@@ -104,6 +104,44 @@ HazardProbe makeAttachmentHazard(const core::FlatDrawStateRecord& hot);
 HazardProbe makeAttachmentHazard(const core::ClearDesc& clear);
 HazardProbe makeDrawReadHazard(core::FlatDrawStateView state);
 
+enum class RenderPassEntryDecision : u8 {
+  ContinueActive,
+  BeginPass,
+  SplitRenderTargetChange,
+  SplitHazard,
+  SplitTileMidPassIneligible,
+};
+
+inline RenderPassEntryDecision classifyRenderPassEntry(
+    bool hasActiveRender,
+    bool attachmentKeyMatches,
+    bool exactHazard,
+    bool tileMidPassIneligible) noexcept {
+  if (!hasActiveRender) {
+    return RenderPassEntryDecision::BeginPass;
+  }
+  if (!attachmentKeyMatches) {
+    return RenderPassEntryDecision::SplitRenderTargetChange;
+  }
+  if (exactHazard) {
+    return RenderPassEntryDecision::SplitHazard;
+  }
+  if (tileMidPassIneligible) {
+    return RenderPassEntryDecision::SplitTileMidPassIneligible;
+  }
+  return RenderPassEntryDecision::ContinueActive;
+}
+
+inline bool useSourceLocalStoreProofLookahead(
+    bool externalEncodeSession,
+    bool sessionMayContinue) noexcept {
+  // R-BACK-2.48: source-local lookahead only proves the current source's
+  // suffix. A carried EncodeSession that can accept later sources must stay
+  // conservative, but the finalizing call has no future source; its current
+  // suffix is the remaining logical stream suffix.
+  return !externalEncodeSession || !sessionMayContinue;
+}
+
 // Per-draw view from DrawParam. Constructed once at encodeDraw entry; all
 // per-draw field reads inside the function go through this view. Lives in
 // the shared internal header because diagnostics consumes it by const-ref.

@@ -50,6 +50,7 @@ open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
 open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
 open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
 stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
+draw_chunk_command_limit=${DXMT9_DRAW_CHUNK_COMMAND_LIMIT:-}
 enable_chunk_end_carry=${DXMT9_ENABLE_CHUNK_END_CARRY:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
@@ -714,6 +715,9 @@ Options:
   --stage-pre-present-command-limit N
                       Set DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=N. Required
                       for pre-Present head staging/open-CB split candidates.
+  --draw-chunk-command-limit N
+                      Set DXMT9_DRAW_CHUNK_COMMAND_LIMIT=N for ordinary
+                      draw-limit source-boundary probes.
   --enable-chunk-end-carry
                       Set DXMT9_ENABLE_CHUNK_END_CARRY=1 for the default-off
                       cross-chunk pending draw submission carry experiment.
@@ -1756,6 +1760,10 @@ while (($#)); do
       ;;
     --stage-pre-present-command-limit)
       stage_pre_present_command_limit=${2:?missing value for --stage-pre-present-command-limit}
+      shift 2
+      ;;
+    --draw-chunk-command-limit)
+      draw_chunk_command_limit=${2:?missing value for --draw-chunk-command-limit}
       shift 2
       ;;
     --enable-chunk-end-carry)
@@ -4279,6 +4287,10 @@ fi
 
 if [[ -n "$stage_pre_present_command_limit" ]]; then
   env_args+=("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=$stage_pre_present_command_limit")
+fi
+
+if [[ -n "$draw_chunk_command_limit" ]]; then
+  env_args+=("DXMT9_DRAW_CHUNK_COMMAND_LIMIT=$draw_chunk_command_limit")
 fi
 
 if [[ "$enable_chunk_end_carry" != "0" && -n "$enable_chunk_end_carry" ]]; then

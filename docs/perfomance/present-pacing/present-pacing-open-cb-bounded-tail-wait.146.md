@@ -98,3 +98,12 @@ Next work should move to one of two safer tracks:
 - a smaller P4 diagnostic that can explain why the pending head does not reach
   timeout-submit before the app stalls, without keeping an uncommitted render
   command buffer as the main correctness mechanism.
+
+Update: [[present-pacing-encode-session-pass-streaming-runtime.147]] fixes the
+session-lifetime/fail-open failure class and retests bounded wait. The updated
+2ms run no longer black-screens and records `timeout_submitted=2,364`, proving
+the fail-open path. Longer waits reduce timeout fragmentation (`163` at 8ms,
+`3` at 16ms) and the 16ms PE-stats capture shows no reproduced `0x8876086c` /
+`D3DERR_INVALIDCALL` failure, but the candidate still fails promotion because
+the short 16ms scout remains above baseline tile preservation and worse on
+no-enqueue completion wait.

@@ -95,6 +95,7 @@ enum class ChunkPublishReason : std::uint8_t {
   Flush,
   StretchSplit,
   MapWait,
+  SemanticBoundary,
 };
 
 enum class ChunkPublishTailCommandKind : std::uint8_t {
@@ -295,6 +296,11 @@ void countOpenCbTailPresentPendingAbandonedNonAppendable();
 void countOpenCbTailPresentPendingAbandonedRetainFailed();
 void countOpenCbTailPresentPendingAbandonedEncodeNull();
 void countOpenCbTailPresentPendingMergeFailed();
+void countOpenCbTailPresentSemanticReleaseCandidate();
+void countOpenCbTailPresentSemanticReleaseSubmitted();
+void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
+void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
+void countOpenCbTailPresentSemanticReleaseFailed();
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -1122,6 +1128,12 @@ void countCompletionSignalDelay(std::uint64_t nanoseconds);
 void countCompletionWaitCommitChunkEntry();
 void countCompletionWaitCommitChunkReplayStart();
 void countCompletionWaitCommitChunkReplayEnd(std::uint64_t replayNanoseconds);
+void countCompletionWaitCommitPublish();
+void countCompletionWaitEncodeDequeue();
+void countCompletionWaitCommandBufferCommit();
+void countCompletionWaitStagePublishToEncodeDequeue(std::uint64_t nanoseconds);
+void countCompletionWaitStageEncodeDequeueToCommandBufferCommit(
+    std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayStart(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueWaitToCommitChunkReplayEnd(std::uint64_t nanoseconds);
@@ -1262,6 +1274,11 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentPendingAbandonedRetainFailed = 0;
   std::uint64_t openCbTailPresentPendingAbandonedEncodeNull = 0;
   std::uint64_t openCbTailPresentPendingMergeFailed = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseFailed = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;

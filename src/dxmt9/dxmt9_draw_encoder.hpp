@@ -50,10 +50,18 @@ using EncodeChunkSession =
 
 EncodeChunkSession makeEncodeChunkSession();
 void resetEncodeChunkSession(EncodeChunkSessionState& session);
+bool retainEncodeChunkSessionUntilSubmissionComplete(
+    EncodeChunkSession session,
+    core::metalqueue::QueueSubmissionRecord& record);
 bool encodeChunkSessionHasActiveRender(
     const EncodeChunkSessionState& session) noexcept;
 bool encodeChunkSessionHasDeferredSubmissionPayload(
     const EncodeChunkSessionState& session) noexcept;
+bool appendEncodeChunkSessionSource(
+    EncodeChunkSessionState& session,
+    core::metalqueue::QueueCompletionSource source) noexcept;
+std::span<const core::metalqueue::QueueCompletionSource>
+encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept;
 
 // Optional recorder seam for tests that need to observe the final draw-issue
 // commands after encodeDraw has selected UP vs bound resources and built the
@@ -205,6 +213,13 @@ struct RenderPassActionSummary {
   std::uint64_t stencilStoreBytes = 0;
 };
 
+struct RenderPassStoreProofLookaheadSource {
+  const core::ChunkSlot* slot = nullptr;
+  // Inclusive first command index for this source. The current source passes
+  // the command after the pass-opening draw; later selected sources pass 0.
+  std::size_t firstCommandIndex = 0;
+};
+
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -231,6 +246,10 @@ dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::size_t startCommandIndex,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr);
+dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
+    std::span<const RenderPassStoreProofLookaheadSource> sources,
+    core::Handle depthHandle,
+    std::uint32_t* firstTouchCommandDistance = nullptr);
 
 // Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -249,6 +268,10 @@ bool nextColorOperationIsClear(const core::ChunkSlot& slot,
 dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
+    core::Handle colorHandle,
+    std::uint32_t* firstTouchCommandDistance = nullptr);
+dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
+    std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr);
 
@@ -437,20 +460,24 @@ bool encodeDraw(EncodeContext& ctx,
 
 struct EncodeChunkOptions {
   // Optional open command buffer supplied by an encoded-pending-tail carrier.
-  // When present, encodeChunk appends work into this command buffer and must
-  // not internally commit/split it before the Present tail is appended.
+  // When present, encodeChunk appends work into this command buffer. Internal
+  // semantic pass/barrier splits remain disabled unless the caller opts into
+  // allowInjectedCommandBufferMidChunkCommits below.
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
-  // Open-CB pre-encode carriers must not commit sub-CBs before the Present tail
-  // has been appended; keep the default false for the current byte-identical
-  // path.
+  // Force-disable the normal mid-chunk split policy. Used only by callers that
+  // intentionally want one command buffer for the whole logical unit.
   bool disableMidChunkCommits = false;
+  // Semantic pass/barrier boundaries may commit an injected CB and continue
+  // into a new tail CB when the caller can merge the already-committed prefix
+  // into the final completion source list without violating locality.
+  bool allowInjectedCommandBufferMidChunkCommits = false;
   // Same carrier class must also avoid the optional pre-acquire split that can
   // commit the pre-Present head immediately before encoding Present.
   bool disablePresentAcquireSplit = false;
-  // Optional session owner for future render-pass carry candidates. The
-  // current encodeChunk path still finalizes and resets this session before
-  // returning; passing one only routes state through the same explicit owner
-  // that a later opt-in carry path can keep alive.
+  // Optional session owner for render-pass carry candidates. When a final
+  // submission is returned, the caller must transfer the session owner into the
+  // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()
+  // so session-owned Metal references live until command-buffer completion.
   EncodeChunkSessionState* session = nullptr;
   // Opt-in open-CB render-session carry path. When true and `session` is
   // non-null, encodeChunk returns after appending commands without ending the
@@ -458,6 +485,14 @@ struct EncodeChunkOptions {
   // returned record. A later encodeChunk call on the same session must finalize
   // it before the shared command buffer is submitted.
   bool deferSessionFinalization = false;
+  // Compact source metadata represented by this encodeChunk call when a
+  // session is active. The session publishes the ordered list during final
+  // submission so one Metal tail can expand to per-source seqId completion.
+  std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
+  // Call-local selected EncodeSession suffix used only for load/store proof.
+  // The span points at already dequeued ReadySlotSnapshot entries and must not
+  // be retained by encodeChunk or EncodeSession.
+  std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};
 
   bool hasInjectedCommandBuffer() const noexcept {
     return static_cast<bool>(commandBuffer);

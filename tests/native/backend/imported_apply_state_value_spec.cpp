@@ -197,6 +197,11 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     dxmt9::Device::submitDrawRunBatch(submissions);
   }
 
+  void submitCompactDrawRunBatch(
+      std::span<DrawRunCompactSubmission> submissions) override {
+    compactDrawBatchSizes.push_back(submissions.size());
+  }
+
   void flush() override {
     RecordedEvent event;
     event.kind = EventKind::Flush;
@@ -208,6 +213,7 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   std::uint64_t nextHandle = 1;
   std::vector<RecordedEvent> events;
   std::vector<std::size_t> drawBatchSizes;
+  std::vector<std::size_t> compactDrawBatchSizes;
   BackendDevice::DeviceLostObserver deviceLostObserver;
   BackendDevice::PresentationStatusObserver presentationStatusObserver;
 };
@@ -1605,6 +1611,68 @@ void testMalformedImportedRecordDoesNotMutateState() {
   checkEq(d3d->Release(), 0u, "release malformed d3d factory");
 }
 
+void testMixedChunkEndCarryFlushesFailOpen() {
+  auto upper = std::make_unique<RecordingDxmt9Device>();
+  auto* recorder = upper.get();
+  auto* d3d = dxmt9::com::Direct3DCreate9Ex(dxmt9::com::D3D_SDK_VERSION,
+                                            std::move(upper));
+  check(d3d != nullptr, "create mixed-carry recording d3d factory");
+
+  PresentParameters params{};
+  params.backBufferWidth = 16u;
+  params.backBufferHeight = 16u;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{993};
+  params.presentationInterval = PresentInterval::Immediate;
+
+  auto* device = d3d->CreateDeviceEx(0u, params, nullptr);
+  check(device != nullptr, "create mixed-carry recording d3d device");
+  device->AddRef();
+
+  {
+    D9CDevice cDevice(device);
+
+    DrawRunSubmission submission{};
+    submission.state = CanonicalDrawState{};
+    submission.uniforms = DrawUniformPayload{.hash = 0x101u};
+    submission.draw.primitiveCount = 1u;
+    cDevice.chunkEndSubmissionCarry.submissions.push_back(std::move(submission));
+
+    DrawRunCompactSubmission compactSubmission{};
+    compactSubmission.state = CanonicalDrawState{};
+    compactSubmission.draw.primitiveCount = 1u;
+    cDevice.chunkEndSubmissionCarry.compactSubmissions.push_back(
+        std::move(compactSubmission));
+    cDevice.chunkEndSubmissionCarry.forceResourceMarking = true;
+
+    const auto apply = makeApplyStateRecord();
+    std::vector<std::uint8_t> payload;
+    const auto applyOffset = appendRecord(payload, apply);
+    const std::vector<D9CCommandChunkWireRecordHeader> records{
+        wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, applyOffset,
+                         sizeof(apply)),
+    };
+    const auto wireBlob = makeWireChunkBlob(payload, records, {});
+
+    checkEq(commitWireChunk(cDevice, wireBlob, 1u, 0u), D3D_OK,
+            "mixed chunk-end carry is flushed fail-open before APPLY_STATE");
+    check(cDevice.chunkEndSubmissionCarry.empty(),
+          "mixed chunk-end carry is cleared after fail-open flush");
+    checkEq(recorder->drawBatchSizes.size(), 1u,
+            "mixed carry flush submits normal lane once");
+    checkEq(recorder->drawBatchSizes[0], 1u,
+            "mixed carry normal lane preserves record count");
+    checkEq(recorder->compactDrawBatchSizes.size(), 1u,
+            "mixed carry flush submits compact lane once");
+    checkEq(recorder->compactDrawBatchSizes[0], 1u,
+            "mixed carry compact lane preserves record count");
+  }
+
+  checkEq(device->Release(), 0u, "release mixed-carry d3d device");
+  checkEq(d3d->Release(), 0u, "release mixed-carry d3d factory");
+}
+
 }  // namespace
 
 int main() {
@@ -1616,6 +1684,7 @@ int main() {
     testStampedSurfaceGenerationMismatchRejectsBeforeReplay();
     testStampedTextureAndBufferGenerationMismatchRejectBeforeReplay();
     testMalformedImportedRecordDoesNotMutateState();
+    testMixedChunkEndCarryFlushesFailOpen();
   } catch (const TestFailure& e) {
     std::cerr << "imported_apply_state_value_spec failed: " << e.what()
               << '\n';

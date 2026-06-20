@@ -444,7 +444,7 @@ class CommandQueue {
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.
   // Set on the first command append and consumed when the slot is published;
-  // not part of ChunkSlot so ReadySlotSnapshot copies stay unchanged.
+  // not part of ChunkSlot so encode-side ReadySlotSnapshot refs stay narrow.
   std::array<std::uint64_t, kCommandChunkCount> slotFirstCommandSteadyNs_{};
   std::optional<size_t> writingSlot_{};
   size_t writeIndex_ = 0;

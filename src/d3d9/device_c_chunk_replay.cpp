@@ -526,10 +526,19 @@ void clearCompactUniformArena(std::vector<Submission>& submissions) {
   }
 }
 
+template <typename Submission, typename CompactSubmission>
+std::uint32_t pendingSubmissionLaneCount(
+    const std::vector<Submission>& submissions,
+    const std::vector<CompactSubmission>& compactSubmissions) {
+  return (submissions.empty() ? 0u : 1u) +
+         (compactSubmissions.empty() ? 0u : 1u);
+}
+
 bool canStoreChunkEndCarry(D9CDevice* d,
                            PendingDrawFlushReason reason,
                            std::uint64_t pendingRecords,
-                           bool chunkSawQueueBoundary) {
+                           bool chunkSawQueueBoundary,
+                           std::uint32_t pendingLaneCount) {
   constexpr std::uint64_t kMaxChunkEndCarryRecords = 512;
   return reason == PendingDrawFlushReason::End &&
          chunkEndCarryEnabled() &&
@@ -537,6 +546,7 @@ bool canStoreChunkEndCarry(D9CDevice* d,
          d &&
          d->chunkEndSubmissionCarry.empty() &&
          !chunkSawQueueBoundary &&
+         pendingLaneCount == 1u &&
          pendingRecords != 0 &&
          pendingRecords <= kMaxChunkEndCarryRecords;
 }
@@ -546,8 +556,9 @@ int32_t storeChunkEndCarry(
     std::vector<dxmt9::core::DrawRunSubmission>& pendingDrawSubmissions,
     std::vector<dxmt9::core::DrawRunCompactSubmission>& pendingCompactDrawSubmissions,
     dxmt9::core::DrawSubmissionUniformScratch& pendingUniformScratch) {
-  if (!d || (!pendingDrawSubmissions.empty() &&
-             !pendingCompactDrawSubmissions.empty())) {
+  if (!d ||
+      pendingSubmissionLaneCount(pendingDrawSubmissions,
+                                 pendingCompactDrawSubmissions) != 1u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
@@ -598,7 +609,10 @@ int32_t flushChunkEndCarry(D9CDevice* d, PendingDrawFlushReason reason) {
   }
   auto& carry = d->chunkEndSubmissionCarry;
   if (!carry.submissions.empty() && !carry.compactSubmissions.empty()) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
+    dxmt9::util::logf(
+        dxmt9::util::LogLevel::Info, "dxmt9-device",
+        "chunk_end_carry_mixed_lane_flush submissions=%zu compactSubmissions=%zu",
+        carry.submissions.size(), carry.compactSubmissions.size());
   }
 
   const auto pendingRecordCount = carry.recordCount();
@@ -1347,6 +1361,10 @@ int32_t commitChunkFail(const char* reason,
                         int32_t hr = dxmt9::core::D3DERR_INVALIDCALL) {
   dxmt9DebugLog("commit_chunk fail reason=%s index=%u type=%u hr=0x%08x",
                 reason, index, type, static_cast<std::uint32_t>(hr));
+  dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                    "commit_chunk_fail reason=%s index=%u type=%u hr=0x%08x",
+                    reason ? reason : "unknown", index, type,
+                    static_cast<std::uint32_t>(hr));
   // R-BACK-2.10: every commit_chunk reject path funnels through here.
   dxmt9::perf::countChunkReject();
   return hr;
@@ -2235,8 +2253,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     const auto pendingRecordCount =
         static_cast<std::uint64_t>(pendingDrawSubmissions.size()) +
         static_cast<std::uint64_t>(pendingCompactDrawSubmissions.size());
+    const auto pendingLaneCount =
+        pendingSubmissionLaneCount(pendingDrawSubmissions,
+                                   pendingCompactDrawSubmissions);
     if (canStoreChunkEndCarry(d, reason, pendingRecordCount,
-                              chunkSawQueueBoundary)) {
+                              chunkSawQueueBoundary, pendingLaneCount)) {
       if (!pendingDrawSubmissions.empty()) {
         storeChunkEndFlushProbe(d, pendingDrawSubmissions.back(),
                                 pendingRecordCount);

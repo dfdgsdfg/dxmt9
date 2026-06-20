@@ -23,12 +23,14 @@
 // can ship as a public symbol without leaking `WMTRenderPassInfo` into
 // headers. The encoder still owns the call site in `beginRenderPass`.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -58,6 +60,7 @@ using dxmt9::core::SurfaceCopyDesc;
 using dxmt9::core::SwapDesc;
 using DepthProof = dxmt9::perf::RenderPassDepthStoreProof;
 using ColorProof = dxmt9::perf::RenderPassColorStoreProof;
+using LookaheadSource = dxmt9::encoders::RenderPassStoreProofLookaheadSource;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -552,6 +555,72 @@ void testNoCrossChunkLookahead() {
         "R-BACK-15.13 Present in slot forces end-of-chunk Store");
 }
 
+void testEncodeSessionLookaheadAcrossSelectedSources() {
+  // R-BACK-2.48: ordinary single-slot lookahead still does not cross a chunk
+  // boundary. EncodeSession can provide a stronger, explicit logical suffix
+  // once the queue has already selected and retained the ready sources.
+  Handle depth{0xD242u};
+  ChunkSlot depthHead;
+  appendDrawRunWithDepth(depthHead, depth);
+  ChunkSlot depthClearTail;
+  appendClearOnDepth(depthClearTail, depth);
+  std::array<LookaheadSource, 2> depthClearSources{{
+      LookaheadSource{.slot = &depthHead, .firstCommandIndex = 1u},
+      LookaheadSource{.slot = &depthClearTail, .firstCommandIndex = 0u},
+  }};
+  std::uint32_t distance = 0;
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  depthClearSources.data(), depthClearSources.size()),
+              depth, &distance),
+          DepthProof::AllowNextClear,
+          "R-BACK-2.48 selected suffix sees depth clear in next source");
+  checkEq(distance, 1u,
+          "R-BACK-2.48 first touch distance spans source boundary");
+
+  ChunkSlot depthDrawTail;
+  appendDrawRunWithDepth(depthDrawTail, depth);
+  std::array<LookaheadSource, 2> depthDrawSources{{
+      LookaheadSource{.slot = &depthHead, .firstCommandIndex = 1u},
+      LookaheadSource{.slot = &depthDrawTail, .firstCommandIndex = 0u},
+  }};
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  depthDrawSources.data(), depthDrawSources.size()),
+              depth),
+          DepthProof::BlockDrawDepth,
+          "R-BACK-2.48 selected suffix blocks on later depth draw");
+
+  Handle color{0xC242u};
+  ChunkSlot colorHead;
+  appendDrawRunWithColor(colorHead, color);
+  ChunkSlot colorClearTail;
+  appendClearOnColor(colorClearTail, color);
+  std::array<LookaheadSource, 2> colorClearSources{{
+      LookaheadSource{.slot = &colorHead, .firstCommandIndex = 1u},
+      LookaheadSource{.slot = &colorClearTail, .firstCommandIndex = 0u},
+  }};
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  colorClearSources.data(), colorClearSources.size()),
+              color),
+          ColorProof::AllowNextClear,
+          "R-BACK-2.48 selected suffix sees color clear in next source");
+
+  ChunkSlot colorPresentTail;
+  appendPresent(colorPresentTail, color);
+  std::array<LookaheadSource, 2> colorPresentSources{{
+      LookaheadSource{.slot = &colorHead, .firstCommandIndex = 1u},
+      LookaheadSource{.slot = &colorPresentTail, .firstCommandIndex = 0u},
+  }};
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  colorPresentSources.data(), colorPresentSources.size()),
+              color),
+          ColorProof::BlockPresent,
+          "R-BACK-2.48 selected suffix blocks on present source");
+}
+
 void testTouchedSet() {
   // R-BACK-15.4 / 15.5 / 15.6: minimal CommandQueue API exercise.
   // Inert queue (null WMT::Device) — no threads, no Metal — but the
@@ -823,6 +892,7 @@ int main() {
     testDepthForcedStoreOnNextRead();
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();
+    testEncodeSessionLookaheadAcrossSelectedSources();
     testTouchedSet();
     testTouchedCrossChunkPersists();
     testTouchedClearAllResets();

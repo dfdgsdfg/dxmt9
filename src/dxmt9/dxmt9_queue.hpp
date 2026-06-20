@@ -4,9 +4,11 @@
 #include "dxmt9_capture.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -208,9 +210,66 @@ struct QueueCompletionSource {
   bool hasPresent = false;
 };
 
+inline constexpr size_t kMaxEncodeSessionSources = 32;
+
+struct EncodeSessionSourceList {
+  std::array<QueueCompletionSource, kMaxEncodeSessionSources> entries{};
+  size_t count = 0;
+
+  bool append(QueueCompletionSource source) noexcept {
+    if (source.seqId == 0 || count >= entries.size()) {
+      return false;
+    }
+    if (count > 0) {
+      const auto& previous = entries[count - 1u];
+      if (previous.hasPresent || source.seqId != previous.seqId + 1u) {
+        return false;
+      }
+    }
+    entries[count++] = source;
+    return true;
+  }
+
+  bool assign(std::span<const QueueCompletionSource> sources) noexcept {
+    EncodeSessionSourceList next{};
+    for (const auto& source : sources) {
+      if (!next.append(source)) {
+        return false;
+      }
+    }
+    *this = next;
+    return true;
+  }
+
+  bool assign(const std::vector<QueueCompletionSource>& sources) noexcept {
+    return assign(std::span<const QueueCompletionSource>(
+        sources.data(), sources.size()));
+  }
+
+  void clear() noexcept {
+    entries = {};
+    count = 0;
+  }
+  bool empty() const noexcept { return count == 0; }
+  size_t size() const noexcept { return count; }
+
+  std::span<const QueueCompletionSource> span() const noexcept {
+    return std::span<const QueueCompletionSource>(entries.data(), count);
+  }
+
+  const QueueCompletionSource* begin() const noexcept { return entries.data(); }
+  const QueueCompletionSource* end() const noexcept {
+    return entries.data() + count;
+  }
+};
+
 struct ReadySlotSnapshot {
   size_t slotIndex = 0;
-  ChunkSlot slot{};
+  // Non-owning ref into QueueLifecycleController::SubmissionBinding::slots.
+  // A dequeued slot is in Encoding state and cannot be recycled until its
+  // completion source drains, so encode-side batch/session paths can consume
+  // the source records by view instead of deep-copying ChunkSlot.
+  ChunkSlot* slot = nullptr;
 };
 
 QueueCompletionSource completionSourceForReadySlot(
@@ -268,6 +327,7 @@ struct QueueSubmissionRecord {
   std::vector<RenderEncoderGpuSample> renderEncoderGpuSamples{};
   std::vector<std::function<void()>> postCommitCallbacks;
   std::vector<std::function<void()>> completionCallbacks;
+  std::vector<std::shared_ptr<void>> retainedPayloads;
 };
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
@@ -282,9 +342,10 @@ CommandBufferDiagnostics mergeCommandBufferDiagnostics(
     const CommandBufferDiagnostics& source) noexcept;
 bool mergeEncodedPendingTailSubmission(
     QueueSubmissionRecord& tail,
-    QueueSubmissionRecord&& encodedHead,
+    QueueSubmissionRecord& encodedHead,
     std::span<const QueueCompletionSource> encodedHeadSources,
-    QueueCompletionSource tailSource);
+    QueueCompletionSource tailSource,
+    bool encodedHeadTailAlreadyCommitted = false);
 Handle selectPresentSourceHandle(const SwapDesc& desc, Handle currentBackBuffer) noexcept;
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 void appendCompletionSourcesToQueues(
@@ -591,6 +652,10 @@ class QueueLifecycleController {
   void reclaimCompletedGpuSlots(u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
+  // Queue-local observation used by experimental open-CB carriers to decide
+  // whether a prefix submit would actually overlap the completion thread's
+  // wait. This does not participate in ordering or lifetime decisions.
+  bool completionWaitActive();
   // Diagnostic stage probes from the last no-enqueue completion wait end to
   // producer-side commit_chunk milestones.
   void recordCompletionWaitCommitChunkEntry();
@@ -723,6 +788,7 @@ class QueueLifecycleController {
     WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
     std::vector<QueueSubmissionRecord::RenderEncoderGpuSample> renderEncoderGpuSamples{};
     std::vector<std::function<void()>> completionCallbacks;
+    std::vector<std::shared_ptr<void>> retainedPayloads;
   };
 
   // Drain one pending completion — blocks on waitUntilCompleted() and then
@@ -730,6 +796,10 @@ class QueueLifecycleController {
   // the dedicated completion-watcher thread. Returns true if a record was
   // processed, false on stop. `stop` is read under pendingCompletionMutex_.
   bool processOnePendingCompletion(bool& stop);
+  // CPU-only specs use this to exercise the completion-watcher expansion
+  // path without manufacturing a fake Objective-C command-buffer handle.
+  // Production submissions enter the same pending queue through submit().
+  void enqueuePendingCompletionForTest(PendingCompletion pending);
 
   void notifyPendingCompletionStop() {
     pendingCompletionCv_.notify_all();
@@ -743,6 +813,8 @@ class QueueLifecycleController {
   std::deque<PendingCompletion> pendingCompletion_{};
   bool completionWaitActive_ = false;
   std::uint64_t completionWaitEnqueues_ = 0;
+  std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};
+  std::chrono::steady_clock::time_point completionWaitEncodeDequeueTime_{};
   std::chrono::steady_clock::time_point lastNoEnqueueCompletionWaitEnd_{};
   bool noEnqueueGapCommitPublishRecorded_ = false;
   bool noEnqueueGapEncodeDequeueRecorded_ = false;

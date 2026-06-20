@@ -1,4 +1,5 @@
 #include "device_c_provider.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -46,6 +47,14 @@ extern "C" int32_t dxmt9c_device_present(D9CDevice* d, const D9CRect* src, const
   delete srcRect;
   delete dstRect;
   dxmt9DebugLog("device_present hr=0x%08x", static_cast<unsigned>(hr));
+  if (failed(hr)) {
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                      "device_present_fail hr=0x%08x destWindow=%llu "
+                      "flags=0x%x src=%u dst=%u",
+                      static_cast<std::uint32_t>(hr),
+                      static_cast<unsigned long long>(destWindow), flags,
+                      src ? 1u : 0u, dst ? 1u : 0u);
+  }
   return hr;
 }
 

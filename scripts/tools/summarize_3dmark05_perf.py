@@ -1279,6 +1279,21 @@ RUN_COUNTERS = (
     "completion_wait_commit_chunk_replay_cpu_max_ms",
     "completion_wait_commit_chunk_replay_cpu_p50_ms",
     "completion_wait_commit_chunk_replay_cpu_p95_ms",
+    "completion_wait_commit_publish",
+    "completion_wait_encode_dequeue",
+    "completion_wait_command_buffer_commit",
+    "completion_wait_stage_publish_to_encode_dequeue",
+    "completion_wait_stage_publish_to_encode_dequeue_ms",
+    "completion_wait_stage_publish_to_encode_dequeue_max_ms",
+    "completion_wait_stage_publish_to_encode_dequeue_p50_ms",
+    "completion_wait_stage_publish_to_encode_dequeue_p95_ms",
+    "completion_wait_stage_publish_to_encode_dequeue_p99_ms",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit_ms",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit_max_ms",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit_p50_ms",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit_p95_ms",
+    "completion_wait_stage_encode_dequeue_to_command_buffer_commit_p99_ms",
     "completion_no_enqueue_wait_to_commit_chunk_entry",
     "completion_no_enqueue_wait_to_commit_chunk_entry_ms",
     "completion_no_enqueue_wait_to_commit_chunk_entry_p50_ms",
@@ -3136,6 +3151,22 @@ def append_pacing_cpu_stage_derived(
             "completion_no_enqueue_wait_to_next_enqueue_p95_ms",
         ),
     )
+    wait_active_stage_rows = (
+        (
+            "publish -> encode dequeue",
+            "completion_wait_stage_publish_to_encode_dequeue",
+            "completion_wait_stage_publish_to_encode_dequeue_ms",
+            "completion_wait_stage_publish_to_encode_dequeue_p50_ms",
+            "completion_wait_stage_publish_to_encode_dequeue_p95_ms",
+        ),
+        (
+            "encode dequeue -> command buffer commit",
+            "completion_wait_stage_encode_dequeue_to_command_buffer_commit",
+            "completion_wait_stage_encode_dequeue_to_command_buffer_commit_ms",
+            "completion_wait_stage_encode_dequeue_to_command_buffer_commit_p50_ms",
+            "completion_wait_stage_encode_dequeue_to_command_buffer_commit_p95_ms",
+        ),
+    )
     timeline_rows = (
         (
             "wait -> commit chunk entry",
@@ -3330,6 +3361,25 @@ def append_pacing_cpu_stage_derived(
         "| `encode_draw_cpu_ms_per_present` | "
         f"`{ratio_text(counters.get('encode_draw_cpu_ms'), present_encoded)}` |"
     )
+    lines.append("")
+
+    lines.append("### Completion-Wait Active Stage Samples")
+    lines.append("")
+    lines.append(
+        "These rows are sampled only when producer/encoder work happens while "
+        "the completion watcher is blocked in `waitUntilCompleted()`. They "
+        "measure the overlap path directly; sparse sample counts mean the "
+        "candidate work usually arrived outside the wait window."
+    )
+    lines.append("")
+    lines.append("| Stage | samples/present | total ms/present | p50 ms | p95 ms |")
+    lines.append("|---|---:|---:|---:|---:|")
+    for label, count_key, total_key, p50_key, p95_key in wait_active_stage_rows:
+        lines.append(
+            f"| {label} | `{ratio_text(counters.get(count_key), present_encoded)}` | "
+            f"`{ratio_text(counters.get(total_key), present_encoded)}` | "
+            f"`{fmt(counters.get(p50_key))}` | `{fmt(counters.get(p95_key))}` |"
+        )
     lines.append("")
 
     lines.append("### No-Enqueue Cumulative Timeline")

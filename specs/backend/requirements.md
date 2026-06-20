@@ -106,7 +106,7 @@ objects, PE `DeviceState` pointers, Objective-C objects from the bridge payload,
 or ad-hoc per-call mutable state that is not owned by the execution chunk or
 queue.
 
-**R-BACK-2.17** Large draw-uniform payloads (shader constants, fixed-function
+**R-BACK-2.15.1** Large draw-uniform payloads (shader constants, fixed-function
 matrices, texture transforms, and clip planes) must be stored outside hot draw
 state records and referenced by stable queue-local handles or spans. Hot
 PSO/resource decisions must use hashes and compact flat records, not full constant
@@ -252,12 +252,12 @@ publish-at-frame-end grain.
 
 **R-BACK-2.36** Any pre-`Present` (run-ahead) promotion point used as a
 production carrier must coincide with deterministic **encoder pass / barrier
-boundaries**, not arbitrary draw counts or payload-byte thresholds. The boundary identity must be
-derived from imported records and queue-local state that the encoder already
-uses to end or begin work: attachment set, encoder kind, load/store action,
-clear folding, resolve/copy/readback/query ordering, resource hazards, and
-`Present`. Relative to the single-publish-at-`Present` baseline, a production
-run-ahead policy must not increase per-present command-buffer count,
+boundaries**, not arbitrary draw counts or payload-byte thresholds. The boundary
+identity must be derived from imported records and queue-local state that the
+encoder already uses to end or begin work: attachment set, encoder kind,
+load/store action, clear folding, resolve/copy/readback/query ordering, resource
+hazards, and `Present`. Relative to the single-publish-at-`Present` baseline, a
+production run-ahead policy must not increase per-present command-buffer count,
 render-pass count, or tile-preservation bytes (the locality-preservation gate).
 A direct early-publish policy that maps each promoted slot to its own Metal
 command buffer is diagnostic-only unless this gate is proven by counters for the
@@ -378,7 +378,10 @@ logical pass. Deferred clears remain load actions until the first draw of the
 logical pass; `DontCare` store proofs remain tied to the actual pass-end
 live-out proof; sidecar dumps, visibility samples, encoder-breakdown rows, and
 touched-color publication occur when the logical pass ends, not when an
-intermediate source returns. A promotable pass-streaming path must not increase
+intermediate source returns. Store-proof lookahead may cross source boundaries
+only over an already selected/retained session suffix; it must stay conservative
+for unknown future writer output and must not persist borrowed source spans in
+session state. A promotable pass-streaming path must not increase
 final same-key reopens, per-present render-pass count, color/depth load/store
 MiB, tile-preservation bytes, or command-buffer count relative to the
 single-publish baseline unless a spec-local exception explicitly proves the
@@ -394,13 +397,14 @@ represented by a session may complete before the Metal tail that contains its
 commands completes.
 
 **R-BACK-2.50** *(Promotion gates.)* Any production `EncodeSession` /
-pass-streaming candidate must be gated by deterministic native or fake-backend
-coverage for source-order preservation, fail-open publication, completion-source
-expansion, and semantic boundary detection; TLA+ or equivalent model evidence
-for the completion refinement in R-BACK-2.49; and runtime counters proving P4
-movement (`completion_wait_with_enqueue_ms` increases or
-`completion_wait_without_enqueue_ms` decreases) at non-increasing
-command-buffer/render-pass/tile-preservation/load-store shape. Runtime FPS or
+pass-streaming candidate must pass four ordered gates before promotion:
+deterministic native or fake-backend coverage for source-order preservation,
+fail-open publication, completion-source expansion, and semantic boundary
+detection; TLA+ or equivalent model evidence for the completion refinement in
+R-BACK-2.49; runtime visual/locality evidence proving output correctness at
+non-increasing command-buffer/render-pass/tile-preservation/load-store shape; and
+runtime no-gputrace counters proving P4 movement (`completion_wait_with_enqueue_ms`
+increases or `completion_wait_without_enqueue_ms` decreases). Runtime FPS or
 Xcode-counter evidence must not be promoted until the visual gate and the
 R-BACK-2.48 locality gates pass.
 

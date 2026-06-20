@@ -77,6 +77,13 @@ tokens bound accepted but incomplete present-bearing chunks by the configured
 maximum frame latency, and that an application present wait cannot return while
 the gate remains full unless shutdown has been requested.
 
+**R-VERIF-2.11** The formal spec must prove the `EncodeSession` completion
+refinement used by R-BACK-2.49: one Metal session-tail completion may expand
+into several consecutive source `seqId` completions, but each source completes
+only after the Metal tail containing its commands completes, per-source
+completion drains in strict sequence order, and present completion advances only
+for the represented present tail source.
+
 ---
 
 ## 3. Resource Lifetime

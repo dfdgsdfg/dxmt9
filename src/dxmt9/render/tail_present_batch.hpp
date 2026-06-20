@@ -6,6 +6,7 @@
 #include "../dxmt9_queue.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <span>
@@ -14,7 +15,51 @@ namespace dxmt9::render {
 
 bool slotIsPresentOnlyTail(const core::ChunkSlot& slot) noexcept;
 
+bool slotHasFinalPresentTail(const core::ChunkSlot& slot) noexcept;
+
 bool slotIsOpenCbPreencodeHead(const core::ChunkSlot& slot) noexcept;
+
+bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
+                                  bool carryRenderSession,
+                                  bool hasPendingSession) noexcept;
+
+bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
+                                      bool carryRenderSession) noexcept;
+
+bool openCbPendingAllowsSemanticMidChunkCommits(
+    bool appendToPending) noexcept;
+
+enum class OpenCbSemanticBoundaryReleaseMode : std::uint8_t {
+  CompletionWait,
+  Deterministic,
+};
+
+bool openCbPendingCanReleaseAtSemanticBoundary(
+    bool sourceIsSemanticBoundary,
+    bool sourceHasFinalPresentTail,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept;
+
+bool openCbPendingCompletionWaitTransitionNeedsRecheck(
+    bool completionWaitActive,
+    bool waitObservedCompletionWaitActive,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool canReleaseAtSemanticBoundary,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept;
+
+enum class OpenCbPendingTailWaitAction : std::uint8_t {
+  None,
+  WaitForReady,
+  SubmitPending,
+};
+
+OpenCbPendingTailWaitAction selectOpenCbPendingTailWaitAction(
+    bool hasPendingRecord,
+    bool readySlotsEmpty,
+    bool stopRequested,
+    bool writerActive,
+    bool timeoutEnabled) noexcept;
 
 bool canCoalesceTailPresentBatch(
     std::span<const core::metalqueue::ReadySlotSnapshot> sources) noexcept;

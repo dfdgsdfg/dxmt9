@@ -132,6 +132,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonFlush{0};
   std::atomic<std::uint64_t> chunkPublishReasonStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishReasonMapWait{0};
+  std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -141,6 +142,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsFlush{0};
   std::atomic<std::uint64_t> chunkPublishCommandsStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailEmpty{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailDrawRun{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailClear{0};
@@ -393,6 +395,11 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedRetainFailed{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedEncodeNull{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingMergeFailed{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseCandidates{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseSubmitted{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWait{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedAlreadyUsed{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseFailed{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
@@ -1549,6 +1556,15 @@ struct Counters {
   std::atomic<std::uint64_t> completionWaitCommitChunkReplayEnds{0};
   std::atomic<std::uint64_t> completionWaitCommitChunkReplayCpuNs{0};
   std::atomic<std::uint64_t> completionWaitCommitChunkReplayCpuMaxNs{0};
+  std::atomic<std::uint64_t> completionWaitCommitPublishes{0};
+  std::atomic<std::uint64_t> completionWaitEncodeDequeues{0};
+  std::atomic<std::uint64_t> completionWaitCommandBufferCommits{0};
+  std::atomic<std::uint64_t> completionWaitStagePublishToEncodeDequeue{0};
+  std::atomic<std::uint64_t> completionWaitStagePublishToEncodeDequeueNs{0};
+  std::atomic<std::uint64_t> completionWaitStagePublishToEncodeDequeueMaxNs{0};
+  std::atomic<std::uint64_t> completionWaitStageEncodeDequeueToCommandBufferCommit{0};
+  std::atomic<std::uint64_t> completionWaitStageEncodeDequeueToCommandBufferCommitNs{0};
+  std::atomic<std::uint64_t> completionWaitStageEncodeDequeueToCommandBufferCommitMaxNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntry{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToCommitChunkEntryMaxNs{0};
@@ -1856,6 +1872,8 @@ struct Counters {
   PercentileRing commitChunkReplayOtherRecordCpuRing;
   PercentileRing commitChunkConstUploadCpuRing;
   PercentileRing completionWaitCommitChunkReplayCpuRing;
+  PercentileRing completionWaitStagePublishToEncodeDequeueRing;
+  PercentileRing completionWaitStageEncodeDequeueToCommandBufferCommitRing;
   PercentileRing completionDequeueAgeRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkEntryRing;
   PercentileRing completionNoEnqueueWaitToCommitChunkReplayStartRing;
@@ -2180,6 +2198,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_reason_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonMapWait, nullptr, nullptr, 0.0},
+    {"chunk_publish_reason_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonSemanticBoundary, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_unknown", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsUnknown, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_draw_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_payload_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPayloadLimit, nullptr, nullptr, 0.0},
@@ -2189,6 +2208,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_commands_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsMapWait, nullptr, nullptr, 0.0},
+    {"chunk_publish_commands_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsSemanticBoundary, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_empty", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailEmpty, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailDrawRun, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_clear", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailClear, nullptr, nullptr, 0.0},
@@ -2453,6 +2473,11 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_pending_abandoned_retain_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedRetainFailed, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_abandoned_encode_null", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedEncodeNull, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_merge_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingMergeFailed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseCandidates, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseSubmitted, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_blocked_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWait, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_blocked_already_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedAlreadyUsed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseFailed, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
@@ -3685,6 +3710,21 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_wait_commit_chunk_replay_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.5},
     {"completion_wait_commit_chunk_replay_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.95},
     {"completion_wait_commit_chunk_replay_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitCommitChunkReplayCpuRing, 0.99},
+    {"completion_wait_commit_publish", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitCommitPublishes, nullptr, nullptr, 0.0},
+    {"completion_wait_encode_dequeue", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitEncodeDequeues, nullptr, nullptr, 0.0},
+    {"completion_wait_command_buffer_commit", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitCommandBufferCommits, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_publish_to_encode_dequeue", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStagePublishToEncodeDequeue, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_publish_to_encode_dequeue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStagePublishToEncodeDequeueNs, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_publish_to_encode_dequeue_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStagePublishToEncodeDequeueMaxNs, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_publish_to_encode_dequeue_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStagePublishToEncodeDequeueRing, 0.5},
+    {"completion_wait_stage_publish_to_encode_dequeue_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStagePublishToEncodeDequeueRing, 0.95},
+    {"completion_wait_stage_publish_to_encode_dequeue_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStagePublishToEncodeDequeueRing, 0.99},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit", CounterEntry::Kind::UnsignedCount, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommit, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommitNs, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommitMaxNs, nullptr, nullptr, 0.0},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommitRing, 0.5},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommitRing, 0.95},
+    {"completion_wait_stage_encode_dequeue_to_command_buffer_commit_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::completionWaitStageEncodeDequeueToCommandBufferCommitRing, 0.99},
     {"completion_no_enqueue_wait_to_commit_chunk_entry", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToCommitChunkEntry, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_commit_chunk_entry_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToCommitChunkEntryMaxNs, nullptr, nullptr, 0.0},
@@ -4334,6 +4374,10 @@ void countChunkPublishReason(ChunkPublishReason reason,
   case ChunkPublishReason::MapWait:
     count = &c.chunkPublishReasonMapWait;
     commands = &c.chunkPublishCommandsMapWait;
+    break;
+  case ChunkPublishReason::SemanticBoundary:
+    count = &c.chunkPublishReasonSemanticBoundary;
+    commands = &c.chunkPublishCommandsSemanticBoundary;
     break;
   case ChunkPublishReason::Unknown:
     break;
@@ -4991,6 +5035,26 @@ void countOpenCbTailPresentPendingAbandonedEncodeNull() {
 
 void countOpenCbTailPresentPendingMergeFailed() {
   add(counters().openCbTailPresentPendingMergeFailed);
+}
+
+void countOpenCbTailPresentSemanticReleaseCandidate() {
+  add(counters().openCbTailPresentSemanticReleaseCandidates);
+}
+
+void countOpenCbTailPresentSemanticReleaseSubmitted() {
+  add(counters().openCbTailPresentSemanticReleaseSubmitted);
+}
+
+void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait() {
+  add(counters().openCbTailPresentSemanticReleaseBlockedNoCompletionWait);
+}
+
+void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed() {
+  add(counters().openCbTailPresentSemanticReleaseBlockedAlreadyUsed);
+}
+
+void countOpenCbTailPresentSemanticReleaseFailed() {
+  add(counters().openCbTailPresentSemanticReleaseFailed);
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
@@ -8933,6 +8997,38 @@ void countCompletionWaitCommitChunkReplayEnd(std::uint64_t replayNanoseconds) {
   recordRing(c.completionWaitCommitChunkReplayCpuRing, replayNanoseconds);
 }
 
+void countCompletionWaitCommitPublish() {
+  add(counters().completionWaitCommitPublishes);
+}
+
+void countCompletionWaitEncodeDequeue() {
+  add(counters().completionWaitEncodeDequeues);
+}
+
+void countCompletionWaitCommandBufferCommit() {
+  add(counters().completionWaitCommandBufferCommits);
+}
+
+void countCompletionWaitStagePublishToEncodeDequeue(
+    std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionWaitStagePublishToEncodeDequeue);
+  add(c.completionWaitStagePublishToEncodeDequeueNs, nanoseconds);
+  updateMax(c.completionWaitStagePublishToEncodeDequeueMaxNs, nanoseconds);
+  recordRing(c.completionWaitStagePublishToEncodeDequeueRing, nanoseconds);
+}
+
+void countCompletionWaitStageEncodeDequeueToCommandBufferCommit(
+    std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.completionWaitStageEncodeDequeueToCommandBufferCommit);
+  add(c.completionWaitStageEncodeDequeueToCommandBufferCommitNs, nanoseconds);
+  updateMax(c.completionWaitStageEncodeDequeueToCommandBufferCommitMaxNs,
+            nanoseconds);
+  recordRing(c.completionWaitStageEncodeDequeueToCommandBufferCommitRing,
+             nanoseconds);
+}
+
 void countCompletionNoEnqueueWaitToCommitPublish(std::uint64_t nanoseconds) {
   auto& c = counters();
   add(c.completionNoEnqueueWaitToCommitPublish);
@@ -10348,6 +10444,16 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentPendingAbandonedEncodeNull);
   s.openCbTailPresentPendingMergeFailed =
       load(c.openCbTailPresentPendingMergeFailed);
+  s.openCbTailPresentSemanticReleaseCandidates =
+      load(c.openCbTailPresentSemanticReleaseCandidates);
+  s.openCbTailPresentSemanticReleaseSubmitted =
+      load(c.openCbTailPresentSemanticReleaseSubmitted);
+  s.openCbTailPresentSemanticReleaseBlockedNoCompletionWait =
+      load(c.openCbTailPresentSemanticReleaseBlockedNoCompletionWait);
+  s.openCbTailPresentSemanticReleaseBlockedAlreadyUsed =
+      load(c.openCbTailPresentSemanticReleaseBlockedAlreadyUsed);
+  s.openCbTailPresentSemanticReleaseFailed =
+      load(c.openCbTailPresentSemanticReleaseFailed);
   s.drawCalls = load(c.drawCalls);
   s.drawIndexedCalls = load(c.drawIndexedCalls);
   s.drawPrimitiveCount = load(c.drawPrimitiveCount);
@@ -10444,6 +10550,11 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_pending_abandoned_retain_failed=%llu "
       "open_cb_tail_present_pending_abandoned_encode_null=%llu "
       "open_cb_tail_present_pending_merge_failed=%llu "
+      "open_cb_tail_present_semantic_release_candidates=%llu "
+      "open_cb_tail_present_semantic_release_submitted=%llu "
+      "open_cb_tail_present_semantic_release_blocked_no_completion_wait=%llu "
+      "open_cb_tail_present_semantic_release_blocked_already_used=%llu "
+      "open_cb_tail_present_semantic_release_failed=%llu "
       "draw_calls=%llu draw_indexed=%llu draw_primitives=%llu "
       "draw_triangles=%llu draw_vertices=%llu bind_pipeline=%llu "
       "present_encoded=%llu "
@@ -10533,6 +10644,21 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentPendingMergeFailed,
                 curr.openCbTailPresentPendingMergeFailed)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseCandidates,
+                curr.openCbTailPresentSemanticReleaseCandidates)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseSubmitted,
+                curr.openCbTailPresentSemanticReleaseSubmitted)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseBlockedNoCompletionWait,
+                curr.openCbTailPresentSemanticReleaseBlockedNoCompletionWait)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseBlockedAlreadyUsed,
+                curr.openCbTailPresentSemanticReleaseBlockedAlreadyUsed)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseFailed,
+                curr.openCbTailPresentSemanticReleaseFailed)),
       static_cast<unsigned long long>(delta(prev.drawCalls, curr.drawCalls)),
       static_cast<unsigned long long>(delta(prev.drawIndexedCalls, curr.drawIndexedCalls)),
       static_cast<unsigned long long>(delta(prev.drawPrimitiveCount, curr.drawPrimitiveCount)),

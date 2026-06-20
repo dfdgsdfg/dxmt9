@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 #include <vector>
 
 namespace dxmt9::render {
@@ -14,10 +15,97 @@ bool slotIsPresentOnlyTail(const core::ChunkSlot& slot) noexcept {
          slot.presentRecords.size() == 1u;
 }
 
+bool slotHasFinalPresentTail(const core::ChunkSlot& slot) noexcept {
+  return !slot.commandHeaders.empty() &&
+         slot.commandHeaders.back().kind == core::MetalCommandKind::Present &&
+         slot.presentRecords.size() == 1u;
+}
+
 bool slotIsOpenCbPreencodeHead(const core::ChunkSlot& slot) noexcept {
   return slot.publishReason == perf::ChunkPublishReason::PresentSplitBefore &&
          !slot.commandsEmpty() &&
          slot.presentRecords.empty();
+}
+
+bool slotCanBeOpenCbSessionHead(const core::ChunkSlot& slot) noexcept {
+  return !slot.commandsEmpty() && slot.presentRecords.empty();
+}
+
+bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
+                                  bool carryRenderSession,
+                                  bool hasPendingSession) noexcept {
+  if (slotHasFinalPresentTail(slot) || slotIsOpenCbPreencodeHead(slot)) {
+    return true;
+  }
+  return carryRenderSession && hasPendingSession &&
+         slotCanBeOpenCbSessionHead(slot);
+}
+
+bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
+                                      bool carryRenderSession) noexcept {
+  if (slotIsOpenCbPreencodeHead(slot)) {
+    return true;
+  }
+  return carryRenderSession && slotCanBeOpenCbSessionHead(slot);
+}
+
+bool openCbPendingAllowsSemanticMidChunkCommits(
+    bool appendToPending) noexcept {
+  // Open-CB pending carriers must not turn source boundaries into extra
+  // command buffers, but semantic pass/barrier boundaries should still follow
+  // the normal mid-chunk chain policy. This preserves the single-publish
+  // command-buffer shape while the session owner keeps a compatible render
+  // encoder open across sources.
+  static_cast<void>(appendToPending);
+  return true;
+}
+
+bool openCbPendingCanReleaseAtSemanticBoundary(
+    bool sourceIsSemanticBoundary,
+    bool sourceHasFinalPresentTail,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept {
+  if (!sourceIsSemanticBoundary || sourceHasFinalPresentTail) {
+    return false;
+  }
+  if (mode == OpenCbSemanticBoundaryReleaseMode::Deterministic) {
+    return true;
+  }
+  return completionWaitActive && !semanticReleaseAlreadyUsedDuringWait;
+}
+
+bool openCbPendingCompletionWaitTransitionNeedsRecheck(
+    bool completionWaitActive,
+    bool waitObservedCompletionWaitActive,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool canReleaseAtSemanticBoundary,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept {
+  if (mode == OpenCbSemanticBoundaryReleaseMode::Deterministic) {
+    return false;
+  }
+  if (completionWaitActive &&
+      canReleaseAtSemanticBoundary &&
+      !semanticReleaseAlreadyUsedDuringWait) {
+    return true;
+  }
+  return waitObservedCompletionWaitActive && !completionWaitActive;
+}
+
+OpenCbPendingTailWaitAction selectOpenCbPendingTailWaitAction(
+    bool hasPendingRecord,
+    bool readySlotsEmpty,
+    bool stopRequested,
+    bool writerActive,
+    bool timeoutEnabled) noexcept {
+  if (!hasPendingRecord || !readySlotsEmpty) {
+    return OpenCbPendingTailWaitAction::None;
+  }
+  static_cast<void>(timeoutEnabled);
+  if (stopRequested || !writerActive) {
+    return OpenCbPendingTailWaitAction::SubmitPending;
+  }
+  return OpenCbPendingTailWaitAction::WaitForReady;
 }
 
 bool canCoalesceTailPresentBatch(
@@ -26,15 +114,21 @@ bool canCoalesceTailPresentBatch(
     return false;
   }
 
-  const auto& tail = sources.back().slot;
-  if (!slotIsPresentOnlyTail(tail)) {
+  if (!sources.back().slot) {
+    return false;
+  }
+  const auto& tail = *sources.back().slot;
+  if (!slotHasFinalPresentTail(tail)) {
     return false;
   }
   for (const auto& source : sources.first(sources.size() - 1u)) {
-    const auto& head = source.slot;
+    if (!source.slot) {
+      return false;
+    }
+    const auto& head = *source.slot;
     if (head.commandsEmpty() ||
         !head.presentRecords.empty() ||
-        slotIsPresentOnlyTail(head)) {
+        slotHasFinalPresentTail(head)) {
       return false;
     }
   }
@@ -57,7 +151,7 @@ std::size_t selectTailPresentBatchPrefix(
     }
 
     const auto& slot = slots[slotIndex];
-    if (slotIsPresentOnlyTail(slot)) {
+    if (slotHasFinalPresentTail(slot)) {
       return i == 0u ? 0u : i + 1u;
     }
     if (slot.commandsEmpty() || !slot.presentRecords.empty()) {
@@ -84,10 +178,10 @@ std::size_t selectOpenCbTailPresentBatchPrefix(
     }
 
     const auto& slot = slots[slotIndex];
-    if (slotIsPresentOnlyTail(slot)) {
+    if (slotHasFinalPresentTail(slot)) {
       return i == 0u ? 0u : i + 1u;
     }
-    if (!slotIsOpenCbPreencodeHead(slot)) {
+    if (!slotCanBeOpenCbSessionHead(slot)) {
       return 0;
     }
   }
@@ -110,39 +204,83 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
         core::metalqueue::completionSourceForReadySlot(source));
   }
 
-  const auto& tail = sources.back();
-  const auto& present = tail.slot.presentRecords.front();
-
-  auto& combined = sources.front().slot;
-  combined.seqId = tail.slot.seqId;
-  combined.state = core::ChunkSlot::State::Encoding;
-  combined.pipelinePrefetchSealed = false;
-  combined.pipelinePrefetchCommandCursor = 0;
-  for (const auto& head : sources.subspan(1u, sources.size() - 2u)) {
-    if (!combined.appendCommandsFrom(head.slot)) {
+  auto session = encoders::makeEncodeChunkSession();
+  std::optional<core::metalqueue::QueueSubmissionRecord> pending;
+  auto finalizePendingPrefix = [&]() -> std::optional<core::metalqueue::QueueSubmissionRecord> {
+    if (!pending.has_value() || !pending->commandBuffer) {
       return std::nullopt;
     }
-  }
-  combined.appendPresent(present.present, present.presentSource);
-  // Match the normal single-source encode path after the tail Present is
-  // appended; otherwise every draw in the combined slot rebuilds pipeline state.
-  const auto prefetchStarted = std::chrono::steady_clock::now();
-  ctx.queue.prefetchSlotPipelines(combined);
-  perf::countEncodeSlotPsoPrefetchCpuTime(static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - prefetchStarted)
-          .count()));
-
-  observer.observeAndExport(combined);
-  auto submission = encoders::encodeChunk(ctx, tail.slotIndex, combined);
-  if (submission.has_value()) {
-    submission->slotIndex = tail.slotIndex;
-    submission->seqId = tail.slot.seqId;
-    if (submission->completionSources.empty()) {
-      submission->completionSources = std::move(completionSources);
+    if (!encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *pending)) {
+      return std::nullopt;
     }
+    if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
+            std::move(session), *pending)) {
+      return std::nullopt;
+    }
+    return std::move(pending);
+  };
+
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    auto& source = sources[i];
+    if (!source.slot) {
+      return std::nullopt;
+    }
+    auto& slot = *source.slot;
+
+    // Match the normal single-source encode path. The old diagnostic batch
+    // prefetched a copied aggregate slot; the session path keeps source
+    // storage immutable and prefetches each live slot in place.
+    if (!slot.prefetchedPipelinesSealed()) {
+      const auto prefetchStarted = std::chrono::steady_clock::now();
+      ctx.queue.prefetchSlotPipelines(slot);
+      perf::countEncodeSlotPsoPrefetchCpuTime(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - prefetchStarted)
+              .count()));
+    }
+
+    observer.observeAndExport(slot);
+
+    encoders::EncodeChunkOptions options{};
+    options.allowInjectedCommandBufferMidChunkCommits =
+        openCbPendingAllowsSemanticMidChunkCommits(
+            pending.has_value());
+    options.disablePresentAcquireSplit = true;
+    options.session = session.get();
+    options.deferSessionFinalization = i + 1u < sources.size();
+    options.sessionSource = completionSources[i];
+    options.sessionLookaheadSources = sources.subspan(i);
+    if (pending.has_value()) {
+      options.commandBuffer = pending->commandBuffer;
+    }
+
+    auto submission = encoders::encodeChunk(
+        ctx, source.slotIndex, slot, std::move(options));
+    if (!submission.has_value() || !submission->commandBuffer) {
+      if (pending.has_value()) {
+        return finalizePendingPrefix();
+      }
+      return std::nullopt;
+    }
+    pending = std::move(*submission);
   }
-  return submission;
+
+  if (!pending.has_value()) {
+    return std::nullopt;
+  }
+  const auto& tail = sources.back();
+  DXMT_ASSERT(tail.slot != nullptr);
+  pending->slotIndex = tail.slotIndex;
+  pending->seqId = tail.slot->seqId;
+  if (pending->completionSources.empty()) {
+    pending->completionSources = std::move(completionSources);
+  }
+  if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
+          std::move(session), *pending)) {
+    return std::nullopt;
+  }
+  return pending;
 }
 
 }  // namespace dxmt9::render

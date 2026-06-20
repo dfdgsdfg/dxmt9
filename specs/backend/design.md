@@ -379,27 +379,38 @@ design needs — `dequeueReadySlotBatch()` (move several consecutive ready slots
 batch to `onChunkReady` and returns `nullopt` for empty/multi-source batches),
 and `PendingCompletion` CB-to-N-`seqId` expansion. The production encode loop
 still calls `runEncodeIteration()` / `onChunkReady()`; these primitives change no
-current behavior. The §2.2.3 completion contract (R-BACK-2.49) is authoritative
-for how one Metal tail expands to ordered per-source `seqId` completion.
+default behavior. The opt-in tail-Present batch path consumes source slots
+through `EncodeSession` refs instead of materializing a copied aggregate
+`ChunkSlot`, but remains diagnostic until the §2.2.3 gates pass. The §2.2.3
+completion contract (R-BACK-2.49) is authoritative for how one Metal tail expands
+to ordered per-source `seqId` completion.
 
-Verification (the full gate set is in §2.2.3 *Verification Shape*; in brief):
+Verification (the full ordered gate set is in §2.2.3 *Verification Shape*; in
+brief):
 
+- Native/fake backend — semantic boundary detection, fail-open prefix submit,
+  ordered source completion, and no inline completion of unsubmitted work.
 - TLA — `PresentFrameLatency` (`CommitNonPresent` / `CommitPresent`,
   `OutstandingPresentBound`), `ResourceLifetime` (`NoUseAfterFree`),
   `QueueLifecycleRefinement` (`SeqIdAssignmentSafety`, `BoundedInflight`),
-  `ConcurrentProgressSignals`. The current models are per-`seqId`; a session that
-  backs several `seqId`s with one Metal tail needs the R-BACK-2.49 completion
-  refinement, which the TLA models do **not** yet cover (tracked in `specs/gap.md`).
-- Counters / A-B — `completion_wait_with_enqueue_ms` ↑ or
-  `completion_wait_without_enqueue_ms` ↓ at non-increasing
+  `ConcurrentProgressSignals`, and `EncodeSessionCompletion`
+  (`NoInlineCompletionOfSessionSources`, `PresentCompletionAfterTail`,
+  `OrderedCompletionExpansion`). `EncodeSessionCompletion.tla` models the
+  R-BACK-2.49 refinement where one Metal tail expands into several ordered
+  per-source `seqId` completions.
+- Runtime visual/locality — output must pass the visual gate at non-increasing
   `command_buffers_per_present` / `passes_per_present` / `tile_preservation_mib`
-  / final same-key reopens (H43 overlap + H57 locality gates in
+  / final same-key reopens (H57 locality gates in
   `scripts/tools/compare_3dmark05_perf_counters.py`).
+- Runtime no-gputrace — only after visual/locality is clean, counters must show
+  `completion_wait_with_enqueue_ms` ↑ or `completion_wait_without_enqueue_ms` ↓
+  (H43 overlap gate).
 - Reverted carriers — the A/C and B prototypes (`DXMT9_OFFSCREEN_RUN_AHEAD` plus
   ready-slot coalescing, then CPU-ready staging) moved the P4 wait but failed
   locality, total-wait, and visual-correctness gates and were reverted; current
-  HEAD honors none of those envs. The production path is §2.2.3, not a reintroduced
-  A/C/B carrier.
+  source honors none of those historical envs. The opt-in open-CB
+  `EncodeSession` carrier is separate diagnostic infrastructure and remains
+  gated by the §2.2.3 promotion requirements, not a reintroduced A/C/B carrier.
 - Performance model — `docs/perfomance/present-pacing.md` (H10 under-pipelining,
   H54/H56 draw-count-carrier rejection, H57 locality gates, H73 run-ahead design
   gate, H108–H116/H134–H136 open-CB and render-session-carry failures).
@@ -469,6 +480,12 @@ SessionSourceRef {
 This is the DOD boundary for pass streaming: coalescing is a vector of source
 references plus one session state object, not a merged heap object or a deep
 copy of `ChunkSlot`.
+
+Load/store proof lookahead follows the same boundary. The encoder may scan a
+call-local suffix of already selected/retained sources when choosing store
+actions for a logical pass, but the suffix is not stored in `EncodeSession`.
+If the queue has not selected a future source, the proof remains source-local
+or defensive.
 
 #### Semantic Boundary Rules
 
@@ -584,13 +601,14 @@ large uniform/resource arrays just because several sources share a session.
 
 #### Verification Shape
 
-The session model needs evidence at three levels:
+The session model needs evidence through four ordered gates:
 
 | Level | Required proof |
 |---|---|
 | Native/fake backend | semantic boundary detection, fail-open prefix submit, ordered source completion, no inline completion of unsubmitted work |
 | TLA/refinement | one Metal completion event expands to ordered per-source `GpuComplete`; resources reclaim only after represented source seqIds complete |
-| Runtime no-gputrace | `completion_wait_with_enqueue_ms` rises or `completion_wait_without_enqueue_ms` falls while final same-key reopen, CB/pass count, load/store MiB, and tile preservation do not increase |
+| Runtime visual/locality | output passes the visual gate, and final same-key reopen, CB/pass count, load/store MiB, and tile preservation do not increase |
+| Runtime no-gputrace | `completion_wait_with_enqueue_ms` rises or `completion_wait_without_enqueue_ms` falls after the visual/locality gate is clean |
 
 Only after those gates pass should Xcode replay counters be spent. The Xcode
 question is then whether the session changed GPU-side hot rows; the no-gputrace

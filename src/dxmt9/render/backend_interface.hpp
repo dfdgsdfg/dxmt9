@@ -55,7 +55,8 @@ class IRenderBackend {
     }
     if (sources.size() == 1u) {
       const auto& source = sources.front();
-      return onChunkReady(ctx, source.slotIndex, source.slot, {});
+      DXMT_ASSERT(source.slot != nullptr);
+      return onChunkReady(ctx, source.slotIndex, *source.slot, {});
     }
     return std::nullopt;
   }

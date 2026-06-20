@@ -1,6 +1,7 @@
 #include "../../../src/dxmt9/render/backend_interface.hpp"
 #include "../../../src/dxmt9/render/tail_present_batch.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,8 @@ using dxmt9::core::DrawParamPayloadView;
 using dxmt9::core::DrawUniformPayload;
 using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::ReadySlotSnapshot;
+using dxmt9::encoders::RenderPassEntryDecision;
+using dxmt9::render::OpenCbPendingTailWaitAction;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -94,23 +97,29 @@ struct ContextFixture {
   };
 };
 
-ReadySlotSnapshot makeReadySource(std::size_t slotIndex, std::uint64_t seqId) {
+ReadySlotSnapshot makeReadySource(ChunkSlot& slot,
+                                  std::size_t slotIndex,
+                                  std::uint64_t seqId) {
   ReadySlotSnapshot source;
   source.slotIndex = slotIndex;
-  source.slot.seqId = seqId;
+  slot.seqId = seqId;
+  source.slot = &slot;
   return source;
 }
 
-ReadySlotSnapshot makeClearSource(std::size_t slotIndex, std::uint64_t seqId) {
-  auto source = makeReadySource(slotIndex, seqId);
-  source.slot.appendClear({});
+ReadySlotSnapshot makeClearSource(ChunkSlot& slot,
+                                  std::size_t slotIndex,
+                                  std::uint64_t seqId) {
+  auto source = makeReadySource(slot, slotIndex, seqId);
+  slot.appendClear({});
   return source;
 }
 
-ReadySlotSnapshot makePresentOnlySource(std::size_t slotIndex,
+ReadySlotSnapshot makePresentOnlySource(ChunkSlot& slot,
+                                        std::size_t slotIndex,
                                         std::uint64_t seqId) {
-  auto source = makeReadySource(slotIndex, seqId);
-  source.slot.appendPresent({}, {});
+  auto source = makeReadySource(slot, slotIndex, seqId);
+  slot.appendPresent({}, {});
   return source;
 }
 
@@ -167,8 +176,9 @@ void encodeChunkOptionsDefaultToFreshCommandBufferPath() {
 void singleSourceBatchFallsBackToOnChunkReady() {
   ContextFixture fixture;
   CountingBackend backend;
+  ChunkSlot slot;
   std::array<ReadySlotSnapshot, 1> sources{
-      makeReadySource(/*slotIndex=*/3, /*seqId=*/11),
+      makeReadySource(slot, /*slotIndex=*/3, /*seqId=*/11),
   };
 
   const auto submission = backend.onChunkBatchReady(fixture.ctx, sources);
@@ -184,9 +194,10 @@ void singleSourceBatchFallsBackToOnChunkReady() {
 void multiSourceBatchRequiresExplicitBackendImplementation() {
   ContextFixture fixture;
   CountingBackend backend;
+  std::array<ChunkSlot, 2> slots{};
   std::array<ReadySlotSnapshot, 2> sources{
-      makeReadySource(/*slotIndex=*/1, /*seqId=*/5),
-      makeReadySource(/*slotIndex=*/2, /*seqId=*/6),
+      makeReadySource(slots[0], /*slotIndex=*/1, /*seqId=*/5),
+      makeReadySource(slots[1], /*slotIndex=*/2, /*seqId=*/6),
   };
 
   const auto submission = backend.onChunkBatchReady(fixture.ctx, sources);
@@ -196,29 +207,60 @@ void multiSourceBatchRequiresExplicitBackendImplementation() {
           "multi-source batch does not silently encode only the first source");
 }
 
-void tailPresentBatchShapeRequiresPresentOnlyTail() {
+void tailPresentBatchShapeRequiresFinalPresentTail() {
+  std::array<ChunkSlot, 2> slots{};
   std::array<ReadySlotSnapshot, 2> valid{
-      makeClearSource(/*slotIndex=*/1, /*seqId=*/5),
-      makePresentOnlySource(/*slotIndex=*/2, /*seqId=*/6),
+      makeClearSource(slots[0], /*slotIndex=*/1, /*seqId=*/5),
+      makePresentOnlySource(slots[1], /*slotIndex=*/2, /*seqId=*/6),
   };
   check(dxmt9::render::canCoalesceTailPresentBatch(valid),
         "non-present head plus present-only tail is coalescable");
-  check(dxmt9::render::slotIsPresentOnlyTail(valid.back().slot),
+  check(dxmt9::render::slotIsPresentOnlyTail(*valid.back().slot),
         "tail source is recognized as present-only");
+  check(dxmt9::render::slotHasFinalPresentTail(*valid.back().slot),
+        "present-only tail is also a final-present tail");
 
-  auto headWithPresent = valid;
-  headWithPresent.front().slot.appendPresent({}, {});
+  std::array<ChunkSlot, 2> headWithPresentSlots{};
+  std::array<ReadySlotSnapshot, 2> headWithPresent{
+      makeClearSource(headWithPresentSlots[0], /*slotIndex=*/1, /*seqId=*/5),
+      makePresentOnlySource(headWithPresentSlots[1], /*slotIndex=*/2, /*seqId=*/6),
+  };
+  headWithPresentSlots[0].appendPresent({}, {});
   check(!dxmt9::render::canCoalesceTailPresentBatch(headWithPresent),
         "head source with an existing present is rejected");
 
-  auto tailWithExtraWork = valid;
-  tailWithExtraWork.back().slot.clearCommands();
-  tailWithExtraWork.back().slot.appendClear({});
-  tailWithExtraWork.back().slot.appendPresent({}, {});
-  check(!dxmt9::render::slotIsPresentOnlyTail(tailWithExtraWork.back().slot),
-        "tail with extra work is not present-only");
-  check(!dxmt9::render::canCoalesceTailPresentBatch(tailWithExtraWork),
-        "tail source with extra work is rejected");
+  std::array<ChunkSlot, 2> tailWithPrePresentWorkSlots{};
+  std::array<ReadySlotSnapshot, 2> tailWithPrePresentWork{
+      makeClearSource(tailWithPrePresentWorkSlots[0], /*slotIndex=*/1,
+                      /*seqId=*/5),
+      makeReadySource(tailWithPrePresentWorkSlots[1], /*slotIndex=*/2,
+                      /*seqId=*/6),
+  };
+  tailWithPrePresentWorkSlots[1].appendClear({});
+  tailWithPrePresentWorkSlots[1].appendPresent({}, {});
+  check(!dxmt9::render::slotIsPresentOnlyTail(
+            *tailWithPrePresentWork.back().slot),
+        "tail with pre-Present work is not present-only");
+  check(dxmt9::render::slotHasFinalPresentTail(
+            *tailWithPrePresentWork.back().slot),
+        "tail with pre-Present work still has a final Present");
+  check(dxmt9::render::canCoalesceTailPresentBatch(tailWithPrePresentWork),
+        "tail source with pre-Present work is coalescable");
+
+  std::array<ChunkSlot, 2> tailWithPostPresentWorkSlots{};
+  std::array<ReadySlotSnapshot, 2> tailWithPostPresentWork{
+      makeClearSource(tailWithPostPresentWorkSlots[0], /*slotIndex=*/1,
+                      /*seqId=*/5),
+      makeReadySource(tailWithPostPresentWorkSlots[1], /*slotIndex=*/2,
+                      /*seqId=*/6),
+  };
+  tailWithPostPresentWorkSlots[1].appendPresent({}, {});
+  tailWithPostPresentWorkSlots[1].appendClear({});
+  check(!dxmt9::render::slotHasFinalPresentTail(
+            *tailWithPostPresentWork.back().slot),
+        "tail with post-Present work is not a final-present tail");
+  check(!dxmt9::render::canCoalesceTailPresentBatch(tailWithPostPresentWork),
+        "tail source with post-Present work is rejected");
 }
 
 void openCbPreencodeHeadRequiresPresentSplitBeforePublish() {
@@ -243,17 +285,225 @@ void openCbPreencodeHeadRequiresPresentSplitBeforePublish() {
         "clearCommands resets publish reason before slot reuse");
 }
 
+void openCbPendingAppendPolicyAllowsFinalPresentTail() {
+  ChunkSlot head;
+  head.publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  head.appendClear({});
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
+            head, /*carryRenderSession=*/false),
+        "open-CB preencode heads can start pending work");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            head, /*carryRenderSession=*/false, /*hasPendingSession=*/false),
+        "open-CB preencode heads can start or extend pending work");
+
+  ChunkSlot presentOnly;
+  presentOnly.appendPresent({}, {});
+  check(dxmt9::render::slotHasFinalPresentTail(presentOnly),
+        "present-only tail has final Present");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            presentOnly, /*carryRenderSession=*/false,
+            /*hasPendingSession=*/false),
+        "present-only tails can finalize pending work");
+
+  ChunkSlot ordinaryWork;
+  ordinaryWork.appendClear({});
+  check(!dxmt9::render::slotCanStartOpenCbPendingSession(
+            ordinaryWork, /*carryRenderSession=*/false),
+        "ordinary work cannot start a pending session without carry mode");
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
+            ordinaryWork, /*carryRenderSession=*/true),
+        "ordinary non-present work may start a carried session");
+  check(!dxmt9::render::slotCanAppendToOpenCbPending(
+            ordinaryWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/false),
+        "ordinary work cannot append before a session exists");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            ordinaryWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true),
+        "ordinary non-present work may append inside a carried session");
+
+  ChunkSlot presentWithPreWork;
+  presentWithPreWork.appendClear({});
+  presentWithPreWork.appendPresent({}, {});
+  check(!dxmt9::render::slotIsPresentOnlyTail(presentWithPreWork),
+        "pre-Present work makes the tail non-present-only");
+  check(dxmt9::render::slotHasFinalPresentTail(presentWithPreWork),
+        "pre-Present work can still end in a final Present");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            presentWithPreWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true),
+        "final-present tails can finalize an open-CB session");
+
+  ChunkSlot presentWithPostWork;
+  presentWithPostWork.appendPresent({}, {});
+  presentWithPostWork.appendClear({});
+  check(!dxmt9::render::slotHasFinalPresentTail(presentWithPostWork),
+        "post-Present work is not a final-present tail");
+  check(!dxmt9::render::slotCanAppendToOpenCbPending(
+            presentWithPostWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true),
+        "present-bearing work must not append after the final Present");
+}
+
+void openCbPendingTailWaitActionUsesQueueLocalState() {
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/false, /*readySlotsEmpty=*/true,
+            /*stopRequested=*/false, /*writerActive=*/false,
+            /*timeoutEnabled=*/false) ==
+            OpenCbPendingTailWaitAction::None,
+        "no pending record needs no tail wait action");
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/true, /*readySlotsEmpty=*/false,
+            /*stopRequested=*/false, /*writerActive=*/true,
+            /*timeoutEnabled=*/false) ==
+            OpenCbPendingTailWaitAction::None,
+        "ready sources continue through normal dequeue");
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/true, /*readySlotsEmpty=*/true,
+            /*stopRequested=*/false, /*writerActive=*/true,
+            /*timeoutEnabled=*/false) ==
+            OpenCbPendingTailWaitAction::WaitForReady,
+        "active writer lets a pending head wait for the next ready source");
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/true, /*readySlotsEmpty=*/true,
+            /*stopRequested=*/false, /*writerActive=*/false,
+            /*timeoutEnabled=*/false) ==
+            OpenCbPendingTailWaitAction::SubmitPending,
+        "inactive writer releases a pending visible prefix deterministically");
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/true, /*readySlotsEmpty=*/true,
+            /*stopRequested=*/true, /*writerActive=*/true,
+            /*timeoutEnabled=*/false) ==
+            OpenCbPendingTailWaitAction::SubmitPending,
+        "stop releases a pending visible prefix");
+  check(dxmt9::render::selectOpenCbPendingTailWaitAction(
+            /*hasPendingRecord=*/true, /*readySlotsEmpty=*/true,
+            /*stopRequested=*/false, /*writerActive=*/false,
+            /*timeoutEnabled=*/true) ==
+            OpenCbPendingTailWaitAction::SubmitPending,
+        "inactive writer releases a pending prefix even in timeout mode");
+}
+
+void openCbPendingMidChunkPolicyPreservesSemanticSplits() {
+  check(dxmt9::render::openCbPendingAllowsSemanticMidChunkCommits(
+            /*appendToPending=*/false),
+        "fresh pending heads keep semantic pass-boundary sub-CBs enabled");
+  check(dxmt9::render::openCbPendingAllowsSemanticMidChunkCommits(
+            /*appendToPending=*/true),
+        "appended sources keep semantic pass-boundary sub-CBs enabled");
+}
+
+void openCbSemanticBoundaryReleaseRequiresCompletionWait() {
+  using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
+
+  check(dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/true,
+            /*sourceHasFinalPresentTail=*/false,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "semantic boundary source may release during a completion wait");
+  check(!dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/false,
+            /*sourceHasFinalPresentTail=*/false,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "ordinary sources do not trigger semantic boundary release");
+  check(!dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/true,
+            /*sourceHasFinalPresentTail=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "final-present tails use the tail submit path");
+  check(!dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/true,
+            /*sourceHasFinalPresentTail=*/false,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "semantic boundary release is useful only while completion waits");
+  check(!dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/true,
+            /*sourceHasFinalPresentTail=*/false,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "only one semantic boundary prefix is released per completion wait");
+  check(dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            /*sourceIsSemanticBoundary=*/true,
+            /*sourceHasFinalPresentTail=*/false,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "deterministic semantic-boundary release does not depend on wait state");
+}
+
+void openCbPendingWakeRecheckTracksCompletionWaitTransitions() {
+  using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
+
+  check(dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/true,
+            /*waitObservedCompletionWaitActive=*/false,
+            Mode::CompletionWait,
+            /*canReleaseAtSemanticBoundary=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "wait-start wakes a releasable semantic-boundary prefix");
+  check(!dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/true,
+            /*waitObservedCompletionWaitActive=*/false,
+            Mode::CompletionWait,
+            /*canReleaseAtSemanticBoundary=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "already-used semantic release does not spin while wait stays active");
+  check(!dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/true,
+            /*waitObservedCompletionWaitActive=*/false,
+            Mode::CompletionWait,
+            /*canReleaseAtSemanticBoundary=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "ordinary pending prefixes do not wake on wait-start");
+  check(dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/false,
+            /*waitObservedCompletionWaitActive=*/true,
+            Mode::CompletionWait,
+            /*canReleaseAtSemanticBoundary=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "wait-end wakes to reset the once-per-wait release gate");
+  check(!dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/false,
+            /*waitObservedCompletionWaitActive=*/false,
+            Mode::CompletionWait,
+            /*canReleaseAtSemanticBoundary=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "idle non-wait state does not wake by itself");
+  check(!dxmt9::render::openCbPendingCompletionWaitTransitionNeedsRecheck(
+            /*completionWaitActive=*/true,
+            /*waitObservedCompletionWaitActive=*/false,
+            Mode::Deterministic,
+            /*canReleaseAtSemanticBoundary=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "deterministic release does not need completion-wait transition wakeups");
+}
+
 void tailPresentBatchShapeAllowsSeveralHeads() {
+  std::array<ChunkSlot, 3> slots{};
   std::array<ReadySlotSnapshot, 3> valid{
-      makeClearSource(/*slotIndex=*/1, /*seqId=*/5),
-      makeClearSource(/*slotIndex=*/2, /*seqId=*/6),
-      makePresentOnlySource(/*slotIndex=*/3, /*seqId=*/7),
+      makeClearSource(slots[0], /*slotIndex=*/1, /*seqId=*/5),
+      makeClearSource(slots[1], /*slotIndex=*/2, /*seqId=*/6),
+      makePresentOnlySource(slots[2], /*slotIndex=*/3, /*seqId=*/7),
   };
   check(dxmt9::render::canCoalesceTailPresentBatch(valid),
         "several non-present heads plus present-only tail are coalescable");
 
-  auto middleWithPresent = valid;
-  middleWithPresent[1].slot.appendPresent({}, {});
+  std::array<ChunkSlot, 3> middleWithPresentSlots{};
+  std::array<ReadySlotSnapshot, 3> middleWithPresent{
+      makeClearSource(middleWithPresentSlots[0], /*slotIndex=*/1, /*seqId=*/5),
+      makeClearSource(middleWithPresentSlots[1], /*slotIndex=*/2, /*seqId=*/6),
+      makePresentOnlySource(middleWithPresentSlots[2], /*slotIndex=*/3, /*seqId=*/7),
+  };
+  middleWithPresentSlots[1].appendPresent({}, {});
   check(!dxmt9::render::canCoalesceTailPresentBatch(middleWithPresent),
         "any pre-tail source with present metadata is rejected");
 }
@@ -265,6 +515,7 @@ void tailPresentPrefixSelectorRequiresCompleteTail() {
   slots[1].seqId = 6;
   slots[1].appendClear({});
   slots[2].seqId = 7;
+  slots[2].appendClear({});
   slots[2].appendPresent({}, {});
 
   const std::deque<std::size_t> readySlots{0, 1, 2};
@@ -273,7 +524,7 @@ void tailPresentPrefixSelectorRequiresCompleteTail() {
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/3),
           3u,
-          "selector accepts complete head/head/present-tail prefix");
+          "selector accepts complete head/head/final-present-tail prefix");
   checkEq(dxmt9::render::selectTailPresentBatchPrefix(
               readySlots,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
@@ -294,11 +545,24 @@ void tailPresentPrefixSelectorRequiresCompleteTail() {
               readySlots,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/3),
+          2u,
+          "selector ends the prefix at the first final Present");
+
+  std::array<ChunkSlot, 3> postPresentTailSlots{};
+  postPresentTailSlots[0].appendClear({});
+  postPresentTailSlots[1].appendClear({});
+  postPresentTailSlots[2].appendPresent({}, {});
+  postPresentTailSlots[2].appendClear({});
+  checkEq(dxmt9::render::selectTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(
+                  postPresentTailSlots.data(), postPresentTailSlots.size()),
+              /*maxCount=*/3),
           0u,
-          "selector rejects present metadata before the tail");
+          "selector rejects work after the final Present");
 }
 
-void openCbTailPresentPrefixRequiresOpenCbHeads() {
+void openCbTailPresentPrefixAllowsSessionHeads() {
   std::array<ChunkSlot, 4> slots{};
   slots[0].seqId = 5;
   slots[0].publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
@@ -307,6 +571,7 @@ void openCbTailPresentPrefixRequiresOpenCbHeads() {
   slots[1].publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
   slots[1].appendClear({});
   slots[2].seqId = 7;
+  slots[2].appendClear({});
   slots[2].appendPresent({}, {});
 
   const std::deque<std::size_t> readySlots{0, 1, 2};
@@ -315,7 +580,7 @@ void openCbTailPresentPrefixRequiresOpenCbHeads() {
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/3),
           3u,
-          "open-CB selector accepts open heads plus present-only tail");
+          "open-CB selector accepts open heads plus final-present tail");
   checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
               readySlots,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
@@ -323,13 +588,92 @@ void openCbTailPresentPrefixRequiresOpenCbHeads() {
           0u,
           "open-CB selector rejects when tail is outside scratch capacity");
 
+  const std::deque<std::size_t> headOnly{0, 1};
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              headOnly,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/2),
+          0u,
+          "open-CB selector rejects a real head-only ready queue");
+
+  std::array<ChunkSlot, 3> postPresentTailSlots{};
+  postPresentTailSlots[0].publishReason =
+      dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  postPresentTailSlots[0].appendClear({});
+  postPresentTailSlots[1].publishReason =
+      dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  postPresentTailSlots[1].appendClear({});
+  postPresentTailSlots[2].appendPresent({}, {});
+  postPresentTailSlots[2].appendClear({});
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(
+                  postPresentTailSlots.data(), postPresentTailSlots.size()),
+              /*maxCount=*/3),
+          0u,
+          "open-CB selector rejects post-Present work in the tail");
+
+  slots[0].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
   slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
   checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
               readySlots,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/3),
-          0u,
-          "open-CB selector rejects non-PresentSplitBefore heads");
+          3u,
+          "carry-session selector accepts ordinary non-present heads");
+}
+
+void renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch() {
+  check(dxmt9::encoders::classifyRenderPassEntry(
+            /*hasActiveRender=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*exactHazard=*/false,
+            /*tileMidPassIneligible=*/false) ==
+            RenderPassEntryDecision::ContinueActive,
+        "same attachment with clean hazards continues active render encoder");
+  check(dxmt9::encoders::classifyRenderPassEntry(
+            /*hasActiveRender=*/false,
+            /*attachmentKeyMatches=*/true,
+            /*exactHazard=*/false,
+            /*tileMidPassIneligible=*/false) ==
+            RenderPassEntryDecision::BeginPass,
+        "no active render encoder begins a pass");
+  check(dxmt9::encoders::classifyRenderPassEntry(
+            /*hasActiveRender=*/true,
+            /*attachmentKeyMatches=*/false,
+            /*exactHazard=*/false,
+            /*tileMidPassIneligible=*/false) ==
+            RenderPassEntryDecision::SplitRenderTargetChange,
+        "attachment changes are semantic render-pass boundaries");
+  check(dxmt9::encoders::classifyRenderPassEntry(
+            /*hasActiveRender=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*exactHazard=*/true,
+            /*tileMidPassIneligible=*/false) ==
+            RenderPassEntryDecision::SplitHazard,
+        "exact active-render-target hazards split the render pass");
+  check(dxmt9::encoders::classifyRenderPassEntry(
+            /*hasActiveRender=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*exactHazard=*/false,
+            /*tileMidPassIneligible=*/true) ==
+            RenderPassEntryDecision::SplitTileMidPassIneligible,
+        "tile-FFP mid-pass ineligibility is a semantic encoder boundary");
+}
+
+void storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession() {
+  check(dxmt9::encoders::useSourceLocalStoreProofLookahead(
+            /*externalEncodeSession=*/false,
+            /*sessionMayContinue=*/false),
+        "single-source encode path may use source-local store proof lookahead");
+  check(!dxmt9::encoders::useSourceLocalStoreProofLookahead(
+            /*externalEncodeSession=*/true,
+            /*sessionMayContinue=*/true),
+        "carried EncodeSession path must not use source-local store proof lookahead");
+  check(dxmt9::encoders::useSourceLocalStoreProofLookahead(
+            /*externalEncodeSession=*/true,
+            /*sessionMayContinue=*/false),
+        "finalizing EncodeSession path may use current-source suffix lookahead");
 }
 
 void chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices() {
@@ -423,11 +767,18 @@ int main() {
     encodeChunkOptionsDefaultToFreshCommandBufferPath();
     singleSourceBatchFallsBackToOnChunkReady();
     multiSourceBatchRequiresExplicitBackendImplementation();
-    tailPresentBatchShapeRequiresPresentOnlyTail();
+    tailPresentBatchShapeRequiresFinalPresentTail();
     openCbPreencodeHeadRequiresPresentSplitBeforePublish();
+    openCbPendingAppendPolicyAllowsFinalPresentTail();
+    openCbPendingTailWaitActionUsesQueueLocalState();
+    openCbPendingMidChunkPolicyPreservesSemanticSplits();
+    openCbSemanticBoundaryReleaseRequiresCompletionWait();
+    openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();
-    openCbTailPresentPrefixRequiresOpenCbHeads();
+    openCbTailPresentPrefixAllowsSessionHeads();
+    renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch();
+    storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession();
     chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices();
   } catch (const TestFailure& error) {
     std::cerr << "render_backend_batch_contract_spec failed: "

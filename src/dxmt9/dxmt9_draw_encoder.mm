@@ -5249,6 +5249,7 @@ struct EncodeChunkSessionStorage {
       renderEncoderGpuSamples;
   std::uint32_t renderEncoderGpuSampleCursor = 0;
   std::uint32_t requestedRenderEncoderGpuSamples = 0;
+  std::uint64_t committedSubCommandBuffers = 0;
   bool initialized = false;
 };
 
@@ -5290,6 +5291,40 @@ void initializeEncodeChunkSessionGpuSamplingStorage(
   if (!state.renderEncoderGpuSampleBuffer) {
     state.requestedRenderEncoderGpuSamples = 0;
   }
+}
+
+std::size_t sessionGpuSamplingCommandCount(
+    const core::ChunkSlot& slot,
+    std::span<const core::metalqueue::ReadySlotSnapshot> lookaheadSources) noexcept {
+  if (lookaheadSources.empty()) {
+    return slot.commandCount();
+  }
+
+  constexpr std::size_t kMaxSampledCommands =
+      (kMaxRenderEncoderGpuSamples - 16u) / 2u;
+  std::size_t total = 0;
+  bool includesCurrentSlot = false;
+  auto addCommands = [&](std::size_t count) noexcept {
+    if (total >= kMaxSampledCommands) {
+      return;
+    }
+    const std::size_t remaining = kMaxSampledCommands - total;
+    total += std::min(count, remaining);
+  };
+  for (const auto& source : lookaheadSources) {
+    if (!source.slot) {
+      continue;
+    }
+    includesCurrentSlot =
+        includesCurrentSlot || source.slot == &slot ||
+        source.slot->seqId == slot.seqId;
+    addCommands(source.slot->commandCount());
+  }
+  if (!includesCurrentSlot) {
+    addCommands(slot.commandCount());
+  }
+  return std::min(kMaxSampledCommands,
+                  std::max<std::size_t>(slot.commandCount(), total));
 }
 
 AttachmentKey makeAttachmentKey(const core::FlatDrawStateRecord& hot) {
@@ -9015,6 +9050,7 @@ void appendSamplerTrace(std::ostringstream& out,
 
 struct EncodeChunkSessionState {
   EncodeChunkSessionStorage storage{};
+  core::metalqueue::EncodeSessionSourceList sources{};
 };
 
 EncodeChunkSession makeEncodeChunkSession() {
@@ -9032,6 +9068,19 @@ void resetEncodeChunkSession(EncodeChunkSessionState& session) {
   DXMT_ASSERT(!session.storage.activeBlitEncoder);
   DXMT_ASSERT(!session.storage.hasActiveRender);
   session.storage = EncodeChunkSessionStorage{};
+  session.sources.clear();
+}
+
+bool retainEncodeChunkSessionUntilSubmissionComplete(
+    EncodeChunkSession session,
+    core::metalqueue::QueueSubmissionRecord& record) {
+  if (!session) {
+    return true;
+  }
+  std::shared_ptr<EncodeChunkSessionState> retained(
+      session.release(), EncodeChunkSessionDeleter{});
+  record.retainedPayloads.push_back(std::move(retained));
+  return true;
 }
 
 bool encodeChunkSessionHasActiveRender(
@@ -9051,6 +9100,46 @@ bool encodeChunkSessionHasDeferredSubmissionPayload(
          storage.metalCaptureRequest.has_value() ||
          static_cast<bool>(storage.renderEncoderGpuSampleBuffer) ||
          !storage.renderEncoderGpuSamples.empty();
+}
+
+bool appendEncodeChunkSessionSource(
+    EncodeChunkSessionState& session,
+    core::metalqueue::QueueCompletionSource source) noexcept {
+  return session.sources.append(source);
+}
+
+std::span<const core::metalqueue::QueueCompletionSource>
+encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept {
+  return session.sources.span();
+}
+
+bool publishEncodeChunkSessionSources(
+    const EncodeChunkSessionState& sessionState,
+    core::metalqueue::QueueSubmissionRecord& record) {
+  const auto sessionSources = sessionState.sources.span();
+  if (sessionSources.empty()) {
+    return true;
+  }
+
+  if (record.completionSources.empty()) {
+    record.completionSources.assign(
+        sessionSources.begin(), sessionSources.end());
+    return true;
+  }
+
+  if (record.completionSources.size() != sessionSources.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < sessionSources.size(); ++i) {
+    const auto& expected = sessionSources[i];
+    const auto& actual = record.completionSources[i];
+    if (expected.slotIndex != actual.slotIndex ||
+        expected.seqId != actual.seqId ||
+        expected.hasPresent != actual.hasPresent) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool finalizeEncodeChunkSessionIntoSubmission(
@@ -9210,6 +9299,9 @@ bool finalizeEncodeChunkSessionIntoSubmission(
   if (storage.metalCaptureRequest.has_value()) {
     record.metalCaptureDevice = WMT::Device{ctx.device.handle};
     record.metalCapture = std::move(storage.metalCaptureRequest);
+  }
+  if (!publishEncodeChunkSessionSources(sessionState, record)) {
+    return false;
   }
   if (!record.renderEncoderGpuSampleBuffer &&
       storage.renderEncoderGpuSampleBuffer) {
@@ -9386,8 +9478,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 // Public so the G4 render-pass-actions fixture can exercise the
 // contract without a Metal device.
 perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
-    const core::ChunkSlot& slot,
-    std::size_t startCommandIndex,
+    std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance) {
   using Proof = perf::RenderPassDepthStoreProof;
@@ -9395,99 +9486,107 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
   if (firstTouchCommandDistance) {
     *firstTouchCommandDistance = noTouch;
   }
-  auto finish = [&](Proof proof, std::size_t commandIndex) {
+  auto finish = [&](Proof proof, std::size_t logicalDistance) {
     if (firstTouchCommandDistance) {
-      const auto distance = commandIndex > startCommandIndex
-          ? commandIndex - startCommandIndex
-          : std::size_t{0};
       *firstTouchCommandDistance =
           static_cast<std::uint32_t>(
-              std::min<std::size_t>(distance, noTouch - 1u));
+              std::min<std::size_t>(logicalDistance, noTouch - 1u));
     }
     return proof;
   };
   if (!depthHandle) {
     return Proof::BlockNullDepth;
   }
+  if (sources.empty()) {
+    return Proof::BlockNoLookahead;
+  }
   using Kind = core::MetalCommandKind;
   bool sawPresent = false;
-  for (std::size_t i = startCommandIndex + 1; i < slot.commandCount(); ++i) {
-    const auto next = slot.commandAt(i);
-    switch (next.kind) {
-      case Kind::Clear:
-        if (next.clear && next.clear->depthStencil.handle == depthHandle) {
-          // R-BACK-15.7: the next op on this depth handle is a clear,
-          // so storing tile contents would be wasted bandwidth.
-          return finish(Proof::AllowNextClear, i);
-        }
-        break;
-      case Kind::DrawRun:
-        if (next.drawState.hot) {
-          if (next.drawState.hot->depthStencil.handle == depthHandle) {
-            // Depth is read by a subsequent draw — must Store.
-            return finish(Proof::BlockDrawDepth, i);
+  std::size_t logicalDistance = 0;
+  for (const auto& source : sources) {
+    if (!source.slot) {
+      return Proof::BlockNoLookahead;
+    }
+    const auto& slot = *source.slot;
+    const std::size_t firstCommandIndex =
+        std::min(source.firstCommandIndex, slot.commandCount());
+    for (std::size_t i = firstCommandIndex; i < slot.commandCount(); ++i) {
+      ++logicalDistance;
+      const auto next = slot.commandAt(i);
+      switch (next.kind) {
+        case Kind::Clear:
+          if (next.clear && next.clear->depthStencil.handle == depthHandle) {
+            // R-BACK-15.7: the next op on this depth handle is a clear,
+            // so storing tile contents would be wasted bandwidth.
+            return finish(Proof::AllowNextClear, logicalDistance);
           }
-          // R-BACK-15.7 extension: depth-as-shadow-map sample. Walk the
-          // active texture bindings and bail if any matches the depth
-          // handle (the depth surface is sampled as a texture by this
-          // later draw, so its tile contents must be preserved).
-          const auto& textures = next.drawState.hot->textures;
-          const std::uint32_t mask = next.drawState.hot->textureMask;
-          for (std::size_t s = 0; s < textures.size(); ++s) {
-            if ((mask & (1u << s)) == 0) continue;
-            if (textures[s] == depthHandle) {
-              return finish(Proof::BlockShadowSample, i);
+          break;
+        case Kind::DrawRun:
+          if (next.drawState.hot) {
+            if (next.drawState.hot->depthStencil.handle == depthHandle) {
+              // Depth is read by a subsequent draw — must Store.
+              return finish(Proof::BlockDrawDepth, logicalDistance);
+            }
+            // R-BACK-15.7 extension: depth-as-shadow-map sample. Walk the
+            // active texture bindings and bail if any matches the depth
+            // handle (the depth surface is sampled as a texture by this
+            // later draw, so its tile contents must be preserved).
+            const auto& textures = next.drawState.hot->textures;
+            const std::uint32_t mask = next.drawState.hot->textureMask;
+            for (std::size_t s = 0; s < textures.size(); ++s) {
+              if ((mask & (1u << s)) == 0) continue;
+              if (textures[s] == depthHandle) {
+                return finish(Proof::BlockShadowSample, logicalDistance);
+              }
             }
           }
-        }
-        break;
-      case Kind::SurfaceCopy:
-        if (next.surfaceCopy &&
-            (next.surfaceCopy->source == depthHandle ||
-             next.surfaceCopy->destination == depthHandle)) {
-          return finish(Proof::BlockSurfaceCopy, i);
-        }
-        break;
-      case Kind::StretchRect:
-        if (next.stretchRect &&
-            (next.stretchRect->source == depthHandle ||
-             next.stretchRect->destination == depthHandle)) {
-          return finish(Proof::BlockStretchRect, i);
-        }
-        break;
-      case Kind::Readback:
-        // R-BACK-15.15: host-visible read of the depth surface must not
-        // be served from a DontCare-stored tile.
-        if (next.readback &&
-            (next.readback->source == depthHandle ||
-             next.readback->destination == depthHandle)) {
-          return finish(Proof::BlockReadback, i);
-        }
-        break;
-      case Kind::ColorFill:
-        if (next.colorFill && next.colorFill->destination == depthHandle) {
-          return finish(Proof::BlockColorFill, i);
-        }
-        break;
-      case Kind::DepthResolve:
-        // R-FORMAT-11: a later RESZ resolve reads the MSAA depth surface as
-        // its source (and writes the INTZ destination). If either endpoint is
-        // this depth handle its tile contents must survive — force a Store
-        // exactly like the StretchRect/Readback depth-touch cases above.
-        if (next.depthResolve &&
-            (next.depthResolve->msaaDepth == depthHandle ||
-             next.depthResolve->intzDest == depthHandle)) {
-          return finish(Proof::BlockDepthResolve, i);
-        }
-        break;
-      case Kind::Present:
-        // R-BACK-15.13: a Present in this chunk implies the frame may
-        // persist depth state across the chunk boundary. Don't return
-        // early — a later Clear on the same handle still wins (it
-        // proves the tile contents are about to be discarded), but if
-        // we fall through to end-of-chunk we must Store defensively.
-        sawPresent = true;
-        break;
+          break;
+        case Kind::SurfaceCopy:
+          if (next.surfaceCopy &&
+              (next.surfaceCopy->source == depthHandle ||
+               next.surfaceCopy->destination == depthHandle)) {
+            return finish(Proof::BlockSurfaceCopy, logicalDistance);
+          }
+          break;
+        case Kind::StretchRect:
+          if (next.stretchRect &&
+              (next.stretchRect->source == depthHandle ||
+               next.stretchRect->destination == depthHandle)) {
+            return finish(Proof::BlockStretchRect, logicalDistance);
+          }
+          break;
+        case Kind::Readback:
+          // R-BACK-15.15: host-visible read of the depth surface must not
+          // be served from a DontCare-stored tile.
+          if (next.readback &&
+              (next.readback->source == depthHandle ||
+               next.readback->destination == depthHandle)) {
+            return finish(Proof::BlockReadback, logicalDistance);
+          }
+          break;
+        case Kind::ColorFill:
+          if (next.colorFill && next.colorFill->destination == depthHandle) {
+            return finish(Proof::BlockColorFill, logicalDistance);
+          }
+          break;
+        case Kind::DepthResolve:
+          // R-FORMAT-11: a later RESZ resolve reads the MSAA depth surface as
+          // its source (and writes the INTZ destination). If either endpoint is
+          // this depth handle its tile contents must survive — force a Store
+          // exactly like the StretchRect/Readback depth-touch cases above.
+          if (next.depthResolve &&
+              (next.depthResolve->msaaDepth == depthHandle ||
+               next.depthResolve->intzDest == depthHandle)) {
+            return finish(Proof::BlockDepthResolve, logicalDistance);
+          }
+          break;
+        case Kind::Present:
+          // R-BACK-15.13: a Present in the selected logical suffix implies the
+          // frame may persist depth state across that boundary. Don't return
+          // early — a later Clear on the same handle still wins.
+          sawPresent = true;
+          break;
+      }
     }
   }
   // R-BACK-15.7 end-of-chunk fall-through. Default keeps the defensive
@@ -9513,6 +9612,25 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
   return sawPresent ? Proof::BlockPresent : Proof::AllowDeadNoPresent;
 }
 
+perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle depthHandle,
+    std::uint32_t* firstTouchCommandDistance) {
+  const std::size_t firstCommandIndex =
+      startCommandIndex < slot.commandCount()
+          ? startCommandIndex + 1u
+          : slot.commandCount();
+  const RenderPassStoreProofLookaheadSource source{
+      .slot = &slot,
+      .firstCommandIndex = firstCommandIndex,
+  };
+  return depthStoreProofForLookahead(
+      std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
+      depthHandle,
+      firstTouchCommandDistance);
+}
+
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle depthHandle) {
@@ -9523,8 +9641,7 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
 }
 
 perf::RenderPassColorStoreProof colorStoreProofForLookahead(
-    const core::ChunkSlot& slot,
-    std::size_t startCommandIndex,
+    std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance) {
   using Proof = perf::RenderPassColorStoreProof;
@@ -9532,86 +9649,96 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
   if (firstTouchCommandDistance) {
     *firstTouchCommandDistance = noTouch;
   }
-  auto finish = [&](Proof proof, std::size_t commandIndex) {
+  auto finish = [&](Proof proof, std::size_t logicalDistance) {
     if (firstTouchCommandDistance) {
-      const auto distance = commandIndex > startCommandIndex
-          ? commandIndex - startCommandIndex
-          : std::size_t{0};
       *firstTouchCommandDistance =
           static_cast<std::uint32_t>(
-              std::min<std::size_t>(distance, noTouch - 1u));
+              std::min<std::size_t>(logicalDistance, noTouch - 1u));
     }
     return proof;
   };
   if (!colorHandle) {
     return Proof::BlockNullColor;
   }
+  if (sources.empty()) {
+    return Proof::BlockNoLookahead;
+  }
   using Kind = core::MetalCommandKind;
   bool sawPresent = false;
-  for (std::size_t i = startCommandIndex + 1; i < slot.commandCount(); ++i) {
-    const auto next = slot.commandAt(i);
-    switch (next.kind) {
-      case Kind::Clear:
-        if (next.clear && next.clear->clearColor) {
-          for (const auto& attachment : next.clear->colorAttachments) {
-            if (attachment.handle == colorHandle) {
-              return finish(Proof::AllowNextClear, i);
+  std::size_t logicalDistance = 0;
+  for (const auto& source : sources) {
+    if (!source.slot) {
+      return Proof::BlockNoLookahead;
+    }
+    const auto& slot = *source.slot;
+    const std::size_t firstCommandIndex =
+        std::min(source.firstCommandIndex, slot.commandCount());
+    for (std::size_t i = firstCommandIndex; i < slot.commandCount(); ++i) {
+      ++logicalDistance;
+      const auto next = slot.commandAt(i);
+      switch (next.kind) {
+        case Kind::Clear:
+          if (next.clear && next.clear->clearColor) {
+            for (const auto& attachment : next.clear->colorAttachments) {
+              if (attachment.handle == colorHandle) {
+                return finish(Proof::AllowNextClear, logicalDistance);
+              }
             }
           }
-        }
-        break;
-      case Kind::DrawRun:
-        if (next.drawState.hot) {
-          const auto& hot = *next.drawState.hot;
-          for (const auto& attachment : hot.colorAttachments) {
-            if (attachment.handle == colorHandle) {
-              return finish(Proof::BlockDrawTarget, i);
+          break;
+        case Kind::DrawRun:
+          if (next.drawState.hot) {
+            const auto& hot = *next.drawState.hot;
+            for (const auto& attachment : hot.colorAttachments) {
+              if (attachment.handle == colorHandle) {
+                return finish(Proof::BlockDrawTarget, logicalDistance);
+              }
+            }
+            const auto& textures = hot.textures;
+            const std::uint32_t mask = hot.textureMask;
+            for (std::size_t s = 0; s < textures.size(); ++s) {
+              if ((mask & (1u << s)) == 0) continue;
+              if (textures[s] == colorHandle) {
+                return finish(Proof::BlockTextureSample, logicalDistance);
+              }
             }
           }
-          const auto& textures = hot.textures;
-          const std::uint32_t mask = hot.textureMask;
-          for (std::size_t s = 0; s < textures.size(); ++s) {
-            if ((mask & (1u << s)) == 0) continue;
-            if (textures[s] == colorHandle) {
-              return finish(Proof::BlockTextureSample, i);
-            }
+          break;
+        case Kind::SurfaceCopy:
+          if (next.surfaceCopy &&
+              (next.surfaceCopy->source == colorHandle ||
+               next.surfaceCopy->destination == colorHandle)) {
+            return finish(Proof::BlockSurfaceCopy, logicalDistance);
           }
-        }
-        break;
-      case Kind::SurfaceCopy:
-        if (next.surfaceCopy &&
-            (next.surfaceCopy->source == colorHandle ||
-             next.surfaceCopy->destination == colorHandle)) {
-          return finish(Proof::BlockSurfaceCopy, i);
-        }
-        break;
-      case Kind::StretchRect:
-        if (next.stretchRect &&
-            (next.stretchRect->source == colorHandle ||
-             next.stretchRect->destination == colorHandle)) {
-          return finish(Proof::BlockStretchRect, i);
-        }
-        break;
-      case Kind::Readback:
-        if (next.readback &&
-            (next.readback->source == colorHandle ||
-             next.readback->destination == colorHandle)) {
-          return finish(Proof::BlockReadback, i);
-        }
-        break;
-      case Kind::ColorFill:
-        if (next.colorFill && next.colorFill->destination == colorHandle) {
-          return finish(Proof::BlockColorFill, i);
-        }
-        break;
-      case Kind::Present:
-        if (next.present && next.present->presentSource == colorHandle) {
-          return finish(Proof::BlockPresent, i);
-        }
-        sawPresent = true;
-        break;
-      case Kind::DepthResolve:
-        break;
+          break;
+        case Kind::StretchRect:
+          if (next.stretchRect &&
+              (next.stretchRect->source == colorHandle ||
+               next.stretchRect->destination == colorHandle)) {
+            return finish(Proof::BlockStretchRect, logicalDistance);
+          }
+          break;
+        case Kind::Readback:
+          if (next.readback &&
+              (next.readback->source == colorHandle ||
+               next.readback->destination == colorHandle)) {
+            return finish(Proof::BlockReadback, logicalDistance);
+          }
+          break;
+        case Kind::ColorFill:
+          if (next.colorFill && next.colorFill->destination == colorHandle) {
+            return finish(Proof::BlockColorFill, logicalDistance);
+          }
+          break;
+        case Kind::Present:
+          if (next.present && next.present->presentSource == colorHandle) {
+            return finish(Proof::BlockPresent, logicalDistance);
+          }
+          sawPresent = true;
+          break;
+        case Kind::DepthResolve:
+          break;
+      }
     }
   }
   static const bool aggressive = []() {
@@ -9627,6 +9754,25 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
                     : Proof::BlockDeadNoPresentDisabled;
 }
 
+perf::RenderPassColorStoreProof colorStoreProofForLookahead(
+    const core::ChunkSlot& slot,
+    std::size_t startCommandIndex,
+    core::Handle colorHandle,
+    std::uint32_t* firstTouchCommandDistance) {
+  const std::size_t firstCommandIndex =
+      startCommandIndex < slot.commandCount()
+          ? startCommandIndex + 1u
+          : slot.commandCount();
+  const RenderPassStoreProofLookaheadSource source{
+      .slot = &slot,
+      .firstCommandIndex = firstCommandIndex,
+  };
+  return colorStoreProofForLookahead(
+      std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
+      colorHandle,
+      firstTouchCommandDistance);
+}
+
 bool nextColorOperationIsClear(const core::ChunkSlot& slot,
                                std::size_t startCommandIndex,
                                core::Handle colorHandle) {
@@ -9636,8 +9782,7 @@ bool nextColorOperationIsClear(const core::ChunkSlot& slot,
 
 RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
     EncodeContext& ctx,
-    const core::ChunkSlot* lookaheadSlot,
-    std::size_t lookaheadStartIndex,
+    std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
     const core::FlatDrawStateRecord& hot) {
   RenderPassStoreProofSummary summary{};
   auto* colorSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
@@ -9645,9 +9790,9 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
       colorSurface && colorSurface->texture &&
       colorSurface->desc.format != core::Format::NullRt;
   if (colorIncluded) {
-    summary.color = lookaheadSlot != nullptr
+    summary.color = !lookaheadSources.empty()
         ? colorStoreProofForLookahead(
-              *lookaheadSlot, lookaheadStartIndex,
+              lookaheadSources,
               hot.colorAttachments[0].handle,
               &summary.colorTouchDistance)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
@@ -9660,9 +9805,9 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
 
   auto* depthSurface = ctx.pool.findSurface(hot.depthStencil.handle.value);
   if (depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
-    summary.depth = lookaheadSlot != nullptr
+    summary.depth = !lookaheadSources.empty()
         ? depthStoreProofForLookahead(
-              *lookaheadSlot, lookaheadStartIndex,
+              lookaheadSources,
               hot.depthStencil.handle,
               &summary.depthTouchDistance)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
@@ -9675,13 +9820,12 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
   return summary;
 }
 
-WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
+WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
     core::FlatDrawStateView drawState,
     const std::optional<ClearDesc>& clear,
-    const core::ChunkSlot* lookaheadSlot,
-    std::size_t lookaheadStartIndex,
+    std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
     WMT::Buffer visibilityBuffer,
     RenderPassActionSummary* actionSummary) {
@@ -9736,8 +9880,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
                            : discardAttachment     ? WMTLoadActionDontCare
                            : firstUseAttachment    ? WMTLoadActionDontCare
                                                    : WMTLoadActionLoad;
-    auto colorStoreProof = lookaheadSlot != nullptr
-        ? colorStoreProofForLookahead(*lookaheadSlot, lookaheadStartIndex,
+    auto colorStoreProof = !lookaheadSources.empty()
+        ? colorStoreProofForLookahead(lookaheadSources,
                                       hot.colorAttachments[i].handle)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (surface->resolveTexture &&
@@ -9782,8 +9926,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     // immediately discarded, so we can DontCare-store. R-BACK-15.14:
     // never DontCare an MSAA depth target with an attached resolve.
     const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
-    auto depthStoreProof = lookaheadSlot != nullptr
-        ? depthStoreProofForLookahead(*lookaheadSlot, lookaheadStartIndex,
+    auto depthStoreProof = !lookaheadSources.empty()
+        ? depthStoreProofForLookahead(lookaheadSources,
                                       hot.depthStencil.handle)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
     if (hasResolveTarget &&
@@ -10008,6 +10152,35 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
                               prologueDepthBias, prologueSlopeScale, 0.0f);
   countRasterizerBind();
   return WMT::Reference<WMT::RenderCommandEncoder>(encoder);
+}
+
+WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
+    EncodeContext& ctx,
+    WMT::CommandBuffer& commandBuffer,
+    core::FlatDrawStateView drawState,
+    const std::optional<ClearDesc>& clear,
+    const core::ChunkSlot* lookaheadSlot,
+    std::size_t lookaheadStartIndex,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
+    WMT::Buffer visibilityBuffer,
+    RenderPassActionSummary* actionSummary) {
+  RenderPassStoreProofLookaheadSource lookaheadSource{};
+  std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources{};
+  if (lookaheadSlot) {
+    const std::size_t firstCommandIndex =
+        lookaheadStartIndex < lookaheadSlot->commandCount()
+            ? lookaheadStartIndex + 1u
+            : lookaheadSlot->commandCount();
+    lookaheadSource = RenderPassStoreProofLookaheadSource{
+        .slot = lookaheadSlot,
+        .firstCommandIndex = firstCommandIndex,
+    };
+    lookaheadSources =
+        std::span<const RenderPassStoreProofLookaheadSource>(&lookaheadSource, 1u);
+  }
+  return beginRenderPassWithStoreProofLookahead(
+      ctx, commandBuffer, drawState, clear, lookaheadSources,
+      sampleBufferAttachments, visibilityBuffer, actionSummary);
 }
 
 std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
@@ -14379,7 +14552,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
-      session, WMT::Device{ctx.device.handle}, slot.commandCount());
+      session, WMT::Device{ctx.device.handle},
+      sessionGpuSamplingCommandCount(slot, options.sessionLookaheadSources));
   traceEncodeStage("after-gpu-sampling-setup");
 
   auto makeRenderEncoderGpuAttachment = [&](
@@ -14837,12 +15011,62 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                               : NULL_OBJECT_HANDLE};
     traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
                             clear.has_value());
+    std::array<RenderPassStoreProofLookaheadSource,
+               core::metalqueue::kMaxEncodeSessionSources>
+        storeProofLookaheadStorage{};
+    std::size_t storeProofLookaheadCount = 0;
+    auto appendStoreProofLookahead = [&](const core::ChunkSlot* sourceSlot,
+                                         std::size_t firstCommandIndex) {
+      if (!sourceSlot ||
+          storeProofLookaheadCount >= storeProofLookaheadStorage.size()) {
+        return;
+      }
+      storeProofLookaheadStorage[storeProofLookaheadCount++] =
+          RenderPassStoreProofLookaheadSource{
+              .slot = sourceSlot,
+              .firstCommandIndex =
+                  std::min(firstCommandIndex, sourceSlot->commandCount()),
+          };
+    };
+    auto firstCommandAfter = [](const core::ChunkSlot& sourceSlot,
+                                std::size_t commandIndex) {
+      return commandIndex < sourceSlot.commandCount()
+          ? commandIndex + 1u
+          : sourceSlot.commandCount();
+    };
+    const bool selectedSessionLookaheadStartsHere =
+        !options.sessionLookaheadSources.empty() &&
+        options.sessionLookaheadSources.front().slot == &slot;
+    bool selectedSessionLookaheadValid = selectedSessionLookaheadStartsHere;
+    if (selectedSessionLookaheadValid) {
+      for (const auto& source : options.sessionLookaheadSources) {
+        if (!source.slot) {
+          selectedSessionLookaheadValid = false;
+          break;
+        }
+      }
+    }
+    if (selectedSessionLookaheadValid) {
+      for (std::size_t i = 0; i < options.sessionLookaheadSources.size(); ++i) {
+        const auto* sourceSlot = options.sessionLookaheadSources[i].slot;
+        appendStoreProofLookahead(
+            sourceSlot,
+            i == 0u ? firstCommandAfter(*sourceSlot, lookaheadStartIndex)
+                    : std::size_t{0});
+      }
+    }
+    if (storeProofLookaheadCount == 0 &&
+        useSourceLocalStoreProofLookahead(options.session != nullptr,
+                                         deferSessionFinalization)) {
+      appendStoreProofLookahead(&slot, firstCommandAfter(slot, lookaheadStartIndex));
+    }
+    const std::span<const RenderPassStoreProofLookaheadSource>
+        storeProofLookaheadSources(storeProofLookaheadStorage.data(),
+                                   storeProofLookaheadCount);
     RenderPassActionSummary renderPassActions{};
-    activeRenderEncoder = beginRenderPass(ctx, commandBuffer, drawState, clear,
-                                          &slot, lookaheadStartIndex,
-                                          sampleAttachment.span(),
-                                          visibilityBuffer,
-                                          &renderPassActions);
+    activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
+        ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
+        sampleAttachment.span(), visibilityBuffer, &renderPassActions);
     traceRenderPassProgress(activeRenderEncoder
                                 ? "after-begin-render-pass-ok"
                                 : "after-begin-render-pass-null",
@@ -14853,7 +15077,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     if (hasActiveRender) {
       const auto storeProof = renderPassStoreProofSummaryForLookahead(
-          ctx, &slot, lookaheadStartIndex, *drawState.hot);
+          ctx, storeProofLookaheadSources, *drawState.hot);
       renderPassFrameTracker.noteStart(
           makeRenderPassFrameKey(*drawState.hot),
           estimateRenderPassAttachmentFootprintBytes(ctx, *drawState.hot),
@@ -15161,7 +15385,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     traceEncodeStage("before-final-flush-blit");
     flushBlit();
     traceEncodeStage("after-final-flush-blit");
+    traceEncodeStage("before-final-assert-no-active-encoder");
     assertNoActiveEncoder();
+    traceEncodeStage("after-final-assert-no-active-encoder");
   };
 
   // Deferred-upload fence: flush any pending staging->private blits via
@@ -15233,7 +15459,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // surfaces both total mid-chunk commits and the worst-case chain length.
   std::uint64_t perChunkSubCBCount = 0;
   auto splitMidChunk = [&] {
-    if (injectedCommandBuffer || !commandBufferHasWork) return;
+    if ((injectedCommandBuffer &&
+         !options.allowInjectedCommandBufferMidChunkCommits) ||
+        !commandBufferHasWork) {
+      return;
+    }
     auto next = ctx.queue.newCommandBuffer();
     if (!next) return;
     const auto commitStarted = std::chrono::steady_clock::now();
@@ -15243,24 +15473,35 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             std::chrono::steady_clock::now() - commitStarted).count()));
     perf::countSubCommandBufferCommit();
     ++perChunkSubCBCount;
+    if (options.session) {
+      ++session.committedSubCommandBuffers;
+    }
     commandBuffer = std::move(next);
     commandBufferHasWork = false;
   };
 
-  const auto commitPolicy = injectedCommandBuffer || options.disableMidChunkCommits
-      ? MidChunkCommitPolicy::Off
-      : midChunkCommitPolicy();
+  const bool injectedCommandBufferCanSplit =
+      !injectedCommandBuffer ||
+      options.allowInjectedCommandBufferMidChunkCommits;
+  const auto commitPolicy =
+      options.disableMidChunkCommits || !injectedCommandBufferCanSplit
+          ? MidChunkCommitPolicy::Off
+          : midChunkCommitPolicy();
   const std::uint32_t splitNRecords = midChunkCommitNRecords();
   const std::uint32_t splitChainCap = midChunkCommitCapPerRenderPass();
   std::uint32_t recordsSinceLastSplit = 0;
   // R-BACK-2.33 — splitMidChunkUnderCap wraps splitMidChunk so callers
   // do not need to repeat the cap check at every split site. cap=0
   // disables the cap (unbounded chain) for diagnostic comparison.
-  // perChunkSubCBCount counts mid-chunk commits already issued; the
-  // chain tail (final commit at chunk exit) is implicit, so the cap
-  // applies to mid-chunk commits + 1 = chain length.
+  // perChunkSubCBCount counts mid-chunk commits issued by this encodeChunk
+  // call. A carried EncodeSession also tracks committedSubCommandBuffers
+  // across source boundaries so the cap applies to the logical coalesced
+  // session rather than resetting for each source.
   auto splitMidChunkUnderCap = [&] {
-    if (splitChainCap > 0 && perChunkSubCBCount + 1 >= splitChainCap) {
+    const std::uint64_t committedForCap =
+        options.session ? session.committedSubCommandBuffers
+                        : perChunkSubCBCount;
+    if (splitChainCap > 0 && committedForCap + 1 >= splitChainCap) {
       perf::countSubCommandBufferSplitSuppressedByCap();
       return;
     }
@@ -15365,20 +15606,28 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::countTileFfpMidPassResplit();
           perf::countTileFfpFallbackMidPassIneligible();
         }
-        if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
-          if (renderTargetChanged) {
+        const auto entryDecision = classifyRenderPassEntry(
+            hasActiveRender,
+            !renderTargetChanged,
+            hazardDetected,
+            tileResplit);
+        if (entryDecision != RenderPassEntryDecision::ContinueActive) {
+          if (entryDecision ==
+              RenderPassEntryDecision::SplitRenderTargetChange) {
             // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
             DXMT_ASSERT(hasActiveRender);
           }
-          if (hazardDetected) {
+          if (entryDecision == RenderPassEntryDecision::SplitHazard) {
             // TLA+: EncoderLifecycle / HazardDetected
             DXMT_ASSERT(hasActiveRender);
             DXMT_ASSERT(activeKey == drawKey);
           }
-          const auto splitReason = renderTargetChanged
-              ? perf::EncoderSplitReason::RenderTargetChange
-              : (hazardDetected ? perf::EncoderSplitReason::Hazard
-                                : perf::EncoderSplitReason::ClearBarrier);
+          const auto splitReason =
+              entryDecision == RenderPassEntryDecision::SplitRenderTargetChange
+                  ? perf::EncoderSplitReason::RenderTargetChange
+              : entryDecision == RenderPassEntryDecision::SplitHazard
+                  ? perf::EncoderSplitReason::Hazard
+                  : perf::EncoderSplitReason::ClearBarrier;
           flushRender(splitReason);
           // R-BACK-2.29..2.32 — per-render-pass policy commits the
           // current sub-CB at every non-Final flushRender. Encoder is
@@ -15408,20 +15657,28 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         perf::countTileFfpMidPassResplit();
         perf::countTileFfpFallbackMidPassIneligible();
       }
-      if (!hasActiveRender || renderTargetChanged || hazardDetected || tileResplit) {
-        if (renderTargetChanged) {
+      const auto entryDecision = classifyRenderPassEntry(
+          hasActiveRender,
+          !renderTargetChanged,
+          hazardDetected,
+          tileResplit);
+      if (entryDecision != RenderPassEntryDecision::ContinueActive) {
+        if (entryDecision ==
+            RenderPassEntryDecision::SplitRenderTargetChange) {
           // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
           DXMT_ASSERT(hasActiveRender);
         }
-        if (hazardDetected) {
+        if (entryDecision == RenderPassEntryDecision::SplitHazard) {
           // TLA+: EncoderLifecycle / HazardDetected
           DXMT_ASSERT(hasActiveRender);
           DXMT_ASSERT(activeKey == drawKey);
         }
-        const auto splitReason = renderTargetChanged
-            ? perf::EncoderSplitReason::RenderTargetChange
-            : (hazardDetected ? perf::EncoderSplitReason::Hazard
-                              : perf::EncoderSplitReason::Final);
+        const auto splitReason =
+            entryDecision == RenderPassEntryDecision::SplitRenderTargetChange
+                ? perf::EncoderSplitReason::RenderTargetChange
+            : entryDecision == RenderPassEntryDecision::SplitHazard
+                ? perf::EncoderSplitReason::Hazard
+                : perf::EncoderSplitReason::Final;
         flushRender(splitReason);
         // R-BACK-2.29..2.32 — see twin call site above. The split
         // reason here can be Final when neither RT-change nor hazard
@@ -16085,6 +16342,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   }
 
+  if (options.session && options.sessionSource.has_value()) {
+    const bool appended =
+        appendEncodeChunkSessionSource(*options.session,
+                                       *options.sessionSource);
+    DXMT_ASSERT(appended);
+    if (!appended) {
+      return std::nullopt;
+    }
+  }
+
   if (deferSessionFinalization) {
     perf::countEncodeSessionCarryDeferredChunk(
         static_cast<bool>(activeRenderEncoder),
@@ -16097,19 +16364,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     finalizeEncodeChunkSessionForReturn();
   }
 
-  // R-BACK-2.29..2.32 — fold the chunk's local sub-CB chain length into
-  // chunkSubCBCountMax. The chain length includes every mid-chunk commit
-  // (counted via splitMidChunk above) PLUS the final commit performed by
-  // the queue once this record is returned, so the per-chunk count is
-  // perChunkSubCBCount + 1. Always at least 1 for a non-empty chunk.
+  traceEncodeStage("before-record-chunk-sub-cb-count");
+  // R-BACK-2.29..2.32 — fold this encode call's sub-CB segment length into
+  // chunkSubCBCountMax. A carried EncodeSession enforces the cap across
+  // source boundaries with session.committedSubCommandBuffers, but the record
+  // still publishes only the segment length added by this call. Queue-side
+  // merge then subtracts the shared tail CB once when joining segments.
   if (commandBufferHasWork || perChunkSubCBCount > 0) {
     perf::recordChunkSubCBCount(perChunkSubCBCount + 1);
   }
+  traceEncodeStage("after-record-chunk-sub-cb-count");
 
   const u64 seqId = slot.seqId;
   if (argbufPayloadDeltaSourcePerf) {
+    traceEncodeStage("before-argbuf-payload-delta-source-emit");
     argbufPayloadDeltaSourceAttribution.emit(seqId);
+    traceEncodeStage("after-argbuf-payload-delta-source-emit");
   }
+  traceEncodeStage("before-build-submission-record");
   core::metalqueue::QueueSubmissionRecord record;
   record.commandBuffer = std::move(commandBuffer);
   record.commandBufferChainLength = perChunkSubCBCount + 1;
@@ -16128,8 +16400,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     record.postCommitCallbacks = std::move(postCommitCallbacks);
     record.completionCallbacks = std::move(completionCallbacks);
   }
+  traceEncodeStage("after-build-submission-record");
   if (!deferSessionFinalization && options.session) {
-    resetEncodeChunkSession(*options.session);
+    traceEncodeStage("before-publish-session-sources");
+    const bool sourcesPublished =
+        publishEncodeChunkSessionSources(*options.session, record);
+    traceEncodeStage(sourcesPublished ? "after-publish-session-sources-ok"
+                                      : "after-publish-session-sources-failed");
+    DXMT_ASSERT(sourcesPublished);
+    if (!sourcesPublished) {
+      return std::nullopt;
+    }
+    traceEncodeStage("session-owner-retained-by-caller");
   }
   traceEncodeStage("return-record");
   return record;

@@ -23,6 +23,7 @@ precise and machine-checkable.
 | `backend/design.md` §8 / §8.1 | `tla/PresentFrameLatency.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` |
 | `backend/design.md` §6.5 (pacing independence) | `tla/ConcurrentProgressSignals.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` |
 | `backend/design.md` §8.2 (drawable token handoff) | `tla/DrawableToken.tla` | `src/dxmt9/dxmt9_presenter.*` (PresentDrawableToken), `src/dxmt9/dxmt9_command_queue.*` (stash/take) |
+| `backend/design.md` §2.2.3 / R-BACK-2.49 (EncodeSession completion refinement) | `tla/EncodeSessionCompletion.tla` | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` |
 | `backend/design.md` §2.7 / `include/dxmt9/device_c.h` (cross-side generation) | `tla/WireHandleGeneration.tla` | `src/d3d9/d3d9_pe_recorder.*`, `src/d3d9/device_c_chunk_replay.cpp`, `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena) |
 | `backend/design.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/design.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
@@ -47,6 +48,8 @@ specs/verification/
     ├── ConcurrentProgressSignals.cfg
     ├── DrawableToken.tla  PresentDrawableToken stash/take/wait handoff
     ├── DrawableToken.cfg
+    ├── EncodeSessionCompletion.tla  one Metal tail → ordered source completions
+    ├── EncodeSessionCompletion.cfg
     ├── WireHandleGeneration.tla  PE → unix generation-stamp gate
     ├── WireHandleGeneration.cfg
     ├── PresentIdAba.tla   (slot, generation) tagged-handle ABA-safety
@@ -158,6 +161,7 @@ exercise all structural behaviors while keeping the state space tractable.
 | PresentFrameLatency | `MAX_FRAME_LATENCY` | 2 | `SetMaximumFrameLatency()` / backend latency cap |
 | ConcurrentProgressSignals | `MaxRing` / `MaxFrameLatency` / `MaxSeqId` / `Queries` | 3 / 2 / 6 / `{q1,q2}` | ring=32, latency=2, seq unbounded, queries dynamic |
 | DrawableToken | `MAX_PIDS` / `Drawables` | 2 / `{D1,D2}` | unbounded present-ids, opaque drawables |
+| EncodeSessionCompletion | `MaxSeqId` / `MaxSessionLen` | 5 / 3 | unbounded source seqIds, bounded by `kMaxEncodeSessionSources` and queue ring size |
 | WireHandleGeneration | `Handles` / `WireSlots` / `GENERATION_DOMAIN` / `MAX_BUMPS` | `{h1,h2}` / `{w1,w2}` / 3 / 3 | unbounded handles, generation domain = 2^24 (`D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS`) |
 | PresentIdAba | `Slots` / `Entities` / `MAX_GEN` / `MAX_OPS` | `{s1,s2}` / `{p1,p2}` / 3 / 6 | unbounded slots, generation domain = 2^24 (`HandleArena::kGenerationBits`) |
 | ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
@@ -226,6 +230,7 @@ or reviewing a TLA+ module.
 | `PresentFrameLatency.tla` | Queue-owned frame-latency tokens, present vs non-present timelines | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` | `TypeOK`, `SeqTimelineSafety`, `PresentCompletionSafety`, `OutstandingPresentBound`, `PresentQueueSafety`, `AppWaitReturnSafe` | `SubmittedPresentsEventuallyComplete`, `WaitEventuallyReturnsOrStops` | `tests/native/backend/present_boundary_policy_spec.cpp` |
 | `ConcurrentProgressSignals.tla` | Pacing independence across `completedSeqId` / `presentCompletedSeqId` / `ringSlotOccupancy` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `PacingOrdering` (`presentCompletedSeqId ≤ completedSeqId`), `RingOccupancyBound`, `FrameLatencyBound`, `OutstandingAccounting` | `NoQueryWaitBlocksPresent`, `NoFrameLatencyBlocksQuery`, `NoRingPressureBlocksPresentCompletion` | _(gap: no native spec — cross-axis non-blocking is observable only at the queue, not as a pure-data transform; tracked as `R-VERIF-2.9 / 2.10` evidence shortfall in `specs/gap.md`)_ |
 | `DrawableToken.tla` | `PresentDrawableToken` lifecycle: Stash / Complete / Fail / Take / Wait | `src/dxmt9/dxmt9_presenter.*` (token), `src/dxmt9/dxmt9_command_queue.*` (stash/take) | `TypeOK`, `NoDoubleComplete`, `NoUseAfterTake`, `StashTakeOrdering`, `DrawableValueShape`, `TakenIsSink`, `FulfilledMonotonic` | `WaitProgress`, `EventuallyResolved` | `tests/native/backend/present_acquire_policy_spec.cpp` covers the surrounding **policy** (env-var → AcquirePolicy resolver); _(gap: no deterministic spec for the token's stash/take/wait state machine — only the TLA+ model and runtime exercise)_ |
+| `EncodeSessionCompletion.tla` | One Metal session tail expands into ordered per-source `seqId` completions | `QueueSubmissionRecord::completionSources`, `QueueLifecycleController::submitEncodedSubmission`, pending completion drain in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `CommittedWaterlineOK`, `OrderedCompletionExpansion`, `NoInlineCompletionOfSessionSources`, `PresentCompletionAfterTail` | _(safety/refinement model; no fairness property)_ | `tests/native/backend/queue_completion_sources_spec.cpp` |
 | `WireHandleGeneration.tla` | PE → unix cross-side generation-stamp gate on `D9CCommandChunkWireHandleEntry` | `src/d3d9/d3d9_pe_recorder.*` (`appendRecordWireHandleStamped`), `src/d3d9/device_c_chunk_replay.cpp:705-772`, `src/dxmt9/dxmt9_resource_pool.hpp` (`HandleArena`, `kGenerationBits=24`), `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `LegacyNoneAlwaysAccepts`, `StampedMatchesArenaOnAdmit`, `NoForwardInconsistency` | `EventuallyDecided`, `EventuallyRejectStale` | `tests/native/bridge/chunk_record_validation_spec.cpp` (range-check + cross-side match helper), `tests/native/bridge/chunk_record_import_spec.cpp` (NONE-sentinel acceptance), `tests/native/bridge/chunk_record_spec.cpp` (wire layout) |
 | `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_validation_spec.cpp` (generation reject path); _(gap: no dedicated `HandleArena` slot-reuse spec; the ABA property is only exercised end-to-end via the chunk-replay validator)_ |
 | `ResourceLifetime.tla` | Deferred GPU resource destruction; `lastUsedSeqId ≤ completedSeqId` before free | `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `NoUseAfterFree` | `DestroyPendingEventuallyFreed` | `tests/native/backend/resource_hazard_spec.cpp`, `tests/native/core/resource_format_boundary_spec.cpp` |

@@ -6154,6 +6154,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                   callerPc);
         const PePresentCallSample sample =
             logPeCallMilestoneAfterPresent(callName, callerPc);
+        if (!sample.tracked && dxmt9PeRecorderStatsEnabled()) {
+            PePresentCallSample untracked{};
+            untracked.entryNs = dxmt9PeCurrentCallEntryNs;
+            untracked.callerPc = callerPc;
+            untracked.threadId = dxmt9PeCurrentThreadId();
+            dxmt9PeCaptureCallStack(untracked);
+            logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
+                                       untracked);
+            return untracked;
+        }
         logPeFirstCallAfterPresent(callName, claimPeFirstCallAfterPresent(),
                                    sample);
         return sample;
@@ -6256,13 +6266,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     void logPeCallReturnAfterPresent(const PePresentCallSample& sample,
                                      const char* callName,
                                      HRESULT hr) {
-        if (!dxmt9PeRecorderStatsEnabled() || !sample.tracked) {
+        if (!dxmt9PeRecorderStatsEnabled()) {
             return;
         }
         const std::int64_t exitNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+        if (!sample.tracked) {
+            if (hr != D3DERR_INVALIDCALL) {
+                return;
+            }
+            if (sample.entryNs != 0) {
+                recordPeBetweenCallsReturn(callName, sample.entryNs, exitNs);
+            }
+            const auto callerInfo = dxmt9PeResolveCallerModule(sample.callerPc);
+            const auto callerStack = dxmt9PeFormatCallerStack(sample);
+            dxmt9DeviceInfoLog(
+                "pe_call_return_untracked_failure device=%p call=%s "
+                "thread_id=0x%lx hr=0x%08x duration_ms=%.3f "
+                "caller_pc=%p caller_module=%s caller_base=%p "
+                "caller_rva=0x%llx caller_stack=%s",
+                this, callName ? callName : "unknown",
+                static_cast<unsigned long>(sample.threadId),
+                static_cast<unsigned>(hr),
+                sample.entryNs != 0
+                    ? static_cast<double>(exitNs - sample.entryNs) / 1000000.0
+                    : 0.0,
+                sample.callerPc, dxmt9PeCallerModuleLeaf(callerInfo),
+                callerInfo.base,
+                static_cast<unsigned long long>(callerInfo.rva),
+                callerStack.data());
+            return;
+        }
         recordPeBetweenCallsReturn(callName, sample.entryNs, exitNs);
-        if (sample.callCount > 8) {
+        if (sample.callCount > 8 && SUCCEEDED(hr)) {
             return;
         }
         const auto callerInfo = dxmt9PeResolveCallerModule(sample.callerPc);
@@ -12757,14 +12793,19 @@ public:
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
                                              UINT count) noexcept override {
-        notePeDeviceCallAfterPresent("DrawPrimitive");
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "DrawPrimitive", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "DrawPrimitive", hr);
+            return hr;
+        };
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_primitive device=%p type=%u startVertex=%u count=%u",
                             this, (unsigned)type, startVertex, count);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
         SoftwareFfpDrawData swvpDraw{};
         HRESULT hr = trySoftwareFfpDrawPrimitive(type, startVertex, count, swvpDraw);
@@ -12803,23 +12844,27 @@ public:
             }
         }
         notePeCurrentCallReturnForInterAppendSplit();
-        return hr;
+        return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE type,
                                                     INT baseVertex,
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) noexcept override {
-        notePeDeviceCallAfterPresent(
+        const auto peCall = notePeDeviceCallAfterPresent(
             "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "DrawIndexedPrimitive", hr);
+            return hr;
+        };
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_indexed_primitive device=%p type=%u base=%d min=%u num=%u startIndex=%u count=%u",
                             this, (unsigned)type, baseVertex, minVertex, numVertices,
                             startIndex, count);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
         SoftwareFfpDrawData swvpDraw{};
         std::vector<std::uint8_t> swvpIndices{};
@@ -12871,20 +12916,25 @@ public:
             }
         }
         notePeCurrentCallReturnForInterAppendSplit();
-        return hr;
+        return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,
                                                UINT count,
                                                const void* pData,
                                                UINT stride) noexcept override {
-        notePeDeviceCallAfterPresent("DrawPrimitiveUP");
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "DrawPrimitiveUP", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(peCall, "DrawPrimitiveUP", hr);
+            return hr;
+        };
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_primitive_up device=%p type=%u count=%u data=%p stride=%u",
                             this, (unsigned)type, count, pData, stride);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
         SoftwareFfpDrawData swvpDraw{};
         HRESULT hr = trySoftwareFfpDrawPrimitiveUP(type, count, pData, stride, swvpDraw);
@@ -12922,7 +12972,7 @@ public:
                 if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
             }
         }
-        return hr;
+        return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,
                                                       UINT minVertex,
@@ -12932,15 +12982,21 @@ public:
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
                                                       UINT stride) noexcept override {
-        notePeDeviceCallAfterPresent("DrawIndexedPrimitiveUP");
+        const auto peCall = notePeDeviceCallAfterPresent(
+            "DrawIndexedPrimitiveUP", DXMT9_PE_CALLSITE_PC());
+        const auto finishPeCall = [&](HRESULT hr) noexcept {
+            logPeCallReturnAfterPresent(
+                peCall, "DrawIndexedPrimitiveUP", hr);
+            return hr;
+        };
         // T2 device-lost gate.
-        if (deviceNotReset_) return D3DERR_DEVICELOST;
+        if (deviceNotReset_) return finishPeCall(D3DERR_DEVICELOST);
         dxmt9DeviceDebugLog("device_draw_indexed_primitive_up device=%p type=%u min=%u num=%u count=%u idx=%p idxFmt=%u vtx=%p stride=%u",
                             this, (unsigned)type, minVertex, numVertices, count,
                             pIdxData, (unsigned)idxFmt, pVtxData, stride);
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             const HRESULT barrierHr = chunkBarrierFlush();
-            if (FAILED(barrierHr)) return barrierHr;
+            if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
         SoftwareFfpDrawData swvpDraw{};
         std::vector<std::uint8_t> swvpIndices{};
@@ -13008,7 +13064,7 @@ public:
                 if (swvpDraw.bypassVertexShader) peState_.pendingVs = true;
             }
         }
-        return hr;
+        return finishPeCall(hr);
     }
     HRESULT STDMETHODCALLTYPE ProcessVertices(UINT srcStart, UINT dstIndex,
                                                UINT vertexCount,
