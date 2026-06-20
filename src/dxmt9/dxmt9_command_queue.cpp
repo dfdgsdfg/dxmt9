@@ -3841,6 +3841,13 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
           !completionWaitActive) {
         semanticBoundaryReleaseUsedDuringWait = false;
       }
+      if (render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+              /*readySlotsEmpty=*/false,
+              pendingCanReleaseAtSemanticBoundary,
+              semanticBoundaryReleaseMode,
+              completionWaitActive)) {
+        perf::countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
+      }
       if (pendingCanReleaseAtSemanticBoundary &&
           (completionWaitActive ||
            semanticBoundaryReleaseMode ==

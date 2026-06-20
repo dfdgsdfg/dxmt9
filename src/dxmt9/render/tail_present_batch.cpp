@@ -114,6 +114,17 @@ bool openCbPendingShouldReleaseBeforeReadySource(
       semanticReleaseAlreadyUsedDuringWait);
 }
 
+bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive) noexcept {
+  return !readySlotsEmpty &&
+         canReleaseAtSemanticBoundary &&
+         mode == OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+         !completionWaitActive;
+}
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

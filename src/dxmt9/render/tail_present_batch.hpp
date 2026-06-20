@@ -50,6 +50,12 @@ bool openCbPendingShouldReleaseBeforeReadySource(
     bool completionWaitActive,
     bool semanticReleaseAlreadyUsedDuringWait) noexcept;
 
+bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive) noexcept;
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

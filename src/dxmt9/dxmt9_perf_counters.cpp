@@ -398,6 +398,7 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseCandidates{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseSubmitted{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWait{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedAlreadyUsed{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseFailed{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
@@ -2476,6 +2477,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_semantic_release_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseCandidates, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseSubmitted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWait, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_already_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedAlreadyUsed, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseFailed, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
@@ -5047,6 +5049,10 @@ void countOpenCbTailPresentSemanticReleaseSubmitted() {
 
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait() {
   add(counters().openCbTailPresentSemanticReleaseBlockedNoCompletionWait);
+}
+
+void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait() {
+  add(counters().openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait);
 }
 
 void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed() {
@@ -10450,6 +10456,8 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentSemanticReleaseSubmitted);
   s.openCbTailPresentSemanticReleaseBlockedNoCompletionWait =
       load(c.openCbTailPresentSemanticReleaseBlockedNoCompletionWait);
+  s.openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait =
+      load(c.openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait);
   s.openCbTailPresentSemanticReleaseBlockedAlreadyUsed =
       load(c.openCbTailPresentSemanticReleaseBlockedAlreadyUsed);
   s.openCbTailPresentSemanticReleaseFailed =
@@ -10553,6 +10561,7 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_semantic_release_candidates=%llu "
       "open_cb_tail_present_semantic_release_submitted=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait=%llu "
+      "open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait=%llu "
       "open_cb_tail_present_semantic_release_blocked_already_used=%llu "
       "open_cb_tail_present_semantic_release_failed=%llu "
       "draw_calls=%llu draw_indexed=%llu draw_primitives=%llu "
@@ -10653,6 +10662,9 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseBlockedNoCompletionWait,
                 curr.openCbTailPresentSemanticReleaseBlockedNoCompletionWait)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait,
+                curr.openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseBlockedAlreadyUsed,
                 curr.openCbTailPresentSemanticReleaseBlockedAlreadyUsed)),

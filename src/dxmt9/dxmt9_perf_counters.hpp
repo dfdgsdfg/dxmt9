@@ -299,6 +299,7 @@ void countOpenCbTailPresentPendingMergeFailed();
 void countOpenCbTailPresentSemanticReleaseCandidate();
 void countOpenCbTailPresentSemanticReleaseSubmitted();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
+void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
 void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
 void countOpenCbTailPresentSemanticReleaseFailed();
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
@@ -1277,6 +1278,7 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
   std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;
   std::uint64_t openCbTailPresentSemanticReleaseFailed = 0;
   std::uint64_t drawCalls = 0;

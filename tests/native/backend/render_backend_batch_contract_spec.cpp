@@ -520,6 +520,31 @@ void openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait() {
             /*completionWaitActive=*/false,
             /*semanticReleaseAlreadyUsedDuringWait=*/true),
         "deterministic release preempts ready-source append for diagnostics");
+
+  check(dxmt9::render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false),
+        "ready-source append blocks semantic release outside completion wait");
+  check(!dxmt9::render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true),
+        "active completion wait releases instead of counting ready-source block");
+  check(!dxmt9::render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false),
+        "empty ready queue uses the existing no-completion-wait blocker");
+  check(!dxmt9::render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false),
+        "deterministic mode is not a completion-wait miss");
 }
 
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
