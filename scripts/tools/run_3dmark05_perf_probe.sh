@@ -48,6 +48,8 @@ pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
 dxmt_log_level=${DXMT_LOG_LEVEL:-}
 open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
 open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
+open_cb_semantic_boundary_publish=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH:-0}
+open_cb_semantic_boundary_release_mode=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE:-}
 open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
 stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
 draw_chunk_command_limit=${DXMT9_DRAW_CHUNK_COMMAND_LIMIT:-}
@@ -707,6 +709,14 @@ Options:
                       Set DXMT9_OPEN_CB_CARRY_RENDER_SESSION=1 so the open-CB
                       carrier keeps EncodeChunkSession state alive until the
                       Present tail finalizes the shared command buffer.
+  --open-cb-semantic-boundary-publish
+                      Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=1 so
+                      semantic non-draw commands publish the preceding
+                      non-present source for the open-CB carrier.
+  --open-cb-semantic-boundary-release-mode MODE
+                      Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=MODE.
+                      Accepted values follow the runtime: completion_wait or
+                      deterministic.
   --open-cb-pending-tail-wait-us N
                       Set DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US=N. When paired
                       with open-CB carry, a tail-less pending head waits up to
@@ -1753,6 +1763,14 @@ while (($#)); do
     --open-cb-carry-render-session)
       open_cb_carry_render_session=1
       shift
+      ;;
+    --open-cb-semantic-boundary-publish)
+      open_cb_semantic_boundary_publish=1
+      shift
+      ;;
+    --open-cb-semantic-boundary-release-mode)
+      open_cb_semantic_boundary_release_mode=${2:?missing value for --open-cb-semantic-boundary-release-mode}
+      shift 2
       ;;
     --open-cb-pending-tail-wait-us)
       open_cb_pending_tail_wait_us=${2:?missing value for --open-cb-pending-tail-wait-us}
@@ -3172,6 +3190,13 @@ if (( require_xcode_attach_preflight )) &&
   exit 2
 fi
 
+if [[ -n "$open_cb_semantic_boundary_release_mode" &&
+      "$open_cb_semantic_boundary_release_mode" != "completion_wait" &&
+      "$open_cb_semantic_boundary_release_mode" != "deterministic" ]]; then
+  echo "--open-cb-semantic-boundary-release-mode must be completion_wait or deterministic" >&2
+  exit 2
+fi
+
 if (( with_wine_capture_layer )) && (( ! capture_gputrace )); then
   echo "--with-wine-capture-layer requires a file .gputrace capture; remove --no-gputrace" >&2
   exit 2
@@ -4279,6 +4304,14 @@ fi
 
 if [[ "$open_cb_carry_render_session" != "0" && -n "$open_cb_carry_render_session" ]]; then
   env_args+=("DXMT9_OPEN_CB_CARRY_RENDER_SESSION=$open_cb_carry_render_session")
+fi
+
+if [[ "$open_cb_semantic_boundary_publish" != "0" && -n "$open_cb_semantic_boundary_publish" ]]; then
+  env_args+=("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=$open_cb_semantic_boundary_publish")
+fi
+
+if [[ -n "$open_cb_semantic_boundary_release_mode" ]]; then
+  env_args+=("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=$open_cb_semantic_boundary_release_mode")
 fi
 
 if [[ -n "$open_cb_pending_tail_wait_us" ]]; then
