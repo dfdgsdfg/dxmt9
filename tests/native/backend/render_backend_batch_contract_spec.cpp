@@ -440,6 +440,53 @@ void openCbSemanticBoundaryReleaseRequiresCompletionWait() {
         "deterministic semantic-boundary release does not depend on wait state");
 }
 
+void openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait() {
+  using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
+
+  check(dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "active wait releases a semantic-boundary pending prefix before appending ready work");
+  check(!dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "empty ready queue stays on the existing wait/release path");
+  check(!dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "inactive wait preserves ready-source append locality");
+  check(!dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "one semantic-boundary preemptive release is allowed per completion wait");
+  check(!dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/false,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "ordinary pending prefixes do not preempt ready-source append");
+  check(dxmt9::render::openCbPendingShouldReleaseBeforeReadySource(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true),
+        "deterministic release preempts ready-source append for diagnostics");
+}
+
 void openCbPendingWakeRecheckTracksCompletionWaitTransitions() {
   using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
 
@@ -773,6 +820,7 @@ int main() {
     openCbPendingTailWaitActionUsesQueueLocalState();
     openCbPendingMidChunkPolicyPreservesSemanticSplits();
     openCbSemanticBoundaryReleaseRequiresCompletionWait();
+    openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();

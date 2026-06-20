@@ -3834,6 +3834,47 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
 
   while (true) {
     std::unique_lock lock(mutex_);
+    if (pendingRecord.has_value() && !readySlots_.empty()) {
+      const bool completionWaitActive = queueLifecycle_.completionWaitActive();
+      if (semanticBoundaryReleaseMode ==
+              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+          !completionWaitActive) {
+        semanticBoundaryReleaseUsedDuringWait = false;
+      }
+      if (pendingCanReleaseAtSemanticBoundary &&
+          (completionWaitActive ||
+           semanticBoundaryReleaseMode ==
+               render::OpenCbSemanticBoundaryReleaseMode::Deterministic)) {
+        perf::countOpenCbTailPresentSemanticReleaseCandidate();
+        if (semanticBoundaryReleaseMode ==
+                render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+            semanticBoundaryReleaseUsedDuringWait) {
+          perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
+        }
+      }
+      if (render::openCbPendingShouldReleaseBeforeReadySource(
+              /*readySlotsEmpty=*/false,
+              pendingCanReleaseAtSemanticBoundary,
+              semanticBoundaryReleaseMode,
+              completionWaitActive,
+              semanticBoundaryReleaseUsedDuringWait)) {
+        if (submitPendingRecordLocked(lock)) {
+          if (semanticBoundaryReleaseMode ==
+              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait) {
+            semanticBoundaryReleaseUsedDuringWait = true;
+          }
+          perf::countOpenCbTailPresentSemanticReleaseSubmitted();
+          if (stop_) {
+            return;
+          }
+          continue;
+        }
+        perf::countOpenCbTailPresentSemanticReleaseFailed();
+        perf::countOpenCbTailPresentPendingAbandonedNoReady();
+        abortOpenCbPendingFailOpen("semantic boundary release before ready");
+      }
+    }
+
     if (pendingRecord.has_value() && readySlots_.empty()) {
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
       if (pendingCanReleaseAtSemanticBoundary) {

@@ -174,6 +174,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H152 | Fresh-build EncodeSession smoke stays visual/error safe but does not promote | mechanism observed; runtime promotion rejected | [[present-pacing-encode-session-current-smoke.152]] rebuilds and reinstalls the native/unix/PE staging outputs, then reruns the current opt-in open-CB `EncodeSession` path. The smoke passes with no invalid-call/GPU/queue errors, non-black output, active render-session carry (`encode_session_carry_deferred_active_render_chunks=1725`), and semantic-release submissions (`57`). It remains a short no-gputrace smoke, not a promotion: most semantic-release candidates still arrive outside completion wait (`1318 / 1528` blocked with no active wait). |
 | H153 | Completion-wait wakeup increases same-window commits but fails locality/FPS gates | mechanism observed; runtime promotion rejected | [[present-pacing-encode-session-completion-wait-wakeup.153]] makes the completion watcher notify the encode loop when a `waitUntilCompleted()` window opens/closes and fixes the first spin-prone predicate variant (`597600` candidates, `595667` already-used blocks). The r2 smoke is visual/error safe with no invalid-call/GPU/queue errors and raises semantic-release submissions (`57 -> 126`), completion-wait command-buffer commits (`57 -> 125`), and with-enqueue wait (`1572.978ms -> 3721.949ms`). Promotion is still rejected: `1625 / 1785` candidates miss the active wait, `command_buffers_per_present` worsens (`4.059 -> 4.124`), and `render_pass_begin_per_present` worsens (`10.360 -> 10.843`). |
 | H154 | Deterministic semantic release removes coverage blocks but fragments command-buffer shape | negative control; runtime promotion rejected | [[present-pacing-encode-session-deterministic-semantic-release.154]] exposes the semantic-release probe flags in the wrapper and runs `DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=deterministic`. The smoke is visual/error safe with no invalid-call/GPU/queue rows, and every semantic candidate is released (`1598 / 1598`, no no-wait or already-used blocks). This proves the release path itself is not the blocker, but it is not an FPS candidate: command buffers rise to `6.280/present`, sub-CBs to `3.613/present`, GPU command-buffer time to `8.441ms/present`, and no-enqueue wait still dominates at `26.657ms/present`. Keep deterministic release diagnostic-only; the promotable path still needs earlier CPU-ready or already-dequeued wait-window commits without breaking baseline CB/sub-CB shape. |
+| H155 | Ready-source preemptive semantic release raises wait-window commits but not the FPS wall | mechanism observed; runtime promotion rejected | [[present-pacing-encode-session-ready-preempt-release.155]] lets an active-wait semantic-boundary pending prefix submit before appending the next ready source. The smoke is visual/error safe with no invalid-call/GPU/queue rows and raises H153 same-window activity (`semantic_release_submitted 126 -> 141`, completion-wait CB commits `125 -> 141`, enqueues during wait `124 -> 140`) while preserving H153/H154's desired sub-CB cap (`2.997/present`, `chunk_subcb_count_max=4`). Promotion is still rejected: command buffers edge up to `4.147/present`, total completion wait is `20.365ms/present`, no-enqueue wait is still `15.863ms/present`, and most candidates miss the wait (`1396 / 1602` blocked outside active wait). |
 
 ## Verification methods
 
@@ -1519,13 +1520,15 @@ flowchart TD
   made visual/error safe, but the useful overlap remains too sparse and the
   wakeup-only path worsens CB/pass locality. H151 shifts the next P4 branch away
   from "slow publish/dequeue handoff"; H153 adds that waking the encoder on
-  completion-wait start/end can increase same-window commits but still cannot
-  promote unless more work becomes CPU-ready inside the wait without increasing
-  CB/pass/tile preservation.
+  completion-wait start/end can increase same-window commits. H155 adds that
+  ready-source preemption during active wait is a better policy point than
+  deterministic release, but it still cannot promote unless more work becomes
+  CPU-ready inside the wait without increasing CB/pass/tile preservation.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
   [[present-pacing-encode-session-completion-wait-wakeup.153]]
+  [[present-pacing-encode-session-ready-preempt-release.155]]
 
 **Rejected**
 

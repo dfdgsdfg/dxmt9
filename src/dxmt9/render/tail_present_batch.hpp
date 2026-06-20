@@ -41,6 +41,13 @@ bool openCbPendingCanReleaseAtSemanticBoundary(
     bool completionWaitActive,
     bool semanticReleaseAlreadyUsedDuringWait) noexcept;
 
+bool openCbPendingShouldReleaseBeforeReadySource(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept;
+
 bool openCbPendingCompletionWaitTransitionNeedsRecheck(
     bool completionWaitActive,
     bool waitObservedCompletionWaitActive,

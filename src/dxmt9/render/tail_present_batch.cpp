@@ -75,6 +75,23 @@ bool openCbPendingCanReleaseAtSemanticBoundary(
   return completionWaitActive && !semanticReleaseAlreadyUsedDuringWait;
 }
 
+bool openCbPendingShouldReleaseBeforeReadySource(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait) noexcept {
+  if (readySlotsEmpty || !canReleaseAtSemanticBoundary) {
+    return false;
+  }
+  return openCbPendingCanReleaseAtSemanticBoundary(
+      /*sourceIsSemanticBoundary=*/true,
+      /*sourceHasFinalPresentTail=*/false,
+      mode,
+      completionWaitActive,
+      semanticReleaseAlreadyUsedDuringWait);
+}
+
 bool openCbPendingCompletionWaitTransitionNeedsRecheck(
     bool completionWaitActive,
     bool waitObservedCompletionWaitActive,
