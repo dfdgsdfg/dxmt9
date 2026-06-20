@@ -30,6 +30,7 @@ require_tile_preservation_decrease=0
 require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
+require_render_pass_carry_promotion_gates=0
 require_encoder_final_end_reason_not_increase=0
 require_encoder_final_same_key_reopen_not_increase=0
 require_encoder_color_load_not_increase=0
@@ -183,6 +184,7 @@ Options:
   --require-tile-preservation-not-increase
   --require-command-buffers-per-present-not-increase
   --require-render-passes-per-present-not-increase
+  --require-render-pass-carry-promotion-gates
   --require-encoder-final-end-reason-not-increase
   --require-encoder-final-same-key-reopen-not-increase
   --require-encoder-color-load-not-increase
@@ -436,6 +438,10 @@ while (($#)); do
       ;;
     --require-render-passes-per-present-not-increase)
       require_render_passes_per_present_not_increase=1
+      shift
+      ;;
+    --require-render-pass-carry-promotion-gates)
+      require_render_pass_carry_promotion_gates=1
       shift
       ;;
     --require-encoder-final-end-reason-not-increase)
@@ -975,6 +981,7 @@ if (( require_color_dontcare_increase ||
       require_tile_preservation_not_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
+      require_render_pass_carry_promotion_gates ||
       require_encoder_final_end_reason_not_increase ||
       require_encoder_final_same_key_reopen_not_increase ||
       require_encoder_color_load_not_increase ||
@@ -1249,6 +1256,9 @@ if [[ -n "$baseline_output" ]]; then
   fi
   if (( require_render_passes_per_present_not_increase )); then
     perf_compare_cmd+=(--require-render-passes-per-present-not-increase)
+  fi
+  if (( require_render_pass_carry_promotion_gates )); then
+    perf_compare_cmd+=(--require-render-pass-carry-promotion-gates)
   fi
   if (( require_encoder_final_end_reason_not_increase )); then
     perf_compare_cmd+=(--require-encoder-final-end-reason-not-increase)

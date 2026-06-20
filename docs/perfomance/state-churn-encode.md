@@ -214,6 +214,20 @@ bottleneck — that is owned by [[hidden-backend-storage]].
 | H194 | After mixed-carrier rejection, the next owner is direct compact uniform cache or locality-preserving P4 overlap | accepted next-owner review | [[state-churn-encode-encode-phase.184]] rereads H193 child counters and ranks the next branches. More draw-run preflush carriers are closed unless paired with underlying materialization removal. Direct compact uniform cache remains plausible because H181 proves full `CachedBaseDrawState::uniforms` is still built before compacting; P4 overlap remains the average-FPS lane but must not repeat previous CB/pass/tile/final-reopen regressions. | Use `v0.0.3` as the visual-safe anchor. Run 120s no-gputrace gates before Xcode: direct uniform work must reduce snapshot/replay rows without worsening P4/frame, and P4 overlap work must create enqueue-during-wait while keeping command buffers, render passes, tile preservation, final same-key reopens, and load/store traffic flat. |
 | H195 | Hot-state construction can now consume uniform hashes without a full payload argument | accepted prerequisite; no runtime claim | [[state-churn-encode-encode-phase.185]] adds `FlatDrawStateUniformInputs` and routes current hash-ready hot-build call sites through `FlatDrawStateUniformInputs{.hashes = &uniformHashes}`. This removes the function-signature blocker identified by H184: `FlatDrawStateRecord` construction no longer inherently requires a full `DrawUniformPayload` object when hashes are already available. Focused native tests pass. | Keep this as a direct compact uniform-cache prerequisite only. The cache still builds full `CachedBaseDrawState::uniforms`; the next mutation must split that source of truth and then pass the 120s no-gputrace plus `v0.0.3` visual gate before any Xcode/gputrace spend. |
 | H196 | Direct compact uniform cache source lowers local replay/snapshot CPU but does not move P4 | mechanism accepted; runtime promotion rejected | [[state-churn-encode-encode-phase.187]] pairs h216 control with h217 `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS=1` after H186's direct-source implementation. The mechanism is real: carrier width drops `21,176 -> 10,904B/record`, full-uniform carrier storage drops `10,272 -> 0B/record`, uniform materialized bytes fall `5.070 -> 1.428MB/present`, snapshot uniform build drops `0.467 -> 0.405ms/present`, queue draw submission drops `3.919 -> 3.629`, and replay drops `8.247 -> 7.902`. | Keep compact direct as bounded P2/P3 cleanup behind the existing opt-in knob, but do not promote it as the average-FPS lever. Completion remains no-enqueue dominated (`25.801ms/present` without enqueue, `0.036` with enqueue), ready depth is still `1.000`, encode chunk slightly worsens, and sampled FPS is noise (`16.429 -> 16.545`). Return to producer/replay/encode overlap or serial-cadence work, still gated by CB/pass/tile locality and `v0.0.3` visual safety. |
+| H197 | Chunk-end pending flushes are real opportunities, but naive cross-chunk carry is not safe | opportunity accepted; naive carry rejected | [[state-churn-encode-encode-phase.188]] adds default-off `DXMT9_PERF_CHUNK_END_FLUSH_PROBE=1` and runs h218 under the standard 120s no-gputrace gate. The `End` drain is the same order as draw-run preflush (`1,393.521ms` vs `1,411.785ms`, about `0.801ms/present`), with `32,283` stored end flushes / `406,005` pending records (`12.576` records/flush). Almost every stored flush resolves immediately to a next draw-shaped record (`29,582` first submissions, `2,623` first imported draw-runs, `78` blockers). | Do not implement a plain cross-chunk pending-vector carry. Only `48.25%` of first-submission candidates share stable state/lane, uniform generation matches only `7.04%`, and whole uniform payload hash matches only `11.40%`. The viable next design must preserve per-draw uniform ownership and explicit-run shared state, or return to a larger P4 overlap contract. The run remains no-enqueue dominated (`completion_wait_without_enqueue=26.898ms/present`, `with_enqueue=0`), so no `.gputrace` spend from this probe alone. |
+| H198 | State-compatible chunk-end carry remains plausible, but uniform-stable carry is too narrow | opportunity accepted; uniform-stable carry rejected | [[state-churn-encode-encode-phase.189]] adds the missing H188 intersection counters and runs h221 under the 120s no-gputrace foreground gate. The opportunity repeats: `32,740` stored end flushes / `408,432` records (`12.475` records/flush), `30,198` first-submission candidates, and `2,470` first imported draw-runs. State/lane compatibility is still about half (`15,070`, `49.90%`). | Do not implement a carry that requires both same state and same uniform. The actual state+uniform intersection is only `7.22%` by both generation and whole-payload-hash predicates, so a useful carrier must preserve per-draw uniform ownership while carrying only the shared state lane, or preserve the following explicit run as a shared-state span. H221 itself is not a perf win: sampled FPS is `16.305`, `completion_wait_without_enqueue=30.051ms/present`, ready depth is `1.000`, replay is `8.458ms/present`, and encode is `11.096ms/present`; no `.gputrace` spend from this probe alone. |
+| H199 | Cross-chunk end carry needs owned uniform scratch and resource re-marking | accepted design gate | [[state-churn-encode-encode-phase.190]] audits the current replay and queue code before mutating H221. The pending vectors and `DrawSubmissionUniformScratch` are thread-local scratch cleared at commit exit, while compact submissions may hold arena-view spans into that scratch. Separately, chunk replay suppresses per-draw resource marking after `markChunkResources()` because same-chunk draws share the bulk-mark `seqId`. | Do not move the local vectors to `D9CDevice` as a standalone patch. A safe end carry must own submissions plus uniform scratch across calls, keep full/compact lanes exclusive, flush before next non-draw boundary, and submit carried work with forced per-draw resource marking at the actual submit sequence. Without that submit mode, prefer same-call mixed carriers or P4 overlap work over cross-chunk deferral. |
+| H200 | Forced resource-marking submit is now available as a cross-chunk carry prerequisite | prerequisite accepted; no runtime claim | [[state-churn-encode-encode-phase.191]] adds explicit forced-mark submit methods through `core::Device`, `BackendDevice`, `dxmt9::Device`, and `CommandQueue`. The queue variants reuse the existing batch submit implementation with per-draw resource marking enabled even if chunk replay is currently in bulk-mark skip mode. Focused native coverage proves the seams route through the dedicated backend methods and preserve draw params. | This removes only the resource-lifetime blocker from H199. It does not enable end carry, reduce CPU, or justify `.gputrace`. The next mutation must add owned carried submission/uniform scratch storage and then pass the usual 120s no-gputrace P4 plus `v0.0.3` visual gate before promotion. |
+| H201 | Owned chunk-end carry is implemented as a default-off runtime experiment | implementation accepted; runtime result pending | [[state-churn-encode-encode-phase.192]] adds `DXMT9_ENABLE_CHUNK_END_CARRY=1`. The replay path can move a small chunk `End` pending-submission drain plus compact-uniform scratch into `D9CDevice`, adopt it into the next draw-shaped record, or flush it through forced resource marking on non-draw/failure boundaries. New summary counters report stored/adopted/flushed carry records. | Keep the knob default-off and unpromoted. Default-off native/TLA/script coverage passes, but the useful proof is still missing: run a 120s no-gputrace 3DMark05 A/B with `--keep-frontmost`, verify carry adoption dominates flushing, verify P4/no-enqueue and replay/encode rows improve or stay flat, and compare visually against `v0.0.3`. Broad env-on unit tests are not the promotion gate because isolated draw-only final chunks can be intentionally deferred with no following boundary. |
+| H202 | Owned chunk-end carry removes the local end-flush bucket but not the P4/FPS owner | mechanism accepted; runtime promotion rejected | [[state-churn-encode-encode-phase.193]] pairs h222 control with h223 `DXMT9_ENABLE_CHUNK_END_CARRY=1` under the 120s no-gputrace foreground gate. The mechanism works: `649,242` records are stored, `648,183` are adopted (`99.84%`), and chunk-end pending flush CPU falls `0.817 -> 0.045ms/present`. The frame-facing rows do not move: replay is `8.497 -> 8.492ms/present`, encode is `13.060 -> 13.001`, ready depth stays `1.000`, and completion wait remains no-enqueue dominated (`26.943 -> 26.402ms/present` without enqueue, `0.106 -> 0.000` with enqueue). | Keep the knob default-off. The saved end-flush work shifts into larger submit batches (`draw_batch_submit` `1.714 -> 1.983ms/present`, submission records per submit `9.053 -> 12.497`) instead of becoming an FPS lever. Do not spend `.gputrace` on this candidate; next work should attribute the submit-cost shift, combine carry only with real N-1 materialization elision, or return to a locality-preserving P4 overlap design gated by `v0.0.3` visual safety. |
+| H203 | Forced resource-marking pending flushes need direct attribution after H202 | instrumentation accepted; runtime partially attributed; visual gate failed | [[state-churn-encode-encode-phase.194]] adds behavior-neutral counters for pending flushes that submit through forced per-draw resource marking, then h224 reruns `DXMT9_ENABLE_CHUNK_END_CARRY=1`. The mechanism repeats (`557,652` stored records, `557,140` adopted), and the new counter reports `0.144ms/present`, `1.089` flushes/present, and `30.401` records/present through forced resource marking. That is a real local cost (`20.09%` of pending flush CPU), but it is not the whole submit shift: `draw_batch_submit` remains `2.007ms/present` and batch resource marking remains `0.114ms/present`. H224's screenshot is HUD plus black scene (`mean_luma=6.289`), so it is counter evidence only, not visual-safe performance evidence. | Keep `DXMT9_ENABLE_CHUNK_END_CARRY=1` default-off. Do not mutate carry again from this alone. The next branch is either a narrower resource-marking residual proof, queue lock / outer submit / batch-width attribution for the rest of `draw_batch_submit`, or P4 overlap work. Any timing claim still needs a repeated no-gputrace run with `v0.0.3` visual safety before `.gputrace` or promotion. |
+| H204 | Current wall review narrows the next owner to P4 or submit residual attribution | accepted current direction | [[state-churn-encode-encode-phase.195]] reviews the current visual-safe evidence: same-generation state-copy elision is already live (`410,814` states / `4.203GiB` saved), adjacent uniform generation reuse is `0`, compact uniform source already failed P4 promotion, and chunk-end carry shifts rather than removes work. | Treat the project as narrowed, not stuck. The next branch is queue lock / outer submit / batch-width residual attribution, append materialization, or a render-pass-safe overlap carrier. `.gputrace` is only for GPU-hot-frame questions or a candidate that moves P4/locality gates. |
+| H205 | Queue mutex acquisition owns the draw-batch-submit residual | rejected | [[state-churn-encode-encode-phase.196]] adds `submit_draw_run_batch_queue_lock_cpu_ms` around the queue lock in `submitDrawRunBatch*` and reruns the current visual-safe 120s no-gputrace probe. The lock is only `0.018ms/present`, while `draw_batch_submit=1.682ms/present`, replay `8.424`, encode `11.249`, and no-enqueue completion wait `27.837` remain. | Do not optimize the submit mutex for GT1. The next local CPU branch is append/materialization width or snapshot/cache; the average-FPS branch remains P4 overlap. |
+| H206 | The remaining draw-batch-submit row is mostly an unmeasured outer-submit gap | rejected by derived reanalysis | [[state-churn-encode-encode-phase.197]] extends the summary tool with parent-minus-child residual rows and re-summarizes H225. Existing children explain `89.96%` of `commit_chunk_draw_batch_submit_cpu_ms`; append alone is `76.63%` of the parent. Inside append, uniform is `51.51%`, state is `26.00%`, and append residual is `9.73%`. | Treat append uniform/state materialization as the next local submit branch. Do not chase a broad outer-submit unknown or `.gputrace` from this CPU-only evidence. Any append-width win still needs P4/no-enqueue movement before FPS promotion. |
+| H207 | Uniform append is mostly just payload lookup and payload-record append | rejected by derived reanalysis | [[state-churn-encode-encode-phase.198]] adds derived uniform-append CPU rows and re-summarizes H225. The parent is `0.664ms/present`, but payload lookup is only `0.152`, payload append storage is only `0.101`, and the known child share is `38.02%`. The residual is `0.411ms/present`, likely stage-level find/append/vector maintenance around vertex/pixel constant payloads. | Do not optimize only the final payload-record append copy. The next local branch is stage-level uniform append materialization or N-1 state/uniform materialization elision. This remains a local CPU branch until replay/encode/P4 rows move under the visual-safe no-gputrace gate. |
+| H208 | The remaining uniform-append residual needs component-level attribution before mutation | instrumentation accepted; runtime gate completed | [[state-churn-encode-encode-phase.199]] adds behavior-neutral counters for fixed/VS/PS component find and append scopes inside `appendDrawUniformPayload()`, plus summary rows for known-with-components share and component residual. Existing H225 data predates the counters, so the new rows correctly report `n/a` rather than zero. | The follow-up run in H209 makes fixed-payload find the first local cleanup target. Keep the component split as attribution tooling; it is not `.gputrace` evidence by itself. |
+| H209 | Fixed-payload handle carry reduces the targeted component but does not break the FPS wall | accepted local cleanup; not FPS proof | [[state-churn-encode-encode-phase.200]] stamps submissions with `uniformFixedPayloadGeneration` and lets `appendDrawRunBatch()` reuse the previous slot-local fixed handle when the generation is unchanged and the record hash still matches the current fixed payload. The targeted row moves: `uniform_component_fixed_find_cpu_ms_per_present` `0.229 -> 0.150`, and total component find `0.323 -> 0.257`. | Keep the carry path. Do not promote it as a wall-breaker: `uniform_append_parent_cpu_ms_per_present` is flat (`0.882 -> 0.880`), sampled FPS is noisy/regressed (`16.170 -> 14.261`), and no-enqueue completion wait remains dominant. The next FPS-facing branch remains P4/no-enqueue overlap or larger replay/encode materialization elision. |
+| H210 | Uniform append residual after fixed-handle carry is bounded local cleanup | accepted direction | [[state-churn-encode-encode-phase.201]] audits H209's current run and the `appendDrawUniformPayload()` source. The remaining parent is `0.880ms/present`; known scopes plus component scopes explain `77.75%`, leaving `0.196ms/present` residual. VS stage append is the largest named remaining component (`0.116ms/present`) because `661,640` VS stage records are appended (`0.833` per payload append), while full uniform generation reuse remains `0` and full payload hash reuse is only `3,970 / 672,993` adjacent payloads. | Do not spend `.gputrace` on uniform append residual alone. A VS-stage split or stage-handle tweak is optional local cleanup with a small ceiling. The FPS branch remains P4/no-enqueue overlap or a larger replay/encode materialization change that moves serial rows under the visual-safe no-gputrace gate. |
 
 ## Verification methods
 
@@ -249,6 +263,12 @@ bottleneck — that is owned by [[hidden-backend-storage]].
   `commit_chunk_replay_pending_flush_{before_record,draw_run,draw_fallback,failure,end}_cpu_ms`
   decide whether a candidate should attack non-draw boundaries, draw-run
   interaction, real fallback drains, or ordinary chunk-end draining.
+  `DXMT9_PERF_CHUNK_END_FLUSH_PROBE=1` is a default-off opportunity probe for
+  the ordinary chunk-end class: it stores only the end-flush generation/lane
+  stamp and resolves it against the next chunk's first draw-shaped record. Use
+  its `commit_chunk_replay_end_flush_probe_*` rows to size cross-chunk carry
+  designs, not as permission to carry pending submissions across chunks without
+  per-draw uniform and state-compatibility proof.
 - **`commit_chunk_*_cpu_ms` stage counters** — split the historical
   `bridge_commit_latency_ns` wall time into wire import, handle/resource
   marking, record replay, and nested draw-batch submit. Use these before
@@ -1684,6 +1704,156 @@ default behavior is unchanged. Native parity tests cover direct compact stage
 spans against the full compact materializer, but this remains an
 implementation-only result until a 120s no-gputrace GT1 smoke passes the
 `v0.0.3` visual gate and moves the relevant snapshot/P4 counters.
+
+[[state-churn-encode-encode-phase.187]] runs that gate and rejects runtime
+promotion. The direct compact source removes the full-uniform carrier lane
+(`10,272 -> 0B/record`) and lowers local uniform/replay costs, including
+materialized uniform bytes (`5.070 -> 1.428MB/present`), snapshot uniform build
+(`0.467 -> 0.405ms/present`), queue draw submission (`3.919 -> 3.629`), and
+replay (`8.247 -> 7.902`). The frame owner remains unchanged: ready depth is
+still `1.000`, completion wait is still no-enqueue dominated
+(`25.801ms/present` without enqueue, `0.036` with enqueue), encode chunk does
+not improve, and sampled FPS movement is noise. Treat compact direct as bounded
+P2/P3 cleanup only; the next average-FPS work returns to P4/serial-cadence
+overlap with CB/pass/tile locality and the `v0.0.3` visual-safe gate.
+
+[[state-churn-encode-encode-phase.188]] sizes the separate chunk `End` drain.
+The opportunity is real: end pending flush costs `1,393.521ms/run`
+(`0.801ms/present`) and carries `406,005` records across `32,283` flushes.
+Nearly all end flushes meet a next draw-shaped record, but the first-submission
+compatibility shape is weak: only `48.25%` share state/lane, only `7.04%` share
+uniform generation, and only `11.40%` share whole uniform payload hash. Treat
+this as a carrier-design limit for a naive cross-chunk carry, not as a hardware
+wall. The next mutation must preserve per-draw uniforms and explicit-run shared
+state or move to a stricter P4 overlap design; the probe alone does not justify
+`.gputrace` because P4 remains fully no-enqueue dominated.
+
+[[state-churn-encode-encode-phase.189]] adds the missing state+uniform
+intersection proof for that same chunk-end shape. H221 repeats the opportunity
+(`32,740` stored end flushes / `408,432` records, `30,198` first-submission
+candidates), but proves that uniform-stable carry is too narrow: state/lane
+compatibility is `49.90%`, while the state-and-uniform intersection is only
+`7.22%` by both generation and whole-payload-hash predicates. A promotable
+end-drain carrier therefore cannot require uniform stability. It must keep each
+draw's uniform payload owned while sharing only the stable state lane, or
+preserve the following explicit run as a shared-state span. H221 remains
+no-enqueue dominated and is not a `.gputrace` candidate by itself.
+
+[[state-churn-encode-encode-phase.190]] audits the implementation shape before
+turning H221 into a mutation. A naive cross-chunk carry is unsafe for two
+independent reasons: the pending submission vectors and compact-uniform arena
+scratch are commit-call-local, and previous-chunk `markChunkResources()` stamps
+resources for the old chunk's expected submission sequence. A safe carried
+submit would need owned `D9CDevice` storage for submissions plus uniform scratch
+and a queue submit mode that forces carried work through per-draw resource
+marking at the actual submit sequence. Until that exists, do not implement
+end-drain carry by merely extending vector lifetime.
+
+[[state-churn-encode-encode-phase.191]] adds that forced resource-marking submit
+mode as a prerequisite. The new frontend/backend/queue seams let carried work
+enter `CommandQueue` with per-draw resource marking enabled even while ordinary
+same-chunk replay is using the bulk-mark skip path. This is not a performance
+result and does not carry any submissions yet; it only removes the resource
+lifetime blocker for a future owned end-carry object.
+
+[[state-churn-encode-encode-phase.192]] implements that owned end-carry object
+behind `DXMT9_ENABLE_CHUNK_END_CARRY=1`. This is still default-off and not
+promoted: deterministic coverage only proves the existing path and the summary
+plumbing. The next decision requires a 120s no-gputrace GT1 A/B proving that
+stored carry records are adopted, not mostly flushed, and that P4/cadence plus
+the `v0.0.3` visual gate remain healthy.
+
+[[state-churn-encode-encode-phase.193]] performs that runtime gate and rejects
+promotion. The carry path adopts `99.84%` of stored records and collapses the
+target chunk-end flush bucket (`0.817 -> 0.045ms/present`), but total replay per
+present is flat (`8.497 -> 8.492ms`) because submit batching grows wider:
+`commit_chunk_draw_batch_submit_cpu_ms` rises `1.714 -> 1.983ms/present` and
+submission records per submit rise `9.053 -> 12.497`. P4 also stays in the same
+no-enqueue class: ready depth remains `1.000` and
+`completion_wait_with_enqueue_ms_per_present` falls to `0.000`. Treat the owned
+carry as a proven mechanism, not a current FPS lever. The next branch should
+either remove the underlying submit/materialization work or return to a
+locality-preserving P4 overlap design.
+
+[[state-churn-encode-encode-phase.194]] adds and runs the missing attribution
+for that branch. H224 repeats the carry mechanism but shows forced
+resource-marking pending flushes are only a partial owner:
+`0.144ms/present`, `30.401` records/present, and `20.09%` of pending flush CPU.
+The larger submit row remains (`draw_batch_submit=2.007ms/present`), ready depth
+stays `1.000`, and the output screenshot is HUD plus black scene, so this is
+not visual-safe promotion evidence. Treat resource marking as a local residual
+to reduce only after a narrower proof; the average-FPS branch remains queue
+submit residual/batch width or P4 overlap.
+
+[[state-churn-encode-encode-phase.195]] summarizes the current "wall" review.
+The latest visual-safe scout confirms that same-generation state-copy elision is
+already active (`410,814` elided states / `4.203GiB` saved) while adjacent
+uniform elision remains unavailable (`same uniform generation = 0`) and compact
+uniform / chunk-end carry branches have already failed the FPS/P4 gate. This is
+not a proven hard limit: it narrows the next work to queue lock / outer submit /
+batch-width residuals for local CPU cleanup, or a render-pass-safe P4 overlap
+carrier that actually moves no-enqueue rows. The first follow-up counter is
+`submit_draw_run_batch_queue_lock_cpu_ms`, which splits queue mutex acquisition
+from the existing `submit_draw_run_batch_*` child rows.
+
+[[state-churn-encode-encode-phase.196]] runs that follow-up counter and rejects
+queue mutex acquisition as the owner. H225 reports only
+`0.018ms/present` in `submit_draw_run_batch_queue_lock_cpu_ms`, while the same
+run still has `completion_wait_without_enqueue_ms_per_present=27.837`,
+`commit_chunk_replay_cpu_ms_per_present=8.424`,
+`encode_chunk_cpu_ms_per_present=11.249`, and
+`submit_draw_run_batch_append_cpu_ms_per_present=1.289`. Visual captures from
+frames `900` and `920` are coherent and the run has
+`draw_skipped_no_pipeline=0` / `gpu_command_buffer_errors=0`, so this is a valid
+negative attribution result. Do not spend GT1 work on this mutex path; the next
+local CPU branch is snapshot/cache materialization or append payload width, and
+the next average-FPS branch remains P4/run-ahead overlap.
+
+[[state-churn-encode-encode-phase.197]] then reuses the same H225 run with a
+summary-only parent-minus-child split. The draw-batch-submit parent is not a
+large unmeasured outer-submit gap: known children explain `89.96%` of the
+parent, and append alone is `76.63%`. Inside append, uniform append owns
+`51.51%`, state append `26.00%`, and the residual is only `9.73%`. This keeps
+the local submit branch focused on append materialization width rather than
+queue locking or broad submit wrapper cost. It remains a local CPU branch unless
+a follow-up no-gputrace run moves P4/no-enqueue rows.
+
+[[state-churn-encode-encode-phase.198]] further narrows the uniform half of that
+append row. Payload lookup plus payload-record append storage explain only
+`38.02%` of `submit_draw_run_batch_append_uniform_cpu_ms`; the remaining
+`0.411ms/present` is stage-level uniform append work. The useful local branch is
+therefore N-1 materialization elision or stage-level uniform append reduction,
+not payload-record copy width alone. The average-FPS branch still requires
+P4/no-enqueue movement.
+
+[[state-churn-encode-encode-phase.199]] adds the missing component split for the
+next run. It separates fixed/VS/PS component find and append scopes inside
+`appendDrawUniformPayload()` and makes the summary report
+known-with-components share plus remaining component residual. Older H225 data
+shows `n/a` for those rows, preserving the H207 conclusion while making the next
+probe decisive.
+
+[[state-churn-encode-encode-phase.200]] runs that probe and implements the
+small fixed-payload handle carry that the split suggested. The targeted row
+moves: `uniform_component_fixed_find_cpu_ms_per_present` falls
+`0.229 -> 0.150`, and total component find falls `0.323 -> 0.257`. The run stays
+clean on skipped-pipeline and command-buffer errors, but the parent uniform
+append row is flat (`0.882 -> 0.880ms/present`), sampled FPS is noisy/regressed,
+and completion wait remains no-enqueue dominated. Treat fixed-handle carry as a
+valid local cleanup, not the wall-breaking FPS lever. The next average-FPS
+branch remains P4/no-enqueue overlap or larger replay/encode materialization
+elision.
+
+[[state-churn-encode-encode-phase.201]] then puts a ceiling on the remaining
+uniform append path after that cleanup. The H209 run still appends `794,314`
+uniform payload records, including `661,640` VS constant stage records
+(`0.833` per payload append), but the normalized local CPU is small:
+the parent is `0.880ms/present`, known scopes plus component scopes explain
+`77.75%`, the remaining component residual is `0.196ms/present`, and the
+largest named child left is VS stage append at `0.116ms/present`. That makes
+more uniform-append work optional local cleanup, not a reason to spend Xcode or
+claim a wall-breaker. The next FPS-facing branch remains P4/no-enqueue overlap
+or a larger replay/encode materialization change that moves serial rows.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

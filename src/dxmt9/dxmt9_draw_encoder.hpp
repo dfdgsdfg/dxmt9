@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,6 +38,22 @@ namespace pipeline { class Cache; }
 namespace scratch { struct FrameAllocators; }
 
 namespace encoders {
+
+struct EncodeChunkSessionState;
+
+struct EncodeChunkSessionDeleter {
+  void operator()(EncodeChunkSessionState* session) const noexcept;
+};
+
+using EncodeChunkSession =
+    std::unique_ptr<EncodeChunkSessionState, EncodeChunkSessionDeleter>;
+
+EncodeChunkSession makeEncodeChunkSession();
+void resetEncodeChunkSession(EncodeChunkSessionState& session);
+bool encodeChunkSessionHasActiveRender(
+    const EncodeChunkSessionState& session) noexcept;
+bool encodeChunkSessionHasDeferredSubmissionPayload(
+    const EncodeChunkSessionState& session) noexcept;
 
 // Optional recorder seam for tests that need to observe the final draw-issue
 // commands after encodeDraw has selected UP vs bound resources and built the
@@ -430,6 +447,17 @@ struct EncodeChunkOptions {
   // Same carrier class must also avoid the optional pre-acquire split that can
   // commit the pre-Present head immediately before encoding Present.
   bool disablePresentAcquireSplit = false;
+  // Optional session owner for future render-pass carry candidates. The
+  // current encodeChunk path still finalizes and resets this session before
+  // returning; passing one only routes state through the same explicit owner
+  // that a later opt-in carry path can keep alive.
+  EncodeChunkSessionState* session = nullptr;
+  // Opt-in open-CB render-session carry path. When true and `session` is
+  // non-null, encodeChunk returns after appending commands without ending the
+  // active session or publishing session-owned callbacks / GPU samples into the
+  // returned record. A later encodeChunk call on the same session must finalize
+  // it before the shared command buffer is submitted.
+  bool deferSessionFinalization = false;
 
   bool hasInjectedCommandBuffer() const noexcept {
     return static_cast<bool>(commandBuffer);
@@ -444,6 +472,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::size_t slotIndex,
     const core::ChunkSlot& slot,
     EncodeChunkOptions options = {});
+
+bool finalizeEncodeChunkSessionIntoSubmission(
+    EncodeContext& ctx,
+    EncodeChunkSessionState& session,
+    core::metalqueue::QueueSubmissionRecord& record);
 
 }  // namespace encoders
 }  // namespace dxmt9

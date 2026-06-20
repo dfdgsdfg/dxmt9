@@ -24,6 +24,11 @@ std::size_t selectTailPresentBatchPrefix(
     std::span<const core::ChunkSlot> slots,
     std::size_t maxCount) noexcept;
 
+std::size_t selectOpenCbTailPresentBatchPrefix(
+    const std::deque<std::size_t>& readySlots,
+    std::span<const core::ChunkSlot> slots,
+    std::size_t maxCount) noexcept;
+
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
     encoders::EncodeContext& ctx,
     std::span<core::metalqueue::ReadySlotSnapshot> sources,

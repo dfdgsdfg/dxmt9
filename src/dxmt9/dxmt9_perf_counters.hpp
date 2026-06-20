@@ -276,6 +276,25 @@ void countDrawSkippedNoPipeline();
 void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
+void countEncodeSessionCarryDeferredChunk(bool activeRender,
+                                          bool activeBlit,
+                                          bool pendingClear);
+void countEncodeSessionCarryFinalChunk();
+void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
+                                                          bool activeBlit,
+                                                          bool pendingClear);
+void countOpenCbTailPresentPendingStarted();
+void countOpenCbTailPresentPendingSuppressedNoTail();
+void countOpenCbTailPresentHeadAppended();
+void countOpenCbTailPresentTailAppended();
+void countOpenCbTailPresentTailSubmitted();
+void countOpenCbTailPresentPendingTailWaitTimeout();
+void countOpenCbTailPresentPendingTimeoutSubmitted();
+void countOpenCbTailPresentPendingAbandonedNoReady();
+void countOpenCbTailPresentPendingAbandonedNonAppendable();
+void countOpenCbTailPresentPendingAbandonedRetainFailed();
+void countOpenCbTailPresentPendingAbandonedEncodeNull();
+void countOpenCbTailPresentPendingMergeFailed();
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -335,9 +354,26 @@ void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records);
 void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records);
 void countCommitChunkReplayPendingFlushFailure(std::uint64_t records);
 void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
+void countCommitChunkReplayPendingFlushForcedResourceMarking(
+    std::uint64_t nanoseconds,
+    std::uint64_t records);
 void countCommitChunkReplayDrawRunPreflushOpportunity(
     std::uint64_t pendingRecords,
     std::uint64_t runRecords);
+void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords);
+void countCommitChunkReplayEndFlushProbeFirstSubmission(
+    std::uint64_t pendingRecords,
+    bool sameStateLane,
+    bool sameUniformGeneration,
+    bool sameUniformPayloadHash);
+void countCommitChunkReplayEndFlushProbeFirstDrawRun(
+    std::uint64_t pendingRecords,
+    std::uint64_t runRecords);
+void countCommitChunkReplayEndFlushProbeBlocked(bool drawFallback,
+                                                std::uint64_t pendingRecords);
+void countCommitChunkReplayEndCarryStored(std::uint64_t records);
+void countCommitChunkReplayEndCarryAdopted(std::uint64_t records);
+void countCommitChunkReplayEndCarryFlushed(std::uint64_t records);
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds);
@@ -357,6 +393,7 @@ void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunResourceMarkCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunAppendCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds);
+void countSubmitDrawRunBatchQueueLockCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane);
 void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane, bool compatible);
@@ -543,6 +580,12 @@ void countDrawUniformVertexConstantsAppend();
 void countDrawUniformVertexConstantsAppendBytes(std::uint64_t bytes);
 void countDrawUniformPixelConstantsAppend();
 void countDrawUniformPixelConstantsAppendBytes(std::uint64_t bytes);
+void countDrawUniformPayloadAppendFixedFindCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendVertexFindCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendPixelFindCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendFixedAppendCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendVertexAppendCpuTime(std::uint64_t nanoseconds);
+void countDrawUniformPayloadAppendPixelAppendCpuTime(std::uint64_t nanoseconds);
 void countDrawUniformPayloadMaterialized(DrawUniformPayloadMaterializeSite site,
                                          std::uint64_t bytes);
 void countDrawUniformPayloadMaterializeFallback(
@@ -1115,7 +1158,15 @@ void countCompletionNoEnqueueFirstPublishSlotShape(
     std::uint64_t drawItems,
     std::uint64_t nonDrawCommands,
     std::uint64_t payloadBytes,
-    std::uint64_t presentCommands);
+    std::uint64_t presentCommands,
+    std::uint64_t prePresentCommands,
+    std::uint64_t prePresentDrawRunCommands,
+    std::uint64_t prePresentDrawItems,
+    std::uint64_t prePresentNonDrawCommands,
+    std::uint64_t prePresentPayloadBytes,
+    std::uint64_t postPresentCommands,
+    std::uint64_t presentTailSlots,
+    std::uint64_t presentNonTailSlots);
 void countCompletionNoEnqueueStageCommitEntryToPublish(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStagePublishToEncodeDequeue(std::uint64_t nanoseconds);
 void countCompletionNoEnqueueStageEncodeDequeueToCommandBufferCommit(std::uint64_t nanoseconds);
@@ -1194,6 +1245,23 @@ struct CounterSnapshot {
   std::uint64_t commandBuffers = 0;
   std::uint64_t renderPassBegin = 0;
   std::uint64_t renderPassEnd = 0;
+  std::uint64_t encodeSessionCarryDeferredChunks = 0;
+  std::uint64_t encodeSessionCarryDeferredActiveRenderChunks = 0;
+  std::uint64_t encodeSessionCarryFinalChunks = 0;
+  std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaits = 0;
+  std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaitActiveRender = 0;
+  std::uint64_t openCbTailPresentPendingStarted = 0;
+  std::uint64_t openCbTailPresentPendingSuppressedNoTail = 0;
+  std::uint64_t openCbTailPresentHeadAppended = 0;
+  std::uint64_t openCbTailPresentTailAppended = 0;
+  std::uint64_t openCbTailPresentTailSubmitted = 0;
+  std::uint64_t openCbTailPresentPendingTailWaitTimeout = 0;
+  std::uint64_t openCbTailPresentPendingTimeoutSubmitted = 0;
+  std::uint64_t openCbTailPresentPendingAbandonedNoReady = 0;
+  std::uint64_t openCbTailPresentPendingAbandonedNonAppendable = 0;
+  std::uint64_t openCbTailPresentPendingAbandonedRetainFailed = 0;
+  std::uint64_t openCbTailPresentPendingAbandonedEncodeNull = 0;
+  std::uint64_t openCbTailPresentPendingMergeFailed = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;

@@ -272,6 +272,8 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunAppendCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunChunkCommitCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunChunkCommitCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchQueueLockCpuNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchQueueLockCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatScanCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchSubmissionAdjacentPairs{0};
@@ -370,6 +372,27 @@ struct Counters {
   std::atomic<std::uint64_t> renderSplitColorFill{0};
   std::atomic<std::uint64_t> renderSplitPresent{0};
   std::atomic<std::uint64_t> renderSplitPresentAcquire{0};
+  std::atomic<std::uint64_t> encodeSessionCarryDeferredChunks{0};
+  std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveRenderChunks{0};
+  std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveBlitChunks{0};
+  std::atomic<std::uint64_t> encodeSessionCarryDeferredPendingClearChunks{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFinalChunks{0};
+  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaits{0};
+  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveRender{0};
+  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit{0};
+  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitPendingClear{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStarted{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingSuppressedNoTail{0};
+  std::atomic<std::uint64_t> openCbTailPresentHeadAppended{0};
+  std::atomic<std::uint64_t> openCbTailPresentTailAppended{0};
+  std::atomic<std::uint64_t> openCbTailPresentTailSubmitted{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingTailWaitTimeout{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingTimeoutSubmitted{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedNoReady{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedNonAppendable{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedRetainFailed{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedEncodeNull{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingMergeFailed{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
@@ -385,6 +408,27 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushPendingRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushRunRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushCombinedRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStored{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStoredRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmission{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRun{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRunRunRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedNonDraw{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedDrawFallback{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedPendingRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryStored{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryStoredRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryAdopted{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryAdoptedRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryFlushed{0};
+  std::atomic<std::uint64_t> commitChunkReplayEndCarryFlushedRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
@@ -435,6 +479,9 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndRecords{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushForcedResourceMarkingCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushForcedResourceMarkingFlushes{0};
+  std::atomic<std::uint64_t> commitChunkReplayPendingFlushForcedResourceMarkingRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuNs{0};
   std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuNs{0};
@@ -1252,6 +1299,18 @@ struct Counters {
   std::atomic<std::uint64_t> drawUniformVertexConstantsAppendBytes{0};
   std::atomic<std::uint64_t> drawUniformPixelConstantsAppends{0};
   std::atomic<std::uint64_t> drawUniformPixelConstantsAppendBytes{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendFixedFindCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendFixedFindCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendVertexFindCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendVertexFindCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendPixelFindCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendPixelFindCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendFixedAppendCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendFixedAppendCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendVertexAppendCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendVertexAppendCpuMaxNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendPixelAppendCpuNs{0};
+  std::atomic<std::uint64_t> drawUniformPayloadAppendPixelAppendCpuMaxNs{0};
   std::atomic<std::uint64_t> drawUniformPayloadMaterialized{0};
   std::atomic<std::uint64_t> drawUniformPayloadMaterializedBytes{0};
   std::atomic<std::uint64_t> drawUniformPayloadMaterializeFallbacks{0};
@@ -1548,6 +1607,17 @@ struct Counters {
   std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPayloadBytes{0};
   std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPayloadBytesMax{0};
   std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPresentCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentCommandsMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentDrawRunCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentDrawItems{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentDrawItemsMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentNonDrawCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentPayloadBytes{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesMax{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPostPresentCommands{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPresentTailSlots{0};
+  std::atomic<std::uint64_t> completionNoEnqueueFirstPublishSlotPresentNonTailSlots{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeue{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeueNs{0};
   std::atomic<std::uint64_t> completionNoEnqueueWaitToEncodeDequeueMaxNs{0};
@@ -1803,6 +1873,9 @@ struct Counters {
   PercentileRing completionNoEnqueueFirstPublishSlotCommandsRing;
   PercentileRing completionNoEnqueueFirstPublishSlotDrawItemsRing;
   PercentileRing completionNoEnqueueFirstPublishSlotPayloadBytesRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotPrePresentCommandsRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotPrePresentDrawItemsRing;
+  PercentileRing completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesRing;
   PercentileRing completionNoEnqueueWaitToEncodeDequeueRing;
   PercentileRing completionNoEnqueueWaitToCommandBufferCommitRing;
   PercentileRing completionNoEnqueueStageCommitEntryToPublishRing;
@@ -2301,6 +2374,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunAppendCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_chunk_commit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunChunkCommitCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_chunk_commit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunChunkCommitCpuMaxNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_queue_lock_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchQueueLockCpuNs, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_queue_lock_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchQueueLockCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchCompatScanCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_submission_adjacent_pairs", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchSubmissionAdjacentPairs, nullptr, nullptr, 0.0},
@@ -2357,6 +2432,27 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_split_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitColorFill, nullptr, nullptr, 0.0},
     {"render_split_present", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresent, nullptr, nullptr, 0.0},
     {"render_split_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresentAcquire, nullptr, nullptr, 0.0},
+    {"encode_session_carry_deferred_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredChunks, nullptr, nullptr, 0.0},
+    {"encode_session_carry_deferred_active_render_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveRenderChunks, nullptr, nullptr, 0.0},
+    {"encode_session_carry_deferred_active_blit_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveBlitChunks, nullptr, nullptr, 0.0},
+    {"encode_session_carry_deferred_pending_clear_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredPendingClearChunks, nullptr, nullptr, 0.0},
+    {"encode_session_carry_final_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFinalChunks, nullptr, nullptr, 0.0},
+    {"encode_session_carry_forced_finalize_initializer_waits", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaits, nullptr, nullptr, 0.0},
+    {"encode_session_carry_forced_finalize_initializer_wait_active_render", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveRender, nullptr, nullptr, 0.0},
+    {"encode_session_carry_forced_finalize_initializer_wait_active_blit", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit, nullptr, nullptr, 0.0},
+    {"encode_session_carry_forced_finalize_initializer_wait_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitPendingClear, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStarted, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_suppressed_no_tail", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingSuppressedNoTail, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentHeadAppended, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_tail_appended", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentTailAppended, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentTailSubmitted, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_tail_wait_timeout", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingTailWaitTimeout, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_timeout_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingTimeoutSubmitted, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_abandoned_no_ready", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedNoReady, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_abandoned_nonappendable", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedNonAppendable, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_abandoned_retain_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedRetainFailed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_abandoned_encode_null", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedEncodeNull, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_merge_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingMergeFailed, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
@@ -2438,10 +2534,34 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_replay_pending_flush_draw_fallback_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_failure_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_end_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_forced_resource_marking_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_forced_resource_marking_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingFlushes, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_pending_flush_forced_resource_marking_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_run_preflush_opportunities", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushOpportunities, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_run_preflush_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushPendingRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_run_preflush_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushRunRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_run_preflush_combined_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushCombinedRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_stored", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStored, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_stored_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStoredRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmission, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_same_uniform_generation", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_same_uniform_payload_hash", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_generation", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_submission_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRun, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_draw_run_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_first_draw_run_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRunRunRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_blocked_non_draw", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedNonDraw, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_blocked_draw_fallback", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedDrawFallback, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_flush_probe_blocked_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedPendingRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_stored", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryStored, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_stored_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryStoredRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_adopted", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryAdopted, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_adopted_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryAdoptedRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_flushed", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryFlushed, nullptr, nullptr, 0.0},
+    {"commit_chunk_replay_end_carry_flushed_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndCarryFlushedRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.5},
@@ -3310,6 +3430,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"draw_uniform_vertex_constants_append_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformVertexConstantsAppendBytes, nullptr, nullptr, 0.0},
     {"draw_uniform_pixel_constants_appends", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPixelConstantsAppends, nullptr, nullptr, 0.0},
     {"draw_uniform_pixel_constants_append_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPixelConstantsAppendBytes, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_fixed_find_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendFixedFindCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_fixed_find_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendFixedFindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_vertex_find_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendVertexFindCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_vertex_find_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendVertexFindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_pixel_find_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendPixelFindCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_pixel_find_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendPixelFindCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_fixed_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendFixedAppendCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_fixed_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendFixedAppendCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_vertex_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendVertexAppendCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_vertex_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendVertexAppendCpuMaxNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_pixel_append_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendPixelAppendCpuNs, nullptr, nullptr, 0.0},
+    {"draw_uniform_payload_append_pixel_append_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::drawUniformPayloadAppendPixelAppendCpuMaxNs, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_materialized", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadMaterialized, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadMaterializedBytes, nullptr, nullptr, 0.0},
     {"draw_uniform_payload_materialize_fallbacks", CounterEntry::Kind::UnsignedCount, &Counters::drawUniformPayloadMaterializeFallbacks, nullptr, nullptr, 0.0},
@@ -3656,6 +3788,23 @@ constexpr CounterEntry kCounterTable[] = {
     {"completion_no_enqueue_first_publish_slot_payload_bytes_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytesRing, 0.5},
     {"completion_no_enqueue_first_publish_slot_payload_bytes_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPayloadBytesRing, 0.95},
     {"completion_no_enqueue_first_publish_slot_present_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPresentCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_commands_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentCommandsMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_commands_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentCommandsRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_pre_present_commands_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentCommandsRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentDrawRunCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_draw_items", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentDrawItems, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_draw_items_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentDrawItemsMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_draw_items_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentDrawItemsRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_pre_present_draw_items_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentDrawItemsRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentNonDrawCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_payload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentPayloadBytes, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_max", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesMax, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p50", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesRing, 0.5},
+    {"completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p95", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesRing, 0.95},
+    {"completion_no_enqueue_first_publish_slot_post_present_commands", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPostPresentCommands, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_present_tail_slots", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPresentTailSlots, nullptr, nullptr, 0.0},
+    {"completion_no_enqueue_first_publish_slot_present_nontail_slots", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueFirstPublishSlotPresentNonTailSlots, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue", CounterEntry::Kind::UnsignedCount, &Counters::completionNoEnqueueWaitToEncodeDequeue, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToEncodeDequeueNs, nullptr, nullptr, 0.0},
     {"completion_no_enqueue_wait_to_encode_dequeue_max_ms", CounterEntry::Kind::Milliseconds, &Counters::completionNoEnqueueWaitToEncodeDequeueMaxNs, nullptr, nullptr, 0.0},
@@ -4760,6 +4909,90 @@ void countRenderPassEnd(EncoderSplitReason reason) {
   add(splitReasonCounter(counters(), reason));
 }
 
+void countEncodeSessionCarryDeferredChunk(bool activeRender,
+                                          bool activeBlit,
+                                          bool pendingClear) {
+  auto& c = counters();
+  add(c.encodeSessionCarryDeferredChunks);
+  if (activeRender) {
+    add(c.encodeSessionCarryDeferredActiveRenderChunks);
+  }
+  if (activeBlit) {
+    add(c.encodeSessionCarryDeferredActiveBlitChunks);
+  }
+  if (pendingClear) {
+    add(c.encodeSessionCarryDeferredPendingClearChunks);
+  }
+}
+
+void countEncodeSessionCarryFinalChunk() {
+  add(counters().encodeSessionCarryFinalChunks);
+}
+
+void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
+                                                          bool activeBlit,
+                                                          bool pendingClear) {
+  auto& c = counters();
+  add(c.encodeSessionCarryForcedFinalizeInitializerWaits);
+  if (activeRender) {
+    add(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender);
+  }
+  if (activeBlit) {
+    add(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit);
+  }
+  if (pendingClear) {
+    add(c.encodeSessionCarryForcedFinalizeInitializerWaitPendingClear);
+  }
+}
+
+void countOpenCbTailPresentPendingStarted() {
+  add(counters().openCbTailPresentPendingStarted);
+}
+
+void countOpenCbTailPresentPendingSuppressedNoTail() {
+  add(counters().openCbTailPresentPendingSuppressedNoTail);
+}
+
+void countOpenCbTailPresentHeadAppended() {
+  add(counters().openCbTailPresentHeadAppended);
+}
+
+void countOpenCbTailPresentTailAppended() {
+  add(counters().openCbTailPresentTailAppended);
+}
+
+void countOpenCbTailPresentTailSubmitted() {
+  add(counters().openCbTailPresentTailSubmitted);
+}
+
+void countOpenCbTailPresentPendingTailWaitTimeout() {
+  add(counters().openCbTailPresentPendingTailWaitTimeout);
+}
+
+void countOpenCbTailPresentPendingTimeoutSubmitted() {
+  add(counters().openCbTailPresentPendingTimeoutSubmitted);
+}
+
+void countOpenCbTailPresentPendingAbandonedNoReady() {
+  add(counters().openCbTailPresentPendingAbandonedNoReady);
+}
+
+void countOpenCbTailPresentPendingAbandonedNonAppendable() {
+  add(counters().openCbTailPresentPendingAbandonedNonAppendable);
+}
+
+void countOpenCbTailPresentPendingAbandonedRetainFailed() {
+  add(counters().openCbTailPresentPendingAbandonedRetainFailed);
+}
+
+void countOpenCbTailPresentPendingAbandonedEncodeNull() {
+  add(counters().openCbTailPresentPendingAbandonedEncodeNull);
+}
+
+void countOpenCbTailPresentPendingMergeFailed() {
+  add(counters().openCbTailPresentPendingMergeFailed);
+}
+
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
   add(counters().hazardProbeComparisons);
   if (bloomOverlap) {
@@ -5259,6 +5492,15 @@ void countCommitChunkReplayPendingFlushEnd(std::uint64_t records) {
   add(c.commitChunkReplayPendingFlushEndRecords, records);
 }
 
+void countCommitChunkReplayPendingFlushForcedResourceMarking(
+    std::uint64_t nanoseconds,
+    std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayPendingFlushForcedResourceMarkingCpuNs, nanoseconds);
+  add(c.commitChunkReplayPendingFlushForcedResourceMarkingFlushes);
+  add(c.commitChunkReplayPendingFlushForcedResourceMarkingRecords, records);
+}
+
 void countCommitChunkReplayDrawRunPreflushOpportunity(
     std::uint64_t pendingRecords,
     std::uint64_t runRecords) {
@@ -5268,6 +5510,78 @@ void countCommitChunkReplayDrawRunPreflushOpportunity(
   add(c.commitChunkReplayDrawRunPreflushRunRecords, runRecords);
   add(c.commitChunkReplayDrawRunPreflushCombinedRecords,
       pendingRecords + runRecords);
+}
+
+void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndFlushProbeStored);
+  add(c.commitChunkReplayEndFlushProbeStoredRecords, pendingRecords);
+}
+
+void countCommitChunkReplayEndFlushProbeFirstSubmission(
+    std::uint64_t pendingRecords,
+    bool sameStateLane,
+    bool sameUniformGeneration,
+    bool sameUniformPayloadHash) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndFlushProbeFirstSubmission);
+  add(c.commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords,
+      pendingRecords);
+  if (sameStateLane) {
+    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane);
+  }
+  if (sameUniformGeneration) {
+    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration);
+  }
+  if (sameUniformPayloadHash) {
+    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash);
+  }
+  if (sameStateLane && sameUniformGeneration) {
+    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration);
+  }
+  if (sameStateLane && sameUniformPayloadHash) {
+    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash);
+  }
+}
+
+void countCommitChunkReplayEndFlushProbeFirstDrawRun(
+    std::uint64_t pendingRecords,
+    std::uint64_t runRecords) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndFlushProbeFirstDrawRun);
+  add(c.commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords,
+      pendingRecords);
+  add(c.commitChunkReplayEndFlushProbeFirstDrawRunRunRecords, runRecords);
+}
+
+void countCommitChunkReplayEndFlushProbeBlocked(
+    bool drawFallback,
+    std::uint64_t pendingRecords) {
+  auto& c = counters();
+  if (drawFallback) {
+    add(c.commitChunkReplayEndFlushProbeBlockedDrawFallback);
+  } else {
+    add(c.commitChunkReplayEndFlushProbeBlockedNonDraw);
+  }
+  add(c.commitChunkReplayEndFlushProbeBlockedPendingRecords, pendingRecords);
+}
+
+void countCommitChunkReplayEndCarryStored(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndCarryStored);
+  add(c.commitChunkReplayEndCarryStoredRecords, records);
+}
+
+void countCommitChunkReplayEndCarryAdopted(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndCarryAdopted);
+  add(c.commitChunkReplayEndCarryAdoptedRecords, records);
+}
+
+void countCommitChunkReplayEndCarryFlushed(std::uint64_t records) {
+  auto& c = counters();
+  add(c.commitChunkReplayEndCarryFlushed);
+  add(c.commitChunkReplayEndCarryFlushedRecords, records);
 }
 
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds) {
@@ -5393,6 +5707,13 @@ void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();
   recordCpuTime(c.submitDrawRunChunkCommitCpuNs,
                 c.submitDrawRunChunkCommitCpuMaxNs,
+                nanoseconds);
+}
+
+void countSubmitDrawRunBatchQueueLockCpuTime(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  recordCpuTime(c.submitDrawRunBatchQueueLockCpuNs,
+                c.submitDrawRunBatchQueueLockCpuMaxNs,
                 nanoseconds);
 }
 
@@ -7908,6 +8229,45 @@ void countDrawUniformPixelConstantsAppendBytes(std::uint64_t bytes) {
   add(counters().drawUniformPixelConstantsAppendBytes, bytes);
 }
 
+void countDrawUniformPayloadAppendFixedFindCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendFixedFindCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendFixedFindCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadAppendVertexFindCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendVertexFindCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendVertexFindCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadAppendPixelFindCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendPixelFindCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendPixelFindCpuMaxNs, nanoseconds);
+}
+
+void countDrawUniformPayloadAppendFixedAppendCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendFixedAppendCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendFixedAppendCpuMaxNs,
+            nanoseconds);
+}
+
+void countDrawUniformPayloadAppendVertexAppendCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendVertexAppendCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendVertexAppendCpuMaxNs,
+            nanoseconds);
+}
+
+void countDrawUniformPayloadAppendPixelAppendCpuTime(
+    std::uint64_t nanoseconds) {
+  add(counters().drawUniformPayloadAppendPixelAppendCpuNs, nanoseconds);
+  updateMax(counters().drawUniformPayloadAppendPixelAppendCpuMaxNs,
+            nanoseconds);
+}
+
 void countDrawUniformPayloadMaterialized(
     DrawUniformPayloadMaterializeSite site,
     std::uint64_t bytes) {
@@ -8703,7 +9063,15 @@ void countCompletionNoEnqueueFirstPublishSlotShape(
     std::uint64_t drawItems,
     std::uint64_t nonDrawCommands,
     std::uint64_t payloadBytes,
-    std::uint64_t presentCommands) {
+    std::uint64_t presentCommands,
+    std::uint64_t prePresentCommands,
+    std::uint64_t prePresentDrawRunCommands,
+    std::uint64_t prePresentDrawItems,
+    std::uint64_t prePresentNonDrawCommands,
+    std::uint64_t prePresentPayloadBytes,
+    std::uint64_t postPresentCommands,
+    std::uint64_t presentTailSlots,
+    std::uint64_t presentNonTailSlots) {
   auto& c = counters();
   add(c.completionNoEnqueueFirstPublishSlotSamples);
   add(c.completionNoEnqueueFirstPublishSlotCommands, commandCount);
@@ -8718,6 +9086,32 @@ void countCompletionNoEnqueueFirstPublishSlotShape(
   updateMax(c.completionNoEnqueueFirstPublishSlotPayloadBytesMax, payloadBytes);
   recordRing(c.completionNoEnqueueFirstPublishSlotPayloadBytesRing, payloadBytes);
   add(c.completionNoEnqueueFirstPublishSlotPresentCommands, presentCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPrePresentCommands, prePresentCommands);
+  updateMax(c.completionNoEnqueueFirstPublishSlotPrePresentCommandsMax,
+            prePresentCommands);
+  recordRing(c.completionNoEnqueueFirstPublishSlotPrePresentCommandsRing,
+             prePresentCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPrePresentDrawRunCommands,
+      prePresentDrawRunCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPrePresentDrawItems,
+      prePresentDrawItems);
+  updateMax(c.completionNoEnqueueFirstPublishSlotPrePresentDrawItemsMax,
+            prePresentDrawItems);
+  recordRing(c.completionNoEnqueueFirstPublishSlotPrePresentDrawItemsRing,
+             prePresentDrawItems);
+  add(c.completionNoEnqueueFirstPublishSlotPrePresentNonDrawCommands,
+      prePresentNonDrawCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPrePresentPayloadBytes,
+      prePresentPayloadBytes);
+  updateMax(c.completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesMax,
+            prePresentPayloadBytes);
+  recordRing(c.completionNoEnqueueFirstPublishSlotPrePresentPayloadBytesRing,
+             prePresentPayloadBytes);
+  add(c.completionNoEnqueueFirstPublishSlotPostPresentCommands,
+      postPresentCommands);
+  add(c.completionNoEnqueueFirstPublishSlotPresentTailSlots, presentTailSlots);
+  add(c.completionNoEnqueueFirstPublishSlotPresentNonTailSlots,
+      presentNonTailSlots);
 }
 
 void countCompletionNoEnqueueWaitToCommitChunkEntry(std::uint64_t nanoseconds) {
@@ -9921,6 +10315,39 @@ CounterSnapshot snapshot() {
   s.commandBuffers = load(c.commandBuffers);
   s.renderPassBegin = load(c.renderPassBegin);
   s.renderPassEnd = load(c.renderPassEnd);
+  s.encodeSessionCarryDeferredChunks =
+      load(c.encodeSessionCarryDeferredChunks);
+  s.encodeSessionCarryDeferredActiveRenderChunks =
+      load(c.encodeSessionCarryDeferredActiveRenderChunks);
+  s.encodeSessionCarryFinalChunks = load(c.encodeSessionCarryFinalChunks);
+  s.encodeSessionCarryForcedFinalizeInitializerWaits =
+      load(c.encodeSessionCarryForcedFinalizeInitializerWaits);
+  s.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender =
+      load(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender);
+  s.openCbTailPresentPendingStarted =
+      load(c.openCbTailPresentPendingStarted);
+  s.openCbTailPresentPendingSuppressedNoTail =
+      load(c.openCbTailPresentPendingSuppressedNoTail);
+  s.openCbTailPresentHeadAppended =
+      load(c.openCbTailPresentHeadAppended);
+  s.openCbTailPresentTailAppended =
+      load(c.openCbTailPresentTailAppended);
+  s.openCbTailPresentTailSubmitted =
+      load(c.openCbTailPresentTailSubmitted);
+  s.openCbTailPresentPendingTailWaitTimeout =
+      load(c.openCbTailPresentPendingTailWaitTimeout);
+  s.openCbTailPresentPendingTimeoutSubmitted =
+      load(c.openCbTailPresentPendingTimeoutSubmitted);
+  s.openCbTailPresentPendingAbandonedNoReady =
+      load(c.openCbTailPresentPendingAbandonedNoReady);
+  s.openCbTailPresentPendingAbandonedNonAppendable =
+      load(c.openCbTailPresentPendingAbandonedNonAppendable);
+  s.openCbTailPresentPendingAbandonedRetainFailed =
+      load(c.openCbTailPresentPendingAbandonedRetainFailed);
+  s.openCbTailPresentPendingAbandonedEncodeNull =
+      load(c.openCbTailPresentPendingAbandonedEncodeNull);
+  s.openCbTailPresentPendingMergeFailed =
+      load(c.openCbTailPresentPendingMergeFailed);
   s.drawCalls = load(c.drawCalls);
   s.drawIndexedCalls = load(c.drawIndexedCalls);
   s.drawPrimitiveCount = load(c.drawPrimitiveCount);
@@ -10000,6 +10427,23 @@ void emitFrameDelta(std::uint64_t frameId,
       "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "render_pass_begin=%llu render_pass_end=%llu "
+      "encode_session_carry_deferred_chunks=%llu "
+      "encode_session_carry_deferred_active_render_chunks=%llu "
+      "encode_session_carry_final_chunks=%llu "
+      "encode_session_carry_forced_finalize_initializer_waits=%llu "
+      "encode_session_carry_forced_finalize_initializer_wait_active_render=%llu "
+      "open_cb_tail_present_pending_started=%llu "
+      "open_cb_tail_present_pending_suppressed_no_tail=%llu "
+      "open_cb_tail_present_head_appended=%llu "
+      "open_cb_tail_present_tail_appended=%llu "
+      "open_cb_tail_present_tail_submitted=%llu "
+      "open_cb_tail_present_pending_tail_wait_timeout=%llu "
+      "open_cb_tail_present_pending_timeout_submitted=%llu "
+      "open_cb_tail_present_pending_abandoned_no_ready=%llu "
+      "open_cb_tail_present_pending_abandoned_nonappendable=%llu "
+      "open_cb_tail_present_pending_abandoned_retain_failed=%llu "
+      "open_cb_tail_present_pending_abandoned_encode_null=%llu "
+      "open_cb_tail_present_pending_merge_failed=%llu "
       "draw_calls=%llu draw_indexed=%llu draw_primitives=%llu "
       "draw_triangles=%llu draw_vertices=%llu bind_pipeline=%llu "
       "present_encoded=%llu "
@@ -10038,6 +10482,57 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(delta(prev.commandBuffers, curr.commandBuffers)),
       static_cast<unsigned long long>(delta(prev.renderPassBegin, curr.renderPassBegin)),
       static_cast<unsigned long long>(delta(prev.renderPassEnd, curr.renderPassEnd)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryDeferredChunks,
+                curr.encodeSessionCarryDeferredChunks)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryDeferredActiveRenderChunks,
+                curr.encodeSessionCarryDeferredActiveRenderChunks)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFinalChunks,
+                curr.encodeSessionCarryFinalChunks)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryForcedFinalizeInitializerWaits,
+                curr.encodeSessionCarryForcedFinalizeInitializerWaits)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender,
+                curr.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStarted,
+                curr.openCbTailPresentPendingStarted)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingSuppressedNoTail,
+                curr.openCbTailPresentPendingSuppressedNoTail)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentHeadAppended,
+                curr.openCbTailPresentHeadAppended)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentTailAppended,
+                curr.openCbTailPresentTailAppended)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentTailSubmitted,
+                curr.openCbTailPresentTailSubmitted)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingTailWaitTimeout,
+                curr.openCbTailPresentPendingTailWaitTimeout)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingTimeoutSubmitted,
+                curr.openCbTailPresentPendingTimeoutSubmitted)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingAbandonedNoReady,
+                curr.openCbTailPresentPendingAbandonedNoReady)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingAbandonedNonAppendable,
+                curr.openCbTailPresentPendingAbandonedNonAppendable)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingAbandonedRetainFailed,
+                curr.openCbTailPresentPendingAbandonedRetainFailed)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingAbandonedEncodeNull,
+                curr.openCbTailPresentPendingAbandonedEncodeNull)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingMergeFailed,
+                curr.openCbTailPresentPendingMergeFailed)),
       static_cast<unsigned long long>(delta(prev.drawCalls, curr.drawCalls)),
       static_cast<unsigned long long>(delta(prev.drawIndexedCalls, curr.drawIndexedCalls)),
       static_cast<unsigned long long>(delta(prev.drawPrimitiveCount, curr.drawPrimitiveCount)),

@@ -189,7 +189,18 @@ struct NoEnqueueFirstPublishSlotShape {
   u64 nonDrawCommands = 0;
   u64 payloadBytes = 0;
   u64 presentCommands = 0;
+  u64 prePresentCommands = 0;
+  u64 prePresentDrawRunCommands = 0;
+  u64 prePresentDrawItems = 0;
+  u64 prePresentNonDrawCommands = 0;
+  u64 prePresentPayloadBytes = 0;
+  u64 postPresentCommands = 0;
+  u64 presentTailSlots = 0;
+  u64 presentNonTailSlots = 0;
 };
+
+NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
+    const ChunkSlot& slot) noexcept;
 
 struct QueueCompletionSource {
   size_t slotIndex = 0;

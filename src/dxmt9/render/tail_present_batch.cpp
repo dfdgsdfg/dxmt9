@@ -68,6 +68,33 @@ std::size_t selectTailPresentBatchPrefix(
   return 0;
 }
 
+std::size_t selectOpenCbTailPresentBatchPrefix(
+    const std::deque<std::size_t>& readySlots,
+    std::span<const core::ChunkSlot> slots,
+    std::size_t maxCount) noexcept {
+  if (maxCount < 2u || readySlots.size() < 2u) {
+    return 0;
+  }
+
+  const std::size_t limit = std::min(maxCount, readySlots.size());
+  for (std::size_t i = 0; i < limit; ++i) {
+    const std::size_t slotIndex = readySlots[i];
+    if (slotIndex >= slots.size()) {
+      return 0;
+    }
+
+    const auto& slot = slots[slotIndex];
+    if (slotIsPresentOnlyTail(slot)) {
+      return i == 0u ? 0u : i + 1u;
+    }
+    if (!slotIsOpenCbPreencodeHead(slot)) {
+      return 0;
+    }
+  }
+
+  return 0;
+}
+
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
     encoders::EncodeContext& ctx,
     std::span<core::metalqueue::ReadySlotSnapshot> sources,

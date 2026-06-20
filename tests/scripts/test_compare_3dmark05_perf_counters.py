@@ -1687,6 +1687,201 @@ class Compare3DMark05PerfCountersTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_render_pass_carry_promotion_gate_passes_on_p4_and_locality(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {
+                "present_encoded": 2,
+                "command_buffers": 8,
+                "render_pass_begin": 12,
+                "render_pass_tile_preservation_bytes": 8 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 8.0,
+                "completion_wait_with_enqueue_ms": 1.0,
+                "completion_wait_without_enqueue_ms": 60.0,
+                "encode_dequeue_ready_depth_gt1": 0,
+                "gpu_command_buffer_errors": 0,
+                "draw_skipped_no_pipeline": 0,
+            })
+            write_encoder_csv(root / "before", [
+                {
+                    "rt": "0x1",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 2 * 1024 * 1024,
+                    "depth_load_bytes": 4 * 1024 * 1024,
+                },
+            ])
+            write_result(root / "after", {
+                "present_encoded": 4,
+                "command_buffers": 16,
+                "render_pass_begin": 24,
+                "render_pass_tile_preservation_bytes": 16 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 16.0,
+                "completion_wait_with_enqueue_ms": 8.0,
+                "completion_wait_without_enqueue_ms": 100.0,
+                "encode_dequeue_ready_depth_gt1": 8,
+                "gpu_command_buffer_errors": 0,
+                "draw_skipped_no_pipeline": 0,
+            })
+            write_encoder_csv(root / "after", [
+                {
+                    "rt": "0x1",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 4 * 1024 * 1024,
+                    "depth_load_bytes": 8 * 1024 * 1024,
+                },
+            ])
+
+            result = self.run_compare(
+                root,
+                "--require-render-pass-carry-promotion-gates",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = root.joinpath("comparison.md").read_text(encoding="utf-8")
+            self.assertIn("tile_preservation_mib_per_present", report)
+            self.assertIn("gpu_command_buffer_time_ms_per_present", report)
+
+    def test_render_pass_carry_promotion_gate_fails_when_p4_does_not_move(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {
+                "present_encoded": 2,
+                "command_buffers": 8,
+                "render_pass_begin": 12,
+                "render_pass_tile_preservation_bytes": 8 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 8.0,
+                "completion_wait_with_enqueue_ms": 4.0,
+                "completion_wait_without_enqueue_ms": 40.0,
+                "encode_dequeue_ready_depth_gt1": 2,
+                "gpu_command_buffer_errors": 0,
+                "draw_skipped_no_pipeline": 0,
+            })
+            write_encoder_csv(root / "before", [
+                {
+                    "rt": "0x1",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 1024 * 1024,
+                    "depth_load_bytes": 1024 * 1024,
+                },
+            ])
+            write_result(root / "after", {
+                "present_encoded": 2,
+                "command_buffers": 8,
+                "render_pass_begin": 12,
+                "render_pass_tile_preservation_bytes": 8 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 8.0,
+                "completion_wait_with_enqueue_ms": 3.0,
+                "completion_wait_without_enqueue_ms": 41.0,
+                "encode_dequeue_ready_depth_gt1": 4,
+                "gpu_command_buffer_errors": 0,
+                "draw_skipped_no_pipeline": 0,
+            })
+            write_encoder_csv(root / "after", [
+                {
+                    "rt": "0x1",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 1024 * 1024,
+                    "depth_load_bytes": 1024 * 1024,
+                },
+            ])
+
+            result = self.run_compare(
+                root,
+                "--require-render-pass-carry-promotion-gates",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("render-pass-carry P4 gate did not move", result.stderr)
+
+    def test_render_pass_carry_promotion_gate_fails_on_locality_or_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_result(root / "before", {
+                "present_encoded": 2,
+                "command_buffers": 8,
+                "render_pass_begin": 12,
+                "render_pass_tile_preservation_bytes": 8 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 8.0,
+                "completion_wait_with_enqueue_ms": 1.0,
+                "completion_wait_without_enqueue_ms": 60.0,
+                "encode_dequeue_ready_depth_gt1": 1,
+                "gpu_command_buffer_errors": 0,
+                "draw_skipped_no_pipeline": 0,
+            })
+            write_encoder_csv(root / "before", [
+                {
+                    "rt": "0x1",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 1024 * 1024,
+                    "depth_load_bytes": 1024 * 1024,
+                },
+            ])
+            write_result(root / "after", {
+                "present_encoded": 2,
+                "command_buffers": 9,
+                "render_pass_begin": 13,
+                "render_pass_tile_preservation_bytes": 10 * 1024 * 1024,
+                "gpu_command_buffer_time_ms": 9.0,
+                "completion_wait_with_enqueue_ms": 4.0,
+                "completion_wait_without_enqueue_ms": 50.0,
+                "encode_dequeue_ready_depth_gt1": 4,
+                "gpu_command_buffer_errors": 1,
+                "draw_skipped_no_pipeline": 2,
+            })
+            write_encoder_csv(root / "after", [
+                {
+                    "rt": "0x2",
+                    "depth": "0x10",
+                    "end_reason": "final",
+                    "color_load_bytes": 2 * 1024 * 1024,
+                    "color_store_bytes": 1024 * 1024,
+                    "depth_load_bytes": 2 * 1024 * 1024,
+                    "depth_store_bytes": 1024 * 1024,
+                },
+                {
+                    "rt": "0x2",
+                    "depth": "0x10",
+                    "end_reason": "rt_change",
+                    "color_load_bytes": 2 * 1024 * 1024,
+                    "depth_load_bytes": 2 * 1024 * 1024,
+                },
+            ])
+
+            result = self.run_compare(
+                root,
+                "--require-render-pass-carry-promotion-gates",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("command_buffers_per_present increased", result.stderr)
+            self.assertIn("passes_per_present increased", result.stderr)
+            self.assertIn("encoder_sidecar_rows_per_present increased", result.stderr)
+            self.assertIn("tile_preservation_mib_per_present increased", result.stderr)
+            self.assertIn("gpu_command_buffer_time_ms_per_present increased", result.stderr)
+            self.assertIn(
+                "encoder_sidecar_final_end_reason_per_present increased",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_final_same_key_reopen_per_present increased",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_color_load_mib_per_present increased",
+                result.stderr,
+            )
+            self.assertIn(
+                "encoder_sidecar_depth_load_mib_per_present increased",
+                result.stderr,
+            )
+            self.assertIn("gpu_command_buffer_errors is nonzero", result.stderr)
+            self.assertIn("draw_skipped_no_pipeline is nonzero", result.stderr)
+
     def test_encoder_sidecar_metrics_are_reported_when_csv_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

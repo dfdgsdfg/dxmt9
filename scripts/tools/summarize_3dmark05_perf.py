@@ -138,6 +138,20 @@ RUN_COUNTERS = (
     "completion_no_enqueue_first_publish_slot_payload_bytes_p50",
     "completion_no_enqueue_first_publish_slot_payload_bytes_p95",
     "completion_no_enqueue_first_publish_slot_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p95",
+    "completion_no_enqueue_first_publish_slot_post_present_commands",
+    "completion_no_enqueue_first_publish_slot_present_tail_slots",
+    "completion_no_enqueue_first_publish_slot_present_nontail_slots",
     "encode_slot_pso_prefetch_cpu_ms",
     "encode_slot_pso_prefetch_cpu_p50_ms",
     "encode_slot_pso_prefetch_cpu_p95_ms",
@@ -227,6 +241,23 @@ RUN_COUNTERS = (
     "draw_skipped_no_pipeline",
     "render_pass_begin",
     "render_pass_end",
+    "encode_session_carry_deferred_chunks",
+    "encode_session_carry_deferred_active_render_chunks",
+    "encode_session_carry_final_chunks",
+    "encode_session_carry_forced_finalize_initializer_waits",
+    "encode_session_carry_forced_finalize_initializer_wait_active_render",
+    "open_cb_tail_present_pending_started",
+    "open_cb_tail_present_pending_suppressed_no_tail",
+    "open_cb_tail_present_head_appended",
+    "open_cb_tail_present_tail_appended",
+    "open_cb_tail_present_tail_submitted",
+    "open_cb_tail_present_pending_tail_wait_timeout",
+    "open_cb_tail_present_pending_timeout_submitted",
+    "open_cb_tail_present_pending_abandoned_no_ready",
+    "open_cb_tail_present_pending_abandoned_nonappendable",
+    "open_cb_tail_present_pending_abandoned_retain_failed",
+    "open_cb_tail_present_pending_abandoned_encode_null",
+    "open_cb_tail_present_pending_merge_failed",
     "render_pass_load_action_load",
     "render_pass_load_action_clear",
     "render_pass_load_action_dontcare",
@@ -622,6 +653,18 @@ RUN_COUNTERS = (
     "draw_uniform_vertex_constants_append_bytes",
     "draw_uniform_pixel_constants_appends",
     "draw_uniform_pixel_constants_append_bytes",
+    "draw_uniform_payload_append_fixed_find_cpu_ms",
+    "draw_uniform_payload_append_fixed_find_cpu_max_ms",
+    "draw_uniform_payload_append_vertex_find_cpu_ms",
+    "draw_uniform_payload_append_vertex_find_cpu_max_ms",
+    "draw_uniform_payload_append_pixel_find_cpu_ms",
+    "draw_uniform_payload_append_pixel_find_cpu_max_ms",
+    "draw_uniform_payload_append_fixed_append_cpu_ms",
+    "draw_uniform_payload_append_fixed_append_cpu_max_ms",
+    "draw_uniform_payload_append_vertex_append_cpu_ms",
+    "draw_uniform_payload_append_vertex_append_cpu_max_ms",
+    "draw_uniform_payload_append_pixel_append_cpu_ms",
+    "draw_uniform_payload_append_pixel_append_cpu_max_ms",
     "draw_uniform_payload_materialized",
     "draw_uniform_payload_materialized_bytes",
     "draw_uniform_payload_materialize_fallbacks",
@@ -668,6 +711,8 @@ RUN_COUNTERS = (
     "submit_draw_run_append_cpu_max_ms",
     "submit_draw_run_chunk_commit_cpu_ms",
     "submit_draw_run_chunk_commit_cpu_max_ms",
+    "submit_draw_run_batch_queue_lock_cpu_ms",
+    "submit_draw_run_batch_queue_lock_cpu_max_ms",
     "submit_draw_run_batch_compat_scan_cpu_ms",
     "submit_draw_run_batch_compat_scan_cpu_max_ms",
     "submit_draw_run_batch_submission_adjacent_pairs",
@@ -1155,10 +1200,34 @@ RUN_COUNTERS = (
     "commit_chunk_replay_pending_flush_draw_fallback_records",
     "commit_chunk_replay_pending_flush_failure_records",
     "commit_chunk_replay_pending_flush_end_records",
+    "commit_chunk_replay_pending_flush_forced_resource_marking_cpu_ms",
+    "commit_chunk_replay_pending_flush_forced_resource_marking_flushes",
+    "commit_chunk_replay_pending_flush_forced_resource_marking_records",
     "commit_chunk_replay_draw_run_preflush_opportunities",
     "commit_chunk_replay_draw_run_preflush_pending_records",
     "commit_chunk_replay_draw_run_preflush_run_records",
     "commit_chunk_replay_draw_run_preflush_combined_records",
+    "commit_chunk_replay_end_flush_probe_stored",
+    "commit_chunk_replay_end_flush_probe_stored_records",
+    "commit_chunk_replay_end_flush_probe_first_submission",
+    "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane",
+    "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_generation",
+    "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_payload_hash",
+    "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_generation",
+    "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash",
+    "commit_chunk_replay_end_flush_probe_first_submission_pending_records",
+    "commit_chunk_replay_end_flush_probe_first_draw_run",
+    "commit_chunk_replay_end_flush_probe_first_draw_run_pending_records",
+    "commit_chunk_replay_end_flush_probe_first_draw_run_run_records",
+    "commit_chunk_replay_end_flush_probe_blocked_non_draw",
+    "commit_chunk_replay_end_flush_probe_blocked_draw_fallback",
+    "commit_chunk_replay_end_flush_probe_blocked_pending_records",
+    "commit_chunk_replay_end_carry_stored",
+    "commit_chunk_replay_end_carry_stored_records",
+    "commit_chunk_replay_end_carry_adopted",
+    "commit_chunk_replay_end_carry_adopted_records",
+    "commit_chunk_replay_end_carry_flushed",
+    "commit_chunk_replay_end_carry_flushed_records",
     "commit_chunk_replay_draw_record_cpu_ms",
     "commit_chunk_replay_draw_record_cpu_p50_ms",
     "commit_chunk_replay_draw_record_cpu_p95_ms",
@@ -1296,6 +1365,23 @@ RUN_COUNTERS = (
     "completion_no_enqueue_first_publish_slot_payload_bytes_p50",
     "completion_no_enqueue_first_publish_slot_payload_bytes_p95",
     "completion_no_enqueue_first_publish_slot_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_max",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_max",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_max",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p95",
+    "completion_no_enqueue_first_publish_slot_post_present_commands",
+    "completion_no_enqueue_first_publish_slot_present_tail_slots",
+    "completion_no_enqueue_first_publish_slot_present_nontail_slots",
     "completion_no_enqueue_wait_to_encode_dequeue",
     "completion_no_enqueue_wait_to_encode_dequeue_ms",
     "completion_no_enqueue_wait_to_encode_dequeue_p50_ms",
@@ -2318,6 +2404,23 @@ FRAME_CSV_KEYS = (
     "command_buffers",
     "render_pass_begin",
     "render_pass_end",
+    "encode_session_carry_deferred_chunks",
+    "encode_session_carry_deferred_active_render_chunks",
+    "encode_session_carry_final_chunks",
+    "encode_session_carry_forced_finalize_initializer_waits",
+    "encode_session_carry_forced_finalize_initializer_wait_active_render",
+    "open_cb_tail_present_pending_started",
+    "open_cb_tail_present_pending_suppressed_no_tail",
+    "open_cb_tail_present_head_appended",
+    "open_cb_tail_present_tail_appended",
+    "open_cb_tail_present_tail_submitted",
+    "open_cb_tail_present_pending_tail_wait_timeout",
+    "open_cb_tail_present_pending_timeout_submitted",
+    "open_cb_tail_present_pending_abandoned_no_ready",
+    "open_cb_tail_present_pending_abandoned_nonappendable",
+    "open_cb_tail_present_pending_abandoned_retain_failed",
+    "open_cb_tail_present_pending_abandoned_encode_null",
+    "open_cb_tail_present_pending_merge_failed",
     "draw_calls",
     "draw_indexed",
     "draw_triangles",
@@ -3196,6 +3299,14 @@ def append_pacing_cpu_stage_derived(
         f"`{ratio_text(counters.get('completion_no_enqueue_first_publish_slot_payload_bytes'), first_publish_slot_samples)}` |"
     )
     lines.append(
+        "| `no_enqueue_first_publish_slot_pre_present_draw_items_per_slot` | "
+        f"`{ratio_text(counters.get('completion_no_enqueue_first_publish_slot_pre_present_draw_items'), first_publish_slot_samples)}` |"
+    )
+    lines.append(
+        "| `no_enqueue_first_publish_slot_present_tail_share_pct` | "
+        f"`{pct(counters.get('completion_no_enqueue_first_publish_slot_present_tail_slots'), first_publish_slot_samples)}` |"
+    )
+    lines.append(
         "| `commit_chunk_replay_cpu_ms_per_present` | "
         f"`{ratio_text(counters.get('commit_chunk_replay_cpu_ms'), present_encoded)}` |"
     )
@@ -3670,6 +3781,38 @@ def append_pacing_cpu_stage_derived(
                 "present commands",
                 "completion_no_enqueue_first_publish_slot_present_commands",
             ),
+            (
+                "pre-Present commands",
+                "completion_no_enqueue_first_publish_slot_pre_present_commands",
+            ),
+            (
+                "pre-Present draw-run commands",
+                "completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands",
+            ),
+            (
+                "pre-Present draw items",
+                "completion_no_enqueue_first_publish_slot_pre_present_draw_items",
+            ),
+            (
+                "pre-Present non-draw commands",
+                "completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands",
+            ),
+            (
+                "pre-Present payload bytes",
+                "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes",
+            ),
+            (
+                "post-Present commands",
+                "completion_no_enqueue_first_publish_slot_post_present_commands",
+            ),
+            (
+                "Present-tail slots",
+                "completion_no_enqueue_first_publish_slot_present_tail_slots",
+            ),
+            (
+                "Present-nontail slots",
+                "completion_no_enqueue_first_publish_slot_present_nontail_slots",
+            ),
         )
         for label, total_key in first_publish_rows:
             value = counters.get(total_key)
@@ -3698,6 +3841,89 @@ def append_pacing_cpu_stage_derived(
             f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_payload_bytes_p50'))}` | "
             f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_payload_bytes_p95'))}` |"
         )
+        lines.append(
+            "| pre-Present commands | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_commands_max'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_commands_p50'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_commands_p95'))}` |"
+        )
+        lines.append(
+            "| pre-Present draw items | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_draw_items_max'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_draw_items_p50'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_draw_items_p95'))}` |"
+        )
+        lines.append(
+            "| pre-Present payload bytes | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_max'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p50'))}` | "
+            f"`{fmt(counters.get('completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p95'))}` |"
+        )
+        lines.append("")
+
+    open_cb_started = counters.get("open_cb_tail_present_pending_started")
+
+    def open_cb_counter_value(key: str) -> float:
+        value = parse_number(counters.get(key))
+        if isinstance(value, (int, float)):
+            return float(value)
+        return 0.0
+
+    open_cb_activity = sum(
+        open_cb_counter_value(key)
+        for key in (
+            "open_cb_tail_present_pending_started",
+            "open_cb_tail_present_pending_suppressed_no_tail",
+            "open_cb_tail_present_head_appended",
+            "open_cb_tail_present_tail_appended",
+            "open_cb_tail_present_tail_submitted",
+            "open_cb_tail_present_pending_tail_wait_timeout",
+            "open_cb_tail_present_pending_timeout_submitted",
+            "open_cb_tail_present_pending_abandoned_no_ready",
+            "open_cb_tail_present_pending_abandoned_nonappendable",
+            "open_cb_tail_present_pending_abandoned_retain_failed",
+            "open_cb_tail_present_pending_abandoned_encode_null",
+            "open_cb_tail_present_pending_merge_failed",
+        )
+    )
+    if open_cb_activity:
+        lines.append("### Open-CB Tail-Present Carry Shape")
+        lines.append("")
+        lines.append(
+            "These rows classify the default-off open-CB tail-present carrier. "
+            "They explain whether a deferred pre-Present head reaches a final "
+            "Present tail or is abandoned before a coherent tail submission."
+        )
+        lines.append("")
+        lines.append("| Event | total | per pending start |")
+        lines.append("|---|---:|---:|")
+        for label, key in (
+            ("pending started", "open_cb_tail_present_pending_started"),
+            (
+                "pending suppressed: no ready tail",
+                "open_cb_tail_present_pending_suppressed_no_tail",
+            ),
+            ("head appended", "open_cb_tail_present_head_appended"),
+            ("tail appended", "open_cb_tail_present_tail_appended"),
+            ("tail submitted", "open_cb_tail_present_tail_submitted"),
+            (
+                "pending tail wait timeout",
+                "open_cb_tail_present_pending_tail_wait_timeout",
+            ),
+            (
+                "timeout-submitted pending head",
+                "open_cb_tail_present_pending_timeout_submitted",
+            ),
+            ("abandoned: no ready source", "open_cb_tail_present_pending_abandoned_no_ready"),
+            ("abandoned: non-appendable source", "open_cb_tail_present_pending_abandoned_nonappendable"),
+            ("abandoned: retain failed", "open_cb_tail_present_pending_abandoned_retain_failed"),
+            ("abandoned: encode returned null", "open_cb_tail_present_pending_abandoned_encode_null"),
+            ("abandoned: merge failed", "open_cb_tail_present_pending_merge_failed"),
+        ):
+            value = counters.get(key)
+            lines.append(
+                f"| {label} | `{fmt(value)}` | `{ratio_text(value, open_cb_started)}` |"
+            )
         lines.append("")
 
     lines.append("### Exposed No-Enqueue Stage Shape")
@@ -4193,8 +4419,21 @@ REPLAY_SNAPSHOT_CPU_STAGE_ROWS: tuple[tuple[str, str], ...] = (
     ("batch-submit", "submit_draw_run_batch_append_cpu_ms"),
     ("batch-submit", "submit_draw_run_batch_append_uniform_cpu_ms"),
     ("batch-submit", "submit_draw_run_batch_append_state_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_reserve_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_payload_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_param_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_record_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_state_pso_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_state_invariant_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_append_state_soa_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_queue_lock_cpu_ms"),
     ("batch-submit", "submit_draw_run_batch_compat_scan_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_binding_override_cpu_ms"),
     ("batch-submit", "submit_draw_run_batch_binding_snapshot_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_payload_bytes_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_slot_prepare_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_resource_mark_cpu_ms"),
+    ("batch-submit", "submit_draw_run_batch_chunk_commit_cpu_ms"),
     ("snapshot", "d3d9_snapshot_draw_submission_cpu_ms"),
     ("snapshot", "d3d9_snapshot_cache_lookup_cpu_ms"),
     ("snapshot", "d3d9_snapshot_cache_batch_hit_cpu_ms"),
@@ -4242,6 +4481,9 @@ def append_replay_snapshot_cpu_derived(
     )
     pending_flush_end = counters.get(
         "commit_chunk_replay_pending_flush_end_cpu_ms"
+    )
+    pending_flush_forced_marking = counters.get(
+        "commit_chunk_replay_pending_flush_forced_resource_marking_cpu_ms"
     )
     pending_flush_reason_rows = (
         (
@@ -4302,6 +4544,43 @@ def append_replay_snapshot_cpu_derived(
     draw_record_residual = (
         draw_record_cpu - draw_record_known_child_sum
         if isinstance(draw_record_cpu, (int, float))
+        else None
+    )
+    submit_draw_cpu = counters.get("submit_draw_cpu_ms")
+    batch_submit_known_child_sum = sum(
+        numeric_counter(name)
+        for name in (
+            "submit_draw_run_batch_queue_lock_cpu_ms",
+            "submit_draw_run_batch_compat_scan_cpu_ms",
+            "submit_draw_run_batch_binding_override_cpu_ms",
+            "submit_draw_run_batch_binding_snapshot_cpu_ms",
+            "submit_draw_run_batch_payload_bytes_cpu_ms",
+            "submit_draw_run_batch_slot_prepare_cpu_ms",
+            "submit_draw_run_batch_resource_mark_cpu_ms",
+            "submit_draw_run_batch_append_cpu_ms",
+            "submit_draw_run_batch_chunk_commit_cpu_ms",
+        )
+    )
+    batch_submit_residual = (
+        draw_batch_submit - batch_submit_known_child_sum
+        if isinstance(draw_batch_submit, (int, float))
+        else None
+    )
+    append_cpu = counters.get("submit_draw_run_batch_append_cpu_ms")
+    append_known_child_sum = sum(
+        numeric_counter(name)
+        for name in (
+            "submit_draw_run_batch_append_reserve_cpu_ms",
+            "submit_draw_run_batch_append_state_cpu_ms",
+            "submit_draw_run_batch_append_uniform_cpu_ms",
+            "submit_draw_run_batch_append_payload_cpu_ms",
+            "submit_draw_run_batch_append_param_cpu_ms",
+            "submit_draw_run_batch_append_record_cpu_ms",
+        )
+    )
+    append_residual = (
+        append_cpu - append_known_child_sum
+        if isinstance(append_cpu, (int, float))
         else None
     )
 
@@ -4389,6 +4668,10 @@ def append_replay_snapshot_cpu_derived(
         "| `pending_flush_end_share` | "
         f"`{pct(pending_flush_end, pending_flush)}` |"
     )
+    lines.append(
+        "| `pending_flush_forced_resource_marking_share` | "
+        f"`{pct(pending_flush_forced_marking, pending_flush)}` |"
+    )
     total_pending_flushes = sum(
         numeric_counter(f"commit_chunk_replay_pending_flush_{name}_flushes")
         for name in ("before_record", "draw_run", "draw_fallback", "failure", "end")
@@ -4409,9 +4692,62 @@ def append_replay_snapshot_cpu_derived(
     draw_run_preflush_combined_records = counters.get(
         "commit_chunk_replay_draw_run_preflush_combined_records"
     )
+    end_flush_probe_stored = counters.get(
+        "commit_chunk_replay_end_flush_probe_stored"
+    )
+    end_flush_probe_stored_records = counters.get(
+        "commit_chunk_replay_end_flush_probe_stored_records"
+    )
+    end_flush_probe_first_submission = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission"
+    )
+    end_flush_probe_first_submission_same_state_lane = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane"
+    )
+    end_flush_probe_first_submission_same_uniform_generation = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_generation"
+    )
+    end_flush_probe_first_submission_same_uniform_payload_hash = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_payload_hash"
+    )
+    end_flush_probe_first_submission_same_state_lane_and_uniform_generation = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_generation"
+    )
+    end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash"
+    )
+    end_flush_probe_first_submission_pending_records = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_submission_pending_records"
+    )
+    end_flush_probe_first_draw_run = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_draw_run"
+    )
+    end_flush_probe_first_draw_run_pending_records = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_draw_run_pending_records"
+    )
+    end_flush_probe_first_draw_run_run_records = counters.get(
+        "commit_chunk_replay_end_flush_probe_first_draw_run_run_records"
+    )
+    end_flush_probe_blocked_non_draw = counters.get(
+        "commit_chunk_replay_end_flush_probe_blocked_non_draw"
+    )
+    end_flush_probe_blocked_draw_fallback = counters.get(
+        "commit_chunk_replay_end_flush_probe_blocked_draw_fallback"
+    )
+    end_flush_probe_blocked_pending_records = counters.get(
+        "commit_chunk_replay_end_flush_probe_blocked_pending_records"
+    )
     lines.append(
         "| `pending_flush_records_per_flush` | "
         f"`{ratio_text(total_pending_flush_records, total_pending_flushes)}` |"
+    )
+    lines.append(
+        "| `pending_flush_forced_resource_marking_records_per_flush` | "
+        f"`{ratio_text(counters.get('commit_chunk_replay_pending_flush_forced_resource_marking_records'), counters.get('commit_chunk_replay_pending_flush_forced_resource_marking_flushes'))}` |"
+    )
+    lines.append(
+        "| `pending_flush_forced_resource_marking_records_per_present` | "
+        f"`{ratio_text(counters.get('commit_chunk_replay_pending_flush_forced_resource_marking_records'), present_encoded)}` |"
     )
     lines.append(
         "| `draw_run_preflush_combined_records_per_boundary` | "
@@ -4420,6 +4756,14 @@ def append_replay_snapshot_cpu_derived(
     lines.append(
         "| `draw_batch_submit_share_of_replay` | "
         f"`{pct(draw_batch_submit, replay_cpu)}` |"
+    )
+    lines.append(
+        "| `draw_batch_submit_known_child_residual_ms_per_present` | "
+        f"`{ratio_text(batch_submit_residual, present_encoded)}` |"
+    )
+    lines.append(
+        "| `draw_batch_append_known_child_residual_ms_per_present` | "
+        f"`{ratio_text(append_residual, present_encoded)}` |"
     )
     lines.append(
         "| `queue_submission_known_child_residual_ms_per_present` | "
@@ -4510,6 +4854,207 @@ def append_replay_snapshot_cpu_derived(
         lines.append(
             "| `draw_run_preflush_opportunity_share_of_draw_run_flushes` | "
             f"`{pct(draw_run_preflush_opportunities, counters.get('commit_chunk_replay_pending_flush_draw_run_flushes'))}` |"
+        )
+        lines.append("")
+
+    batch_submit_has_volume = (
+        isinstance(draw_batch_submit, (int, float)) and draw_batch_submit > 0
+    ) or any(
+        numeric_counter(name) > 0
+        for name in (
+            "submit_draw_run_batch_queue_lock_cpu_ms",
+            "submit_draw_run_batch_compat_scan_cpu_ms",
+            "submit_draw_run_batch_binding_override_cpu_ms",
+            "submit_draw_run_batch_binding_snapshot_cpu_ms",
+            "submit_draw_run_batch_payload_bytes_cpu_ms",
+            "submit_draw_run_batch_slot_prepare_cpu_ms",
+            "submit_draw_run_batch_resource_mark_cpu_ms",
+            "submit_draw_run_batch_append_cpu_ms",
+            "submit_draw_run_batch_chunk_commit_cpu_ms",
+        )
+    )
+    if batch_submit_has_volume:
+        lines.append("### Draw Batch Submit Residual")
+        lines.append("")
+        lines.append(
+            "This table splits the `commit_chunk_draw_batch_submit_cpu_ms` "
+            "parent into the queue-side child scopes that run inside "
+            "`submitDrawRunBatch*`. The residual is parent minus known child "
+            "scopes; it is the next target when queue-lock and append children "
+            "do not explain the submit row."
+        )
+        lines.append("")
+        lines.append(
+            "| Metric | total ms | ms/present | share of draw-batch-submit |"
+        )
+        lines.append("|---|---:|---:|---:|")
+        batch_submit_rows = (
+            ("parent", draw_batch_submit),
+            ("submit_draw_cpu", submit_draw_cpu),
+            ("known_child_sum", batch_submit_known_child_sum),
+            ("known_child_residual", batch_submit_residual),
+            (
+                "queue_lock",
+                counters.get("submit_draw_run_batch_queue_lock_cpu_ms"),
+            ),
+            (
+                "compat_scan",
+                counters.get("submit_draw_run_batch_compat_scan_cpu_ms"),
+            ),
+            (
+                "binding_override",
+                counters.get("submit_draw_run_batch_binding_override_cpu_ms"),
+            ),
+            (
+                "binding_snapshot",
+                counters.get("submit_draw_run_batch_binding_snapshot_cpu_ms"),
+            ),
+            (
+                "payload_bytes",
+                counters.get("submit_draw_run_batch_payload_bytes_cpu_ms"),
+            ),
+            (
+                "slot_prepare",
+                counters.get("submit_draw_run_batch_slot_prepare_cpu_ms"),
+            ),
+            (
+                "resource_mark",
+                counters.get("submit_draw_run_batch_resource_mark_cpu_ms"),
+            ),
+            ("append", append_cpu),
+            (
+                "chunk_commit",
+                counters.get("submit_draw_run_batch_chunk_commit_cpu_ms"),
+            ),
+        )
+        for name, value in batch_submit_rows:
+            lines.append(
+                f"| `{name}` | `{fmt(value)}` | "
+                f"`{ratio_text(value, present_encoded)}` | "
+                f"`{pct(value, draw_batch_submit)}` |"
+            )
+        lines.append("")
+        lines.append(
+            "| Append child | total ms | ms/present | share of append |"
+        )
+        lines.append("|---|---:|---:|---:|")
+        append_rows = (
+            ("append_parent", append_cpu),
+            ("known_child_sum", append_known_child_sum),
+            ("known_child_residual", append_residual),
+            (
+                "reserve",
+                counters.get("submit_draw_run_batch_append_reserve_cpu_ms"),
+            ),
+            (
+                "state",
+                counters.get("submit_draw_run_batch_append_state_cpu_ms"),
+            ),
+            (
+                "uniform",
+                counters.get("submit_draw_run_batch_append_uniform_cpu_ms"),
+            ),
+            (
+                "payload",
+                counters.get("submit_draw_run_batch_append_payload_cpu_ms"),
+            ),
+            (
+                "param",
+                counters.get("submit_draw_run_batch_append_param_cpu_ms"),
+            ),
+            (
+                "record",
+                counters.get("submit_draw_run_batch_append_record_cpu_ms"),
+            ),
+        )
+        for name, value in append_rows:
+            lines.append(
+                f"| `{name}` | `{fmt(value)}` | "
+                f"`{ratio_text(value, present_encoded)}` | "
+                f"`{pct(value, append_cpu)}` |"
+            )
+        lines.append("")
+
+    if numeric_counter("commit_chunk_replay_end_flush_probe_stored") > 0:
+        lines.append("### Chunk-End Flush Carry Probe")
+        lines.append("")
+        lines.append(
+            "This default-off probe (`DXMT9_PERF_CHUNK_END_FLUSH_PROBE=1`) "
+            "stores only the generation/lane stamp from a non-empty "
+            "`End` pending-submission flush and resolves it against the next "
+            "chunk's first draw-shaped record. It sizes a cross-chunk "
+            "end-drain carrier without changing replay ordering."
+        )
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(
+            "| `end_flush_probe_stored` | "
+            f"`{fmt(end_flush_probe_stored)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_stored_records` | "
+            f"`{fmt(end_flush_probe_stored_records)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_records_per_stored_flush` | "
+            f"`{ratio_text(end_flush_probe_stored_records, end_flush_probe_stored)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission` | "
+            f"`{fmt(end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_state_lane` | "
+            f"`{fmt(end_flush_probe_first_submission_same_state_lane)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_state_lane_share` | "
+            f"`{pct(end_flush_probe_first_submission_same_state_lane, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_uniform_generation_share` | "
+            f"`{pct(end_flush_probe_first_submission_same_uniform_generation, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_uniform_payload_hash_share` | "
+            f"`{pct(end_flush_probe_first_submission_same_uniform_payload_hash, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_state_lane_and_uniform_generation_share` | "
+            f"`{pct(end_flush_probe_first_submission_same_state_lane_and_uniform_generation, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash_share` | "
+            f"`{pct(end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_submission_pending_records_per_candidate` | "
+            f"`{ratio_text(end_flush_probe_first_submission_pending_records, end_flush_probe_first_submission)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_draw_run` | "
+            f"`{fmt(end_flush_probe_first_draw_run)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_first_draw_run_combined_records_per_candidate` | "
+            f"`{ratio_text((numeric_counter('commit_chunk_replay_end_flush_probe_first_draw_run_pending_records') + numeric_counter('commit_chunk_replay_end_flush_probe_first_draw_run_run_records')), end_flush_probe_first_draw_run)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_blocked_non_draw` | "
+            f"`{fmt(end_flush_probe_blocked_non_draw)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_blocked_draw_fallback` | "
+            f"`{fmt(end_flush_probe_blocked_draw_fallback)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_blocked_pending_records` | "
+            f"`{fmt(end_flush_probe_blocked_pending_records)}` |"
+        )
+        lines.append(
+            "| `end_flush_probe_resolved_or_blocked_share` | "
+            f"`{pct((numeric_counter('commit_chunk_replay_end_flush_probe_first_submission') + numeric_counter('commit_chunk_replay_end_flush_probe_first_draw_run') + numeric_counter('commit_chunk_replay_end_flush_probe_blocked_non_draw') + numeric_counter('commit_chunk_replay_end_flush_probe_blocked_draw_fallback')), end_flush_probe_stored)}` |"
         )
         lines.append("")
 
@@ -6072,6 +6617,77 @@ def write_markdown(
             )
         lines.append("")
 
+        open_cb_frame_rows = (
+            ("session deferred chunks", "encode_session_carry_deferred_chunks"),
+            (
+                "session deferred active-render chunks",
+                "encode_session_carry_deferred_active_render_chunks",
+            ),
+            ("session final chunks", "encode_session_carry_final_chunks"),
+            ("pending started", "open_cb_tail_present_pending_started"),
+            (
+                "pending suppressed: no ready tail",
+                "open_cb_tail_present_pending_suppressed_no_tail",
+            ),
+            ("head appended", "open_cb_tail_present_head_appended"),
+            ("tail appended", "open_cb_tail_present_tail_appended"),
+            ("tail submitted", "open_cb_tail_present_tail_submitted"),
+            (
+                "pending tail wait timeout",
+                "open_cb_tail_present_pending_tail_wait_timeout",
+            ),
+            (
+                "timeout-submitted pending head",
+                "open_cb_tail_present_pending_timeout_submitted",
+            ),
+            (
+                "abandoned: no ready source",
+                "open_cb_tail_present_pending_abandoned_no_ready",
+            ),
+            (
+                "abandoned: non-appendable source",
+                "open_cb_tail_present_pending_abandoned_nonappendable",
+            ),
+            (
+                "abandoned: retain failed",
+                "open_cb_tail_present_pending_abandoned_retain_failed",
+            ),
+            (
+                "abandoned: encode returned null",
+                "open_cb_tail_present_pending_abandoned_encode_null",
+            ),
+            (
+                "abandoned: merge failed",
+                "open_cb_tail_present_pending_merge_failed",
+            ),
+        )
+        open_cb_frame_started = sum(
+            numeric_value(row, "open_cb_tail_present_pending_started")
+            for row in sampled_frames
+        )
+        open_cb_frame_activity = sum(
+            sum(numeric_value(row, key) for row in sampled_frames)
+            for _label, key in open_cb_frame_rows
+        )
+        if open_cb_frame_activity:
+            lines.append("### Frame-Sampled Open-CB Carry Deltas")
+            lines.append("")
+            lines.append(
+                "These rows are summed from `[dxmt9-perf-frame ...]` deltas, "
+                "so they remain available when a failed or timeout run exits "
+                "before the cumulative `[dxmt9-perf]` line is emitted."
+            )
+            lines.append("")
+            lines.append("| Event | sampled total | per pending start |")
+            lines.append("|---|---:|---:|")
+            for label, key in open_cb_frame_rows:
+                value = sum(numeric_value(row, key) for row in sampled_frames)
+                lines.append(
+                    f"| {label} | `{fmt(value)}` | "
+                    f"`{ratio_text(value, open_cb_frame_started)}` |"
+                )
+            lines.append("")
+
     append_pacing_cpu_stage_derived(lines, counters, present_encoded)
     append_pe_recorder_gap_call_derived(lines, pe_counters, present_encoded)
     append_replay_snapshot_cpu_derived(lines, counters, present_encoded)
@@ -6139,6 +6755,40 @@ def write_markdown(
     )
     uniform_backend_materialize_cpu = counters.get(
         "draw_uniform_payload_materialize_cpu_ms"
+    )
+    uniform_append_parent_cpu = counters.get(
+        "submit_draw_run_batch_append_uniform_cpu_ms"
+    )
+    uniform_lookup_cpu = counters.get("draw_uniform_payload_lookup_cpu_ms")
+    uniform_lookup_bucket_cpu = counters.get(
+        "draw_uniform_payload_lookup_bucket_cpu_ms"
+    )
+    uniform_append_reserve_cpu = counters.get(
+        "draw_uniform_payload_append_reserve_cpu_ms"
+    )
+    uniform_append_copy_cpu = counters.get(
+        "draw_uniform_payload_append_copy_cpu_ms"
+    )
+    uniform_append_link_cpu = counters.get(
+        "draw_uniform_payload_append_link_cpu_ms"
+    )
+    uniform_append_fixed_find_cpu = counters.get(
+        "draw_uniform_payload_append_fixed_find_cpu_ms"
+    )
+    uniform_append_vertex_find_cpu = counters.get(
+        "draw_uniform_payload_append_vertex_find_cpu_ms"
+    )
+    uniform_append_pixel_find_cpu = counters.get(
+        "draw_uniform_payload_append_pixel_find_cpu_ms"
+    )
+    uniform_append_fixed_append_cpu = counters.get(
+        "draw_uniform_payload_append_fixed_append_cpu_ms"
+    )
+    uniform_append_vertex_append_cpu = counters.get(
+        "draw_uniform_payload_append_vertex_append_cpu_ms"
+    )
+    uniform_append_pixel_append_cpu = counters.get(
+        "draw_uniform_payload_append_pixel_append_cpu_ms"
     )
     uniform_backend_materialize_sites = [
         ("other", "Other"),
@@ -6234,6 +6884,56 @@ def write_markdown(
         submission_carrier_unused_uniform_storage_mib = (
             submission_carrier_unused_uniform_storage_bytes / (1024 * 1024)
         )
+
+    def uniform_cpu_value(value: Any) -> float:
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    def uniform_cpu_sum(values: list[Any]) -> float | None:
+        if not any(isinstance(value, (int, float)) for value in values):
+            return None
+        return sum(uniform_cpu_value(value) for value in values)
+
+    uniform_payload_append_cpu = (
+        uniform_cpu_value(uniform_append_reserve_cpu)
+        + uniform_cpu_value(uniform_append_copy_cpu)
+        + uniform_cpu_value(uniform_append_link_cpu)
+    )
+    uniform_component_find_cpu = uniform_cpu_sum([
+        uniform_append_fixed_find_cpu,
+        uniform_append_vertex_find_cpu,
+        uniform_append_pixel_find_cpu,
+    ])
+    uniform_component_append_cpu = uniform_cpu_sum([
+        uniform_append_fixed_append_cpu,
+        uniform_append_vertex_append_cpu,
+        uniform_append_pixel_append_cpu,
+    ])
+    uniform_append_known_cpu = (
+        uniform_cpu_value(uniform_lookup_cpu) + uniform_payload_append_cpu
+    )
+    uniform_append_known_with_components_cpu = None
+    if (
+        uniform_component_find_cpu is not None or
+        uniform_component_append_cpu is not None
+    ):
+        uniform_append_known_with_components_cpu = (
+            uniform_append_known_cpu
+            + uniform_cpu_value(uniform_component_find_cpu)
+            + uniform_cpu_value(uniform_component_append_cpu)
+        )
+    uniform_append_cpu_residual = (
+        uniform_append_parent_cpu - uniform_append_known_cpu
+        if isinstance(uniform_append_parent_cpu, (int, float))
+        else None
+    )
+    uniform_append_component_residual = (
+        uniform_append_parent_cpu - uniform_append_known_with_components_cpu
+        if (
+            isinstance(uniform_append_parent_cpu, (int, float)) and
+            isinstance(uniform_append_known_with_components_cpu, (int, float))
+        )
+        else None
+    )
     lines.append("## Uniform Payload Derived")
     lines.append("")
     lines.append(
@@ -6360,6 +7060,82 @@ def write_markdown(
     lines.append(
         "| `uniform_payload_record_append_bytes_per_append` | "
         f"`{ratio_text(uniform_payload_record_append_bytes, uniform_appends)}` |"
+    )
+    lines.append(
+        "| `uniform_append_parent_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_parent_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_lookup_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_lookup_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_lookup_bucket_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_lookup_bucket_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_append_reserve_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_reserve_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_append_copy_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_copy_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_append_link_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_link_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_payload_append_storage_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_payload_append_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_find_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_component_find_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_append_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_component_append_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_fixed_find_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_fixed_find_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_vertex_find_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_vertex_find_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_pixel_find_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_pixel_find_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_fixed_append_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_fixed_append_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_vertex_append_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_vertex_append_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_component_pixel_append_cpu_ms_per_present` | "
+        f"`{ratio_text(uniform_append_pixel_append_cpu, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_append_known_cpu_share_of_parent` | "
+        f"`{pct(uniform_append_known_cpu, uniform_append_parent_cpu)}` |"
+    )
+    lines.append(
+        "| `uniform_append_cpu_residual_ms_per_present` | "
+        f"`{ratio_text(uniform_append_cpu_residual, present_encoded)}` |"
+    )
+    lines.append(
+        "| `uniform_append_known_with_components_cpu_share_of_parent` | "
+        f"`{pct(uniform_append_known_with_components_cpu, uniform_append_parent_cpu)}` |"
+    )
+    lines.append(
+        "| `uniform_append_component_residual_ms_per_present` | "
+        f"`{ratio_text(uniform_append_component_residual, present_encoded)}` |"
     )
     lines.append(
         "| `uniform_fixed_append_records_per_payload_append` | "

@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_queue.hpp"
 
 namespace {
@@ -25,6 +26,7 @@ using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
 using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
+using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
 using dxmt9::core::ChunkSlot;
 
 struct TestFailure : std::runtime_error {
@@ -172,6 +174,22 @@ void diagnosticsMergeKeepsTailIdentityAndAggregatesSourceShape() {
           "merged diagnostics use latest shader variant hash");
 }
 
+void encodeChunkSessionFactoryStartsWithoutActiveRender() {
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  check(static_cast<bool>(session), "encode session factory returns a session");
+  check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "new encode session has no active render encoder");
+  check(!dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(*session),
+        "new encode session has no deferred submission payload");
+
+  dxmt9::encoders::resetEncodeChunkSession(*session);
+  check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "reset encode session has no active render encoder");
+  check(!dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(*session),
+        "reset encode session has no deferred submission payload");
+}
+
 struct QueueFixture {
   std::optional<std::size_t> writingSlot{};
   std::size_t writeIndex = 0;
@@ -223,6 +241,127 @@ struct QueueFixture {
     ++inflightCount;
   }
 };
+
+void appendShapeTestDraw(ChunkSlot& slot,
+                         std::span<const dxmt9::core::DrawParam> draws,
+                         std::span<const dxmt9::core::DrawParamPayloadView> payloads) {
+  dxmt9::core::DrawUniformPayload uniforms{};
+  slot.appendDrawRun(dxmt9::core::CanonicalDrawState{}, uniforms, draws, payloads);
+}
+
+void firstPublishSlotShapeClassifiesTailPresentPrefix() {
+  ChunkSlot slot{};
+  slot.appendClear(dxmt9::core::ClearDesc{});
+
+  const std::array<dxmt9::core::u8, 4> firstPayload{1, 2, 3, 4};
+  const std::array<dxmt9::core::u8, 2> secondPayload{5, 6};
+  std::array<dxmt9::core::DrawParam, 2> draws{{
+      dxmt9::core::DrawParam{.primitiveCount = 1u},
+      dxmt9::core::DrawParam{.primitiveCount = 2u},
+  }};
+  std::array<dxmt9::core::DrawParamPayloadView, 2> payloads{{
+      dxmt9::core::DrawParamPayloadView{
+          .userVertexData = std::span<const dxmt9::core::u8>(
+              firstPayload.data(), firstPayload.size()),
+      },
+      dxmt9::core::DrawParamPayloadView{
+          .userVertexData = std::span<const dxmt9::core::u8>(
+              secondPayload.data(), secondPayload.size()),
+      },
+  }};
+  appendShapeTestDraw(slot,
+                      std::span<const dxmt9::core::DrawParam>(
+                          draws.data(), draws.size()),
+                      std::span<const dxmt9::core::DrawParamPayloadView>(
+                          payloads.data(), payloads.size()));
+  slot.appendPresent(dxmt9::core::SwapDesc{}, dxmt9::core::Handle{0x55});
+
+  const auto shape = summarizeNoEnqueueFirstPublishSlotShape(slot);
+
+  checkEq(shape.commandCount, 3ull,
+          "tail-present shape counts every command");
+  checkEq(shape.drawRunCommands, 1ull,
+          "tail-present shape counts draw-run commands");
+  checkEq(shape.drawItems, 2ull,
+          "tail-present shape counts draw items");
+  checkEq(shape.nonDrawCommands, 2ull,
+          "tail-present shape counts clear and present as non-draw");
+  checkEq(shape.payloadBytes, 6ull,
+          "tail-present shape counts all slot payload bytes");
+  checkEq(shape.presentCommands, 1ull,
+          "tail-present shape counts present commands");
+  checkEq(shape.prePresentCommands, 2ull,
+          "tail-present shape counts commands before first present");
+  checkEq(shape.prePresentDrawRunCommands, 1ull,
+          "tail-present shape counts pre-present draw-run commands");
+  checkEq(shape.prePresentDrawItems, 2ull,
+          "tail-present shape counts pre-present draw items");
+  checkEq(shape.prePresentNonDrawCommands, 1ull,
+          "tail-present shape counts pre-present non-draw commands");
+  checkEq(shape.prePresentPayloadBytes, 6ull,
+          "tail-present shape counts pre-present draw payload bytes");
+  checkEq(shape.postPresentCommands, 0ull,
+          "tail-present shape has no commands after present");
+  checkEq(shape.presentTailSlots, 1ull,
+          "tail-present shape classifies present as tail");
+  checkEq(shape.presentNonTailSlots, 0ull,
+          "tail-present shape does not classify non-tail present");
+}
+
+void firstPublishSlotShapeRejectsPostPresentWorkAsTail() {
+  ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{{
+      dxmt9::core::DrawParam{.primitiveCount = 3u},
+  }};
+  appendShapeTestDraw(slot,
+                      std::span<const dxmt9::core::DrawParam>(
+                          draws.data(), draws.size()),
+                      std::span<const dxmt9::core::DrawParamPayloadView>{});
+  slot.appendPresent(dxmt9::core::SwapDesc{}, dxmt9::core::Handle{0x66});
+  slot.appendClear(dxmt9::core::ClearDesc{});
+
+  const auto shape = summarizeNoEnqueueFirstPublishSlotShape(slot);
+
+  checkEq(shape.commandCount, 3ull,
+          "non-tail-present shape counts every command");
+  checkEq(shape.prePresentCommands, 1ull,
+          "non-tail-present shape stops prefix at first present");
+  checkEq(shape.prePresentDrawRunCommands, 1ull,
+          "non-tail-present shape counts the draw before present");
+  checkEq(shape.prePresentDrawItems, 1ull,
+          "non-tail-present shape counts pre-present draw item");
+  checkEq(shape.postPresentCommands, 1ull,
+          "non-tail-present shape counts commands after present");
+  checkEq(shape.presentTailSlots, 0ull,
+          "non-tail-present shape rejects present tail classification");
+  checkEq(shape.presentNonTailSlots, 1ull,
+          "non-tail-present shape classifies the slot as non-tail present");
+}
+
+void firstPublishSlotShapeKeepsNoPresentSlotUnclassified() {
+  ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{{
+      dxmt9::core::DrawParam{.primitiveCount = 4u},
+  }};
+  appendShapeTestDraw(slot,
+                      std::span<const dxmt9::core::DrawParam>(
+                          draws.data(), draws.size()),
+                      std::span<const dxmt9::core::DrawParamPayloadView>{});
+  slot.appendClear(dxmt9::core::ClearDesc{});
+
+  const auto shape = summarizeNoEnqueueFirstPublishSlotShape(slot);
+
+  checkEq(shape.commandCount, 2ull,
+          "no-present shape counts commands");
+  checkEq(shape.prePresentCommands, 2ull,
+          "no-present shape treats all commands as pre-present");
+  checkEq(shape.postPresentCommands, 0ull,
+          "no-present shape has no post-present commands");
+  checkEq(shape.presentTailSlots, 0ull,
+          "no-present shape does not classify present tail");
+  checkEq(shape.presentNonTailSlots, 0ull,
+          "no-present shape does not classify non-tail present");
+}
 
 void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   QueueFixture fixture;
@@ -771,6 +910,10 @@ int main() {
     respectsAlreadyQueuedCompletions();
     presentQueueMayBeAbsent();
     diagnosticsMergeKeepsTailIdentityAndAggregatesSourceShape();
+    encodeChunkSessionFactoryStartsWithoutActiveRender();
+    firstPublishSlotShapeClassifiesTailPresentPrefix();
+    firstPublishSlotShapeRejectsPostPresentWorkAsTail();
+    firstPublishSlotShapeKeepsNoPresentSlotUnclassified();
     dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding();
     dequeueReadySlotBatchRespectsOutputCapacity();
     dequeueReadySlotBatchHonorsAppendPredicate();

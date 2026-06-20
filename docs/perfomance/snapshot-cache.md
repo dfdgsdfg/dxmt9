@@ -54,6 +54,11 @@ write" owner ([[hidden-backend-storage]]).
 | H31 | Batch misses should refresh `cache.hot` in place instead of constructing a fresh `FlatDrawStateRecord` | accepted CPU win, FPS noisy; in-place refresh drops hot-build zero-init to `0`, hot build `0.729 -> 0.571ms/present`, lookup `2.655 -> 2.468ms/present`, and queue submission `3.975 -> 3.796ms/present`, while sampled FPS is only noisy/slightly up `16.662 -> 16.807` | [[snapshot-cache-snapshot.28]] |
 | H32 | Compact uniform stage storage may preserve only semantic used counts while the Metal-visible constant ABI needs struct-prefix bytes | accepted correctness bug; `v0.0.3` is the last visual-safe tag, and post-tag compact uniform storage could zero float/int prefix values before int/bool uploads, matching red-light/weapon transparency artifacts. Fix: keep float-only compact, but preserve the required ABI prefix when int or bool constants are stored | [[snapshot-cache-visual.01]] |
 | H33 | Recent semantic-key recurrence on batch misses is high enough to justify a small multi-entry/interner cache | rejected; opt-in probe finds only `8,172 / 419,703` hits (`1.95%`) in the previous-eight miss keys, so a small recent-key cache cannot move the `~2ms/present` batch-miss owner | [[snapshot-cache-snapshot.29]] |
+| H34 | A latest black-geometry / transparent-weapon report proves a new hard performance wall | rejected as a wall; accepted as current visual gate. Prefix-native tests pass, H169 rejects full-cbuf as the owner for the sampled black-foreground window, and H172 shows that same broad dark-foreground class also exists in `v0.0.3`. A separate weapon/lighting artifact still needs same-frame or draw-local proof before it redirects the performance plan | [[snapshot-cache-visual.02]] |
+| H35 | The current `f880..960` object-window sample reproduces the close-up weapon/lighting artifact | rejected for this window; current HEAD renders coherent rifle geometry, sparks, bloom, and muzzle flashes with clean no-skip/no-error counters. The close-up artifact remains a separate target requiring its own capture range before demoting perf evidence | [[snapshot-cache-visual.03]] |
+| H36 | A wider current `100..1000:100` internal capture reproduces the red-light / weapon artifact | rejected for this window; current HEAD renders coherent red corridor, wide firefight, `f900` object, and `f1000` close-up frames with `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.457`. The run remains P4/no-enqueue shaped, so performance work should continue under the `v0.0.3` visual gate | [[snapshot-cache-visual.04]] |
+| H37 | A denser current `1..291:10` red-corridor capture reproduces the reported close-up transparent weapon / black-vertex artifact | target-window miss; the run captures red-corridor and wide-transition frames with coherent dark foreground geometry, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.100`, but it does not match the reported close-up camera window. Treat this as continued need for same-window capture, not a wall or closure | [[snapshot-cache-visual.05]] |
+| H38 | Same-generation draw-submission state-copy elision directly causes the latest transparent-weapon / black-vertex report | rejected for the sampled effects-heavy window; `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` forces `d3d9_snapshot_state_elided=0`, while the default path elides `411,532` states / `4.211GiB`, and both screenshots render coherent bloom, sparks, geometry, and lighting. Keep the knob as an exact-window diagnostic, but do not demote P4 work based on state elision alone | [[snapshot-cache-visual.06]] |
 
 ## Verification methods
 
@@ -231,6 +236,8 @@ flowchart TD
   S27["snapshot.27\nnonconst payload reuse\nuniform build 0.871→0.596ms/present\nFPS flat"]:::accepted
   S28["snapshot.28\nhot state in-place refresh\nhot build 0.729→0.571ms/present\nFPS noisy"]:::accepted
   V1["visual.01\nuniform ABI prefix\nv0.0.3 visual-safe baseline\nfix compact stage storage"]:::accepted
+  V4["visual.04\nwide-window scout\n100..1000:100 coherent\nP4 track remains open"]:::accepted
+  V5["visual.05\nred-corridor dense scout\n1..291:10 target-window miss"]:::accepted
   S29["snapshot.29\nsemantic reuse probe\nrecent-key hit 1.95%\nreject small interner"]:::rejected
 
   S1 -->|"hits=0 → split"| S2
@@ -265,6 +272,9 @@ flowchart TD
   S27 -->|"avoid fresh hot record churn"| S28
   S28 -->|"visual regression after v0.0.3"| V1
   V1 -->|"resume cache opportunity sizing"| S29
+  V1 -->|"later wide-window visual gate"| V4
+  V4 -->|"denser early target search"| V5
+  V5 -.->|"exact close-up still needs proof"| OPEN
   S29 -.->|"fps proof still open"| OPEN["open CPU tracks\nbatch-miss count/churn,\nhot-build key construction,\nshader-constant hashing,\ncompact uniform submission/storage,\ncompletion_wait"]:::open
 ```
 
@@ -581,6 +591,60 @@ same frame-rate owner shape: `completion_wait_ms_per_present=27.336`,
 `encode_chunk_cpu_ms_per_present=11.221`. The next work should therefore stay on
 the P4 overlap / producer-to-encode pipeline and larger replay/encode owners,
 not a narrow batch-miss semantic cache.
+
+[[snapshot-cache-visual.02]] then records the current visual gate after a later
+black-geometry / transparent-weapon report. The known compact-uniform
+ABI-prefix class is covered by native tests and by [[snapshot-cache-visual.01]].
+For the sampled black-foreground firefight window, H169 rejects full-cbuf as the
+first owner and H172 shows the broad dark-foreground class exists in `v0.0.3`.
+That keeps the performance direction open rather than blocked: the sampled
+window is not a new hard wall, but any separate weapon/lighting-coupled artifact
+still demotes perf evidence until a foreground capture-window pair or draw-local
+probe localizes it to uniform/cbuf, stream/vdecl, dynamic backing,
+material/lighting state, or render-pass ordering.
+
+[[snapshot-cache-visual.03]] follows up with a current same-build
+`880..960:10` internal backbuffer window around the previously used `f910`
+class. That window is visually coherent: rifle and character geometry,
+ricochet particles, spark/bloom effects, and wide-scene muzzle flashes are
+present, while `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and
+`sampled_avg_fps=16.232`. This does not disprove a separate close-up
+weapon/lighting artifact, but it means the current sampled window is not a
+reason to halt P4/replay/encode performance work. A future artifact report
+should first capture the exact close-up frame range and compare against the
+`v0.0.3` anchor before spending Xcode/gputrace budget.
+
+[[snapshot-cache-visual.04]] widens that current smoke to internal backbuffers
+`100..1000:100`, covering the red corridor, wide firefight, the `f900` object
+window, and a `f1000` close-up. It is another non-reproduction:
+`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
+`sampled_avg_fps=16.457`, and the qualitative contact sheet shows coherent
+geometry, muzzle/bloom, particles, and lighting. The run still has the known
+P4 shape (`completion_wait_without_enqueue_ms_per_present=28.053`,
+ready-depth max `1`), so the next work remains P4/replay/encode movement rather
+than a visual-wall detour unless a future same-window artifact is reproduced.
+
+[[snapshot-cache-visual.05]] then densifies the early red-corridor search to
+internal backbuffers `1..291:10` after a close-up transparent-weapon /
+weapon-attached black-vertex report. The run is clean and P4-shaped
+(`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
+`sampled_avg_fps=16.100`,
+`completion_wait_without_enqueue_ms_per_present=28.076`, ready-depth max `1`),
+but the captured camera window still does not match the reported close-up
+composition. Treat this as a target-window miss: it keeps performance work open
+under the `v0.0.3` visual gate, while the exact close-up still needs a
+same-window current capture and, if reproduced, a same-window `v0.0.3` split.
+
+[[snapshot-cache-visual.06]] adds a narrow A/B for one plausible owner of that
+report: same-generation draw-submission state-copy elision. The diagnostic
+`DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` path proves the opt-out works
+(`d3d9_snapshot_state_elided=0`, `879,885` states materialized), and the default
+path proves the current elision remains active (`411,532` states /
+`4.211GiB` elided). Both nearby effects-heavy screenshots are visually
+coherent, so state-copy elision is lowered for the sampled window. This is not
+a pixel-equal same-frame proof, and the exact close-up report still needs a
+same-window capture, but the next performance direction remains P4/replay/encode
+unless that exact window reproduces.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This is a

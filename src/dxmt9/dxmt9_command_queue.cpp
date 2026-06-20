@@ -113,6 +113,35 @@ bool openCbPreencodeTailPresentEnabled() {
   return enabled;
 }
 
+bool openCbRenderSessionCarryEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_OPEN_CB_CARRY_RENDER_SESSION");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+std::chrono::microseconds openCbPendingTailWaitTimeout() {
+  static const auto timeout = [] {
+    const char* env = std::getenv("DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US");
+    if (!env || env[0] == '\0') {
+      return std::chrono::microseconds{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::chrono::microseconds{0};
+    }
+    const auto max =
+        static_cast<unsigned long long>(
+            std::chrono::microseconds::max().count());
+    return std::chrono::microseconds{
+        static_cast<std::chrono::microseconds::rep>(std::min(parsed, max))};
+  }();
+  return openCbPreencodeTailPresentEnabled() ? timeout
+                                             : std::chrono::microseconds{0};
+}
+
 bool stageTailPresentChunkEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_STAGE_TAIL_PRESENT_CHUNK");
@@ -1734,7 +1763,7 @@ CommandQueue::InitializerFlush CommandQueue::flushInitializerUploads() {
     return {};
   }
   auto result = initializer_->flushToWait();
-  return {result.event, result.value};
+  return {result.event, result.value, result.didFlush};
 }
 
 WMT::Reference<WMT::CommandBuffer> CommandQueue::newCommandBuffer() {
@@ -2943,7 +2972,11 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
   }
   countDrawSubmissionAdjacentStateGenerations(submissions);
   PerfScope scope(perf::countSubmitDrawCpuTime);
-  std::unique_lock lock(mutex);
+  std::unique_lock lock(mutex, std::defer_lock);
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunBatchQueueLockCpuTime);
+    lock.lock();
+  }
   std::size_t batchStart = 0;
   while (batchStart < submissions.size()) {
     std::size_t batchEnd = batchStart + 1u;
@@ -3049,7 +3082,11 @@ void submitDrawRunBatchAndRunImpl(
   }
   countDrawSubmissionAdjacentStateGenerations(submissions);
   PerfScope scope(perf::countSubmitDrawCpuTime);
-  std::unique_lock lock(mutex);
+  std::unique_lock lock(mutex, std::defer_lock);
+  {
+    PerfScope stageScope(perf::countSubmitDrawRunBatchQueueLockCpuTime);
+    lock.lock();
+  }
 
   std::size_t batchStart = 0;
   while (batchStart < submissions.size()) {
@@ -3174,6 +3211,22 @@ void CommandQueue::submitCompactDrawRunBatch(
                          submissions);
 }
 
+void CommandQueue::submitDrawRunBatchWithResourceMarking(
+    std::span<core::DrawRunSubmission> submissions) {
+  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
+                         /*skipDrawResourceMarking=*/false,
+                         /*forceDrawResourceMarkingAfterSplit=*/false,
+                         submissions);
+}
+
+void CommandQueue::submitCompactDrawRunBatchWithResourceMarking(
+    std::span<core::DrawRunCompactSubmission> submissions) {
+  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
+                         /*skipDrawResourceMarking=*/false,
+                         /*forceDrawResourceMarkingAfterSplit=*/false,
+                         submissions);
+}
+
 void CommandQueue::submitDrawRunBatchAndRun(
     std::span<core::DrawRunSubmission> submissions,
     core::CanonicalDrawState state,
@@ -3196,6 +3249,32 @@ void CommandQueue::submitCompactDrawRunBatchAndRun(
   submitDrawRunBatchAndRunImpl(*this, pool_, mutex_, currentBackBuffer_,
                                skipDrawResourceMarking_,
                                forceDrawResourceMarkingAfterSplit_,
+                               submissions, std::move(state), uniforms,
+                               draws, payloads);
+}
+
+void CommandQueue::submitDrawRunBatchAndRunWithResourceMarking(
+    std::span<core::DrawRunSubmission> submissions,
+    core::CanonicalDrawState state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  submitDrawRunBatchAndRunImpl(*this, pool_, mutex_, currentBackBuffer_,
+                               /*skipDrawResourceMarking=*/false,
+                               /*forceDrawResourceMarkingAfterSplit=*/false,
+                               submissions, std::move(state), uniforms,
+                               draws, payloads);
+}
+
+void CommandQueue::submitCompactDrawRunBatchAndRunWithResourceMarking(
+    std::span<core::DrawRunCompactSubmission> submissions,
+    core::CanonicalDrawState state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) {
+  submitDrawRunBatchAndRunImpl(*this, pool_, mutex_, currentBackBuffer_,
+                               /*skipDrawResourceMarking=*/false,
+                               /*forceDrawResourceMarkingAfterSplit=*/false,
                                submissions, std::move(state), uniforms,
                                draws, payloads);
 }
@@ -3555,9 +3634,14 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::QueueSubmissionRecord;
   using core::metalqueue::ReadySlotSnapshot;
 
-  std::array<ReadySlotSnapshot, 1> scratch{};
+  std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
   std::vector<QueueCompletionSource> pendingSources;
+  encoders::EncodeChunkSession pendingSession;
+  const bool carryRenderSession = openCbRenderSessionCarryEnabled();
+  const auto pendingTailWaitTimeout = openCbPendingTailWaitTimeout();
+  const bool allowPendingHeadWithoutReadyTail =
+      carryRenderSession && pendingTailWaitTimeout.count() > 0;
 
   auto encodeSource = [this](const ReadySlotSnapshot& source,
                              encoders::EncodeChunkOptions options) {
@@ -3603,6 +3687,15 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
     }
   };
 
+  auto abandonPendingLocked = [&] {
+    for (const auto& source : pendingSources) {
+      completeInlineSource(source);
+    }
+    pendingRecord.reset();
+    pendingSources.clear();
+    pendingSession.reset();
+  };
+
   auto retainSource = [this](std::unique_lock<std::mutex>& lock,
                              const ReadySlotSnapshot& source,
                              QueueCompletionSource& retained) {
@@ -3630,121 +3723,242 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
     }
   };
 
+  auto finalizePendingSessionForSubmitLocked =
+      [this, &pendingRecord, &pendingSession](
+          std::unique_lock<std::mutex>& lock) {
+        if (!pendingSession) {
+          return true;
+        }
+        if (!encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+                *pendingSession)) {
+          pendingSession.reset();
+          return true;
+        }
+        if (!pendingRecord.has_value()) {
+          return false;
+        }
+
+        lock.unlock();
+        auto ctx = makeEncodeContext();
+        const bool finalized =
+            encoders::finalizeEncodeChunkSessionIntoSubmission(
+                ctx, *pendingSession, *pendingRecord);
+        lock.lock();
+        if (finalized) {
+          pendingSession.reset();
+        }
+        return finalized;
+      };
+
+  auto submitPendingRecordLocked =
+      [&pendingRecord, &pendingSources, &pendingSession,
+       &finalizePendingSessionForSubmitLocked, &submitRecordLocked](
+          std::unique_lock<std::mutex>& lock) {
+        if (!pendingRecord.has_value()) {
+          return false;
+        }
+        if (!finalizePendingSessionForSubmitLocked(lock)) {
+          return false;
+        }
+        submitRecordLocked(lock, *pendingRecord);
+        pendingRecord.reset();
+        pendingSources.clear();
+        pendingSession.reset();
+        return true;
+      };
+
   while (true) {
     std::unique_lock lock(mutex_);
+    if (pendingRecord.has_value() && pendingTailWaitTimeout.count() > 0 &&
+        readySlots_.empty() && !stop_) {
+      const bool readyOrStopped =
+          encodeCv_.wait_for(lock, pendingTailWaitTimeout, [this] {
+            return stop_ || !readySlots_.empty();
+          });
+      if (!readyOrStopped && readySlots_.empty() && !stop_) {
+        perf::countOpenCbTailPresentPendingTailWaitTimeout();
+        if (submitPendingRecordLocked(lock)) {
+          perf::countOpenCbTailPresentPendingTimeoutSubmitted();
+        } else {
+          perf::countOpenCbTailPresentPendingAbandonedNoReady();
+          abandonPendingLocked();
+        }
+        continue;
+      }
+    }
+
     const std::size_t count =
         queueLifecycle_.dequeueReadySlotBatchPrefix(
             lock,
             std::span<ReadySlotSnapshot>(scratch),
-            [](const std::deque<std::size_t>&,
-               std::span<const core::ChunkSlot>,
-               std::size_t maxCount) noexcept {
-              return maxCount == 0u ? 0u : 1u;
+            [carryRenderSession](
+                const std::deque<std::size_t>& readySlots,
+                std::span<const core::ChunkSlot> slots,
+                std::size_t maxCount) noexcept -> std::size_t {
+              if (carryRenderSession) {
+                return render::selectOpenCbTailPresentBatchPrefix(
+                    readySlots, slots, maxCount);
+              }
+              return maxCount == 0u ? std::size_t{0} : std::size_t{1};
             });
     if (count == 0) {
       if (pendingRecord.has_value()) {
-        submitRecordLocked(lock, *pendingRecord);
-        pendingRecord.reset();
-        pendingSources.clear();
+        if (!submitPendingRecordLocked(lock)) {
+          perf::countOpenCbTailPresentPendingAbandonedNoReady();
+          abandonPendingLocked();
+        }
       }
       return;
     }
 
-    const ReadySlotSnapshot source = scratch.front();
-    const bool sourceHasPresent = !source.slot.presentRecords.empty();
-    const bool sourceIsOpenHead =
-        render::slotIsOpenCbPreencodeHead(source.slot);
-
-    if (pendingRecord.has_value() &&
-        !sourceHasPresent &&
-        !sourceIsOpenHead) {
-      submitRecordLocked(lock, *pendingRecord);
-      pendingRecord.reset();
-      pendingSources.clear();
-      lock.lock();
-    }
-
-    bool appendToPending = pendingRecord.has_value() &&
-                           (sourceHasPresent || sourceIsOpenHead);
-    bool startPending = !pendingRecord.has_value() && sourceIsOpenHead;
-    QueueCompletionSource appendRetained{};
-    bool appendRetainedValid = false;
-    if (appendToPending) {
-      if (!retainSource(lock, source, appendRetained)) {
-        submitRecordLocked(lock, *pendingRecord);
-        pendingRecord.reset();
-        pendingSources.clear();
+    const bool selectedTailReadyPrefix =
+        carryRenderSession && count > 1u &&
+        render::slotIsPresentOnlyTail(scratch[count - 1u].slot);
+    for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
+      if (!lock.owns_lock()) {
         lock.lock();
-        appendToPending = false;
-        startPending = sourceIsOpenHead;
-      } else {
-        appendRetainedValid = true;
       }
-    }
+      const ReadySlotSnapshot source = scratch[sourceIndex];
+      const bool sourceHasPresent = !source.slot.presentRecords.empty();
+      const bool sourceIsOpenHead =
+          render::slotIsOpenCbPreencodeHead(source.slot);
+      const bool tailReadyForCurrentHead =
+          selectedTailReadyPrefix && sourceIndex + 1u < count;
+      const bool sourceCanAppendToPending =
+          sourceHasPresent ||
+          sourceIsOpenHead ||
+          (carryRenderSession && pendingSession && !sourceHasPresent);
 
-    encoders::EncodeChunkOptions options{};
-    if (appendToPending || startPending) {
-      options.disableMidChunkCommits = true;
-      options.disablePresentAcquireSplit = true;
-    }
-    if (appendToPending) {
-      options.commandBuffer = pendingRecord->commandBuffer;
-    }
+      if (pendingRecord.has_value() &&
+          !sourceCanAppendToPending) {
+        perf::countOpenCbTailPresentPendingAbandonedNonAppendable();
+        if (!submitPendingRecordLocked(lock)) {
+          abandonPendingLocked();
+        }
+        if (!lock.owns_lock()) {
+          lock.lock();
+        }
+      }
 
-    lock.unlock();
-    auto submission = encodeSource(source, std::move(options));
-    lock.lock();
-
-    if (!submission.has_value()) {
+      bool appendToPending =
+          pendingRecord.has_value() && sourceCanAppendToPending;
+      const bool suppressCarryHeadWithoutTail =
+          carryRenderSession && !allowPendingHeadWithoutReadyTail &&
+          !pendingRecord.has_value() && sourceIsOpenHead &&
+          !tailReadyForCurrentHead;
+      if (suppressCarryHeadWithoutTail) {
+        perf::countOpenCbTailPresentPendingSuppressedNoTail();
+      }
+      bool startPending = !pendingRecord.has_value() && sourceIsOpenHead &&
+          !suppressCarryHeadWithoutTail;
+      QueueCompletionSource appendRetained{};
+      bool appendRetainedValid = false;
       if (appendToPending) {
-        for (const auto& retained : pendingSources) {
-          completeInlineSource(retained);
+        if (!retainSource(lock, source, appendRetained)) {
+          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
+          if (pendingSession) {
+            abandonPendingLocked();
+          } else {
+            if (!submitPendingRecordLocked(lock)) {
+              abandonPendingLocked();
+            }
+            if (!lock.owns_lock()) {
+              lock.lock();
+            }
+          }
+          appendToPending = false;
+          startPending = sourceIsOpenHead && tailReadyForCurrentHead;
+        } else {
+          appendRetainedValid = true;
         }
-        pendingRecord.reset();
-        pendingSources.clear();
       }
-      completeInlineSnapshot(source);
-      continue;
-    }
 
-    if (startPending) {
-      QueueCompletionSource retained{};
-      if (!retainSource(lock, source, retained)) {
-        submitRecordLocked(lock, *submission);
+      encoders::EncodeChunkOptions options{};
+      if (appendToPending || startPending) {
+        options.disableMidChunkCommits = true;
+        options.disablePresentAcquireSplit = true;
+      }
+      if (carryRenderSession && (appendToPending || startPending)) {
+        if (!pendingSession) {
+          pendingSession = encoders::makeEncodeChunkSession();
+        }
+        options.session = pendingSession.get();
+        options.deferSessionFinalization = !sourceHasPresent;
+      }
+      if (appendToPending) {
+        options.commandBuffer = pendingRecord->commandBuffer;
+      }
+
+      lock.unlock();
+      auto submission = encodeSource(source, std::move(options));
+      lock.lock();
+
+      if (!submission.has_value()) {
+        if (appendToPending) {
+          perf::countOpenCbTailPresentPendingAbandonedEncodeNull();
+          for (const auto& retained : pendingSources) {
+            completeInlineSource(retained);
+          }
+          pendingRecord.reset();
+          pendingSources.clear();
+          pendingSession.reset();
+        }
+        completeInlineSnapshot(source);
         continue;
       }
-      pendingSources.assign(1u, retained);
-      pendingRecord = std::move(*submission);
-      continue;
-    }
 
-    if (appendToPending) {
-      if (!appendRetainedValid ||
-          !core::metalqueue::mergeEncodedPendingTailSubmission(
-              *submission, std::move(*pendingRecord), pendingSources,
-              appendRetained)) {
-        for (const auto& pendingSource : pendingSources) {
-          completeInlineSource(pendingSource);
+      if (startPending) {
+        QueueCompletionSource retained{};
+        if (!retainSource(lock, source, retained)) {
+          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
+          if (pendingSession) {
+            pendingSession.reset();
+            completeInlineSnapshot(source);
+          } else {
+            submitRecordLocked(lock, *submission);
+          }
+          continue;
         }
-        completeInlineSource(appendRetained);
-        pendingRecord.reset();
-        pendingSources.clear();
-        continue;
-      }
-
-      pendingRecord.reset();
-      pendingSources.clear();
-      if (!sourceHasPresent) {
-        pendingSources = submission->completionSources;
+        pendingSources.assign(1u, retained);
         pendingRecord = std::move(*submission);
+        perf::countOpenCbTailPresentPendingStarted();
+        continue;
+      }
+
+      if (appendToPending) {
+        if (!appendRetainedValid ||
+            !core::metalqueue::mergeEncodedPendingTailSubmission(
+                *submission, std::move(*pendingRecord), pendingSources,
+                appendRetained)) {
+          perf::countOpenCbTailPresentPendingMergeFailed();
+          for (const auto& pendingSource : pendingSources) {
+            completeInlineSource(pendingSource);
+          }
+          completeInlineSource(appendRetained);
+          pendingRecord.reset();
+          pendingSources.clear();
+          pendingSession.reset();
+          continue;
+        }
+
+        pendingRecord.reset();
+        pendingSources.clear();
+        if (!sourceHasPresent) {
+          pendingSources = submission->completionSources;
+          pendingRecord = std::move(*submission);
+          perf::countOpenCbTailPresentHeadAppended();
+          continue;
+        }
+
+        perf::countOpenCbTailPresentTailAppended();
+        submitRecordLocked(lock, *submission);
+        perf::countOpenCbTailPresentTailSubmitted();
+        pendingSession.reset();
         continue;
       }
 
       submitRecordLocked(lock, *submission);
-      continue;
     }
-
-    submitRecordLocked(lock, *submission);
   }
 }
 

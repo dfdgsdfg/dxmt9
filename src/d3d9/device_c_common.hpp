@@ -13,6 +13,7 @@
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/core_snapshots.hpp"
 
 #include <algorithm>
 #include <array>
@@ -140,6 +141,39 @@ struct D9CFactory {
 };
 
 struct D9CDevice {
+  struct ChunkEndFlushProbe {
+    bool valid = false;
+    std::uint64_t pendingRecords = 0;
+    std::uint64_t stateGeneration = 0;
+    std::uint64_t uniformGeneration = 0;
+    std::uint64_t uniformPayloadHash = 0;
+    dxmt9::core::DrawRunSubmissionStateLane stateLane =
+        dxmt9::core::DrawRunSubmissionStateLane::Unknown;
+  };
+
+  struct ChunkEndSubmissionCarry {
+    std::vector<dxmt9::core::DrawRunSubmission> submissions;
+    std::vector<dxmt9::core::DrawRunCompactSubmission> compactSubmissions;
+    dxmt9::core::DrawSubmissionUniformScratch uniformScratch;
+    bool forceResourceMarking = false;
+
+    bool empty() const noexcept {
+      return submissions.empty() && compactSubmissions.empty();
+    }
+
+    std::uint64_t recordCount() const noexcept {
+      return static_cast<std::uint64_t>(submissions.size()) +
+             static_cast<std::uint64_t>(compactSubmissions.size());
+    }
+
+    void clear() noexcept {
+      submissions.clear();
+      compactSubmissions.clear();
+      uniformScratch.clear();
+      forceResourceMarking = false;
+    }
+  };
+
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t> refs{1};
   std::array<std::shared_ptr<dxmt9::core::Surface>, dxmt9::core::kMaxRenderTargets> renderTargets;
@@ -148,6 +182,8 @@ struct D9CDevice {
   std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
+  ChunkEndFlushProbe chunkEndFlushProbe{};
+  ChunkEndSubmissionCarry chunkEndSubmissionCarry{};
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
   ~D9CDevice() {

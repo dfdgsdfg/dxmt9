@@ -46,6 +46,11 @@ pe_draw_full_snapshot=${DXMT9_PE_DRAW_FULL_SNAPSHOT:-0}
 pe_chunk_max_records=${DXMT9_PE_CHUNK_MAX_RECORDS:-}
 pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
 dxmt_log_level=${DXMT_LOG_LEVEL:-}
+open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
+open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
+open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
+stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
+enable_chunk_end_carry=${DXMT9_ENABLE_CHUNK_END_CARRY:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -268,6 +273,7 @@ require_tile_preservation_decrease=0
 require_tile_preservation_not_increase=0
 require_command_buffers_per_present_not_increase=0
 require_render_passes_per_present_not_increase=0
+require_render_pass_carry_promotion_gates=0
 require_encoder_final_end_reason_not_increase=0
 require_encoder_final_same_key_reopen_not_increase=0
 require_encoder_color_load_not_increase=0
@@ -693,6 +699,24 @@ Options:
   --frame-sampling    Set DXMT9_PERF_FRAME_SAMPLING=1 and emit per-Present
                       wall_ms/fps plus counter deltas. Use for visual/perf
                       coupling probes such as bloom, glow, and muzzle effects.
+  --open-cb-preencode-tail-present
+                      Set DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1 for the
+                      open-command-buffer P4 carrier.
+  --open-cb-carry-render-session
+                      Set DXMT9_OPEN_CB_CARRY_RENDER_SESSION=1 so the open-CB
+                      carrier keeps EncodeChunkSession state alive until the
+                      Present tail finalizes the shared command buffer.
+  --open-cb-pending-tail-wait-us N
+                      Set DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US=N. When paired
+                      with open-CB carry, a tail-less pending head waits up to
+                      N microseconds for a Present tail before finalizing and
+                      submitting the head alone.
+  --stage-pre-present-command-limit N
+                      Set DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=N. Required
+                      for pre-Present head staging/open-CB split candidates.
+  --enable-chunk-end-carry
+                      Set DXMT9_ENABLE_CHUNK_END_CARRY=1 for the default-off
+                      cross-chunk pending draw submission carry experiment.
   --probe-draw-packet-actual-change
                       Set DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1. Counts
                       declared draw-packet state deltas whose values do or do
@@ -1360,6 +1384,8 @@ Options:
                       Compare gate: command buffers per present must not increase
   --require-render-passes-per-present-not-increase
                       Compare gate: render passes per present must not increase
+  --require-render-pass-carry-promotion-gates
+                      Compare gate: H128 P4/locality/error promotion bundle must pass
   --require-encoder-final-end-reason-not-increase
                       Compare gate: encoder sidecar final end-reason per present must not increase
   --require-encoder-final-same-key-reopen-not-increase
@@ -1714,6 +1740,26 @@ while (($#)); do
       ;;
     --frame-sampling)
       frame_sampling=1
+      shift
+      ;;
+    --open-cb-preencode-tail-present)
+      open_cb_preencode_tail_present=1
+      shift
+      ;;
+    --open-cb-carry-render-session)
+      open_cb_carry_render_session=1
+      shift
+      ;;
+    --open-cb-pending-tail-wait-us)
+      open_cb_pending_tail_wait_us=${2:?missing value for --open-cb-pending-tail-wait-us}
+      shift 2
+      ;;
+    --stage-pre-present-command-limit)
+      stage_pre_present_command_limit=${2:?missing value for --stage-pre-present-command-limit}
+      shift 2
+      ;;
+    --enable-chunk-end-carry)
+      enable_chunk_end_carry=1
       shift
       ;;
     --probe-draw-packet-actual-change)
@@ -2691,6 +2737,10 @@ while (($#)); do
       ;;
     --require-render-passes-per-present-not-increase)
       require_render_passes_per_present_not_increase=1
+      shift
+      ;;
+    --require-render-pass-carry-promotion-gates)
+      require_render_pass_carry_promotion_gates=1
       shift
       ;;
     --require-encoder-final-end-reason-not-increase)
@@ -3901,6 +3951,7 @@ if (( require_color_dontcare_increase ||
       require_tile_preservation_not_increase ||
       require_command_buffers_per_present_not_increase ||
       require_render_passes_per_present_not_increase ||
+      require_render_pass_carry_promotion_gates ||
       require_encoder_final_end_reason_not_increase ||
       require_encoder_final_same_key_reopen_not_increase ||
       require_encoder_color_load_not_increase ||
@@ -4212,6 +4263,26 @@ fi
 
 if [[ "$frame_sampling" != "0" && -n "$frame_sampling" ]]; then
   env_args+=("DXMT9_PERF_FRAME_SAMPLING=$frame_sampling")
+fi
+
+if [[ "$open_cb_preencode_tail_present" != "0" && -n "$open_cb_preencode_tail_present" ]]; then
+  env_args+=("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=$open_cb_preencode_tail_present")
+fi
+
+if [[ "$open_cb_carry_render_session" != "0" && -n "$open_cb_carry_render_session" ]]; then
+  env_args+=("DXMT9_OPEN_CB_CARRY_RENDER_SESSION=$open_cb_carry_render_session")
+fi
+
+if [[ -n "$open_cb_pending_tail_wait_us" ]]; then
+  env_args+=("DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US=$open_cb_pending_tail_wait_us")
+fi
+
+if [[ -n "$stage_pre_present_command_limit" ]]; then
+  env_args+=("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=$stage_pre_present_command_limit")
+fi
+
+if [[ "$enable_chunk_end_carry" != "0" && -n "$enable_chunk_end_carry" ]]; then
+  env_args+=("DXMT9_ENABLE_CHUNK_END_CARRY=$enable_chunk_end_carry")
 fi
 
 if [[ "$draw_packet_actual_change" != "0" && -n "$draw_packet_actual_change" ]]; then
@@ -5097,6 +5168,9 @@ if [[ -n "$compare_baseline_output" ]]; then
   if (( require_render_passes_per_present_not_increase )); then
     counter_compare_cmd+=(--require-render-passes-per-present-not-increase)
   fi
+  if (( require_render_pass_carry_promotion_gates )); then
+    counter_compare_cmd+=(--require-render-pass-carry-promotion-gates)
+  fi
   if (( require_encoder_final_end_reason_not_increase )); then
     counter_compare_cmd+=(--require-encoder-final-end-reason-not-increase)
   fi
@@ -5358,6 +5432,9 @@ if (( capture_gputrace )); then
   fi
   if (( require_render_passes_per_present_not_increase )); then
     finalize_cmd+=(--require-render-passes-per-present-not-increase)
+  fi
+  if (( require_render_pass_carry_promotion_gates )); then
+    finalize_cmd+=(--require-render-pass-carry-promotion-gates)
   fi
   if (( require_encoder_final_end_reason_not_increase )); then
     finalize_cmd+=(--require-encoder-final-end-reason-not-increase)

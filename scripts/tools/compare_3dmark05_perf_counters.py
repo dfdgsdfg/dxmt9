@@ -140,6 +140,12 @@ FOCUS_COUNTERS = (
     "draw_uniform_vertex_constants_append_bytes",
     "draw_uniform_pixel_constants_appends",
     "draw_uniform_pixel_constants_append_bytes",
+    "draw_uniform_payload_append_fixed_find_cpu_ms",
+    "draw_uniform_payload_append_vertex_find_cpu_ms",
+    "draw_uniform_payload_append_pixel_find_cpu_ms",
+    "draw_uniform_payload_append_fixed_append_cpu_ms",
+    "draw_uniform_payload_append_vertex_append_cpu_ms",
+    "draw_uniform_payload_append_pixel_append_cpu_ms",
     "draw_uniform_payload_materialized",
     "draw_uniform_payload_materialized_bytes",
     "draw_uniform_payload_materialize_fallbacks",
@@ -314,6 +320,20 @@ FOCUS_COUNTERS = (
     "completion_no_enqueue_first_publish_slot_payload_bytes_p50",
     "completion_no_enqueue_first_publish_slot_payload_bytes_p95",
     "completion_no_enqueue_first_publish_slot_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_commands_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_draw_items_p95",
+    "completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p50",
+    "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes_p95",
+    "completion_no_enqueue_first_publish_slot_post_present_commands",
+    "completion_no_enqueue_first_publish_slot_present_tail_slots",
+    "completion_no_enqueue_first_publish_slot_present_nontail_slots",
     "completion_no_enqueue_stage_commit_entry_to_publish_ms",
     "completion_no_enqueue_stage_commit_entry_to_publish_p50_ms",
     "completion_no_enqueue_stage_commit_entry_to_publish_p95_ms",
@@ -1383,6 +1403,34 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         counters,
         "completion_no_enqueue_first_publish_slot_present_commands",
     )) or 0.0
+    no_enqueue_first_publish_slot_pre_present_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_pre_present_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_pre_present_draw_run_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_pre_present_draw_run_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_pre_present_draw_items = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_pre_present_draw_items",
+    )) or 0.0
+    no_enqueue_first_publish_slot_pre_present_non_draw_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_pre_present_non_draw_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_pre_present_payload_bytes = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_pre_present_payload_bytes",
+    )) or 0.0
+    no_enqueue_first_publish_slot_post_present_commands = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_post_present_commands",
+    )) or 0.0
+    no_enqueue_first_publish_slot_present_tail_slots = number(counter(
+        counters,
+        "completion_no_enqueue_first_publish_slot_present_tail_slots",
+    )) or 0.0
     no_enqueue_before_publish_replay_cpu_ms = (
         no_enqueue_completed_replay_cpu_before_publish_ms +
         no_enqueue_active_replay_cpu_before_publish_ms
@@ -1563,6 +1611,11 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
             (number(counter(counters, "render_pass_tile_preservation_bytes")) or 0.0) /
             mib
         ),
+        "tile_preservation_mib_per_present": (
+            (number(counter(counters, "render_pass_tile_preservation_bytes")) or 0.0) /
+            mib / present
+            if present else None
+        ),
         "same_key_preservation_mib": (
             (number(counter(counters, "render_pass_same_key_reentry_preservation_bytes")) or 0.0) /
             mib
@@ -1661,6 +1714,11 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
             completion_present_wait_without_enqueue_ms /
             completion_present_wait_ms * 100.0
             if completion_present_wait_ms else None
+        ),
+        "gpu_command_buffer_time_ms_per_present": ratio(
+            counters,
+            "gpu_command_buffer_time_ms",
+            "present_encoded",
         ),
         "completion_enqueue_while_waiting_per_present": (
             completion_enqueue_while_waiting / present if present else None
@@ -2000,6 +2058,41 @@ def derived(counters: dict[str, Any]) -> dict[str, float | None]:
         "no_enqueue_first_publish_slot_present_commands_per_slot": (
             no_enqueue_first_publish_slot_present_commands /
             no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_pre_present_commands_per_slot": (
+            no_enqueue_first_publish_slot_pre_present_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_pre_present_draw_run_commands_per_slot": (
+            no_enqueue_first_publish_slot_pre_present_draw_run_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_pre_present_draw_items_per_slot": (
+            no_enqueue_first_publish_slot_pre_present_draw_items /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_pre_present_non_draw_commands_per_slot": (
+            no_enqueue_first_publish_slot_pre_present_non_draw_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_pre_present_payload_bytes_per_slot": (
+            no_enqueue_first_publish_slot_pre_present_payload_bytes /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_post_present_commands_per_slot": (
+            no_enqueue_first_publish_slot_post_present_commands /
+            no_enqueue_first_publish_slot_samples
+            if no_enqueue_first_publish_slot_samples else None
+        ),
+        "no_enqueue_first_publish_slot_present_tail_share_pct": (
+            no_enqueue_first_publish_slot_present_tail_slots /
+            no_enqueue_first_publish_slot_samples * 100.0
             if no_enqueue_first_publish_slot_samples else None
         ),
         "no_enqueue_before_publish_replay_cpu_ms_per_present": (
@@ -3381,6 +3474,115 @@ def failed_requirements(args: argparse.Namespace,
                 f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
             )
 
+    def require_available_derived_increase(key: str, label: str) -> None:
+        before_value = before_derived[key]
+        after_value = after_derived[key]
+        if before_value is None or after_value is None:
+            failures.append(
+                f"{label} is missing "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+            return
+        if after_value <= before_value:
+            failures.append(
+                f"{label} did not increase "
+                f"({fmt_derived(before_value)} -> {fmt_derived(after_value)})"
+            )
+
+    def require_after_counter_zero(key: str, label: str) -> None:
+        after_value = number(counter(after, key))
+        if after_value is None:
+            failures.append(f"{label} is missing")
+            return
+        if after_value != 0.0:
+            failures.append(f"{label} is nonzero ({fmt_value(after_value)})")
+
+    def require_render_pass_carry_promotion_gates() -> None:
+        with_enqueue_before = before_derived[
+            "completion_wait_with_enqueue_ms_per_present"
+        ]
+        with_enqueue_after = after_derived[
+            "completion_wait_with_enqueue_ms_per_present"
+        ]
+        without_enqueue_before = before_derived[
+            "completion_wait_without_enqueue_ms_per_present"
+        ]
+        without_enqueue_after = after_derived[
+            "completion_wait_without_enqueue_ms_per_present"
+        ]
+        with_enqueue_ok = (
+            with_enqueue_before is not None and
+            with_enqueue_after is not None and
+            with_enqueue_after > with_enqueue_before
+        )
+        without_enqueue_ok = (
+            without_enqueue_before is not None and
+            without_enqueue_after is not None and
+            without_enqueue_after < without_enqueue_before
+        )
+        if not (with_enqueue_ok or without_enqueue_ok):
+            failures.append(
+                "render-pass-carry P4 gate did not move: "
+                "completion_wait_with_enqueue_ms_per_present did not increase "
+                f"({fmt_derived(with_enqueue_before)} -> "
+                f"{fmt_derived(with_enqueue_after)}) and "
+                "completion_wait_without_enqueue_ms_per_present did not decrease "
+                f"({fmt_derived(without_enqueue_before)} -> "
+                f"{fmt_derived(without_enqueue_after)})"
+            )
+
+        require_available_derived_increase(
+            "encode_ready_depth_gt1_per_present",
+            "encode_ready_depth_gt1_per_present",
+        )
+        require_derived_not_increase(
+            "command_buffers_per_present",
+            "command_buffers_per_present",
+        )
+        require_derived_not_increase(
+            "passes_per_present",
+            "passes_per_present",
+        )
+        require_available_derived_not_increase(
+            "encoder_sidecar_rows_per_present",
+            "encoder_sidecar_rows_per_present",
+        )
+        require_available_derived_not_increase(
+            "tile_preservation_mib_per_present",
+            "tile_preservation_mib_per_present",
+        )
+        require_available_derived_not_increase(
+            "gpu_command_buffer_time_ms_per_present",
+            "gpu_command_buffer_time_ms_per_present",
+        )
+        require_available_derived_not_increase(
+            "encoder_sidecar_final_end_reason_per_present",
+            "encoder_sidecar_final_end_reason_per_present",
+        )
+        require_available_derived_not_increase(
+            "encoder_sidecar_final_same_key_reopen_per_present",
+            "encoder_sidecar_final_same_key_reopen_per_present",
+        )
+        require_available_derived_not_increase(
+            "encoder_sidecar_color_load_mib_per_present",
+            "encoder_sidecar_color_load_mib_per_present",
+        )
+        require_available_derived_not_increase(
+            "encoder_sidecar_depth_load_mib_per_present",
+            "encoder_sidecar_depth_load_mib_per_present",
+        )
+        require_after_counter_zero(
+            "gpu_command_buffer_errors",
+            "gpu_command_buffer_errors",
+        )
+        require_after_counter_zero(
+            "draw_skipped_no_pipeline",
+            "draw_skipped_no_pipeline",
+        )
+
+    if args.require_render_pass_carry_promotion_gates:
+        require_render_pass_carry_promotion_gates()
+
     if args.require_color_dontcare_increase:
         before_value = metric_value(before, "render_pass_store_action_dontcare")
         after_value = metric_value(after, "render_pass_store_action_dontcare")
@@ -3850,6 +4052,15 @@ def main() -> int:
         "--require-render-passes-per-present-not-increase",
         action="store_true",
         help="exit nonzero if render_pass_begin per present increases",
+    )
+    parser.add_argument(
+        "--require-render-pass-carry-promotion-gates",
+        action="store_true",
+        help=(
+            "exit nonzero unless a render-pass-carry candidate moves P4 "
+            "overlap/no-enqueue wait, increases ready depth, preserves "
+            "CB/pass/tile/GPU/encoder-load locality, and keeps error counters zero"
+        ),
     )
     parser.add_argument(
         "--require-encoder-final-end-reason-not-increase",

@@ -365,6 +365,36 @@ NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
     const ChunkSlot& slot) noexcept {
   const auto commandCount = slot.commandCount();
   const auto drawRunCommands = slot.drawRunRecords.size();
+  u64 prePresentCommands = 0;
+  u64 prePresentDrawRunCommands = 0;
+  u64 prePresentDrawItems = 0;
+  u64 prePresentPayloadBytes = 0;
+  u64 postPresentCommands = 0;
+  bool foundPresent = false;
+
+  for (std::size_t index = 0; index < commandCount; ++index) {
+    const auto command = slot.commandAt(index);
+    if (!foundPresent && command.kind == MetalCommandKind::Present) {
+      foundPresent = true;
+      continue;
+    }
+    if (foundPresent) {
+      ++postPresentCommands;
+      continue;
+    }
+
+    ++prePresentCommands;
+    if (command.kind == MetalCommandKind::DrawRun) {
+      ++prePresentDrawRunCommands;
+      prePresentDrawItems += static_cast<u64>(drawRunDrawCount(command));
+      prePresentPayloadBytes += static_cast<u64>(drawRunPayloadSize(command));
+    }
+  }
+  const bool presentTail = foundPresent && postPresentCommands == 0;
+  const auto prePresentNonDrawCommands =
+      prePresentCommands >= prePresentDrawRunCommands
+          ? prePresentCommands - prePresentDrawRunCommands
+          : 0;
   return NoEnqueueFirstPublishSlotShape{
       .commandCount = static_cast<u64>(commandCount),
       .drawRunCommands = static_cast<u64>(drawRunCommands),
@@ -373,6 +403,14 @@ NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
           commandCount >= drawRunCommands ? commandCount - drawRunCommands : 0),
       .payloadBytes = static_cast<u64>(slot.drawPayloadArena.size()),
       .presentCommands = static_cast<u64>(slot.presentRecords.size()),
+      .prePresentCommands = prePresentCommands,
+      .prePresentDrawRunCommands = prePresentDrawRunCommands,
+      .prePresentDrawItems = prePresentDrawItems,
+      .prePresentNonDrawCommands = prePresentNonDrawCommands,
+      .prePresentPayloadBytes = prePresentPayloadBytes,
+      .postPresentCommands = postPresentCommands,
+      .presentTailSlots = presentTail ? 1u : 0u,
+      .presentNonTailSlots = foundPresent && !presentTail ? 1u : 0u,
   };
 }
 
@@ -816,7 +854,15 @@ void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish
       shape.drawItems,
       shape.nonDrawCommands,
       shape.payloadBytes,
-      shape.presentCommands);
+      shape.presentCommands,
+      shape.prePresentCommands,
+      shape.prePresentDrawRunCommands,
+      shape.prePresentDrawItems,
+      shape.prePresentNonDrawCommands,
+      shape.prePresentPayloadBytes,
+      shape.postPresentCommands,
+      shape.presentTailSlots,
+      shape.presentNonTailSlots);
 }
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {

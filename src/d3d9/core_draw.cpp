@@ -1456,6 +1456,14 @@ bool renderTraceEnabled() {
   return enabled;
 }
 
+bool drawSubmissionStateElisionDisabled() {
+  static const bool disabled = [] {
+    return dxmt9::util::getenvFlag(
+        "DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION");
+  }();
+  return disabled;
+}
+
 bool batchMissSemanticReuseProbeEnabled() {
   static const bool enabled = [] {
     return dxmt9::util::getenvFlag(
@@ -3927,6 +3935,7 @@ HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
   submission.bindingOverride = {};
   submission.stateGeneration = cached.generation;
   submission.uniformGeneration = cached.uniformGeneration;
+  submission.uniformFixedPayloadGeneration = cached.uniformNonConstantGeneration;
   submission.uniformPayloadHash = cached.uniformPayloadHash;
   submission.stateLane = useBindingAgnosticSnapshot
       ? DrawRunSubmissionStateLane::BindingAgnostic
@@ -3935,7 +3944,8 @@ HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
           : DrawRunSubmissionStateLane::FullNoIndex);
   const bool samePreviousGenerationLane = previousSubmission &&
       drawRunSubmissionSameStateGenerationLane(*previousSubmission, submission);
-  const bool stateCopyElisionEnabled = useBindingAgnosticSnapshot;
+  const bool stateCopyElisionEnabled =
+      useBindingAgnosticSnapshot && !drawSubmissionStateElisionDisabled();
   const bool samePreviousUniformGeneration = previousSubmission &&
       drawRunSubmissionSameUniformGeneration(*previousSubmission, submission);
   const bool samePreviousUniformPayloadHash = previousSubmission &&
@@ -4303,6 +4313,57 @@ void Device::submitCompactDrawSubmissionBatch(
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
 
+void Device::submitDrawSubmissionBatchWithResourceMarking(
+    std::span<DrawRunSubmission> submissions) {
+  if (submissions.empty()) {
+    return;
+  }
+
+  for (auto &submission : submissions) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
+  }
+
+  if (renderTraceEnabled()) {
+    submitDrawSubmissionBatch(submissions);
+    return;
+  }
+
+  if (activeOcclusionQuery_) {
+    for (const auto &submission : submissions) {
+      activeOcclusionCount_ += submission.draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitDrawRunBatchWithResourceMarking(submissions);
+  submittedSequenceId_ += static_cast<u64>(submissions.size());
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+}
+
+void Device::submitCompactDrawSubmissionBatchWithResourceMarking(
+    std::span<DrawRunCompactSubmission> submissions) {
+  if (submissions.empty()) {
+    return;
+  }
+
+  for (auto &submission : submissions) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
+  }
+
+  DXMT_ASSERT(!renderTraceEnabled() &&
+              "compact draw submission carrier is a no-trace batch path");
+  if (renderTraceEnabled()) {
+    return;
+  }
+
+  if (activeOcclusionQuery_) {
+    for (const auto &submission : submissions) {
+      activeOcclusionCount_ += submission.draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitCompactDrawRunBatchWithResourceMarking(submissions);
+  submittedSequenceId_ += static_cast<u64>(submissions.size());
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+}
+
 HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws) {
   return drawPrimitiveRun(draws, {});
 }
@@ -4481,6 +4542,128 @@ HResult Device::submitCompactDrawSubmissionBatchAndDrawRunCanonical(
     }
   }
   upperDevice_->submitCompactDrawRunBatchAndRun(
+      submissions, std::move(state), cached.uniforms, draws, payloads);
+  submittedSequenceId_ +=
+      static_cast<u64>(submissions.size()) + static_cast<u64>(draws.size());
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
+}
+
+HResult Device::submitDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
+    std::span<DrawRunSubmission> submissions,
+    std::span<const DrawParam> draws,
+    std::span<const DrawParamPayloadView> payloads) {
+  if (renderTraceEnabled()) {
+    return submitDrawSubmissionBatchAndDrawRunCanonical(
+        submissions, draws, payloads);
+  }
+  if (submissions.empty()) {
+    return drawPrimitiveRunCanonical(draws, payloads);
+  }
+  if (draws.empty()) {
+    submitDrawSubmissionBatchWithResourceMarking(submissions);
+    return D3D_OK;
+  }
+  for (const auto& draw : draws) {
+    if (draw.primitiveType == PrimitiveType::TriangleFan) {
+      return D3DERR_INVALIDCALL;
+    }
+  }
+  for (auto& submission : submissions) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
+  }
+
+  const auto& cached =
+      cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
+  CanonicalDrawState state{
+      cached.hot,
+      cached.shaderLayout,
+      makeDrawDebugSnapshot(
+          DrawCallArgs{draws.front().primitiveType,
+                       draws.front().primitiveCount, draws.front().startVertex,
+                       draws.front().baseVertexIndex, draws.front().startIndex,
+                       draws.front().indexType},
+          cached.hot),
+  };
+  const auto firstPayload = drawPayloadAt(payloads, 0);
+  state.debug.userVertexBytes = static_cast<u32>(std::min<std::size_t>(
+      firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
+  state.debug.userIndexBytes = static_cast<u32>(std::min<std::size_t>(
+      firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
+
+  if (activeOcclusionQuery_) {
+    for (const auto& submission : submissions) {
+      activeOcclusionCount_ += submission.draw.primitiveCount;
+    }
+    for (const auto& draw : draws) {
+      activeOcclusionCount_ += draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitDrawRunBatchAndRunWithResourceMarking(
+      submissions, std::move(state), cached.uniforms, draws, payloads);
+  submittedSequenceId_ +=
+      static_cast<u64>(submissions.size()) + static_cast<u64>(draws.size());
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
+}
+
+HResult Device::submitCompactDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
+    std::span<DrawRunCompactSubmission> submissions,
+    std::span<const DrawParam> draws,
+    std::span<const DrawParamPayloadView> payloads) {
+  if (renderTraceEnabled()) {
+    return submitCompactDrawSubmissionBatchAndDrawRunCanonical(
+        submissions, draws, payloads);
+  }
+  if (submissions.empty()) {
+    return drawPrimitiveRunCanonical(draws, payloads);
+  }
+  if (draws.empty()) {
+    submitCompactDrawSubmissionBatchWithResourceMarking(submissions);
+    return D3D_OK;
+  }
+  for (const auto& draw : draws) {
+    if (draw.primitiveType == PrimitiveType::TriangleFan) {
+      return D3DERR_INVALIDCALL;
+    }
+  }
+  for (auto& submission : submissions) {
+    ensureDrawRunSubmissionBindingOverridePayload(submission);
+  }
+
+  DXMT_ASSERT(!renderTraceEnabled() &&
+              "compact mixed draw-run carrier is a no-trace batch path");
+  if (renderTraceEnabled()) {
+    return D3DERR_INVALIDCALL;
+  }
+
+  const auto& cached =
+      cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
+  CanonicalDrawState state{
+      cached.hot,
+      cached.shaderLayout,
+      makeDrawDebugSnapshot(
+          DrawCallArgs{draws.front().primitiveType,
+                       draws.front().primitiveCount, draws.front().startVertex,
+                       draws.front().baseVertexIndex, draws.front().startIndex,
+                       draws.front().indexType},
+          cached.hot),
+  };
+  const auto firstPayload = drawPayloadAt(payloads, 0);
+  state.debug.userVertexBytes = static_cast<u32>(std::min<std::size_t>(
+      firstPayload.userVertexData.size(), std::numeric_limits<u32>::max()));
+  state.debug.userIndexBytes = static_cast<u32>(std::min<std::size_t>(
+      firstPayload.userIndexData.size(), std::numeric_limits<u32>::max()));
+
+  if (activeOcclusionQuery_) {
+    for (const auto& submission : submissions) {
+      activeOcclusionCount_ += submission.draw.primitiveCount;
+    }
+    for (const auto& draw : draws) {
+      activeOcclusionCount_ += draw.primitiveCount;
+    }
+  }
+  upperDevice_->submitCompactDrawRunBatchAndRunWithResourceMarking(
       submissions, std::move(state), cached.uniforms, draws, payloads);
   submittedSequenceId_ +=
       static_cast<u64>(submissions.size()) + static_cast<u64>(draws.size());

@@ -64,6 +64,7 @@ every other domain at the lever that actually moves the bucket.
 | H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [[hidden-backend-storage-shape.33]] (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
 | H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | [[hidden-backend-storage-shape.34]] (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
 | H44 | Removing the `60/0` fragment function while keeping `VSOut=0xfff` reduces hidden VS writes | rejected | [[hidden-backend-storage-shape.34]] (capture-layer route is usable again and exports Xcode counters, but target `60/0` VS buffer write stays flat: `224.918 -> 224.944 MiB`, VS invocations `152,895 -> 152,895`, top-three hidden estimate `1749.858 -> 1749.694 MiB`) |
+| H45 | Current shader-dump liveness reopens visible `VSOut` trimming as the next GPU lever | rejected by refresh | [[hidden-backend-storage-shape.35]] (H226 no-gputrace shader dump joins `9/9` top-row VS/PS rows, but top-three still write `1543..1602 B/VS invocation` against `184 B` visible `VSOut`; PS liveness is useful, generic varying trim remains closed) |
 
 ## Verification methods
 
@@ -141,6 +142,7 @@ flowchart TD
   SystemTraceRefresh["shape.31\ncurrent System Trace refresh\n5263/5263 joined\n90.39% vertex"]:::accepted
   CaptureRecovered["shape.32\nrecovered gputrace\nframe60 Xcode counters\n1779MiB top3 VS write"]:::accepted
   JoinedGate["shape.33\ncurrent Xcode+dxmt join\nsame density across hot classes\nnext gate narrowed"]:::accepted
+  ShaderDumpJoin["shape.35\ncurrent shader dump join\nPS liveness available\nvisible trim still closed"]:::rejected
   OcclusionGate["texture.08\nocclusion oracle feasibility\nexisting query not enough"]:::rejected
   ScopedSemantic["semantic.02\nselected 60/2 depth-read/no-blend\nexact mini replay\nscoped only"]:::accepted
 
@@ -199,6 +201,8 @@ flowchart TD
   CaptureRecovered -->|"same hidden-write owner"| NextTriage
   CaptureRecovered -->|"joined attribution sharpens"| JoinedGate
   JoinedGate -->|"rejects one-off state-toggle spend"| NextTriage
+  JoinedGate -->|"attach current MSL/PS liveness"| ShaderDumpJoin
+  ShaderDumpJoin -->|"8.4..8.7x visible VSOut persists"| NextTriage
   Scale2 -->|"separate hot-frame GPU from average FPS"| FloorVsWall
   FloorVsWall -->|"GPU locality gate and pacing gate stay separate"| NextTriage
   ProgrammableRoute -->|"next reduced route candidate"| NextTriage
@@ -259,6 +263,16 @@ encoder share `98.40%`, top-three `VS Buffer Device Memory Bytes Written`
 useful for route-attributed timing and low-overhead runs, but Xcode replay
 counters are available again for TVB/PB byte proof when the diagnostic capture
 route is deliberately selected.
+The current shader-dump join refresh ([[hidden-backend-storage-shape.35]]) adds
+MSL source and PS liveness to that same Xcode row set without spending another
+gputrace. It matches `9/9` top-row VS/PS pairs from `254` dumped MSL files. The
+top three rows still report `1543..1602 B/VS invocation` against a `184 B`
+visible `VSOut` layout (`8.4..8.7x`). The PS reads only a small field set on
+those rows (`fogFactor,position,texcoord0` for `60/2` and `60/1`;
+`color,fogFactor,secondaryColor` for `60/0`), so source liveness is real, but
+the measured density remains below-visible. This keeps generic varying trimming
+closed as the next GPU lever; future shader-output work must be pair-specific
+and backed by a counter gate that changes hidden bytes per invocation.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
@@ -510,6 +524,12 @@ unchanged VS invocations (`152,895 -> 152,895`). The useful conclusion is
 therefore narrower: the fragment-function-presence bit is not the hidden-write
 owner for `60/0`; further backend-route work needs a different below-visible
 mechanism or an invocation/locality reducer.
+[[hidden-backend-storage-shape.35]] keeps that negative result current with
+fresh shader dumps: the top rows have large unread visible `VSOut` shares, but
+their measured VS-write density is still `8.4..8.7x` larger than the visible
+layout. Do not spend another Xcode capture on generic visible varying trim. Use
+shader liveness only as a correctness constraint for a more specific
+below-visible route or invocation/locality proof.
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. This domain
@@ -602,6 +622,10 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   equality plus Xcode gate; isolates the position-only variable, passes
   pass-end depth and color equality, and then rejects the fragmentless
   keep-VSOut route as a hidden-write performance lever.
+- [[hidden-backend-storage-shape.35]] — current shader-dump liveness refresh;
+  joins current MSL/PS dumps to the existing Xcode top rows and keeps generic
+  visible varying trim closed because the hot rows still write `8.4..8.7x` the
+  visible `VSOut` bytes.
 - [[hidden-backend-storage-shape.27]] — Metal System Trace sidecar after
   compact draw-state work; confirms the residual top rows remain vertex-stage
   dominated large indexed encoders while `.gputrace` replay remains blocked by

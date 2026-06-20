@@ -693,7 +693,16 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "present_token_wait_ms=3.000 gpu_command_buffer_time_ms=11.000 "
                 "gpu_command_buffer_time_samples=2 render_encoder_gpu_time_ms=10.000 "
                 "render_encoder_gpu_time_samples=2 gpu_command_buffer_errors=1 "
-                "sub_command_buffers=3]\n",
+                "sub_command_buffers=3 "
+                "encode_session_carry_deferred_chunks=1 "
+                "encode_session_carry_deferred_active_render_chunks=1 "
+                "encode_session_carry_final_chunks=0 "
+                "open_cb_tail_present_pending_started=1 "
+                "open_cb_tail_present_pending_suppressed_no_tail=0 "
+                "open_cb_tail_present_head_appended=0 "
+                "open_cb_tail_present_tail_appended=0 "
+                "open_cb_tail_present_tail_submitted=0 "
+                "open_cb_tail_present_pending_abandoned_no_ready=0]\n",
                 encoding="utf-8",
             )
 
@@ -994,15 +1003,49 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "commit_chunk_replay_pending_flush_draw_fallback_records": 2,
                         "commit_chunk_replay_pending_flush_failure_records": 0,
                         "commit_chunk_replay_pending_flush_end_records": 12,
+                        "commit_chunk_replay_pending_flush_forced_resource_marking_cpu_ms": 20.0,
+                        "commit_chunk_replay_pending_flush_forced_resource_marking_flushes": 2,
+                        "commit_chunk_replay_pending_flush_forced_resource_marking_records": 8,
                         "commit_chunk_replay_draw_run_preflush_opportunities": 4,
                         "commit_chunk_replay_draw_run_preflush_pending_records": 20,
                         "commit_chunk_replay_draw_run_preflush_run_records": 12,
                         "commit_chunk_replay_draw_run_preflush_combined_records": 32,
+                        "commit_chunk_replay_end_flush_probe_stored": 5,
+                        "commit_chunk_replay_end_flush_probe_stored_records": 30,
+                        "commit_chunk_replay_end_flush_probe_first_submission": 3,
+                        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane": 2,
+                        "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_generation": 1,
+                        "commit_chunk_replay_end_flush_probe_first_submission_same_uniform_payload_hash": 2,
+                        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_generation": 1,
+                        "commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash": 1,
+                        "commit_chunk_replay_end_flush_probe_first_submission_pending_records": 18,
+                        "commit_chunk_replay_end_flush_probe_first_draw_run": 1,
+                        "commit_chunk_replay_end_flush_probe_first_draw_run_pending_records": 8,
+                        "commit_chunk_replay_end_flush_probe_first_draw_run_run_records": 4,
+                        "commit_chunk_replay_end_flush_probe_blocked_non_draw": 1,
+                        "commit_chunk_replay_end_flush_probe_blocked_draw_fallback": 0,
+                        "commit_chunk_replay_end_flush_probe_blocked_pending_records": 4,
                         "commit_chunk_draw_batch_submit_cpu_ms": 150.0,
                         "commit_chunk_queue_draw_submission_cpu_ms": 160.0,
                         "commit_chunk_queue_draw_submission_snapshot_cpu_ms": 140.0,
                         "commit_chunk_queue_draw_submission_emplace_cpu_ms": 8.0,
                         "d3d9_snapshot_draw_submission_cpu_ms": 80.0,
+                        "submit_draw_cpu_ms": 155.0,
+                        "submit_draw_run_batch_queue_lock_cpu_ms": 2.0,
+                        "submit_draw_run_batch_compat_scan_cpu_ms": 3.0,
+                        "submit_draw_run_batch_binding_override_cpu_ms": 2.0,
+                        "submit_draw_run_batch_binding_snapshot_cpu_ms": 4.0,
+                        "submit_draw_run_batch_payload_bytes_cpu_ms": 1.0,
+                        "submit_draw_run_batch_slot_prepare_cpu_ms": 2.0,
+                        "submit_draw_run_batch_resource_mark_cpu_ms": 3.0,
+                        "submit_draw_run_batch_append_cpu_ms": 10.0,
+                        "submit_draw_run_batch_append_reserve_cpu_ms": 1.0,
+                        "submit_draw_run_batch_append_state_cpu_ms": 2.0,
+                        "submit_draw_run_batch_append_uniform_cpu_ms": 3.0,
+                        "submit_draw_run_batch_append_payload_cpu_ms": 1.0,
+                        "submit_draw_run_batch_append_param_cpu_ms": 0.5,
+                        "submit_draw_run_batch_append_record_cpu_ms": 0.5,
+                        "submit_draw_run_batch_chunk_commit_cpu_ms": 5.0,
                         "d3d9_snapshot_cache_lookup_cpu_ms": 40.0,
                         "d3d9_snapshot_cache_batch_hit_cpu_ms": 16.0,
                         "d3d9_snapshot_cache_batch_miss_cpu_ms": 24.0,
@@ -1142,6 +1185,16 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "chunk_publish_present_pre_present_opportunity_tail_draw_run": 1,
                         "chunk_publish_present_pre_present_opportunity_tail_clear": 1,
                         "chunk_publish_present_pre_present_opportunity_draw_only": 1,
+                        "open_cb_tail_present_pending_started": 4,
+                        "open_cb_tail_present_pending_suppressed_no_tail": 2,
+                        "open_cb_tail_present_head_appended": 2,
+                        "open_cb_tail_present_tail_appended": 1,
+                        "open_cb_tail_present_tail_submitted": 1,
+                        "open_cb_tail_present_pending_abandoned_no_ready": 3,
+                        "open_cb_tail_present_pending_abandoned_nonappendable": 2,
+                        "open_cb_tail_present_pending_abandoned_retain_failed": 1,
+                        "open_cb_tail_present_pending_abandoned_encode_null": 1,
+                        "open_cb_tail_present_pending_merge_failed": 1,
                         "completion_no_enqueue_wait_to_encode_dequeue_ms": 460.0,
                         "completion_no_enqueue_wait_to_encode_dequeue_p50_ms": 9.0,
                         "completion_no_enqueue_wait_to_encode_dequeue_p95_ms": 17.0,
@@ -1212,6 +1265,17 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                         "draw_uniform_vertex_constants_append_bytes": 4096,
                         "draw_uniform_pixel_constants_appends": 1,
                         "draw_uniform_pixel_constants_append_bytes": 2048,
+                        "draw_uniform_payload_lookup_cpu_ms": 0.8,
+                        "draw_uniform_payload_lookup_bucket_cpu_ms": 0.4,
+                        "draw_uniform_payload_append_reserve_cpu_ms": 0.3,
+                        "draw_uniform_payload_append_copy_cpu_ms": 0.4,
+                        "draw_uniform_payload_append_link_cpu_ms": 0.5,
+                        "draw_uniform_payload_append_fixed_find_cpu_ms": 0.1,
+                        "draw_uniform_payload_append_vertex_find_cpu_ms": 0.2,
+                        "draw_uniform_payload_append_pixel_find_cpu_ms": 0.1,
+                        "draw_uniform_payload_append_fixed_append_cpu_ms": 0.05,
+                        "draw_uniform_payload_append_vertex_append_cpu_ms": 0.1,
+                        "draw_uniform_payload_append_pixel_append_cpu_ms": 0.05,
                         "draw_uniform_payload_materialized": 3,
                         "draw_uniform_payload_materialized_bytes": 30720,
                         "draw_uniform_payload_materialize_fallbacks": 1,
@@ -1329,6 +1393,25 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `uniform_stage_append_amplification_vs_compact_stage` | `0.500` |", summary)
             self.assertIn("| `uniform_append_bytes_per_append` | `10256.000` |", summary)
             self.assertIn("| `uniform_payload_record_append_bytes_per_append` | `3088.000` |", summary)
+            self.assertIn("| `uniform_append_parent_cpu_ms_per_present` | `0.037` |", summary)
+            self.assertIn("| `uniform_payload_lookup_cpu_ms_per_present` | `0.010` |", summary)
+            self.assertIn("| `uniform_payload_lookup_bucket_cpu_ms_per_present` | `0.005` |", summary)
+            self.assertIn("| `uniform_payload_append_reserve_cpu_ms_per_present` | `0.004` |", summary)
+            self.assertIn("| `uniform_payload_append_copy_cpu_ms_per_present` | `0.005` |", summary)
+            self.assertIn("| `uniform_payload_append_link_cpu_ms_per_present` | `0.006` |", summary)
+            self.assertIn("| `uniform_payload_append_storage_cpu_ms_per_present` | `0.015` |", summary)
+            self.assertIn("| `uniform_component_find_cpu_ms_per_present` | `0.005` |", summary)
+            self.assertIn("| `uniform_component_append_cpu_ms_per_present` | `0.003` |", summary)
+            self.assertIn("| `uniform_component_fixed_find_cpu_ms_per_present` | `0.001` |", summary)
+            self.assertIn("| `uniform_component_vertex_find_cpu_ms_per_present` | `0.003` |", summary)
+            self.assertIn("| `uniform_component_pixel_find_cpu_ms_per_present` | `0.001` |", summary)
+            self.assertIn("| `uniform_component_fixed_append_cpu_ms_per_present` | `0.001` |", summary)
+            self.assertIn("| `uniform_component_vertex_append_cpu_ms_per_present` | `0.001` |", summary)
+            self.assertIn("| `uniform_component_pixel_append_cpu_ms_per_present` | `0.001` |", summary)
+            self.assertIn("| `uniform_append_known_cpu_share_of_parent` | `66.67%` |", summary)
+            self.assertIn("| `uniform_append_cpu_residual_ms_per_present` | `0.013` |", summary)
+            self.assertIn("| `uniform_append_known_with_components_cpu_share_of_parent` | `86.67%` |", summary)
+            self.assertIn("| `uniform_append_component_residual_ms_per_present` | `0.005` |", summary)
             self.assertIn("| `uniform_fixed_append_records_per_payload_append` | `0.500` |", summary)
             self.assertIn("| `uniform_vertex_constants_append_records_per_payload_append` | `0.500` |", summary)
             self.assertIn("| `uniform_pixel_constants_append_records_per_payload_append` | `0.500` |", summary)
@@ -1353,6 +1436,14 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("## Frame Sampling / Low-FPS Windows", summary)
             self.assertIn("| `sampled_frames` | `1` |", summary)
             self.assertIn("| 1 | 125.000 | 8.000 | 40 | 5/5 | 3 | 9.000 | 6.000 | 11.000 | 10.000 | 3 | 1 |", summary)
+            self.assertIn("### Frame-Sampled Open-CB Carry Deltas", summary)
+            self.assertIn("| session deferred chunks | `1` | `1.000` |", summary)
+            self.assertIn(
+                "| session deferred active-render chunks | `1` | `1.000` |",
+                summary,
+            )
+            self.assertIn("| pending started | `1` | `1.000` |", summary)
+            self.assertIn("| tail submitted | `0` | `0.000` |", summary)
             self.assertIn("## Pacing / CPU Stage Derived", summary)
             self.assertIn("| `completion_wait_ms_per_present` | `10.000` |", summary)
             self.assertIn("| `completion_wait_with_enqueue_ms_per_present` | `0.500` |", summary)
@@ -1484,6 +1575,23 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
                 "| record count | `30` | `12` | `20` |",
                 summary,
             )
+            self.assertIn("### Open-CB Tail-Present Carry Shape", summary)
+            self.assertIn("| pending started | `4` | `1.000` |", summary)
+            self.assertIn(
+                "| pending suppressed: no ready tail | `2` | `0.500` |",
+                summary,
+            )
+            self.assertIn("| head appended | `2` | `0.500` |", summary)
+            self.assertIn("| tail appended | `1` | `0.250` |", summary)
+            self.assertIn("| tail submitted | `1` | `0.250` |", summary)
+            self.assertIn(
+                "| abandoned: no ready source | `3` | `0.750` |",
+                summary,
+            )
+            self.assertIn(
+                "| abandoned: non-appendable source | `2` | `0.500` |",
+                summary,
+            )
             self.assertIn("### Exposed No-Enqueue Stage Shape", summary)
             self.assertIn(
                 "| encode dequeue -> command buffer commit | `5.000` | `10.000` | `18.000` |",
@@ -1508,12 +1616,57 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `pending_flush_draw_fallback_share` | `12.50%` |", summary)
             self.assertIn("| `pending_flush_failure_share` | `0.00%` |", summary)
             self.assertIn("| `pending_flush_end_share` | `4.17%` |", summary)
+            self.assertIn(
+                "| `pending_flush_forced_resource_marking_share` | `16.67%` |",
+                summary,
+            )
             self.assertIn("| `pending_flush_records_per_flush` | `4.000` |", summary)
+            self.assertIn(
+                "| `pending_flush_forced_resource_marking_records_per_flush` | `4.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `pending_flush_forced_resource_marking_records_per_present` | `0.100` |",
+                summary,
+            )
             self.assertIn(
                 "| `draw_run_preflush_combined_records_per_boundary` | `8.000` |",
                 summary,
             )
+            self.assertIn("### Chunk-End Flush Carry Probe", summary)
+            self.assertIn(
+                "| `end_flush_probe_records_per_stored_flush` | `6.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `end_flush_probe_first_submission_same_state_lane_share` | `66.67%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `end_flush_probe_first_submission_same_state_lane_and_uniform_generation_share` | `33.33%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash_share` | `33.33%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `end_flush_probe_first_draw_run_combined_records_per_candidate` | `12.000` |",
+                summary,
+            )
+            self.assertIn(
+                "| `end_flush_probe_resolved_or_blocked_share` | `100.00%` |",
+                summary,
+            )
             self.assertIn("| `draw_batch_submit_share_of_replay` | `46.88%` |", summary)
+            self.assertIn(
+                "| `draw_batch_submit_known_child_residual_ms_per_present` | `1.475` |",
+                summary,
+            )
+            self.assertIn(
+                "| `draw_batch_append_known_child_residual_ms_per_present` | `0.025` |",
+                summary,
+            )
             self.assertIn(
                 "| `queue_submission_known_child_residual_ms_per_present` | `0.150` |",
                 summary,
@@ -1543,6 +1696,23 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             )
             self.assertIn(
                 "| `draw_run_preflush_opportunity_share_of_draw_run_flushes` | `100.00%` |",
+                summary,
+            )
+            self.assertIn("### Draw Batch Submit Residual", summary)
+            self.assertIn(
+                "| `known_child_residual` | `118.000` | `1.475` | `78.67%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `queue_lock` | `2.000` | `0.025` | `1.33%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `append` | `10.000` | `0.125` | `6.67%` |",
+                summary,
+            )
+            self.assertIn(
+                "| `known_child_residual` | `2.000` | `0.025` | `20.00%` |",
                 summary,
             )
             self.assertIn("### Replay / Snapshot Candidate Ranking", summary)

@@ -381,6 +381,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   lastSignaledValue_ = value;
   pendingUploads_.clear();
   result.value = value;
+  result.didFlush = true;
   return result;
 }
 

@@ -1307,6 +1307,8 @@ struct ChunkSlot {
   DrawUniformFixedHandle
   appendDrawUniformFixedPayload(const DrawUniformFixedPayload& payload,
                                 u64 fixedPayloadHash) {
+    detail::ChunkSlotPerfScope appendScope(
+        dxmt9::perf::countDrawUniformPayloadAppendFixedAppendCpuTime);
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size());
     DXMT_ASSERT(canUseUniformSoA &&
@@ -1565,6 +1567,8 @@ struct ChunkSlot {
 
   DrawUniformStageHandle
   appendDrawUniformVertexConstants(const DrawUniformPayload& payload) {
+    detail::ChunkSlotPerfScope appendScope(
+        dxmt9::perf::countDrawUniformPayloadAppendVertexAppendCpuTime);
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformVertexConstants.size());
     DXMT_ASSERT(canUseUniformSoA &&
@@ -1610,6 +1614,8 @@ struct ChunkSlot {
   DrawUniformStageHandle
   appendDrawUniformVertexConstants(
       const DrawUniformCompactPayloadView& payload) {
+    detail::ChunkSlotPerfScope appendScope(
+        dxmt9::perf::countDrawUniformPayloadAppendVertexAppendCpuTime);
     if (!payload.valid()) {
       return {};
     }
@@ -1658,6 +1664,8 @@ struct ChunkSlot {
 
   DrawUniformStageHandle
   appendDrawUniformPixelConstants(const DrawUniformPayload& payload) {
+    detail::ChunkSlotPerfScope appendScope(
+        dxmt9::perf::countDrawUniformPayloadAppendPixelAppendCpuTime);
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
     DXMT_ASSERT(canUseUniformSoA &&
@@ -1703,6 +1711,8 @@ struct ChunkSlot {
   DrawUniformStageHandle
   appendDrawUniformPixelConstants(
       const DrawUniformCompactPayloadView& payload) {
+    detail::ChunkSlotPerfScope appendScope(
+        dxmt9::perf::countDrawUniformPayloadAppendPixelAppendCpuTime);
     if (!payload.valid()) {
       return {};
     }
@@ -2090,7 +2100,9 @@ struct ChunkSlot {
     return {};
   }
 
-  DrawUniformHandle appendDrawUniformPayload(const DrawUniformPayload& payload) {
+  DrawUniformHandle appendDrawUniformPayload(
+      const DrawUniformPayload& payload,
+      DrawUniformFixedHandle fixedHandleCandidate = {}) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size()) &&
@@ -2101,10 +2113,19 @@ struct ChunkSlot {
       return {};
     }
 
-    DrawUniformFixedHandle fixedHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformFixedHandle{}
-            : findDrawUniformFixedPayload(payload);
+    DrawUniformFixedHandle fixedHandle = fixedHandleCandidate;
+    if (fixedHandle.valid()) {
+      const auto* record = drawUniformFixedPayloadRecord(fixedHandle);
+      if (!record || record->handle.hash != payload.fixedPayloadHash) {
+        fixedHandle = {};
+      }
+    }
+    if (!fixedHandle.valid() &&
+        !detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendFixedFindCpuTime);
+      fixedHandle = findDrawUniformFixedPayload(payload);
+    }
     if (!fixedHandle.valid()) {
       fixedHandle = appendDrawUniformFixedPayload(payload);
       if (!fixedHandle.valid()) {
@@ -2112,10 +2133,12 @@ struct ChunkSlot {
       }
     }
 
-    DrawUniformStageHandle vertexConstantsHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformStageHandle{}
-            : findDrawUniformVertexConstants(payload);
+    DrawUniformStageHandle vertexConstantsHandle{};
+    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendVertexFindCpuTime);
+      vertexConstantsHandle = findDrawUniformVertexConstants(payload);
+    }
     if (!vertexConstantsHandle.valid()) {
       vertexConstantsHandle = appendDrawUniformVertexConstants(payload);
       if (!vertexConstantsHandle.valid()) {
@@ -2123,10 +2146,12 @@ struct ChunkSlot {
       }
     }
 
-    DrawUniformStageHandle pixelConstantsHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformStageHandle{}
-            : findDrawUniformPixelConstants(payload);
+    DrawUniformStageHandle pixelConstantsHandle{};
+    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendPixelFindCpuTime);
+      pixelConstantsHandle = findDrawUniformPixelConstants(payload);
+    }
     if (!pixelConstantsHandle.valid()) {
       pixelConstantsHandle = appendDrawUniformPixelConstants(payload);
       if (!pixelConstantsHandle.valid()) {
@@ -2166,7 +2191,8 @@ struct ChunkSlot {
   }
 
   DrawUniformHandle appendDrawUniformPayload(
-      const DrawUniformCompactPayloadView& payload) {
+      const DrawUniformCompactPayloadView& payload,
+      DrawUniformFixedHandle fixedHandleCandidate = {}) {
     if (!payload.valid()) {
       return {};
     }
@@ -2180,11 +2206,20 @@ struct ChunkSlot {
       return {};
     }
 
-    DrawUniformFixedHandle fixedHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformFixedHandle{}
-            : findDrawUniformFixedPayload(*payload.fixedPayload,
-                                          payload.fixedPayloadHash);
+    DrawUniformFixedHandle fixedHandle = fixedHandleCandidate;
+    if (fixedHandle.valid()) {
+      const auto* record = drawUniformFixedPayloadRecord(fixedHandle);
+      if (!record || record->handle.hash != payload.fixedPayloadHash) {
+        fixedHandle = {};
+      }
+    }
+    if (!fixedHandle.valid() &&
+        !detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendFixedFindCpuTime);
+      fixedHandle = findDrawUniformFixedPayload(*payload.fixedPayload,
+                                                payload.fixedPayloadHash);
+    }
     if (!fixedHandle.valid()) {
       fixedHandle = appendDrawUniformFixedPayload(*payload.fixedPayload,
                                                   payload.fixedPayloadHash);
@@ -2193,10 +2228,12 @@ struct ChunkSlot {
       }
     }
 
-    DrawUniformStageHandle vertexConstantsHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformStageHandle{}
-            : findDrawUniformVertexConstants(payload);
+    DrawUniformStageHandle vertexConstantsHandle{};
+    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendVertexFindCpuTime);
+      vertexConstantsHandle = findDrawUniformVertexConstants(payload);
+    }
     if (!vertexConstantsHandle.valid()) {
       vertexConstantsHandle = appendDrawUniformVertexConstants(payload);
       if (!vertexConstantsHandle.valid()) {
@@ -2204,10 +2241,12 @@ struct ChunkSlot {
       }
     }
 
-    DrawUniformStageHandle pixelConstantsHandle =
-        detail::chunkSlotDisableDrawUniformPayloadDedup()
-            ? DrawUniformStageHandle{}
-            : findDrawUniformPixelConstants(payload);
+    DrawUniformStageHandle pixelConstantsHandle{};
+    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      detail::ChunkSlotPerfScope scope(
+          dxmt9::perf::countDrawUniformPayloadAppendPixelFindCpuTime);
+      pixelConstantsHandle = findDrawUniformPixelConstants(payload);
+    }
     if (!pixelConstantsHandle.valid()) {
       pixelConstantsHandle = appendDrawUniformPixelConstants(payload);
       if (!pixelConstantsHandle.valid()) {
@@ -2575,9 +2614,17 @@ struct ChunkSlot {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countSubmitDrawRunBatchAppendUniformCpuTime);
       DrawUniformHandle previousUniformHandle{};
+      DrawUniformFixedHandle previousFixedHandle{};
       std::uint64_t previousUniformGeneration = 0;
+      std::uint64_t previousFixedPayloadGeneration = 0;
       for (std::size_t i = 0; i < submissions.size(); ++i) {
         DrawUniformHandle uniformHandle{};
+        const DrawUniformFixedHandle fixedHandleCandidate =
+            submissions[i].uniformFixedPayloadGeneration != 0 &&
+            submissions[i].uniformFixedPayloadGeneration ==
+                previousFixedPayloadGeneration
+                ? previousFixedHandle
+                : DrawUniformFixedHandle{};
         if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
           if (drawRunSubmissionHasFullUniformPayload(submissions[i])) {
             const auto& uniformPayload =
@@ -2586,13 +2633,13 @@ struct ChunkSlot {
               uniformHandle = findDrawUniformPayload(uniformPayload);
             }
             if (!uniformHandle.valid()) {
-              uniformHandle = appendDrawUniformPayload(uniformPayload);
+              uniformHandle =
+                  appendDrawUniformPayload(uniformPayload,
+                                           fixedHandleCandidate);
               if (!uniformHandle.valid()) {
                 return;
               }
             }
-            previousUniformHandle = uniformHandle;
-            previousUniformGeneration = submissions[i].uniformGeneration;
           } else if (submissions[i].compactUniforms.has_value()) {
             const auto compactUniform = drawUniformCompactPayloadView(submissions[i]);
             DXMT_ASSERT(compactUniform.valid() &&
@@ -2604,13 +2651,13 @@ struct ChunkSlot {
               uniformHandle = findDrawUniformPayload(compactUniform);
             }
             if (!uniformHandle.valid()) {
-              uniformHandle = appendDrawUniformPayload(compactUniform);
+              uniformHandle =
+                  appendDrawUniformPayload(compactUniform,
+                                           fixedHandleCandidate);
               if (!uniformHandle.valid()) {
                 return;
               }
             }
-            previousUniformHandle = uniformHandle;
-            previousUniformGeneration = submissions[i].uniformGeneration;
           } else {
             const bool sameUniformGeneration =
                 submissions[i].uniformGeneration != 0 &&
@@ -2633,13 +2680,13 @@ struct ChunkSlot {
             uniformHandle = findDrawUniformPayload(compactUniform);
           }
           if (!uniformHandle.valid()) {
-            uniformHandle = appendDrawUniformPayload(compactUniform);
+            uniformHandle =
+                appendDrawUniformPayload(compactUniform,
+                                         fixedHandleCandidate);
             if (!uniformHandle.valid()) {
               return;
             }
           }
-          previousUniformHandle = uniformHandle;
-          previousUniformGeneration = submissions[i].uniformGeneration;
         } else {
           const bool sameUniformGeneration =
               submissions[i].uniformGeneration != 0 &&
@@ -2650,6 +2697,18 @@ struct ChunkSlot {
                       "elided draw submission uniforms require previous handle");
           (void)sameUniformGeneration;
           uniformHandle = previousUniformHandle;
+        }
+        if (const auto* record = drawUniformPayloadRecord(uniformHandle)) {
+          previousUniformHandle = uniformHandle;
+          previousFixedHandle = record->fixedHandle;
+          previousUniformGeneration = submissions[i].uniformGeneration;
+          previousFixedPayloadGeneration =
+              submissions[i].uniformFixedPayloadGeneration;
+        } else {
+          previousUniformHandle = {};
+          previousFixedHandle = {};
+          previousUniformGeneration = 0;
+          previousFixedPayloadGeneration = 0;
         }
         if (i == 0) {
           firstUniformHandle = uniformHandle;

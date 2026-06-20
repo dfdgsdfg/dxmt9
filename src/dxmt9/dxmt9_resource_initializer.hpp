@@ -53,9 +53,14 @@ class Initializer {
   //          previously-signaled value if no new work). 0 means no
   //          flush has ever happened — the caller should skip the
   //          wait-for-event encode.
+  //   didFlush: true only when this call encoded and committed new
+  //             staging work. Render encoders should wait only for new
+  //             work; synchronous callers may still wait on value to
+  //             join a previously flushed initializer command buffer.
   struct FlushResult {
     WMT::Event event{};
     std::uint64_t value = 0;
+    bool didFlush = false;
   };
   FlushResult flushToWait();
 

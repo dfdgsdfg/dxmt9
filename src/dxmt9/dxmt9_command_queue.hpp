@@ -124,6 +124,7 @@ class CommandQueue {
   struct InitializerFlush {
     WMT::Event event{};
     std::uint64_t value = 0;
+    bool didFlush = false;
   };
   InitializerFlush flushInitializerUploads();
 
@@ -140,6 +141,10 @@ class CommandQueue {
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
   void submitCompactDrawRunBatch(
       std::span<core::DrawRunCompactSubmission> submissions);
+  void submitDrawRunBatchWithResourceMarking(
+      std::span<core::DrawRunSubmission> submissions);
+  void submitCompactDrawRunBatchWithResourceMarking(
+      std::span<core::DrawRunCompactSubmission> submissions);
   void submitDrawRunBatchAndRun(
       std::span<core::DrawRunSubmission> submissions,
       core::CanonicalDrawState state,
@@ -147,6 +152,18 @@ class CommandQueue {
       std::span<const core::DrawParam> draws,
       std::span<const core::DrawParamPayloadView> payloads = {});
   void submitCompactDrawRunBatchAndRun(
+      std::span<core::DrawRunCompactSubmission> submissions,
+      core::CanonicalDrawState state,
+      const core::DrawUniformPayload& uniforms,
+      std::span<const core::DrawParam> draws,
+      std::span<const core::DrawParamPayloadView> payloads = {});
+  void submitDrawRunBatchAndRunWithResourceMarking(
+      std::span<core::DrawRunSubmission> submissions,
+      core::CanonicalDrawState state,
+      const core::DrawUniformPayload& uniforms,
+      std::span<const core::DrawParam> draws,
+      std::span<const core::DrawParamPayloadView> payloads = {});
+  void submitCompactDrawRunBatchAndRunWithResourceMarking(
       std::span<core::DrawRunCompactSubmission> submissions,
       core::CanonicalDrawState state,
       const core::DrawUniformPayload& uniforms,

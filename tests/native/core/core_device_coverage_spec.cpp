@@ -385,6 +385,55 @@ void testIndexedDrawPolicyContracts() {
           "mixed carrier canonical path rejects TriangleFan run");
   checkEq(backend->drawRuns.size(), beforeRejectedMixedRuns,
           "rejected mixed carrier does not submit pending batch");
+
+  std::array<DrawRunSubmission, 1> forcedSubmissions{};
+  DrawParam forcedDraw{};
+  forcedDraw.primitiveType = PrimitiveType::TriangleList;
+  forcedDraw.primitiveCount = 1;
+  forcedDraw.startVertex = 31;
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(
+              forcedDraw, forcedSubmissions[0]),
+          D3D_OK, "forced-mark batch snapshots pending submission");
+  const auto beforeForcedBatchRuns = backend->drawRuns.size();
+  device->submitDrawSubmissionBatchWithResourceMarking(
+      std::span<DrawRunSubmission>(forcedSubmissions.data(),
+                                   forcedSubmissions.size()));
+  checkEq(backend->forcedDrawRunBatchCalls, 1u,
+          "forced-mark batch uses dedicated backend path");
+  checkEq(backend->drawRuns.size(), beforeForcedBatchRuns + 1u,
+          "forced-mark batch still submits one draw run");
+  checkEq(backend->drawRuns.back().draws[0].startVertex, 31u,
+          "forced-mark batch preserves pending draw params");
+
+  std::array<DrawRunSubmission, 1> forcedMixedSubmissions{};
+  DrawParam forcedMixedPending{};
+  forcedMixedPending.primitiveType = PrimitiveType::TriangleList;
+  forcedMixedPending.primitiveCount = 1;
+  forcedMixedPending.startVertex = 37;
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(
+              forcedMixedPending, forcedMixedSubmissions[0]),
+          D3D_OK, "forced-mark mixed carrier snapshots pending submission");
+  std::array<DrawParam, 1> forcedMixedRun{};
+  forcedMixedRun[0].primitiveType = PrimitiveType::TriangleList;
+  forcedMixedRun[0].primitiveCount = 1;
+  forcedMixedRun[0].startVertex = 41;
+  const auto beforeForcedMixedRuns = backend->drawRuns.size();
+  checkEq(device->submitDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
+              std::span<DrawRunSubmission>(forcedMixedSubmissions.data(),
+                                           forcedMixedSubmissions.size()),
+              std::span<const DrawParam>(forcedMixedRun.data(),
+                                         forcedMixedRun.size())),
+          D3D_OK, "forced-mark mixed carrier submits pending batch plus run");
+  checkEq(backend->forcedDrawRunBatchAndRunCalls, 1u,
+          "forced-mark mixed carrier uses dedicated backend path");
+  checkEq(backend->forcedDrawRunBatchCalls, 2u,
+          "forced-mark mixed carrier reuses forced batch expansion in stub");
+  checkEq(backend->drawRuns.size(), beforeForcedMixedRuns + 2u,
+          "forced-mark mixed carrier preserves separate batch and run");
+  checkEq(backend->drawRuns[beforeForcedMixedRuns].draws[0].startVertex, 37u,
+          "forced-mark mixed carrier keeps pending draw params");
+  checkEq(backend->drawRuns[beforeForcedMixedRuns + 1u].draws[0].startVertex,
+          41u, "forced-mark mixed carrier keeps run draw params");
 }
 
 void testCubeTextureSubresourceFlow() {

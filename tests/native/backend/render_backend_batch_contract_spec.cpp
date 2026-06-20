@@ -160,6 +160,8 @@ void encodeChunkOptionsDefaultToFreshCommandBufferPath() {
         "default encodeChunk options keep current mid-chunk commit policy");
   check(!options.disablePresentAcquireSplit,
         "default encodeChunk options keep current present-acquire split policy");
+  check(!options.deferSessionFinalization,
+        "default encodeChunk options finalize the session before return");
 }
 
 void singleSourceBatchFallsBackToOnChunkReady() {
@@ -296,6 +298,40 @@ void tailPresentPrefixSelectorRequiresCompleteTail() {
           "selector rejects present metadata before the tail");
 }
 
+void openCbTailPresentPrefixRequiresOpenCbHeads() {
+  std::array<ChunkSlot, 4> slots{};
+  slots[0].seqId = 5;
+  slots[0].publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  slots[0].appendClear({});
+  slots[1].seqId = 6;
+  slots[1].publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  slots[1].appendClear({});
+  slots[2].seqId = 7;
+  slots[2].appendPresent({}, {});
+
+  const std::deque<std::size_t> readySlots{0, 1, 2};
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/3),
+          3u,
+          "open-CB selector accepts open heads plus present-only tail");
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/2),
+          0u,
+          "open-CB selector rejects when tail is outside scratch capacity");
+
+  slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/3),
+          0u,
+          "open-CB selector rejects non-PresentSplitBefore heads");
+}
+
 void chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices() {
   ChunkSlot destination;
   const std::array<dxmt9::core::u8, 1> existingVertex{{0x90}};
@@ -391,6 +427,7 @@ int main() {
     openCbPreencodeHeadRequiresPresentSplitBeforePublish();
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();
+    openCbTailPresentPrefixRequiresOpenCbHeads();
     chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices();
   } catch (const TestFailure& error) {
     std::cerr << "render_backend_batch_contract_spec failed: "
