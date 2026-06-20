@@ -487,6 +487,29 @@ void openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait() {
         "deterministic release preempts ready-source append for diagnostics");
 }
 
+void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
+  check(dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
+            /*canAppendToPending=*/true,
+            /*pendingSessionHasActiveRender=*/true,
+            /*initializerHasPendingUploads=*/true),
+        "initializer uploads split before appending to an active render session");
+  check(!dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
+            /*canAppendToPending=*/false,
+            /*pendingSessionHasActiveRender=*/true,
+            /*initializerHasPendingUploads=*/true),
+        "non-appendable sources use the existing non-appendable path");
+  check(!dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
+            /*canAppendToPending=*/true,
+            /*pendingSessionHasActiveRender=*/false,
+            /*initializerHasPendingUploads=*/true),
+        "pending initializer uploads do not split an inactive render session");
+  check(!dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
+            /*canAppendToPending=*/true,
+            /*pendingSessionHasActiveRender=*/true,
+            /*initializerHasPendingUploads=*/false),
+        "active render sessions can append when no initializer wait is pending");
+}
+
 void openCbPendingWakeRecheckTracksCompletionWaitTransitions() {
   using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
 
@@ -821,6 +844,7 @@ int main() {
     openCbPendingMidChunkPolicyPreservesSemanticSplits();
     openCbSemanticBoundaryReleaseRequiresCompletionWait();
     openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait();
+    openCbInitializerWaitBoundarySubmitsPendingBeforeAppend();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();

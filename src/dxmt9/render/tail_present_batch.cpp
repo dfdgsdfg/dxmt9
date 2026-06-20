@@ -92,6 +92,15 @@ bool openCbPendingShouldReleaseBeforeReadySource(
       semanticReleaseAlreadyUsedDuringWait);
 }
 
+bool openCbPendingShouldSubmitBeforeInitializerWait(
+    bool canAppendToPending,
+    bool pendingSessionHasActiveRender,
+    bool initializerHasPendingUploads) noexcept {
+  return canAppendToPending &&
+         pendingSessionHasActiveRender &&
+         initializerHasPendingUploads;
+}
+
 bool openCbPendingCompletionWaitTransitionNeedsRecheck(
     bool completionWaitActive,
     bool waitObservedCompletionWaitActive,

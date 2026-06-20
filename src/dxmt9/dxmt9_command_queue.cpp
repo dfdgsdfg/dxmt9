@@ -4037,7 +4037,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
               *source.slot, carryRenderSession);
       const bool tailReadyForCurrentHead =
           selectedTailReadyPrefix && sourceIndex + 1u < count;
-      const bool sourceCanAppendToPending =
+      bool sourceCanAppendToPending =
           render::slotCanAppendToOpenCbPending(
               *source.slot, carryRenderSession,
               static_cast<bool>(pendingSession));
@@ -4051,6 +4051,22 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         if (!lock.owns_lock()) {
           lock.lock();
         }
+      }
+      if (pendingRecord.has_value() &&
+          render::openCbPendingShouldSubmitBeforeInitializerWait(
+              sourceCanAppendToPending,
+              pendingSession &&
+                  encoders::encodeChunkSessionHasActiveRender(
+                      *pendingSession),
+              initializer_ &&
+                  initializer_->hasPendingUploadsUnlocked())) {
+        if (!submitPendingRecordLocked(lock)) {
+          abortOpenCbPendingFailOpen("initializer wait boundary");
+        }
+        if (!lock.owns_lock()) {
+          lock.lock();
+        }
+        sourceCanAppendToPending = false;
       }
 
       bool appendToPending =

@@ -309,6 +309,10 @@ Initializer::FlushResult Initializer::flushToWait() {
   return flushToWaitUnlocked();
 }
 
+bool Initializer::hasPendingUploadsUnlocked() const noexcept {
+  return !pendingUploads_.empty();
+}
+
 Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   FlushResult result{};
   if (event_) {

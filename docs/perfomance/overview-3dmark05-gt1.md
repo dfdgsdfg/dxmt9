@@ -1739,6 +1739,19 @@ again (`125 -> 141`) and avoids deterministic fragmentation
 (`2.997` sub-CBs/present), but still rejects promotion because command buffers
 edge up to `4.147/present`, total completion wait stays `20.365ms/present`, and
 `1396 / 1602` candidates still miss the active wait.
+[[present-pacing-encode-session-prepresent-initboundary.156]] then retries the
+draw-heavy `DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=128` diagnostic with a
+queue-side initializer-wait boundary. The pre-change run never becomes a valid
+sample (`9` frame rows, dark early image, no run counters, `2` active-render
+initializer forced finalizations). The new boundary makes the diagnostic
+visual/error safe over `960` presents and removes initializer forced
+finalization (`0`), with substantial carrier activity (`head_appended=1950`,
+`tail_submitted=919`, `semantic_release_submitted=161`). It still rejects
+promotion because the added source splits raise locality and boundary costs:
+`4.171` CB/present, `10.553` passes/present, `107.286MiB/present` tile
+preservation, `2.913ms/present` GPU CB time, and `4.063ms/present`
+present-boundary wait. This keeps command-limit pre-Present splitting as a
+diagnostic, not the production R-BACK-2.50 carrier.
 
 Related CPU-side counter design doc: [[overview]].
 

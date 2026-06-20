@@ -64,6 +64,10 @@ class Initializer {
   };
   FlushResult flushToWait();
 
+  // Caller must hold CommandQueue::mutex_. This is a queue-side boundary
+  // predicate for EncodeSession append decisions; it does not flush work.
+  bool hasPendingUploadsUnlocked() const noexcept;
+
  private:
   FlushResult flushToWaitUnlocked();
 
