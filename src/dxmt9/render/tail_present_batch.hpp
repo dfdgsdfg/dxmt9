@@ -21,10 +21,12 @@ bool slotIsOpenCbPreencodeHead(const core::ChunkSlot& slot) noexcept;
 
 bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
                                   bool carryRenderSession,
-                                  bool hasPendingSession) noexcept;
+                                  bool hasPendingSession,
+                                  bool tailReadyForCurrentHead) noexcept;
 
 bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
-                                      bool carryRenderSession) noexcept;
+                                      bool carryRenderSession,
+                                      bool tailReadyForCurrentHead) noexcept;
 
 bool openCbPendingAllowsSemanticMidChunkCommits(
     bool appendToPending) noexcept;

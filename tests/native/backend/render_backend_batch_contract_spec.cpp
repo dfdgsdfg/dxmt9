@@ -290,11 +290,17 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
   head.publishReason = dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
   head.appendClear({});
   check(dxmt9::render::slotCanStartOpenCbPendingSession(
-            head, /*carryRenderSession=*/false),
+            head, /*carryRenderSession=*/false,
+            /*tailReadyForCurrentHead=*/false),
         "open-CB preencode heads can start pending work");
-  check(dxmt9::render::slotCanAppendToOpenCbPending(
-            head, /*carryRenderSession=*/false, /*hasPendingSession=*/false),
-        "open-CB preencode heads can start or extend pending work");
+  check(!dxmt9::render::slotCanStartOpenCbPendingSession(
+            head, /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "draw-count preencode heads do not start carried sessions without a ready tail");
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
+            head, /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/true),
+        "draw-count preencode heads may start when the final Present tail is ready");
 
   ChunkSlot presentOnly;
   presentOnly.appendPresent({}, {});
@@ -302,25 +308,52 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
         "present-only tail has final Present");
   check(dxmt9::render::slotCanAppendToOpenCbPending(
             presentOnly, /*carryRenderSession=*/false,
-            /*hasPendingSession=*/false),
+            /*hasPendingSession=*/false,
+            /*tailReadyForCurrentHead=*/false),
         "present-only tails can finalize pending work");
 
   ChunkSlot ordinaryWork;
   ordinaryWork.appendClear({});
   check(!dxmt9::render::slotCanStartOpenCbPendingSession(
-            ordinaryWork, /*carryRenderSession=*/false),
+            ordinaryWork, /*carryRenderSession=*/false,
+            /*tailReadyForCurrentHead=*/false),
         "ordinary work cannot start a pending session without carry mode");
+  check(!dxmt9::render::slotCanStartOpenCbPendingSession(
+            ordinaryWork, /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "ordinary work cannot start a carried session without a semantic boundary");
   check(dxmt9::render::slotCanStartOpenCbPendingSession(
-            ordinaryWork, /*carryRenderSession=*/true),
-        "ordinary non-present work may start a carried session");
+            ordinaryWork, /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/true),
+        "ordinary non-present work may start when the final Present tail is ready");
   check(!dxmt9::render::slotCanAppendToOpenCbPending(
             ordinaryWork, /*carryRenderSession=*/true,
-            /*hasPendingSession=*/false),
+            /*hasPendingSession=*/false,
+            /*tailReadyForCurrentHead=*/false),
         "ordinary work cannot append before a session exists");
+  check(!dxmt9::render::slotCanAppendToOpenCbPending(
+            ordinaryWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "ordinary non-present work does not append to a carried session without a semantic boundary");
   check(dxmt9::render::slotCanAppendToOpenCbPending(
             ordinaryWork, /*carryRenderSession=*/true,
-            /*hasPendingSession=*/true),
-        "ordinary non-present work may append inside a carried session");
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/true),
+        "ordinary non-present work may append when the final Present tail is ready");
+
+  ChunkSlot semanticWork;
+  semanticWork.publishReason = dxmt9::perf::ChunkPublishReason::SemanticBoundary;
+  semanticWork.appendClear({});
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
+            semanticWork, /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "semantic boundaries can start carried sessions before the tail is ready");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            semanticWork, /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "semantic boundaries can append to carried sessions before the tail is ready");
 
   ChunkSlot presentWithPreWork;
   presentWithPreWork.appendClear({});
@@ -331,7 +364,8 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
         "pre-Present work can still end in a final Present");
   check(dxmt9::render::slotCanAppendToOpenCbPending(
             presentWithPreWork, /*carryRenderSession=*/true,
-            /*hasPendingSession=*/true),
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
         "final-present tails can finalize an open-CB session");
 
   ChunkSlot presentWithPostWork;
@@ -341,7 +375,8 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
         "post-Present work is not a final-present tail");
   check(!dxmt9::render::slotCanAppendToOpenCbPending(
             presentWithPostWork, /*carryRenderSession=*/true,
-            /*hasPendingSession=*/true),
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
         "present-bearing work must not append after the final Present");
 }
 

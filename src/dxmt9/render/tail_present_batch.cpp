@@ -31,22 +31,44 @@ bool slotCanBeOpenCbSessionHead(const core::ChunkSlot& slot) noexcept {
   return !slot.commandsEmpty() && slot.presentRecords.empty();
 }
 
-bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
-                                  bool carryRenderSession,
-                                  bool hasPendingSession) noexcept {
-  if (slotHasFinalPresentTail(slot) || slotIsOpenCbPreencodeHead(slot)) {
-    return true;
-  }
-  return carryRenderSession && hasPendingSession &&
+bool slotIsSemanticOpenCbSessionHead(
+    const core::ChunkSlot& slot) noexcept {
+  return slot.publishReason == perf::ChunkPublishReason::SemanticBoundary &&
          slotCanBeOpenCbSessionHead(slot);
 }
 
-bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
-                                      bool carryRenderSession) noexcept {
-  if (slotIsOpenCbPreencodeHead(slot)) {
+bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
+                                  bool carryRenderSession,
+                                  bool hasPendingSession,
+                                  bool tailReadyForCurrentHead) noexcept {
+  if (slotHasFinalPresentTail(slot)) {
     return true;
   }
-  return carryRenderSession && slotCanBeOpenCbSessionHead(slot);
+  if (!hasPendingSession) {
+    return false;
+  }
+  if (!carryRenderSession) {
+    return slotIsOpenCbPreencodeHead(slot);
+  }
+  if (tailReadyForCurrentHead) {
+    return slotCanBeOpenCbSessionHead(slot);
+  }
+  return slotIsSemanticOpenCbSessionHead(slot);
+}
+
+bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
+                                      bool carryRenderSession,
+                                      bool tailReadyForCurrentHead) noexcept {
+  if (!slotCanBeOpenCbSessionHead(slot)) {
+    return false;
+  }
+  if (!carryRenderSession) {
+    return slotIsOpenCbPreencodeHead(slot);
+  }
+  if (tailReadyForCurrentHead) {
+    return true;
+  }
+  return slotIsSemanticOpenCbSessionHead(slot);
 }
 
 bool openCbPendingAllowsSemanticMidChunkCommits(

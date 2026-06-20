@@ -4032,15 +4032,15 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       const bool sourceIsSemanticBoundary =
           source.slot->publishReason ==
           perf::ChunkPublishReason::SemanticBoundary;
-      const bool sourceCanStartSession =
-          render::slotCanStartOpenCbPendingSession(
-              *source.slot, carryRenderSession);
       const bool tailReadyForCurrentHead =
           selectedTailReadyPrefix && sourceIndex + 1u < count;
+      const bool sourceCanStartSession =
+          render::slotCanStartOpenCbPendingSession(
+              *source.slot, carryRenderSession, tailReadyForCurrentHead);
       bool sourceCanAppendToPending =
           render::slotCanAppendToOpenCbPending(
               *source.slot, carryRenderSession,
-              static_cast<bool>(pendingSession));
+              static_cast<bool>(pendingSession), tailReadyForCurrentHead);
 
       if (pendingRecord.has_value() &&
           !sourceCanAppendToPending) {
