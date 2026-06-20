@@ -1752,6 +1752,17 @@ promotion because the added source splits raise locality and boundary costs:
 preservation, `2.913ms/present` GPU CB time, and `4.063ms/present`
 present-boundary wait. This keeps command-limit pre-Present splitting as a
 diagnostic, not the production R-BACK-2.50 carrier.
+[[present-pacing-encode-session-strict-semantic-start.157]] then reruns the
+latest source after tailless carried-session starts are restricted to
+`SemanticBoundary` sources unless the final Present tail is already selected.
+The smoke stays visual/error safe, removes the draw-count path
+(`PresentSplitBefore=0`), and increases same-window work over H155
+(`semantic_release_submitted 141 -> 163`, completion-wait CB commits
+`141 -> 162`, with-enqueue wait `4.502 -> 5.123ms/present`). It still misses
+promotion: command buffers rise to `4.173/present`, total completion wait is
+`20.757ms/present`, and `1359 / 1581` semantic candidates still arrive outside
+active wait. The remaining gap is earlier CPU-ready semantic sources or
+already-dequeued wait-window commits without increasing CB count.
 
 Related CPU-side counter design doc: [[overview]].
 
