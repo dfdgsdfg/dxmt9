@@ -547,6 +547,47 @@ void openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait() {
         "deterministic mode is not a completion-wait miss");
 }
 
+void openCbSemanticBoundaryNoWaitBlockClassifiesWriterState() {
+  using Block = dxmt9::render::OpenCbSemanticReleaseNoCompletionWaitBlock;
+  using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
+
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true) == Block::WriterActive,
+        "empty-ready semantic release miss records an active writer");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/false) == Block::WriterInactive,
+        "empty-ready semantic release miss records an inactive writer");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*writerActive=*/true) == Block::None,
+        "active completion wait is a release opportunity, not a no-wait miss");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true) == Block::None,
+        "ready-source no-wait misses use the ready-source counter");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true) == Block::None,
+        "deterministic diagnostics are not completion-wait misses");
+}
+
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
   check(dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
             /*canAppendToPending=*/true,
@@ -904,6 +945,7 @@ int main() {
     openCbPendingMidChunkPolicyPreservesSemanticSplits();
     openCbSemanticBoundaryReleaseRequiresCompletionWait();
     openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait();
+    openCbSemanticBoundaryNoWaitBlockClassifiesWriterState();
     openCbInitializerWaitBoundarySubmitsPendingBeforeAppend();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();

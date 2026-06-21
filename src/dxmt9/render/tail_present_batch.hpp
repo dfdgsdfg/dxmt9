@@ -56,6 +56,20 @@ bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
     OpenCbSemanticBoundaryReleaseMode mode,
     bool completionWaitActive) noexcept;
 
+enum class OpenCbSemanticReleaseNoCompletionWaitBlock : std::uint8_t {
+  None,
+  WriterActive,
+  WriterInactive,
+};
+
+OpenCbSemanticReleaseNoCompletionWaitBlock
+classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool writerActive) noexcept;
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

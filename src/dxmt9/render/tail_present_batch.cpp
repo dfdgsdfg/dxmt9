@@ -125,6 +125,24 @@ bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
          !completionWaitActive;
 }
 
+OpenCbSemanticReleaseNoCompletionWaitBlock
+classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool writerActive) noexcept {
+  if (!readySlotsEmpty ||
+      !canReleaseAtSemanticBoundary ||
+      mode != OpenCbSemanticBoundaryReleaseMode::CompletionWait ||
+      completionWaitActive) {
+    return OpenCbSemanticReleaseNoCompletionWaitBlock::None;
+  }
+  return writerActive
+      ? OpenCbSemanticReleaseNoCompletionWaitBlock::WriterActive
+      : OpenCbSemanticReleaseNoCompletionWaitBlock::WriterInactive;
+}
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

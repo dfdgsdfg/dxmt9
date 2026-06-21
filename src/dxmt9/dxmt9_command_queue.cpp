@@ -3884,15 +3884,33 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
 
     if (pendingRecord.has_value() && readySlots_.empty()) {
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
+      const bool writerActive = writingSlot_.has_value();
       if (pendingCanReleaseAtSemanticBoundary) {
         perf::countOpenCbTailPresentSemanticReleaseCandidate();
-        if (semanticBoundaryReleaseMode ==
-            render::OpenCbSemanticBoundaryReleaseMode::CompletionWait) {
-          if (!completionWaitActive) {
+        const auto noWaitBlock =
+            render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+                /*readySlotsEmpty=*/true,
+                pendingCanReleaseAtSemanticBoundary,
+                semanticBoundaryReleaseMode,
+                completionWaitActive,
+                writerActive);
+        switch (noWaitBlock) {
+          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::None:
+            if (semanticBoundaryReleaseMode ==
+                    render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+                completionWaitActive &&
+                semanticBoundaryReleaseUsedDuringWait) {
+              perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
+            }
+            break;
+          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterActive:
             perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
-          } else if (semanticBoundaryReleaseUsedDuringWait) {
-            perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
-          }
+            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
+            break;
+          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterInactive:
+            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
+            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive();
+            break;
         }
       }
       if (semanticBoundaryReleaseMode ==
@@ -3924,7 +3942,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       const auto waitAction =
           render::selectOpenCbPendingTailWaitAction(
               pendingRecord.has_value(), readySlots_.empty(), stop_,
-              writingSlot_.has_value(), pendingTailTimeoutEnabled);
+              writerActive, pendingTailTimeoutEnabled);
       if (waitAction == render::OpenCbPendingTailWaitAction::SubmitPending) {
         if (submitPendingRecordLocked(lock)) {
           if (stop_) {

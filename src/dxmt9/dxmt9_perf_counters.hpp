@@ -299,6 +299,8 @@ void countOpenCbTailPresentPendingMergeFailed();
 void countOpenCbTailPresentSemanticReleaseCandidate();
 void countOpenCbTailPresentSemanticReleaseSubmitted();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
+void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
+void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive();
 void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
 void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
 void countOpenCbTailPresentSemanticReleaseFailed();
@@ -1278,6 +1280,8 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
   std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;
   std::uint64_t openCbTailPresentSemanticReleaseFailed = 0;
