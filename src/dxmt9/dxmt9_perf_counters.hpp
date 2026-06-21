@@ -303,6 +303,12 @@ void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent();
+void countOpenCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShape(
+    std::uint64_t commandCount,
+    std::uint64_t drawRunCommands,
+    std::uint64_t drawItems,
+    std::uint64_t nonDrawCommands,
+    std::uint64_t payloadBytes);
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive();
 void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
 void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
@@ -1287,6 +1293,15 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes = 0;
+  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;

@@ -3921,6 +3921,17 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
                 break;
               case render::OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork:
                 perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent();
+                {
+                  const auto shape =
+                      core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape(
+                          writerSlot);
+                  perf::countOpenCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShape(
+                      shape.commandCount,
+                      shape.drawRunCommands,
+                      shape.drawItems,
+                      shape.nonDrawCommands,
+                      shape.payloadBytes);
+                }
                 break;
               case render::OpenCbSemanticReleaseWriterActiveSlotState::PresentBearing:
                 perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent();

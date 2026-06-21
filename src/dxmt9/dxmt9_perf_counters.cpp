@@ -402,6 +402,15 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes{0};
+  std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedAlreadyUsed{0};
@@ -2486,6 +2495,15 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_empty", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_nonpresent", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_present", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_shape_samples", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_commands", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_commands_max", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_runs", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_items", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_items_max", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_non_draw_commands", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_payload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_payload_bytes_max", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_already_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedAlreadyUsed, nullptr, nullptr, 0.0},
@@ -5075,6 +5093,32 @@ void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlo
 
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent() {
   add(counters().openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent);
+}
+
+void countOpenCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShape(
+    std::uint64_t commandCount,
+    std::uint64_t drawRunCommands,
+    std::uint64_t drawItems,
+    std::uint64_t nonDrawCommands,
+    std::uint64_t payloadBytes) {
+  auto& c = counters();
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples);
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands,
+      commandCount);
+  updateMax(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax,
+            commandCount);
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns,
+      drawRunCommands);
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems,
+      drawItems);
+  updateMax(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax,
+            drawItems);
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands,
+      nonDrawCommands);
+  add(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes,
+      payloadBytes);
+  updateMax(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax,
+            payloadBytes);
 }
 
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive() {
@@ -10494,6 +10538,24 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent);
   s.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent =
       load(c.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes);
+  s.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax =
+      load(c.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax);
   s.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive =
       load(c.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive);
   s.openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait =
@@ -10605,6 +10667,15 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_empty=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_nonpresent=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_active_slot_present=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_shape_samples=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_commands=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_commands_max=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_runs=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_items=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_draw_items_max=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_non_draw_commands=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_payload_bytes=%llu "
+      "open_cb_tail_present_semantic_release_writer_active_nonpresent_slot_payload_bytes_max=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait_writer_inactive=%llu "
       "open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait=%llu "
       "open_cb_tail_present_semantic_release_blocked_already_used=%llu "
@@ -10719,6 +10790,30 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent,
                 curr.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands)),
+      static_cast<unsigned long long>(
+          curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems)),
+      static_cast<unsigned long long>(
+          curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes,
+                curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes)),
+      static_cast<unsigned long long>(
+          curr.openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive,
                 curr.openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive)),
