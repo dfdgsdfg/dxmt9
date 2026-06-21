@@ -3906,6 +3906,27 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
           case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterActive:
             perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
             perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
+            {
+              const auto& writerSlot = currentSlotUnlocked(*this);
+              const auto writerSlotState =
+                  render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+                      noWaitBlock,
+                      writerSlot.commandsEmpty(),
+                      !writerSlot.presentRecords.empty());
+              switch (writerSlotState) {
+              case render::OpenCbSemanticReleaseWriterActiveSlotState::None:
+                break;
+              case render::OpenCbSemanticReleaseWriterActiveSlotState::Empty:
+                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty();
+                break;
+              case render::OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork:
+                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent();
+                break;
+              case render::OpenCbSemanticReleaseWriterActiveSlotState::PresentBearing:
+                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent();
+                break;
+              }
+            }
             break;
           case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterInactive:
             perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();

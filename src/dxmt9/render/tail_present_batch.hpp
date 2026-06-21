@@ -62,6 +62,13 @@ enum class OpenCbSemanticReleaseNoCompletionWaitBlock : std::uint8_t {
   WriterInactive,
 };
 
+enum class OpenCbSemanticReleaseWriterActiveSlotState : std::uint8_t {
+  None,
+  Empty,
+  NonPresentWork,
+  PresentBearing,
+};
+
 OpenCbSemanticReleaseNoCompletionWaitBlock
 classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
     bool readySlotsEmpty,
@@ -69,6 +76,12 @@ classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
     OpenCbSemanticBoundaryReleaseMode mode,
     bool completionWaitActive,
     bool writerActive) noexcept;
+
+OpenCbSemanticReleaseWriterActiveSlotState
+classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+    OpenCbSemanticReleaseNoCompletionWaitBlock block,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept;
 
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,

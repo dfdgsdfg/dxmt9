@@ -549,6 +549,8 @@ void openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait() {
 
 void openCbSemanticBoundaryNoWaitBlockClassifiesWriterState() {
   using Block = dxmt9::render::OpenCbSemanticReleaseNoCompletionWaitBlock;
+  using SlotState =
+      dxmt9::render::OpenCbSemanticReleaseWriterActiveSlotState;
   using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
 
   check(dxmt9::render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
@@ -586,6 +588,27 @@ void openCbSemanticBoundaryNoWaitBlockClassifiesWriterState() {
             /*completionWaitActive=*/false,
             /*writerActive=*/true) == Block::None,
         "deterministic diagnostics are not completion-wait misses");
+
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+            Block::WriterActive,
+            /*writingSlotEmpty=*/true,
+            /*writingSlotHasPresent=*/false) == SlotState::Empty,
+        "writer-active miss records an empty writing slot");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+            Block::WriterActive,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false) == SlotState::NonPresentWork,
+        "writer-active miss records non-present work in the writing slot");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+            Block::WriterActive,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/true) == SlotState::PresentBearing,
+        "writer-active miss records present-bearing writing slot work");
+  check(dxmt9::render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+            Block::WriterInactive,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false) == SlotState::None,
+        "inactive-writer misses do not claim a writer-active slot state");
 }
 
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {

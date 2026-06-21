@@ -143,6 +143,22 @@ classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
       : OpenCbSemanticReleaseNoCompletionWaitBlock::WriterInactive;
 }
 
+OpenCbSemanticReleaseWriterActiveSlotState
+classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+    OpenCbSemanticReleaseNoCompletionWaitBlock block,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept {
+  if (block != OpenCbSemanticReleaseNoCompletionWaitBlock::WriterActive) {
+    return OpenCbSemanticReleaseWriterActiveSlotState::None;
+  }
+  if (writingSlotEmpty) {
+    return OpenCbSemanticReleaseWriterActiveSlotState::Empty;
+  }
+  return writingSlotHasPresent
+      ? OpenCbSemanticReleaseWriterActiveSlotState::PresentBearing
+      : OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork;
+}
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,
