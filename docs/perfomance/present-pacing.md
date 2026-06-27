@@ -191,6 +191,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H169 | Ordinary-source append is safe but too small to move P4 | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-ordinary-source-append.169]] widens the pending carried-session append policy so ordinary non-present ready sources can append once an open `EncodeSession` already exists, with completion-source and encoder-source preflight before mutation. The manually closed r1 sample is discarded; the valid r2 smoke is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows), has no pending abandon/merge failures, and slightly improves shape versus H168 (`4.012 -> 4.008` CB/present, `10.740 -> 10.661` passes/present). Promotion remains rejected: same-window work falls to `completion_wait_command_buffer_commit=1` and `completion_wait_enqueues_during_wait=1`, no-enqueue wait is still `13.414ms/present`, and tail600 FPS is unchanged within noise (`10.051/9.960/13.496`). The remaining carrier must attach source-tape work to an open render encoder earlier, not only relax appendability after a sparse pending session already exists. |
 | H170 | Semantic-start source-prefix selection is safe but still not promotable | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-semantic-prefix.170]] lets the open-CB selector consume a tailless non-present ready prefix when the first source is a `SemanticBoundary`; ordinary sources may append behind that first semantic source but cannot become the first tailless head. The valid r1 smoke is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows), with no pending abandon/merge failures and more pending wait observations than H169 (`3 -> 7`). Promotion remains rejected: same-window commits only reach `2`, no-enqueue wait is unchanged (`13.417ms/present`), CB/pass shape is not lower (`4.011` CB/present, `10.664` passes/present), and tail600 FPS is noise-level (`10.050/9.907/13.666`). The selector path needs either explicit runtime counters or an earlier producer/queue boundary that makes the selected prefix active before the wait opens. |
 | H171 | Selector-prefix counters prove selection but not useful overlap | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-selector-counters.171]] adds explicit cumulative and frame-sampled counters for open-CB selector prefix classes, then reruns the H170 flag set. The valid smoke is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows), and proves the selector path is active: `804` tail-ready prefixes (`1613` sources) and `277` semantic-start prefixes (`562` sources). Promotion remains rejected because selected prefixes still do not land in the useful P4 window: same-window command-buffer commits are only `1`, no-enqueue wait is `13.409ms/present`, CB/pass shape stays baseline-like (`4.008` CB/present, `10.675` passes/present), and tail600 FPS remains noise-level (`10.059/9.871/13.713`). The bottleneck is no longer selector activation; it is earlier source-tape attachment or producer/queue boundary timing. |
+| H172 | Selector-prefix timing proves the selected work misses the active wait | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-selector-wait-phase.172]] splits H171's selected-prefix and pending-start counters by `completionWaitActive()`. The valid smoke remains visual/error safe (`status=pass`, non-black image, no invalid-call/assert rows). Almost all selected work occurs after the useful wait is inactive: pending starts are `3` wait-active vs `840` wait-inactive; tail-ready prefixes are `1` wait-active (`2` sources) vs `805` wait-inactive (`1615` sources); semantic-start prefixes are `2` wait-active (`4` sources) vs `274` wait-inactive (`558` sources). Same-window commits remain only `2`, no-enqueue wait is `13.673ms/present`, and shape is baseline-like (`4.011` CB/present, `10.682` passes/present). This shifts the next owner away from selector/session append policy and toward earlier CPU-ready/source attachment or producer/replay cadence. |
 
 ## Verification methods
 
@@ -1558,6 +1559,15 @@ flowchart TD
   slot (`published=0`). This rejects another wait-window gate; the production
   branch must move source-tape/session attachment earlier than wait observation
   or reduce replay/producer cadence enough to create real enqueue-during-wait.
+  H169-H171 then widen ordinary-source appendability, semantic-start prefix
+  selection, and selector observability; all remain visual/error safe, but
+  same-window commits stay at `1-2` and FPS remains noise-level. H172 closes the
+  remaining timing ambiguity: pending starts are `3` wait-active versus `840`
+  wait-inactive, tail-ready prefixes are `1` wait-active versus `805`
+  wait-inactive, and semantic-start prefixes are `2` wait-active versus `274`
+  wait-inactive. Selector/session append policy is therefore too late by
+  itself; the next implementation owner is earlier CPU-ready/source attachment
+  or producer/replay cadence.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
@@ -1567,6 +1577,10 @@ flowchart TD
   [[present-pacing-encode-session-active-wait-cpuready-append.165]]
   [[present-pacing-encode-session-combined-cpuready-append.166]]
   [[present-pacing-encode-session-pending-wait-state.167]]
+  [[present-pacing-encode-session-ordinary-source-append.169]]
+  [[present-pacing-encode-session-semantic-prefix.170]]
+  [[present-pacing-encode-session-selector-counters.171]]
+  [[present-pacing-encode-session-selector-wait-phase.172]]
 
 **Rejected**
 

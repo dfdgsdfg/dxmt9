@@ -284,7 +284,7 @@ void countEncodeSessionCarryFinalChunk();
 void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
                                                           bool activeBlit,
                                                           bool pendingClear);
-void countOpenCbTailPresentPendingStarted();
+void countOpenCbTailPresentPendingStarted(bool completionWaitActive);
 void countOpenCbTailPresentPendingSuppressedNoTail();
 void countOpenCbTailPresentHeadAppended();
 void countOpenCbTailPresentTailAppended();
@@ -296,8 +296,10 @@ void countOpenCbTailPresentPendingAbandonedNonAppendable();
 void countOpenCbTailPresentPendingAbandonedRetainFailed();
 void countOpenCbTailPresentPendingAbandonedEncodeNull();
 void countOpenCbTailPresentPendingMergeFailed();
-void countOpenCbTailPresentSelectorTailPrefix(std::uint64_t sourceCount);
-void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount);
+void countOpenCbTailPresentSelectorTailPrefix(std::uint64_t sourceCount,
+                                              bool completionWaitActive);
+void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount,
+                                                  bool completionWaitActive);
 void countOpenCbTailPresentSemanticReleaseCandidate();
 void countOpenCbTailPresentSemanticReleaseSubmitted();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
@@ -1287,6 +1289,8 @@ struct CounterSnapshot {
   std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaits = 0;
   std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaitActiveRender = 0;
   std::uint64_t openCbTailPresentPendingStarted = 0;
+  std::uint64_t openCbTailPresentPendingStartedWaitActive = 0;
+  std::uint64_t openCbTailPresentPendingStartedWaitInactive = 0;
   std::uint64_t openCbTailPresentPendingSuppressedNoTail = 0;
   std::uint64_t openCbTailPresentHeadAppended = 0;
   std::uint64_t openCbTailPresentTailAppended = 0;
@@ -1300,8 +1304,16 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentPendingMergeFailed = 0;
   std::uint64_t openCbTailPresentSelectorTailPrefix = 0;
   std::uint64_t openCbTailPresentSelectorTailPrefixSources = 0;
+  std::uint64_t openCbTailPresentSelectorTailPrefixWaitActive = 0;
+  std::uint64_t openCbTailPresentSelectorTailPrefixWaitActiveSources = 0;
+  std::uint64_t openCbTailPresentSelectorTailPrefixWaitInactive = 0;
+  std::uint64_t openCbTailPresentSelectorTailPrefixWaitInactiveSources = 0;
   std::uint64_t openCbTailPresentSelectorSemanticPrefix = 0;
   std::uint64_t openCbTailPresentSelectorSemanticPrefixSources = 0;
+  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitActive = 0;
+  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitActiveSources = 0;
+  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactive = 0;
+  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactiveSources = 0;
   std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
   std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;

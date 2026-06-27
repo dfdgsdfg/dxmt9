@@ -247,6 +247,8 @@ RUN_COUNTERS = (
     "encode_session_carry_forced_finalize_initializer_waits",
     "encode_session_carry_forced_finalize_initializer_wait_active_render",
     "open_cb_tail_present_pending_started",
+    "open_cb_tail_present_pending_started_wait_active",
+    "open_cb_tail_present_pending_started_wait_inactive",
     "open_cb_tail_present_pending_suppressed_no_tail",
     "open_cb_tail_present_head_appended",
     "open_cb_tail_present_tail_appended",
@@ -260,8 +262,16 @@ RUN_COUNTERS = (
     "open_cb_tail_present_pending_merge_failed",
     "open_cb_tail_present_selector_tail_prefix",
     "open_cb_tail_present_selector_tail_prefix_sources",
+    "open_cb_tail_present_selector_tail_prefix_wait_active",
+    "open_cb_tail_present_selector_tail_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_tail_prefix_wait_inactive",
+    "open_cb_tail_present_selector_tail_prefix_wait_inactive_sources",
     "open_cb_tail_present_selector_semantic_prefix",
     "open_cb_tail_present_selector_semantic_prefix_sources",
+    "open_cb_tail_present_selector_semantic_prefix_wait_active",
+    "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
+    "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
     "open_cb_tail_present_wait_start_publish_candidates",
     "open_cb_tail_present_wait_start_publish_slot_empty",
     "open_cb_tail_present_wait_start_publish_slot_present",
@@ -2440,6 +2450,8 @@ FRAME_CSV_KEYS = (
     "encode_session_carry_forced_finalize_initializer_waits",
     "encode_session_carry_forced_finalize_initializer_wait_active_render",
     "open_cb_tail_present_pending_started",
+    "open_cb_tail_present_pending_started_wait_active",
+    "open_cb_tail_present_pending_started_wait_inactive",
     "open_cb_tail_present_pending_suppressed_no_tail",
     "open_cb_tail_present_head_appended",
     "open_cb_tail_present_tail_appended",
@@ -2453,8 +2465,16 @@ FRAME_CSV_KEYS = (
     "open_cb_tail_present_pending_merge_failed",
     "open_cb_tail_present_selector_tail_prefix",
     "open_cb_tail_present_selector_tail_prefix_sources",
+    "open_cb_tail_present_selector_tail_prefix_wait_active",
+    "open_cb_tail_present_selector_tail_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_tail_prefix_wait_inactive",
+    "open_cb_tail_present_selector_tail_prefix_wait_inactive_sources",
     "open_cb_tail_present_selector_semantic_prefix",
     "open_cb_tail_present_selector_semantic_prefix_sources",
+    "open_cb_tail_present_selector_semantic_prefix_wait_active",
+    "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
+    "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
     "draw_calls",
     "draw_indexed",
     "draw_triangles",
@@ -3971,6 +3991,14 @@ def append_pacing_cpu_stage_derived(
         for label, key in (
             ("pending started", "open_cb_tail_present_pending_started"),
             (
+                "pending started: wait active",
+                "open_cb_tail_present_pending_started_wait_active",
+            ),
+            (
+                "pending started: wait inactive",
+                "open_cb_tail_present_pending_started_wait_inactive",
+            ),
+            (
                 "pending suppressed: no ready tail",
                 "open_cb_tail_present_pending_suppressed_no_tail",
             ),
@@ -3999,12 +4027,44 @@ def append_pacing_cpu_stage_derived(
                 "open_cb_tail_present_selector_tail_prefix_sources",
             ),
             (
+                "selector: tail-ready prefix wait active",
+                "open_cb_tail_present_selector_tail_prefix_wait_active",
+            ),
+            (
+                "selector: tail-ready prefix wait active sources",
+                "open_cb_tail_present_selector_tail_prefix_wait_active_sources",
+            ),
+            (
+                "selector: tail-ready prefix wait inactive",
+                "open_cb_tail_present_selector_tail_prefix_wait_inactive",
+            ),
+            (
+                "selector: tail-ready prefix wait inactive sources",
+                "open_cb_tail_present_selector_tail_prefix_wait_inactive_sources",
+            ),
+            (
                 "selector: semantic-start prefix",
                 "open_cb_tail_present_selector_semantic_prefix",
             ),
             (
                 "selector: semantic-start prefix sources",
                 "open_cb_tail_present_selector_semantic_prefix_sources",
+            ),
+            (
+                "selector: semantic-start prefix wait active",
+                "open_cb_tail_present_selector_semantic_prefix_wait_active",
+            ),
+            (
+                "selector: semantic-start prefix wait active sources",
+                "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
+            ),
+            (
+                "selector: semantic-start prefix wait inactive",
+                "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
+            ),
+            (
+                "selector: semantic-start prefix wait inactive sources",
+                "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
             ),
             (
                 "wait-start publish candidates",
@@ -6783,6 +6843,14 @@ def write_markdown(
             ("session final chunks", "encode_session_carry_final_chunks"),
             ("pending started", "open_cb_tail_present_pending_started"),
             (
+                "pending started: wait active",
+                "open_cb_tail_present_pending_started_wait_active",
+            ),
+            (
+                "pending started: wait inactive",
+                "open_cb_tail_present_pending_started_wait_inactive",
+            ),
+            (
                 "pending suppressed: no ready tail",
                 "open_cb_tail_present_pending_suppressed_no_tail",
             ),
@@ -6826,12 +6894,44 @@ def write_markdown(
                 "open_cb_tail_present_selector_tail_prefix_sources",
             ),
             (
+                "selector: tail-ready prefix wait active",
+                "open_cb_tail_present_selector_tail_prefix_wait_active",
+            ),
+            (
+                "selector: tail-ready prefix wait active sources",
+                "open_cb_tail_present_selector_tail_prefix_wait_active_sources",
+            ),
+            (
+                "selector: tail-ready prefix wait inactive",
+                "open_cb_tail_present_selector_tail_prefix_wait_inactive",
+            ),
+            (
+                "selector: tail-ready prefix wait inactive sources",
+                "open_cb_tail_present_selector_tail_prefix_wait_inactive_sources",
+            ),
+            (
                 "selector: semantic-start prefix",
                 "open_cb_tail_present_selector_semantic_prefix",
             ),
             (
                 "selector: semantic-start prefix sources",
                 "open_cb_tail_present_selector_semantic_prefix_sources",
+            ),
+            (
+                "selector: semantic-start prefix wait active",
+                "open_cb_tail_present_selector_semantic_prefix_wait_active",
+            ),
+            (
+                "selector: semantic-start prefix wait active sources",
+                "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
+            ),
+            (
+                "selector: semantic-start prefix wait inactive",
+                "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
+            ),
+            (
+                "selector: semantic-start prefix wait inactive sources",
+                "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
             ),
         )
         open_cb_frame_started = sum(

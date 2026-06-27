@@ -4361,12 +4361,16 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         scratch[0].slot &&
         scratch[0].slot->publishReason ==
             perf::ChunkPublishReason::SemanticBoundary;
+    const bool selectorCompletionWaitActive =
+        queueLifecycle_.completionWaitActive();
     if (selectedTailReadyPrefix) {
       perf::countOpenCbTailPresentSelectorTailPrefix(
-          static_cast<std::uint64_t>(count));
+          static_cast<std::uint64_t>(count),
+          selectorCompletionWaitActive);
     } else if (selectedSemanticStartPrefix) {
       perf::countOpenCbTailPresentSelectorSemanticPrefix(
-          static_cast<std::uint64_t>(count));
+          static_cast<std::uint64_t>(count),
+          selectorCompletionWaitActive);
     }
     for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
       if (!lock.owns_lock()) {
@@ -4543,7 +4547,8 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingRecord = std::move(*submission);
         pendingCanReleaseAtSemanticBoundary =
             sourceIsSemanticBoundary && !sourceHasFinalPresentTail;
-        perf::countOpenCbTailPresentPendingStarted();
+        perf::countOpenCbTailPresentPendingStarted(
+            queueLifecycle_.completionWaitActive());
         continue;
       }
 
