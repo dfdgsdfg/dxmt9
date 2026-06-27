@@ -119,6 +119,19 @@ bool drawAttachmentKeysMatch(const core::FlatDrawStateRecord& lhs,
          drawAttachmentMaxSampleCount(lhs) == drawAttachmentMaxSampleCount(rhs);
 }
 
+bool openCbShouldPublishDrawContinuationBoundary(
+    bool slotEmpty,
+    bool slotHasPresent,
+    bool hasDrawTail,
+    bool attachmentKeyMatches,
+    bool headroomAvailable) noexcept {
+  return !slotEmpty &&
+         !slotHasPresent &&
+         hasDrawTail &&
+         attachmentKeyMatches &&
+         headroomAvailable;
+}
+
 bool openCbPendingCanReleaseAtSemanticBoundary(
     bool sourceIsSemanticBoundary,
     bool sourceHasFinalPresentTail,

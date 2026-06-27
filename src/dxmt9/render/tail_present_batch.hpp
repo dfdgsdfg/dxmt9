@@ -42,6 +42,13 @@ bool openCbPendingAllowsSemanticMidChunkCommits(
 bool drawAttachmentKeysMatch(const core::FlatDrawStateRecord& lhs,
                              const core::FlatDrawStateRecord& rhs) noexcept;
 
+bool openCbShouldPublishDrawContinuationBoundary(
+    bool slotEmpty,
+    bool slotHasPresent,
+    bool hasDrawTail,
+    bool attachmentKeyMatches,
+    bool headroomAvailable) noexcept;
+
 enum class OpenCbSemanticBoundaryReleaseMode : std::uint8_t {
   CompletionWait,
   Deterministic,

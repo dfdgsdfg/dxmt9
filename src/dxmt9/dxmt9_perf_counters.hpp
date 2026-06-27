@@ -96,6 +96,7 @@ enum class ChunkPublishReason : std::uint8_t {
   StretchSplit,
   MapWait,
   SemanticBoundary,
+  DrawContinuation,
 };
 
 enum class ChunkPublishTailCommandKind : std::uint8_t {

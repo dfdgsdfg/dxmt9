@@ -133,6 +133,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishReasonMapWait{0};
   std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
+  std::atomic<std::uint64_t> chunkPublishReasonDrawContinuation{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -143,6 +144,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
   std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsDrawContinuation{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailEmpty{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailDrawRun{0};
   std::atomic<std::uint64_t> chunkPublishPresentSplitBeforeTailClear{0};
@@ -2293,6 +2295,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_reason_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonMapWait, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonSemanticBoundary, nullptr, nullptr, 0.0},
+    {"chunk_publish_reason_draw_continuation", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonDrawContinuation, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_unknown", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsUnknown, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_draw_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_payload_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPayloadLimit, nullptr, nullptr, 0.0},
@@ -2303,6 +2306,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_commands_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsMapWait, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsSemanticBoundary, nullptr, nullptr, 0.0},
+    {"chunk_publish_commands_draw_continuation", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawContinuation, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_empty", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailEmpty, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailDrawRun, nullptr, nullptr, 0.0},
     {"chunk_publish_present_split_before_tail_clear", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishPresentSplitBeforeTailClear, nullptr, nullptr, 0.0},
@@ -4566,6 +4570,10 @@ void countChunkPublishReason(ChunkPublishReason reason,
   case ChunkPublishReason::SemanticBoundary:
     count = &c.chunkPublishReasonSemanticBoundary;
     commands = &c.chunkPublishCommandsSemanticBoundary;
+    break;
+  case ChunkPublishReason::DrawContinuation:
+    count = &c.chunkPublishReasonDrawContinuation;
+    commands = &c.chunkPublishCommandsDrawContinuation;
     break;
   case ChunkPublishReason::Unknown:
     break;

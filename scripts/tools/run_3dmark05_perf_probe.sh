@@ -54,6 +54,7 @@ open_cb_writer_active_cpu_ready_publish=${DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_
 open_cb_active_wait_cpu_ready_append=${DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND:-0}
 open_cb_wait_start_cpu_ready_publish=${DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH:-0}
 open_cb_draw_attachment_boundary_publish=${DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH:-0}
+open_cb_draw_continuation_boundary_publish=${DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH:-0}
 open_cb_semantic_boundary_release_mode=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE:-}
 open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
 stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
@@ -741,6 +742,12 @@ Options:
                       Set DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH=1 so
                       producer-side draw appends publish the current non-present
                       writing slot before a draw attachment-key change.
+  --open-cb-draw-continuation-boundary-publish
+                      Set DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH=1 so
+                      producer-side draw appends publish the current non-present
+                      draw-tail slot before a same-attachment draw. This creates
+                      a metadata-only draw-to-draw source boundary for
+                      EncodeSession pass-streaming probes.
   --open-cb-semantic-boundary-release-mode MODE
                       Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=MODE.
                       Accepted values follow the runtime: completion_wait or
@@ -1814,6 +1821,10 @@ while (($#)); do
       ;;
     --open-cb-draw-attachment-boundary-publish)
       open_cb_draw_attachment_boundary_publish=1
+      shift
+      ;;
+    --open-cb-draw-continuation-boundary-publish)
+      open_cb_draw_continuation_boundary_publish=1
       shift
       ;;
     --open-cb-semantic-boundary-release-mode)
@@ -4376,6 +4387,10 @@ fi
 
 if [[ "$open_cb_draw_attachment_boundary_publish" != "0" && -n "$open_cb_draw_attachment_boundary_publish" ]]; then
   env_args+=("DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH=$open_cb_draw_attachment_boundary_publish")
+fi
+
+if [[ "$open_cb_draw_continuation_boundary_publish" != "0" && -n "$open_cb_draw_continuation_boundary_publish" ]]; then
+  env_args+=("DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH=$open_cb_draw_continuation_boundary_publish")
 fi
 
 if [[ -n "$open_cb_semantic_boundary_release_mode" ]]; then

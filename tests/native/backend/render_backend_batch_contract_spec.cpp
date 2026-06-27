@@ -1237,6 +1237,51 @@ void drawAttachmentKeysUseEncoderKeyShape() {
         "sample-count change is a semantic boundary");
 }
 
+void openCbDrawContinuationBoundaryPublishesOnlySameKeyDrawTails() {
+  check(dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true),
+        "same-key draw tail can become a metadata-only continuation source");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/true,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true),
+        "empty slots cannot publish draw-continuation sources");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/true,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true),
+        "present-bearing slots are not draw-continuation sources");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/false,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true),
+        "only draw-tail slots can create draw-to-draw source boundaries");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/false,
+            /*headroomAvailable=*/true),
+        "attachment changes are semantic boundaries, not continuation sources");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/false),
+        "queue headroom is required before publishing a continuation source");
+}
+
 void storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession() {
   check(dxmt9::encoders::useSourceLocalStoreProofLookahead(
             /*externalEncodeSession=*/false,
@@ -1364,6 +1409,7 @@ int main() {
     openCbTailPresentPrefixAllowsSessionHeads();
     renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch();
     drawAttachmentKeysUseEncoderKeyShape();
+    openCbDrawContinuationBoundaryPublishesOnlySameKeyDrawTails();
     storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession();
     chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices();
   } catch (const TestFailure& error) {
