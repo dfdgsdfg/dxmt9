@@ -163,6 +163,10 @@ void encodeSessionSourceListStoresConsecutiveSources() {
   checkEq(span[1].slotIndex, 4u, "session source list preserves tail slot");
   checkEq(span[1].seqId, 8ull, "session source list preserves tail seq");
   check(span[1].hasPresent, "session source list preserves tail present flag");
+  checkEq(span[0].commandBegin, 0u,
+          "session source list preserves head command begin");
+  checkEq(span[1].commandBegin, 0u,
+          "session source list preserves tail command begin");
   checkEq(span[0].commandCount, 11u,
           "session source list preserves head command count");
   checkEq(span[1].commandCount, 1u,
@@ -176,6 +180,8 @@ void encodeSessionSourceListStoresConsecutiveSources() {
         "session source list clear scrubs stale tail present metadata");
   checkEq(list.entries[0].commandCount, 0u,
           "session source list clear scrubs stale command-count metadata");
+  checkEq(list.entries[0].commandBegin, 0u,
+          "session source list clear scrubs stale command-begin metadata");
 }
 
 void encodeSessionSourceListRejectsInvalidShape() {
@@ -401,6 +407,10 @@ void encodeChunkSessionOwnsOrderedSourceList() {
           "encode session keeps head command count");
   checkEq(sources[1].commandCount, 1u,
           "encode session keeps tail command count");
+  checkEq(sources[0].commandBegin, 0u,
+          "encode session keeps head command begin");
+  checkEq(sources[1].commandBegin, 0u,
+          "encode session keeps tail command begin");
   check(!dxmt9::encoders::canAppendEncodeChunkSessionSource(
             *session,
             QueueCompletionSource{
@@ -630,6 +640,8 @@ void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
         "first snapshot references live slot storage");
   checkEq(snapshots[0].seqId, 1ull, "first snapshot records seqId");
   check(!snapshots[0].hasPresent, "first snapshot records present absence");
+  checkEq(snapshots[0].commandBegin, 0u,
+          "first snapshot records whole-source begin");
   checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
           "first snapshot records command count");
   checkEq(snapshots[1].slotIndex, 1u, "second snapshot records slot index");
@@ -637,6 +649,8 @@ void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
         "second snapshot references live slot storage");
   checkEq(snapshots[1].seqId, 2ull, "second snapshot records seqId");
   check(!snapshots[1].hasPresent, "second snapshot records present absence");
+  checkEq(snapshots[1].commandBegin, 0u,
+          "second snapshot records whole-source begin");
   checkEq(snapshots[1].commandCount, fixture.slots[1].commandCount(),
           "second snapshot records command count");
 }
@@ -740,6 +754,8 @@ void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
         "third snapshot references live slot storage");
   checkEq(snapshots[2].seqId, 3ull, "third snapshot records seqId");
   check(!snapshots[2].hasPresent, "third snapshot records present absence");
+  checkEq(snapshots[2].commandBegin, 0u,
+          "third snapshot records whole-source begin");
   checkEq(snapshots[2].commandCount, fixture.slots[2].commandCount(),
           "third snapshot records command count");
 }
@@ -776,6 +792,8 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
         "fallback snapshot references live slot storage");
   checkEq(snapshots[0].seqId, 1ull, "fallback snapshot records first seq");
   check(!snapshots[0].hasPresent, "fallback snapshot records present absence");
+  checkEq(snapshots[0].commandBegin, 0u,
+          "fallback snapshot records whole-source begin");
   checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
           "fallback snapshot records command count");
 }
@@ -882,6 +900,8 @@ void completionSourceForReadySlotPreservesPresentMetadata() {
   checkEq(source.slotIndex, 3u, "completion source preserves slot index");
   checkEq(source.seqId, 7ull, "completion source preserves seqId");
   check(source.hasPresent, "completion source preserves present metadata");
+  checkEq(source.commandBegin, 0u,
+          "completion source preserves command begin metadata");
   checkEq(source.commandCount, slot.commandCount(),
           "completion source preserves command count metadata");
 }
@@ -922,7 +942,7 @@ void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
   checkEq(count, 1u, "test setup dequeues one source");
 
   ReadySlotSnapshot stale = snapshots[0];
-  stale.commandCount = 0;
+  stale.commandBegin = 1;
   std::array<QueueCompletionSource, 1> retained{};
   const std::size_t retainedCount =
       fixture.controller.retainEncodedSourcesForPendingTail(
@@ -930,7 +950,7 @@ void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
           std::span<const ReadySlotSnapshot>(&stale, 1),
           std::span<QueueCompletionSource>(retained));
 
-  checkEq(retainedCount, 0u, "stale command-count metadata is rejected");
+  checkEq(retainedCount, 0u, "stale command-begin metadata is rejected");
   check(fixture.slots[0].state == ChunkSlot::State::Encoding,
         "rejected stale source remains owned by the current encode");
 }
@@ -957,6 +977,8 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   checkEq(retainedHeads[0].slotIndex, 0u, "retained head keeps slot index");
   checkEq(retainedHeads[0].seqId, 1ull, "retained head keeps seqId");
   check(!retainedHeads[0].hasPresent, "retained head is not a present source");
+  checkEq(retainedHeads[0].commandBegin, head[0].commandBegin,
+          "retained head keeps command begin metadata");
   checkEq(retainedHeads[0].commandCount, head[0].commandCount,
           "retained head keeps command count metadata");
   check(fixture.slots[0].state == ChunkSlot::State::Encoding,
@@ -1205,6 +1227,10 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
           "head completion source stays first");
   checkEq(tailSources[1].seqId, 2ull,
           "tail completion source stays second");
+  checkEq(tailSources[0].commandBegin, 0u,
+          "head completion source keeps command-begin metadata");
+  checkEq(tailSources[1].commandBegin, 0u,
+          "tail completion source keeps command-begin metadata");
   checkEq(tailSources[0].commandCount, 4u,
           "head completion source keeps command-count metadata");
   checkEq(tailSources[1].commandCount, 1u,
@@ -1296,6 +1322,8 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
           "merged source list preserves tail seq");
   check(mergedSources.span()[1].hasPresent,
         "merged source list preserves tail present metadata");
+  checkEq(mergedSources.span()[0].commandBegin, 0u,
+          "merged source list preserves head command begin");
   checkEq(mergedSources.span()[0].commandCount, 5u,
           "merged source list preserves head command count");
 }
@@ -1326,7 +1354,8 @@ void mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch() {
           .slotIndex = 0,
           .seqId = 1,
           .hasPresent = false,
-          .commandCount = 8,
+          .commandBegin = 1,
+          .commandCount = 7,
       },
       tailSource,
   }};
@@ -1347,7 +1376,7 @@ void mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch() {
   check(!merged, "source metadata mismatch rejects tail-source reuse");
   check(mergedSources.empty(),
         "metadata mismatch leaves merged source output empty");
-  checkEq(tail.explicitCompletionSourceSpan()[0].commandCount, 8u,
+  checkEq(tail.explicitCompletionSourceSpan()[0].commandBegin, 1u,
           "metadata mismatch leaves existing fixed sources untouched");
 }
 
@@ -1567,6 +1596,10 @@ void runEncodeBatchIterationCompletesEmptySubmissionInline() {
           "first inline completion preserves command count metadata");
   checkEq(completedSources[1].commandCount, snapshots[1].commandCount,
           "second inline completion preserves command count metadata");
+  checkEq(completedSources[0].commandBegin, snapshots[0].commandBegin,
+          "first inline completion preserves command begin metadata");
+  checkEq(completedSources[1].commandBegin, snapshots[1].commandBegin,
+          "second inline completion preserves command begin metadata");
   checkEq(inlineCompleted.size(), 2u,
           "empty submission completes every source inline");
   checkEq(inlineCompleted[0], 1ull, "first source inline completion");

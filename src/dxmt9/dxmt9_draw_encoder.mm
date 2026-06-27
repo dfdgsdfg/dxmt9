@@ -9144,6 +9144,7 @@ bool publishEncodeChunkSessionSources(
     if (expected.slotIndex != actual.slotIndex ||
         expected.seqId != actual.seqId ||
         expected.hasPresent != actual.hasPresent ||
+        expected.commandBegin != actual.commandBegin ||
         expected.commandCount != actual.commandCount) {
       return false;
     }

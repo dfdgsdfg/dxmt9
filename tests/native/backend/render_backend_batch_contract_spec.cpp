@@ -105,6 +105,7 @@ ReadySlotSnapshot makeReadySource(ChunkSlot& slot,
   slot.seqId = seqId;
   source.seqId = seqId;
   source.hasPresent = !slot.presentRecords.empty();
+  source.commandBegin = 0;
   source.commandCount = slot.commandCount();
   source.slot = &slot;
   return source;

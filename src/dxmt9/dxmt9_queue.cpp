@@ -260,11 +260,13 @@ std::array<QueueCompletionSource, 1> fallbackCompletionSource(
     size_t slotIndex,
     u64 seqId,
     bool hasPresent,
-    size_t commandCount = 0) {
+    size_t commandCount = 0,
+    size_t commandBegin = 0) {
   return {QueueCompletionSource{
       .slotIndex = slotIndex,
       .seqId = seqId,
       .hasPresent = hasPresent,
+      .commandBegin = commandBegin,
       .commandCount = commandCount,
   }};
 }
@@ -284,6 +286,7 @@ ReadySlotSnapshot makeReadySlotSnapshot(size_t slotIndex,
       .slotIndex = slotIndex,
       .seqId = slot.seqId,
       .hasPresent = !slot.presentRecords.empty(),
+      .commandBegin = 0,
       .commandCount = slot.commandCount(),
       .slot = &slot,
   };
@@ -300,10 +303,12 @@ QueueCompletionSource completionSourceForReadySlot(
                   snapshot.hasPresent);
   DXMT_ASSERT(!snapshot.slot ||
               snapshot.slot->commandCount() == snapshot.commandCount);
+  DXMT_ASSERT(snapshot.commandBegin == 0);
   return QueueCompletionSource{
       .slotIndex = snapshot.slotIndex,
       .seqId = snapshot.seqId,
       .hasPresent = snapshot.hasPresent,
+      .commandBegin = snapshot.commandBegin,
       .commandCount = snapshot.commandCount,
   };
 }
@@ -510,6 +515,7 @@ bool mergeEncodedPendingTailSubmission(
       if (left[i].slotIndex != right[i].slotIndex ||
           left[i].seqId != right[i].seqId ||
           left[i].hasPresent != right[i].hasPresent ||
+          left[i].commandBegin != right[i].commandBegin ||
           left[i].commandCount != right[i].commandCount) {
         return false;
       }
@@ -1387,6 +1393,7 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
         liveSlot.state != ChunkSlot::State::Encoding ||
         liveSlot.seqId != source.seqId ||
         liveSlot.seqId == 0 ||
+        source.commandBegin != 0 ||
         liveSlot.commandCount() != source.commandCount ||
         (!liveSlot.presentRecords.empty()) != source.hasPresent) {
       return 0;
@@ -1402,6 +1409,7 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
         .slotIndex = sources[i].slotIndex,
         .seqId = sources[i].seqId,
         .hasPresent = sources[i].hasPresent,
+        .commandBegin = sources[i].commandBegin,
         .commandCount = sources[i].commandCount,
     };
   }

@@ -208,6 +208,7 @@ struct QueueCompletionSource {
   size_t slotIndex = 0;
   u64 seqId = 0;
   bool hasPresent = false;
+  size_t commandBegin = 0;
   size_t commandCount = 0;
 };
 
@@ -275,6 +276,7 @@ struct ReadySlotSnapshot {
   size_t slotIndex = 0;
   u64 seqId = 0;
   bool hasPresent = false;
+  size_t commandBegin = 0;
   size_t commandCount = 0;
   // Non-owning ref into QueueLifecycleController::SubmissionBinding::slots.
   // A dequeued slot is in Encoding state and cannot be recycled until its
