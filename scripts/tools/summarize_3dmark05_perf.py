@@ -277,6 +277,8 @@ RUN_COUNTERS = (
     "open_cb_tail_present_wait_start_publish_slot_present",
     "open_cb_tail_present_wait_start_publish_blocked_headroom",
     "open_cb_tail_present_wait_start_published",
+    "open_cb_tail_present_wait_start_producer_publish_candidates",
+    "open_cb_tail_present_wait_start_producer_published",
     "open_cb_tail_present_completion_wait_pending_observed",
     "open_cb_tail_present_completion_wait_pending_releasable",
     "open_cb_tail_present_completion_wait_pending_release_used",
@@ -4085,6 +4087,14 @@ def append_pacing_cpu_stage_derived(
             (
                 "wait-start published",
                 "open_cb_tail_present_wait_start_published",
+            ),
+            (
+                "wait-start producer publish candidates",
+                "open_cb_tail_present_wait_start_producer_publish_candidates",
+            ),
+            (
+                "wait-start producer published",
+                "open_cb_tail_present_wait_start_producer_published",
             ),
         ):
             value = counters.get(key)

@@ -434,6 +434,8 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishSlotPresent{0};
   std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishBlockedHeadroom{0};
   std::atomic<std::uint64_t> openCbTailPresentWaitStartPublished{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartProducerPublishCandidates{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartProducerPublished{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingObserved{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleasable{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleaseUsed{0};
@@ -2552,6 +2554,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_wait_start_publish_slot_present", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishSlotPresent, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_wait_start_publish_blocked_headroom", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishBlockedHeadroom, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_wait_start_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublished, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_producer_publish_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartProducerPublishCandidates, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_producer_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartProducerPublished, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_observed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingObserved, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_releasable", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleasable, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_release_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleaseUsed, nullptr, nullptr, 0.0},
@@ -5260,6 +5264,14 @@ void countOpenCbTailPresentWaitStartPublishBlockedHeadroom() {
 
 void countOpenCbTailPresentWaitStartPublished() {
   add(counters().openCbTailPresentWaitStartPublished);
+}
+
+void countOpenCbTailPresentWaitStartProducerPublishCandidate() {
+  add(counters().openCbTailPresentWaitStartProducerPublishCandidates);
+}
+
+void countOpenCbTailPresentWaitStartProducerPublished() {
+  add(counters().openCbTailPresentWaitStartProducerPublished);
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
@@ -10727,6 +10739,10 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentWaitStartPublishBlockedHeadroom);
   s.openCbTailPresentWaitStartPublished =
       load(c.openCbTailPresentWaitStartPublished);
+  s.openCbTailPresentWaitStartProducerPublishCandidates =
+      load(c.openCbTailPresentWaitStartProducerPublishCandidates);
+  s.openCbTailPresentWaitStartProducerPublished =
+      load(c.openCbTailPresentWaitStartProducerPublished);
   s.drawCalls = load(c.drawCalls);
   s.drawIndexedCalls = load(c.drawIndexedCalls);
   s.drawPrimitiveCount = load(c.drawPrimitiveCount);

@@ -3036,6 +3036,52 @@ bool maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
   return true;
 }
 
+bool maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock) {
+  if (!openCbWaitStartCpuReadyPublishEnabled() || !q.writingSlot_) {
+    return false;
+  }
+
+  auto& slot = currentSlotUnlocked(q);
+  const bool readySlotsEmpty = q.readySlots_.empty();
+  const bool completionWaitActive = q.queueLifecycle_.completionWaitActive();
+  const bool writingSlotEmpty = slot.commandsEmpty();
+  const bool writingSlotHasPresent = !slot.presentRecords.empty();
+  if (!readySlotsEmpty || !completionWaitActive || q.stop_) {
+    return false;
+  }
+
+  perf::countOpenCbTailPresentWaitStartPublishCandidate();
+  perf::countOpenCbTailPresentWaitStartProducerPublishCandidate();
+  if (!render::openCbShouldCpuReadyPublishWaitStartSlot(
+          readySlotsEmpty,
+          /*hasPendingRecord=*/false,
+          completionWaitActive,
+          q.stop_,
+          /*writerActive=*/true,
+          writingSlotEmpty,
+          writingSlotHasPresent)) {
+    if (writingSlotEmpty) {
+      perf::countOpenCbTailPresentWaitStartPublishSlotEmpty();
+    } else if (writingSlotHasPresent) {
+      perf::countOpenCbTailPresentWaitStartPublishSlotPresent();
+    }
+    return false;
+  }
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    perf::countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
+    return false;
+  }
+  if (!maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock)) {
+    return false;
+  }
+  perf::countOpenCbTailPresentWaitStartPublished();
+  perf::countOpenCbTailPresentWaitStartProducerPublished();
+  return true;
+}
+
 bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
     const CommandQueue& q,
     bool carryRenderSession,
@@ -3198,7 +3244,8 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybePublishOpenCbCpuReadyCommandLimitUnlocked(*this, pool_, lock) &&
+    if (!maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(*this, pool_, lock) &&
+        !maybePublishOpenCbCpuReadyCommandLimitUnlocked(*this, pool_, lock) &&
         !maybeStagePrePresentChunkUnlocked(*this, pool_, lock)) {
       (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
     }
@@ -3292,6 +3339,7 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
       const bool cpuReadyPublished =
+          maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) ||
           maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock);
       if (cpuReadyPublished) {
         forceDrawResourceMarkingAfterSplit =
@@ -3414,7 +3462,8 @@ void submitDrawRunBatchAndRunImpl(
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      if (maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock)) {
+      if (maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) ||
+          maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock)) {
         forceDrawResourceMarkingAfterSplit =
             forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
       }
@@ -3460,7 +3509,8 @@ void submitDrawRunBatchAndRunImpl(
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock) &&
+    if (!maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) &&
+        !maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock) &&
         !maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
       (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
     }

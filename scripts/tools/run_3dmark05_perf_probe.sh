@@ -734,7 +734,8 @@ Options:
                       Set DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH=1 so an
                       active completion wait may cut current writer work as a
                       semantic CPU-ready source before a pending EncodeSession
-                      exists.
+                      exists, including producer-side draw appends that happen
+                      after the wait-start wakeup.
   --open-cb-semantic-boundary-release-mode MODE
                       Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=MODE.
                       Accepted values follow the runtime: completion_wait or

@@ -327,6 +327,8 @@ void countOpenCbTailPresentWaitStartPublishSlotEmpty();
 void countOpenCbTailPresentWaitStartPublishSlotPresent();
 void countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
 void countOpenCbTailPresentWaitStartPublished();
+void countOpenCbTailPresentWaitStartProducerPublishCandidate();
+void countOpenCbTailPresentWaitStartProducerPublished();
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -1339,6 +1341,8 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentWaitStartPublishSlotPresent = 0;
   std::uint64_t openCbTailPresentWaitStartPublishBlockedHeadroom = 0;
   std::uint64_t openCbTailPresentWaitStartPublished = 0;
+  std::uint64_t openCbTailPresentWaitStartProducerPublishCandidates = 0;
+  std::uint64_t openCbTailPresentWaitStartProducerPublished = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;
