@@ -1943,10 +1943,23 @@ above H220 baseline (`22.878ms/present` vs `3.287`). The shape is still not
 promoted because the runs require `DXMT9_DISABLE_PRESENT_BOUNDARY=1`, either
 raise render passes per present (`11.579 -> 12.66 to 12.75` versus H180) or
 leave GPU-CB time far above baseline, retain active-entry loss, and only have
-output-frame visual evidence. This reframes the next implementation shape:
-semantic/attachment CpuReady source publication and bounded wait-time release
-with a coarser source-tape/producer-cadence owner, not same-key continuation
-source flooding or command-floor threshold sweeps.
+output-frame visual evidence. [[present-pacing-encode-session-stable-rerun.187]]
+then reruns the stable flag set after the producer sequence-wait release fix,
+without disabling the present boundary and without draw-continuation
+publication. It is a clean safety sample and collapses the command-buffer
+carrier (`869` CBs for `861` presents, `1.009` CB/present, `2` sub-CBs), but
+it is not R-BACK-2.43 open-render-encoder streaming:
+`source_entry_active_render=10086`, while first-draw continuation and
+active-entry first-draw continuation are both `0`. The active-entry losses are
+semantic (`clear=2495`, `present=854`), and P4 remains closed
+(`completion_wait_with_enqueue_ms=41.303`,
+`completion_wait_without_enqueue_ms=28403.505`, only `2` wait-time commits)
+under `32966.656ms` of present-boundary wait. This reframes the next
+implementation shape: command-buffer coalescing is solved separately from
+open-render-encoder pass streaming. The remaining owner is semantic/attachment
+CpuReady source publication and bounded wait-time release with a coarser
+source-tape/producer-cadence carrier, not same-key continuation source flooding
+or command-floor threshold sweeps.
 
 Related CPU-side counter design doc: [[overview]].
 
