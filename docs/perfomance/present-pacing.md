@@ -195,6 +195,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H173 | Producer active-wait CpuReady publish is safe but inert in GT1 | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-producer-active-wait-publish.173]] extends the wait-start CpuReady check to producer-side draw append while completion wait is active. The valid rerun is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`) and keeps baseline-like shape (`4.008` CB/present, `3.001` sub-CBs/present, `10.680` passes/present), but the producer-specific path is completely inert: `producer_publish_candidates=0` and `producer_published=0`. Same-window work remains negligible (`completion_wait_command_buffer_commit=1`, `completion_wait_enqueues_during_wait=1`). This rejects producer-append-during-active-wait as the immediate owner; source/session attachment must happen before the wait opens, or pacing must change enough for producer work to exist during that wait. |
 | H174 | Ordinary head-start selection is safe but still misses P4 | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-ordinary-head-start.174]] removes the semantic-only first-head restriction so carry mode can start a pending `EncodeSession` from an ordinary non-present source, including a single head or head-only prefix. The r2 no-gputrace smoke is visual/error safe (`status=pass`, non-black `mean_luma=75.829`, `variance=5677.556`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.008` CB/present, `3.001` sub-CBs/present, `10.665` passes/present). Promotion remains rejected: pending starts are still `2` wait-active vs `840` wait-inactive, `completion_wait_enqueues_during_wait=1`, `completion_wait_command_buffer_commit=1`, and tail600 FPS is noise-level (`10.084/9.991/14.010`). The semantic-only selector limit is not the wall; the remaining owner is earlier source/session attachment to an open render encoder or producer/replay cadence. |
 | H175 | Ordinary-prefix counters show GT1 has no ordinary-start numerator | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-ordinary-prefix-counters.175]] adds explicit ordinary-start prefix counters and reruns the H174 knob set. The smoke is visual/error safe (`status=pass`, non-black `mean_luma=71.848`, `variance=5098.550`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.011` CB/present, `3.002` sub-CBs/present, `10.662` passes/present). The ordinary numerator is exactly zero: `selector_ordinary_prefix=0`, all ordinary wait-split rows `0`. Single-prefix classification instead shows semantic starts dominate (`selector_semantic_prefix=10170`, `10437` sources), but almost all are wait-inactive (`10166` vs `4` wait-active). Same-window work remains negligible (`completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`). This closes ordinary selector relaxation as a GT1 owner; the remaining source-tape path is semantic-boundary attachment before the wait opens or producer/replay cadence. |
+| H176 | Source-class counters show attachment is semantic but wait-inactive | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-source-class-counters.176]] splits pending starts and head appends by source class. The clean r2 rerun is visual/error safe (`status=pass`, non-black `mean_luma=72.195`, `variance=5145.315`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.008` CB/present, `3.001` sub-CBs/present, `10.696` passes/present, `chunk_subcb_count_max=4`). Pending starts are `842` total but only `2` wait-active; class split is tail-ready `2`, semantic `840`, ordinary `0`. Head append is active but mostly semantic (`10250` total, `9447` semantic, `803` ordinary). Same-window work remains negligible (`completion_wait_command_buffer_commit=1`, `completion_wait_enqueues_during_wait=1`). This rejects appendability and ordinary-start policy as the wall; the remaining owner is semantic source/session attachment before the wait opens, or producer/replay cadence. |
 
 ## Verification methods
 
@@ -1578,9 +1579,13 @@ flowchart TD
   counters and shows the GT1 numerator is not ordinary at all:
   `selector_ordinary_prefix=0`, while single-prefix classification exposes
   `10170` semantic-start prefixes and only `4` wait-active semantic prefixes.
-  The next implementation owner is earlier semantic source attachment to an
-  open render encoder or producer/replay cadence, not another selector
-  relaxation.
+  H176 then splits the actual pending-start and head-append path by source
+  class: starts are tail-ready `2`, semantic `840`, ordinary `0`, and
+  appended heads are `9447` semantic versus `803` ordinary. This means
+  appendability is already exercised, but almost all useful source attachment
+  is semantic and wait-inactive. The next implementation owner is earlier
+  semantic source attachment to an open render encoder or producer/replay
+  cadence, not another selector or appendability relaxation.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
@@ -1594,6 +1599,10 @@ flowchart TD
   [[present-pacing-encode-session-semantic-prefix.170]]
   [[present-pacing-encode-session-selector-counters.171]]
   [[present-pacing-encode-session-selector-wait-phase.172]]
+  [[present-pacing-encode-session-producer-active-wait-publish.173]]
+  [[present-pacing-encode-session-ordinary-head-start.174]]
+  [[present-pacing-encode-session-ordinary-prefix-counters.175]]
+  [[present-pacing-encode-session-source-class-counters.176]]
 
 **Rejected**
 

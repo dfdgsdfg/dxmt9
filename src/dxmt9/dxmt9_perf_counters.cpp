@@ -386,8 +386,19 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentPendingStarted{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitActive{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitInactive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedTailReady{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedTailReadyWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedTailReadyWaitInactive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedSemantic{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedSemanticWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedSemanticWaitInactive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedOrdinary{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedOrdinaryWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentPendingStartedOrdinaryWaitInactive{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingSuppressedNoTail{0};
   std::atomic<std::uint64_t> openCbTailPresentHeadAppended{0};
+  std::atomic<std::uint64_t> openCbTailPresentHeadAppendedSemantic{0};
+  std::atomic<std::uint64_t> openCbTailPresentHeadAppendedOrdinary{0};
   std::atomic<std::uint64_t> openCbTailPresentTailAppended{0};
   std::atomic<std::uint64_t> openCbTailPresentTailSubmitted{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingTailWaitTimeout{0};
@@ -2512,8 +2523,19 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStarted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitActive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitInactive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_tail_ready", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedTailReady, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_tail_ready_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedTailReadyWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_tail_ready_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedTailReadyWaitInactive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_semantic", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedSemantic, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_semantic_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedSemanticWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_semantic_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedSemanticWaitInactive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_ordinary", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedOrdinary, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_ordinary_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedOrdinaryWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_pending_started_ordinary_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedOrdinaryWaitInactive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_suppressed_no_tail", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingSuppressedNoTail, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentHeadAppended, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_head_appended_semantic", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentHeadAppendedSemantic, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_head_appended_ordinary", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentHeadAppendedOrdinary, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_tail_appended", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentTailAppended, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentTailSubmitted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_tail_wait_timeout", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingTailWaitTimeout, nullptr, nullptr, 0.0},
@@ -5093,12 +5115,47 @@ void countOpenCbTailPresentPendingStarted(bool completionWaitActive) {
           : c.openCbTailPresentPendingStartedWaitInactive);
 }
 
+void countOpenCbTailPresentPendingStartedTailReady(
+    bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentPendingStartedTailReady);
+  add(completionWaitActive
+          ? c.openCbTailPresentPendingStartedTailReadyWaitActive
+          : c.openCbTailPresentPendingStartedTailReadyWaitInactive);
+}
+
+void countOpenCbTailPresentPendingStartedSemantic(
+    bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentPendingStartedSemantic);
+  add(completionWaitActive
+          ? c.openCbTailPresentPendingStartedSemanticWaitActive
+          : c.openCbTailPresentPendingStartedSemanticWaitInactive);
+}
+
+void countOpenCbTailPresentPendingStartedOrdinary(
+    bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentPendingStartedOrdinary);
+  add(completionWaitActive
+          ? c.openCbTailPresentPendingStartedOrdinaryWaitActive
+          : c.openCbTailPresentPendingStartedOrdinaryWaitInactive);
+}
+
 void countOpenCbTailPresentPendingSuppressedNoTail() {
   add(counters().openCbTailPresentPendingSuppressedNoTail);
 }
 
 void countOpenCbTailPresentHeadAppended() {
   add(counters().openCbTailPresentHeadAppended);
+}
+
+void countOpenCbTailPresentHeadAppendedSemantic() {
+  add(counters().openCbTailPresentHeadAppendedSemantic);
+}
+
+void countOpenCbTailPresentHeadAppendedOrdinary() {
+  add(counters().openCbTailPresentHeadAppendedOrdinary);
 }
 
 void countOpenCbTailPresentTailAppended() {
@@ -10669,10 +10726,32 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentPendingStartedWaitActive);
   s.openCbTailPresentPendingStartedWaitInactive =
       load(c.openCbTailPresentPendingStartedWaitInactive);
+  s.openCbTailPresentPendingStartedTailReady =
+      load(c.openCbTailPresentPendingStartedTailReady);
+  s.openCbTailPresentPendingStartedTailReadyWaitActive =
+      load(c.openCbTailPresentPendingStartedTailReadyWaitActive);
+  s.openCbTailPresentPendingStartedTailReadyWaitInactive =
+      load(c.openCbTailPresentPendingStartedTailReadyWaitInactive);
+  s.openCbTailPresentPendingStartedSemantic =
+      load(c.openCbTailPresentPendingStartedSemantic);
+  s.openCbTailPresentPendingStartedSemanticWaitActive =
+      load(c.openCbTailPresentPendingStartedSemanticWaitActive);
+  s.openCbTailPresentPendingStartedSemanticWaitInactive =
+      load(c.openCbTailPresentPendingStartedSemanticWaitInactive);
+  s.openCbTailPresentPendingStartedOrdinary =
+      load(c.openCbTailPresentPendingStartedOrdinary);
+  s.openCbTailPresentPendingStartedOrdinaryWaitActive =
+      load(c.openCbTailPresentPendingStartedOrdinaryWaitActive);
+  s.openCbTailPresentPendingStartedOrdinaryWaitInactive =
+      load(c.openCbTailPresentPendingStartedOrdinaryWaitInactive);
   s.openCbTailPresentPendingSuppressedNoTail =
       load(c.openCbTailPresentPendingSuppressedNoTail);
   s.openCbTailPresentHeadAppended =
       load(c.openCbTailPresentHeadAppended);
+  s.openCbTailPresentHeadAppendedSemantic =
+      load(c.openCbTailPresentHeadAppendedSemantic);
+  s.openCbTailPresentHeadAppendedOrdinary =
+      load(c.openCbTailPresentHeadAppendedOrdinary);
   s.openCbTailPresentTailAppended =
       load(c.openCbTailPresentTailAppended);
   s.openCbTailPresentTailSubmitted =
@@ -10868,8 +10947,19 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_pending_started=%llu "
       "open_cb_tail_present_pending_started_wait_active=%llu "
       "open_cb_tail_present_pending_started_wait_inactive=%llu "
+      "open_cb_tail_present_pending_started_tail_ready=%llu "
+      "open_cb_tail_present_pending_started_tail_ready_wait_active=%llu "
+      "open_cb_tail_present_pending_started_tail_ready_wait_inactive=%llu "
+      "open_cb_tail_present_pending_started_semantic=%llu "
+      "open_cb_tail_present_pending_started_semantic_wait_active=%llu "
+      "open_cb_tail_present_pending_started_semantic_wait_inactive=%llu "
+      "open_cb_tail_present_pending_started_ordinary=%llu "
+      "open_cb_tail_present_pending_started_ordinary_wait_active=%llu "
+      "open_cb_tail_present_pending_started_ordinary_wait_inactive=%llu "
       "open_cb_tail_present_pending_suppressed_no_tail=%llu "
       "open_cb_tail_present_head_appended=%llu "
+      "open_cb_tail_present_head_appended_semantic=%llu "
+      "open_cb_tail_present_head_appended_ordinary=%llu "
       "open_cb_tail_present_tail_appended=%llu "
       "open_cb_tail_present_tail_submitted=%llu "
       "open_cb_tail_present_pending_tail_wait_timeout=%llu "
@@ -10980,11 +11070,44 @@ void emitFrameDelta(std::uint64_t frameId,
           delta(prev.openCbTailPresentPendingStartedWaitInactive,
                 curr.openCbTailPresentPendingStartedWaitInactive)),
       static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedTailReady,
+                curr.openCbTailPresentPendingStartedTailReady)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedTailReadyWaitActive,
+                curr.openCbTailPresentPendingStartedTailReadyWaitActive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedTailReadyWaitInactive,
+                curr.openCbTailPresentPendingStartedTailReadyWaitInactive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedSemantic,
+                curr.openCbTailPresentPendingStartedSemantic)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedSemanticWaitActive,
+                curr.openCbTailPresentPendingStartedSemanticWaitActive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedSemanticWaitInactive,
+                curr.openCbTailPresentPendingStartedSemanticWaitInactive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedOrdinary,
+                curr.openCbTailPresentPendingStartedOrdinary)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedOrdinaryWaitActive,
+                curr.openCbTailPresentPendingStartedOrdinaryWaitActive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentPendingStartedOrdinaryWaitInactive,
+                curr.openCbTailPresentPendingStartedOrdinaryWaitInactive)),
+      static_cast<unsigned long long>(
           delta(prev.openCbTailPresentPendingSuppressedNoTail,
                 curr.openCbTailPresentPendingSuppressedNoTail)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentHeadAppended,
                 curr.openCbTailPresentHeadAppended)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentHeadAppendedSemantic,
+                curr.openCbTailPresentHeadAppendedSemantic)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentHeadAppendedOrdinary,
+                curr.openCbTailPresentHeadAppendedOrdinary)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentTailAppended,
                 curr.openCbTailPresentTailAppended)),

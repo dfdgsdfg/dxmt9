@@ -285,8 +285,13 @@ void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
                                                           bool activeBlit,
                                                           bool pendingClear);
 void countOpenCbTailPresentPendingStarted(bool completionWaitActive);
+void countOpenCbTailPresentPendingStartedTailReady(bool completionWaitActive);
+void countOpenCbTailPresentPendingStartedSemantic(bool completionWaitActive);
+void countOpenCbTailPresentPendingStartedOrdinary(bool completionWaitActive);
 void countOpenCbTailPresentPendingSuppressedNoTail();
 void countOpenCbTailPresentHeadAppended();
+void countOpenCbTailPresentHeadAppendedSemantic();
+void countOpenCbTailPresentHeadAppendedOrdinary();
 void countOpenCbTailPresentTailAppended();
 void countOpenCbTailPresentTailSubmitted();
 void countOpenCbTailPresentPendingTailWaitTimeout();
@@ -1295,8 +1300,19 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentPendingStarted = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitActive = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitInactive = 0;
+  std::uint64_t openCbTailPresentPendingStartedTailReady = 0;
+  std::uint64_t openCbTailPresentPendingStartedTailReadyWaitActive = 0;
+  std::uint64_t openCbTailPresentPendingStartedTailReadyWaitInactive = 0;
+  std::uint64_t openCbTailPresentPendingStartedSemantic = 0;
+  std::uint64_t openCbTailPresentPendingStartedSemanticWaitActive = 0;
+  std::uint64_t openCbTailPresentPendingStartedSemanticWaitInactive = 0;
+  std::uint64_t openCbTailPresentPendingStartedOrdinary = 0;
+  std::uint64_t openCbTailPresentPendingStartedOrdinaryWaitActive = 0;
+  std::uint64_t openCbTailPresentPendingStartedOrdinaryWaitInactive = 0;
   std::uint64_t openCbTailPresentPendingSuppressedNoTail = 0;
   std::uint64_t openCbTailPresentHeadAppended = 0;
+  std::uint64_t openCbTailPresentHeadAppendedSemantic = 0;
+  std::uint64_t openCbTailPresentHeadAppendedOrdinary = 0;
   std::uint64_t openCbTailPresentTailAppended = 0;
   std::uint64_t openCbTailPresentTailSubmitted = 0;
   std::uint64_t openCbTailPresentPendingTailWaitTimeout = 0;

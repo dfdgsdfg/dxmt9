@@ -4604,8 +4604,20 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingRecord = std::move(*submission);
         pendingCanReleaseAtSemanticBoundary =
             sourceIsSemanticBoundary && !sourceHasFinalPresentTail;
+        const bool pendingStartedDuringCompletionWait =
+            queueLifecycle_.completionWaitActive();
         perf::countOpenCbTailPresentPendingStarted(
-            queueLifecycle_.completionWaitActive());
+            pendingStartedDuringCompletionWait);
+        if (tailReadyForCurrentHead) {
+          perf::countOpenCbTailPresentPendingStartedTailReady(
+              pendingStartedDuringCompletionWait);
+        } else if (sourceIsSemanticBoundary) {
+          perf::countOpenCbTailPresentPendingStartedSemantic(
+              pendingStartedDuringCompletionWait);
+        } else {
+          perf::countOpenCbTailPresentPendingStartedOrdinary(
+              pendingStartedDuringCompletionWait);
+        }
         continue;
       }
 
@@ -4656,6 +4668,11 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
           pendingCanReleaseAtSemanticBoundary =
               sourceIsSemanticBoundary && !sourceHasFinalPresentTail;
           perf::countOpenCbTailPresentHeadAppended();
+          if (sourceIsSemanticBoundary) {
+            perf::countOpenCbTailPresentHeadAppendedSemantic();
+          } else {
+            perf::countOpenCbTailPresentHeadAppendedOrdinary();
+          }
           continue;
         }
 

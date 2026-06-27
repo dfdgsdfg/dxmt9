@@ -249,8 +249,19 @@ RUN_COUNTERS = (
     "open_cb_tail_present_pending_started",
     "open_cb_tail_present_pending_started_wait_active",
     "open_cb_tail_present_pending_started_wait_inactive",
+    "open_cb_tail_present_pending_started_tail_ready",
+    "open_cb_tail_present_pending_started_tail_ready_wait_active",
+    "open_cb_tail_present_pending_started_tail_ready_wait_inactive",
+    "open_cb_tail_present_pending_started_semantic",
+    "open_cb_tail_present_pending_started_semantic_wait_active",
+    "open_cb_tail_present_pending_started_semantic_wait_inactive",
+    "open_cb_tail_present_pending_started_ordinary",
+    "open_cb_tail_present_pending_started_ordinary_wait_active",
+    "open_cb_tail_present_pending_started_ordinary_wait_inactive",
     "open_cb_tail_present_pending_suppressed_no_tail",
     "open_cb_tail_present_head_appended",
+    "open_cb_tail_present_head_appended_semantic",
+    "open_cb_tail_present_head_appended_ordinary",
     "open_cb_tail_present_tail_appended",
     "open_cb_tail_present_tail_submitted",
     "open_cb_tail_present_pending_tail_wait_timeout",
@@ -2460,8 +2471,19 @@ FRAME_CSV_KEYS = (
     "open_cb_tail_present_pending_started",
     "open_cb_tail_present_pending_started_wait_active",
     "open_cb_tail_present_pending_started_wait_inactive",
+    "open_cb_tail_present_pending_started_tail_ready",
+    "open_cb_tail_present_pending_started_tail_ready_wait_active",
+    "open_cb_tail_present_pending_started_tail_ready_wait_inactive",
+    "open_cb_tail_present_pending_started_semantic",
+    "open_cb_tail_present_pending_started_semantic_wait_active",
+    "open_cb_tail_present_pending_started_semantic_wait_inactive",
+    "open_cb_tail_present_pending_started_ordinary",
+    "open_cb_tail_present_pending_started_ordinary_wait_active",
+    "open_cb_tail_present_pending_started_ordinary_wait_inactive",
     "open_cb_tail_present_pending_suppressed_no_tail",
     "open_cb_tail_present_head_appended",
+    "open_cb_tail_present_head_appended_semantic",
+    "open_cb_tail_present_head_appended_ordinary",
     "open_cb_tail_present_tail_appended",
     "open_cb_tail_present_tail_submitted",
     "open_cb_tail_present_pending_tail_wait_timeout",
@@ -3976,8 +3998,13 @@ def append_pacing_cpu_stage_derived(
         open_cb_counter_value(key)
         for key in (
             "open_cb_tail_present_pending_started",
+            "open_cb_tail_present_pending_started_tail_ready",
+            "open_cb_tail_present_pending_started_semantic",
+            "open_cb_tail_present_pending_started_ordinary",
             "open_cb_tail_present_pending_suppressed_no_tail",
             "open_cb_tail_present_head_appended",
+            "open_cb_tail_present_head_appended_semantic",
+            "open_cb_tail_present_head_appended_ordinary",
             "open_cb_tail_present_tail_appended",
             "open_cb_tail_present_tail_submitted",
             "open_cb_tail_present_pending_tail_wait_timeout",
@@ -4014,10 +4041,54 @@ def append_pacing_cpu_stage_derived(
                 "open_cb_tail_present_pending_started_wait_inactive",
             ),
             (
+                "pending started: tail-ready",
+                "open_cb_tail_present_pending_started_tail_ready",
+            ),
+            (
+                "pending started: tail-ready wait active",
+                "open_cb_tail_present_pending_started_tail_ready_wait_active",
+            ),
+            (
+                "pending started: tail-ready wait inactive",
+                "open_cb_tail_present_pending_started_tail_ready_wait_inactive",
+            ),
+            (
+                "pending started: semantic",
+                "open_cb_tail_present_pending_started_semantic",
+            ),
+            (
+                "pending started: semantic wait active",
+                "open_cb_tail_present_pending_started_semantic_wait_active",
+            ),
+            (
+                "pending started: semantic wait inactive",
+                "open_cb_tail_present_pending_started_semantic_wait_inactive",
+            ),
+            (
+                "pending started: ordinary",
+                "open_cb_tail_present_pending_started_ordinary",
+            ),
+            (
+                "pending started: ordinary wait active",
+                "open_cb_tail_present_pending_started_ordinary_wait_active",
+            ),
+            (
+                "pending started: ordinary wait inactive",
+                "open_cb_tail_present_pending_started_ordinary_wait_inactive",
+            ),
+            (
                 "pending suppressed: no ready tail",
                 "open_cb_tail_present_pending_suppressed_no_tail",
             ),
             ("head appended", "open_cb_tail_present_head_appended"),
+            (
+                "head appended: semantic",
+                "open_cb_tail_present_head_appended_semantic",
+            ),
+            (
+                "head appended: ordinary",
+                "open_cb_tail_present_head_appended_ordinary",
+            ),
             ("tail appended", "open_cb_tail_present_tail_appended"),
             ("tail submitted", "open_cb_tail_present_tail_submitted"),
             (
@@ -6898,10 +6969,54 @@ def write_markdown(
                 "open_cb_tail_present_pending_started_wait_inactive",
             ),
             (
+                "pending started: tail-ready",
+                "open_cb_tail_present_pending_started_tail_ready",
+            ),
+            (
+                "pending started: tail-ready wait active",
+                "open_cb_tail_present_pending_started_tail_ready_wait_active",
+            ),
+            (
+                "pending started: tail-ready wait inactive",
+                "open_cb_tail_present_pending_started_tail_ready_wait_inactive",
+            ),
+            (
+                "pending started: semantic",
+                "open_cb_tail_present_pending_started_semantic",
+            ),
+            (
+                "pending started: semantic wait active",
+                "open_cb_tail_present_pending_started_semantic_wait_active",
+            ),
+            (
+                "pending started: semantic wait inactive",
+                "open_cb_tail_present_pending_started_semantic_wait_inactive",
+            ),
+            (
+                "pending started: ordinary",
+                "open_cb_tail_present_pending_started_ordinary",
+            ),
+            (
+                "pending started: ordinary wait active",
+                "open_cb_tail_present_pending_started_ordinary_wait_active",
+            ),
+            (
+                "pending started: ordinary wait inactive",
+                "open_cb_tail_present_pending_started_ordinary_wait_inactive",
+            ),
+            (
                 "pending suppressed: no ready tail",
                 "open_cb_tail_present_pending_suppressed_no_tail",
             ),
             ("head appended", "open_cb_tail_present_head_appended"),
+            (
+                "head appended: semantic",
+                "open_cb_tail_present_head_appended_semantic",
+            ),
+            (
+                "head appended: ordinary",
+                "open_cb_tail_present_head_appended_ordinary",
+            ),
             ("tail appended", "open_cb_tail_present_tail_appended"),
             ("tail submitted", "open_cb_tail_present_tail_submitted"),
             (
