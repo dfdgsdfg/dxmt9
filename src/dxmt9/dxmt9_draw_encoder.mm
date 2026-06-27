@@ -14581,7 +14581,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         static_cast<bool>(activeBlitEncoder),
         pendingClear.has_value());
   }
+  const bool sessionSourceEntryActiveRender =
+      options.session && static_cast<bool>(activeRenderEncoder);
   bool sessionSourceFirstDrawDecisionRecorded = false;
+  bool sessionSourceActiveRenderClosedBeforeFirstDraw = false;
+  auto recordSessionSourceActiveRenderClosedBeforeFirstDraw =
+      [&](perf::EncoderSplitReason reason) {
+        if (!sessionSourceEntryActiveRender ||
+            sessionSourceFirstDrawDecisionRecorded ||
+            sessionSourceActiveRenderClosedBeforeFirstDraw) {
+          return;
+        }
+        sessionSourceActiveRenderClosedBeforeFirstDraw = true;
+        perf::countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
+            reason);
+      };
   auto recordSessionSourceFirstDrawDecision =
       [&](RenderPassEntryDecision decision) {
         if (!options.session || sessionSourceFirstDrawDecisionRecorded) {
@@ -14591,18 +14605,33 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         switch (decision) {
         case RenderPassEntryDecision::ContinueActive:
           perf::countEncodeSessionCarryFirstDrawContinueActive();
+          if (sessionSourceEntryActiveRender) {
+            perf::countEncodeSessionCarryActiveEntryFirstDrawContinueActive();
+          }
           break;
         case RenderPassEntryDecision::BeginPass:
           perf::countEncodeSessionCarryFirstDrawBeginPass();
+          if (sessionSourceEntryActiveRender) {
+            perf::countEncodeSessionCarryActiveEntryFirstDrawBeginPass();
+          }
           break;
         case RenderPassEntryDecision::SplitRenderTargetChange:
           perf::countEncodeSessionCarryFirstDrawSplitRenderTargetChange();
+          if (sessionSourceEntryActiveRender) {
+            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange();
+          }
           break;
         case RenderPassEntryDecision::SplitHazard:
           perf::countEncodeSessionCarryFirstDrawSplitHazard();
+          if (sessionSourceEntryActiveRender) {
+            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitHazard();
+          }
           break;
         case RenderPassEntryDecision::SplitTileMidPassIneligible:
           perf::countEncodeSessionCarryFirstDrawSplitOther();
+          if (sessionSourceEntryActiveRender) {
+            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitOther();
+          }
           break;
         }
       };
@@ -14984,6 +15013,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   auto flushRender = [&](perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final) {
     if (activeRenderEncoder) {
+      recordSessionSourceActiveRenderClosedBeforeFirstDraw(reason);
       // TLA+: EncoderLifecycle / EndEncoder(Render)
       DXMT_ASSERT(hasActiveRender);
       DXMT_ASSERT(!activeBlitEncoder);

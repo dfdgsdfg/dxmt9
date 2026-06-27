@@ -196,6 +196,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H174 | Ordinary head-start selection is safe but still misses P4 | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-ordinary-head-start.174]] removes the semantic-only first-head restriction so carry mode can start a pending `EncodeSession` from an ordinary non-present source, including a single head or head-only prefix. The r2 no-gputrace smoke is visual/error safe (`status=pass`, non-black `mean_luma=75.829`, `variance=5677.556`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.008` CB/present, `3.001` sub-CBs/present, `10.665` passes/present). Promotion remains rejected: pending starts are still `2` wait-active vs `840` wait-inactive, `completion_wait_enqueues_during_wait=1`, `completion_wait_command_buffer_commit=1`, and tail600 FPS is noise-level (`10.084/9.991/14.010`). The semantic-only selector limit is not the wall; the remaining owner is earlier source/session attachment to an open render encoder or producer/replay cadence. |
 | H175 | Ordinary-prefix counters show GT1 has no ordinary-start numerator | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-ordinary-prefix-counters.175]] adds explicit ordinary-start prefix counters and reruns the H174 knob set. The smoke is visual/error safe (`status=pass`, non-black `mean_luma=71.848`, `variance=5098.550`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.011` CB/present, `3.002` sub-CBs/present, `10.662` passes/present). The ordinary numerator is exactly zero: `selector_ordinary_prefix=0`, all ordinary wait-split rows `0`. Single-prefix classification instead shows semantic starts dominate (`selector_semantic_prefix=10170`, `10437` sources), but almost all are wait-inactive (`10166` vs `4` wait-active). Same-window work remains negligible (`completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`). This closes ordinary selector relaxation as a GT1 owner; the remaining source-tape path is semantic-boundary attachment before the wait opens or producer/replay cadence. |
 | H176 | Source-class counters show attachment is semantic but wait-inactive | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-source-class-counters.176]] splits pending starts and head appends by source class. The clean r2 rerun is visual/error safe (`status=pass`, non-black `mean_luma=72.195`, `variance=5145.315`, `gpu_command_buffer_errors=0`, no invalid-call rows) and preserves baseline-like shape (`4.008` CB/present, `3.001` sub-CBs/present, `10.696` passes/present, `chunk_subcb_count_max=4`). Pending starts are `842` total but only `2` wait-active; class split is tail-ready `2`, semantic `840`, ordinary `0`. Head append is active but mostly semantic (`10250` total, `9447` semantic, `803` ordinary). Same-window work remains negligible (`completion_wait_command_buffer_commit=1`, `completion_wait_enqueues_during_wait=1`). This rejects appendability and ordinary-start policy as the wall; the remaining owner is semantic source/session attachment before the wait opens, or producer/replay cadence. |
+| H177 | Active-entry loss counters show selected sources close on clear/present before first draw | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-active-entry-loss.177]] adds active-entry first-draw and lost-before-first-draw reason counters, then reruns the current open-CB semantic-boundary carrier. The valid r2 scout is visual/error safe (`status=pass`, non-black `mean_luma=70.072`, `variance=5263.079`, `gpu_command_buffer_errors=0`) and keeps baseline-like shape (`4.228` CB/present, `2.998` sub-CBs/present, `11.470` passes/present; tail600 `4.223` / `3.000` / `12.638`). Active render reaches source entry (`4350` cumulative, `2635` tail600), but first-draw continuation is always zero and every active-entry loss is caused by semantic `Clear` or `Present` (`3097` clear, `1253` present). This rejects the current selected-source tape as a useful draw-to-draw pass-streaming sample; the next owner is pass-compatible source selection or deterministic fake-backend coverage, not crossing clear/present with one Metal render encoder. |
 
 ## Verification methods
 
@@ -1583,9 +1584,15 @@ flowchart TD
   class: starts are tail-ready `2`, semantic `840`, ordinary `0`, and
   appended heads are `9447` semantic versus `803` ordinary. This means
   appendability is already exercised, but almost all useful source attachment
-  is semantic and wait-inactive. The next implementation owner is earlier
-  semantic source attachment to an open render encoder or producer/replay
-  cadence, not another selector or appendability relaxation.
+  is semantic and wait-inactive. H177 then asks whether those selected sources
+  actually expose compatible draw-to-draw pass streaming. They do not in the
+  sampled GT1 scout: active render reaches source entry, but first-draw
+  continuation stays `0`, and every active-entry loss before first draw is
+  caused by semantic `Clear` or final `Present`. The next implementation owner
+  is earlier pass-compatible source attachment to an open render encoder,
+  producer/replay cadence, or deterministic draw-to-draw continuation coverage,
+  not another selector relaxation or crossing clear/present with one Metal
+  render encoder.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
@@ -1603,6 +1610,7 @@ flowchart TD
   [[present-pacing-encode-session-ordinary-head-start.174]]
   [[present-pacing-encode-session-ordinary-prefix-counters.175]]
   [[present-pacing-encode-session-source-class-counters.176]]
+  [[present-pacing-encode-session-active-entry-loss.177]]
 
 **Rejected**
 
