@@ -3562,12 +3562,12 @@ void submitDrawRunBatchAndRunImpl(
       ensureWritingSlotUnlocked(queue, lock);
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
       DXMT_ASSERT(batch.front().stateMaterialized);
-      const bool attachmentBoundaryPublished =
-          maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+      const bool sourceBoundaryPublished =
+          maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
               queue, pool, lock, batch.front().materializedState().hot);
       forceDrawResourceMarkingAfterSplit =
           forceDrawResourceMarkingAfterSplit ||
-          (attachmentBoundaryPublished && skipDrawResourceMarking);
+          (sourceBoundaryPublished && skipDrawResourceMarking);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
