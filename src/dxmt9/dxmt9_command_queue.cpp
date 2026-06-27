@@ -4302,6 +4302,18 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
     }
 
     if (pendingRecord.has_value() && !readySlots_.empty()) {
+      if (render::openCbPendingShouldSubmitForProducerSequenceWait(
+              pendingRecord.has_value(),
+              queueLifecycle_.producerSequenceWaitActive())) {
+        if (submitPendingRecordLocked(lock)) {
+          if (stop_) {
+            return;
+          }
+          continue;
+        }
+        perf::countOpenCbTailPresentPendingAbandonedNoReady();
+        abortOpenCbPendingFailOpen("producer sequence wait release before ready");
+      }
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
       countCompletionWaitPendingState(
           completionWaitActive, /*readySlotsEmpty=*/false);
@@ -4359,6 +4371,18 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
     }
 
     if (pendingRecord.has_value() && readySlots_.empty()) {
+      if (render::openCbPendingShouldSubmitForProducerSequenceWait(
+              pendingRecord.has_value(),
+              queueLifecycle_.producerSequenceWaitActive())) {
+        if (submitPendingRecordLocked(lock)) {
+          if (stop_) {
+            return;
+          }
+          continue;
+        }
+        perf::countOpenCbTailPresentPendingAbandonedNoReady();
+        abortOpenCbPendingFailOpen("producer sequence wait release");
+      }
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
       const bool writerActive = writingSlot_.has_value();
       countCompletionWaitPendingState(
@@ -4494,6 +4518,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
               queueLifecycle_.completionWaitActive();
           return stop_ || !readySlots_.empty() ||
                  !writingSlot_.has_value() ||
+                 queueLifecycle_.producerSequenceWaitActive() ||
                  render::openCbPendingCompletionWaitTransitionNeedsRecheck(
                      completionWaitActive,
                      waitObservedCompletionWaitActive,
@@ -4511,6 +4536,18 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
                            !writingSlot_.has_value();
         }
         if (pendingRecord.has_value() && readySlots_.empty()) {
+          if (render::openCbPendingShouldSubmitForProducerSequenceWait(
+                  pendingRecord.has_value(),
+                  queueLifecycle_.producerSequenceWaitActive())) {
+            if (submitPendingRecordLocked(lock)) {
+              if (stop_) {
+                return;
+              }
+              continue;
+            }
+            perf::countOpenCbTailPresentPendingAbandonedNoReady();
+            abortOpenCbPendingFailOpen("producer sequence wait wake release");
+          }
           const bool completionWaitActiveAfterWake =
               queueLifecycle_.completionWaitActive();
           if (render::openCbPendingCompletionWaitTransitionNeedsRecheck(

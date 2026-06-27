@@ -611,8 +611,9 @@ int32_t flushChunkEndCarry(D9CDevice* d, PendingDrawFlushReason reason) {
   if (!carry.submissions.empty() && !carry.compactSubmissions.empty()) {
     dxmt9::util::logf(
         dxmt9::util::LogLevel::Info, "dxmt9-device",
-        "chunk_end_carry_mixed_lane_flush submissions=%zu compactSubmissions=%zu",
-        carry.submissions.size(), carry.compactSubmissions.size());
+        "chunk_end_carry_mixed_lane_flush submissions=%u compactSubmissions=%u",
+        static_cast<unsigned>(carry.submissions.size()),
+        static_cast<unsigned>(carry.compactSubmissions.size()));
   }
 
   const auto pendingRecordCount = carry.recordCount();

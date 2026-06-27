@@ -682,6 +682,10 @@ class QueueLifecycleController {
   // whether a prefix submit would actually overlap the completion thread's
   // wait. This does not participate in ordering or lifetime decisions.
   bool completionWaitActive();
+  // Queue-local observation for producer-side waits such as resource Lock/Map.
+  // A pending open-CB carrier must be allowed to submit without the final
+  // Present tail when the producer is blocked on a sequence it owns.
+  bool producerSequenceWaitActive();
   // Diagnostic stage probes from the last no-enqueue completion wait end to
   // producer-side commit_chunk milestones.
   void recordCompletionWaitCommitChunkEntry();
@@ -842,6 +846,7 @@ class QueueLifecycleController {
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
   bool completionWaitActive_ = false;
+  std::uint32_t producerSequenceWaitDepth_ = 0;
   std::uint64_t completionWaitEnqueues_ = 0;
   std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};
   std::chrono::steady_clock::time_point completionWaitEncodeDequeueTime_{};

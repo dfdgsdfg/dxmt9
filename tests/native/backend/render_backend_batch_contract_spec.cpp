@@ -947,6 +947,21 @@ void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
         "active render sessions can append when no initializer wait is pending");
 }
 
+void openCbProducerSequenceWaitSubmitsPending() {
+  check(dxmt9::render::openCbPendingShouldSubmitForProducerSequenceWait(
+            /*hasPendingRecord=*/true,
+            /*producerSequenceWaitActive=*/true),
+        "producer-side resource waits release a pending open-CB source");
+  check(!dxmt9::render::openCbPendingShouldSubmitForProducerSequenceWait(
+            /*hasPendingRecord=*/false,
+            /*producerSequenceWaitActive=*/true),
+        "no pending source means no producer-wait submission");
+  check(!dxmt9::render::openCbPendingShouldSubmitForProducerSequenceWait(
+            /*hasPendingRecord=*/true,
+            /*producerSequenceWaitActive=*/false),
+        "tail-ready path remains preferred without a producer wait");
+}
+
 void openCbPendingWakeRecheckTracksCompletionWaitTransitions() {
   using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
 
@@ -1511,6 +1526,7 @@ int main() {
     openCbActiveWaitAppendKeepsReadySourceInSession();
     openCbWaitStartPublishCreatesFirstPendingSource();
     openCbInitializerWaitBoundarySubmitsPendingBeforeAppend();
+    openCbProducerSequenceWaitSubmitsPending();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();

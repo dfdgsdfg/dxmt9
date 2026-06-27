@@ -144,6 +144,10 @@ bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool pendingSessionHasActiveRender,
     bool initializerHasPendingUploads) noexcept;
 
+bool openCbPendingShouldSubmitForProducerSequenceWait(
+    bool hasPendingRecord,
+    bool producerSequenceWaitActive) noexcept;
+
 bool openCbPendingCompletionWaitTransitionNeedsRecheck(
     bool completionWaitActive,
     bool waitObservedCompletionWaitActive,

@@ -774,6 +774,11 @@ bool QueueLifecycleController::completionWaitActive() {
   return completionWaitActive_;
 }
 
+bool QueueLifecycleController::producerSequenceWaitActive() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  return producerSequenceWaitDepth_ != 0;
+}
+
 void QueueLifecycleController::recordNoEnqueueCommitPublishWaitBeforePublish(
     std::uint64_t nanoseconds) {
   std::lock_guard lock(pendingCompletionMutex_);
@@ -1767,7 +1772,27 @@ void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& loc
   }
   const bool waitNeeded = *completedSeqId < targetSeqId;
   const auto waitStarted = std::chrono::steady_clock::now();
-  finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+  if (waitNeeded) {
+    auto* encodeCv = submissionBinding_.encodeCv;
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      ++producerSequenceWaitDepth_;
+    }
+    if (encodeCv) {
+      encodeCv->notify_one();
+    }
+    finishCv->wait(lock, [&] { return *stop || *completedSeqId >= targetSeqId; });
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      DXMT_ASSERT(producerSequenceWaitDepth_ > 0);
+      if (producerSequenceWaitDepth_ > 0) {
+        --producerSequenceWaitDepth_;
+      }
+    }
+    if (encodeCv) {
+      encodeCv->notify_one();
+    }
+  }
   // TLA+: QueueLifecycleRefinement / WaitForSequenceSafety.
   DXMT_ASSERT(*stop || *completedSeqId >= targetSeqId);
   if (waitNeeded) {

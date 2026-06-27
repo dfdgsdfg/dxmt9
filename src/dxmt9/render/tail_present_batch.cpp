@@ -292,6 +292,12 @@ bool openCbPendingShouldSubmitBeforeInitializerWait(
          initializerHasPendingUploads;
 }
 
+bool openCbPendingShouldSubmitForProducerSequenceWait(
+    bool hasPendingRecord,
+    bool producerSequenceWaitActive) noexcept {
+  return hasPendingRecord && producerSequenceWaitActive;
+}
+
 bool openCbPendingCompletionWaitTransitionNeedsRecheck(
     bool completionWaitActive,
     bool waitObservedCompletionWaitActive,
