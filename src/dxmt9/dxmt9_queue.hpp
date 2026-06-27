@@ -250,11 +250,6 @@ struct EncodeSessionSourceList {
     return true;
   }
 
-  bool assign(const std::vector<QueueCompletionSource>& sources) noexcept {
-    return assign(std::span<const QueueCompletionSource>(
-        sources.data(), sources.size()));
-  }
-
   void clear() noexcept {
     entries = {};
     count = 0;
@@ -331,28 +326,19 @@ struct QueueSubmissionRecord {
   size_t slotIndex = 0;
   u64 seqId = 0;
   // Empty means the legacy one-slot submission: (slotIndex, seqId,
-  // diagnostics.hasPresent). Multi-slot encode coalescing fills this with
-  // every source slot completed by the same tail command buffer, in strict
-  // seqId order.
-  // EncodeSession/pass-streaming paths store the same compact metadata in the
-  // fixed list below so source publication does not allocate on the hot path.
-  // The vector remains for legacy/test records until all callers are migrated.
+  // diagnostics.hasPresent). EncodeSession/pass-streaming and multi-source
+  // paths fill this with every source slot completed by the same tail command
+  // buffer, in strict seqId order, without heap allocation.
   EncodeSessionSourceList fixedCompletionSources{};
-  std::vector<QueueCompletionSource> completionSources{};
   std::span<const QueueCompletionSource> explicitCompletionSourceSpan()
       const noexcept {
-    if (!fixedCompletionSources.empty()) {
-      return fixedCompletionSources.span();
-    }
-    return std::span<const QueueCompletionSource>(
-        completionSources.data(), completionSources.size());
+    return fixedCompletionSources.span();
   }
   bool assignFixedCompletionSources(
       std::span<const QueueCompletionSource> sources) {
     if (!fixedCompletionSources.assign(sources)) {
       return false;
     }
-    completionSources.clear();
     return true;
   }
   CommandBufferDiagnostics diagnostics{};
@@ -674,7 +660,7 @@ class QueueLifecycleController {
                           const char* context = "queue");
   // TLA+: EncodeSubmitToGpu for an externally prepared tail submission.
   // Used by split encode carriers once they have assembled the final
-  // completionSources chain.
+  // fixed completion-source chain.
   void submitEncodedSubmission(std::unique_lock<std::mutex>& lock,
                                QueueSubmissionRecord& record);
   // TLA+: EncodeCompleteInline.
@@ -819,14 +805,9 @@ class QueueLifecycleController {
     size_t slotIndex = 0;
     u64 seqId = 0;
     EncodeSessionSourceList fixedCompletionSources{};
-    std::vector<QueueCompletionSource> completionSources{};
     std::span<const QueueCompletionSource> explicitCompletionSourceSpan()
         const noexcept {
-      if (!fixedCompletionSources.empty()) {
-        return fixedCompletionSources.span();
-      }
-      return std::span<const QueueCompletionSource>(
-          completionSources.data(), completionSources.size());
+      return fixedCompletionSources.span();
     }
     u64 commandBufferChainLength = 1;
     std::chrono::steady_clock::time_point enqueueTime{};

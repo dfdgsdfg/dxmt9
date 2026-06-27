@@ -2222,7 +2222,6 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
     pending.fixedCompletionSources = record.fixedCompletionSources;
-    pending.completionSources = std::move(record.completionSources);
     pending.commandBufferChainLength = record.commandBufferChainLength;
     pending.enqueueTime = enqueueTime;
     pending.renderEncoderGpuSampleBuffer =

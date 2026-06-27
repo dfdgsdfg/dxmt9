@@ -1311,8 +1311,6 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
   checkEq(tail.commandBufferChainLength, 4ull,
           "chain length counts head sub-CBs plus one final tail commit");
   const auto tailSources = tail.explicitCompletionSourceSpan();
-  check(tail.completionSources.empty(),
-        "merged session sources do not allocate legacy vector storage");
   checkEq(tailSources.size(), 2u,
           "merged record carries head and tail completion sources");
   checkEq(tailSources[0].seqId, 1ull,
@@ -1398,8 +1396,6 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
 
   check(merged, "session-owned completion source prefix is accepted");
   const auto tailSources = tail.explicitCompletionSourceSpan();
-  check(tail.completionSources.empty(),
-        "session-owned completion sources stay in fixed metadata");
   checkEq(tailSources.size(), 2u,
           "session-owned completion sources are not duplicated");
   checkEq(tailSources[0].seqId, 1ull,
@@ -1561,8 +1557,6 @@ void mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch() {
 
   check(!merged,
         "different tail CB handles require proof that the head tail committed");
-  check(tail.completionSources.empty(),
-        "rejected mismatch leaves legacy completion sources untouched");
   check(tail.fixedCompletionSources.empty(),
         "rejected mismatch leaves fixed completion sources untouched");
   checkEq(head.retainedPayloads.size(), 1u,
@@ -1601,8 +1595,6 @@ void mergeEncodedPendingTailSubmissionRejectsSequenceGaps() {
       tailSource);
 
   check(!merged, "sequence gaps are rejected");
-  check(tail.completionSources.empty(),
-        "failed merge leaves legacy completion sources untouched");
   check(tail.fixedCompletionSources.empty(),
         "failed merge leaves fixed completion sources untouched");
   checkEq(tail.commandBufferChainLength, 9ull,
@@ -1643,8 +1635,6 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
       &mergedSources);
 
   check(!merged, "session source overflow is rejected");
-  check(tail.completionSources.empty(),
-        "overflow rejection leaves legacy completion sources untouched");
   check(tail.fixedCompletionSources.empty(),
         "overflow rejection leaves fixed completion sources untouched");
   check(mergedSources.empty(),
