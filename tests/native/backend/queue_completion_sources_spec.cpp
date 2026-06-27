@@ -907,9 +907,14 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   QueueSubmissionRecord record;
   record.slotIndex = tail[0].slotIndex;
   record.seqId = tail[0].slot->seqId;
-  record.completionSources.reserve(retainedCount + tailCount);
-  record.completionSources.push_back(retainedHeads[0]);
-  record.completionSources.push_back(completionSourceForReadySlot(tail[0]));
+  const std::array<QueueCompletionSource, 2> recordSources{{
+      retainedHeads[0],
+      completionSourceForReadySlot(tail[0]),
+  }};
+  check(record.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(
+                recordSources.data(), recordSources.size())),
+        "tail carrier stores retained sources in fixed completion metadata");
 
   fixture.controller.submitEncodedSubmission(lock, record);
   check(fixture.slots[0].state == ChunkSlot::State::GPU,
@@ -923,7 +928,7 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
       fixture.completedSeqQueue,
       &fixture.completedPresentSeqQueue,
       fixture.completedSeqId,
-      asSpan(record.completionSources));
+      record.explicitCompletionSourceSpan());
 
   std::uint64_t finishedSeq = 0;
   const bool finishedHead = fixture.controller.runFinishIteration(
@@ -966,9 +971,13 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
     record.slotIndex = sources[2].slotIndex;
     check(sources[2].slot != nullptr, "tail source keeps live slot view");
     record.seqId = sources[2].slot->seqId;
+    EncodeSessionSourceList recordSources;
     for (const auto& source : sources) {
-      record.completionSources.push_back(completionSourceForReadySlot(source));
+      check(recordSources.append(completionSourceForReadySlot(source)),
+            "test setup builds fixed completion source metadata");
     }
+    check(record.assignFixedCompletionSources(recordSources.span()),
+          "session submission stores fixed completion source metadata");
 
     fixture.controller.submitEncodedSubmission(lock, record);
     check(fixture.completedSeqQueue.empty(),
@@ -986,7 +995,7 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
   pending.diagnostics.hasDraw = true;
   pending.diagnostics.hasPresent = true;
   pending.contextValue = "queue-completion-sources-spec";
-  pending.completionSources = record.completionSources;
+  pending.fixedCompletionSources = record.fixedCompletionSources;
   pending.completionCallbacks.push_back(
       [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
@@ -1118,13 +1127,16 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
   checkEq(tail.seqId, 2ull, "merged record keeps tail seq identity");
   checkEq(tail.commandBufferChainLength, 4ull,
           "chain length counts head sub-CBs plus one final tail commit");
-  checkEq(tail.completionSources.size(), 2u,
+  const auto tailSources = tail.explicitCompletionSourceSpan();
+  check(tail.completionSources.empty(),
+        "merged session sources do not allocate legacy vector storage");
+  checkEq(tailSources.size(), 2u,
           "merged record carries head and tail completion sources");
-  checkEq(tail.completionSources[0].seqId, 1ull,
+  checkEq(tailSources[0].seqId, 1ull,
           "head completion source stays first");
-  checkEq(tail.completionSources[1].seqId, 2ull,
+  checkEq(tailSources[1].seqId, 2ull,
           "tail completion source stays second");
-  check(tail.completionSources[1].hasPresent,
+  check(tailSources[1].hasPresent,
         "tail completion source carries present metadata");
   check(tail.diagnostics.hasDraw, "merged diagnostics include head draw work");
   check(tail.diagnostics.hasPresent,
@@ -1173,8 +1185,13 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
       .seqId = 2,
       .hasPresent = true,
   };
-  tail.completionSources.push_back(headSources[0]);
-  tail.completionSources.push_back(tailSource);
+  const std::array<QueueCompletionSource, 2> tailSourcesBeforeMerge{{
+      headSources[0],
+      tailSource,
+  }};
+  check(tail.assignFixedCompletionSources(std::span<const QueueCompletionSource>(
+            tailSourcesBeforeMerge.data(), tailSourcesBeforeMerge.size())),
+        "test setup stores session-owned tail sources in fixed metadata");
 
   EncodeSessionSourceList mergedSources;
   const bool merged = mergeEncodedPendingTailSubmission(
@@ -1187,11 +1204,14 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
       &mergedSources);
 
   check(merged, "session-owned completion source prefix is accepted");
-  checkEq(tail.completionSources.size(), 2u,
+  const auto tailSources = tail.explicitCompletionSourceSpan();
+  check(tail.completionSources.empty(),
+        "session-owned completion sources stay in fixed metadata");
+  checkEq(tailSources.size(), 2u,
           "session-owned completion sources are not duplicated");
-  checkEq(tail.completionSources[0].seqId, 1ull,
+  checkEq(tailSources[0].seqId, 1ull,
           "session-owned head source stays first");
-  checkEq(tail.completionSources[1].seqId, 2ull,
+  checkEq(tailSources[1].seqId, 2ull,
           "session-owned tail source stays second");
   checkEq(mergedSources.size(), 2u,
           "merged source list mirrors the queue completion sources");
@@ -1293,7 +1313,9 @@ void mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch() {
   check(!merged,
         "different tail CB handles require proof that the head tail committed");
   check(tail.completionSources.empty(),
-        "rejected mismatch leaves tail completion sources untouched");
+        "rejected mismatch leaves legacy completion sources untouched");
+  check(tail.fixedCompletionSources.empty(),
+        "rejected mismatch leaves fixed completion sources untouched");
   checkEq(head.retainedPayloads.size(), 1u,
           "rejected mismatch does not move head retained payloads");
 
@@ -1331,7 +1353,9 @@ void mergeEncodedPendingTailSubmissionRejectsSequenceGaps() {
 
   check(!merged, "sequence gaps are rejected");
   check(tail.completionSources.empty(),
-        "failed merge leaves tail completion sources untouched");
+        "failed merge leaves legacy completion sources untouched");
+  check(tail.fixedCompletionSources.empty(),
+        "failed merge leaves fixed completion sources untouched");
   checkEq(tail.commandBufferChainLength, 9ull,
           "failed merge leaves tail chain length untouched");
 }
@@ -1371,7 +1395,9 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
 
   check(!merged, "session source overflow is rejected");
   check(tail.completionSources.empty(),
-        "overflow rejection leaves tail completion sources untouched");
+        "overflow rejection leaves legacy completion sources untouched");
+  check(tail.fixedCompletionSources.empty(),
+        "overflow rejection leaves fixed completion sources untouched");
   check(mergedSources.empty(),
         "overflow rejection leaves merged source output empty");
 }

@@ -9127,18 +9127,20 @@ bool publishEncodeChunkSessionSources(
     return true;
   }
 
-  if (record.completionSources.empty()) {
-    record.completionSources.assign(
-        sessionSources.begin(), sessionSources.end());
+  const auto recordSources = record.explicitCompletionSourceSpan();
+  if (recordSources.empty()) {
+    if (!record.assignFixedCompletionSources(sessionSources)) {
+      return false;
+    }
     return true;
   }
 
-  if (record.completionSources.size() != sessionSources.size()) {
+  if (recordSources.size() != sessionSources.size()) {
     return false;
   }
   for (std::size_t i = 0; i < sessionSources.size(); ++i) {
     const auto& expected = sessionSources[i];
-    const auto& actual = record.completionSources[i];
+    const auto& actual = recordSources[i];
     if (expected.slotIndex != actual.slotIndex ||
         expected.seqId != actual.seqId ||
         expected.hasPresent != actual.hasPresent) {

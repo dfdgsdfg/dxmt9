@@ -42,8 +42,8 @@ class IRenderBackend {
       const core::ChunkSlot& slot,
       encoders::EncodeChunkOptions options = {}) = 0;
   // Future run-ahead / tail-Present staging path: a backend may encode several
-  // consecutive ready sources into one Metal tail submission and fill
-  // QueueSubmissionRecord::completionSources. The default contract is
+  // consecutive ready sources into one Metal tail submission and publish the
+  // ordered QueueSubmissionRecord completion-source metadata. The default contract is
   // intentionally conservative: an empty batch completes inline, and a
   // single-source batch delegates to the byte-identical onChunkReady path.
   // Multi-source encode is backend-specific and must be implemented explicitly.

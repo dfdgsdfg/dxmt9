@@ -268,10 +268,10 @@ std::array<QueueCompletionSource, 1> fallbackCompletionSource(
 }
 
 std::span<const QueueCompletionSource> completionSourcesFor(
-    const std::vector<QueueCompletionSource>& sources,
+    std::span<const QueueCompletionSource> sources,
     const std::array<QueueCompletionSource, 1>& fallback) {
   if (!sources.empty()) {
-    return std::span<const QueueCompletionSource>(sources.data(), sources.size());
+    return sources;
   }
   return std::span<const QueueCompletionSource>(fallback.data(), fallback.size());
 }
@@ -499,9 +499,10 @@ bool mergeEncodedPendingTailSubmission(
   std::array<QueueCompletionSource, 1> fallbackTailSources{tailSource};
   std::span<const QueueCompletionSource> tailSources(
       fallbackTailSources.data(), fallbackTailSources.size());
-  if (!tail.completionSources.empty()) {
-    std::span<const QueueCompletionSource> explicitTailSources(
-        tail.completionSources.data(), tail.completionSources.size());
+  const auto explicitTailSourceSpan = tail.explicitCompletionSourceSpan();
+  if (!explicitTailSourceSpan.empty()) {
+    std::span<const QueueCompletionSource> explicitTailSources =
+        explicitTailSourceSpan;
     if (explicitTailSources.size() > encodedHeadSources.size() &&
         sourcesEqual(
             explicitTailSources.first(encodedHeadSources.size()),
@@ -560,8 +561,9 @@ bool mergeEncodedPendingTailSubmission(
         std::move(encodedHead.renderEncoderGpuSampleBuffer);
   }
 
-  tail.completionSources.assign(
-      mergedSourceSpan.begin(), mergedSourceSpan.end());
+  if (!tail.assignFixedCompletionSources(mergedSourceSpan)) {
+    return false;
+  }
   if (mergedSourcesOut) {
     *mergedSourcesOut = mergedSourceList;
   }
@@ -1476,17 +1478,38 @@ bool QueueLifecycleController::runEncodeBatchIteration(
 
   lock.lock();
   if (submission.has_value()) {
-    if (sources.size() > 1 && submission->completionSources.empty()) {
-      submission->completionSources.reserve(sources.size());
+    if (sources.size() > 1 &&
+        submission->explicitCompletionSourceSpan().empty()) {
+      EncodeSessionSourceList completionSources;
       for (const auto& source : sources) {
-        submission->completionSources.push_back(completionSourceForReadySlot(source));
+        if (!completionSources.append(completionSourceForReadySlot(source))) {
+          submission.reset();
+          break;
+        }
+      }
+      if (submission.has_value()) {
+        if (!submission->assignFixedCompletionSources(
+                completionSources.span())) {
+          submission.reset();
+        }
       }
     }
 #ifndef NDEBUG
-    if (sources.size() > 1) {
-      DXMT_ASSERT(!submission->completionSources.empty());
+    if (submission.has_value() && sources.size() > 1) {
+      DXMT_ASSERT(!submission->explicitCompletionSourceSpan().empty());
     }
 #endif
+    if (!submission.has_value()) {
+      for (const auto& source : sources) {
+        DXMT_ASSERT(source.slot != nullptr);
+        const u64 seqId = source.slot->seqId;
+        completeInlineChunk(source.slotIndex, seqId);
+        if (onInlineComplete) {
+          onInlineComplete(seqId);
+        }
+      }
+      return true;
+    }
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
     enqueueSubmission(*submission);
     lock.unlock();
@@ -1974,7 +1997,7 @@ void QueueLifecycleController::assertPendingCompletionInvariantsLocked() const {
         pending.seqId,
         pending.diagnostics.hasPresent);
     const auto completionSources = completionSourcesFor(
-        pending.completionSources,
+        pending.explicitCompletionSourceSpan(),
         fallbackSources);
     for (const auto& source : completionSources) {
       DXMT_ASSERT(source.slotIndex < slots.size());
@@ -2008,7 +2031,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   const auto fallbackSources = fallbackCompletionSource(
       record.slotIndex, record.seqId, record.diagnostics.hasPresent);
   const auto completionSources = completionSourcesFor(
-      record.completionSources, fallbackSources);
+      record.explicitCompletionSourceSpan(), fallbackSources);
   const CommandBufferDiagnostics diagnostics =
       summarizeSubmissionSources(record, completionSources);
   for (const auto& source : completionSources) {
@@ -2122,6 +2145,7 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.contextValue = record.context ? record.context : "queue";
     pending.slotIndex = record.slotIndex;
     pending.seqId = record.seqId;
+    pending.fixedCompletionSources = record.fixedCompletionSources;
     pending.completionSources = std::move(record.completionSources);
     pending.commandBufferChainLength = record.commandBufferChainLength;
     pending.enqueueTime = enqueueTime;
@@ -2277,7 +2301,7 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
         pending.seqId,
         pending.diagnostics.hasPresent);
     const auto completionSources = completionSourcesFor(
-        pending.completionSources,
+        pending.explicitCompletionSourceSpan(),
         fallbackSources);
     for (const auto& source : completionSources) {
       const QueueControllerState before = makeBoundQueueState(binding);
