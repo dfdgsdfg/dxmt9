@@ -1912,9 +1912,28 @@ then aligns the batch-and-run producer path with the same draw-source boundary
 policy. Both runs are visual/error safe and baseline-shaped, but both leave P4
 closed (`completion_wait_enqueues_during_wait=0`,
 `completion_wait_command_buffer_commit=0`, `completion_wait_with_enqueue_ms=0`).
-This closes the "is continuation broken?" branch; the remaining owner is still
-coarser source-tape/CpuReady staging or producer/replay cadence movement before
-the active wait window.
+[[present-pacing-encode-session-boundary-disabled.180]] then shows that
+disabling the explicit present boundary is not sufficient by itself: PE
+`Present()` returns faster and sampled FPS rises, but wait-time enqueue/commit
+rows stay zero. [[present-pacing-encode-session-pe-clear-flush-boundary-disabled.181]]
+adds the existing PE clear-flush diagnostic and again leaves P4 closed, so the
+blocker is not merely PE bridge entry. [[present-pacing-encode-session-semantic-continuation-overlap.182]]
+turns on semantic, attachment, wait-start, active-wait, and same-key
+draw-continuation sources; it creates only a token overlap window
+(`completion_wait_command_buffer_commit=2`) while worsening CB/source shape.
+[[present-pacing-encode-session-semantic-attachment-only.183]] is the first
+strong positive current signal: removing same-key continuation and keeping
+semantic attachment-only sources gives `85.674%` overlap share,
+`1,642` wait-time command-buffer commits, and sampled FPS `11.562`.
+[[present-pacing-encode-session-semantic-attachment-only-rerun.184]] then
+repeats the same flag set after discarding an early aborted launch and
+reproduces the signal (`85.495%` overlap share, `1,607` wait-time
+command-buffer commits, sampled FPS `11.502`). It is not promoted yet because
+the runs require `DXMT9_DISABLE_PRESENT_BOUNDARY=1`, raise render passes per
+present (`11.579 -> 12.66 to 12.75` versus H180), retain active-entry loss, and
+only have output-frame visual evidence. This reframes the next implementation
+shape: semantic/attachment CpuReady source publication and bounded wait-time
+release, not same-key continuation source flooding.
 
 Related CPU-side counter design doc: [[overview]].
 
