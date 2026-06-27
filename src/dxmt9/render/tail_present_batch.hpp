@@ -28,6 +28,10 @@ bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
                                       bool carryRenderSession,
                                       bool tailReadyForCurrentHead) noexcept;
 
+bool selectedOpenCbPrefixStartsSession(
+    std::span<const core::metalqueue::ReadySlotSnapshot> sources,
+    bool carryRenderSession) noexcept;
+
 bool openCbPresentTailNeedsPrePresentSplit(
     bool openCbPreencodeTailPresent,
     bool hasCurrentPrePresentWork) noexcept;

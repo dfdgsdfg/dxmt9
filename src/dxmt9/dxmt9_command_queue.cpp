@@ -4405,7 +4405,10 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         carryRenderSession && count > 1u &&
         scratch[count - 1u].slot &&
         render::slotHasFinalPresentTail(*scratch[count - 1u].slot);
-    const bool selectedOpenCbSessionPrefix = carryRenderSession && count > 1u;
+    const bool selectedOpenCbSessionPrefix =
+        render::selectedOpenCbPrefixStartsSession(
+            std::span<const ReadySlotSnapshot>(scratch.data(), count),
+            carryRenderSession);
     const bool selectedSemanticStartPrefix =
         selectedOpenCbSessionPrefix && !selectedTailReadyPrefix &&
         scratch[0].slot &&

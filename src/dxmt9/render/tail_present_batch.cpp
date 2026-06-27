@@ -68,6 +68,19 @@ bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
   return true;
 }
 
+bool selectedOpenCbPrefixStartsSession(
+    std::span<const core::metalqueue::ReadySlotSnapshot> sources,
+    bool carryRenderSession) noexcept {
+  if (!carryRenderSession || sources.empty() || !sources.front().slot) {
+    return false;
+  }
+  const bool tailReadyForCurrentHead =
+      sources.size() > 1u && sources.back().slot &&
+      slotHasFinalPresentTail(*sources.back().slot);
+  return slotCanStartOpenCbPendingSession(
+      *sources.front().slot, carryRenderSession, tailReadyForCurrentHead);
+}
+
 bool openCbPresentTailNeedsPrePresentSplit(
     bool openCbPreencodeTailPresent,
     bool hasCurrentPrePresentWork) noexcept {

@@ -1110,6 +1110,24 @@ void openCbTailPresentPrefixAllowsSessionHeads() {
               /*maxCount=*/1),
           1u,
           "open-CB selector accepts a single ordinary head");
+  std::array<ReadySlotSnapshot, 1> singleHeadSources{
+      makeReadySource(slots[0], 0, slots[0].seqId),
+  };
+  check(dxmt9::render::selectedOpenCbPrefixStartsSession(
+            std::span<const ReadySlotSnapshot>(
+                singleHeadSources.data(), singleHeadSources.size()),
+            /*carryRenderSession=*/true),
+        "single ordinary head is a selected carry-session prefix");
+
+  ChunkSlot presentOnlySlot;
+  std::array<ReadySlotSnapshot, 1> presentOnlySources{
+      makePresentOnlySource(presentOnlySlot, 0, 11),
+  };
+  check(!dxmt9::render::selectedOpenCbPrefixStartsSession(
+            std::span<const ReadySlotSnapshot>(
+                presentOnlySources.data(), presentOnlySources.size()),
+            /*carryRenderSession=*/true),
+        "single Present-only fallback is not a carry-session prefix");
 
   slots[0].publishReason = dxmt9::perf::ChunkPublishReason::SemanticBoundary;
   slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
