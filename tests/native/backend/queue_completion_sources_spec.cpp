@@ -889,7 +889,7 @@ void completionSourceForReadySlotPreservesPresentMetadata() {
   ReadySlotSnapshot snapshot{};
   snapshot.slotIndex = 3;
   slot.seqId = 7;
-  slot.presentRecords.push_back({});
+  slot.appendPresent(dxmt9::core::SwapDesc{}, dxmt9::core::Handle{0x77});
   snapshot.seqId = slot.seqId;
   snapshot.hasPresent = true;
   snapshot.commandCount = slot.commandCount();
@@ -904,6 +904,28 @@ void completionSourceForReadySlotPreservesPresentMetadata() {
           "completion source preserves command begin metadata");
   checkEq(source.commandCount, slot.commandCount(),
           "completion source preserves command count metadata");
+}
+
+void completionSourceForReadySlotPreservesRangeMetadata() {
+  ChunkSlot slot{};
+  ReadySlotSnapshot snapshot{};
+  snapshot.slotIndex = 4;
+  slot.seqId = 8;
+  slot.appendClear(dxmt9::core::ClearDesc{});
+  slot.appendPresent(dxmt9::core::SwapDesc{}, dxmt9::core::Handle{0x88});
+  snapshot.seqId = slot.seqId;
+  snapshot.hasPresent = false;
+  snapshot.commandBegin = 0;
+  snapshot.commandCount = 1;
+  snapshot.slot = &slot;
+
+  const auto source = completionSourceForReadySlot(snapshot);
+
+  checkEq(source.slotIndex, 4u, "range source preserves slot index");
+  checkEq(source.seqId, 8ull, "range source preserves seqId");
+  check(!source.hasPresent, "range source preserves non-present metadata");
+  checkEq(source.commandBegin, 0u, "range source preserves command begin");
+  checkEq(source.commandCount, 1u, "range source preserves command count");
 }
 
 void retainEncodedSourcesRejectsPendingSources() {
@@ -955,6 +977,39 @@ void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
         "rejected stale source remains owned by the current encode");
 }
 
+void retainEncodedSourcesAcceptsPartialRangeMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[0].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0x99});
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(count, 1u, "test setup dequeues one source");
+
+  ReadySlotSnapshot head = snapshots[0];
+  head.hasPresent = false;
+  head.commandBegin = 0;
+  head.commandCount = 1;
+  std::array<QueueCompletionSource, 1> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(&head, 1),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, 1u, "partial non-present range is retained");
+  checkEq(retained[0].commandBegin, 0u,
+          "retained partial range preserves command begin");
+  checkEq(retained[0].commandCount, 1u,
+          "retained partial range preserves command count");
+  check(!retained[0].hasPresent,
+        "retained partial range preserves hasPresent=false");
+}
+
 void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -985,7 +1040,8 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
         "retaining head does not make it GPU-visible");
 
   fixture.addReadySlot(1, 2);
-  fixture.slots[1].presentRecords.push_back({});
+  fixture.slots[1].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0xA1});
   std::array<ReadySlotSnapshot, 1> tail{};
   const std::size_t tailCount =
       fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(tail));
@@ -1047,7 +1103,8 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
   fixture.addReadySlot(0, 1);
   fixture.addReadySlot(1, 2);
   fixture.addReadySlot(2, 3);
-  fixture.slots[2].presentRecords.push_back({});
+  fixture.slots[2].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0xA2});
 
   std::array<ReadySlotSnapshot, 3> sources{};
   QueueSubmissionRecord record;
@@ -1656,8 +1713,10 @@ int main() {
     severalStagedReadySlotsReleaseBeforeReadyTailInFifoOrder();
     stagedReadySlotReleaseRequiresMatchingTail();
     completionSourceForReadySlotPreservesPresentMetadata();
+    completionSourceForReadySlotPreservesRangeMetadata();
     retainEncodedSourcesRejectsPendingSources();
     retainEncodedSourcesRejectsStaleSnapshotMetadata();
+    retainEncodedSourcesAcceptsPartialRangeMetadata();
     retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();

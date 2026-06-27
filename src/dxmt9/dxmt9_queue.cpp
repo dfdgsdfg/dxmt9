@@ -280,6 +280,29 @@ std::span<const QueueCompletionSource> completionSourcesFor(
   return std::span<const QueueCompletionSource>(fallback.data(), fallback.size());
 }
 
+bool commandRangeWithinSlot(const ChunkSlot& slot,
+                            size_t commandBegin,
+                            size_t commandCount) noexcept {
+  const size_t slotCommandCount = slot.commandCount();
+  return commandBegin <= slotCommandCount &&
+         commandCount <= slotCommandCount - commandBegin;
+}
+
+bool commandRangeHasPresent(const ChunkSlot& slot,
+                            size_t commandBegin,
+                            size_t commandCount) noexcept {
+  if (!commandRangeWithinSlot(slot, commandBegin, commandCount)) {
+    return false;
+  }
+  const size_t commandEnd = commandBegin + commandCount;
+  for (size_t i = commandBegin; i < commandEnd; ++i) {
+    if (slot.commandHeaders[i].kind == MetalCommandKind::Present) {
+      return true;
+    }
+  }
+  return false;
+}
+
 ReadySlotSnapshot makeReadySlotSnapshot(size_t slotIndex,
                                         ChunkSlot& slot) noexcept {
   return ReadySlotSnapshot{
@@ -299,11 +322,14 @@ QueueCompletionSource completionSourceForReadySlot(
   DXMT_ASSERT(snapshot.slot != nullptr);
   DXMT_ASSERT(!snapshot.slot || snapshot.slot->seqId == snapshot.seqId);
   DXMT_ASSERT(!snapshot.slot ||
-              (!snapshot.slot->presentRecords.empty()) ==
-                  snapshot.hasPresent);
+              commandRangeWithinSlot(*snapshot.slot,
+                                     snapshot.commandBegin,
+                                     snapshot.commandCount));
   DXMT_ASSERT(!snapshot.slot ||
-              snapshot.slot->commandCount() == snapshot.commandCount);
-  DXMT_ASSERT(snapshot.commandBegin == 0);
+              commandRangeHasPresent(*snapshot.slot,
+                                     snapshot.commandBegin,
+                                     snapshot.commandCount) ==
+                  snapshot.hasPresent);
   return QueueCompletionSource{
       .slotIndex = snapshot.slotIndex,
       .seqId = snapshot.seqId,
@@ -1393,9 +1419,12 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
         liveSlot.state != ChunkSlot::State::Encoding ||
         liveSlot.seqId != source.seqId ||
         liveSlot.seqId == 0 ||
-        source.commandBegin != 0 ||
-        liveSlot.commandCount() != source.commandCount ||
-        (!liveSlot.presentRecords.empty()) != source.hasPresent) {
+        !commandRangeWithinSlot(liveSlot,
+                                source.commandBegin,
+                                source.commandCount) ||
+        commandRangeHasPresent(liveSlot,
+                               source.commandBegin,
+                               source.commandCount) != source.hasPresent) {
       return 0;
     }
     if (previousSeqId != 0 && source.seqId != previousSeqId + 1) {
