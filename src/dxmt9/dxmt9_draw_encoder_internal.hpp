@@ -182,6 +182,33 @@ inline EncodeChunkReplayRange encodeChunkReplayRange(
   };
 }
 
+inline bool readySlotSnapshotMatchesCompletionSource(
+    const core::metalqueue::ReadySlotSnapshot& snapshot,
+    const core::metalqueue::QueueCompletionSource& source,
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot) noexcept {
+  return snapshot.slot == &slot &&
+         snapshot.slotIndex == slotIndex &&
+         snapshot.slotIndex == source.slotIndex &&
+         snapshot.seqId == slot.seqId &&
+         snapshot.seqId == source.seqId &&
+         snapshot.hasPresent == source.hasPresent &&
+         snapshot.commandBegin == source.commandBegin &&
+         snapshot.commandCount == source.commandCount;
+}
+
+inline bool readySlotSnapshotMatchesReplayRange(
+    const core::metalqueue::ReadySlotSnapshot& snapshot,
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot,
+    EncodeChunkReplayRange replayRange) noexcept {
+  return snapshot.slot == &slot &&
+         snapshot.slotIndex == slotIndex &&
+         snapshot.seqId == slot.seqId &&
+         snapshot.commandBegin == replayRange.commandBegin &&
+         snapshot.commandCount == replayRange.commandCount();
+}
+
 // Per-draw view from DrawParam. Constructed once at encodeDraw entry; all
 // per-draw field reads inside the function go through this view. Lives in
 // the shared internal header because diagnostics consumes it by const-ref.

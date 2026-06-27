@@ -5295,9 +5295,10 @@ void initializeEncodeChunkSessionGpuSamplingStorage(
 
 std::size_t sessionGpuSamplingCommandCount(
     const core::ChunkSlot& slot,
+    std::size_t currentCommandCount,
     std::span<const core::metalqueue::ReadySlotSnapshot> lookaheadSources) noexcept {
   if (lookaheadSources.empty()) {
-    return slot.commandCount();
+    return currentCommandCount;
   }
 
   constexpr std::size_t kMaxSampledCommands =
@@ -5321,10 +5322,10 @@ std::size_t sessionGpuSamplingCommandCount(
     addCommands(source.commandCount);
   }
   if (!includesCurrentSlot) {
-    addCommands(slot.commandCount());
+    addCommands(currentCommandCount);
   }
   return std::min(kMaxSampledCommands,
-                  std::max<std::size_t>(slot.commandCount(), total));
+                  std::max<std::size_t>(currentCommandCount, total));
 }
 
 AttachmentKey makeAttachmentKey(const core::FlatDrawStateRecord& hot) {
@@ -14580,6 +14581,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       options.sessionLookaheadSources.empty()
           ? replayRange.commandCount()
           : sessionGpuSamplingCommandCount(slot,
+                                           replayRange.commandCount(),
                                            options.sessionLookaheadSources));
   traceEncodeStage("after-gpu-sampling-setup");
 
@@ -15069,7 +15071,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     };
     const bool selectedSessionLookaheadStartsHere =
         !options.sessionLookaheadSources.empty() &&
-        options.sessionLookaheadSources.front().slot == &slot;
+        (options.sessionSource.has_value()
+             ? readySlotSnapshotMatchesCompletionSource(
+                   options.sessionLookaheadSources.front(),
+                   *options.sessionSource,
+                   slotIndex,
+                   slot)
+             : readySlotSnapshotMatchesReplayRange(
+                   options.sessionLookaheadSources.front(),
+                   slotIndex,
+                   slot,
+                   replayRange));
     bool selectedSessionLookaheadValid = selectedSessionLookaheadStartsHere;
     if (selectedSessionLookaheadValid) {
       for (const auto& source : options.sessionLookaheadSources) {

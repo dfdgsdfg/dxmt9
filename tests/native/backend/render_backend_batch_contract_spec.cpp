@@ -222,6 +222,57 @@ void encodeChunkReplayRangeUsesSessionSourceRange() {
   check(!staleRange.valid, "stale session source range is rejected");
 }
 
+void sessionLookaheadFirstSourceMustMatchCurrentReplaySource() {
+  ChunkSlot slot;
+  slot.seqId = 13;
+  slot.appendClear({});
+  slot.appendClear({});
+  slot.appendPresent({}, {});
+
+  const QueueCompletionSource source{
+      .slotIndex = 7,
+      .seqId = slot.seqId,
+      .hasPresent = false,
+      .commandBegin = 1,
+      .commandCount = 1,
+  };
+  ReadySlotSnapshot exact = makeReadySource(slot, source.slotIndex,
+                                           source.seqId);
+  exact.hasPresent = source.hasPresent;
+  exact.commandBegin = source.commandBegin;
+  exact.commandCount = source.commandCount;
+
+  check(dxmt9::encoders::readySlotSnapshotMatchesCompletionSource(
+            exact, source, source.slotIndex, slot),
+        "session lookahead accepts the exact current source range");
+
+  ReadySlotSnapshot wider = exact;
+  wider.commandBegin = 0;
+  wider.commandCount = slot.commandCount();
+  wider.hasPresent = true;
+  check(!dxmt9::encoders::readySlotSnapshotMatchesCompletionSource(
+            wider, source, source.slotIndex, slot),
+        "session lookahead rejects a wider first source range");
+
+  ReadySlotSnapshot staleSeq = exact;
+  staleSeq.seqId += 1u;
+  check(!dxmt9::encoders::readySlotSnapshotMatchesCompletionSource(
+            staleSeq, source, source.slotIndex, slot),
+        "session lookahead rejects stale first source seqId");
+
+  const dxmt9::encoders::EncodeChunkReplayRange replayRange{
+      .commandBegin = 1,
+      .commandEnd = 2,
+      .valid = true,
+  };
+  check(dxmt9::encoders::readySlotSnapshotMatchesReplayRange(
+            exact, source.slotIndex, slot, replayRange),
+        "non-session lookahead accepts the exact replay range");
+  check(!dxmt9::encoders::readySlotSnapshotMatchesReplayRange(
+            wider, source.slotIndex, slot, replayRange),
+        "non-session lookahead rejects replay-range overreach");
+}
+
 void singleSourceBatchFallsBackToOnChunkReady() {
   ContextFixture fixture;
   CountingBackend backend;
@@ -1236,6 +1287,7 @@ int main() {
     encodeChunkOptionsDefaultToFreshCommandBufferPath();
     encodeChunkReplayRangeDefaultsToWholeSlot();
     encodeChunkReplayRangeUsesSessionSourceRange();
+    sessionLookaheadFirstSourceMustMatchCurrentReplaySource();
     singleSourceBatchFallsBackToOnChunkReady();
     multiSourceBatchRequiresExplicitBackendImplementation();
     tailPresentBatchShapeRequiresFinalPresentTail();
