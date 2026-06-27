@@ -159,6 +159,22 @@ classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
       : OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork;
 }
 
+bool openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept {
+  const auto block = classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
+      readySlotsEmpty, canReleaseAtSemanticBoundary, mode,
+      completionWaitActive, writerActive);
+  return classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
+             block, writingSlotEmpty, writingSlotHasPresent) ==
+         OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork;
+}
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

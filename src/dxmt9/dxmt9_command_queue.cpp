@@ -139,6 +139,15 @@ bool openCbSemanticBoundaryPublishEnabled() {
          openCbRenderSessionCarryEnabled();
 }
 
+bool openCbWriterActiveCpuReadyPublishEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled && openCbSemanticBoundaryPublishEnabled();
+}
+
 render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
   static const auto mode = [] {
     const char* env =
@@ -2863,6 +2872,34 @@ bool maybePublishSemanticBoundaryChunkUnlocked(
   return true;
 }
 
+bool maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    bool pendingCanReleaseAtSemanticBoundary,
+    render::OpenCbSemanticBoundaryReleaseMode semanticBoundaryReleaseMode,
+    bool completionWaitActive,
+    bool writerActive) {
+  if (!openCbWriterActiveCpuReadyPublishEnabled() || !q.writingSlot_) {
+    return false;
+  }
+  auto& slot = currentSlotUnlocked(q);
+  if (!render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+          /*readySlotsEmpty=*/q.readySlots_.empty(),
+          pendingCanReleaseAtSemanticBoundary,
+          semanticBoundaryReleaseMode,
+          completionWaitActive,
+          writerActive,
+          slot.commandsEmpty(),
+          !slot.presentRecords.empty())) {
+    return false;
+  }
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    return false;
+  }
+  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
+}
+
 }  // namespace
 
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
@@ -3931,6 +3968,14 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
                       shape.drawItems,
                       shape.nonDrawCommands,
                       shape.payloadBytes);
+                  if (maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
+                          *this, pool_, lock,
+                          pendingCanReleaseAtSemanticBoundary,
+                          semanticBoundaryReleaseMode,
+                          completionWaitActive,
+                          writerActive)) {
+                    continue;
+                  }
                 }
                 break;
               case render::OpenCbSemanticReleaseWriterActiveSlotState::PresentBearing:

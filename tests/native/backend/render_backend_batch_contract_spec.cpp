@@ -609,6 +609,52 @@ void openCbSemanticBoundaryNoWaitBlockClassifiesWriterState() {
             /*writingSlotEmpty=*/false,
             /*writingSlotHasPresent=*/false) == SlotState::None,
         "inactive-writer misses do not claim a writer-active slot state");
+
+  check(dxmt9::render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "writer-active no-wait miss with non-present work may be cut as CPU-ready");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/true,
+            /*writingSlotHasPresent=*/false),
+        "empty writer slot is not a CPU-ready source");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/true),
+        "present-bearing writer slot is not a semantic CPU-ready source");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "active completion wait uses release, not writer-slot publication");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "deterministic release mode does not need writer-slot CPU-ready publication");
 }
 
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {

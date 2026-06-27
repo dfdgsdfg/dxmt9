@@ -83,6 +83,15 @@ classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
     bool writingSlotEmpty,
     bool writingSlotHasPresent) noexcept;
 
+bool openCbPendingShouldCpuReadyPublishWriterActiveSlot(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept;
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,
