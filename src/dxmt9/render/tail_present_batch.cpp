@@ -124,12 +124,15 @@ bool openCbShouldPublishDrawContinuationBoundary(
     bool slotHasPresent,
     bool hasDrawTail,
     bool attachmentKeyMatches,
-    bool headroomAvailable) noexcept {
+    bool headroomAvailable,
+    std::size_t commandCount,
+    std::size_t commandLimit) noexcept {
   return !slotEmpty &&
          !slotHasPresent &&
          hasDrawTail &&
          attachmentKeyMatches &&
-         headroomAvailable;
+         headroomAvailable &&
+         (commandLimit == 0 || commandCount >= commandLimit);
 }
 
 bool openCbPendingCanReleaseAtSemanticBoundary(

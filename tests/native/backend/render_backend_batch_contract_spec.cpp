@@ -1335,6 +1335,24 @@ void openCbDrawContinuationBoundaryPublishesOnlySameKeyDrawTails() {
             /*attachmentKeyMatches=*/true,
             /*headroomAvailable=*/true),
         "same-key draw tail can become a metadata-only continuation source");
+  check(dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true,
+            /*commandCount=*/16,
+            /*commandLimit=*/16),
+        "same-key continuation source may publish at the coarse command floor");
+  check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
+            /*slotEmpty=*/false,
+            /*slotHasPresent=*/false,
+            /*hasDrawTail=*/true,
+            /*attachmentKeyMatches=*/true,
+            /*headroomAvailable=*/true,
+            /*commandCount=*/15,
+            /*commandLimit=*/16),
+        "coarse command floor keeps tiny continuation cuts out of the source tape");
   check(!dxmt9::render::openCbShouldPublishDrawContinuationBoundary(
             /*slotEmpty=*/true,
             /*slotHasPresent=*/false,

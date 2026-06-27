@@ -47,7 +47,9 @@ bool openCbShouldPublishDrawContinuationBoundary(
     bool slotHasPresent,
     bool hasDrawTail,
     bool attachmentKeyMatches,
-    bool headroomAvailable) noexcept;
+    bool headroomAvailable,
+    std::size_t commandCount = 0,
+    std::size_t commandLimit = 0) noexcept;
 
 enum class OpenCbSemanticBoundaryReleaseMode : std::uint8_t {
   CompletionWait,

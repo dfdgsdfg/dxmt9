@@ -186,6 +186,27 @@ bool openCbDrawContinuationBoundaryPublishEnabled() {
          openCbRenderSessionCarryEnabled();
 }
 
+std::size_t openCbDrawContinuationCommandLimit() {
+  static const std::size_t limit = [] {
+    const char* env =
+        std::getenv("DXMT9_OPEN_CB_DRAW_CONTINUATION_COMMAND_LIMIT");
+    if (!env || env[0] == '\0') {
+      return std::size_t{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::size_t{0};
+    }
+    if (parsed > std::numeric_limits<std::size_t>::max()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return static_cast<std::size_t>(parsed);
+  }();
+  return openCbDrawContinuationBoundaryPublishEnabled() ? limit
+                                                        : std::size_t{0};
+}
+
 render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
   static const auto mode = [] {
     const char* env =
@@ -3019,7 +3040,9 @@ bool maybePublishOpenCbDrawContinuationBoundaryChunkUnlocked(
           !slot.presentRecords.empty(),
           tailHot != nullptr,
           tailHot && render::drawAttachmentKeysMatch(*tailHot, nextHot),
-          hasHeadroom)) {
+          hasHeadroom,
+          slot.commandCount(),
+          openCbDrawContinuationCommandLimit())) {
     return false;
   }
 
