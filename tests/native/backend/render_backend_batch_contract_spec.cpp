@@ -1169,6 +1169,66 @@ void openCbTailPresentPrefixAllowsSessionHeads() {
           "carry-session selector accepts ordinary non-present heads");
 }
 
+void drawContinuationSourcesAreOrdinaryOpenCbSessionSources() {
+  std::array<ChunkSlot, 3> slots{};
+  slots[0].seqId = 21;
+  slots[0].publishReason = dxmt9::perf::ChunkPublishReason::DrawContinuation;
+  appendTestDraw(slots[0], /*primitiveCount=*/1, makeUniformPayload(0x210),
+                 {}, {});
+  slots[1].seqId = 22;
+  slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawContinuation;
+  appendTestDraw(slots[1], /*primitiveCount=*/2, makeUniformPayload(0x220),
+                 {}, {});
+  slots[2].seqId = 23;
+  slots[2].appendPresent({}, {});
+
+  const std::deque<std::size_t> readySlots{0, 1, 2};
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              readySlots,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/3),
+          3u,
+          "draw-continuation sources coalesce with the final Present tail");
+
+  const std::deque<std::size_t> headOnly{0, 1};
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              headOnly,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/2),
+          2u,
+          "draw-continuation sources may form a head-only session prefix");
+
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
+            slots[0], /*carryRenderSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "draw-continuation source can start a carried session");
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
+            slots[1], /*carryRenderSession=*/true,
+            /*hasPendingSession=*/true,
+            /*tailReadyForCurrentHead=*/false),
+        "draw-continuation source can append to a carried session");
+
+  std::array<ReadySlotSnapshot, 1> continuationSource{
+      makeReadySource(slots[0], 0, slots[0].seqId),
+  };
+  check(dxmt9::render::selectedOpenCbPrefixStartsSession(
+            std::span<const ReadySlotSnapshot>(
+                continuationSource.data(), continuationSource.size()),
+            /*carryRenderSession=*/true),
+        "selected draw-continuation prefix starts a carry session");
+
+  const bool sourceIsSemanticBoundary =
+      slots[0].publishReason ==
+      dxmt9::perf::ChunkPublishReason::SemanticBoundary;
+  check(!dxmt9::render::openCbPendingCanReleaseAtSemanticBoundary(
+            sourceIsSemanticBoundary,
+            /*sourceHasFinalPresentTail=*/false,
+            dxmt9::render::OpenCbSemanticBoundaryReleaseMode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false),
+        "draw-continuation source is not a semantic-release boundary");
+}
+
 void renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch() {
   check(dxmt9::encoders::classifyRenderPassEntry(
             /*hasActiveRender=*/true,
@@ -1407,6 +1467,7 @@ int main() {
     tailPresentBatchShapeAllowsSeveralHeads();
     tailPresentPrefixSelectorRequiresCompleteTail();
     openCbTailPresentPrefixAllowsSessionHeads();
+    drawContinuationSourcesAreOrdinaryOpenCbSessionSources();
     renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch();
     drawAttachmentKeysUseEncoderKeyShape();
     openCbDrawContinuationBoundaryPublishesOnlySameKeyDrawTails();
