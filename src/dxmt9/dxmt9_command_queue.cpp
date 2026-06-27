@@ -4572,6 +4572,32 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
           static_cast<std::uint64_t>(count),
           selectorCompletionWaitActive);
     }
+    std::array<QueueCompletionSource, kCommandChunkCount>
+        selectedCompletionSources{};
+    bool selectedCompletionSourcesValid = false;
+    if (selectedOpenCbSessionPrefix) {
+      const std::size_t retainedCount =
+          queueLifecycle_.retainEncodedSourcesForPendingTail(
+              lock,
+              std::span<const ReadySlotSnapshot>(scratch.data(), count),
+              std::span<QueueCompletionSource>(
+                  selectedCompletionSources.data(), count));
+      selectedCompletionSourcesValid = retainedCount == count;
+      DXMT_ASSERT(selectedCompletionSourcesValid);
+    }
+    auto retainedSourceForIndex =
+        [&retainSource, &selectedCompletionSources,
+         selectedCompletionSourcesValid](
+            std::unique_lock<std::mutex>& lock,
+            std::size_t sourceIndex,
+            const ReadySlotSnapshot& source,
+            QueueCompletionSource& retained) {
+          if (selectedCompletionSourcesValid) {
+            retained = selectedCompletionSources[sourceIndex];
+            return true;
+          }
+          return retainSource(lock, source, retained);
+        };
     for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
       if (!lock.owns_lock()) {
         lock.lock();
@@ -4625,8 +4651,9 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       bool appendToPending =
           pendingRecord.has_value() && sourceCanAppendToPending;
       if (appendToPending) {
-        const QueueCompletionSource candidate =
-            core::metalqueue::completionSourceForReadySlot(source);
+        const QueueCompletionSource candidate = selectedCompletionSourcesValid
+            ? selectedCompletionSources[sourceIndex]
+            : core::metalqueue::completionSourceForReadySlot(source);
         const bool queueSourcesCanAppend =
             pendingSources.canAppend(candidate);
         const bool sessionSourcesCanAppend =
@@ -4655,7 +4682,8 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       QueueCompletionSource appendRetained{};
       bool appendRetainedValid = false;
       if (appendToPending) {
-        if (!retainSource(lock, source, appendRetained)) {
+        if (!retainedSourceForIndex(lock, sourceIndex, source,
+                                    appendRetained)) {
           perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
           if (!submitPendingRecordLocked(lock)) {
             abortOpenCbPendingFailOpen("append source retain failed");
@@ -4672,7 +4700,8 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       QueueCompletionSource startRetained{};
       bool startRetainedValid = false;
       if (startPending) {
-        if (!retainSource(lock, source, startRetained)) {
+        if (!retainedSourceForIndex(lock, sourceIndex, source,
+                                    startRetained)) {
           perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
           startPending = false;
         } else {
@@ -4695,7 +4724,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         options.deferSessionFinalization = !sourceHasFinalPresentTail;
         options.sessionSource =
             appendToPending ? appendRetained : startRetained;
-        if (selectedOpenCbSessionPrefix) {
+        if (selectedOpenCbSessionPrefix && selectedCompletionSourcesValid) {
           options.sessionLookaheadSources =
               std::span<const ReadySlotSnapshot>(scratch.data() + sourceIndex,
                                                  count - sourceIndex);

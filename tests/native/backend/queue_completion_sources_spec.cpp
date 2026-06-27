@@ -1045,6 +1045,50 @@ void retainEncodedSourcesAcceptsPartialRangeMetadata() {
         "retained partial range preserves hasPresent=false");
 }
 
+void retainEncodedSourcesAcceptsSelectedPrefixMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[1].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[2].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0xA3});
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t sourceCount =
+      fixture.controller.dequeueReadySlotBatchPrefix(
+          lock,
+          std::span<ReadySlotSnapshot>(snapshots),
+          [](const std::deque<std::size_t>&,
+             std::span<const ChunkSlot>,
+             std::size_t) { return 3u; });
+  checkEq(sourceCount, 3u, "test setup selects the whole source prefix");
+
+  std::array<QueueCompletionSource, 3> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(snapshots.data(), sourceCount),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, sourceCount,
+          "selected source prefix is retained as compact metadata");
+  checkEq(retained[0].seqId, 1ull, "first prefix source keeps seqId");
+  checkEq(retained[1].seqId, 2ull, "middle prefix source keeps seqId");
+  checkEq(retained[2].seqId, 3ull, "tail prefix source keeps seqId");
+  check(!retained[0].hasPresent, "first prefix source is non-present");
+  check(!retained[1].hasPresent, "middle prefix source is non-present");
+  check(retained[2].hasPresent, "tail prefix source preserves present flag");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "first retained prefix source remains encode-owned");
+  check(fixture.slots[1].state == ChunkSlot::State::Encoding,
+        "middle retained prefix source remains encode-owned");
+  check(fixture.slots[2].state == ChunkSlot::State::Encoding,
+        "tail retained prefix source remains encode-owned");
+}
+
 void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -1785,6 +1829,7 @@ int main() {
     retainEncodedSourcesRejectsPendingSources();
     retainEncodedSourcesRejectsStaleSnapshotMetadata();
     retainEncodedSourcesAcceptsPartialRangeMetadata();
+    retainEncodedSourcesAcceptsSelectedPrefixMetadata();
     retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();

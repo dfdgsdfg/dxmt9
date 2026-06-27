@@ -1928,12 +1928,18 @@ semantic attachment-only sources gives `85.674%` overlap share,
 [[present-pacing-encode-session-semantic-attachment-only-rerun.184]] then
 repeats the same flag set after discarding an early aborted launch and
 reproduces the signal (`85.495%` overlap share, `1,607` wait-time
-command-buffer commits, sampled FPS `11.502`). It is not promoted yet because
-the runs require `DXMT9_DISABLE_PRESENT_BOUNDARY=1`, raise render passes per
-present (`11.579 -> 12.66 to 12.75` versus H180), retain active-entry loss, and
-only have output-frame visual evidence. This reframes the next implementation
-shape: semantic/attachment CpuReady source publication and bounded wait-time
-release, not same-key continuation source flooding.
+command-buffer commits, sampled FPS `11.502`).
+[[present-pacing-encode-session-selected-prefix-retain.185]] then tightens the
+implementation so the selected open-CB source prefix is retained as compact
+completion-source metadata before cross-source lookahead is exposed; focused
+native tests, TLA verification, and a same-flag no-gputrace smoke pass
+(`86.312%` overlap share, `2.398` CB/present, `12.694` passes/present). The
+shape is still not promoted because the runs require
+`DXMT9_DISABLE_PRESENT_BOUNDARY=1`, raise render passes per present (`11.579 ->
+12.66 to 12.75` versus H180), retain active-entry loss, and only have
+output-frame visual evidence. This reframes the next implementation shape:
+semantic/attachment CpuReady source publication and bounded wait-time release,
+not same-key continuation source flooding.
 
 Related CPU-side counter design doc: [[overview]].
 
