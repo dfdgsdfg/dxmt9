@@ -393,10 +393,10 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
             head, /*carryRenderSession=*/false,
             /*tailReadyForCurrentHead=*/false),
         "open-CB preencode heads can start pending work");
-  check(!dxmt9::render::slotCanStartOpenCbPendingSession(
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
             head, /*carryRenderSession=*/true,
             /*tailReadyForCurrentHead=*/false),
-        "draw-count preencode heads do not start carried sessions without a ready tail");
+        "draw-count preencode heads can start carried sessions before the tail is ready");
   check(dxmt9::render::slotCanStartOpenCbPendingSession(
             head, /*carryRenderSession=*/true,
             /*tailReadyForCurrentHead=*/true),
@@ -418,10 +418,10 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
             ordinaryWork, /*carryRenderSession=*/false,
             /*tailReadyForCurrentHead=*/false),
         "ordinary work cannot start a pending session without carry mode");
-  check(!dxmt9::render::slotCanStartOpenCbPendingSession(
+  check(dxmt9::render::slotCanStartOpenCbPendingSession(
             ordinaryWork, /*carryRenderSession=*/true,
             /*tailReadyForCurrentHead=*/false),
-        "ordinary work cannot start a carried session without a semantic boundary");
+        "ordinary work can start a carried session before the tail is ready");
   check(dxmt9::render::slotCanStartOpenCbPendingSession(
             ordinaryWork, /*carryRenderSession=*/true,
             /*tailReadyForCurrentHead=*/true),
@@ -1092,16 +1092,24 @@ void openCbTailPresentPrefixAllowsSessionHeads() {
               readySlots,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/2),
-          0u,
-          "open-CB selector rejects when tail is outside scratch capacity");
+          2u,
+          "open-CB selector starts a pending head prefix when tail is outside scratch capacity");
 
   const std::deque<std::size_t> headOnly{0, 1};
   checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
               headOnly,
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/2),
-          0u,
-          "open-CB selector rejects non-semantic head-only ready queues");
+          2u,
+          "open-CB selector accepts ordinary head-only ready queues");
+
+  const std::deque<std::size_t> singleHead{0};
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              singleHead,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/1),
+          1u,
+          "open-CB selector accepts a single ordinary head");
 
   slots[0].publishReason = dxmt9::perf::ChunkPublishReason::SemanticBoundary;
   slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
@@ -1110,7 +1118,7 @@ void openCbTailPresentPrefixAllowsSessionHeads() {
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/2),
           2u,
-          "open-CB selector accepts semantic-start non-present prefixes");
+          "open-CB selector still accepts semantic-start non-present prefixes");
   slots[0].publishReason =
       dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
   slots[1].publishReason =

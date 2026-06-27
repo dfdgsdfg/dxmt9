@@ -65,7 +65,7 @@ bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
   if (tailReadyForCurrentHead) {
     return true;
   }
-  return slotIsSemanticOpenCbSessionHead(slot);
+  return true;
 }
 
 bool openCbPresentTailNeedsPrePresentSplit(
@@ -355,20 +355,7 @@ std::size_t selectOpenCbTailPresentBatchPrefix(
     ++nonPresentPrefix;
   }
 
-  if (nonPresentPrefix < 2u) {
-    return 0;
-  }
-
-  // Without a final Present tail, only a semantic boundary may start a
-  // carried session. Ordinary heads can then append to that already-open
-  // session, but must not become the first tailless source.
-  const auto firstSlotIndex = readySlots.front();
-  if (firstSlotIndex >= slots.size()) {
-    return 0;
-  }
-  return slotIsSemanticOpenCbSessionHead(slots[firstSlotIndex])
-      ? nonPresentPrefix
-      : 0u;
+  return nonPresentPrefix;
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
