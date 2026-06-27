@@ -186,6 +186,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H164 | Open-CB Present-tail split makes tail-only sources but still misses P4 | mechanism observed; runtime promotion rejected | [[present-pacing-encode-session-open-cb-present-tail-split.164]] changes `DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1` so `submitPresent()` publishes any remaining pre-Present writing slot as `PresentSplitBefore` before appending the final Present tail. The smoke is visual/error safe and proves the structure (`PresentSplitBefore 0 -> 829`, Present pre-Present draw-tail opportunity `884 -> 0`, `tail_submitted=839`). Promotion still fails: `semantic_release_submitted=0`, `completion_wait_encode_dequeue=0`, `completion_wait_command_buffer_commit=1`, `completion_wait_enqueues_during_wait=1`, and the shape stays baseline-like (`4.006` CB/present, `3.000` sub-CB/present, `10.577` passes/present). This fixes the tail ownership model but not the P4 wall; the next owner is earlier CPU-ready arrival or an already-dequeued pass-streaming session that can commit inside the active wait window without extra CB/pass/tile/load-store cost. |
 | H165 | Active-wait CpuReady append is safe but has almost no active-wait opportunity | mechanism safe; runtime promotion rejected | [[present-pacing-encode-session-active-wait-cpuready-append.165]] adds default-off `DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=1`, so appendable ready sources stay inside the pending `EncodeSession` before active-wait semantic release, and an empty-ready active wait may cut current non-present writer work as semantic CPU-ready. The smoke is visual/error safe and keeps baseline-like shape (`4.006` CB/present, `3.000` sub-CBs/present, `10.880` passes/present), but records `semantic_release_submitted=0`, `completion_wait_encode_dequeue=0`, `completion_wait_command_buffer_commit=1`, and `completion_wait_enqueues_during_wait=1`. This rejects release-before-ready ordering as the main owner under H164; the remaining blocker is active-wait coverage or a stronger source-tape merge before the wait opens. |
 | H166 | Combining writer-active, command-limit, and active-wait CpuReady policies is safe but not promotable | mechanism safe; runtime promotion rejected | [[present-pacing-encode-session-combined-cpuready-append.166]] reruns the combined opt-in path after discarding a manually closed sample. The valid rerun is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows) and heavily exercises semantic source publication (`semantic_boundary=10541`, `head_appended=10494`) while preserving baseline-like shape (`4.009` CB/present, `3.001` sub-CBs/present). It still misses P4: `semantic_release_submitted=1`, `completion_wait_encode_dequeue=4`, `completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`, and tail600 FPS is `9.959/9.748/13.539`. Keep the combination diagnostic-only; the next carrier must make staged work already attached to an open render encoder before the active wait. |
+| H167 | Pending-wait state counters show the wait almost never has an open session | diagnostic observed; runtime promotion rejected | [[present-pacing-encode-session-pending-wait-state.167]] adds cumulative counters for `pendingRecord` state while `completionWaitActive()` is true and reruns the H166 flag set. The smoke remains visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows) and preserves baseline-like shape (`4.009` CB/present, `3.001` sub-CBs/present, `10.882` passes/present), but the active wait observes only `3` pending sessions (`3` releasable, `3` active-render, `3` with ready source) across `840` presents and `9524` semantic-release candidates. Same-window work stays negligible (`completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`). This closes the "pending exists but is blocked" branch; the next carrier must attach source-tape work to an already-open render encoder before the wait opens. |
 
 ## Verification methods
 
@@ -1541,7 +1542,12 @@ flowchart TD
   because all `5358` candidates still miss the active wait window. H166 combines
   writer-active cuts, command-limit cuts, and active-wait append; the valid
   rerun is still visual/error safe and keeps baseline-like shape, but only
-  reaches `2` completion-wait Metal commits and does not improve FPS.
+  reaches `2` completion-wait Metal commits and does not improve FPS. H167 then
+  instruments the remaining ambiguity and finds only `3` pending open sessions
+  during active completion waits across `840` presents and `9524` semantic
+  candidates, so the issue is not a frequently blocked pending session; it is
+  that source-tape work is not attached to an already-open render encoder before
+  the wait opens.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
@@ -1549,6 +1555,7 @@ flowchart TD
   [[present-pacing-encode-session-ready-preempt-release.155]]
   [[present-pacing-encode-session-active-wait-cpuready-append.165]]
   [[present-pacing-encode-session-combined-cpuready-append.166]]
+  [[present-pacing-encode-session-pending-wait-state.167]]
 
 **Rejected**
 

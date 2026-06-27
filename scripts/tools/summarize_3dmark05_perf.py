@@ -258,6 +258,12 @@ RUN_COUNTERS = (
     "open_cb_tail_present_pending_abandoned_retain_failed",
     "open_cb_tail_present_pending_abandoned_encode_null",
     "open_cb_tail_present_pending_merge_failed",
+    "open_cb_tail_present_completion_wait_pending_observed",
+    "open_cb_tail_present_completion_wait_pending_releasable",
+    "open_cb_tail_present_completion_wait_pending_release_used",
+    "open_cb_tail_present_completion_wait_pending_active_render",
+    "open_cb_tail_present_completion_wait_pending_ready_source",
+    "open_cb_tail_present_completion_wait_pending_no_ready_source",
     "render_pass_load_action_load",
     "render_pass_load_action_clear",
     "render_pass_load_action_dontcare",
@@ -3973,6 +3979,56 @@ def append_pacing_cpu_stage_derived(
             value = counters.get(key)
             lines.append(
                 f"| {label} | `{fmt(value)}` | `{ratio_text(value, open_cb_started)}` |"
+            )
+        lines.append("")
+
+    wait_pending_observed = counters.get(
+        "open_cb_tail_present_completion_wait_pending_observed"
+    )
+    wait_pending_activity = open_cb_counter_value(
+        "open_cb_tail_present_completion_wait_pending_observed"
+    )
+    if wait_pending_activity:
+        lines.append("### Open-CB Completion-Wait Pending State")
+        lines.append("")
+        lines.append(
+            "These rows show whether an active completion wait coincided with a "
+            "deferred `EncodeSession`, and whether that pending session was "
+            "releasable or could still append a ready source."
+        )
+        lines.append("")
+        lines.append("| Event | total | per pending-wait observation |")
+        lines.append("|---|---:|---:|")
+        for label, key in (
+            (
+                "pending observed during completion wait",
+                "open_cb_tail_present_completion_wait_pending_observed",
+            ),
+            (
+                "semantic-boundary releasable",
+                "open_cb_tail_present_completion_wait_pending_releasable",
+            ),
+            (
+                "release already used in wait",
+                "open_cb_tail_present_completion_wait_pending_release_used",
+            ),
+            (
+                "active render encoder carried",
+                "open_cb_tail_present_completion_wait_pending_active_render",
+            ),
+            (
+                "ready source available",
+                "open_cb_tail_present_completion_wait_pending_ready_source",
+            ),
+            (
+                "no ready source available",
+                "open_cb_tail_present_completion_wait_pending_no_ready_source",
+            ),
+        ):
+            value = counters.get(key)
+            lines.append(
+                f"| {label} | `{fmt(value)}` | "
+                f"`{ratio_text(value, wait_pending_observed)}` |"
             )
         lines.append("")
 

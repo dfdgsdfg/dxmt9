@@ -3993,10 +3993,29 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         return true;
       };
 
+  auto countCompletionWaitPendingState =
+      [&pendingRecord, &pendingSession,
+       &pendingCanReleaseAtSemanticBoundary,
+       &semanticBoundaryReleaseUsedDuringWait](
+          bool completionWaitActive,
+          bool readySlotsEmpty) {
+        if (!completionWaitActive || !pendingRecord.has_value()) {
+          return;
+        }
+        perf::countOpenCbTailPresentCompletionWaitPendingState(
+            pendingCanReleaseAtSemanticBoundary,
+            semanticBoundaryReleaseUsedDuringWait,
+            pendingSession &&
+                encoders::encodeChunkSessionHasActiveRender(*pendingSession),
+            readySlotsEmpty);
+      };
+
   while (true) {
     std::unique_lock lock(mutex_);
     if (pendingRecord.has_value() && !readySlots_.empty()) {
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
+      countCompletionWaitPendingState(
+          completionWaitActive, /*readySlotsEmpty=*/false);
       if (semanticBoundaryReleaseMode ==
               render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
           !completionWaitActive) {
@@ -4058,6 +4077,8 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
     if (pendingRecord.has_value() && readySlots_.empty()) {
       const bool completionWaitActive = queueLifecycle_.completionWaitActive();
       const bool writerActive = writingSlot_.has_value();
+      countCompletionWaitPendingState(
+          completionWaitActive, /*readySlotsEmpty=*/true);
       if (pendingCanReleaseAtSemanticBoundary) {
         perf::countOpenCbTailPresentSemanticReleaseCandidate();
         const auto noWaitBlock =

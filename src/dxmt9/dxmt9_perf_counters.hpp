@@ -313,6 +313,11 @@ void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive(
 void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
 void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
 void countOpenCbTailPresentSemanticReleaseFailed();
+void countOpenCbTailPresentCompletionWaitPendingState(
+    bool canReleaseAtSemanticBoundary,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool hasActiveRender,
+    bool readySlotsEmpty);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,

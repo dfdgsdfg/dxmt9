@@ -415,6 +415,12 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedAlreadyUsed{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseFailed{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingObserved{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleasable{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleaseUsed{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingActiveRender{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReadySource{0};
+  std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingNoReadySource{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
@@ -2508,6 +2514,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_already_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedAlreadyUsed, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseFailed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_observed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingObserved, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_releasable", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleasable, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_release_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleaseUsed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_active_render", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingActiveRender, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_ready_source", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReadySource, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_completion_wait_pending_no_ready_source", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingNoReadySource, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
@@ -5135,6 +5147,29 @@ void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed() {
 
 void countOpenCbTailPresentSemanticReleaseFailed() {
   add(counters().openCbTailPresentSemanticReleaseFailed);
+}
+
+void countOpenCbTailPresentCompletionWaitPendingState(
+    bool canReleaseAtSemanticBoundary,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool hasActiveRender,
+    bool readySlotsEmpty) {
+  auto& c = counters();
+  add(c.openCbTailPresentCompletionWaitPendingObserved);
+  if (canReleaseAtSemanticBoundary) {
+    add(c.openCbTailPresentCompletionWaitPendingReleasable);
+  }
+  if (semanticReleaseAlreadyUsedDuringWait) {
+    add(c.openCbTailPresentCompletionWaitPendingReleaseUsed);
+  }
+  if (hasActiveRender) {
+    add(c.openCbTailPresentCompletionWaitPendingActiveRender);
+  }
+  if (readySlotsEmpty) {
+    add(c.openCbTailPresentCompletionWaitPendingNoReadySource);
+  } else {
+    add(c.openCbTailPresentCompletionWaitPendingReadySource);
+  }
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
