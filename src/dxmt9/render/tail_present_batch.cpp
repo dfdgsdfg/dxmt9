@@ -98,6 +98,27 @@ bool openCbPendingAllowsSemanticMidChunkCommits(
   return true;
 }
 
+std::uint32_t drawAttachmentMaxSampleCount(
+    const core::FlatDrawStateRecord& hot) noexcept {
+  std::uint32_t sampleCount = 1;
+  for (const auto& attachment : hot.colorAttachments) {
+    sampleCount = std::max(sampleCount, attachment.sampleCount);
+  }
+  sampleCount = std::max(sampleCount, hot.depthStencil.sampleCount);
+  return sampleCount;
+}
+
+bool drawAttachmentKeysMatch(const core::FlatDrawStateRecord& lhs,
+                             const core::FlatDrawStateRecord& rhs) noexcept {
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    if (lhs.colorAttachments[i].handle != rhs.colorAttachments[i].handle) {
+      return false;
+    }
+  }
+  return lhs.depthStencil.handle == rhs.depthStencil.handle &&
+         drawAttachmentMaxSampleCount(lhs) == drawAttachmentMaxSampleCount(rhs);
+}
+
 bool openCbPendingCanReleaseAtSemanticBoundary(
     bool sourceIsSemanticBoundary,
     bool sourceHasFinalPresentTail,

@@ -39,6 +39,9 @@ bool openCbPresentTailNeedsPrePresentSplit(
 bool openCbPendingAllowsSemanticMidChunkCommits(
     bool appendToPending) noexcept;
 
+bool drawAttachmentKeysMatch(const core::FlatDrawStateRecord& lhs,
+                             const core::FlatDrawStateRecord& rhs) noexcept;
+
 enum class OpenCbSemanticBoundaryReleaseMode : std::uint8_t {
   CompletionWait,
   Deterministic,

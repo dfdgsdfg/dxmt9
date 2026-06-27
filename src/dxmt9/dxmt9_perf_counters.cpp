@@ -453,6 +453,16 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentWaitStartPublished{0};
   std::atomic<std::uint64_t> openCbTailPresentWaitStartProducerPublishCandidates{0};
   std::atomic<std::uint64_t> openCbTailPresentWaitStartProducerPublished{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryCandidates{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryCandidateWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryCandidateWaitInactive{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryNoDrawTail{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundarySame{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryChanged{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryBlockedHeadroom{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryPublished{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryPublishedWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentDrawAttachmentBoundaryPublishedWaitInactive{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingObserved{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleasable{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleaseUsed{0};
@@ -2590,6 +2600,16 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_wait_start_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublished, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_wait_start_producer_publish_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartProducerPublishCandidates, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_wait_start_producer_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartProducerPublished, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryCandidates, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_candidate_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryCandidateWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_candidate_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryCandidateWaitInactive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_no_draw_tail", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryNoDrawTail, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_same", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundarySame, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_changed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryChanged, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_blocked_headroom", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryBlockedHeadroom, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryPublished, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_published_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryPublishedWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_draw_attachment_boundary_published_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentDrawAttachmentBoundaryPublishedWaitInactive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_observed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingObserved, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_releasable", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleasable, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_release_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleaseUsed, nullptr, nullptr, 0.0},
@@ -5355,6 +5375,40 @@ void countOpenCbTailPresentWaitStartProducerPublishCandidate() {
 
 void countOpenCbTailPresentWaitStartProducerPublished() {
   add(counters().openCbTailPresentWaitStartProducerPublished);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundaryCandidate(
+    bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentDrawAttachmentBoundaryCandidates);
+  add(completionWaitActive
+          ? c.openCbTailPresentDrawAttachmentBoundaryCandidateWaitActive
+          : c.openCbTailPresentDrawAttachmentBoundaryCandidateWaitInactive);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundaryNoDrawTail() {
+  add(counters().openCbTailPresentDrawAttachmentBoundaryNoDrawTail);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundarySame() {
+  add(counters().openCbTailPresentDrawAttachmentBoundarySame);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundaryChanged() {
+  add(counters().openCbTailPresentDrawAttachmentBoundaryChanged);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundaryBlockedHeadroom() {
+  add(counters().openCbTailPresentDrawAttachmentBoundaryBlockedHeadroom);
+}
+
+void countOpenCbTailPresentDrawAttachmentBoundaryPublished(
+    bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentDrawAttachmentBoundaryPublished);
+  add(completionWaitActive
+          ? c.openCbTailPresentDrawAttachmentBoundaryPublishedWaitActive
+          : c.openCbTailPresentDrawAttachmentBoundaryPublishedWaitInactive);
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {

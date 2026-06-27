@@ -336,6 +336,14 @@ void countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
 void countOpenCbTailPresentWaitStartPublished();
 void countOpenCbTailPresentWaitStartProducerPublishCandidate();
 void countOpenCbTailPresentWaitStartProducerPublished();
+void countOpenCbTailPresentDrawAttachmentBoundaryCandidate(
+    bool completionWaitActive);
+void countOpenCbTailPresentDrawAttachmentBoundaryNoDrawTail();
+void countOpenCbTailPresentDrawAttachmentBoundarySame();
+void countOpenCbTailPresentDrawAttachmentBoundaryChanged();
+void countOpenCbTailPresentDrawAttachmentBoundaryBlockedHeadroom();
+void countOpenCbTailPresentDrawAttachmentBoundaryPublished(
+    bool completionWaitActive);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,

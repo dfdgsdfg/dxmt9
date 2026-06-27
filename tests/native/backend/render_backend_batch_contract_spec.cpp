@@ -1207,6 +1207,36 @@ void renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch() {
         "tile-FFP mid-pass ineligibility is a semantic encoder boundary");
 }
 
+void drawAttachmentKeysUseEncoderKeyShape() {
+  dxmt9::core::FlatDrawStateRecord a{};
+  dxmt9::core::FlatDrawStateRecord b{};
+  check(dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "default empty attachment keys match");
+
+  a.colorAttachments[0].handle.value = 0x101;
+  b.colorAttachments[0].handle.value = 0x101;
+  check(dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "same color attachment handle matches");
+
+  b.colorAttachments[0].level = 3;
+  check(dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "producer boundary key mirrors encoder key and ignores level");
+
+  b.colorAttachments[0].handle.value = 0x202;
+  check(!dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "color attachment handle change is a semantic boundary");
+
+  b.colorAttachments[0].handle.value = 0x101;
+  b.depthStencil.handle.value = 0x303;
+  check(!dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "depth attachment handle change is a semantic boundary");
+
+  b.depthStencil.handle.value = {};
+  b.colorAttachments[1].sampleCount = 4;
+  check(!dxmt9::render::drawAttachmentKeysMatch(a, b),
+        "sample-count change is a semantic boundary");
+}
+
 void storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession() {
   check(dxmt9::encoders::useSourceLocalStoreProofLookahead(
             /*externalEncodeSession=*/false,
@@ -1333,6 +1363,7 @@ int main() {
     tailPresentPrefixSelectorRequiresCompleteTail();
     openCbTailPresentPrefixAllowsSessionHeads();
     renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch();
+    drawAttachmentKeysUseEncoderKeyShape();
     storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession();
     chunkSlotAppendCommandsFromRemapsPayloadsAndCommandIndices();
   } catch (const TestFailure& error) {

@@ -296,6 +296,16 @@ RUN_COUNTERS = (
     "open_cb_tail_present_wait_start_published",
     "open_cb_tail_present_wait_start_producer_publish_candidates",
     "open_cb_tail_present_wait_start_producer_published",
+    "open_cb_tail_present_draw_attachment_boundary_candidates",
+    "open_cb_tail_present_draw_attachment_boundary_candidate_wait_active",
+    "open_cb_tail_present_draw_attachment_boundary_candidate_wait_inactive",
+    "open_cb_tail_present_draw_attachment_boundary_no_draw_tail",
+    "open_cb_tail_present_draw_attachment_boundary_same",
+    "open_cb_tail_present_draw_attachment_boundary_changed",
+    "open_cb_tail_present_draw_attachment_boundary_blocked_headroom",
+    "open_cb_tail_present_draw_attachment_boundary_published",
+    "open_cb_tail_present_draw_attachment_boundary_published_wait_active",
+    "open_cb_tail_present_draw_attachment_boundary_published_wait_inactive",
     "open_cb_tail_present_completion_wait_pending_observed",
     "open_cb_tail_present_completion_wait_pending_releasable",
     "open_cb_tail_present_completion_wait_pending_release_used",
@@ -4203,6 +4213,46 @@ def append_pacing_cpu_stage_derived(
             (
                 "wait-start producer published",
                 "open_cb_tail_present_wait_start_producer_published",
+            ),
+            (
+                "draw attachment boundary candidates",
+                "open_cb_tail_present_draw_attachment_boundary_candidates",
+            ),
+            (
+                "draw attachment boundary candidates: wait active",
+                "open_cb_tail_present_draw_attachment_boundary_candidate_wait_active",
+            ),
+            (
+                "draw attachment boundary candidates: wait inactive",
+                "open_cb_tail_present_draw_attachment_boundary_candidate_wait_inactive",
+            ),
+            (
+                "draw attachment boundary blocked: no draw tail",
+                "open_cb_tail_present_draw_attachment_boundary_no_draw_tail",
+            ),
+            (
+                "draw attachment boundary same key",
+                "open_cb_tail_present_draw_attachment_boundary_same",
+            ),
+            (
+                "draw attachment boundary changed key",
+                "open_cb_tail_present_draw_attachment_boundary_changed",
+            ),
+            (
+                "draw attachment boundary blocked: headroom",
+                "open_cb_tail_present_draw_attachment_boundary_blocked_headroom",
+            ),
+            (
+                "draw attachment boundary published",
+                "open_cb_tail_present_draw_attachment_boundary_published",
+            ),
+            (
+                "draw attachment boundary published: wait active",
+                "open_cb_tail_present_draw_attachment_boundary_published_wait_active",
+            ),
+            (
+                "draw attachment boundary published: wait inactive",
+                "open_cb_tail_present_draw_attachment_boundary_published_wait_inactive",
             ),
         ):
             value = counters.get(key)

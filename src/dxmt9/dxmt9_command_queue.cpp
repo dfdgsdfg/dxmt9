@@ -166,6 +166,15 @@ bool openCbWaitStartCpuReadyPublishEnabled() {
   return enabled && openCbSemanticBoundaryPublishEnabled();
 }
 
+bool openCbDrawAttachmentBoundaryPublishEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled && openCbSemanticBoundaryPublishEnabled();
+}
+
 render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
   static const auto mode = [] {
     const char* env =
@@ -2930,6 +2939,58 @@ bool maybePublishOpenCbCpuReadyCommandLimitUnlocked(
   return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
 }
 
+const core::FlatDrawStateRecord* lastDrawTailState(
+    const core::ChunkSlot& slot) noexcept {
+  if (slot.commandHeaders.empty() ||
+      slot.commandHeaders.back().kind != core::MetalCommandKind::DrawRun) {
+    return nullptr;
+  }
+  const auto command = slot.drawRunCommandAt(slot.commandHeaders.size() - 1u);
+  return command.drawState.hot;
+}
+
+bool maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    const core::FlatDrawStateRecord& nextHot) {
+  if (!openCbDrawAttachmentBoundaryPublishEnabled() || !q.writingSlot_) {
+    return false;
+  }
+
+  auto& slot = currentSlotUnlocked(q);
+  if (slot.commandsEmpty() || !slot.presentRecords.empty()) {
+    return false;
+  }
+
+  const bool completionWaitActive =
+      q.queueLifecycle_.completionWaitActive();
+  perf::countOpenCbTailPresentDrawAttachmentBoundaryCandidate(
+      completionWaitActive);
+
+  const auto* tailHot = lastDrawTailState(slot);
+  if (!tailHot) {
+    perf::countOpenCbTailPresentDrawAttachmentBoundaryNoDrawTail();
+    return false;
+  }
+  if (render::drawAttachmentKeysMatch(*tailHot, nextHot)) {
+    perf::countOpenCbTailPresentDrawAttachmentBoundarySame();
+    return false;
+  }
+
+  perf::countOpenCbTailPresentDrawAttachmentBoundaryChanged();
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    perf::countOpenCbTailPresentDrawAttachmentBoundaryBlockedHeadroom();
+    return false;
+  }
+  const bool published = maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
+  if (published) {
+    perf::countOpenCbTailPresentDrawAttachmentBoundaryPublished(
+        completionWaitActive);
+  }
+  return published;
+}
+
 bool maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
     CommandQueue& q,
     resources::Pool& pool,
@@ -3226,6 +3287,8 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
     PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
+    (void)maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+        *this, pool_, lock, state.hot);
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
@@ -3308,6 +3371,13 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
       PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
       ensureWritingSlotUnlocked(queue, lock);
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
+      DXMT_ASSERT(batch.front().stateMaterialized);
+      const bool attachmentBoundaryPublished =
+          maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+              queue, pool, lock, batch.front().materializedState().hot);
+      forceDrawResourceMarkingAfterSplit =
+          forceDrawResourceMarkingAfterSplit ||
+          (attachmentBoundaryPublished && skipDrawResourceMarking);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
@@ -3431,6 +3501,13 @@ void submitDrawRunBatchAndRunImpl(
       PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
       ensureWritingSlotUnlocked(queue, lock);
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
+      DXMT_ASSERT(batch.front().stateMaterialized);
+      const bool attachmentBoundaryPublished =
+          maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+              queue, pool, lock, batch.front().materializedState().hot);
+      forceDrawResourceMarkingAfterSplit =
+          forceDrawResourceMarkingAfterSplit ||
+          (attachmentBoundaryPublished && skipDrawResourceMarking);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
@@ -3491,6 +3568,12 @@ void submitDrawRunBatchAndRunImpl(
     PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
     ensureWritingSlotUnlocked(queue, lock);
     maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
+    const bool attachmentBoundaryPublished =
+        maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
+            queue, pool, lock, state.hot);
+    forceDrawResourceMarkingAfterSplit =
+        forceDrawResourceMarkingAfterSplit ||
+        (attachmentBoundaryPublished && skipDrawResourceMarking);
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
