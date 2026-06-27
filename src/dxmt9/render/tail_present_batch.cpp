@@ -334,11 +334,12 @@ std::size_t selectOpenCbTailPresentBatchPrefix(
     const std::deque<std::size_t>& readySlots,
     std::span<const core::ChunkSlot> slots,
     std::size_t maxCount) noexcept {
-  if (maxCount < 2u || readySlots.size() < 2u) {
+  if (maxCount == 0u || readySlots.empty()) {
     return 0;
   }
 
   const std::size_t limit = std::min(maxCount, readySlots.size());
+  std::size_t nonPresentPrefix = 0;
   for (std::size_t i = 0; i < limit; ++i) {
     const std::size_t slotIndex = readySlots[i];
     if (slotIndex >= slots.size()) {
@@ -352,9 +353,23 @@ std::size_t selectOpenCbTailPresentBatchPrefix(
     if (!slotCanBeOpenCbSessionHead(slot)) {
       return 0;
     }
+    ++nonPresentPrefix;
   }
 
-  return 0;
+  if (nonPresentPrefix < 2u) {
+    return 0;
+  }
+
+  // Without a final Present tail, only a semantic boundary may start a
+  // carried session. Ordinary heads can then append to that already-open
+  // session, but must not become the first tailless source.
+  const auto firstSlotIndex = readySlots.front();
+  if (firstSlotIndex >= slots.size()) {
+    return 0;
+  }
+  return slotIsSemanticOpenCbSessionHead(slots[firstSlotIndex])
+      ? nonPresentPrefix
+      : 0u;
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(

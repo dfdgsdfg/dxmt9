@@ -4355,6 +4355,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         carryRenderSession && count > 1u &&
         scratch[count - 1u].slot &&
         render::slotHasFinalPresentTail(*scratch[count - 1u].slot);
+    const bool selectedOpenCbSessionPrefix = carryRenderSession && count > 1u;
     for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
       if (!lock.owns_lock()) {
         lock.lock();
@@ -4478,7 +4479,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         options.deferSessionFinalization = !sourceHasFinalPresentTail;
         options.sessionSource =
             appendToPending ? appendRetained : startRetained;
-        if (selectedTailReadyPrefix) {
+        if (selectedOpenCbSessionPrefix) {
           options.sessionLookaheadSources =
               std::span<const ReadySlotSnapshot>(scratch.data() + sourceIndex,
                                                  count - sourceIndex);

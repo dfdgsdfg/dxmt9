@@ -1001,7 +1001,20 @@ void openCbTailPresentPrefixAllowsSessionHeads() {
               std::span<const ChunkSlot>(slots.data(), slots.size()),
               /*maxCount=*/2),
           0u,
-          "open-CB selector rejects a real head-only ready queue");
+          "open-CB selector rejects non-semantic head-only ready queues");
+
+  slots[0].publishReason = dxmt9::perf::ChunkPublishReason::SemanticBoundary;
+  slots[1].publishReason = dxmt9::perf::ChunkPublishReason::DrawLimit;
+  checkEq(dxmt9::render::selectOpenCbTailPresentBatchPrefix(
+              headOnly,
+              std::span<const ChunkSlot>(slots.data(), slots.size()),
+              /*maxCount=*/2),
+          2u,
+          "open-CB selector accepts semantic-start non-present prefixes");
+  slots[0].publishReason =
+      dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
+  slots[1].publishReason =
+      dxmt9::perf::ChunkPublishReason::PresentSplitBefore;
 
   std::array<ChunkSlot, 3> postPresentTailSlots{};
   postPresentTailSlots[0].publishReason =
