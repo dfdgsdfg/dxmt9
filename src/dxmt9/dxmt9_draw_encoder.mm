@@ -9143,7 +9143,8 @@ bool publishEncodeChunkSessionSources(
     const auto& actual = recordSources[i];
     if (expected.slotIndex != actual.slotIndex ||
         expected.seqId != actual.seqId ||
-        expected.hasPresent != actual.hasPresent) {
+        expected.hasPresent != actual.hasPresent ||
+        expected.commandCount != actual.commandCount) {
       return false;
     }
   }

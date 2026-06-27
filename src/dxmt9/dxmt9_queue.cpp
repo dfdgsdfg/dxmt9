@@ -259,11 +259,13 @@ void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkS
 std::array<QueueCompletionSource, 1> fallbackCompletionSource(
     size_t slotIndex,
     u64 seqId,
-    bool hasPresent) {
+    bool hasPresent,
+    size_t commandCount = 0) {
   return {QueueCompletionSource{
       .slotIndex = slotIndex,
       .seqId = seqId,
       .hasPresent = hasPresent,
+      .commandCount = commandCount,
   }};
 }
 
@@ -302,6 +304,7 @@ QueueCompletionSource completionSourceForReadySlot(
       .slotIndex = snapshot.slotIndex,
       .seqId = snapshot.seqId,
       .hasPresent = snapshot.hasPresent,
+      .commandCount = snapshot.commandCount,
   };
 }
 
@@ -506,7 +509,8 @@ bool mergeEncodedPendingTailSubmission(
     for (std::size_t i = 0; i < left.size(); ++i) {
       if (left[i].slotIndex != right[i].slotIndex ||
           left[i].seqId != right[i].seqId ||
-          left[i].hasPresent != right[i].hasPresent) {
+          left[i].hasPresent != right[i].hasPresent ||
+          left[i].commandCount != right[i].commandCount) {
         return false;
       }
     }
@@ -1398,6 +1402,7 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
         .slotIndex = sources[i].slotIndex,
         .seqId = sources[i].seqId,
         .hasPresent = sources[i].hasPresent,
+        .commandCount = sources[i].commandCount,
     };
   }
 #ifndef NDEBUG
@@ -2013,7 +2018,10 @@ void QueueLifecycleController::assertPendingCompletionInvariantsLocked() const {
     const auto fallbackSources = fallbackCompletionSource(
         pending.slotIndex,
         pending.seqId,
-        pending.diagnostics.hasPresent);
+        pending.diagnostics.hasPresent,
+        pending.slotIndex < slots.size()
+            ? slots[pending.slotIndex].commandCount()
+            : std::size_t{0});
     const auto completionSources = completionSourcesFor(
         pending.explicitCompletionSourceSpan(),
         fallbackSources);
@@ -2047,7 +2055,12 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 
 void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   const auto fallbackSources = fallbackCompletionSource(
-      record.slotIndex, record.seqId, record.diagnostics.hasPresent);
+      record.slotIndex,
+      record.seqId,
+      record.diagnostics.hasPresent,
+      record.slotIndex < submissionBinding_.slots.size()
+          ? submissionBinding_.slots[record.slotIndex].commandCount()
+          : std::size_t{0});
   const auto completionSources = completionSourcesFor(
       record.explicitCompletionSourceSpan(), fallbackSources);
   const CommandBufferDiagnostics diagnostics =
@@ -2317,7 +2330,10 @@ bool QueueLifecycleController::processOnePendingCompletion(bool& stop) {
     const auto fallbackSources = fallbackCompletionSource(
         pending.slotIndex,
         pending.seqId,
-        pending.diagnostics.hasPresent);
+        pending.diagnostics.hasPresent,
+        pending.slotIndex < binding.slots.size()
+            ? binding.slots[pending.slotIndex].commandCount()
+            : std::size_t{0});
     const auto completionSources = completionSourcesFor(
         pending.explicitCompletionSourceSpan(),
         fallbackSources);

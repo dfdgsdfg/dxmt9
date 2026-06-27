@@ -208,6 +208,7 @@ struct QueueCompletionSource {
   size_t slotIndex = 0;
   u64 seqId = 0;
   bool hasPresent = false;
+  size_t commandCount = 0;
 };
 
 inline constexpr size_t kMaxEncodeSessionSources = 32;

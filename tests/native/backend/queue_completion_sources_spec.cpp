@@ -145,12 +145,14 @@ void encodeSessionSourceListStoresConsecutiveSources() {
             .slotIndex = 3,
             .seqId = 7,
             .hasPresent = false,
+            .commandCount = 11,
         }),
         "first session source appends");
   check(list.append(QueueCompletionSource{
             .slotIndex = 4,
             .seqId = 8,
             .hasPresent = true,
+            .commandCount = 1,
         }),
         "present tail session source appends");
 
@@ -161,6 +163,10 @@ void encodeSessionSourceListStoresConsecutiveSources() {
   checkEq(span[1].slotIndex, 4u, "session source list preserves tail slot");
   checkEq(span[1].seqId, 8ull, "session source list preserves tail seq");
   check(span[1].hasPresent, "session source list preserves tail present flag");
+  checkEq(span[0].commandCount, 11u,
+          "session source list preserves head command count");
+  checkEq(span[1].commandCount, 1u,
+          "session source list preserves tail command count");
 
   list.clear();
   check(list.empty(), "session source list clear resets count");
@@ -168,6 +174,8 @@ void encodeSessionSourceListStoresConsecutiveSources() {
           "session source list clear scrubs stale head seq metadata");
   check(!list.entries[1].hasPresent,
         "session source list clear scrubs stale tail present metadata");
+  checkEq(list.entries[0].commandCount, 0u,
+          "session source list clear scrubs stale command-count metadata");
 }
 
 void encodeSessionSourceListRejectsInvalidShape() {
@@ -253,11 +261,13 @@ void encodeSessionSourceListAssignIsTransactional() {
           .slotIndex = 1,
           .seqId = 1,
           .hasPresent = false,
+          .commandCount = 4,
       },
       {
           .slotIndex = 2,
           .seqId = 2,
           .hasPresent = false,
+          .commandCount = 5,
       },
   }};
   EncodeSessionSourceList list;
@@ -283,6 +293,8 @@ void encodeSessionSourceListAssignIsTransactional() {
   checkEq(list.size(), 2u, "failed assign preserves previous source count");
   checkEq(list.span()[0].seqId, 1ull, "failed assign preserves previous head");
   checkEq(list.span()[1].seqId, 2ull, "failed assign preserves previous tail");
+  checkEq(list.span()[0].commandCount, 4u,
+          "failed assign preserves previous source metadata");
 }
 
 void diagnosticsMergeKeepsTailIdentityAndAggregatesSourceShape() {
@@ -349,6 +361,7 @@ void encodeChunkSessionOwnsOrderedSourceList() {
                 .slotIndex = 3,
                 .seqId = 10,
                 .hasPresent = false,
+                .commandCount = 6,
             }),
         "encode session preflight accepts first completion source");
   check(dxmt9::encoders::appendEncodeChunkSessionSource(
@@ -357,6 +370,7 @@ void encodeChunkSessionOwnsOrderedSourceList() {
                 .slotIndex = 3,
                 .seqId = 10,
                 .hasPresent = false,
+                .commandCount = 6,
             }),
         "encode session accepts first completion source");
   check(dxmt9::encoders::canAppendEncodeChunkSessionSource(
@@ -365,6 +379,7 @@ void encodeChunkSessionOwnsOrderedSourceList() {
                 .slotIndex = 4,
                 .seqId = 11,
                 .hasPresent = true,
+                .commandCount = 1,
             }),
         "encode session preflight accepts present tail completion source");
   check(dxmt9::encoders::appendEncodeChunkSessionSource(
@@ -373,6 +388,7 @@ void encodeChunkSessionOwnsOrderedSourceList() {
                 .slotIndex = 4,
                 .seqId = 11,
                 .hasPresent = true,
+                .commandCount = 1,
             }),
         "encode session accepts present tail completion source");
 
@@ -381,6 +397,10 @@ void encodeChunkSessionOwnsOrderedSourceList() {
   checkEq(sources[0].seqId, 10ull, "encode session keeps head seq");
   checkEq(sources[1].seqId, 11ull, "encode session keeps tail seq");
   check(sources[1].hasPresent, "encode session keeps present flag");
+  checkEq(sources[0].commandCount, 6u,
+          "encode session keeps head command count");
+  checkEq(sources[1].commandCount, 1u,
+          "encode session keeps tail command count");
   check(!dxmt9::encoders::canAppendEncodeChunkSessionSource(
             *session,
             QueueCompletionSource{
@@ -862,6 +882,8 @@ void completionSourceForReadySlotPreservesPresentMetadata() {
   checkEq(source.slotIndex, 3u, "completion source preserves slot index");
   checkEq(source.seqId, 7ull, "completion source preserves seqId");
   check(source.hasPresent, "completion source preserves present metadata");
+  checkEq(source.commandCount, slot.commandCount(),
+          "completion source preserves command count metadata");
 }
 
 void retainEncodedSourcesRejectsPendingSources() {
@@ -935,6 +957,8 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
   checkEq(retainedHeads[0].slotIndex, 0u, "retained head keeps slot index");
   checkEq(retainedHeads[0].seqId, 1ull, "retained head keeps seqId");
   check(!retainedHeads[0].hasPresent, "retained head is not a present source");
+  checkEq(retainedHeads[0].commandCount, head[0].commandCount,
+          "retained head keeps command count metadata");
   check(fixture.slots[0].state == ChunkSlot::State::Encoding,
         "retaining head does not make it GPU-visible");
 
@@ -1151,11 +1175,13 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
       .slotIndex = 0,
       .seqId = 1,
       .hasPresent = false,
+      .commandCount = 4,
   }};
   const QueueCompletionSource tailSource{
       .slotIndex = 1,
       .seqId = 2,
       .hasPresent = true,
+      .commandCount = 1,
   };
 
   const bool merged = mergeEncodedPendingTailSubmission(
@@ -1179,6 +1205,10 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
           "head completion source stays first");
   checkEq(tailSources[1].seqId, 2ull,
           "tail completion source stays second");
+  checkEq(tailSources[0].commandCount, 4u,
+          "head completion source keeps command-count metadata");
+  checkEq(tailSources[1].commandCount, 1u,
+          "tail completion source keeps command-count metadata");
   check(tailSources[1].hasPresent,
         "tail completion source carries present metadata");
   check(tail.diagnostics.hasDraw, "merged diagnostics include head draw work");
@@ -1222,11 +1252,13 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
       .slotIndex = 0,
       .seqId = 1,
       .hasPresent = false,
+      .commandCount = 5,
   }};
   const QueueCompletionSource tailSource{
       .slotIndex = 1,
       .seqId = 2,
       .hasPresent = true,
+      .commandCount = 1,
   };
   const std::array<QueueCompletionSource, 2> tailSourcesBeforeMerge{{
       headSources[0],
@@ -1264,6 +1296,59 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
           "merged source list preserves tail seq");
   check(mergedSources.span()[1].hasPresent,
         "merged source list preserves tail present metadata");
+  checkEq(mergedSources.span()[0].commandCount, 5u,
+          "merged source list preserves head command count");
+}
+
+void mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch() {
+  QueueSubmissionRecord head;
+  head.slotIndex = 0;
+  head.seqId = 1;
+
+  QueueSubmissionRecord tail;
+  tail.slotIndex = 1;
+  tail.seqId = 2;
+
+  const std::array<QueueCompletionSource, 1> headSources{QueueCompletionSource{
+      .slotIndex = 0,
+      .seqId = 1,
+      .hasPresent = false,
+      .commandCount = 7,
+  }};
+  const QueueCompletionSource tailSource{
+      .slotIndex = 1,
+      .seqId = 2,
+      .hasPresent = true,
+      .commandCount = 1,
+  };
+  const std::array<QueueCompletionSource, 2> tailSourcesBeforeMerge{{
+      QueueCompletionSource{
+          .slotIndex = 0,
+          .seqId = 1,
+          .hasPresent = false,
+          .commandCount = 8,
+      },
+      tailSource,
+  }};
+  check(tail.assignFixedCompletionSources(std::span<const QueueCompletionSource>(
+            tailSourcesBeforeMerge.data(), tailSourcesBeforeMerge.size())),
+        "test setup stores mismatched session source metadata");
+
+  EncodeSessionSourceList mergedSources;
+  const bool merged = mergeEncodedPendingTailSubmission(
+      tail,
+      head,
+      std::span<const QueueCompletionSource>(
+          headSources.data(), headSources.size()),
+      tailSource,
+      /*encodedHeadTailAlreadyCommitted=*/false,
+      &mergedSources);
+
+  check(!merged, "source metadata mismatch rejects tail-source reuse");
+  check(mergedSources.empty(),
+        "metadata mismatch leaves merged source output empty");
+  checkEq(tail.explicitCompletionSourceSpan()[0].commandCount, 8u,
+          "metadata mismatch leaves existing fixed sources untouched");
 }
 
 void mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch() {
@@ -1478,6 +1563,10 @@ void runEncodeBatchIterationCompletesEmptySubmissionInline() {
   checkEq(completedSources.size(), 2u, "test captured every completion source");
   check(!completedSources[0].hasPresent, "first source is non-present");
   check(!completedSources[1].hasPresent, "second source is non-present");
+  checkEq(completedSources[0].commandCount, snapshots[0].commandCount,
+          "first inline completion preserves command count metadata");
+  checkEq(completedSources[1].commandCount, snapshots[1].commandCount,
+          "second inline completion preserves command count metadata");
   checkEq(inlineCompleted.size(), 2u,
           "empty submission completes every source inline");
   checkEq(inlineCompleted[0], 1ull, "first source inline completion");
@@ -1540,6 +1629,7 @@ int main() {
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();
     mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources();
+    mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch();
     mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsSequenceGaps();
