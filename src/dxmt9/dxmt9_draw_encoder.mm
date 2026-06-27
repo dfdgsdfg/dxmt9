@@ -14430,6 +14430,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
+  const EncodeChunkReplayRange replayRange =
+      encodeChunkReplayRange(slotIndex, slot, options);
+  if (!replayRange.valid) {
+    return std::nullopt;
+  }
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(slot.seqId);
   auto traceEncodeStage = [&](const char* stage) {
@@ -14442,6 +14447,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         << " seq=" << static_cast<unsigned long long>(slot.seqId)
         << " slot=" << slotIndex
         << " commands=" << slot.commandCount()
+        << " command_begin=" << replayRange.commandBegin
+        << " command_end=" << replayRange.commandEnd
         << " draw_only=" << (slot.drawOnlyCommandStream() ? 1 : 0);
     emitQueueTraceLine(out.str());
   };
@@ -14570,7 +14577,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
       session, WMT::Device{ctx.device.handle},
-      sessionGpuSamplingCommandCount(slot, options.sessionLookaheadSources));
+      options.sessionLookaheadSources.empty()
+          ? replayRange.commandCount()
+          : sessionGpuSamplingCommandCount(slot,
+                                           options.sessionLookaheadSources));
   traceEncodeStage("after-gpu-sampling-setup");
 
   auto makeRenderEncoderGpuAttachment = [&](
@@ -16135,7 +16145,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   if (slot.drawOnlyCommandStream()) {
-    for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
+    for (std::size_t commandIndex = replayRange.commandBegin;
+         commandIndex < replayRange.commandEnd; ++commandIndex) {
       const auto command = slot.drawRunCommandAt(commandIndex);
       traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
@@ -16146,7 +16157,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
     }
   } else {
-    for (std::size_t commandIndex = 0; commandIndex < slot.commandCount(); ++commandIndex) {
+    for (std::size_t commandIndex = replayRange.commandBegin;
+         commandIndex < replayRange.commandEnd; ++commandIndex) {
       const auto command = slot.commandAt(commandIndex);
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.

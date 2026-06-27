@@ -142,6 +142,46 @@ inline bool useSourceLocalStoreProofLookahead(
   return !externalEncodeSession || !sessionMayContinue;
 }
 
+struct EncodeChunkReplayRange {
+  std::size_t commandBegin = 0;
+  std::size_t commandEnd = 0;
+  bool valid = true;
+
+  std::size_t commandCount() const noexcept {
+    return commandEnd >= commandBegin ? commandEnd - commandBegin : 0;
+  }
+};
+
+inline EncodeChunkReplayRange encodeChunkReplayRange(
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot,
+    const EncodeChunkOptions& options) noexcept {
+  const std::size_t slotCommandCount = slot.commandCount();
+  if (!options.sessionSource.has_value()) {
+    return EncodeChunkReplayRange{
+        .commandBegin = 0,
+        .commandEnd = slotCommandCount,
+        .valid = true,
+    };
+  }
+
+  const auto& source = *options.sessionSource;
+  if (source.slotIndex != slotIndex || source.seqId != slot.seqId ||
+      source.commandBegin > slotCommandCount ||
+      source.commandCount > slotCommandCount - source.commandBegin) {
+    return EncodeChunkReplayRange{
+        .commandBegin = 0,
+        .commandEnd = 0,
+        .valid = false,
+    };
+  }
+  return EncodeChunkReplayRange{
+      .commandBegin = source.commandBegin,
+      .commandEnd = source.commandBegin + source.commandCount,
+      .valid = true,
+  };
+}
+
 // Per-draw view from DrawParam. Constructed once at encodeDraw entry; all
 // per-draw field reads inside the function go through this view. Lives in
 // the shared internal header because diagnostics consumes it by const-ref.

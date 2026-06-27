@@ -22,6 +22,7 @@ using dxmt9::core::ChunkSlot;
 using dxmt9::core::DrawParam;
 using dxmt9::core::DrawParamPayloadView;
 using dxmt9::core::DrawUniformPayload;
+using dxmt9::core::metalqueue::QueueCompletionSource;
 using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::ReadySlotSnapshot;
 using dxmt9::encoders::RenderPassEntryDecision;
@@ -173,6 +174,52 @@ void encodeChunkOptionsDefaultToFreshCommandBufferPath() {
         "default encodeChunk options keep current present-acquire split policy");
   check(!options.deferSessionFinalization,
         "default encodeChunk options finalize the session before return");
+}
+
+void encodeChunkReplayRangeDefaultsToWholeSlot() {
+  ChunkSlot slot;
+  slot.seqId = 10;
+  slot.appendClear({});
+  slot.appendPresent({}, {});
+  dxmt9::encoders::EncodeChunkOptions options{};
+
+  const auto range =
+      dxmt9::encoders::encodeChunkReplayRange(2, slot, options);
+
+  check(range.valid, "default replay range is valid");
+  checkEq(range.commandBegin, 0u, "default replay starts at command 0");
+  checkEq(range.commandEnd, slot.commandCount(),
+          "default replay covers the whole slot");
+}
+
+void encodeChunkReplayRangeUsesSessionSourceRange() {
+  ChunkSlot slot;
+  slot.seqId = 11;
+  slot.appendClear({});
+  slot.appendClear({});
+  slot.appendPresent({}, {});
+  dxmt9::encoders::EncodeChunkOptions options{};
+  options.sessionSource = QueueCompletionSource{
+      .slotIndex = 4,
+      .seqId = slot.seqId,
+      .hasPresent = false,
+      .commandBegin = 1,
+      .commandCount = 1,
+  };
+
+  const auto range =
+      dxmt9::encoders::encodeChunkReplayRange(4, slot, options);
+
+  check(range.valid, "session replay range is valid");
+  checkEq(range.commandBegin, 1u,
+          "session replay starts at source command begin");
+  checkEq(range.commandEnd, 2u,
+          "session replay ends at source command end");
+
+  options.sessionSource->seqId = 12;
+  const auto staleRange =
+      dxmt9::encoders::encodeChunkReplayRange(4, slot, options);
+  check(!staleRange.valid, "stale session source range is rejected");
 }
 
 void singleSourceBatchFallsBackToOnChunkReady() {
@@ -1187,6 +1234,8 @@ int main() {
   try {
     emptyBatchCompletesInlineByDefault();
     encodeChunkOptionsDefaultToFreshCommandBufferPath();
+    encodeChunkReplayRangeDefaultsToWholeSlot();
+    encodeChunkReplayRangeUsesSessionSourceRange();
     singleSourceBatchFallsBackToOnChunkReady();
     multiSourceBatchRequiresExplicitBackendImplementation();
     tailPresentBatchShapeRequiresFinalPresentTail();
