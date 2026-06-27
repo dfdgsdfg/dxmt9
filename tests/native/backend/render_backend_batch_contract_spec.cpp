@@ -380,6 +380,21 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
         "present-bearing work must not append after the final Present");
 }
 
+void openCbPresentTailSplitRequiresCurrentPrePresentWork() {
+  check(!dxmt9::render::openCbPresentTailNeedsPrePresentSplit(
+            /*openCbPreencodeTailPresent=*/false,
+            /*hasCurrentPrePresentWork=*/true),
+        "open-CB tail split is opt-in");
+  check(!dxmt9::render::openCbPresentTailNeedsPrePresentSplit(
+            /*openCbPreencodeTailPresent=*/true,
+            /*hasCurrentPrePresentWork=*/false),
+        "open-CB tail split requires current pre-Present work");
+  check(dxmt9::render::openCbPresentTailNeedsPrePresentSplit(
+            /*openCbPreencodeTailPresent=*/true,
+            /*hasCurrentPrePresentWork=*/true),
+        "open-CB tail split requests a final Present-only tail source");
+}
+
 void openCbPendingTailWaitActionUsesQueueLocalState() {
   check(dxmt9::render::selectOpenCbPendingTailWaitAction(
             /*hasPendingRecord=*/false, /*readySlotsEmpty=*/true,
@@ -1010,6 +1025,7 @@ int main() {
     tailPresentBatchShapeRequiresFinalPresentTail();
     openCbPreencodeHeadRequiresPresentSplitBeforePublish();
     openCbPendingAppendPolicyAllowsFinalPresentTail();
+    openCbPresentTailSplitRequiresCurrentPrePresentWork();
     openCbPendingTailWaitActionUsesQueueLocalState();
     openCbPendingMidChunkPolicyPreservesSemanticSplits();
     openCbSemanticBoundaryReleaseRequiresCompletionWait();

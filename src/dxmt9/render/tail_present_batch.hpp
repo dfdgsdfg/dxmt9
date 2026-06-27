@@ -28,6 +28,10 @@ bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
                                       bool carryRenderSession,
                                       bool tailReadyForCurrentHead) noexcept;
 
+bool openCbPresentTailNeedsPrePresentSplit(
+    bool openCbPreencodeTailPresent,
+    bool hasCurrentPrePresentWork) noexcept;
+
 bool openCbPendingAllowsSemanticMidChunkCommits(
     bool appendToPending) noexcept;
 

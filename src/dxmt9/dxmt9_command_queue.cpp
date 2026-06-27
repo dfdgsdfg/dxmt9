@@ -3581,11 +3581,17 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
                                       sourceHandle.value != 0 &&
                                           sourceHandle.value == currentBackBuffer_.value);
     const bool hasStagedPrePresent = !stagedTailPresentSlots_.empty();
+    const bool hasCurrentPrePresentWork =
+        writingSlot_.has_value() &&
+        !currentSlotUnlocked(*this).commandsEmpty();
+    const bool shouldSplitOpenCbPresentTail =
+        render::openCbPresentTailNeedsPrePresentSplit(
+            openCbPreencodeTailPresentEnabled(),
+            hasCurrentPrePresentWork);
     const bool shouldUseTailPresentStaging =
         hasStagedPrePresent ||
-        (stageTailPresentChunkEnabled() &&
-         writingSlot_.has_value() &&
-         !currentSlotUnlocked(*this).commandsEmpty());
+        shouldSplitOpenCbPresentTail ||
+        (stageTailPresentChunkEnabled() && hasCurrentPrePresentWork);
     if (shouldUseTailPresentStaging) {
       if (writingSlot_.has_value() &&
           !currentSlotUnlocked(*this).commandsEmpty()) {

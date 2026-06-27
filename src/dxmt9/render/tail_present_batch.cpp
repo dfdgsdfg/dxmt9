@@ -71,6 +71,12 @@ bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
   return slotIsSemanticOpenCbSessionHead(slot);
 }
 
+bool openCbPresentTailNeedsPrePresentSplit(
+    bool openCbPreencodeTailPresent,
+    bool hasCurrentPrePresentWork) noexcept {
+  return openCbPreencodeTailPresent && hasCurrentPrePresentWork;
+}
+
 bool openCbPendingAllowsSemanticMidChunkCommits(
     bool appendToPending) noexcept {
   // Open-CB pending carriers must not turn source boundaries into extra
