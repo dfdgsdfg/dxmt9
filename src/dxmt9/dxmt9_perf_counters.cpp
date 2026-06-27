@@ -409,6 +409,12 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentSelectorSemanticPrefixWaitActiveSources{0};
   std::atomic<std::uint64_t> openCbTailPresentSelectorSemanticPrefixWaitInactive{0};
   std::atomic<std::uint64_t> openCbTailPresentSelectorSemanticPrefixWaitInactiveSources{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefix{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefixSources{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefixWaitActive{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefixWaitInactive{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseCandidates{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseSubmitted{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWait{0};
@@ -2529,6 +2535,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_selector_semantic_prefix_wait_active_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorSemanticPrefixWaitActiveSources, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_selector_semantic_prefix_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorSemanticPrefixWaitInactive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorSemanticPrefixWaitInactiveSources, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefix, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefixSources, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefixWaitActive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix_wait_active_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefixWaitInactive, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseCandidates, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseSubmitted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWait, nullptr, nullptr, 0.0},
@@ -5150,6 +5162,20 @@ void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount,
   } else {
     add(c.openCbTailPresentSelectorSemanticPrefixWaitInactive);
     add(c.openCbTailPresentSelectorSemanticPrefixWaitInactiveSources, sourceCount);
+  }
+}
+
+void countOpenCbTailPresentSelectorOrdinaryPrefix(std::uint64_t sourceCount,
+                                                  bool completionWaitActive) {
+  auto& c = counters();
+  add(c.openCbTailPresentSelectorOrdinaryPrefix);
+  add(c.openCbTailPresentSelectorOrdinaryPrefixSources, sourceCount);
+  if (completionWaitActive) {
+    add(c.openCbTailPresentSelectorOrdinaryPrefixWaitActive);
+    add(c.openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources, sourceCount);
+  } else {
+    add(c.openCbTailPresentSelectorOrdinaryPrefixWaitInactive);
+    add(c.openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources, sourceCount);
   }
 }
 
@@ -10689,6 +10715,18 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentSelectorSemanticPrefixWaitInactive);
   s.openCbTailPresentSelectorSemanticPrefixWaitInactiveSources =
       load(c.openCbTailPresentSelectorSemanticPrefixWaitInactiveSources);
+  s.openCbTailPresentSelectorOrdinaryPrefix =
+      load(c.openCbTailPresentSelectorOrdinaryPrefix);
+  s.openCbTailPresentSelectorOrdinaryPrefixSources =
+      load(c.openCbTailPresentSelectorOrdinaryPrefixSources);
+  s.openCbTailPresentSelectorOrdinaryPrefixWaitActive =
+      load(c.openCbTailPresentSelectorOrdinaryPrefixWaitActive);
+  s.openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources =
+      load(c.openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources);
+  s.openCbTailPresentSelectorOrdinaryPrefixWaitInactive =
+      load(c.openCbTailPresentSelectorOrdinaryPrefixWaitInactive);
+  s.openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources =
+      load(c.openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources);
   s.openCbTailPresentSemanticReleaseCandidates =
       load(c.openCbTailPresentSemanticReleaseCandidates);
   s.openCbTailPresentSemanticReleaseSubmitted =
@@ -10853,6 +10891,12 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_selector_semantic_prefix_wait_active_sources=%llu "
       "open_cb_tail_present_selector_semantic_prefix_wait_inactive=%llu "
       "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix_sources=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix_wait_active=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix_wait_active_sources=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix_wait_inactive=%llu "
+      "open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources=%llu "
       "open_cb_tail_present_semantic_release_candidates=%llu "
       "open_cb_tail_present_semantic_release_submitted=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait=%llu "
@@ -11004,6 +11048,24 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSelectorSemanticPrefixWaitInactiveSources,
                 curr.openCbTailPresentSelectorSemanticPrefixWaitInactiveSources)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefix,
+                curr.openCbTailPresentSelectorOrdinaryPrefix)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefixSources,
+                curr.openCbTailPresentSelectorOrdinaryPrefixSources)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefixWaitActive,
+                curr.openCbTailPresentSelectorOrdinaryPrefixWaitActive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources,
+                curr.openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefixWaitInactive,
+                curr.openCbTailPresentSelectorOrdinaryPrefixWaitInactive)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources,
+                curr.openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseCandidates,
                 curr.openCbTailPresentSemanticReleaseCandidates)),

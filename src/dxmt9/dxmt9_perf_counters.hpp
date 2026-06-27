@@ -300,6 +300,8 @@ void countOpenCbTailPresentSelectorTailPrefix(std::uint64_t sourceCount,
                                               bool completionWaitActive);
 void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount,
                                                   bool completionWaitActive);
+void countOpenCbTailPresentSelectorOrdinaryPrefix(std::uint64_t sourceCount,
+                                                  bool completionWaitActive);
 void countOpenCbTailPresentSemanticReleaseCandidate();
 void countOpenCbTailPresentSemanticReleaseSubmitted();
 void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
@@ -1316,6 +1318,12 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitActiveSources = 0;
   std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactive = 0;
   std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactiveSources = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefix = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixSources = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitActive = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitInactive = 0;
+  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources = 0;
   std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
   std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;

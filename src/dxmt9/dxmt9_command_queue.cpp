@@ -4424,6 +4424,10 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
       perf::countOpenCbTailPresentSelectorSemanticPrefix(
           static_cast<std::uint64_t>(count),
           selectorCompletionWaitActive);
+    } else if (selectedOpenCbSessionPrefix) {
+      perf::countOpenCbTailPresentSelectorOrdinaryPrefix(
+          static_cast<std::uint64_t>(count),
+          selectorCompletionWaitActive);
     }
     for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
       if (!lock.owns_lock()) {

@@ -272,6 +272,12 @@ RUN_COUNTERS = (
     "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
     "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
     "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
+    "open_cb_tail_present_selector_ordinary_prefix",
+    "open_cb_tail_present_selector_ordinary_prefix_sources",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_active",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_inactive",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources",
     "open_cb_tail_present_wait_start_publish_candidates",
     "open_cb_tail_present_wait_start_publish_slot_empty",
     "open_cb_tail_present_wait_start_publish_slot_present",
@@ -2477,6 +2483,12 @@ FRAME_CSV_KEYS = (
     "open_cb_tail_present_selector_semantic_prefix_wait_active_sources",
     "open_cb_tail_present_selector_semantic_prefix_wait_inactive",
     "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
+    "open_cb_tail_present_selector_ordinary_prefix",
+    "open_cb_tail_present_selector_ordinary_prefix_sources",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_active",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_active_sources",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_inactive",
+    "open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources",
     "draw_calls",
     "draw_indexed",
     "draw_triangles",
@@ -3977,6 +3989,7 @@ def append_pacing_cpu_stage_derived(
             "open_cb_tail_present_pending_merge_failed",
             "open_cb_tail_present_selector_tail_prefix",
             "open_cb_tail_present_selector_semantic_prefix",
+            "open_cb_tail_present_selector_ordinary_prefix",
         )
     )
     if open_cb_activity:
@@ -4067,6 +4080,30 @@ def append_pacing_cpu_stage_derived(
             (
                 "selector: semantic-start prefix wait inactive sources",
                 "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
+            ),
+            (
+                "selector: ordinary-start prefix",
+                "open_cb_tail_present_selector_ordinary_prefix",
+            ),
+            (
+                "selector: ordinary-start prefix sources",
+                "open_cb_tail_present_selector_ordinary_prefix_sources",
+            ),
+            (
+                "selector: ordinary-start prefix wait active",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_active",
+            ),
+            (
+                "selector: ordinary-start prefix wait active sources",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_active_sources",
+            ),
+            (
+                "selector: ordinary-start prefix wait inactive",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_inactive",
+            ),
+            (
+                "selector: ordinary-start prefix wait inactive sources",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources",
             ),
             (
                 "wait-start publish candidates",
@@ -6942,6 +6979,30 @@ def write_markdown(
             (
                 "selector: semantic-start prefix wait inactive sources",
                 "open_cb_tail_present_selector_semantic_prefix_wait_inactive_sources",
+            ),
+            (
+                "selector: ordinary-start prefix",
+                "open_cb_tail_present_selector_ordinary_prefix",
+            ),
+            (
+                "selector: ordinary-start prefix sources",
+                "open_cb_tail_present_selector_ordinary_prefix_sources",
+            ),
+            (
+                "selector: ordinary-start prefix wait active",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_active",
+            ),
+            (
+                "selector: ordinary-start prefix wait active sources",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_active_sources",
+            ),
+            (
+                "selector: ordinary-start prefix wait inactive",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_inactive",
+            ),
+            (
+                "selector: ordinary-start prefix wait inactive sources",
+                "open_cb_tail_present_selector_ordinary_prefix_wait_inactive_sources",
             ),
         )
         open_cb_frame_started = sum(
