@@ -383,6 +383,15 @@ struct Counters {
   std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveRender{0};
   std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit{0};
   std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitPendingClear{0};
+  std::atomic<std::uint64_t> encodeSessionCarrySourceEntries{0};
+  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryActiveRender{0};
+  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryActiveBlit{0};
+  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryPendingClear{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawContinueActive{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawBeginPass{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitRenderTargetChange{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitHazard{0};
+  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitOther{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStarted{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitActive{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitInactive{0};
@@ -2530,6 +2539,15 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_session_carry_forced_finalize_initializer_wait_active_render", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveRender, nullptr, nullptr, 0.0},
     {"encode_session_carry_forced_finalize_initializer_wait_active_blit", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit, nullptr, nullptr, 0.0},
     {"encode_session_carry_forced_finalize_initializer_wait_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitPendingClear, nullptr, nullptr, 0.0},
+    {"encode_session_carry_source_entries", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntries, nullptr, nullptr, 0.0},
+    {"encode_session_carry_source_entry_active_render", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryActiveRender, nullptr, nullptr, 0.0},
+    {"encode_session_carry_source_entry_active_blit", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryActiveBlit, nullptr, nullptr, 0.0},
+    {"encode_session_carry_source_entry_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryPendingClear, nullptr, nullptr, 0.0},
+    {"encode_session_carry_first_draw_continue_active", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawContinueActive, nullptr, nullptr, 0.0},
+    {"encode_session_carry_first_draw_begin_pass", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawBeginPass, nullptr, nullptr, 0.0},
+    {"encode_session_carry_first_draw_split_rt", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitRenderTargetChange, nullptr, nullptr, 0.0},
+    {"encode_session_carry_first_draw_split_hazard", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitHazard, nullptr, nullptr, 0.0},
+    {"encode_session_carry_first_draw_split_other", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitOther, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStarted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitActive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitInactive, nullptr, nullptr, 0.0},
@@ -5125,6 +5143,42 @@ void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
   if (pendingClear) {
     add(c.encodeSessionCarryForcedFinalizeInitializerWaitPendingClear);
   }
+}
+
+void countEncodeSessionCarrySourceEntry(bool activeRender,
+                                        bool activeBlit,
+                                        bool pendingClear) {
+  auto& c = counters();
+  add(c.encodeSessionCarrySourceEntries);
+  if (activeRender) {
+    add(c.encodeSessionCarrySourceEntryActiveRender);
+  }
+  if (activeBlit) {
+    add(c.encodeSessionCarrySourceEntryActiveBlit);
+  }
+  if (pendingClear) {
+    add(c.encodeSessionCarrySourceEntryPendingClear);
+  }
+}
+
+void countEncodeSessionCarryFirstDrawContinueActive() {
+  add(counters().encodeSessionCarryFirstDrawContinueActive);
+}
+
+void countEncodeSessionCarryFirstDrawBeginPass() {
+  add(counters().encodeSessionCarryFirstDrawBeginPass);
+}
+
+void countEncodeSessionCarryFirstDrawSplitRenderTargetChange() {
+  add(counters().encodeSessionCarryFirstDrawSplitRenderTargetChange);
+}
+
+void countEncodeSessionCarryFirstDrawSplitHazard() {
+  add(counters().encodeSessionCarryFirstDrawSplitHazard);
+}
+
+void countEncodeSessionCarryFirstDrawSplitOther() {
+  add(counters().encodeSessionCarryFirstDrawSplitOther);
 }
 
 void countOpenCbTailPresentPendingStarted(bool completionWaitActive) {
@@ -10774,6 +10828,24 @@ CounterSnapshot snapshot() {
       load(c.encodeSessionCarryForcedFinalizeInitializerWaits);
   s.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender =
       load(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender);
+  s.encodeSessionCarrySourceEntries =
+      load(c.encodeSessionCarrySourceEntries);
+  s.encodeSessionCarrySourceEntryActiveRender =
+      load(c.encodeSessionCarrySourceEntryActiveRender);
+  s.encodeSessionCarrySourceEntryActiveBlit =
+      load(c.encodeSessionCarrySourceEntryActiveBlit);
+  s.encodeSessionCarrySourceEntryPendingClear =
+      load(c.encodeSessionCarrySourceEntryPendingClear);
+  s.encodeSessionCarryFirstDrawContinueActive =
+      load(c.encodeSessionCarryFirstDrawContinueActive);
+  s.encodeSessionCarryFirstDrawBeginPass =
+      load(c.encodeSessionCarryFirstDrawBeginPass);
+  s.encodeSessionCarryFirstDrawSplitRenderTargetChange =
+      load(c.encodeSessionCarryFirstDrawSplitRenderTargetChange);
+  s.encodeSessionCarryFirstDrawSplitHazard =
+      load(c.encodeSessionCarryFirstDrawSplitHazard);
+  s.encodeSessionCarryFirstDrawSplitOther =
+      load(c.encodeSessionCarryFirstDrawSplitOther);
   s.openCbTailPresentPendingStarted =
       load(c.openCbTailPresentPendingStarted);
   s.openCbTailPresentPendingStartedWaitActive =
@@ -10998,6 +11070,15 @@ void emitFrameDelta(std::uint64_t frameId,
       "encode_session_carry_final_chunks=%llu "
       "encode_session_carry_forced_finalize_initializer_waits=%llu "
       "encode_session_carry_forced_finalize_initializer_wait_active_render=%llu "
+      "encode_session_carry_source_entries=%llu "
+      "encode_session_carry_source_entry_active_render=%llu "
+      "encode_session_carry_source_entry_active_blit=%llu "
+      "encode_session_carry_source_entry_pending_clear=%llu "
+      "encode_session_carry_first_draw_continue_active=%llu "
+      "encode_session_carry_first_draw_begin_pass=%llu "
+      "encode_session_carry_first_draw_split_rt=%llu "
+      "encode_session_carry_first_draw_split_hazard=%llu "
+      "encode_session_carry_first_draw_split_other=%llu "
       "open_cb_tail_present_pending_started=%llu "
       "open_cb_tail_present_pending_started_wait_active=%llu "
       "open_cb_tail_present_pending_started_wait_inactive=%llu "
@@ -11114,6 +11195,33 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender,
                 curr.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarrySourceEntries,
+                curr.encodeSessionCarrySourceEntries)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarrySourceEntryActiveRender,
+                curr.encodeSessionCarrySourceEntryActiveRender)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarrySourceEntryActiveBlit,
+                curr.encodeSessionCarrySourceEntryActiveBlit)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarrySourceEntryPendingClear,
+                curr.encodeSessionCarrySourceEntryPendingClear)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFirstDrawContinueActive,
+                curr.encodeSessionCarryFirstDrawContinueActive)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFirstDrawBeginPass,
+                curr.encodeSessionCarryFirstDrawBeginPass)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFirstDrawSplitRenderTargetChange,
+                curr.encodeSessionCarryFirstDrawSplitRenderTargetChange)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFirstDrawSplitHazard,
+                curr.encodeSessionCarryFirstDrawSplitHazard)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryFirstDrawSplitOther,
+                curr.encodeSessionCarryFirstDrawSplitOther)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentPendingStarted,
                 curr.openCbTailPresentPendingStarted)),

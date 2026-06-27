@@ -284,6 +284,14 @@ void countEncodeSessionCarryFinalChunk();
 void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
                                                           bool activeBlit,
                                                           bool pendingClear);
+void countEncodeSessionCarrySourceEntry(bool activeRender,
+                                        bool activeBlit,
+                                        bool pendingClear);
+void countEncodeSessionCarryFirstDrawContinueActive();
+void countEncodeSessionCarryFirstDrawBeginPass();
+void countEncodeSessionCarryFirstDrawSplitRenderTargetChange();
+void countEncodeSessionCarryFirstDrawSplitHazard();
+void countEncodeSessionCarryFirstDrawSplitOther();
 void countOpenCbTailPresentPendingStarted(bool completionWaitActive);
 void countOpenCbTailPresentPendingStartedTailReady(bool completionWaitActive);
 void countOpenCbTailPresentPendingStartedSemantic(bool completionWaitActive);
@@ -1305,6 +1313,15 @@ struct CounterSnapshot {
   std::uint64_t encodeSessionCarryFinalChunks = 0;
   std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaits = 0;
   std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaitActiveRender = 0;
+  std::uint64_t encodeSessionCarrySourceEntries = 0;
+  std::uint64_t encodeSessionCarrySourceEntryActiveRender = 0;
+  std::uint64_t encodeSessionCarrySourceEntryActiveBlit = 0;
+  std::uint64_t encodeSessionCarrySourceEntryPendingClear = 0;
+  std::uint64_t encodeSessionCarryFirstDrawContinueActive = 0;
+  std::uint64_t encodeSessionCarryFirstDrawBeginPass = 0;
+  std::uint64_t encodeSessionCarryFirstDrawSplitRenderTargetChange = 0;
+  std::uint64_t encodeSessionCarryFirstDrawSplitHazard = 0;
+  std::uint64_t encodeSessionCarryFirstDrawSplitOther = 0;
   std::uint64_t openCbTailPresentPendingStarted = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitActive = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitInactive = 0;

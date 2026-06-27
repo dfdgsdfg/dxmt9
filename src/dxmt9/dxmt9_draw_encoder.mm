@@ -14575,6 +14575,38 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto& requestedRenderEncoderGpuSamples =
       session.requestedRenderEncoderGpuSamples;
 
+  if (options.session) {
+    perf::countEncodeSessionCarrySourceEntry(
+        static_cast<bool>(activeRenderEncoder),
+        static_cast<bool>(activeBlitEncoder),
+        pendingClear.has_value());
+  }
+  bool sessionSourceFirstDrawDecisionRecorded = false;
+  auto recordSessionSourceFirstDrawDecision =
+      [&](RenderPassEntryDecision decision) {
+        if (!options.session || sessionSourceFirstDrawDecisionRecorded) {
+          return;
+        }
+        sessionSourceFirstDrawDecisionRecorded = true;
+        switch (decision) {
+        case RenderPassEntryDecision::ContinueActive:
+          perf::countEncodeSessionCarryFirstDrawContinueActive();
+          break;
+        case RenderPassEntryDecision::BeginPass:
+          perf::countEncodeSessionCarryFirstDrawBeginPass();
+          break;
+        case RenderPassEntryDecision::SplitRenderTargetChange:
+          perf::countEncodeSessionCarryFirstDrawSplitRenderTargetChange();
+          break;
+        case RenderPassEntryDecision::SplitHazard:
+          perf::countEncodeSessionCarryFirstDrawSplitHazard();
+          break;
+        case RenderPassEntryDecision::SplitTileMidPassIneligible:
+          perf::countEncodeSessionCarryFirstDrawSplitOther();
+          break;
+        }
+      };
+
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
       session, WMT::Device{ctx.device.handle},
@@ -15649,6 +15681,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const auto clearKey = makeAttachmentKey(*pendingClear);
       const auto clearHazard = makeAttachmentHazard(*pendingClear);
       if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
+        recordSessionSourceFirstDrawDecision(RenderPassEntryDecision::BeginPass);
         startRenderPass(stateView, pendingClear, commandIndex, renderPsoHandle);
         pendingClear.reset();
         pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
@@ -15674,6 +15707,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             !renderTargetChanged,
             hazardDetected,
             tileResplit);
+        recordSessionSourceFirstDrawDecision(entryDecision);
         if (entryDecision != RenderPassEntryDecision::ContinueActive) {
           if (entryDecision ==
               RenderPassEntryDecision::SplitRenderTargetChange) {
@@ -15725,6 +15759,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           !renderTargetChanged,
           hazardDetected,
           tileResplit);
+      recordSessionSourceFirstDrawDecision(entryDecision);
       if (entryDecision != RenderPassEntryDecision::ContinueActive) {
         if (entryDecision ==
             RenderPassEntryDecision::SplitRenderTargetChange) {
