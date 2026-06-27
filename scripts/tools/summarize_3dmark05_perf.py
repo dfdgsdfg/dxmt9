@@ -258,6 +258,10 @@ RUN_COUNTERS = (
     "open_cb_tail_present_pending_abandoned_retain_failed",
     "open_cb_tail_present_pending_abandoned_encode_null",
     "open_cb_tail_present_pending_merge_failed",
+    "open_cb_tail_present_selector_tail_prefix",
+    "open_cb_tail_present_selector_tail_prefix_sources",
+    "open_cb_tail_present_selector_semantic_prefix",
+    "open_cb_tail_present_selector_semantic_prefix_sources",
     "open_cb_tail_present_wait_start_publish_candidates",
     "open_cb_tail_present_wait_start_publish_slot_empty",
     "open_cb_tail_present_wait_start_publish_slot_present",
@@ -2447,6 +2451,10 @@ FRAME_CSV_KEYS = (
     "open_cb_tail_present_pending_abandoned_retain_failed",
     "open_cb_tail_present_pending_abandoned_encode_null",
     "open_cb_tail_present_pending_merge_failed",
+    "open_cb_tail_present_selector_tail_prefix",
+    "open_cb_tail_present_selector_tail_prefix_sources",
+    "open_cb_tail_present_selector_semantic_prefix",
+    "open_cb_tail_present_selector_semantic_prefix_sources",
     "draw_calls",
     "draw_indexed",
     "draw_triangles",
@@ -3945,6 +3953,8 @@ def append_pacing_cpu_stage_derived(
             "open_cb_tail_present_pending_abandoned_retain_failed",
             "open_cb_tail_present_pending_abandoned_encode_null",
             "open_cb_tail_present_pending_merge_failed",
+            "open_cb_tail_present_selector_tail_prefix",
+            "open_cb_tail_present_selector_semantic_prefix",
         )
     )
     if open_cb_activity:
@@ -3980,6 +3990,22 @@ def append_pacing_cpu_stage_derived(
             ("abandoned: retain failed", "open_cb_tail_present_pending_abandoned_retain_failed"),
             ("abandoned: encode returned null", "open_cb_tail_present_pending_abandoned_encode_null"),
             ("abandoned: merge failed", "open_cb_tail_present_pending_merge_failed"),
+            (
+                "selector: tail-ready prefix",
+                "open_cb_tail_present_selector_tail_prefix",
+            ),
+            (
+                "selector: tail-ready prefix sources",
+                "open_cb_tail_present_selector_tail_prefix_sources",
+            ),
+            (
+                "selector: semantic-start prefix",
+                "open_cb_tail_present_selector_semantic_prefix",
+            ),
+            (
+                "selector: semantic-start prefix sources",
+                "open_cb_tail_present_selector_semantic_prefix_sources",
+            ),
             (
                 "wait-start publish candidates",
                 "open_cb_tail_present_wait_start_publish_candidates",
@@ -6790,6 +6816,22 @@ def write_markdown(
             (
                 "abandoned: merge failed",
                 "open_cb_tail_present_pending_merge_failed",
+            ),
+            (
+                "selector: tail-ready prefix",
+                "open_cb_tail_present_selector_tail_prefix",
+            ),
+            (
+                "selector: tail-ready prefix sources",
+                "open_cb_tail_present_selector_tail_prefix_sources",
+            ),
+            (
+                "selector: semantic-start prefix",
+                "open_cb_tail_present_selector_semantic_prefix",
+            ),
+            (
+                "selector: semantic-start prefix sources",
+                "open_cb_tail_present_selector_semantic_prefix_sources",
             ),
         )
         open_cb_frame_started = sum(

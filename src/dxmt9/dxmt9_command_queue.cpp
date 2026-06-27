@@ -4356,6 +4356,18 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         scratch[count - 1u].slot &&
         render::slotHasFinalPresentTail(*scratch[count - 1u].slot);
     const bool selectedOpenCbSessionPrefix = carryRenderSession && count > 1u;
+    const bool selectedSemanticStartPrefix =
+        selectedOpenCbSessionPrefix && !selectedTailReadyPrefix &&
+        scratch[0].slot &&
+        scratch[0].slot->publishReason ==
+            perf::ChunkPublishReason::SemanticBoundary;
+    if (selectedTailReadyPrefix) {
+      perf::countOpenCbTailPresentSelectorTailPrefix(
+          static_cast<std::uint64_t>(count));
+    } else if (selectedSemanticStartPrefix) {
+      perf::countOpenCbTailPresentSelectorSemanticPrefix(
+          static_cast<std::uint64_t>(count));
+    }
     for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
       if (!lock.owns_lock()) {
         lock.lock();

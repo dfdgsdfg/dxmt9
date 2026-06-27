@@ -395,6 +395,10 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedRetainFailed{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingAbandonedEncodeNull{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingMergeFailed{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorTailPrefix{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorTailPrefixSources{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorSemanticPrefix{0};
+  std::atomic<std::uint64_t> openCbTailPresentSelectorSemanticPrefixSources{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseCandidates{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseSubmitted{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedNoCompletionWait{0};
@@ -2499,6 +2503,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_pending_abandoned_retain_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedRetainFailed, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_abandoned_encode_null", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingAbandonedEncodeNull, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_merge_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingMergeFailed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_tail_prefix", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorTailPrefix, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_tail_prefix_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorTailPrefixSources, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_semantic_prefix", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorSemanticPrefix, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_selector_semantic_prefix_sources", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSelectorSemanticPrefixSources, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseCandidates, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseSubmitted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedNoCompletionWait, nullptr, nullptr, 0.0},
@@ -5087,6 +5095,18 @@ void countOpenCbTailPresentPendingAbandonedEncodeNull() {
 
 void countOpenCbTailPresentPendingMergeFailed() {
   add(counters().openCbTailPresentPendingMergeFailed);
+}
+
+void countOpenCbTailPresentSelectorTailPrefix(std::uint64_t sourceCount) {
+  auto& c = counters();
+  add(c.openCbTailPresentSelectorTailPrefix);
+  add(c.openCbTailPresentSelectorTailPrefixSources, sourceCount);
+}
+
+void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount) {
+  auto& c = counters();
+  add(c.openCbTailPresentSelectorSemanticPrefix);
+  add(c.openCbTailPresentSelectorSemanticPrefixSources, sourceCount);
 }
 
 void countOpenCbTailPresentSemanticReleaseCandidate() {
@@ -10589,6 +10609,14 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentPendingAbandonedEncodeNull);
   s.openCbTailPresentPendingMergeFailed =
       load(c.openCbTailPresentPendingMergeFailed);
+  s.openCbTailPresentSelectorTailPrefix =
+      load(c.openCbTailPresentSelectorTailPrefix);
+  s.openCbTailPresentSelectorTailPrefixSources =
+      load(c.openCbTailPresentSelectorTailPrefixSources);
+  s.openCbTailPresentSelectorSemanticPrefix =
+      load(c.openCbTailPresentSelectorSemanticPrefix);
+  s.openCbTailPresentSelectorSemanticPrefixSources =
+      load(c.openCbTailPresentSelectorSemanticPrefixSources);
   s.openCbTailPresentSemanticReleaseCandidates =
       load(c.openCbTailPresentSemanticReleaseCandidates);
   s.openCbTailPresentSemanticReleaseSubmitted =
@@ -10735,6 +10763,10 @@ void emitFrameDelta(std::uint64_t frameId,
       "open_cb_tail_present_pending_abandoned_retain_failed=%llu "
       "open_cb_tail_present_pending_abandoned_encode_null=%llu "
       "open_cb_tail_present_pending_merge_failed=%llu "
+      "open_cb_tail_present_selector_tail_prefix=%llu "
+      "open_cb_tail_present_selector_tail_prefix_sources=%llu "
+      "open_cb_tail_present_selector_semantic_prefix=%llu "
+      "open_cb_tail_present_selector_semantic_prefix_sources=%llu "
       "open_cb_tail_present_semantic_release_candidates=%llu "
       "open_cb_tail_present_semantic_release_submitted=%llu "
       "open_cb_tail_present_semantic_release_blocked_no_completion_wait=%llu "
@@ -10844,6 +10876,18 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentPendingMergeFailed,
                 curr.openCbTailPresentPendingMergeFailed)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorTailPrefix,
+                curr.openCbTailPresentSelectorTailPrefix)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorTailPrefixSources,
+                curr.openCbTailPresentSelectorTailPrefixSources)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorSemanticPrefix,
+                curr.openCbTailPresentSelectorSemanticPrefix)),
+      static_cast<unsigned long long>(
+          delta(prev.openCbTailPresentSelectorSemanticPrefixSources,
+                curr.openCbTailPresentSelectorSemanticPrefixSources)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentSemanticReleaseCandidates,
                 curr.openCbTailPresentSemanticReleaseCandidates)),
