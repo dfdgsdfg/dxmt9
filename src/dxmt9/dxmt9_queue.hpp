@@ -619,7 +619,8 @@ class QueueLifecycleController {
                           size_t inflightLimit,
                           const std::function<void(ChunkSlot&)>& onBeforePublish = {});
   // TLA+: EncodeDequeue.
-  bool dequeueReadySlot(std::unique_lock<std::mutex>& lock, size_t& slotIndex, ChunkSlot& slotCopy);
+  bool dequeueReadySlot(std::unique_lock<std::mutex>& lock,
+                        ReadySlotSnapshot& out);
   // TLA+: EncodeDequeue for one or more consecutive ready slots. The caller
   // owns `out`; no heap allocation is performed inside the queue primitive.
   size_t dequeueReadySlotBatch(std::unique_lock<std::mutex>& lock,

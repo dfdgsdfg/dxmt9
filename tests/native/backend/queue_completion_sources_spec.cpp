@@ -619,6 +619,41 @@ void firstPublishSlotShapeKeepsNoPresentSlotUnclassified() {
           "no-present shape does not classify non-tail present");
 }
 
+void runEncodeIterationPassesLiveSlotStorage() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+
+  ChunkSlot* observedSlot = nullptr;
+  std::vector<std::uint64_t> inlineCompleted;
+  std::unique_lock lock(fixture.mutex);
+  const bool encoded = fixture.controller.runEncodeIteration(
+      lock,
+      [&](std::size_t slotIndex, ChunkSlot& slot)
+          -> std::optional<QueueSubmissionRecord> {
+        checkEq(slotIndex, 0u,
+                "single-source iteration forwards the dequeued slot index");
+        observedSlot = &slot;
+        check(observedSlot == &fixture.slots[0],
+              "single-source iteration passes live slot storage by reference");
+        check(slot.state == ChunkSlot::State::Encoding,
+              "single-source encode sees the live slot in Encoding state");
+        return std::nullopt;
+      },
+      [&](std::uint64_t seqId) { inlineCompleted.push_back(seqId); });
+
+  check(encoded, "single-source iteration consumes the ready slot");
+  check(observedSlot == &fixture.slots[0],
+        "single-source iteration did not encode a ChunkSlot copy");
+  checkEq(inlineCompleted.size(), 1u,
+          "inline single-source completion invokes callback once");
+  checkEq(inlineCompleted.front(), 1ull,
+          "inline single-source completion reports source seqId");
+  checkEq(fixture.completedSeqQueue.size(), 1u,
+          "inline single-source completion queues source seqId");
+  check(fixture.slots[0].state == ChunkSlot::State::Free,
+        "inline single-source completion releases the live slot");
+}
+
 void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -1704,6 +1739,7 @@ int main() {
     firstPublishSlotShapeClassifiesTailPresentPrefix();
     firstPublishSlotShapeRejectsPostPresentWorkAsTail();
     firstPublishSlotShapeKeepsNoPresentSlotUnclassified();
+    runEncodeIterationPassesLiveSlotStorage();
     dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding();
     dequeueReadySlotBatchRespectsOutputCapacity();
     dequeueReadySlotBatchHonorsAppendPredicate();

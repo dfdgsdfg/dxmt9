@@ -1223,17 +1223,16 @@ bool QueueLifecycleController::commitCurrentChunk(
   return true;
 }
 
-bool QueueLifecycleController::dequeueReadySlot(std::unique_lock<std::mutex>& lock,
-                                                size_t& slotIndex,
-                                                ChunkSlot& slotCopy) {
+bool QueueLifecycleController::dequeueReadySlot(
+    std::unique_lock<std::mutex>& lock,
+    ReadySlotSnapshot& out) {
   std::array<ReadySlotSnapshot, 1> snapshots{};
   const size_t count = dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
   if (count == 0) {
     return false;
   }
-  slotIndex = snapshots[0].slotIndex;
   DXMT_ASSERT(snapshots[0].slot != nullptr);
-  slotCopy = *snapshots[0].slot;
+  out = snapshots[0];
   return true;
 }
 
@@ -1453,54 +1452,63 @@ bool QueueLifecycleController::runEncodeIteration(
     const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
     const std::function<void(u64)>& onInlineComplete) {
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
-  size_t slotIndex = 0;
-  ChunkSlot slotCopy;
-  if (!dequeueReadySlot(lock, slotIndex, slotCopy)) {
+  ReadySlotSnapshot source{};
+  if (!dequeueReadySlot(lock, source)) {
     return false;
   }
+  DXMT_ASSERT(source.slot != nullptr);
 
-  traceEncodeIterationStage("iteration.after-dequeue", slotIndex, slotCopy);
-  traceEncodeIterationStage("iteration.before-unlock", slotIndex, slotCopy);
+  traceEncodeIterationStage("iteration.after-dequeue",
+                            source.slotIndex, *source.slot);
+  traceEncodeIterationStage("iteration.before-unlock",
+                            source.slotIndex, *source.slot);
   lock.unlock();
-  traceEncodeIterationStage("iteration.after-unlock", slotIndex, slotCopy);
+  traceEncodeIterationStage("iteration.after-unlock",
+                            source.slotIndex, *source.slot);
   std::optional<QueueSubmissionRecord> submission;
   if (encodeFn) {
-    traceEncodeIterationStage("iteration.before-encodefn", slotIndex, slotCopy);
-    submission = encodeFn(slotIndex, slotCopy);
+    traceEncodeIterationStage("iteration.before-encodefn",
+                              source.slotIndex, *source.slot);
+    submission = encodeFn(source.slotIndex, *source.slot);
     if (submission.has_value() && !submission->commandBuffer) {
       submission.reset();
     }
     traceEncodeIterationStage(submission.has_value()
                                   ? "iteration.after-encodefn-submission"
                                   : "iteration.after-encodefn-inline",
-                              slotIndex,
-                              slotCopy);
+                              source.slotIndex,
+                              *source.slot);
   } else {
-    traceEncodeIterationStage("iteration.no-encodefn", slotIndex, slotCopy);
+    traceEncodeIterationStage("iteration.no-encodefn",
+                              source.slotIndex, *source.slot);
   }
-  traceEncodeIterationStage("iteration.before-relock", slotIndex, slotCopy);
+  traceEncodeIterationStage("iteration.before-relock",
+                            source.slotIndex, *source.slot);
   lock.lock();
-  traceEncodeIterationStage("iteration.after-relock", slotIndex, slotCopy);
+  traceEncodeIterationStage("iteration.after-relock",
+                            source.slotIndex, *source.slot);
 
   if (submission.has_value()) {
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
-    traceEncodeIterationStage("iteration.before-submit-record", slotIndex, slotCopy);
+    traceEncodeIterationStage("iteration.before-submit-record",
+                              source.slotIndex, *source.slot);
     enqueueSubmission(*submission);
-    traceEncodeIterationStage("iteration.after-submit-record", slotIndex, slotCopy);
+    traceEncodeIterationStage("iteration.after-submit-record",
+                              source.slotIndex, *source.slot);
     lock.unlock();
-    traceEncodeIterationStage("iteration.after-submit-unlock", slotIndex, slotCopy);
     for (auto& callback : postCommitCallbacks) {
       if (callback) {
         callback();
       }
     }
-    traceEncodeIterationStage("iteration.after-post-commit-callbacks", slotIndex, slotCopy);
   } else {
-    traceEncodeIterationStage("iteration.before-inline-complete", slotIndex, slotCopy);
-    completeInlineChunk(slotIndex, slotCopy.seqId);
-    traceEncodeIterationStage("iteration.after-inline-complete", slotIndex, slotCopy);
+    traceEncodeIterationStage("iteration.before-inline-complete",
+                              source.slotIndex, *source.slot);
+    completeInlineChunk(source.slotIndex, source.seqId);
+    traceEncodeIterationStage("iteration.after-inline-complete",
+                              source.slotIndex, *source.slot);
     if (onInlineComplete) {
-      onInlineComplete(slotCopy.seqId);
+      onInlineComplete(source.seqId);
     }
   }
   return true;
