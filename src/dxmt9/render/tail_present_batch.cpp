@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <chrono>
 #include <utility>
-#include <vector>
 
 namespace dxmt9::render {
 
@@ -380,16 +379,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
     return std::nullopt;
   }
 
-  std::vector<core::metalqueue::QueueCompletionSource> completionSources;
-  completionSources.reserve(sources.size());
+  core::metalqueue::EncodeSessionSourceList completionSources;
   for (const auto& source : sources) {
-    completionSources.push_back(
-        core::metalqueue::completionSourceForReadySlot(source));
+    if (!completionSources.append(
+            core::metalqueue::completionSourceForReadySlot(source))) {
+      return std::nullopt;
+    }
   }
-  core::metalqueue::EncodeSessionSourceList sourcePreflight;
-  if (!sourcePreflight.assign(completionSources)) {
-    return std::nullopt;
-  }
+  const auto completionSourceSpan = completionSources.span();
 
   auto session = encoders::makeEncodeChunkSession();
   std::optional<core::metalqueue::QueueSubmissionRecord> pending;
@@ -436,7 +433,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
     options.disablePresentAcquireSplit = true;
     options.session = session.get();
     options.deferSessionFinalization = i + 1u < sources.size();
-    options.sessionSource = completionSources[i];
+    options.sessionSource = completionSourceSpan[i];
     options.sessionLookaheadSources = sources.subspan(i);
     if (pending.has_value()) {
       options.commandBuffer = pending->commandBuffer;
@@ -461,7 +458,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
   pending->slotIndex = tail.slotIndex;
   pending->seqId = tail.slot->seqId;
   if (pending->completionSources.empty()) {
-    pending->completionSources = std::move(completionSources);
+    pending->completionSources.assign(
+        completionSourceSpan.begin(), completionSourceSpan.end());
   }
   if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
           std::move(session), *pending)) {
