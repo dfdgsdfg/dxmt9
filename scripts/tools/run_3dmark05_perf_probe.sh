@@ -49,6 +49,7 @@ dxmt_log_level=${DXMT_LOG_LEVEL:-}
 open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
 open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
 open_cb_semantic_boundary_publish=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH:-0}
+open_cb_cpu_ready_command_limit=${DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT:-}
 open_cb_writer_active_cpu_ready_publish=${DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH:-0}
 open_cb_semantic_boundary_release_mode=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE:-}
 open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
@@ -714,6 +715,10 @@ Options:
                       Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=1 so
                       semantic non-draw commands publish the preceding
                       non-present source for the open-CB carrier.
+  --open-cb-cpu-ready-command-limit N
+                      Set DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT=N so draw
+                      submit publishes non-present SemanticBoundary sources
+                      deterministically when the writing slot reaches N commands.
   --open-cb-writer-active-cpu-ready-publish
                       Set DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH=1 so
                       H161 writer-active non-present writing-slot misses are
@@ -1772,6 +1777,10 @@ while (($#)); do
     --open-cb-semantic-boundary-publish)
       open_cb_semantic_boundary_publish=1
       shift
+      ;;
+    --open-cb-cpu-ready-command-limit)
+      open_cb_cpu_ready_command_limit=${2:?missing value for --open-cb-cpu-ready-command-limit}
+      shift 2
       ;;
     --open-cb-writer-active-cpu-ready-publish)
       open_cb_writer_active_cpu_ready_publish=1
@@ -4317,6 +4326,10 @@ fi
 
 if [[ "$open_cb_semantic_boundary_publish" != "0" && -n "$open_cb_semantic_boundary_publish" ]]; then
   env_args+=("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=$open_cb_semantic_boundary_publish")
+fi
+
+if [[ -n "$open_cb_cpu_ready_command_limit" ]]; then
+  env_args+=("DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT=$open_cb_cpu_ready_command_limit")
 fi
 
 if [[ "$open_cb_writer_active_cpu_ready_publish" != "0" && -n "$open_cb_writer_active_cpu_ready_publish" ]]; then

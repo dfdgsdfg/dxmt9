@@ -210,6 +210,25 @@ std::size_t stagePrePresentCommandLimit() {
       : std::size_t{0};
 }
 
+std::size_t openCbCpuReadyCommandLimit() {
+  static const std::size_t limit = [] {
+    const char* env = std::getenv("DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT");
+    if (!env || env[0] == '\0') {
+      return std::size_t{0};
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    if (end == env || parsed == 0) {
+      return std::size_t{0};
+    }
+    if (parsed > std::numeric_limits<std::size_t>::max()) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return static_cast<std::size_t>(parsed);
+  }();
+  return openCbSemanticBoundaryPublishEnabled() ? limit : std::size_t{0};
+}
+
 bool unpublishedSlotPsoPrefetchEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO");
@@ -2872,6 +2891,27 @@ bool maybePublishSemanticBoundaryChunkUnlocked(
   return true;
 }
 
+bool maybePublishOpenCbCpuReadyCommandLimitUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock) {
+  const std::size_t limit = openCbCpuReadyCommandLimit();
+  if (limit == 0 || !q.writingSlot_) {
+    return false;
+  }
+
+  auto& slot = currentSlotUnlocked(q);
+  if (slot.commandsEmpty() ||
+      !slot.presentRecords.empty() ||
+      slot.commandCount() < limit) {
+    return false;
+  }
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    return false;
+  }
+  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
+}
+
 bool maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
     CommandQueue& q,
     resources::Pool& pool,
@@ -3043,7 +3083,8 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybeStagePrePresentChunkUnlocked(*this, pool_, lock)) {
+    if (!maybePublishOpenCbCpuReadyCommandLimitUnlocked(*this, pool_, lock) &&
+        !maybeStagePrePresentChunkUnlocked(*this, pool_, lock)) {
       (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
     }
   }
@@ -3135,8 +3176,19 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
-        (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
+      const bool cpuReadyPublished =
+          maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock);
+      if (cpuReadyPublished) {
+        forceDrawResourceMarkingAfterSplit =
+            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
+      } else if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
+        const bool committed = maybeCommitDrawChunkUnlocked(queue, pool, lock);
+        forceDrawResourceMarkingAfterSplit =
+            forceDrawResourceMarkingAfterSplit ||
+            (committed && skipDrawResourceMarking);
+      } else {
+        forceDrawResourceMarkingAfterSplit =
+            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
       }
     }
     batchStart = batchEnd;
@@ -3245,6 +3297,13 @@ void submitDrawRunBatchAndRunImpl(
       noteCurrentSlotCommandAppendStartedUnlocked(queue);
       currentSlotUnlocked(queue).appendDrawRunBatch(batch);
     }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
+      if (maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock)) {
+        forceDrawResourceMarkingAfterSplit =
+            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
+      }
+    }
     batchStart = batchEnd;
   }
 
@@ -3286,7 +3345,8 @@ void submitDrawRunBatchAndRunImpl(
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
+    if (!maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock) &&
+        !maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
       (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
     }
   }
