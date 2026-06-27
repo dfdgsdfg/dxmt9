@@ -1176,12 +1176,15 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
   tail.completionSources.push_back(headSources[0]);
   tail.completionSources.push_back(tailSource);
 
+  EncodeSessionSourceList mergedSources;
   const bool merged = mergeEncodedPendingTailSubmission(
       tail,
       head,
       std::span<const QueueCompletionSource>(
           headSources.data(), headSources.size()),
-      tailSource);
+      tailSource,
+      /*encodedHeadTailAlreadyCommitted=*/false,
+      &mergedSources);
 
   check(merged, "session-owned completion source prefix is accepted");
   checkEq(tail.completionSources.size(), 2u,
@@ -1190,6 +1193,14 @@ void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
           "session-owned head source stays first");
   checkEq(tail.completionSources[1].seqId, 2ull,
           "session-owned tail source stays second");
+  checkEq(mergedSources.size(), 2u,
+          "merged source list mirrors the queue completion sources");
+  checkEq(mergedSources.span()[0].seqId, 1ull,
+          "merged source list preserves head seq");
+  checkEq(mergedSources.span()[1].seqId, 2ull,
+          "merged source list preserves tail seq");
+  check(mergedSources.span()[1].hasPresent,
+        "merged source list preserves tail present metadata");
 }
 
 void mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch() {
@@ -1325,6 +1336,46 @@ void mergeEncodedPendingTailSubmissionRejectsSequenceGaps() {
           "failed merge leaves tail chain length untouched");
 }
 
+void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
+  QueueSubmissionRecord head;
+  head.slotIndex = 0;
+  head.seqId = 1;
+
+  QueueSubmissionRecord tail;
+  tail.slotIndex = kMaxEncodeSessionSources;
+  tail.seqId = static_cast<std::uint64_t>(kMaxEncodeSessionSources + 1u);
+
+  std::array<QueueCompletionSource, kMaxEncodeSessionSources> headSources{};
+  for (std::size_t i = 0; i < headSources.size(); ++i) {
+    headSources[i] = QueueCompletionSource{
+        .slotIndex = i,
+        .seqId = static_cast<std::uint64_t>(i + 1u),
+        .hasPresent = false,
+    };
+  }
+  const QueueCompletionSource tailSource{
+      .slotIndex = kMaxEncodeSessionSources,
+      .seqId = static_cast<std::uint64_t>(kMaxEncodeSessionSources + 1u),
+      .hasPresent = true,
+  };
+
+  EncodeSessionSourceList mergedSources;
+  const bool merged = mergeEncodedPendingTailSubmission(
+      tail,
+      head,
+      std::span<const QueueCompletionSource>(
+          headSources.data(), headSources.size()),
+      tailSource,
+      /*encodedHeadTailAlreadyCommitted=*/false,
+      &mergedSources);
+
+  check(!merged, "session source overflow is rejected");
+  check(tail.completionSources.empty(),
+        "overflow rejection leaves tail completion sources untouched");
+  check(mergedSources.empty(),
+        "overflow rejection leaves merged source output empty");
+}
+
 void runEncodeBatchIterationCompletesEmptySubmissionInline() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -1422,6 +1473,7 @@ int main() {
     mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsSequenceGaps();
+    mergeEncodedPendingTailSubmissionRejectsSourceListOverflow();
     runEncodeBatchIterationCompletesEmptySubmissionInline();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';

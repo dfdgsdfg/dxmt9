@@ -459,7 +459,8 @@ bool mergeEncodedPendingTailSubmission(
     QueueSubmissionRecord& encodedHead,
     std::span<const QueueCompletionSource> encodedHeadSources,
     QueueCompletionSource tailSource,
-    bool encodedHeadTailAlreadyCommitted) {
+    bool encodedHeadTailAlreadyCommitted,
+    EncodeSessionSourceList* mergedSourcesOut) {
   if (encodedHeadSources.empty() ||
       tailSource.seqId == 0 ||
       tail.seqId == 0 ||
@@ -537,6 +538,19 @@ bool mergeEncodedPendingTailSubmission(
     return false;
   }
 
+  EncodeSessionSourceList mergedSourceList;
+  for (const auto& source : encodedHeadSources) {
+    if (!mergedSourceList.append(source)) {
+      return false;
+    }
+  }
+  for (const auto& source : tailSources) {
+    if (!mergedSourceList.append(source)) {
+      return false;
+    }
+  }
+  const auto mergedSourceSpan = mergedSourceList.span();
+
   if (!tail.commandBuffer && encodedHead.commandBuffer) {
     tail.commandBuffer = std::move(encodedHead.commandBuffer);
   }
@@ -546,14 +560,11 @@ bool mergeEncodedPendingTailSubmission(
         std::move(encodedHead.renderEncoderGpuSampleBuffer);
   }
 
-  std::vector<QueueCompletionSource> mergedSources;
-  mergedSources.reserve(encodedHeadSources.size() + tailSources.size());
-  mergedSources.insert(
-      mergedSources.end(),
-      encodedHeadSources.begin(),
-      encodedHeadSources.end());
-  mergedSources.insert(mergedSources.end(), tailSources.begin(), tailSources.end());
-  tail.completionSources = std::move(mergedSources);
+  tail.completionSources.assign(
+      mergedSourceSpan.begin(), mergedSourceSpan.end());
+  if (mergedSourcesOut) {
+    *mergedSourcesOut = mergedSourceList;
+  }
 
   const u64 headChainLength = std::max<u64>(1, encodedHead.commandBufferChainLength);
   const u64 tailChainLength = std::max<u64>(1, tail.commandBufferChainLength);

@@ -4614,11 +4614,13 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
             pendingRecord->commandBuffer.handle !=
                 submission->commandBuffer.handle &&
             appendChainLength > 1u;
+        EncodeSessionSourceList mergedSources;
         const bool merged =
             appendRetainedValid &&
             core::metalqueue::mergeEncodedPendingTailSubmission(
                 *submission, *pendingRecord, pendingSources.span(),
-                appendRetained, appendCommittedPendingTail);
+                appendRetained, appendCommittedPendingTail,
+                sourceHasFinalPresentTail ? nullptr : &mergedSources);
         if (!merged) {
           perf::countOpenCbTailPresentPendingMergeFailed();
           if (!appendRetainedValid || !submission->commandBuffer) {
@@ -4642,15 +4644,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingSources.clear();
         pendingCanReleaseAtSemanticBoundary = false;
         if (!sourceHasFinalPresentTail) {
-          if (!pendingSources.assign(submission->completionSources)) {
-            DXMT_ASSERT(false && "merged session sources must remain bounded");
-            perf::countOpenCbTailPresentPendingMergeFailed();
-            pendingRecord = std::move(*submission);
-            if (!submitPendingRecordLocked(lock)) {
-              abortOpenCbPendingFailOpen("merged session source assign failed");
-            }
-            continue;
-          }
+          pendingSources = mergedSources;
           pendingRecord = std::move(*submission);
           pendingCanReleaseAtSemanticBoundary =
               sourceIsSemanticBoundary && !sourceHasFinalPresentTail;

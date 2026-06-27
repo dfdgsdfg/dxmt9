@@ -352,7 +352,8 @@ bool mergeEncodedPendingTailSubmission(
     QueueSubmissionRecord& encodedHead,
     std::span<const QueueCompletionSource> encodedHeadSources,
     QueueCompletionSource tailSource,
-    bool encodedHeadTailAlreadyCommitted = false);
+    bool encodedHeadTailAlreadyCommitted = false,
+    EncodeSessionSourceList* mergedSourcesOut = nullptr);
 Handle selectPresentSourceHandle(const SwapDesc& desc, Handle currentBackBuffer) noexcept;
 QueueTraceSnapshot makeQueueTraceSnapshot(const QueueTraceState& state);
 void appendCompletionSourcesToQueues(
