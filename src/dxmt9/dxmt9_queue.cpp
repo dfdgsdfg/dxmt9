@@ -339,6 +339,23 @@ QueueCompletionSource completionSourceForReadySlot(
   };
 }
 
+bool assignBatchCompletionSourcesIfNeeded(
+    QueueSubmissionRecord& submission,
+    std::span<const ReadySlotSnapshot> sources) {
+  if (sources.size() <= 1u ||
+      !submission.explicitCompletionSourceSpan().empty()) {
+    return true;
+  }
+
+  EncodeSessionSourceList completionSources;
+  for (const auto& source : sources) {
+    if (!completionSources.append(completionSourceForReadySlot(source))) {
+      return false;
+    }
+  }
+  return submission.assignFixedCompletionSources(completionSources.span());
+}
+
 void appendCompletionSourcesToQueues(
     std::deque<u64>& completedSeqQueue,
     std::deque<u64>* completedPresentSeqQueue,
@@ -1546,21 +1563,8 @@ bool QueueLifecycleController::runEncodeBatchIteration(
 
   lock.lock();
   if (submission.has_value()) {
-    if (sources.size() > 1 &&
-        submission->explicitCompletionSourceSpan().empty()) {
-      EncodeSessionSourceList completionSources;
-      for (const auto& source : sources) {
-        if (!completionSources.append(completionSourceForReadySlot(source))) {
-          submission.reset();
-          break;
-        }
-      }
-      if (submission.has_value()) {
-        if (!submission->assignFixedCompletionSources(
-                completionSources.span())) {
-          submission.reset();
-        }
-      }
+    if (!assignBatchCompletionSourcesIfNeeded(*submission, sources)) {
+      submission.reset();
     }
 #ifndef NDEBUG
     if (submission.has_value() && sources.size() > 1) {

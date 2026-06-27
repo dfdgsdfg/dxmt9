@@ -1711,6 +1711,48 @@ void runEncodeBatchIterationCompletesEmptySubmissionInline() {
           "present completion does not advance for non-present inline sources");
 }
 
+void multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+
+  std::array<ReadySlotSnapshot, 2> snapshots{};
+  {
+    std::unique_lock lock(fixture.mutex);
+    const std::size_t sourceCount =
+        fixture.controller.dequeueReadySlotBatch(
+            lock, std::span<ReadySlotSnapshot>(snapshots));
+    checkEq(sourceCount, 2u, "test setup dequeues both source slots");
+  }
+
+  dxmt9::core::metalqueue::QueueSubmissionRecord record;
+  record.slotIndex = snapshots[1].slotIndex;
+  record.seqId = snapshots[1].seqId;
+  check(record.explicitCompletionSourceSpan().empty(),
+        "test setup starts without explicit completion sources");
+
+  check(dxmt9::core::metalqueue::assignBatchCompletionSourcesIfNeeded(
+            record, std::span<const ReadySlotSnapshot>(
+                        snapshots.data(), snapshots.size())),
+        "multi-source batch submission receives fixed completion sources");
+
+  const auto sources = record.explicitCompletionSourceSpan();
+  checkEq(sources.size(), 2u,
+          "multi-source batch stores every completion source");
+  checkEq(sources[0].slotIndex, snapshots[0].slotIndex,
+          "first source slot metadata is preserved");
+  checkEq(sources[0].seqId, snapshots[0].seqId,
+          "first source seqId metadata is preserved");
+  checkEq(sources[1].slotIndex, snapshots[1].slotIndex,
+          "tail source slot metadata is preserved");
+  checkEq(sources[1].seqId, snapshots[1].seqId,
+          "tail source seqId metadata is preserved");
+  checkEq(sources[0].commandBegin, snapshots[0].commandBegin,
+          "first source command begin metadata is preserved");
+  checkEq(sources[1].commandCount, snapshots[1].commandCount,
+          "tail source command count metadata is preserved");
+}
+
 }  // namespace
 
 int main() {
@@ -1753,6 +1795,7 @@ int main() {
     mergeEncodedPendingTailSubmissionRejectsSequenceGaps();
     mergeEncodedPendingTailSubmissionRejectsSourceListOverflow();
     runEncodeBatchIterationCompletesEmptySubmissionInline();
+    multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';
     return 1;
