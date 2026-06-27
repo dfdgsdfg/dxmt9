@@ -376,6 +376,7 @@ struct Counters {
   std::atomic<std::uint64_t> renderSplitColorFill{0};
   std::atomic<std::uint64_t> renderSplitPresent{0};
   std::atomic<std::uint64_t> renderSplitPresentAcquire{0};
+  std::atomic<std::uint64_t> renderSplitTileMidPassIneligible{0};
   std::atomic<std::uint64_t> encodeSessionCarryDeferredChunks{0};
   std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveRenderChunks{0};
   std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveBlitChunks{0};
@@ -410,6 +411,7 @@ struct Counters {
   std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill{0};
   std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent{0};
   std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire{0};
+  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStarted{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitActive{0};
   std::atomic<std::uint64_t> openCbTailPresentPendingStartedWaitInactive{0};
@@ -2174,6 +2176,8 @@ std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason r
       return c.renderSplitPresent;
     case EncoderSplitReason::PresentAcquire:
       return c.renderSplitPresentAcquire;
+    case EncoderSplitReason::TileMidPassIneligible:
+      return c.renderSplitTileMidPassIneligible;
   }
   return c.renderSplitFinal;
 }
@@ -2200,6 +2204,8 @@ const char* splitReasonName(EncoderSplitReason reason) {
       return "present";
     case EncoderSplitReason::PresentAcquire:
       return "present_acquire";
+    case EncoderSplitReason::TileMidPassIneligible:
+      return "tile_midpass";
   }
   return "unknown";
 }
@@ -2550,6 +2556,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_split_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitColorFill, nullptr, nullptr, 0.0},
     {"render_split_present", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresent, nullptr, nullptr, 0.0},
     {"render_split_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresentAcquire, nullptr, nullptr, 0.0},
+    {"render_split_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitTileMidPassIneligible, nullptr, nullptr, 0.0},
     {"encode_session_carry_deferred_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredChunks, nullptr, nullptr, 0.0},
     {"encode_session_carry_deferred_active_render_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveRenderChunks, nullptr, nullptr, 0.0},
     {"encode_session_carry_deferred_active_blit_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveBlitChunks, nullptr, nullptr, 0.0},
@@ -2584,6 +2591,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_session_carry_active_entry_lost_active_before_first_draw_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill, nullptr, nullptr, 0.0},
     {"encode_session_carry_active_entry_lost_active_before_first_draw_present", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent, nullptr, nullptr, 0.0},
     {"encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire, nullptr, nullptr, 0.0},
+    {"encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStarted, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_active", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitActive, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_pending_started_wait_inactive", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentPendingStartedWaitInactive, nullptr, nullptr, 0.0},
@@ -5275,6 +5283,9 @@ void countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
     break;
   case EncoderSplitReason::PresentAcquire:
     add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire);
+    break;
+  case EncoderSplitReason::TileMidPassIneligible:
+    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible);
     break;
   }
 }
@@ -10976,6 +10987,8 @@ CounterSnapshot snapshot() {
       load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent);
   s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire =
       load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire);
+  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible =
+      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible);
   s.openCbTailPresentPendingStarted =
       load(c.openCbTailPresentPendingStarted);
   s.openCbTailPresentPendingStartedWaitActive =
@@ -11225,6 +11238,7 @@ void emitFrameDelta(std::uint64_t frameId,
       "encode_session_carry_active_entry_lost_active_before_first_draw_color_fill=%llu "
       "encode_session_carry_active_entry_lost_active_before_first_draw_present=%llu "
       "encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire=%llu "
+      "encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass=%llu "
       "open_cb_tail_present_pending_started=%llu "
       "open_cb_tail_present_pending_started_wait_active=%llu "
       "open_cb_tail_present_pending_started_wait_inactive=%llu "
@@ -11416,6 +11430,9 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(
           delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire,
                 curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire)),
+      static_cast<unsigned long long>(
+          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible,
+                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible)),
       static_cast<unsigned long long>(
           delta(prev.openCbTailPresentPendingStarted,
                 curr.openCbTailPresentPendingStarted)),

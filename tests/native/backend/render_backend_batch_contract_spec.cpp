@@ -1267,6 +1267,36 @@ void renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch() {
         "tile-FFP mid-pass ineligibility is a semantic encoder boundary");
 }
 
+void renderPassEntrySplitReasonsPreserveSemanticBoundaryClass() {
+  using dxmt9::perf::EncoderSplitReason;
+
+  check(dxmt9::encoders::renderPassEntrySplitReason(
+            RenderPassEntryDecision::SplitRenderTargetChange,
+            EncoderSplitReason::Final) ==
+            EncoderSplitReason::RenderTargetChange,
+        "RT/depth key changes keep the render-target split reason");
+  check(dxmt9::encoders::renderPassEntrySplitReason(
+            RenderPassEntryDecision::SplitHazard,
+            EncoderSplitReason::Final) ==
+            EncoderSplitReason::Hazard,
+        "exact hazards keep the hazard split reason");
+  check(dxmt9::encoders::renderPassEntrySplitReason(
+            RenderPassEntryDecision::SplitTileMidPassIneligible,
+            EncoderSplitReason::Final) ==
+            EncoderSplitReason::TileMidPassIneligible,
+        "tile mid-pass ineligibility is not reported as a Final split");
+  check(dxmt9::encoders::renderPassEntrySplitReason(
+            RenderPassEntryDecision::BeginPass,
+            EncoderSplitReason::ClearBarrier) ==
+            EncoderSplitReason::ClearBarrier,
+        "fallback reason still classifies non-split begin-pass paths");
+  check(dxmt9::encoders::renderPassEntrySplitReason(
+            RenderPassEntryDecision::ContinueActive,
+            EncoderSplitReason::Final) ==
+            EncoderSplitReason::Final,
+        "continue-active callers keep their fallback reason");
+}
+
 void drawAttachmentKeysUseEncoderKeyShape() {
   dxmt9::core::FlatDrawStateRecord a{};
   dxmt9::core::FlatDrawStateRecord b{};
@@ -1469,6 +1499,7 @@ int main() {
     openCbTailPresentPrefixAllowsSessionHeads();
     drawContinuationSourcesAreOrdinaryOpenCbSessionSources();
     renderPassEntryDecisionContinuesOnlyOnSemanticCleanMatch();
+    renderPassEntrySplitReasonsPreserveSemanticBoundaryClass();
     drawAttachmentKeysUseEncoderKeyShape();
     openCbDrawContinuationBoundaryPublishesOnlySameKeyDrawTails();
     storeProofLookaheadIsSourceLocalOnlyOutsideEncodeSession();

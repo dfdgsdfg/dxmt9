@@ -273,6 +273,7 @@ RUN_COUNTERS = (
     "encode_session_carry_active_entry_lost_active_before_first_draw_color_fill",
     "encode_session_carry_active_entry_lost_active_before_first_draw_present",
     "encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire",
+    "encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass",
     "open_cb_tail_present_pending_started",
     "open_cb_tail_present_pending_started_wait_active",
     "open_cb_tail_present_pending_started_wait_inactive",
@@ -358,6 +359,7 @@ RUN_COUNTERS = (
     "render_split_color_fill",
     "render_split_present",
     "render_split_present_acquire",
+    "render_split_tile_midpass",
     "render_pass_store_action_store",
     "render_pass_store_action_dontcare",
     "render_pass_store_action_resolve",
@@ -2530,6 +2532,7 @@ FRAME_CSV_KEYS = (
     "encode_session_carry_active_entry_lost_active_before_first_draw_color_fill",
     "encode_session_carry_active_entry_lost_active_before_first_draw_present",
     "encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire",
+    "encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass",
     "open_cb_tail_present_pending_started",
     "open_cb_tail_present_pending_started_wait_active",
     "open_cb_tail_present_pending_started_wait_inactive",
@@ -7159,6 +7162,10 @@ def write_markdown(
             (
                 "active-entry lost before first draw: present acquire",
                 "encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire",
+            ),
+            (
+                "active-entry lost before first draw: tile mid-pass",
+                "encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass",
             ),
             ("pending started", "open_cb_tail_present_pending_started"),
             (

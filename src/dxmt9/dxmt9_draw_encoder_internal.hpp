@@ -132,6 +132,23 @@ inline RenderPassEntryDecision classifyRenderPassEntry(
   return RenderPassEntryDecision::ContinueActive;
 }
 
+inline perf::EncoderSplitReason renderPassEntrySplitReason(
+    RenderPassEntryDecision decision,
+    perf::EncoderSplitReason nonSplitFallback) noexcept {
+  switch (decision) {
+  case RenderPassEntryDecision::SplitRenderTargetChange:
+    return perf::EncoderSplitReason::RenderTargetChange;
+  case RenderPassEntryDecision::SplitHazard:
+    return perf::EncoderSplitReason::Hazard;
+  case RenderPassEntryDecision::SplitTileMidPassIneligible:
+    return perf::EncoderSplitReason::TileMidPassIneligible;
+  case RenderPassEntryDecision::BeginPass:
+  case RenderPassEntryDecision::ContinueActive:
+    return nonSplitFallback;
+  }
+  return nonSplitFallback;
+}
+
 inline bool useSourceLocalStoreProofLookahead(
     bool externalEncodeSession,
     bool sessionMayContinue) noexcept {

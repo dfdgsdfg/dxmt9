@@ -15749,12 +15749,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             DXMT_ASSERT(hasActiveRender);
             DXMT_ASSERT(activeKey == drawKey);
           }
-          const auto splitReason =
-              entryDecision == RenderPassEntryDecision::SplitRenderTargetChange
-                  ? perf::EncoderSplitReason::RenderTargetChange
-              : entryDecision == RenderPassEntryDecision::SplitHazard
-                  ? perf::EncoderSplitReason::Hazard
-                  : perf::EncoderSplitReason::ClearBarrier;
+          const auto splitReason = renderPassEntrySplitReason(
+              entryDecision, perf::EncoderSplitReason::ClearBarrier);
           flushRender(splitReason);
           // R-BACK-2.29..2.32 — per-render-pass policy commits the
           // current sub-CB at every non-Final flushRender. Encoder is
@@ -15801,12 +15797,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           DXMT_ASSERT(hasActiveRender);
           DXMT_ASSERT(activeKey == drawKey);
         }
-        const auto splitReason =
-            entryDecision == RenderPassEntryDecision::SplitRenderTargetChange
-                ? perf::EncoderSplitReason::RenderTargetChange
-            : entryDecision == RenderPassEntryDecision::SplitHazard
-                ? perf::EncoderSplitReason::Hazard
-                : perf::EncoderSplitReason::Final;
+        const auto splitReason = renderPassEntrySplitReason(
+            entryDecision, perf::EncoderSplitReason::Final);
         flushRender(splitReason);
         // R-BACK-2.29..2.32 — see twin call site above. The split
         // reason here can be Final when neither RT-change nor hazard

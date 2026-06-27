@@ -26,6 +26,7 @@ enum class EncoderSplitReason : std::uint8_t {
   ColorFill,
   Present,
   PresentAcquire,
+  TileMidPassIneligible,
 };
 
 enum class RenderPassDepthStoreProof : std::uint8_t {
@@ -1346,6 +1347,7 @@ struct CounterSnapshot {
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill = 0;
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent = 0;
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire = 0;
+  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible = 0;
   std::uint64_t openCbTailPresentPendingStarted = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitActive = 0;
   std::uint64_t openCbTailPresentPendingStartedWaitInactive = 0;
