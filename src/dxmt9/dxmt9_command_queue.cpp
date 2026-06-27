@@ -4407,6 +4407,25 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
 
       bool appendToPending =
           pendingRecord.has_value() && sourceCanAppendToPending;
+      if (appendToPending) {
+        const QueueCompletionSource candidate =
+            core::metalqueue::completionSourceForReadySlot(source);
+        const bool queueSourcesCanAppend =
+            pendingSources.canAppend(candidate);
+        const bool sessionSourcesCanAppend =
+            !pendingSession ||
+            encoders::canAppendEncodeChunkSessionSource(
+                *pendingSession, candidate);
+        if (!queueSourcesCanAppend || !sessionSourcesCanAppend) {
+          if (!submitPendingRecordLocked(lock)) {
+            abortOpenCbPendingFailOpen("session source preflight failed");
+          }
+          if (!lock.owns_lock()) {
+            lock.lock();
+          }
+          appendToPending = false;
+        }
+      }
       const bool suppressCarryHeadWithoutTail =
           carryRenderSession && !allowPendingHeadWithoutReadyTail &&
           !pendingRecord.has_value() && sourceIsOpenHead &&

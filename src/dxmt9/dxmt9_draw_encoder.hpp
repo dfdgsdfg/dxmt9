@@ -57,6 +57,9 @@ bool encodeChunkSessionHasActiveRender(
     const EncodeChunkSessionState& session) noexcept;
 bool encodeChunkSessionHasDeferredSubmissionPayload(
     const EncodeChunkSessionState& session) noexcept;
+bool canAppendEncodeChunkSessionSource(
+    const EncodeChunkSessionState& session,
+    core::metalqueue::QueueCompletionSource source) noexcept;
 bool appendEncodeChunkSessionSource(
     EncodeChunkSessionState& session,
     core::metalqueue::QueueCompletionSource source) noexcept;

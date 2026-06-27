@@ -9102,6 +9102,12 @@ bool encodeChunkSessionHasDeferredSubmissionPayload(
          !storage.renderEncoderGpuSamples.empty();
 }
 
+bool canAppendEncodeChunkSessionSource(
+    const EncodeChunkSessionState& session,
+    core::metalqueue::QueueCompletionSource source) noexcept {
+  return session.sources.canAppend(source);
+}
+
 bool appendEncodeChunkSessionSource(
     EncodeChunkSessionState& session,
     core::metalqueue::QueueCompletionSource source) noexcept {

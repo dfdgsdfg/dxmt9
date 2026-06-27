@@ -50,10 +50,8 @@ bool slotCanAppendToOpenCbPending(const core::ChunkSlot& slot,
   if (!carryRenderSession) {
     return slotIsOpenCbPreencodeHead(slot);
   }
-  if (tailReadyForCurrentHead) {
-    return slotCanBeOpenCbSessionHead(slot);
-  }
-  return slotIsSemanticOpenCbSessionHead(slot);
+  static_cast<void>(tailReadyForCurrentHead);
+  return slotCanBeOpenCbSessionHead(slot);
 }
 
 bool slotCanStartOpenCbPendingSession(const core::ChunkSlot& slot,
@@ -372,6 +370,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
   for (const auto& source : sources) {
     completionSources.push_back(
         core::metalqueue::completionSourceForReadySlot(source));
+  }
+  core::metalqueue::EncodeSessionSourceList sourcePreflight;
+  if (!sourcePreflight.assign(completionSources)) {
+    return std::nullopt;
   }
 
   auto session = encoders::makeEncodeChunkSession();

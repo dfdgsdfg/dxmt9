@@ -173,18 +173,36 @@ void encodeSessionSourceListStoresConsecutiveSources() {
 void encodeSessionSourceListRejectsInvalidShape() {
   EncodeSessionSourceList list;
 
+  check(!list.canAppend(QueueCompletionSource{
+            .slotIndex = 1,
+            .seqId = 0,
+            .hasPresent = false,
+        }),
+        "session source list preflight rejects zero seqId");
   check(!list.append(QueueCompletionSource{
             .slotIndex = 1,
             .seqId = 0,
             .hasPresent = false,
         }),
         "session source list rejects zero seqId");
+  check(list.canAppend(QueueCompletionSource{
+            .slotIndex = 1,
+            .seqId = 1,
+            .hasPresent = false,
+        }),
+        "session source list preflight accepts initial valid seqId");
   check(list.append(QueueCompletionSource{
             .slotIndex = 1,
             .seqId = 1,
             .hasPresent = false,
         }),
         "session source list accepts initial valid seqId");
+  check(!list.canAppend(QueueCompletionSource{
+            .slotIndex = 3,
+            .seqId = 3,
+            .hasPresent = false,
+        }),
+        "session source list preflight rejects seqId gaps");
   check(!list.append(QueueCompletionSource{
             .slotIndex = 3,
             .seqId = 3,
@@ -215,6 +233,12 @@ void encodeSessionSourceListRejectsInvalidShape() {
           }),
           "session source list fills bounded capacity");
   }
+  check(!full.canAppend(QueueCompletionSource{
+            .slotIndex = kMaxEncodeSessionSources,
+            .seqId = static_cast<std::uint64_t>(kMaxEncodeSessionSources + 1u),
+            .hasPresent = false,
+        }),
+        "session source list preflight rejects overflow");
   check(!full.append(QueueCompletionSource{
             .slotIndex = kMaxEncodeSessionSources,
             .seqId = static_cast<std::uint64_t>(kMaxEncodeSessionSources + 1u),
@@ -319,6 +343,14 @@ void encodeChunkSessionFactoryStartsWithoutActiveRender() {
 void encodeChunkSessionOwnsOrderedSourceList() {
   auto session = dxmt9::encoders::makeEncodeChunkSession();
 
+  check(dxmt9::encoders::canAppendEncodeChunkSessionSource(
+            *session,
+            QueueCompletionSource{
+                .slotIndex = 3,
+                .seqId = 10,
+                .hasPresent = false,
+            }),
+        "encode session preflight accepts first completion source");
   check(dxmt9::encoders::appendEncodeChunkSessionSource(
             *session,
             QueueCompletionSource{
@@ -327,6 +359,14 @@ void encodeChunkSessionOwnsOrderedSourceList() {
                 .hasPresent = false,
             }),
         "encode session accepts first completion source");
+  check(dxmt9::encoders::canAppendEncodeChunkSessionSource(
+            *session,
+            QueueCompletionSource{
+                .slotIndex = 4,
+                .seqId = 11,
+                .hasPresent = true,
+            }),
+        "encode session preflight accepts present tail completion source");
   check(dxmt9::encoders::appendEncodeChunkSessionSource(
             *session,
             QueueCompletionSource{
@@ -341,6 +381,14 @@ void encodeChunkSessionOwnsOrderedSourceList() {
   checkEq(sources[0].seqId, 10ull, "encode session keeps head seq");
   checkEq(sources[1].seqId, 11ull, "encode session keeps tail seq");
   check(sources[1].hasPresent, "encode session keeps present flag");
+  check(!dxmt9::encoders::canAppendEncodeChunkSessionSource(
+            *session,
+            QueueCompletionSource{
+                .slotIndex = 5,
+                .seqId = 12,
+                .hasPresent = false,
+            }),
+        "encode session preflight rejects source after present tail");
   check(!dxmt9::encoders::appendEncodeChunkSessionSource(
             *session,
             QueueCompletionSource{

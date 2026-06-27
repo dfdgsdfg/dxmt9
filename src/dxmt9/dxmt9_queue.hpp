@@ -216,7 +216,7 @@ struct EncodeSessionSourceList {
   std::array<QueueCompletionSource, kMaxEncodeSessionSources> entries{};
   size_t count = 0;
 
-  bool append(QueueCompletionSource source) noexcept {
+  bool canAppend(QueueCompletionSource source) const noexcept {
     if (source.seqId == 0 || count >= entries.size()) {
       return false;
     }
@@ -225,6 +225,13 @@ struct EncodeSessionSourceList {
       if (previous.hasPresent || source.seqId != previous.seqId + 1u) {
         return false;
       }
+    }
+    return true;
+  }
+
+  bool append(QueueCompletionSource source) noexcept {
+    if (!canAppend(source)) {
+      return false;
     }
     entries[count++] = source;
     return true;

@@ -331,11 +331,11 @@ void openCbPendingAppendPolicyAllowsFinalPresentTail() {
             /*hasPendingSession=*/false,
             /*tailReadyForCurrentHead=*/false),
         "ordinary work cannot append before a session exists");
-  check(!dxmt9::render::slotCanAppendToOpenCbPending(
+  check(dxmt9::render::slotCanAppendToOpenCbPending(
             ordinaryWork, /*carryRenderSession=*/true,
             /*hasPendingSession=*/true,
             /*tailReadyForCurrentHead=*/false),
-        "ordinary non-present work does not append to a carried session without a semantic boundary");
+        "ordinary non-present work can append once a carried session exists");
   check(dxmt9::render::slotCanAppendToOpenCbPending(
             ordinaryWork, /*carryRenderSession=*/true,
             /*hasPendingSession=*/true,
