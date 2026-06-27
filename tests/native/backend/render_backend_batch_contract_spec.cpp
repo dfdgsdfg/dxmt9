@@ -672,6 +672,92 @@ void openCbSemanticBoundaryNoWaitBlockClassifiesWriterState() {
         "deterministic release mode does not need writer-slot CPU-ready publication");
 }
 
+void openCbActiveWaitAppendKeepsReadySourceInSession() {
+  using Mode = dxmt9::render::OpenCbSemanticBoundaryReleaseMode;
+
+  check(dxmt9::render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*firstReadySourceCanAppendToPending=*/true),
+        "active wait appends compatible ready source before semantic release");
+  check(!dxmt9::render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*firstReadySourceCanAppendToPending=*/false),
+        "nonappendable ready source keeps release-before-ready policy");
+  check(!dxmt9::render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*firstReadySourceCanAppendToPending=*/true),
+        "no-wait ready source must not bypass completion-wait release policy");
+  check(!dxmt9::render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/true,
+            /*firstReadySourceCanAppendToPending=*/true),
+        "one semantic release per completion-wait window is preserved");
+  check(!dxmt9::render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::Deterministic,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*firstReadySourceCanAppendToPending=*/true),
+        "active-wait append does not alter deterministic release mode");
+
+  check(dxmt9::render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "active wait may cut current writer work as a semantic CPU-ready source");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+            /*readySlotsEmpty=*/false,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "existing ready source is appended directly instead of cutting writer slot");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/false,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "inactive completion wait uses the older no-wait diagnostic path");
+  check(!dxmt9::render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+            /*readySlotsEmpty=*/true,
+            /*canReleaseAtSemanticBoundary=*/true,
+            Mode::CompletionWait,
+            /*completionWaitActive=*/true,
+            /*semanticReleaseAlreadyUsedDuringWait=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/true),
+        "present-bearing writer slot is not an active-wait semantic source");
+}
+
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
   check(dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
             /*canAppendToPending=*/true,
@@ -1031,6 +1117,7 @@ int main() {
     openCbSemanticBoundaryReleaseRequiresCompletionWait();
     openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait();
     openCbSemanticBoundaryNoWaitBlockClassifiesWriterState();
+    openCbActiveWaitAppendKeepsReadySourceInSession();
     openCbInitializerWaitBoundarySubmitsPendingBeforeAppend();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();

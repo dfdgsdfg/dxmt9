@@ -54,6 +54,14 @@ bool openCbPendingShouldReleaseBeforeReadySource(
     bool completionWaitActive,
     bool semanticReleaseAlreadyUsedDuringWait) noexcept;
 
+bool openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool firstReadySourceCanAppendToPending) noexcept;
+
 bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
     bool readySlotsEmpty,
     bool canReleaseAtSemanticBoundary,
@@ -92,6 +100,16 @@ bool openCbPendingShouldCpuReadyPublishWriterActiveSlot(
     bool canReleaseAtSemanticBoundary,
     OpenCbSemanticBoundaryReleaseMode mode,
     bool completionWaitActive,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept;
+
+bool openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait,
     bool writerActive,
     bool writingSlotEmpty,
     bool writingSlotHasPresent) noexcept;

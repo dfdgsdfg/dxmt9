@@ -120,6 +120,25 @@ bool openCbPendingShouldReleaseBeforeReadySource(
       semanticReleaseAlreadyUsedDuringWait);
 }
 
+bool openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool firstReadySourceCanAppendToPending) noexcept {
+  return mode == OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+         completionWaitActive &&
+         !semanticReleaseAlreadyUsedDuringWait &&
+         firstReadySourceCanAppendToPending &&
+         openCbPendingShouldReleaseBeforeReadySource(
+             readySlotsEmpty,
+             canReleaseAtSemanticBoundary,
+             mode,
+             completionWaitActive,
+             semanticReleaseAlreadyUsedDuringWait);
+}
+
 bool openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
     bool readySlotsEmpty,
     bool canReleaseAtSemanticBoundary,
@@ -179,6 +198,25 @@ bool openCbPendingShouldCpuReadyPublishWriterActiveSlot(
   return classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
              block, writingSlotEmpty, writingSlotHasPresent) ==
          OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork;
+}
+
+bool openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+    bool readySlotsEmpty,
+    bool canReleaseAtSemanticBoundary,
+    OpenCbSemanticBoundaryReleaseMode mode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept {
+  return readySlotsEmpty &&
+         canReleaseAtSemanticBoundary &&
+         mode == OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
+         completionWaitActive &&
+         !semanticReleaseAlreadyUsedDuringWait &&
+         writerActive &&
+         !writingSlotEmpty &&
+         !writingSlotHasPresent;
 }
 
 bool openCbPendingShouldSubmitBeforeInitializerWait(

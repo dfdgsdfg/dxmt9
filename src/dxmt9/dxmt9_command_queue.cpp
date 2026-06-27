@@ -148,6 +148,15 @@ bool openCbWriterActiveCpuReadyPublishEnabled() {
   return enabled && openCbSemanticBoundaryPublishEnabled();
 }
 
+bool openCbActiveWaitCpuReadyAppendEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled && openCbSemanticBoundaryPublishEnabled();
+}
+
 render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
   static const auto mode = [] {
     const char* env =
@@ -2940,6 +2949,55 @@ bool maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
   return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
 }
 
+bool maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    bool pendingCanReleaseAtSemanticBoundary,
+    render::OpenCbSemanticBoundaryReleaseMode semanticBoundaryReleaseMode,
+    bool completionWaitActive,
+    bool semanticReleaseAlreadyUsedDuringWait,
+    bool writerActive) {
+  if (!openCbActiveWaitCpuReadyAppendEnabled() || !q.writingSlot_) {
+    return false;
+  }
+  auto& slot = currentSlotUnlocked(q);
+  if (!render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
+          /*readySlotsEmpty=*/q.readySlots_.empty(),
+          pendingCanReleaseAtSemanticBoundary,
+          semanticBoundaryReleaseMode,
+          completionWaitActive,
+          semanticReleaseAlreadyUsedDuringWait,
+          writerActive,
+          slot.commandsEmpty(),
+          !slot.presentRecords.empty())) {
+    return false;
+  }
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    return false;
+  }
+  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
+}
+
+bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
+    const CommandQueue& q,
+    bool carryRenderSession,
+    bool hasPendingSession) {
+  if (q.readySlots_.empty()) {
+    return false;
+  }
+  const std::size_t slotIndex = q.readySlots_.front();
+  if (slotIndex >= q.slots_.size()) {
+    return false;
+  }
+  const auto& slot = q.slots_[slotIndex];
+  return render::slotCanAppendToOpenCbPending(
+      slot,
+      carryRenderSession,
+      hasPendingSession,
+      /*tailReadyForCurrentHead=*/false);
+}
+
 }  // namespace
 
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
@@ -3962,7 +4020,19 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
           perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
         }
       }
-      if (render::openCbPendingShouldReleaseBeforeReadySource(
+      const bool appendReadyBeforeRelease =
+          openCbActiveWaitCpuReadyAppendEnabled() &&
+          render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
+              /*readySlotsEmpty=*/false,
+              pendingCanReleaseAtSemanticBoundary,
+              semanticBoundaryReleaseMode,
+              completionWaitActive,
+              semanticBoundaryReleaseUsedDuringWait,
+              firstOpenCbReadySourceCanAppendToPendingUnlocked(
+                  *this, carryRenderSession,
+                  static_cast<bool>(pendingSession)));
+      if (!appendReadyBeforeRelease &&
+          render::openCbPendingShouldReleaseBeforeReadySource(
               /*readySlotsEmpty=*/false,
               pendingCanReleaseAtSemanticBoundary,
               semanticBoundaryReleaseMode,
@@ -4060,6 +4130,15 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
               render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
           !completionWaitActive) {
         semanticBoundaryReleaseUsedDuringWait = false;
+      }
+      if (maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
+              *this, pool_, lock,
+              pendingCanReleaseAtSemanticBoundary,
+              semanticBoundaryReleaseMode,
+              completionWaitActive,
+              semanticBoundaryReleaseUsedDuringWait,
+              writerActive)) {
+        continue;
       }
       if (render::openCbPendingCanReleaseAtSemanticBoundary(
               pendingCanReleaseAtSemanticBoundary,

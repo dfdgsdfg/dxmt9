@@ -51,6 +51,7 @@ open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
 open_cb_semantic_boundary_publish=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH:-0}
 open_cb_cpu_ready_command_limit=${DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT:-}
 open_cb_writer_active_cpu_ready_publish=${DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH:-0}
+open_cb_active_wait_cpu_ready_append=${DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND:-0}
 open_cb_semantic_boundary_release_mode=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE:-}
 open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
 stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
@@ -723,6 +724,11 @@ Options:
                       Set DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH=1 so
                       H161 writer-active non-present writing-slot misses are
                       cut as CPU-ready semantic sources for the open-CB carrier.
+  --open-cb-active-wait-cpu-ready-append
+                      Set DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=1 so an
+                      active completion wait may cut current writer work as a
+                      semantic CPU-ready source and append compatible ready
+                      sources to the pending EncodeSession before release.
   --open-cb-semantic-boundary-release-mode MODE
                       Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=MODE.
                       Accepted values follow the runtime: completion_wait or
@@ -1784,6 +1790,10 @@ while (($#)); do
       ;;
     --open-cb-writer-active-cpu-ready-publish)
       open_cb_writer_active_cpu_ready_publish=1
+      shift
+      ;;
+    --open-cb-active-wait-cpu-ready-append)
+      open_cb_active_wait_cpu_ready_append=1
       shift
       ;;
     --open-cb-semantic-boundary-release-mode)
@@ -4334,6 +4344,10 @@ fi
 
 if [[ "$open_cb_writer_active_cpu_ready_publish" != "0" && -n "$open_cb_writer_active_cpu_ready_publish" ]]; then
   env_args+=("DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH=$open_cb_writer_active_cpu_ready_publish")
+fi
+
+if [[ "$open_cb_active_wait_cpu_ready_append" != "0" && -n "$open_cb_active_wait_cpu_ready_append" ]]; then
+  env_args+=("DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=$open_cb_active_wait_cpu_ready_append")
 fi
 
 if [[ -n "$open_cb_semantic_boundary_release_mode" ]]; then

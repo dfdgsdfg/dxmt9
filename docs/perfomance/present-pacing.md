@@ -1532,12 +1532,17 @@ flowchart TD
   completion-wait start/end can increase same-window commits. H155 adds that
   ready-source preemption during active wait is a better policy point than
   deterministic release, but it still cannot promote unless more work becomes
-  CPU-ready inside the wait without increasing CB/pass/tile preservation.
+  CPU-ready inside the wait without increasing CB/pass/tile preservation. H165
+  then tries the inverse active-wait ordering, appending compatible ready work
+  before semantic release and cutting current writer work only when the wait is
+  already active; it stays visual/error safe but records `0` semantic releases
+  because all `5358` candidates still miss the active wait window.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
   [[present-pacing-encode-session-completion-wait-wakeup.153]]
   [[present-pacing-encode-session-ready-preempt-release.155]]
+  [[present-pacing-encode-session-active-wait-cpuready-append.165]]
 
 **Rejected**
 
