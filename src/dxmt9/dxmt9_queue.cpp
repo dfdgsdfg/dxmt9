@@ -276,15 +276,32 @@ std::span<const QueueCompletionSource> completionSourcesFor(
   return std::span<const QueueCompletionSource>(fallback.data(), fallback.size());
 }
 
+ReadySlotSnapshot makeReadySlotSnapshot(size_t slotIndex,
+                                        ChunkSlot& slot) noexcept {
+  return ReadySlotSnapshot{
+      .slotIndex = slotIndex,
+      .seqId = slot.seqId,
+      .hasPresent = !slot.presentRecords.empty(),
+      .commandCount = slot.commandCount(),
+      .slot = &slot,
+  };
+}
+
 }  // namespace
 
 QueueCompletionSource completionSourceForReadySlot(
     const ReadySlotSnapshot& snapshot) noexcept {
   DXMT_ASSERT(snapshot.slot != nullptr);
+  DXMT_ASSERT(!snapshot.slot || snapshot.slot->seqId == snapshot.seqId);
+  DXMT_ASSERT(!snapshot.slot ||
+              (!snapshot.slot->presentRecords.empty()) ==
+                  snapshot.hasPresent);
+  DXMT_ASSERT(!snapshot.slot ||
+              snapshot.slot->commandCount() == snapshot.commandCount);
   return QueueCompletionSource{
       .slotIndex = snapshot.slotIndex,
-      .seqId = snapshot.slot ? snapshot.slot->seqId : 0,
-      .hasPresent = snapshot.slot ? !snapshot.slot->presentRecords.empty() : false,
+      .seqId = snapshot.seqId,
+      .hasPresent = snapshot.hasPresent,
   };
 }
 
@@ -1226,10 +1243,7 @@ size_t QueueLifecycleController::dequeueReadySlotBatch(
     });
     traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
     traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
-    out[i] = ReadySlotSnapshot{
-        .slotIndex = slotIndex,
-        .slot = &slot,
-    };
+    out[i] = makeReadySlotSnapshot(slotIndex, slot);
     traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, *out[i].slot);
     ++count;
   }
@@ -1287,10 +1301,7 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
     });
     traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
     traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
-    out[i] = ReadySlotSnapshot{
-        .slotIndex = slotIndex,
-        .slot = &slot,
-    };
+    out[i] = makeReadySlotSnapshot(slotIndex, slot);
     traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, *out[i].slot);
   }
   return count;
@@ -1368,19 +1379,26 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
       return 0;
     }
     const auto& liveSlot = submissionBinding_.slots[source.slotIndex];
-    if (liveSlot.state != ChunkSlot::State::Encoding ||
-        liveSlot.seqId != source.slot->seqId ||
-        liveSlot.seqId == 0) {
+    if (&liveSlot != source.slot ||
+        liveSlot.state != ChunkSlot::State::Encoding ||
+        liveSlot.seqId != source.seqId ||
+        liveSlot.seqId == 0 ||
+        liveSlot.commandCount() != source.commandCount ||
+        (!liveSlot.presentRecords.empty()) != source.hasPresent) {
       return 0;
     }
-    if (previousSeqId != 0 && liveSlot.seqId != previousSeqId + 1) {
+    if (previousSeqId != 0 && source.seqId != previousSeqId + 1) {
       return 0;
     }
-    previousSeqId = liveSlot.seqId;
+    previousSeqId = source.seqId;
   }
 
   for (size_t i = 0; i < sources.size(); ++i) {
-    out[i] = completionSourceForReadySlot(sources[i]);
+    out[i] = QueueCompletionSource{
+        .slotIndex = sources[i].slotIndex,
+        .seqId = sources[i].seqId,
+        .hasPresent = sources[i].hasPresent,
+    };
   }
 #ifndef NDEBUG
   assertQueueLifecycleInvariants();
@@ -1502,7 +1520,7 @@ bool QueueLifecycleController::runEncodeBatchIteration(
     if (!submission.has_value()) {
       for (const auto& source : sources) {
         DXMT_ASSERT(source.slot != nullptr);
-        const u64 seqId = source.slot->seqId;
+        const u64 seqId = source.seqId;
         completeInlineChunk(source.slotIndex, seqId);
         if (onInlineComplete) {
           onInlineComplete(seqId);
@@ -1521,7 +1539,7 @@ bool QueueLifecycleController::runEncodeBatchIteration(
   } else {
     for (const auto& source : sources) {
       DXMT_ASSERT(source.slot != nullptr);
-      const u64 seqId = source.slot->seqId;
+      const u64 seqId = source.seqId;
       completeInlineChunk(source.slotIndex, seqId);
       if (onInlineComplete) {
         onInlineComplete(seqId);

@@ -4017,7 +4017,7 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
   auto completeInlineSnapshot = [this, &onSubmitted](
                                     const ReadySlotSnapshot& source) {
     DXMT_ASSERT(source.slot != nullptr);
-    const std::uint64_t seqId = source.slot->seqId;
+    const std::uint64_t seqId = source.seqId;
     queueLifecycle_.completeInlineChunk(source.slotIndex, seqId);
     if (onSubmitted) {
       onSubmitted(seqId);

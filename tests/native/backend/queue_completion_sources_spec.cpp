@@ -608,11 +608,17 @@ void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   checkEq(snapshots[0].slotIndex, 0u, "first snapshot records slot index");
   check(snapshots[0].slot == &fixture.slots[0],
         "first snapshot references live slot storage");
-  checkEq(snapshots[0].slot->seqId, 1ull, "first snapshot records seqId");
+  checkEq(snapshots[0].seqId, 1ull, "first snapshot records seqId");
+  check(!snapshots[0].hasPresent, "first snapshot records present absence");
+  checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
+          "first snapshot records command count");
   checkEq(snapshots[1].slotIndex, 1u, "second snapshot records slot index");
   check(snapshots[1].slot == &fixture.slots[1],
         "second snapshot references live slot storage");
-  checkEq(snapshots[1].slot->seqId, 2ull, "second snapshot records seqId");
+  checkEq(snapshots[1].seqId, 2ull, "second snapshot records seqId");
+  check(!snapshots[1].hasPresent, "second snapshot records present absence");
+  checkEq(snapshots[1].commandCount, fixture.slots[1].commandCount(),
+          "second snapshot records command count");
 }
 
 void dequeueReadySlotBatchRespectsOutputCapacity() {
@@ -712,7 +718,10 @@ void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
   checkEq(snapshots[2].slotIndex, 2u, "third snapshot records slot index");
   check(snapshots[2].slot == &fixture.slots[2],
         "third snapshot references live slot storage");
-  checkEq(snapshots[2].slot->seqId, 3ull, "third snapshot records seqId");
+  checkEq(snapshots[2].seqId, 3ull, "third snapshot records seqId");
+  check(!snapshots[2].hasPresent, "third snapshot records present absence");
+  checkEq(snapshots[2].commandCount, fixture.slots[2].commandCount(),
+          "third snapshot records command count");
 }
 
 void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
@@ -745,7 +754,10 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
   checkEq(snapshots[0].slotIndex, 0u, "fallback snapshot records first source");
   check(snapshots[0].slot == &fixture.slots[0],
         "fallback snapshot references live slot storage");
-  checkEq(snapshots[0].slot->seqId, 1ull, "fallback snapshot records first seq");
+  checkEq(snapshots[0].seqId, 1ull, "fallback snapshot records first seq");
+  check(!snapshots[0].hasPresent, "fallback snapshot records present absence");
+  checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
+          "fallback snapshot records command count");
 }
 
 void stagedReadySlotIsHiddenUntilReadyTailRelease() {
@@ -840,13 +852,16 @@ void completionSourceForReadySlotPreservesPresentMetadata() {
   snapshot.slotIndex = 3;
   slot.seqId = 7;
   slot.presentRecords.push_back({});
+  snapshot.seqId = slot.seqId;
+  snapshot.hasPresent = true;
+  snapshot.commandCount = slot.commandCount();
   snapshot.slot = &slot;
 
   const auto source = completionSourceForReadySlot(snapshot);
 
   checkEq(source.slotIndex, 3u, "completion source preserves slot index");
   checkEq(source.seqId, 7ull, "completion source preserves seqId");
-  check(source.hasPresent, "completion source derives present metadata");
+  check(source.hasPresent, "completion source preserves present metadata");
 }
 
 void retainEncodedSourcesRejectsPendingSources() {
@@ -855,6 +870,9 @@ void retainEncodedSourcesRejectsPendingSources() {
 
   ReadySlotSnapshot snapshot{};
   snapshot.slotIndex = 0;
+  snapshot.seqId = fixture.slots[0].seqId;
+  snapshot.hasPresent = false;
+  snapshot.commandCount = fixture.slots[0].commandCount();
   snapshot.slot = &fixture.slots[0];
   std::array<QueueCompletionSource, 1> retained{};
   std::unique_lock lock(fixture.mutex);
@@ -868,6 +886,31 @@ void retainEncodedSourcesRejectsPendingSources() {
           "rejected pending source remains ready-visible");
   check(fixture.slots[0].state == ChunkSlot::State::Pending,
         "rejected pending source keeps Pending state");
+}
+
+void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.slots[0].appendClear({});
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(count, 1u, "test setup dequeues one source");
+
+  ReadySlotSnapshot stale = snapshots[0];
+  stale.commandCount = 0;
+  std::array<QueueCompletionSource, 1> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(&stale, 1),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, 0u, "stale command-count metadata is rejected");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "rejected stale source remains owned by the current encode");
 }
 
 void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
@@ -906,7 +949,7 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
 
   QueueSubmissionRecord record;
   record.slotIndex = tail[0].slotIndex;
-  record.seqId = tail[0].slot->seqId;
+  record.seqId = tail[0].seqId;
   const std::array<QueueCompletionSource, 2> recordSources{{
       retainedHeads[0],
       completionSourceForReadySlot(tail[0]),
@@ -970,7 +1013,7 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
     checkEq(sourceCount, 3u, "test setup dequeues every source");
     record.slotIndex = sources[2].slotIndex;
     check(sources[2].slot != nullptr, "tail source keeps live slot view");
-    record.seqId = sources[2].slot->seqId;
+    record.seqId = sources[2].seqId;
     EncodeSessionSourceList recordSources;
     for (const auto& source : sources) {
       check(recordSources.append(completionSourceForReadySlot(source)),
@@ -1425,7 +1468,7 @@ void runEncodeBatchIterationCompletesEmptySubmissionInline() {
         record.slotIndex = sources.back().slotIndex;
         check(sources.back().slot != nullptr,
               "batch source references live slot storage");
-        record.seqId = sources.back().slot->seqId;
+        record.seqId = sources.back().seqId;
         return std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord>(
             std::move(record));
       },
@@ -1492,6 +1535,7 @@ int main() {
     stagedReadySlotReleaseRequiresMatchingTail();
     completionSourceForReadySlotPreservesPresentMetadata();
     retainEncodedSourcesRejectsPendingSources();
+    retainEncodedSourcesRejectsStaleSnapshotMetadata();
     retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();

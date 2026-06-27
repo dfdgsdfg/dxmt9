@@ -456,7 +456,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeTailPresentBatch(
   const auto& tail = sources.back();
   DXMT_ASSERT(tail.slot != nullptr);
   pending->slotIndex = tail.slotIndex;
-  pending->seqId = tail.slot->seqId;
+  pending->seqId = tail.seqId;
   if (pending->explicitCompletionSourceSpan().empty()) {
     if (!pending->assignFixedCompletionSources(completionSourceSpan)) {
       return std::nullopt;

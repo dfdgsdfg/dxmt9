@@ -272,10 +272,14 @@ struct EncodeSessionSourceList {
 
 struct ReadySlotSnapshot {
   size_t slotIndex = 0;
+  u64 seqId = 0;
+  bool hasPresent = false;
+  size_t commandCount = 0;
   // Non-owning ref into QueueLifecycleController::SubmissionBinding::slots.
   // A dequeued slot is in Encoding state and cannot be recycled until its
-  // completion source drains, so encode-side batch/session paths can consume
-  // the source records by view instead of deep-copying ChunkSlot.
+  // completion source drains. The scalar fields above are compact selected
+  // source metadata; the pointer is only the replay view used during this
+  // encode call, not retained session storage.
   ChunkSlot* slot = nullptr;
 };
 

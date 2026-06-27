@@ -5312,13 +5312,13 @@ std::size_t sessionGpuSamplingCommandCount(
     total += std::min(count, remaining);
   };
   for (const auto& source : lookaheadSources) {
-    if (!source.slot) {
+    if (!source.slot && source.seqId == 0) {
       continue;
     }
     includesCurrentSlot =
         includesCurrentSlot || source.slot == &slot ||
-        source.slot->seqId == slot.seqId;
-    addCommands(source.slot->commandCount());
+        source.seqId == slot.seqId;
+    addCommands(source.commandCount);
   }
   if (!includesCurrentSlot) {
     addCommands(slot.commandCount());

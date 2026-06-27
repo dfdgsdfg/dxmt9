@@ -103,6 +103,9 @@ ReadySlotSnapshot makeReadySource(ChunkSlot& slot,
   ReadySlotSnapshot source;
   source.slotIndex = slotIndex;
   slot.seqId = seqId;
+  source.seqId = seqId;
+  source.hasPresent = !slot.presentRecords.empty();
+  source.commandCount = slot.commandCount();
   source.slot = &slot;
   return source;
 }
@@ -110,17 +113,15 @@ ReadySlotSnapshot makeReadySource(ChunkSlot& slot,
 ReadySlotSnapshot makeClearSource(ChunkSlot& slot,
                                   std::size_t slotIndex,
                                   std::uint64_t seqId) {
-  auto source = makeReadySource(slot, slotIndex, seqId);
   slot.appendClear({});
-  return source;
+  return makeReadySource(slot, slotIndex, seqId);
 }
 
 ReadySlotSnapshot makePresentOnlySource(ChunkSlot& slot,
                                         std::size_t slotIndex,
                                         std::uint64_t seqId) {
-  auto source = makeReadySource(slot, slotIndex, seqId);
   slot.appendPresent({}, {});
-  return source;
+  return makeReadySource(slot, slotIndex, seqId);
 }
 
 DrawUniformPayload makeUniformPayload(std::uint64_t hash) {
