@@ -1933,13 +1933,20 @@ command-buffer commits, sampled FPS `11.502`).
 implementation so the selected open-CB source prefix is retained as compact
 completion-source metadata before cross-source lookahead is exposed; focused
 native tests, TLA verification, and a same-flag no-gputrace smoke pass
-(`86.312%` overlap share, `2.398` CB/present, `12.694` passes/present). The
-shape is still not promoted because the runs require
-`DXMT9_DISABLE_PRESENT_BOUNDARY=1`, raise render passes per present (`11.579 ->
-12.66 to 12.75` versus H180), retain active-entry loss, and only have
+(`86.312%` overlap share, `2.398` CB/present, `12.694` passes/present).
+[[present-pacing-encode-session-draw-continuation-command-floor.186]] then
+tests whether same-key continuation can be made coarse with a 16-command floor.
+The floor works as a diagnostic (`p50/p95=16/16` first-publish commands) and
+reduces H178's source flood, but it does not promote: overlap falls to
+`44.920%`, sampled FPS is `10.999`, and GPU command-buffer time remains far
+above H220 baseline (`22.878ms/present` vs `3.287`). The shape is still not
+promoted because the runs require `DXMT9_DISABLE_PRESENT_BOUNDARY=1`, either
+raise render passes per present (`11.579 -> 12.66 to 12.75` versus H180) or
+leave GPU-CB time far above baseline, retain active-entry loss, and only have
 output-frame visual evidence. This reframes the next implementation shape:
-semantic/attachment CpuReady source publication and bounded wait-time release,
-not same-key continuation source flooding.
+semantic/attachment CpuReady source publication and bounded wait-time release
+with a coarser source-tape/producer-cadence owner, not same-key continuation
+source flooding or command-floor threshold sweeps.
 
 Related CPU-side counter design doc: [[overview]].
 
