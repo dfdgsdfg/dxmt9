@@ -219,6 +219,23 @@ bool openCbPendingShouldCpuReadyPublishActiveWaitSlot(
          !writingSlotHasPresent;
 }
 
+bool openCbShouldCpuReadyPublishWaitStartSlot(
+    bool readySlotsEmpty,
+    bool hasPendingRecord,
+    bool completionWaitActive,
+    bool stopRequested,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept {
+  return readySlotsEmpty &&
+         !hasPendingRecord &&
+         completionWaitActive &&
+         !stopRequested &&
+         writerActive &&
+         !writingSlotEmpty &&
+         !writingSlotHasPresent;
+}
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,

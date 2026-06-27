@@ -157,6 +157,15 @@ bool openCbActiveWaitCpuReadyAppendEnabled() {
   return enabled && openCbSemanticBoundaryPublishEnabled();
 }
 
+bool openCbWaitStartCpuReadyPublishEnabled() {
+  static const bool enabled = [] {
+    const char* env =
+        std::getenv("DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled && openCbSemanticBoundaryPublishEnabled();
+}
+
 render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
   static const auto mode = [] {
     const char* env =
@@ -2979,6 +2988,54 @@ bool maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
   return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
 }
 
+bool maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
+    CommandQueue& q,
+    resources::Pool& pool,
+    std::unique_lock<std::mutex>& lock,
+    bool hasPendingRecord,
+    bool completionWaitActive,
+    bool writerActive) {
+  if (!openCbWaitStartCpuReadyPublishEnabled() || !q.writingSlot_) {
+    return false;
+  }
+  auto& slot = currentSlotUnlocked(q);
+  const bool readySlotsEmpty = q.readySlots_.empty();
+  const bool writingSlotEmpty = slot.commandsEmpty();
+  const bool writingSlotHasPresent = !slot.presentRecords.empty();
+  if (!readySlotsEmpty ||
+      hasPendingRecord ||
+      !completionWaitActive ||
+      q.stop_ ||
+      !writerActive) {
+    return false;
+  }
+  perf::countOpenCbTailPresentWaitStartPublishCandidate();
+  if (!render::openCbShouldCpuReadyPublishWaitStartSlot(
+          readySlotsEmpty,
+          hasPendingRecord,
+          completionWaitActive,
+          q.stop_,
+          writerActive,
+          writingSlotEmpty,
+          writingSlotHasPresent)) {
+    if (writingSlotEmpty) {
+      perf::countOpenCbTailPresentWaitStartPublishSlotEmpty();
+    } else if (writingSlotHasPresent) {
+      perf::countOpenCbTailPresentWaitStartPublishSlotPresent();
+    }
+    return false;
+  }
+  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+    perf::countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
+    return false;
+  }
+  if (!maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock)) {
+    return false;
+  }
+  perf::countOpenCbTailPresentWaitStartPublished();
+  return true;
+}
+
 bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
     const CommandQueue& q,
     bool carryRenderSession,
@@ -4012,15 +4069,26 @@ void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
 
   while (true) {
     std::unique_lock lock(mutex_);
-    if (pendingRecord.has_value() && !readySlots_.empty()) {
-      const bool completionWaitActive = queueLifecycle_.completionWaitActive();
-      countCompletionWaitPendingState(
-          completionWaitActive, /*readySlotsEmpty=*/false);
+    {
+      const bool completionWaitActive =
+          queueLifecycle_.completionWaitActive();
+      const bool writerActive = writingSlot_.has_value();
+      if (maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
+              *this, pool_, lock, pendingRecord.has_value(),
+              completionWaitActive, writerActive)) {
+        continue;
+      }
       if (semanticBoundaryReleaseMode ==
               render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
           !completionWaitActive) {
         semanticBoundaryReleaseUsedDuringWait = false;
       }
+    }
+
+    if (pendingRecord.has_value() && !readySlots_.empty()) {
+      const bool completionWaitActive = queueLifecycle_.completionWaitActive();
+      countCompletionWaitPendingState(
+          completionWaitActive, /*readySlotsEmpty=*/false);
       if (render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
               /*readySlotsEmpty=*/false,
               pendingCanReleaseAtSemanticBoundary,

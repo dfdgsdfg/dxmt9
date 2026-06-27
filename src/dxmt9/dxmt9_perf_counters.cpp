@@ -415,6 +415,11 @@ struct Counters {
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseBlockedAlreadyUsed{0};
   std::atomic<std::uint64_t> openCbTailPresentSemanticReleaseFailed{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishCandidates{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishSlotEmpty{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishSlotPresent{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartPublishBlockedHeadroom{0};
+  std::atomic<std::uint64_t> openCbTailPresentWaitStartPublished{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingObserved{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleasable{0};
   std::atomic<std::uint64_t> openCbTailPresentCompletionWaitPendingReleaseUsed{0};
@@ -2514,6 +2519,11 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_tail_present_semantic_release_blocked_ready_source_no_completion_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_blocked_already_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseBlockedAlreadyUsed, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_semantic_release_failed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentSemanticReleaseFailed, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_publish_candidates", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishCandidates, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_publish_slot_empty", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishSlotEmpty, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_publish_slot_present", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishSlotPresent, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_publish_blocked_headroom", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublishBlockedHeadroom, nullptr, nullptr, 0.0},
+    {"open_cb_tail_present_wait_start_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentWaitStartPublished, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_observed", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingObserved, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_releasable", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleasable, nullptr, nullptr, 0.0},
     {"open_cb_tail_present_completion_wait_pending_release_used", CounterEntry::Kind::UnsignedCount, &Counters::openCbTailPresentCompletionWaitPendingReleaseUsed, nullptr, nullptr, 0.0},
@@ -5170,6 +5180,26 @@ void countOpenCbTailPresentCompletionWaitPendingState(
   } else {
     add(c.openCbTailPresentCompletionWaitPendingReadySource);
   }
+}
+
+void countOpenCbTailPresentWaitStartPublishCandidate() {
+  add(counters().openCbTailPresentWaitStartPublishCandidates);
+}
+
+void countOpenCbTailPresentWaitStartPublishSlotEmpty() {
+  add(counters().openCbTailPresentWaitStartPublishSlotEmpty);
+}
+
+void countOpenCbTailPresentWaitStartPublishSlotPresent() {
+  add(counters().openCbTailPresentWaitStartPublishSlotPresent);
+}
+
+void countOpenCbTailPresentWaitStartPublishBlockedHeadroom() {
+  add(counters().openCbTailPresentWaitStartPublishBlockedHeadroom);
+}
+
+void countOpenCbTailPresentWaitStartPublished() {
+  add(counters().openCbTailPresentWaitStartPublished);
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
@@ -10599,6 +10629,16 @@ CounterSnapshot snapshot() {
       load(c.openCbTailPresentSemanticReleaseBlockedAlreadyUsed);
   s.openCbTailPresentSemanticReleaseFailed =
       load(c.openCbTailPresentSemanticReleaseFailed);
+  s.openCbTailPresentWaitStartPublishCandidates =
+      load(c.openCbTailPresentWaitStartPublishCandidates);
+  s.openCbTailPresentWaitStartPublishSlotEmpty =
+      load(c.openCbTailPresentWaitStartPublishSlotEmpty);
+  s.openCbTailPresentWaitStartPublishSlotPresent =
+      load(c.openCbTailPresentWaitStartPublishSlotPresent);
+  s.openCbTailPresentWaitStartPublishBlockedHeadroom =
+      load(c.openCbTailPresentWaitStartPublishBlockedHeadroom);
+  s.openCbTailPresentWaitStartPublished =
+      load(c.openCbTailPresentWaitStartPublished);
   s.drawCalls = load(c.drawCalls);
   s.drawIndexedCalls = load(c.drawIndexedCalls);
   s.drawPrimitiveCount = load(c.drawPrimitiveCount);

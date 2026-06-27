@@ -758,6 +758,72 @@ void openCbActiveWaitAppendKeepsReadySourceInSession() {
         "present-bearing writer slot is not an active-wait semantic source");
 }
 
+void openCbWaitStartPublishCreatesFirstPendingSource() {
+  check(dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "wait-start may cut current writer work before a pending session exists");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/false,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "existing ready sources should be dequeued instead of cutting writer work");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/true,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "pending sessions use active-wait append/release policy");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/false,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "inactive completion wait keeps the older writer-active diagnostic path");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/true,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/false),
+        "stop/drain does not create a new wait-start source");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/true,
+            /*writingSlotHasPresent=*/false),
+        "empty writer slot is not a wait-start semantic source");
+  check(!dxmt9::render::openCbShouldCpuReadyPublishWaitStartSlot(
+            /*readySlotsEmpty=*/true,
+            /*hasPendingRecord=*/false,
+            /*completionWaitActive=*/true,
+            /*stopRequested=*/false,
+            /*writerActive=*/true,
+            /*writingSlotEmpty=*/false,
+            /*writingSlotHasPresent=*/true),
+        "present-bearing writer slot is not a wait-start semantic source");
+}
+
 void openCbInitializerWaitBoundarySubmitsPendingBeforeAppend() {
   check(dxmt9::render::openCbPendingShouldSubmitBeforeInitializerWait(
             /*canAppendToPending=*/true,
@@ -1118,6 +1184,7 @@ int main() {
     openCbSemanticBoundaryReleaseCanPreemptReadySourceDuringWait();
     openCbSemanticBoundaryNoWaitBlockClassifiesWriterState();
     openCbActiveWaitAppendKeepsReadySourceInSession();
+    openCbWaitStartPublishCreatesFirstPendingSource();
     openCbInitializerWaitBoundarySubmitsPendingBeforeAppend();
     openCbPendingWakeRecheckTracksCompletionWaitTransitions();
     tailPresentBatchShapeAllowsSeveralHeads();

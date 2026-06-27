@@ -187,6 +187,7 @@ GPU frame-time story is owned by [[hidden-backend-storage]] /
 | H165 | Active-wait CpuReady append is safe but has almost no active-wait opportunity | mechanism safe; runtime promotion rejected | [[present-pacing-encode-session-active-wait-cpuready-append.165]] adds default-off `DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=1`, so appendable ready sources stay inside the pending `EncodeSession` before active-wait semantic release, and an empty-ready active wait may cut current non-present writer work as semantic CPU-ready. The smoke is visual/error safe and keeps baseline-like shape (`4.006` CB/present, `3.000` sub-CBs/present, `10.880` passes/present), but records `semantic_release_submitted=0`, `completion_wait_encode_dequeue=0`, `completion_wait_command_buffer_commit=1`, and `completion_wait_enqueues_during_wait=1`. This rejects release-before-ready ordering as the main owner under H164; the remaining blocker is active-wait coverage or a stronger source-tape merge before the wait opens. |
 | H166 | Combining writer-active, command-limit, and active-wait CpuReady policies is safe but not promotable | mechanism safe; runtime promotion rejected | [[present-pacing-encode-session-combined-cpuready-append.166]] reruns the combined opt-in path after discarding a manually closed sample. The valid rerun is visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows) and heavily exercises semantic source publication (`semantic_boundary=10541`, `head_appended=10494`) while preserving baseline-like shape (`4.009` CB/present, `3.001` sub-CBs/present). It still misses P4: `semantic_release_submitted=1`, `completion_wait_encode_dequeue=4`, `completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`, and tail600 FPS is `9.959/9.748/13.539`. Keep the combination diagnostic-only; the next carrier must make staged work already attached to an open render encoder before the active wait. |
 | H167 | Pending-wait state counters show the wait almost never has an open session | diagnostic observed; runtime promotion rejected | [[present-pacing-encode-session-pending-wait-state.167]] adds cumulative counters for `pendingRecord` state while `completionWaitActive()` is true and reruns the H166 flag set. The smoke remains visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows) and preserves baseline-like shape (`4.009` CB/present, `3.001` sub-CBs/present, `10.882` passes/present), but the active wait observes only `3` pending sessions (`3` releasable, `3` active-render, `3` with ready source) across `840` presents and `9524` semantic-release candidates. Same-window work stays negligible (`completion_wait_command_buffer_commit=2`, `completion_wait_enqueues_during_wait=2`). This closes the "pending exists but is blocked" branch; the next carrier must attach source-tape work to an already-open render encoder before the wait opens. |
+| H168 | Wait-start CpuReady publish is safe but has no source to publish | diagnostic safe; runtime promotion rejected | [[present-pacing-encode-session-wait-start-cpuready-publish.168]] adds default-off `DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH=1`, trying to create the first pending `EncodeSession` by publishing current non-present writer work while completion wait is already active and no pending session exists. The smoke remains visual/error safe (`status=pass`, non-black image, `gpu_command_buffer_errors=0`, no invalid-call/assert rows), but the path never publishes: there is only `1` wait-start candidate and it is blocked by an empty writer slot (`published=0`). Same-window work stays negligible (`completion_wait_command_buffer_commit=3`, `completion_wait_enqueues_during_wait=3`), and shape remains baseline-like (`4.012` CB/present, `3.002` sub-CBs/present, `10.740` passes/present). This rejects another reactive wait-window gate; production still needs source-tape work already attached to an open render encoder before the wait opens, or a larger replay/producer cadence change. |
 
 ## Verification methods
 
@@ -1547,12 +1548,18 @@ flowchart TD
   during active completion waits across `840` presents and `9524` semantic
   candidates, so the issue is not a frequently blocked pending session; it is
   that source-tape work is not attached to an already-open render encoder before
-  the wait opens.
+  the wait opens. H168 tries the next reactive variant, publishing a first
+  semantic CpuReady source at wait start when no pending session exists, but the
+  valid sample sees only `1` candidate and that candidate has an empty writer
+  slot (`published=0`). This rejects another wait-window gate; the production
+  branch must move source-tape/session attachment earlier than wait observation
+  or reduce replay/producer cadence enough to create real enqueue-during-wait.
   [[present-pacing-encode-session-pass-streaming-runtime.147]]
   [[present-pacing-encode-session-wait-stage-durations.151]]
   [[present-pacing-encode-session-current-smoke.152]]
   [[present-pacing-encode-session-completion-wait-wakeup.153]]
   [[present-pacing-encode-session-ready-preempt-release.155]]
+  [[present-pacing-encode-session-wait-start-cpuready-publish.168]]
   [[present-pacing-encode-session-active-wait-cpuready-append.165]]
   [[present-pacing-encode-session-combined-cpuready-append.166]]
   [[present-pacing-encode-session-pending-wait-state.167]]

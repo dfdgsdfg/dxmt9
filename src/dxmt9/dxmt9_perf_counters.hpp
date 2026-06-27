@@ -318,6 +318,11 @@ void countOpenCbTailPresentCompletionWaitPendingState(
     bool semanticReleaseAlreadyUsedDuringWait,
     bool hasActiveRender,
     bool readySlotsEmpty);
+void countOpenCbTailPresentWaitStartPublishCandidate();
+void countOpenCbTailPresentWaitStartPublishSlotEmpty();
+void countOpenCbTailPresentWaitStartPublishSlotPresent();
+void countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
+void countOpenCbTailPresentWaitStartPublished();
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -1311,6 +1316,11 @@ struct CounterSnapshot {
   std::uint64_t openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait = 0;
   std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;
   std::uint64_t openCbTailPresentSemanticReleaseFailed = 0;
+  std::uint64_t openCbTailPresentWaitStartPublishCandidates = 0;
+  std::uint64_t openCbTailPresentWaitStartPublishSlotEmpty = 0;
+  std::uint64_t openCbTailPresentWaitStartPublishSlotPresent = 0;
+  std::uint64_t openCbTailPresentWaitStartPublishBlockedHeadroom = 0;
+  std::uint64_t openCbTailPresentWaitStartPublished = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;

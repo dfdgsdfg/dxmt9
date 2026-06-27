@@ -258,6 +258,11 @@ RUN_COUNTERS = (
     "open_cb_tail_present_pending_abandoned_retain_failed",
     "open_cb_tail_present_pending_abandoned_encode_null",
     "open_cb_tail_present_pending_merge_failed",
+    "open_cb_tail_present_wait_start_publish_candidates",
+    "open_cb_tail_present_wait_start_publish_slot_empty",
+    "open_cb_tail_present_wait_start_publish_slot_present",
+    "open_cb_tail_present_wait_start_publish_blocked_headroom",
+    "open_cb_tail_present_wait_start_published",
     "open_cb_tail_present_completion_wait_pending_observed",
     "open_cb_tail_present_completion_wait_pending_releasable",
     "open_cb_tail_present_completion_wait_pending_release_used",
@@ -3975,6 +3980,26 @@ def append_pacing_cpu_stage_derived(
             ("abandoned: retain failed", "open_cb_tail_present_pending_abandoned_retain_failed"),
             ("abandoned: encode returned null", "open_cb_tail_present_pending_abandoned_encode_null"),
             ("abandoned: merge failed", "open_cb_tail_present_pending_merge_failed"),
+            (
+                "wait-start publish candidates",
+                "open_cb_tail_present_wait_start_publish_candidates",
+            ),
+            (
+                "wait-start publish blocked: empty slot",
+                "open_cb_tail_present_wait_start_publish_slot_empty",
+            ),
+            (
+                "wait-start publish blocked: present slot",
+                "open_cb_tail_present_wait_start_publish_slot_present",
+            ),
+            (
+                "wait-start publish blocked: headroom",
+                "open_cb_tail_present_wait_start_publish_blocked_headroom",
+            ),
+            (
+                "wait-start published",
+                "open_cb_tail_present_wait_start_published",
+            ),
         ):
             value = counters.get(key)
             lines.append(

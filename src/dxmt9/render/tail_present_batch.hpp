@@ -114,6 +114,15 @@ bool openCbPendingShouldCpuReadyPublishActiveWaitSlot(
     bool writingSlotEmpty,
     bool writingSlotHasPresent) noexcept;
 
+bool openCbShouldCpuReadyPublishWaitStartSlot(
+    bool readySlotsEmpty,
+    bool hasPendingRecord,
+    bool completionWaitActive,
+    bool stopRequested,
+    bool writerActive,
+    bool writingSlotEmpty,
+    bool writingSlotHasPresent) noexcept;
+
 bool openCbPendingShouldSubmitBeforeInitializerWait(
     bool canAppendToPending,
     bool pendingSessionHasActiveRender,
