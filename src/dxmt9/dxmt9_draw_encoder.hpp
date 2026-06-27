@@ -221,6 +221,10 @@ struct RenderPassStoreProofLookaheadSource {
   // Inclusive first command index for this source. The current source passes
   // the command after the pass-opening draw; later selected sources pass 0.
   std::size_t firstCommandIndex = 0;
+  // Exclusive end command index for this source. Defaults to the full slot so
+  // existing source-local callers keep their whole-suffix meaning; EncodeSession
+  // callers set this from QueueCompletionSource::{commandBegin,commandCount}.
+  std::size_t commandEndIndex = std::numeric_limits<std::size_t>::max();
 };
 
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(

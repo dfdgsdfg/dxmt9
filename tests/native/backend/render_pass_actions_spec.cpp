@@ -590,6 +590,24 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
               depth),
           DepthProof::BlockDrawDepth,
           "R-BACK-2.48 selected suffix blocks on later depth draw");
+  std::array<LookaheadSource, 2> boundedDepthSources{{
+      LookaheadSource{
+          .slot = &depthHead,
+          .firstCommandIndex = 1u,
+          .commandEndIndex = depthHead.commandCount(),
+      },
+      LookaheadSource{
+          .slot = &depthDrawTail,
+          .firstCommandIndex = 0u,
+          .commandEndIndex = 0u,
+      },
+  }};
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  boundedDepthSources.data(), boundedDepthSources.size()),
+              depth),
+          DepthProof::AllowDeadNoPresent,
+          "R-BACK-2.48 selected suffix respects bounded depth source ranges");
 
   Handle color{0xC242u};
   ChunkSlot colorHead;
@@ -619,6 +637,23 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
               color),
           ColorProof::BlockPresent,
           "R-BACK-2.48 selected suffix blocks on present source");
+  std::array<LookaheadSource, 2> boundedColorSources{{
+      LookaheadSource{
+          .slot = &colorHead,
+          .firstCommandIndex = 1u,
+          .commandEndIndex = colorHead.commandCount(),
+      },
+      LookaheadSource{
+          .slot = &colorPresentTail,
+          .firstCommandIndex = 0u,
+          .commandEndIndex = 0u,
+      },
+  }};
+  check(dxmt9::encoders::colorStoreProofForLookahead(
+            std::span<const LookaheadSource>(
+                boundedColorSources.data(), boundedColorSources.size()),
+            color) != ColorProof::BlockPresent,
+        "R-BACK-2.48 selected suffix respects bounded color source ranges");
 }
 
 void testTouchedSet() {
