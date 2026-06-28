@@ -342,8 +342,25 @@ QueueCompletionSource completionSourceForReadySlot(
 bool assignBatchCompletionSourcesIfNeeded(
     QueueSubmissionRecord& submission,
     std::span<const ReadySlotSnapshot> sources) {
-  if (sources.size() <= 1u ||
-      !submission.explicitCompletionSourceSpan().empty()) {
+  const auto existingSources = submission.explicitCompletionSourceSpan();
+  if (!existingSources.empty()) {
+    if (existingSources.size() != sources.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+      const auto expected = completionSourceForReadySlot(sources[i]);
+      const auto& actual = existingSources[i];
+      if (actual.slotIndex != expected.slotIndex ||
+          actual.seqId != expected.seqId ||
+          actual.hasPresent != expected.hasPresent ||
+          actual.commandBegin != expected.commandBegin ||
+          actual.commandCount != expected.commandCount) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (sources.size() <= 1u) {
     return true;
   }
 

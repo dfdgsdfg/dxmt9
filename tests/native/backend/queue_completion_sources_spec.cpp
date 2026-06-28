@@ -1797,6 +1797,57 @@ void multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath() {
           "tail source command count metadata is preserved");
 }
 
+void multiSourceBatchRejectsPartialExplicitCompletionSources() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+
+  std::array<ReadySlotSnapshot, 2> snapshots{};
+  {
+    std::unique_lock lock(fixture.mutex);
+    const std::size_t sourceCount =
+        fixture.controller.dequeueReadySlotBatch(
+            lock, std::span<ReadySlotSnapshot>(snapshots));
+    checkEq(sourceCount, 2u, "test setup dequeues both source slots");
+  }
+
+  QueueSubmissionRecord partial;
+  const QueueCompletionSource first =
+      completionSourceForReadySlot(snapshots[0]);
+  check(partial.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(&first, 1u)),
+        "test setup assigns a partial explicit source list");
+  check(!assignBatchCompletionSourcesIfNeeded(
+            partial, std::span<const ReadySlotSnapshot>(
+                         snapshots.data(), snapshots.size())),
+        "multi-source batch rejects explicit source lists that omit a source");
+
+  QueueSubmissionRecord mismatch;
+  std::array<QueueCompletionSource, 2> wrong{{
+      completionSourceForReadySlot(snapshots[0]),
+      completionSourceForReadySlot(snapshots[1]),
+  }};
+  wrong[1].commandCount += 1u;
+  check(mismatch.assignFixedCompletionSources(wrong),
+        "test setup assigns explicit sources with mismatched metadata");
+  check(!assignBatchCompletionSourcesIfNeeded(
+            mismatch, std::span<const ReadySlotSnapshot>(
+                          snapshots.data(), snapshots.size())),
+        "multi-source batch rejects explicit source metadata mismatches");
+
+  QueueSubmissionRecord exact;
+  std::array<QueueCompletionSource, 2> expected{{
+      completionSourceForReadySlot(snapshots[0]),
+      completionSourceForReadySlot(snapshots[1]),
+  }};
+  check(exact.assignFixedCompletionSources(expected),
+        "test setup assigns full explicit source metadata");
+  check(assignBatchCompletionSourcesIfNeeded(
+            exact, std::span<const ReadySlotSnapshot>(
+                       snapshots.data(), snapshots.size())),
+        "multi-source batch accepts explicit sources that cover the batch");
+}
+
 }  // namespace
 
 int main() {
@@ -1841,6 +1892,7 @@ int main() {
     mergeEncodedPendingTailSubmissionRejectsSourceListOverflow();
     runEncodeBatchIterationCompletesEmptySubmissionInline();
     multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath();
+    multiSourceBatchRejectsPartialExplicitCompletionSources();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';
     return 1;
