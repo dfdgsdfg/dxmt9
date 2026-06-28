@@ -353,6 +353,9 @@ struct QueueSubmissionRecord {
 bool assignBatchCompletionSourcesIfNeeded(
     QueueSubmissionRecord& submission,
     std::span<const ReadySlotSnapshot> sources);
+std::size_t prepareBatchCompletionSources(
+    QueueSubmissionRecord& submission,
+    std::span<const ReadySlotSnapshot> sources);
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
@@ -638,6 +641,12 @@ class QueueLifecycleController {
   size_t retainEncodedSourcesForPendingTail(std::unique_lock<std::mutex>& lock,
                                             std::span<const ReadySlotSnapshot> sources,
                                             std::span<QueueCompletionSource> out);
+  // Fail-open path for a multi-source batch whose backend submitted only a
+  // strict encoded prefix. The suffix was dequeued to Encoding but is not
+  // represented by the returned Metal tail, so restore it to the front of
+  // readySlots in FIFO order instead of completing it inline.
+  size_t requeueUnsubmittedBatchSources(std::unique_lock<std::mutex>& lock,
+                                        std::span<const ReadySlotSnapshot> sources);
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,

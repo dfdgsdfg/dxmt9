@@ -29,6 +29,7 @@ using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
 using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
+using dxmt9::core::metalqueue::prepareBatchCompletionSources;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
 using dxmt9::core::ChunkSlot;
 
@@ -1797,7 +1798,7 @@ void multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath() {
           "tail source command count metadata is preserved");
 }
 
-void multiSourceBatchRejectsPartialExplicitCompletionSources() {
+void multiSourceBatchAcceptsExplicitCompletionSourcePrefix() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
   fixture.addReadySlot(1, 2);
@@ -1817,10 +1818,11 @@ void multiSourceBatchRejectsPartialExplicitCompletionSources() {
   check(partial.assignFixedCompletionSources(
             std::span<const QueueCompletionSource>(&first, 1u)),
         "test setup assigns a partial explicit source list");
-  check(!assignBatchCompletionSourcesIfNeeded(
-            partial, std::span<const ReadySlotSnapshot>(
-                         snapshots.data(), snapshots.size())),
-        "multi-source batch rejects explicit source lists that omit a source");
+  checkEq(prepareBatchCompletionSources(
+              partial, std::span<const ReadySlotSnapshot>(
+                           snapshots.data(), snapshots.size())),
+          1u,
+          "multi-source batch accepts a strict explicit source prefix");
 
   QueueSubmissionRecord mismatch;
   std::array<QueueCompletionSource, 2> wrong{{
@@ -1830,10 +1832,11 @@ void multiSourceBatchRejectsPartialExplicitCompletionSources() {
   wrong[1].commandCount += 1u;
   check(mismatch.assignFixedCompletionSources(wrong),
         "test setup assigns explicit sources with mismatched metadata");
-  check(!assignBatchCompletionSourcesIfNeeded(
-            mismatch, std::span<const ReadySlotSnapshot>(
-                          snapshots.data(), snapshots.size())),
-        "multi-source batch rejects explicit source metadata mismatches");
+  checkEq(prepareBatchCompletionSources(
+              mismatch, std::span<const ReadySlotSnapshot>(
+                            snapshots.data(), snapshots.size())),
+          0u,
+          "multi-source batch rejects explicit source metadata mismatches");
 
   QueueSubmissionRecord exact;
   std::array<QueueCompletionSource, 2> expected{{
@@ -1846,6 +1849,50 @@ void multiSourceBatchRejectsPartialExplicitCompletionSources() {
             exact, std::span<const ReadySlotSnapshot>(
                        snapshots.data(), snapshots.size())),
         "multi-source batch accepts explicit sources that cover the batch");
+}
+
+void requeueUnsubmittedBatchSourcesRestoresFifoSuffix() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+  fixture.addReadySlot(3, 4);
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t sourceCount =
+      fixture.controller.dequeueReadySlotBatch(
+          lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(sourceCount, 3u, "test setup dequeues a three-source batch");
+  checkEq(fixture.readySlots.size(), 1u,
+          "one source remains ready behind the dequeued batch");
+  checkEq(fixture.readySlots.front(), 3u,
+          "remaining ready source keeps its FIFO position");
+  for (std::size_t i = 0; i < sourceCount; ++i) {
+    check(fixture.slots[i].state == ChunkSlot::State::Encoding,
+          "dequeued source enters Encoding before suffix restore");
+  }
+
+  const auto suffix = std::span<const ReadySlotSnapshot>(
+      snapshots.data() + 1, sourceCount - 1);
+  const std::size_t requeued =
+      fixture.controller.requeueUnsubmittedBatchSources(lock, suffix);
+
+  checkEq(requeued, 2u, "suffix restore requeues every unsubmitted source");
+  checkEq(fixture.readySlots.size(), 3u,
+          "ready queue contains restored suffix plus original tail");
+  checkEq(fixture.readySlots[0], 1u,
+          "first unsubmitted source is restored first");
+  checkEq(fixture.readySlots[1], 2u,
+          "second unsubmitted source follows in FIFO order");
+  checkEq(fixture.readySlots[2], 3u,
+          "pre-existing ready source remains behind the restored suffix");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "submitted prefix remains Encoding for the pending Metal submit");
+  check(fixture.slots[1].state == ChunkSlot::State::Pending,
+        "first restored suffix source returns to Pending");
+  check(fixture.slots[2].state == ChunkSlot::State::Pending,
+        "second restored suffix source returns to Pending");
 }
 
 }  // namespace
@@ -1892,7 +1939,8 @@ int main() {
     mergeEncodedPendingTailSubmissionRejectsSourceListOverflow();
     runEncodeBatchIterationCompletesEmptySubmissionInline();
     multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath();
-    multiSourceBatchRejectsPartialExplicitCompletionSources();
+    multiSourceBatchAcceptsExplicitCompletionSourcePrefix();
+    requeueUnsubmittedBatchSourcesRestoresFifoSuffix();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';
     return 1;

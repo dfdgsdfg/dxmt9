@@ -339,15 +339,19 @@ QueueCompletionSource completionSourceForReadySlot(
   };
 }
 
-bool assignBatchCompletionSourcesIfNeeded(
+std::size_t prepareBatchCompletionSources(
     QueueSubmissionRecord& submission,
     std::span<const ReadySlotSnapshot> sources) {
+  if (sources.empty()) {
+    return 0;
+  }
+
   const auto existingSources = submission.explicitCompletionSourceSpan();
   if (!existingSources.empty()) {
-    if (existingSources.size() != sources.size()) {
-      return false;
+    if (existingSources.size() > sources.size()) {
+      return 0;
     }
-    for (std::size_t i = 0; i < sources.size(); ++i) {
+    for (std::size_t i = 0; i < existingSources.size(); ++i) {
       const auto expected = completionSourceForReadySlot(sources[i]);
       const auto& actual = existingSources[i];
       if (actual.slotIndex != expected.slotIndex ||
@@ -355,22 +359,30 @@ bool assignBatchCompletionSourcesIfNeeded(
           actual.hasPresent != expected.hasPresent ||
           actual.commandBegin != expected.commandBegin ||
           actual.commandCount != expected.commandCount) {
-        return false;
+        return 0;
       }
     }
-    return true;
+    return existingSources.size();
   }
   if (sources.size() <= 1u) {
-    return true;
+    return sources.size();
   }
 
   EncodeSessionSourceList completionSources;
   for (const auto& source : sources) {
     if (!completionSources.append(completionSourceForReadySlot(source))) {
-      return false;
+      return 0;
     }
   }
-  return submission.assignFixedCompletionSources(completionSources.span());
+  return submission.assignFixedCompletionSources(completionSources.span())
+      ? sources.size()
+      : 0;
+}
+
+bool assignBatchCompletionSourcesIfNeeded(
+    QueueSubmissionRecord& submission,
+    std::span<const ReadySlotSnapshot> sources) {
+  return prepareBatchCompletionSources(submission, sources) != 0;
 }
 
 void appendCompletionSourcesToQueues(
@@ -1486,6 +1498,54 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
   return sources.size();
 }
 
+size_t QueueLifecycleController::requeueUnsubmittedBatchSources(
+    std::unique_lock<std::mutex>& lock,
+    std::span<const ReadySlotSnapshot> sources) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  if (sources.empty()) {
+    return 0;
+  }
+
+  auto* readySlots = submissionBinding_.readySlots;
+  auto* encodeCv = submissionBinding_.encodeCv;
+  if (!readySlots) {
+    return 0;
+  }
+
+  for (const auto& source : sources) {
+    if (!source.slot ||
+        source.slotIndex >= submissionBinding_.slots.size()) {
+      return 0;
+    }
+    auto& liveSlot = submissionBinding_.slots[source.slotIndex];
+    if (&liveSlot != source.slot ||
+        liveSlot.state != ChunkSlot::State::Encoding ||
+        liveSlot.seqId != source.seqId ||
+        !commandRangeWithinSlot(liveSlot,
+                                source.commandBegin,
+                                source.commandCount) ||
+        commandRangeHasPresent(liveSlot,
+                               source.commandBegin,
+                               source.commandCount) != source.hasPresent) {
+      return 0;
+    }
+  }
+
+  for (auto it = sources.rbegin(); it != sources.rend(); ++it) {
+    auto& slot = submissionBinding_.slots[it->slotIndex];
+    slot.state = ChunkSlot::State::Pending;
+    readySlots->push_front(it->slotIndex);
+  }
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
+  if (encodeCv) {
+    encodeCv->notify_one();
+  }
+  return sources.size();
+}
+
 bool QueueLifecycleController::runEncodeIteration(
     std::unique_lock<std::mutex>& lock,
     const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
@@ -1585,7 +1645,10 @@ bool QueueLifecycleController::runEncodeBatchIteration(
 
   lock.lock();
   if (submission.has_value()) {
-    if (!assignBatchCompletionSourcesIfNeeded(*submission, sources)) {
+    const std::size_t submittedSourceCount =
+        prepareBatchCompletionSources(*submission, sources);
+    if (submittedSourceCount == 0 ||
+        submittedSourceCount > sources.size()) {
       submission.reset();
     }
 #ifndef NDEBUG
@@ -1594,15 +1657,30 @@ bool QueueLifecycleController::runEncodeBatchIteration(
     }
 #endif
     if (!submission.has_value()) {
-      for (const auto& source : sources) {
-        DXMT_ASSERT(source.slot != nullptr);
-        const u64 seqId = source.seqId;
-        completeInlineChunk(source.slotIndex, seqId);
-        if (onInlineComplete) {
-          onInlineComplete(seqId);
+      const std::size_t requeued =
+          requeueUnsubmittedBatchSources(lock, sources);
+      DXMT_ASSERT(requeued == sources.size());
+      if (requeued == 0) {
+        for (const auto& source : sources) {
+          DXMT_ASSERT(source.slot != nullptr);
+          const u64 seqId = source.seqId;
+          completeInlineChunk(source.slotIndex, seqId);
+          if (onInlineComplete) {
+            onInlineComplete(seqId);
+          }
         }
       }
       return true;
+    }
+    if (submittedSourceCount < sources.size()) {
+      const auto suffix = sources.subspan(submittedSourceCount);
+      const std::size_t requeued =
+          requeueUnsubmittedBatchSources(lock, suffix);
+      DXMT_ASSERT(requeued == suffix.size());
+      if (requeued != suffix.size()) {
+        submission.reset();
+        return true;
+      }
     }
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);
     enqueueSubmission(*submission);

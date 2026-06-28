@@ -571,6 +571,10 @@ stateDiagram-v2
 The forbidden state is "encoded visible head, no Metal submit, inline
 completion." Completion-source expansion is allowed only after Metal completion
 of the command buffer containing those source commands.
+If a multi-source batch returns a strict encoded prefix rather than the whole
+dequeued batch, the unrepresented suffix is restored to the ready lane in FIFO
+order. It is not inline-completed, because it is not backed by the prefix
+session tail.
 
 #### Metal API Constraints
 
