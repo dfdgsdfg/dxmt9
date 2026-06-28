@@ -1833,6 +1833,8 @@ struct Counters {
   std::atomic<std::uint64_t> mapBufferPlain{0};
   std::atomic<std::uint64_t> presentBoundaryApplied{0};
   std::atomic<std::uint64_t> presentBoundarySkipped{0};
+  std::atomic<std::uint64_t> presentBoundaryDeferred{0};
+  std::atomic<std::uint64_t> presentBoundaryDeferredWaits{0};
   std::atomic<std::uint64_t> presentBoundaryWaits{0};
   std::atomic<std::uint64_t> presentBoundaryWaitNs{0};
   std::atomic<std::uint64_t> presentBoundaryWaitMaxNs{0};
@@ -4221,6 +4223,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"map_buffer_plain", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferPlain, nullptr, nullptr, 0.0},
     {"present_boundary_applied", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryApplied, nullptr, nullptr, 0.0},
     {"present_boundary_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundarySkipped, nullptr, nullptr, 0.0},
+    {"present_boundary_deferred", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryDeferred, nullptr, nullptr, 0.0},
+    {"present_boundary_deferred_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryDeferredWaits, nullptr, nullptr, 0.0},
     {"present_boundary_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryWaits, nullptr, nullptr, 0.0},
     {"present_boundary_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentBoundaryWaitNs, nullptr, nullptr, 0.0},
     {"present_boundary_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::presentBoundaryWaitMaxNs, nullptr, nullptr, 0.0},
@@ -9983,6 +9987,14 @@ void countPresentBoundaryApplied() {
 
 void countPresentBoundarySkipped() {
   add(counters().presentBoundarySkipped);
+}
+
+void countPresentBoundaryDeferred() {
+  add(counters().presentBoundaryDeferred);
+}
+
+void countPresentBoundaryDeferredWait() {
+  add(counters().presentBoundaryDeferredWaits);
 }
 
 void countPresentBoundaryWait(std::uint64_t nanoseconds) {

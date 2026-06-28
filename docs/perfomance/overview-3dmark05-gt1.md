@@ -582,7 +582,7 @@ flowchart TD
   CPU --> SNAP["[[snapshot-cache]]<br/>D3D9 draw-state rebuild\n(historical owner, current P2/P3 residual;\ndirect-cbuf leaves lookup 2.859ms/present;\npure stream/IB and redundant const rejected)"]
   CPU --> SCE["[[state-churn-encode]]<br/>stream/IB churn and commit_chunk replay"]
   CPU --> CU["[[const-upload]]<br/>cbuf/argbuf traffic (CPU amplifier)"]
-  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate<br/>no next-CB enqueue during wait<br/>BeginScene immediate<br/>SetRT/Clear share higher app frame 0x88760<br/>command dispatcher 0x4886E0 gates Clear dispatch<br/>dxmt9 completion-signal delay does not move Clear/first chunk<br/>CPU-ready regresses total wait/replay and black vertical artifact"]
+  CPU --> PP["[[present-pacing]]<br/>completion_wait dominated by present completion<br/>current direct path already immediate<br/>no next-CB enqueue during wait<br/>BeginScene immediate<br/>SetRT/Clear share higher app frame 0x88760<br/>command dispatcher 0x4886E0 gates Clear dispatch<br/>dxmt9 completion-signal delay does not move Clear/first chunk<br/>deferred prototype opens P4 but fails CB/pass locality"]
   SCE --> SNAP
   PP --> SCE
 
@@ -616,7 +616,7 @@ flowchart LR
   P1 --> P1r["→ [[render-pass-store]] (re-entry real; A/B/A immediate target reuse; coalescing open)"]
   P2 --> P2r["→ [[state-churn-encode]] + [[snapshot-cache]] (CPU wins, replay split, GPU flat)"]
   P3 --> P3r["→ [[const-upload]] (CPU bytes ↓ 4.6GB→1GB, GPU flat)"]
-  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\nno next-CB enqueue during wait\nPE early calls immediate\n3DMark05 command dispatcher gates Clear dispatch\nSetRT return → Clear p50 17.4ms\ndxmt9 completed-seq/waterline dependency rejected\nCPU-ready regresses replay/total wait and breaks visual correctness"]
+  P4 --> P4r["completion_wait is present-completion paced\ncurrent direct path already immediate\nwatcher backlog rejected\nno next-CB enqueue during wait\nPE early calls immediate\n3DMark05 command dispatcher gates Clear dispatch\nSetRT return → Clear p50 17.4ms\ndxmt9 completed-seq/waterline dependency rejected\ndeferred prototype recovers overlap but not locality"]
 
   classDef p0 fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
   classDef p1 fill:#fff0d6,stroke:#b26b00,color:#2b1900
@@ -1954,12 +1954,21 @@ active-entry first-draw continuation are both `0`. The active-entry losses are
 semantic (`clear=2495`, `present=854`), and P4 remains closed
 (`completion_wait_with_enqueue_ms=41.303`,
 `completion_wait_without_enqueue_ms=28403.505`, only `2` wait-time commits)
-under `32966.656ms` of present-boundary wait. This reframes the next
-implementation shape: command-buffer coalescing is solved separately from
-open-render-encoder pass streaming. The remaining owner is semantic/attachment
-CpuReady source publication and bounded wait-time release with a coarser
-source-tape/producer-cadence carrier, not same-key continuation source flooding
-or command-floor threshold sweeps.
+under `32966.656ms` of present-boundary wait. [[present-pacing-encode-session-deferred-boundary.188]]
+then documents the initial loose deferred-boundary prototype. It opens the
+expected run-ahead window (`completion_wait_with_enqueue_ms=35475.400`, overlap
+`85.591%`, `1612` wait-time commits, sampled FPS `7.855 -> 11.386`) and keeps
+the output visually valid, but it loses the H187 carrier shape (`2.432`
+CB/present, `12.740` passes/present, `36.611ms/present` GPU command-buffer
+time). That prototype was superseded before promotion by a stricter tail-gate
+target (`presentSeqId + 1`) so the next present tail, not just the next Present
+entry, enforces configured frame latency. A valid runtime sample for the
+tightened semantics is still pending because the immediate rerun attempts were
+blocked by a locked macOS session. This reframes the next implementation shape:
+command-buffer coalescing and present-boundary deferral are solved separately
+from open-render-encoder pass streaming. The remaining owner is to keep the
+run-ahead window while restoring H187-like CB/pass locality, not same-key
+continuation source flooding or command-floor threshold sweeps.
 
 Related CPU-side counter design doc: [[overview]].
 

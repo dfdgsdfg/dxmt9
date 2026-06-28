@@ -25,6 +25,7 @@ others are ignored. See `dxmt9::resolveAcquirePolicy` in
 |---|---|---|
 | `DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE` | Move `notePresentDequeued` to after acquire (selects `BoundaryPolicy::AfterAcquire`) | `0` |
 | `DXMT9_PRESENT_BOUNDARY_COMPLETION` | Wait on command-buffer `completedSeqId_` (selects `BoundaryPolicy::Completion`) | `0` |
+| `DXMT9_PRESENT_BOUNDARY_DEFERRED` | Experimental frame-latency run-ahead policy. The final Present tail is committed immediately, and the present-completion frame-latency wait is deferred until the next `Present` tail is about to be submitted. This differs from `DXMT9_DISABLE_PRESENT_BOUNDARY`: it still enforces configured frame-latency backpressure before another present tail, but gives the producer a chance to record and publish the next frame's offscreen work while the previous present tail is completing. Default off; do not promote until R-BACK-2.43 pass-streaming, ordered completion, visual, P4, and locality gates pass. | `0` |
 | `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Wait on `presentCompletedSeqId_` (selects `BoundaryPolicy::PresentCompletion`) — default on; explicit `0` opts out | `1` |
 | `DXMT9_PRESENT_REFRESH_HZ` | Override refresh rate (numeric Hz) | derived |
 | `DXMT9_LAYER_DISPLAY_SYNC` | CAMetalLayer display sync opt-in; when set non-zero, the presenter sets `CAMetalLayer.displaySyncEnabled` from the D3D9 PresentationInterval. Default is **off** in code (`dxmt9_presenter.mm::layerDisplaySyncEnabled`), and the runtime instead enforces the per-present minimum duration via `MTLCommandBuffer::presentDrawableAfterMinimumDuration` | `0` (off — code default; the docs row historically said `1`, the code path defaults to off) |
@@ -63,14 +64,15 @@ mechanism but failed locality, total-wait, and visual-correctness gates. Do not
 schedule new runs with those envs unless the run-ahead code is intentionally
 reintroduced and this rules file is updated in the same change.
 
-The four `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
+The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
-`Disabled > PresentCompletion > Completion > AfterAcquire > Default`
-— `Disabled` short-circuits the whole boundary; `PresentCompletion`
-is the historical default-on branch (null / empty env counts as set,
-only explicit `0` demotes). `AfterAcquire` is observationally a no-op
-when a higher-precedence wait branch is selected (those branches do
-not consult `presentDequeuedSeqId_`). See
+`Disabled > DeferredPresentCompletion > PresentCompletion > Completion >
+AfterAcquire > Default` — `Disabled` short-circuits the whole boundary;
+`DeferredPresentCompletion` keeps the present-completion target but moves the
+wait to the next `Present`; `PresentCompletion` is the historical default-on
+branch (null / empty env counts as set, only explicit `0` demotes).
+`AfterAcquire` is observationally a no-op when a higher-precedence wait branch
+is selected (those branches do not consult `presentDequeuedSeqId_`). See
 `dxmt9::resolveBoundaryPolicy` in `src/dxmt9/dxmt9_presenter.hpp`,
 the switch in `CommandQueue::presentBoundary`
 (`src/dxmt9/dxmt9_command_queue.cpp`), the AfterAcquire site in

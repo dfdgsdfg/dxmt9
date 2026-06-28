@@ -46,6 +46,7 @@ pe_draw_full_snapshot=${DXMT9_PE_DRAW_FULL_SNAPSHOT:-0}
 pe_chunk_max_records=${DXMT9_PE_CHUNK_MAX_RECORDS:-}
 pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
 dxmt_log_level=${DXMT_LOG_LEVEL:-}
+present_boundary_deferred=${DXMT9_PRESENT_BOUNDARY_DEFERRED:-0}
 open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
 open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
 open_cb_semantic_boundary_publish=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH:-0}
@@ -709,6 +710,12 @@ Options:
   --frame-sampling    Set DXMT9_PERF_FRAME_SAMPLING=1 and emit per-Present
                       wall_ms/fps plus counter deltas. Use for visual/perf
                       coupling probes such as bloom, glow, and muzzle effects.
+  --present-boundary-deferred
+                      Set DXMT9_PRESENT_BOUNDARY_DEFERRED=1. The current
+                      Present tail is committed immediately and the
+                      present-completion frame-latency wait moves to the next
+                      Present tail, allowing producer run-ahead before the
+                      final present submission is gated.
   --open-cb-preencode-tail-present
                       Set DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1 for the
                       open-command-buffer P4 carrier.
@@ -1794,6 +1801,10 @@ while (($#)); do
       ;;
     --frame-sampling)
       frame_sampling=1
+      shift
+      ;;
+    --present-boundary-deferred)
+      present_boundary_deferred=1
       shift
       ;;
     --open-cb-preencode-tail-present)
@@ -4364,6 +4375,10 @@ fi
 
 if [[ "$frame_sampling" != "0" && -n "$frame_sampling" ]]; then
   env_args+=("DXMT9_PERF_FRAME_SAMPLING=$frame_sampling")
+fi
+
+if [[ "$present_boundary_deferred" != "0" && -n "$present_boundary_deferred" ]]; then
+  env_args+=("DXMT9_PRESENT_BOUNDARY_DEFERRED=$present_boundary_deferred")
 fi
 
 if [[ "$open_cb_preencode_tail_present" != "0" && -n "$open_cb_preencode_tail_present" ]]; then

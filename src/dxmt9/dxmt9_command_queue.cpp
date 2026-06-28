@@ -2609,7 +2609,7 @@ bool splitStretchChunk() {
 
 // Boundary-wait policy — resolved once per process via
 // dxmt9::resolveBoundaryPolicyFromEnv() (see dxmt9_presenter.hpp).
-// The five-value enum collapses the previous trio of env-parsing
+// The boundary enum collapses the previous trio of env-parsing
 // lambdas (DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION /
 // DXMT9_PRESENT_BOUNDARY_COMPLETION / DXMT9_DISABLE_PRESENT_BOUNDARY)
 // into a single switch — see resolveBoundaryPolicy() doc-comment for
@@ -2642,6 +2642,34 @@ std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
 
 bool shouldApplyPresentBoundary(const core::SwapDesc&) {
   return resolveBoundaryPolicyFromEnv() != BoundaryPolicy::Disabled;
+}
+
+std::uint64_t presentBoundaryTargetSeqId(std::uint64_t presentSeqId,
+                                         std::uint32_t maxFrameLatency) {
+  if (presentSeqId == 0) {
+    return 0;
+  }
+  maxFrameLatency = std::clamp<std::uint32_t>(
+      maxFrameLatency, 1u, kMaxQueuedChunks);
+  if (presentSeqId <= maxFrameLatency) {
+    return 0;
+  }
+  return presentSeqId - maxFrameLatency;
+}
+
+std::uint64_t deferredPresentBoundaryTargetSeqId(std::uint64_t presentSeqId,
+                                                 std::uint32_t maxFrameLatency) {
+  if (presentSeqId == std::numeric_limits<std::uint64_t>::max()) {
+    return presentBoundaryTargetSeqId(presentSeqId, maxFrameLatency);
+  }
+  return presentBoundaryTargetSeqId(presentSeqId + 1, maxFrameLatency);
+}
+
+BoundaryPolicy presentBoundaryWaitPolicy(BoundaryPolicy policy) {
+  if (policy == BoundaryPolicy::DeferredPresentCompletion) {
+    return BoundaryPolicy::PresentCompletion;
+  }
+  return policy;
 }
 
 Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
@@ -3858,6 +3886,11 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
   PerfScope scope(perf::countSubmitPresentCpuTime);
+  const BoundaryPolicy boundaryPolicy = resolveBoundaryPolicyFromEnv();
+  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+    PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+    drainDeferredPresentBoundary();
+  }
   core::SwapDesc queuedDesc = desc;
   // Resolve the queue-local Presenter binding once. Stale ids (swapchain
   // destroyed between snapshotSwapDesc and submitPresent) resolve to
@@ -3969,7 +4002,10 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     }
   }
 
-  if (shouldApplyPresentBoundary(queuedDesc)) {
+  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+    perf::countPresentBoundaryApplied();
+    deferPresentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+  } else if (shouldApplyPresentBoundary(queuedDesc)) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     perf::countPresentBoundaryApplied();
     presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
@@ -3981,23 +4017,22 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
 
 void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency) {
   // TLA+: PresentFrameLatency / BeginPresentWait + CommitPendingPresent.
-  if (presentSeqId == 0) {
+  const std::uint64_t targetSeqId =
+      presentBoundaryTargetSeqId(presentSeqId, maxFrameLatency);
+  if (targetSeqId == 0) {
     return;
   }
-  maxFrameLatency = std::clamp<std::uint32_t>(maxFrameLatency, 1u, kMaxQueuedChunks);
-  if (presentSeqId <= maxFrameLatency) {
-    return;
-  }
-  const std::uint64_t targetSeqId = presentSeqId - maxFrameLatency;
   std::unique_lock lock(mutex_);
   // R-BACK / PresentFrameLatency — branch on the unified
   // BoundaryPolicy resolved once at process init. Disabled is
   // filtered earlier by shouldApplyPresentBoundary and never reaches
   // here; AfterAcquire shares the Default wait branch (the position
   // of notePresentDequeued is the only observable difference).
-  const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
+  const BoundaryPolicy policy =
+      presentBoundaryWaitPolicy(resolveBoundaryPolicyFromEnv());
   const auto reachedBoundary = [&] {
     switch (policy) {
+      case BoundaryPolicy::DeferredPresentCompletion:
       case BoundaryPolicy::PresentCompletion:
         return presentCompletedSeqId_ >= targetSeqId;
       case BoundaryPolicy::Completion:
@@ -4015,6 +4050,7 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   }
   const auto waitStarted = std::chrono::steady_clock::now();
   switch (policy) {
+    case BoundaryPolicy::DeferredPresentCompletion:
     case BoundaryPolicy::PresentCompletion:
       presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
       break;
@@ -4033,6 +4069,45 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   DXMT_ASSERT(stop_ || reachedBoundary());
   // TLA+: PresentFrameLatency / PresentCompletionSafety
   DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqId_);
+  perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+}
+
+void CommandQueue::deferPresentBoundary(std::uint64_t presentSeqId,
+                                        std::uint32_t maxFrameLatency) {
+  const std::uint64_t targetSeqId =
+      deferredPresentBoundaryTargetSeqId(presentSeqId, maxFrameLatency);
+  if (targetSeqId == 0) {
+    return;
+  }
+  std::lock_guard lock(mutex_);
+  deferredPresentBoundaryTargetSeqId_ =
+      std::max(deferredPresentBoundaryTargetSeqId_, targetSeqId);
+  perf::countPresentBoundaryDeferred();
+}
+
+void CommandQueue::drainDeferredPresentBoundary() {
+  std::unique_lock lock(mutex_);
+  const std::uint64_t targetSeqId = deferredPresentBoundaryTargetSeqId_;
+  if (targetSeqId == 0) {
+    return;
+  }
+  const auto reachedBoundary = [&] {
+    return presentCompletedSeqId_ >= targetSeqId;
+  };
+  if (reachedBoundary()) {
+    deferredPresentBoundaryTargetSeqId_ = 0;
+    return;
+  }
+  perf::countPresentBoundaryDeferredWait();
+  const auto waitStarted = std::chrono::steady_clock::now();
+  presentCompletedCv_.wait(lock, [&] { return stop_ || reachedBoundary(); });
+  const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
+  DXMT_ASSERT(stop_ || reachedBoundary());
+  DXMT_ASSERT(presentCompletedSeqId_ <= completedSeqId_);
+  if (reachedBoundary()) {
+    deferredPresentBoundaryTargetSeqId_ = 0;
+  }
   perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
 }

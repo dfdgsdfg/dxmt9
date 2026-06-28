@@ -213,6 +213,8 @@ class CommandQueue {
   // design) never wraps within the lifetime of any outstanding id.
   std::uint64_t submitPresent(const core::SwapDesc& desc);
   void presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
+  void deferPresentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
+  void drainDeferredPresentBoundary();
   void submitFlush();
   core::HResult waitForVBlank();
 
@@ -440,6 +442,7 @@ class CommandQueue {
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
+  std::uint64_t deferredPresentBoundaryTargetSeqId_ = 0; // next-Present run-ahead boundary
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.

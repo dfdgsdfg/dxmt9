@@ -514,6 +514,16 @@ Non-boundaries:
 | Payload byte threshold or draw-count threshold | Diagnostic trigger only unless it proves a semantic boundary |
 | End of an `encodeChunk()` helper call | Must not imply `flushRender(Final)` in the session path |
 
+The frame-latency policy may move the explicit present-completion wait from the
+current `Present` return path to the next `Present` entry as an opt-in
+run-ahead carrier. This is not equivalent to disabling the boundary: the final
+Present tail still commits immediately, the next frame may build CPU-ready
+offscreen sources while that tail completes, and the next `Present` drains the
+previous target before allowing another present tail to be queued. The
+optimization exists only to create source availability for R-BACK-2.40 and
+R-BACK-2.43; it does not relax ordered completion, Present semantic boundaries,
+or the locality gates above.
+
 ```mermaid
 sequenceDiagram
   participant Q as Queue

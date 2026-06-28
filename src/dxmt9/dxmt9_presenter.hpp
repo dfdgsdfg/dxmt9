@@ -80,9 +80,10 @@ AcquirePolicy resolveAcquirePolicyFromEnv();
 // scattered env-parsing lambdas.
 //
 // Priority when multiple env-vars are set simultaneously (highest
-// first): Disabled > PresentCompletion > Completion > AfterAcquire >
-// Default. This matches the pre-existing if/else order in
-// CommandQueue::presentBoundary: DXMT9_DISABLE_PRESENT_BOUNDARY=1
+// first): Disabled > DeferredPresentCompletion > PresentCompletion >
+// Completion > AfterAcquire > Default. This matches the pre-existing
+// if/else order in CommandQueue::presentBoundary:
+// DXMT9_DISABLE_PRESENT_BOUNDARY=1
 // short-circuits the whole boundary; otherwise the default-true
 // PresentCompletion branch wins over Completion, which in turn wins
 // over the legacy Dequeued (presentDequeued CV) path. The
@@ -99,6 +100,8 @@ enum class BoundaryPolicy : uint32_t {
   AfterAcquire,        // DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE — same wait, note after encode.
   Completion,          // DXMT9_PRESENT_BOUNDARY_COMPLETION — wait on completedSeqId_.
   PresentCompletion,   // DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION (default on) — wait on presentCompletedSeqId_.
+  // DXMT9_PRESENT_BOUNDARY_DEFERRED — defer present-completion wait until next Present tail.
+  DeferredPresentCompletion,
   Disabled,            // DXMT9_DISABLE_PRESENT_BOUNDARY — skip the boundary altogether.
 };
 
@@ -109,11 +112,13 @@ enum class BoundaryPolicy : uint32_t {
 // the pre-normalization default-true behavior of the historical
 // lambda).
 BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
+                                     const char* deferredEnv,
                                      const char* presentCompletionEnv,
                                      const char* completionEnv,
                                      const char* afterAcquireEnv);
 
 // Process-once env reader; reads DXMT9_DISABLE_PRESENT_BOUNDARY /
+// DXMT9_PRESENT_BOUNDARY_DEFERRED /
 // DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION /
 // DXMT9_PRESENT_BOUNDARY_COMPLETION /
 // DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE via std::getenv on first call

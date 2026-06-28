@@ -138,18 +138,25 @@ bool presentCompletionEnvDefaultOn(const char* env) {
 }  // namespace
 
 BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
+                                     const char* deferredEnv,
                                      const char* presentCompletionEnv,
                                      const char* completionEnv,
                                      const char* afterAcquireEnv) {
   // Priority order — see BoundaryPolicy doc-comment. Disabled
   // short-circuits the whole boundary, so it is consulted first. The
-  // default-on PresentCompletion branch matches the historical
-  // `if (!env) return true;` behavior of the legacy lambda; an
-  // explicit "0" demotes us to the Completion / AfterAcquire /
-  // Default chain.
+  // deferred branch keeps the same present-completion target but moves
+  // the wait to the next Present, so it must outrank the historical
+  // default-on PresentCompletion branch.
   if (envFlagSet(disableEnv)) {
     return BoundaryPolicy::Disabled;
   }
+  if (envFlagSet(deferredEnv)) {
+    return BoundaryPolicy::DeferredPresentCompletion;
+  }
+  // The default-on PresentCompletion branch matches the historical
+  // `if (!env) return true;` behavior of the legacy lambda; an
+  // explicit "0" demotes us to the Completion / AfterAcquire /
+  // Default chain.
   if (presentCompletionEnvDefaultOn(presentCompletionEnv)) {
     return BoundaryPolicy::PresentCompletion;
   }
@@ -165,6 +172,7 @@ BoundaryPolicy resolveBoundaryPolicy(const char* disableEnv,
 BoundaryPolicy resolveBoundaryPolicyFromEnv() {
   static const BoundaryPolicy value = resolveBoundaryPolicy(
       std::getenv("DXMT9_DISABLE_PRESENT_BOUNDARY"),
+      std::getenv("DXMT9_PRESENT_BOUNDARY_DEFERRED"),
       std::getenv("DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION"),
       std::getenv("DXMT9_PRESENT_BOUNDARY_COMPLETION"),
       std::getenv("DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE"));

@@ -1264,6 +1264,8 @@ void countMapBufferWait(std::uint64_t totalNanoseconds,
                         bool waited);
 void countPresentBoundaryApplied();
 void countPresentBoundarySkipped();
+void countPresentBoundaryDeferred();
+void countPresentBoundaryDeferredWait();
 void countPresentBoundaryWait(std::uint64_t nanoseconds);
 void countPresentEncoded();
 void countPresentSkipped();

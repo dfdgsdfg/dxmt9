@@ -295,7 +295,10 @@ state during the previous frame's present-completion wait, decoupled from the
 choice of `MTLCommandBuffer` boundary. CPU-ready units own deterministic replay
 records, retained handles, sequence metadata, and allocator ranges, but no
 drawable or present token. Promotion from CPU-ready work into Metal command
-buffers is owned by the encode thread, subject to R-BACK-2.36.
+buffers is owned by the encode thread, subject to R-BACK-2.36. If the
+frame-latency wait is deferred to create this run-ahead window, the deferred
+wait must be drained before queuing another present tail and must not relax
+R-BACK-2.49 ordered completion.
 
 **R-BACK-2.41** *(Encode-side multi-slot coalescing.)* When more than one
 CPU-ready or non-present slot is available before `Present`, the encode thread
