@@ -14517,9 +14517,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage(injectedCommandBuffer ? "after-use-injected-command-buffer"
                                          : "after-new-command-buffer");
   bool commandBufferHasWork = false;
-  // One-shot session for the current chunk. It remains local and still closes
-  // the render encoder at function exit; making the owner explicit is the
-  // prerequisite for a later opt-in render-pass carry path.
+  // One-shot storage for direct callers. The opt-in EncodeSession path below
+  // supplies persistent storage so source boundaries can remain metadata-only.
   EncodeChunkSessionStorage localSession =
       makeEncodeChunkSessionStorage(ctx.dirty);
   EncodeChunkSessionStorage& session =
