@@ -1644,6 +1644,24 @@ bool QueueLifecycleController::runEncodeBatchIteration(
   }
 
   lock.lock();
+  auto stopOnBatchRestoreFailure = [&] {
+    DXMT_ASSERT(false && "batch suffix restore must succeed for dequeued sources");
+    if (submissionBinding_.stop) {
+      *submissionBinding_.stop = true;
+    }
+    if (submissionBinding_.writeCv) {
+      submissionBinding_.writeCv->notify_all();
+    }
+    if (submissionBinding_.encodeCv) {
+      submissionBinding_.encodeCv->notify_all();
+    }
+    if (submissionBinding_.finishCv) {
+      submissionBinding_.finishCv->notify_all();
+    }
+    if (submissionBinding_.presentCompletedCv) {
+      submissionBinding_.presentCompletedCv->notify_all();
+    }
+  };
   if (submission.has_value()) {
     const std::size_t submittedSourceCount =
         prepareBatchCompletionSources(*submission, sources);
@@ -1660,15 +1678,9 @@ bool QueueLifecycleController::runEncodeBatchIteration(
       const std::size_t requeued =
           requeueUnsubmittedBatchSources(lock, sources);
       DXMT_ASSERT(requeued == sources.size());
-      if (requeued == 0) {
-        for (const auto& source : sources) {
-          DXMT_ASSERT(source.slot != nullptr);
-          const u64 seqId = source.seqId;
-          completeInlineChunk(source.slotIndex, seqId);
-          if (onInlineComplete) {
-            onInlineComplete(seqId);
-          }
-        }
+      if (requeued != sources.size()) {
+        stopOnBatchRestoreFailure();
+        return false;
       }
       return true;
     }
@@ -1678,8 +1690,8 @@ bool QueueLifecycleController::runEncodeBatchIteration(
           requeueUnsubmittedBatchSources(lock, suffix);
       DXMT_ASSERT(requeued == suffix.size());
       if (requeued != suffix.size()) {
-        submission.reset();
-        return true;
+        stopOnBatchRestoreFailure();
+        return false;
       }
     }
     auto postCommitCallbacks = std::move(submission->postCommitCallbacks);

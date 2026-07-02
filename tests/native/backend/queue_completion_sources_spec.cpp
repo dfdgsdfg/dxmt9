@@ -1895,6 +1895,33 @@ void requeueUnsubmittedBatchSourcesRestoresFifoSuffix() {
         "second restored suffix source returns to Pending");
 }
 
+void requeueUnsubmittedBatchSourcesRejectsStaleMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+
+  std::array<ReadySlotSnapshot, 2> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t sourceCount =
+      fixture.controller.dequeueReadySlotBatch(
+          lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(sourceCount, 2u, "test setup dequeues both sources");
+
+  snapshots[1].seqId = 99;
+  const std::size_t requeued =
+      fixture.controller.requeueUnsubmittedBatchSources(
+          lock, std::span<const ReadySlotSnapshot>(
+                    snapshots.data() + 1, sourceCount - 1));
+
+  checkEq(requeued, 0u, "stale suffix metadata is rejected");
+  check(fixture.readySlots.empty(),
+        "failed suffix restore does not publish stale ready slots");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "first source remains Encoding after rejected restore");
+  check(fixture.slots[1].state == ChunkSlot::State::Encoding,
+        "stale source remains Encoding after rejected restore");
+}
+
 }  // namespace
 
 int main() {
@@ -1941,6 +1968,7 @@ int main() {
     multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath();
     multiSourceBatchAcceptsExplicitCompletionSourcePrefix();
     requeueUnsubmittedBatchSourcesRestoresFifoSuffix();
+    requeueUnsubmittedBatchSourcesRejectsStaleMetadata();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';
     return 1;

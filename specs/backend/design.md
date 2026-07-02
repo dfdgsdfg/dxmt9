@@ -574,7 +574,8 @@ of the command buffer containing those source commands.
 If a multi-source batch returns a strict encoded prefix rather than the whole
 dequeued batch, the unrepresented suffix is restored to the ready lane in FIFO
 order. It is not inline-completed, because it is not backed by the prefix
-session tail.
+session tail. A failed suffix restore is an invariant breach and must fail-stop
+the batch path rather than synthesize completion for unsubmitted sources.
 
 #### Metal API Constraints
 
