@@ -1502,7 +1502,7 @@ and the run is still no-enqueue dominated
 idea for the remaining `DrawEncoderCommand` site. A temporary local patch delayed
 command uniform materialization until the draw loop proved that a `DrawParam`
 used the run-level uniform, but the 120s scout stayed effectively flat:
-`draw_encoder_command_materialized/present` moved only `323.548 -> 323.233`.
+`draw_uniform_payload_materialized_draw_encoder_command/present` moved only `323.548 -> 323.233`.
 That means the command site is not mostly pass-open observer waste; GT1's
 draw-runs normally consume the command uniform in the draw loop. Further
 uniform-storage work must change the consumer shape, such as direct compact

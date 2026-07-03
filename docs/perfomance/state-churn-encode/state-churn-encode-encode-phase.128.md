@@ -64,9 +64,9 @@ present. Health counters stayed clean (`draw_skipped_no_pipeline=0`,
 | Metric | Phase 127 | Lazy probe |
 |---|---:|---:|
 | `present_encoded` | `1,819` | `1,857` |
-| `draw_encoder_command_materialized/present` | `323.548` | `323.233` |
-| `draw_encoder_command_bytes/present` | `3,320,897.734` | `3,317,659.748` |
-| `draw_encoder_command_cpu_ms/present` | `0.139` | `0.136` |
+| `draw_uniform_payload_materialized_draw_encoder_command/present` | `323.548` | `323.233` |
+| `draw_uniform_payload_materialized_draw_encoder_command_bytes/present` | `3,320,897.734` | `3,317,659.748` |
+| `draw_uniform_payload_materialize_draw_encoder_command_cpu_ms/present` | `0.139` | `0.136` |
 | `draw_encoder_param_materialized/present` | `229.830` | `229.792` |
 | `queue_observation_materialized/present` | `0.000` | `0.000` |
 | `completion_wait_without_enqueue_ms/present` | `25.390` | `25.515` |
