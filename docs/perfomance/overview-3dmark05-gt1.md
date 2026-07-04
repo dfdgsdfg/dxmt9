@@ -1962,13 +1962,23 @@ the output visually valid, but it loses the H187 carrier shape (`2.432`
 CB/present, `12.740` passes/present, `36.611ms/present` GPU command-buffer
 time). That prototype was superseded before promotion by a stricter tail-gate
 target (`presentSeqId + 1`) so the next present tail, not just the next Present
-entry, enforces configured frame latency. A valid runtime sample for the
-tightened semantics is still pending because the immediate rerun attempts were
-blocked by a locked macOS session. This reframes the next implementation shape:
+entry, enforces configured frame latency. This reframes the next implementation shape:
 command-buffer coalescing and present-boundary deferral are solved separately
 from open-render-encoder pass streaming. The remaining owner is to keep the
 run-ahead window while restoring H187-like CB/pass locality, not same-key
 continuation source flooding or command-floor threshold sweeps.
+[[present-pacing-deferred-boundary-isolated.189]] then closes the pending
+tightened-semantics sample by isolating the deferred boundary on the plain
+baseline shape: the gate engages (`present_boundary_applied=1860`,
+`present_boundary_deferred=1857`) but `deferred_waits=0` because the plain
+baseline never waits at the present boundary at all
+(`present_boundary_waits=0`, `present_boundary_wait_ms=0.0`), so P4 stays
+closed (`completion_wait_without_enqueue_ms/present` `26.546 -> 26.400`), FPS
+moves only `+3.33%` (inside the noise band), and CB/pass/tile stay flat. The
+H188 run-ahead window was a carrier phenomenon (H187's `32966.656ms` boundary
+wait), not a boundary one. Boundary-timing knobs are exhausted as isolated
+levers; the average-FPS owners are producer/replay serial-time reduction and a
+carrier that opens overlap without slowing the producer.
 
 Related CPU-side counter design doc: [[overview]].
 
