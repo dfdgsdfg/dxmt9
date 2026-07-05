@@ -39,34 +39,48 @@ ceiling from ~16.3 to ~19 (+~17%).
 
 ## Architecture (Approach A)
 
-Move replay execution to the encode thread; the app-thread commit becomes a
-validated raw handoff. Present pacing is re-anchored on the app thread with a
-present-ordinal wait. Chosen over the fence variant (B′) to recover the full
-budget including the present-chunk replay; over a dedicated replay thread (C)
-because the encode thread has idle headroom (10.992 + 8.487 < the ~52 ms
-frame target).
+Move replay execution to a dedicated replay worker; the app-thread commit
+becomes a validated raw handoff into a bounded raw-chunk queue. Present
+pacing is re-anchored on the app thread with a present-ordinal wait.
 
-### Slot lifecycle
+Transport correction (2026-07-05, pre-plan): PE chunks and queue `ChunkSlot`s
+are not 1:1 — R0 counters show ~14.1 `commit_chunk` entries coalesce into one
+writing slot that publishes once per present
+(`completion_no_enqueue_commit_chunk_entries_before_publish=14.127/present`,
+`chunk_publish_slot_residency_samples=1.000/present`). A `Recorded` slot state
+therefore does not fit; the deferral point sits upstream of the slot ring.
+A dedicated worker (rather than interleaving replay on the encode thread) is
+chosen because the worker inherits the app thread's existing blocking
+semantics (`ensureWriterSlot` ring waits, publish policy) verbatim, while an
+encode-thread replayer would need a non-blocking scheduling policy to avoid
+ring-full self-deadlock (the encode thread must keep draining `Pending` slots
+to free the ring). Approach A's pacing re-anchor is unchanged.
 
-`ChunkSlot::State` (`src/dxmt9/dxmt9_backend_types.hpp:942`) gains one state:
+### Raw queue and replay worker
 
 ```
-Free → Writing → Recorded → (deferred replay) → Pending → Encoding → GPU → Free
+app thread:    commit_chunk = validate → copy → rawQueue.push → [ordinal wait] → return
+replay worker: rawQueue.pop → existing replay dispatch → writing slot → publish (existing policy)
+encode thread: unchanged (consumes Pending slots)
 ```
 
 - **commit_chunk, app thread**: wire header/range validation stays synchronous
   (early failure preserved, same HRESULTs as today for malformed chunks) →
-  `ensureWriterSlot` (the existing ring backpressure becomes the producer
-  throttle) → copy record table, handle table, and payload arena into
-  slot-owned storage (~14 KB/chunk; the PE buffer is reused by the recorder
-  after return, so the copy is required) → mark `Recorded`, notify the encode
-  thread → present-bearing chunks run the §Pacing wait → return.
-- **encode thread**: when the queue head is `Recorded`, run the existing
-  replay logic from `device_c_chunk_replay.cpp` unchanged in content —
-  only the executing thread moves. The encode thread is the sole owner of
-  `D9CDevice` replay state and the writing-slot materialization. Replay ends
-  with the existing publish path (`Pending`), then normal encode consumption
-  continues. Per-chunk order is FIFO; no reordering is introduced.
+  copy record table, handle table, and payload arena into a unix-owned
+  `RawChunk` buffer (~14 KB/chunk; the PE buffer is reused by the recorder
+  after return, so the copy is required) → push onto the bounded raw queue
+  (blocking when full — producer backpressure, bound sized in records/bytes
+  to cover ~2 frames of chunks) → present-bearing chunks (detected by a
+  record-type scan during validation) run the §Pacing wait → return.
+- **replay worker (new thread)**: pops raw chunks FIFO and runs the existing
+  replay logic from `device_c_chunk_replay.cpp` unchanged in content — the
+  worker is the sole owner of `D9CDevice` replay state, the writing slot, and
+  the existing publish path, inheriting today's blocking semantics
+  (`ensureWriterSlot` ring waits) without new scheduling policy. No
+  reordering is introduced.
+- **encode/completion/finish threads**: unchanged.
+- **Shutdown/Reset**: drain the raw queue, join the worker, then proceed —
+  part of the drain-fence surface.
 
 ### Pacing re-anchor
 
@@ -101,7 +115,7 @@ Today the frame-latency boundary wait runs inside the replay of
 ### Synchronization surface
 
 - Every direct (non-chunk) device call gets a **drain-fence prologue**: wait
-  until no `Recorded` slots remain and the in-flight deferred replay (if any)
+  until the raw queue is empty and the in-flight deferred replay (if any)
   has completed. At `0.030` direct calls/present in GT1 this costs nothing,
   and it is correct by construction for server-state reads (cap-check-class
   `chunkBarrierFlush` users), resource destroy/`Reset`, query paths, and any
@@ -133,7 +147,7 @@ New counters (normal counter-table + callsite audit discipline):
 
 - `commit_chunk_raw_enqueue_cpu_ms` — app-thread cost of the raw handoff.
 - `offload_replay_cpu_ms` — encode-thread deferred replay time.
-- `offload_replay_queue_depth` (+p50/p95 ring) — `Recorded` backlog.
+- `offload_replay_queue_depth` (+p50/p95 ring) — raw-queue backlog.
 - `present_ordinal_boundary_waits` / `present_ordinal_boundary_wait_ms`.
 - `offload_drain_fence_waits` / `offload_drain_fence_wait_ms`.
 
@@ -162,14 +176,16 @@ longer confirm run, per the R-BACK-2.34 default-flip precedent.
 
 ## Correctness Verification
 
-- Native specs (red-green, `build-arm64-nowine`): `Recorded` slot-state
-  transition rules in the queue lifecycle fixture (dequeue must skip/wait on
-  `Recorded`, publish path from `Recorded`, drain-fence predicate), and
-  present-ordinal boundary target math (clamp/underflow/deferred-shift),
-  mirroring the `presentBoundaryTargetSeqId` test style.
-- TLA: extend `QueueLifecycleRefinement.tla` with the `Recorded` state and
-  `PresentFrameLatency.tla` with the ordinal-wait variant; `dxmt9-verify-tla`
-  green is a merge requirement (queue-change convention).
+- Native specs (red-green, `build-arm64-nowine`): raw-queue push/pop/bound/
+  drain-fence predicate rules (pure fixture, no Wine/Metal), present-ordinal
+  boundary target math (clamp/underflow/deferred-shift) mirroring the
+  `presentBoundaryTargetSeqId` test style, and RawChunk copy validation
+  (reusing the `d9c_command_chunk_wire_*` range validators).
+- TLA: extend `PresentFrameLatency.tla` with the ordinal-wait variant;
+  `QueueLifecycleRefinement.tla` is unchanged (the slot lifecycle is
+  untouched; the raw queue sits upstream and the writer role is
+  thread-agnostic in the model). `dxmt9-verify-tla` green is a merge
+  requirement (queue-change convention).
 - Full backend native suite green; `git diff --check` clean.
 - Visual: paired-scout captures (`--capture-range 880:960:10`) compared for
   artifact classes per the `v0.0.3` anchor discipline.
