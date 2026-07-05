@@ -12,7 +12,8 @@
 
 #include "dxmt9/core.hpp"
 
-struct D9CDevice;  // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
@@ -138,6 +139,25 @@ class ReplayOffloadQueue {
 // independent, TU-local resolver of the same env var by design (see that
 // file); do not try to share a single definition across both TUs.
 bool offloadCommitReplayEnabled();
+
+// Drain-fence prologue for every direct (non-commit_chunk) dxmt9c_device_*
+// bridge call: if this device has a live offload worker with a non-empty
+// queue, block until it has drained so the direct call observes
+// offload-replayed state in program order. A null `d` or a device that
+// never spun up a worker (offload disabled, or `d->replayOffload` never
+// constructed) already encodes "nothing to drain" -- do not re-check
+// offloadCommitReplayEnabled() here. An empty queue (depth() == 0) is also
+// a plain no-op return: no counter touch, no wait. Cheap on the common/off
+// path: one pointer test plus one mutex-guarded depth() read.
+void drainDeferredReplay(D9CDevice* d);
+
+// dxmt9c_swapchain_present overload: D9CSwapChain is an opaque forward
+// declaration in the bridge TUs (they only see the ABI-facing
+// dxmt9/device_c.h, not device_c_common.hpp), so this overload -- defined in
+// device_c_replay_offload.cpp where the full D9CSwapChain definition is
+// visible -- resolves `s->owner` (the backpointer set at swapchain creation,
+// see device_c_common.hpp) and forwards to the D9CDevice* overload above.
+void drainDeferredReplay(D9CSwapChain* s);
 
 // Device-owned background thread that drains a ReplayOffloadQueue by
 // calling replayRawChunk() for each popped chunk. Fail-stop: a replay

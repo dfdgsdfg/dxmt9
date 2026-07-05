@@ -200,6 +200,14 @@ struct D9CDevice {
 struct D9CSwapChain {
   dxmt9::com::IDirect3DSwapChain9* iface;
   std::atomic<uint32_t> refs{1};
+  // Owning device, set by both creation paths (dxmt9c_device_get_swap_chain
+  // and dxmt9c_device_create_additional_swap_chain in
+  // device_c_swapchain_query_stateblock.cpp) right after construction.
+  // D9CSwapChain has no other reachable D9CDevice* -- only the PE-side
+  // `iface` -- so this backpointer exists solely to let
+  // dxmt9c_swapchain_present fence via drainDeferredReplay() without a
+  // round-trip through PE COM.
+  D9CDevice* owner = nullptr;
 
   explicit D9CSwapChain(dxmt9::com::IDirect3DSwapChain9* i) : iface(i) {}
   ~D9CSwapChain() {

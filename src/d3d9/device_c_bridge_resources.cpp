@@ -1,34 +1,43 @@
 #include "device_c_provider_api.hpp"
+#include "device_c_replay_offload.hpp"
 
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_texture(arg0, w, h, levels, usage, fmt, pool);
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* arg0, uint32_t size, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_cube_texture(arg0, size, levels, usage, fmt, pool);
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t d, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_volume_texture(arg0, w, h, d, levels, usage, fmt, pool);
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fvf, uint32_t pool) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_vertex_buffer(arg0, length, usage, fvf, pool);
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fmt, uint32_t pool) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_index_buffer(arg0, length, usage, fmt, pool);
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_render_target(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t fmt, uint32_t msType, uint32_t msQuality, uint32_t lockable, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_render_target(arg0, w, h, fmt, msType, msQuality, lockable, sharedHandle);
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_depth_stencil(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t fmt, uint32_t msType, uint32_t msQuality, uint32_t discard, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_depth_stencil(arg0, w, h, fmt, msType, msQuality, discard, sharedHandle);
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_offscreen_surface(arg0, w, h, fmt, pool, sharedHandle);
 }
 

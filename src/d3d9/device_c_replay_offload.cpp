@@ -12,12 +12,42 @@
 // the upperDevice shared_ptr from the fail-stop path below (mirrors the
 // same include-for-the-same-reason comment in device_c_chunk_replay.cpp).
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include "dxmt9/assert.hpp"
 
+#include <chrono>
 #include <cstdlib>
 
 namespace dxmt9::d3d9 {
+
+namespace {
+
+// Same file-local RAII CPU-time scope pattern used across the codebase
+// (e.g. src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_command_queue.cpp): there is
+// no shared dxmt9::perf::PerfScope type, each TU that needs one defines its
+// own thin wrapper around a `count*(nanoseconds)` function pointer.
+class PerfScope {
+ public:
+  explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {}
+  ~PerfScope() {
+    if (!record_) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started_;
+    record_(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  }
+
+  PerfScope(const PerfScope&) = delete;
+  PerfScope& operator=(const PerfScope&) = delete;
+
+ private:
+  void (*record_)(std::uint64_t) = nullptr;
+  std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
+};
+
+}  // namespace
 
 bool offloadCommitReplayEnabled() {
   static const bool enabled = [] {
@@ -82,6 +112,26 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
     releaseRetainedWrappers(drained);
     queue_.markReplayDone();
   }
+}
+
+void drainDeferredReplay(D9CDevice* d) {
+  if (!d || !d->replayOffload) {
+    return;
+  }
+  auto& queue = d->replayOffload->queue();
+  if (queue.depth() == 0) {
+    return;
+  }
+  dxmt9::perf::countOffloadDrainFenceWait();
+  PerfScope scope(dxmt9::perf::countOffloadDrainFenceCpuTime);
+  queue.waitDrained();
+}
+
+void drainDeferredReplay(D9CSwapChain* s) {
+  if (!s) {
+    return;
+  }
+  drainDeferredReplay(s->owner);
 }
 
 }  // namespace dxmt9::d3d9

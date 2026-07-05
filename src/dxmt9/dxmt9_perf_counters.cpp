@@ -1641,6 +1641,9 @@ struct Counters {
   std::atomic<std::uint64_t> offloadReplayQueueDepthGt1{0};
   std::atomic<std::uint64_t> offloadReplayQueueDepthGt2{0};
   std::atomic<std::uint64_t> offloadReplayQueueDepthGt4{0};
+  // Drain-fence prologue (drainDeferredReplay).
+  std::atomic<std::uint64_t> offloadDrainFenceWaits{0};
+  std::atomic<std::uint64_t> offloadDrainFenceWaitNs{0};
   std::atomic<std::uint64_t> completionEnqueueSamples{0};
   std::atomic<std::uint64_t> completionEnqueuePendingDepthMax{0};
   std::atomic<std::uint64_t> completionEnqueueWhileWaiting{0};
@@ -3921,6 +3924,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"offload_replay_queue_depth_gt1", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt1, nullptr, nullptr, 0.0},
     {"offload_replay_queue_depth_gt2", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt2, nullptr, nullptr, 0.0},
     {"offload_replay_queue_depth_gt4", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt4, nullptr, nullptr, 0.0},
+    {"offload_drain_fence_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadDrainFenceWaits, nullptr, nullptr, 0.0},
+    {"offload_drain_fence_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadDrainFenceWaitNs, nullptr, nullptr, 0.0},
     {"completion_enqueue_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueSamples, nullptr, nullptr, 0.0},
     {"completion_enqueue_pending_depth_max", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueuePendingDepthMax, nullptr, nullptr, 0.0},
     {"completion_enqueue_while_waiting", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueWhileWaiting, nullptr, nullptr, 0.0},
@@ -9501,6 +9506,14 @@ void countOffloadReplayQueueDepth(std::uint64_t depthBeforePush) {
   if (depthBeforePush > 4) {
     add(c.offloadReplayQueueDepthGt4);
   }
+}
+
+void countOffloadDrainFenceWait() {
+  add(counters().offloadDrainFenceWaits);
+}
+
+void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds) {
+  add(counters().offloadDrainFenceWaitNs, nanoseconds);
 }
 
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,

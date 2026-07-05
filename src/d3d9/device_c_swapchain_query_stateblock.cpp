@@ -47,7 +47,9 @@ extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* d, uint32_t idx
   if (!swapChain) {
     return nullptr;
   }
-  return new D9CSwapChain(swapChain);
+  auto* out = new D9CSwapChain(swapChain);
+  out->owner = d;
+  return out;
 }
 
 extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* d) {
@@ -63,7 +65,9 @@ extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* d
   if (!swapChain) {
     return nullptr;
   }
-  return new D9CSwapChain(swapChain);
+  auto* out = new D9CSwapChain(swapChain);
+  out->owner = d;
+  return out;
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {

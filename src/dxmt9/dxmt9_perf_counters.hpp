@@ -1184,6 +1184,15 @@ void countOffloadReplayCpuTime(std::uint64_t nanoseconds);
 // ReplayOffloadQueue::depth() sampled just before each push(), mirroring
 // countEncodeDequeueReadyDepth's "depth before pop" convention.
 void countOffloadReplayQueueDepth(std::uint64_t depthBeforePush);
+// Drain-fence prologue (drainDeferredReplay in device_c_replay_offload.cpp):
+// every direct (non-commit_chunk) dxmt9c_device_* bridge call fences on a
+// non-empty ReplayOffloadQueue before issuing its own PE-side effect, so app
+// reads/writes observe offload-replayed state in program order. Counted only
+// on the non-empty-queue path (queue().depth() == 0 is a plain return with
+// no counter touch), mirroring countPresentBoundaryDeferredWait's
+// count-only-when-actually-waited convention.
+void countOffloadDrainFenceWait();
+void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds);
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
                             bool whileWaiting,
                             bool hasPresent);
