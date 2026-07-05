@@ -271,6 +271,15 @@ class CommandQueue {
   // path via dxmt9::Device::waitPresentOrdinalBoundary once submitPresent's
   // own boundary is suppressed (DXMT9_OFFLOAD_COMMIT_REPLAY).
   void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency);
+  // Sticky abort for waitPresentOrdinalBoundary waiters. Set once by
+  // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) when
+  // a deferred commit-replay failure means completedPresentOrdinal_ can
+  // never advance again -- without this, an app thread already blocked in
+  // waitPresentOrdinalBoundary (or one that arrives after the failure) would
+  // wait forever in a release build, since DXMT_ASSERT does not abort
+  // outside debug builds. Never cleared (there is no path back from a
+  // failed offload worker on this device).
+  void abortPresentOrdinalWaits();
   void submitFlush();
   core::HResult waitForVBlank();
 
@@ -502,6 +511,10 @@ class CommandQueue {
   std::uint64_t completedPresentOrdinal_ = 0;  // presents retired (offload ordinal wait)
   std::uint64_t deferredPresentBoundaryTargetSeqId_ = 0; // next-Present run-ahead boundary
   std::uint64_t deferredPresentOrdinalTarget_ = 0;
+  // Sticky, mutex_-guarded release valve for waitPresentOrdinalBoundary; see
+  // abortPresentOrdinalWaits() doc above. Guarded by mutex_ like the other
+  // present-ordinal state above it.
+  bool presentOrdinalWaitsAborted_ = false;
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.

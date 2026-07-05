@@ -231,6 +231,12 @@ class Device {
   // instead of relying on submitPresent()'s inline boundary, which is
   // suppressed under DXMT9_OFFLOAD_COMMIT_REPLAY.
   virtual void waitPresentOrdinalBoundary(std::uint64_t) {}
+  // Sticky release valve for waitPresentOrdinalBoundary waiters. Called by
+  // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) once
+  // a deferred commit-replay failure means no further present ordinal can
+  // ever be retired on this device, so any thread parked (or about to park)
+  // in waitPresentOrdinalBoundary must be released instead of hanging.
+  virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
   virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }

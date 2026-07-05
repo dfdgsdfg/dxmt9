@@ -10,6 +10,7 @@
 // The header itself is intentionally not split — all three areas share the
 // devicec namespace and the D9C* wrapper structs declared below.
 
+#include "device_c_replay_offload.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
@@ -184,13 +185,14 @@ struct D9CDevice {
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
   ChunkEndFlushProbe chunkEndFlushProbe{};
   ChunkEndSubmissionCarry chunkEndSubmissionCarry{};
+  std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
+  std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
-  ~D9CDevice() {
-    if (iface) {
-      iface->Release();
-    }
-  }
+  // Defined out-of-line in device_c_state.cpp, next to
+  // dxmt9c_device_release(), so the replayOffload drain/stop ordering lives
+  // with the rest of the device teardown path.
+  ~D9CDevice();
 
   dxmt9::core::Device& dev() { return iface->coreDevice(); }
 };

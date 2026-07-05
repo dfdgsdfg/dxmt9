@@ -1173,6 +1173,17 @@ void countCommitChunkImportCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds);
+// Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY): CPU cost of
+// building/retaining/pushing a RawCommandChunk in dxmt9c_device_commit_chunk
+// (raw enqueue), and CPU cost of the deferred replayRawChunk() call on the
+// ReplayOffloadWorker thread (offload replay). See
+// device_c_replay_offload.{hpp,cpp} and the commit-chunk offload branch in
+// device_c_chunk_replay.cpp.
+void countCommitChunkRawEnqueueCpuTime(std::uint64_t nanoseconds);
+void countOffloadReplayCpuTime(std::uint64_t nanoseconds);
+// ReplayOffloadQueue::depth() sampled just before each push(), mirroring
+// countEncodeDequeueReadyDepth's "depth before pop" convention.
+void countOffloadReplayQueueDepth(std::uint64_t depthBeforePush);
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
                             bool whileWaiting,
                             bool hasPresent);

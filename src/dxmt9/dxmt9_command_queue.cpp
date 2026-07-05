@@ -4154,18 +4154,31 @@ void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
   // watermark that can be consumed and re-armed.
   deferredPresentOrdinalTarget_ = plan.storedDeferredTarget;
   const std::uint64_t targetOrdinal = plan.waitTargetOrdinal;
-  if (targetOrdinal == 0 || completedPresentOrdinal_ >= targetOrdinal) {
+  if (targetOrdinal == 0 || completedPresentOrdinal_ >= targetOrdinal ||
+      presentOrdinalWaitsAborted_) {
+    // presentOrdinalWaitsAborted_: a dead offload worker can never advance
+    // completedPresentOrdinal_ again (see abortPresentOrdinalWaits() doc),
+    // so return immediately instead of counting/starting a wait that would
+    // otherwise never be satisfied by real progress.
     return;
   }
   perf::countPresentOrdinalBoundaryWait();
   const auto waitStarted = std::chrono::steady_clock::now();
   presentCompletedCv_.wait(lock, [&] {
-    return stop_ || completedPresentOrdinal_ >= targetOrdinal;
+    return stop_ || presentOrdinalWaitsAborted_ ||
+           completedPresentOrdinal_ >= targetOrdinal;
   });
-  DXMT_ASSERT(stop_ || completedPresentOrdinal_ >= targetOrdinal);
+  DXMT_ASSERT(stop_ || presentOrdinalWaitsAborted_ ||
+              completedPresentOrdinal_ >= targetOrdinal);
   perf::countPresentOrdinalBoundaryWaitNs(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStarted).count()));
+}
+
+void CommandQueue::abortPresentOrdinalWaits() {
+  std::lock_guard lock(mutex_);
+  presentOrdinalWaitsAborted_ = true;
+  presentCompletedCv_.notify_all();
 }
 
 void CommandQueue::notePresentDequeued(std::uint64_t seqId) {

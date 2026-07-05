@@ -22,6 +22,7 @@ dxmt9_frontend_provider_srcs = files(
   'device_c_record_hazard.cpp',
   'device_c_record_replay.cpp',
   'device_c_record_validate.cpp',
+  'device_c_replay_offload.cpp',
   'device_c_resources.cpp',
   'device_c_shader_dump.cpp',
   'device_c_shader_vdecl.cpp',

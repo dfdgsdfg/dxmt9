@@ -1,9 +1,29 @@
 #include "device_c_provider.hpp"
+#include "device_c_replay_offload.hpp"
 
 #include <cstdint>
 #include <cstring>
 
 using namespace dxmt9::d3d9::devicec;
+
+// Out-of-line (rather than inline in the struct) so this teardown ordering
+// lives next to dxmt9c_device_release() below, which is D9CDevice's only
+// deletion site.
+//
+// Clean-shutdown ordering: drain any pending/in-flight chunk (waitDrained)
+// BEFORE stopping the worker, so queued replay work still runs against a
+// live `iface`/core device. stop() alone (also called from
+// ~ReplayOffloadWorker(), idempotently) would otherwise let the worker
+// thread race iface->Release() below.
+D9CDevice::~D9CDevice() {
+  if (replayOffload) {
+    replayOffload->queue().waitDrained();
+    replayOffload->stop();
+  }
+  if (iface) {
+    iface->Release();
+  }
+}
 
 namespace {
 

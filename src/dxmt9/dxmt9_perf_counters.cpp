@@ -1630,6 +1630,17 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkReplayCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuNs{0};
   std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuMaxNs{0};
+  // Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY).
+  std::atomic<std::uint64_t> commitChunkRawEnqueueCpuNs{0};
+  std::atomic<std::uint64_t> commitChunkRawEnqueueCpuMaxNs{0};
+  std::atomic<std::uint64_t> offloadReplayCpuNs{0};
+  std::atomic<std::uint64_t> offloadReplayCpuMaxNs{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthSamples{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthTotal{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthMax{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthGt1{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthGt2{0};
+  std::atomic<std::uint64_t> offloadReplayQueueDepthGt4{0};
   std::atomic<std::uint64_t> completionEnqueueSamples{0};
   std::atomic<std::uint64_t> completionEnqueuePendingDepthMax{0};
   std::atomic<std::uint64_t> completionEnqueueWhileWaiting{0};
@@ -1954,6 +1965,8 @@ struct Counters {
   PercentileRing commitChunkHandleCpuRing;
   PercentileRing commitChunkReplayCpuRing;
   PercentileRing commitChunkDrawBatchSubmitCpuRing;
+  PercentileRing commitChunkRawEnqueueCpuRing;
+  PercentileRing offloadReplayCpuRing;
   PercentileRing commitChunkApplyDrawStateCpuRing;
   PercentileRing commitChunkDrawRunScanCpuRing;
   PercentileRing commitChunkDrawRunBuildCpuRing;
@@ -3891,6 +3904,23 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_batch_submit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.5},
     {"commit_chunk_draw_batch_submit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.95},
     {"commit_chunk_draw_batch_submit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.99},
+    // Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY).
+    {"commit_chunk_raw_enqueue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkRawEnqueueCpuNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_raw_enqueue_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkRawEnqueueCpuMaxNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_raw_enqueue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.5},
+    {"commit_chunk_raw_enqueue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.95},
+    {"commit_chunk_raw_enqueue_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.99},
+    {"offload_replay_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadReplayCpuNs, nullptr, nullptr, 0.0},
+    {"offload_replay_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadReplayCpuMaxNs, nullptr, nullptr, 0.0},
+    {"offload_replay_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::offloadReplayCpuRing, 0.5},
+    {"offload_replay_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::offloadReplayCpuRing, 0.95},
+    {"offload_replay_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::offloadReplayCpuRing, 0.99},
+    {"offload_replay_queue_depth_samples", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthSamples, nullptr, nullptr, 0.0},
+    {"offload_replay_queue_depth_total", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthTotal, nullptr, nullptr, 0.0},
+    {"offload_replay_queue_depth_max", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthMax, nullptr, nullptr, 0.0},
+    {"offload_replay_queue_depth_gt1", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt1, nullptr, nullptr, 0.0},
+    {"offload_replay_queue_depth_gt2", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt2, nullptr, nullptr, 0.0},
+    {"offload_replay_queue_depth_gt4", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt4, nullptr, nullptr, 0.0},
     {"completion_enqueue_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueSamples, nullptr, nullptr, 0.0},
     {"completion_enqueue_pending_depth_max", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueuePendingDepthMax, nullptr, nullptr, 0.0},
     {"completion_enqueue_while_waiting", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueWhileWaiting, nullptr, nullptr, 0.0},
@@ -9443,6 +9473,34 @@ void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds) {
   add(counters().commitChunkDrawBatchSubmitCpuNs, nanoseconds);
   updateMax(counters().commitChunkDrawBatchSubmitCpuMaxNs, nanoseconds);
   recordRing(counters().commitChunkDrawBatchSubmitCpuRing, nanoseconds);
+}
+
+void countCommitChunkRawEnqueueCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkRawEnqueueCpuNs, nanoseconds);
+  updateMax(counters().commitChunkRawEnqueueCpuMaxNs, nanoseconds);
+  recordRing(counters().commitChunkRawEnqueueCpuRing, nanoseconds);
+}
+
+void countOffloadReplayCpuTime(std::uint64_t nanoseconds) {
+  add(counters().offloadReplayCpuNs, nanoseconds);
+  updateMax(counters().offloadReplayCpuMaxNs, nanoseconds);
+  recordRing(counters().offloadReplayCpuRing, nanoseconds);
+}
+
+void countOffloadReplayQueueDepth(std::uint64_t depthBeforePush) {
+  auto& c = counters();
+  add(c.offloadReplayQueueDepthSamples);
+  add(c.offloadReplayQueueDepthTotal, depthBeforePush);
+  updateMax(c.offloadReplayQueueDepthMax, depthBeforePush);
+  if (depthBeforePush > 1) {
+    add(c.offloadReplayQueueDepthGt1);
+  }
+  if (depthBeforePush > 2) {
+    add(c.offloadReplayQueueDepthGt2);
+  }
+  if (depthBeforePush > 4) {
+    add(c.offloadReplayQueueDepthGt4);
+  }
 }
 
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
