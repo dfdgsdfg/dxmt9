@@ -3306,7 +3306,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     raw.recordBlob.assign(records, records + chunk->recordBytes);
     raw.recordCount = importedChunk.recordCount;
     raw.recordBytes = chunk->recordBytes;
-    raw.skipDrawResourceMarking = didBulkMarkResources;
+    // Deliberately NOT didBulkMarkResources: the synchronous bulk mark pins
+    // resources against nextSeqId_ observed on the app thread, but the worker
+    // publishes this chunk's draws into a later slot once it runs ahead. The
+    // worker's per-draw markDrawResources must therefore re-pin at the real
+    // append-time seqId, or a resource released in its final frame could be
+    // reclaimed/recycled before the deferred replay's GPU use completes. The
+    // sync bulk mark plus the wrapper addrefs still cover liveness up to the
+    // deferred replay itself.
+    raw.skipDrawResourceMarking = false;
     raw.bridgeCommitStart = bridgeCommitStart;
     raw.hasPresent = importedChunkHasPresentRecord(importedChunk);
     retainWrappersForOffload(importedChunk, raw);
