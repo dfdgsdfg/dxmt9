@@ -419,6 +419,28 @@ argbuf_populator_spec = executable(
 test('dxmt9-argbuf-populator-spec', argbuf_populator_spec,
      env: dxmt9_native_test_env)
 
+replay_offload_queue_spec = executable(
+  'dxmt9-replay-offload-queue-spec',
+  'replay_offload_queue_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-replay-offload-queue-spec', replay_offload_queue_spec,
+     env: dxmt9_native_test_env)
+
+present_ordinal_boundary_spec = executable(
+  'dxmt9-present-ordinal-boundary-spec',
+  'present_ordinal_boundary_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-present-ordinal-boundary-spec', present_ordinal_boundary_spec,
+     env: dxmt9_native_test_env)
+
 # Z1 audit item #2 — unix-side chunk-injection probe.
 # Constructs a wire-format chunk in memory and feeds it directly into
 # dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL
