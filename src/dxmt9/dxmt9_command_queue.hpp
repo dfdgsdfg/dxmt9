@@ -24,18 +24,21 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
+#include "dxmt9_presenter.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "dxmt9_transient_resource_arena.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -68,6 +71,53 @@ namespace render { class IRenderBackend; }
 // frame-latency through queue-owned present tokens.
 inline constexpr size_t kCommandChunkCount = 32;
 inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
+
+// App-side present-ordinal frame-latency target for the commit-replay
+// offload path (TLA+: PresentFrameLatency ordinal variant). Ordinals count
+// present-bearing commits 1,2,3...; the math is the exact shape of the
+// boundary seqId target so pacing stays order-isomorphic to the inline
+// present boundary.
+inline std::uint64_t presentOrdinalBoundaryTarget(std::uint64_t presentOrdinal,
+                                                  std::uint32_t maxFrameLatency) {
+  if (presentOrdinal == 0) {
+    return 0;
+  }
+  const std::uint64_t latency = std::clamp<std::uint64_t>(
+      maxFrameLatency, 1u, kMaxQueuedChunks);
+  if (presentOrdinal <= latency) {
+    return 0;
+  }
+  return presentOrdinal - latency;
+}
+
+// Pure planning step for waitPresentOrdinalBoundary: given the resolved
+// boundary policy, the present ordinal being committed, the effective
+// frame latency, and the previously stored deferred target, returns the
+// ordinal target to wait on NOW (0 = no wait) and the new stored deferred
+// target. Keeps the policy mapping unit-testable without a live queue
+// (TLA+: PresentFrameLatency ordinal variant).
+struct PresentOrdinalWaitPlan {
+  std::uint64_t waitTargetOrdinal = 0;
+  std::uint64_t storedDeferredTarget = 0;
+};
+
+inline PresentOrdinalWaitPlan planPresentOrdinalWait(
+    BoundaryPolicy policy, std::uint64_t presentOrdinal,
+    std::uint32_t maxFrameLatency, std::uint64_t storedDeferredTarget) {
+  if (policy == BoundaryPolicy::Disabled) {
+    return {0, storedDeferredTarget};
+  }
+  if (policy == BoundaryPolicy::DeferredPresentCompletion) {
+    const std::uint64_t nextTarget =
+        presentOrdinal == std::numeric_limits<std::uint64_t>::max()
+            ? presentOrdinalBoundaryTarget(presentOrdinal, maxFrameLatency)
+            : presentOrdinalBoundaryTarget(presentOrdinal + 1, maxFrameLatency);
+    return {storedDeferredTarget,
+            std::max(storedDeferredTarget, nextTarget)};
+  }
+  return {presentOrdinalBoundaryTarget(presentOrdinal, maxFrameLatency),
+          storedDeferredTarget};
+}
 
 class CommandQueue {
  public:
@@ -215,6 +265,12 @@ class CommandQueue {
   void presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void deferPresentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void drainDeferredPresentBoundary();
+  // Commit-replay offload present-ordinal boundary — mirrors presentBoundary
+  // / deferPresentBoundary but paces on completedPresentOrdinal_ (a count of
+  // retired presents) instead of a chunk seqId. Used by the PE-side offload
+  // path via dxmt9::Device::waitPresentOrdinalBoundary once submitPresent's
+  // own boundary is suppressed (DXMT9_OFFLOAD_COMMIT_REPLAY).
+  void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency);
   void submitFlush();
   core::HResult waitForVBlank();
 
@@ -433,6 +489,7 @@ class CommandQueue {
   //   presentDequeuedSeqId_       -> encode progress diagnostic lane
   //   completedPresentSeqQueue_   -> command-completed present tokens
   //   presentCompletedSeqId_      -> presentCompletedSeqId
+  //   completedPresentOrdinal_    -> completedPresentOrdinal (ordinal variant)
   //
   // These are raw-pointer-bound into queueLifecycle_ via bindSelfLifecycle.
   // Callers that need to read completedSeqId_ (e.g., DeviceImpl's
@@ -442,7 +499,9 @@ class CommandQueue {
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
+  std::uint64_t completedPresentOrdinal_ = 0;  // presents retired (offload ordinal wait)
   std::uint64_t deferredPresentBoundaryTargetSeqId_ = 0; // next-Present run-ahead boundary
+  std::uint64_t deferredPresentOrdinalTarget_ = 0;
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.

@@ -1813,6 +1813,10 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
              completedPresentSeqQueue->front() <= *completedSeqId) {
         *presentCompletedSeqId = std::max(*presentCompletedSeqId, completedPresentSeqQueue->front());
         completedPresentSeqQueue->pop_front();
+        if (submissionBinding_.completedPresentOrdinal) {
+          ++*submissionBinding_.completedPresentOrdinal;
+          perf::countCompletedPresentOrdinal();
+        }
       }
       // TLA+: PresentFrameLatency / PresentCompletionSafety.
       DXMT_ASSERT(*presentCompletedSeqId <= *completedSeqId);

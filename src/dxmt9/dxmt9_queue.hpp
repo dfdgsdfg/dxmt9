@@ -565,6 +565,7 @@ void traceQueueSlotsEvent(const char* event,
  * Variable mapping:
  *   presentCompletedSeqId     -> *SubmissionBinding::presentCompletedSeqId
  *   present completion queue  -> *SubmissionBinding::completedPresentSeqQueue
+ *   completedPresentOrdinal   -> *SubmissionBinding::completedPresentOrdinal (ordinal variant)
  *
  * Debug assertions in assertQueueLifecycleInvariants() and
  * assertPendingCompletionInvariantsLocked() are the executable binding for
@@ -582,6 +583,11 @@ class QueueLifecycleController {
     size_t* inflightCount = nullptr;
     u64* completedSeqId = nullptr;
     u64* presentCompletedSeqId = nullptr;
+    // Commit-replay offload ordinal (TLA+: PresentFrameLatency ordinal
+    // variant). Incremented once per present retired in drainCompletedSequence,
+    // alongside presentCompletedSeqId; nullptr in bindings that don't wire
+    // the offload path (e.g. the completion-sources spec).
+    u64* completedPresentOrdinal = nullptr;
     u64* lastCommittedSeqId = nullptr;
     std::span<ChunkSlot> slots;
     std::mutex* mutex = nullptr;

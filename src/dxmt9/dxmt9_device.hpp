@@ -224,6 +224,13 @@ class Device {
   virtual void submitColorFill(const core::ColorFillDesc&) {}
   virtual void submitDepthResolve(const core::DepthResolveDesc&) {}
   virtual void present(const core::SwapDesc&) {}
+  // Commit-replay offload present-ordinal boundary. `ordinal` counts
+  // present-bearing commits 1,2,3... from the caller's own tracking (not a
+  // queue seqId); paced through CommandQueue::waitPresentOrdinalBoundary
+  // using this device's maxFrameLatency. src/d3d9's offload path calls this
+  // instead of relying on submitPresent()'s inline boundary, which is
+  // suppressed under DXMT9_OFFLOAD_COMMIT_REPLAY.
+  virtual void waitPresentOrdinalBoundary(std::uint64_t) {}
   virtual void flush() {}
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
   virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }

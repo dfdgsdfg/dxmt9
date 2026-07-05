@@ -29,6 +29,21 @@
  *              OutstandingPresentBound, PresentQueueSafety,
  *              AppWaitReturnSafe
  *   Liveness - SubmittedPresentsEventuallyComplete, WaitEventuallyReturnsOrStops
+ *
+ * Ordinal variant (commit-replay offload):
+ *   The offload path (dxmt9::presentOrdinalBoundaryTarget /
+ *   CommandQueue::waitPresentOrdinalBoundary in dxmt9_command_queue.hpp/.cpp)
+ *   paces present frame-latency on a present ordinal (a count of
+ *   present-bearing commits) instead of the chunk seqId used by the inline
+ *   submitPresent() boundary above. completedPresentOrdinal models
+ *   completedPresentOrdinal_, advanced by the same PresentComplete action
+ *   that advances presentCompletedSeqId. CanAcceptPresentOrdinal /
+ *   PresentOrdinalWaitIsomorphism establish that the ordinal-side wait
+ *   admits exactly the same states as the existing seqId-side wait
+ *   (CanAcceptPresent) — the offload pacing is order-isomorphic to the
+ *   inline boundary, not merely equivalent-on-average.
+ *
+ *   Safety (ordinal) - PresentOrdinalCorrespondence, PresentOrdinalWaitIsomorphism
  *)
 
 EXTENDS Naturals, FiniteSets, Sequences
@@ -52,6 +67,7 @@ VARIABLES
   lastEncodedSeqId,      \* Nat - most recent chunk submitted to Metal
   completedSeqId,        \* Nat - most recent command-buffer completion
   presentCompletedSeqId, \* Nat - most recent completed present-bearing seq ID
+  completedPresentOrdinal, \* Nat - count of presents retired (ordinal variant)
   presentSubmitted,      \* SUBSET SeqIds - all accepted present-bearing chunks
   presentEncoded,        \* SUBSET SeqIds - presents whose chunk reached Metal
   presentOutstanding,    \* SUBSET SeqIds - accepted presents not yet completed
@@ -66,6 +82,7 @@ vars ==
      lastEncodedSeqId,
      completedSeqId,
      presentCompletedSeqId,
+     completedPresentOrdinal,
      presentSubmitted,
      presentEncoded,
      presentOutstanding,
@@ -93,6 +110,33 @@ CanAcceptPresent ==
   /\ currentSeqId <= MAX_SEQID
   /\ OutstandingPresentCount < MAX_FRAME_LATENCY
 
+(*
+ * PresentOrdinal
+ * The app-side present ordinal: a count of present-bearing chunks accepted
+ * so far (1,2,3... at each CommitPresent / CommitPendingPresent). This is
+ * the value dxmt9::presentOrdinalBoundaryTarget receives as `presentOrdinal`
+ * — a projection of presentSubmitted onto its own counting timeline, not
+ * the shared chunk-seqId timeline currentSeqId walks.
+ *)
+PresentOrdinal ==
+  Cardinality(presentSubmitted)
+
+(*
+ * CanAcceptPresentOrdinal
+ * Ordinal-side mirror of CanAcceptPresent: the gating condition the
+ * commit-replay offload's present-ordinal boundary wait
+ * (CommandQueue::waitPresentOrdinalBoundary) must observe if it is to be
+ * order-isomorphic with the existing seqId-based frame-latency wait.
+ * PresentOrdinal - completedPresentOrdinal counts presents that have been
+ * submitted but not yet retired, mirroring OutstandingPresentCount; the
+ * subtraction stays in Nat because PresentOrdinalCorrespondence proves
+ * completedPresentOrdinal <= PresentOrdinal at every reachable state.
+ *)
+CanAcceptPresentOrdinal ==
+  /\ ~stop
+  /\ currentSeqId <= MAX_SEQID
+  /\ (PresentOrdinal - completedPresentOrdinal) < MAX_FRAME_LATENCY
+
 (* ================================================================
    Initialization
    ================================================================ *)
@@ -103,6 +147,7 @@ Init ==
   /\ lastEncodedSeqId      = 0
   /\ completedSeqId        = 0
   /\ presentCompletedSeqId = 0
+  /\ completedPresentOrdinal = 0
   /\ presentSubmitted      = {}
   /\ presentEncoded        = {}
   /\ presentOutstanding    = {}
@@ -129,6 +174,7 @@ CommitNonPresent ==
   /\ UNCHANGED << lastEncodedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentSubmitted,
                   presentEncoded,
                   presentOutstanding,
@@ -154,6 +200,7 @@ CommitPresent ==
   /\ UNCHANGED << lastEncodedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentEncoded,
                   appState,
                   pendingPresent,
@@ -177,6 +224,7 @@ BeginPresentWait ==
                   lastEncodedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentSubmitted,
                   presentEncoded,
                   presentOutstanding,
@@ -202,6 +250,7 @@ CommitPendingPresent ==
   /\ UNCHANGED << lastEncodedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentEncoded,
                   stop >>
 
@@ -220,6 +269,7 @@ Stop ==
                   lastEncodedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentSubmitted,
                   presentEncoded,
                   presentOutstanding,
@@ -248,6 +298,7 @@ EncodeChunk ==
                   lastCommittedSeqId,
                   completedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentSubmitted,
                   presentOutstanding,
                   presentQueue,
@@ -268,6 +319,7 @@ CommandComplete ==
                   lastCommittedSeqId,
                   lastEncodedSeqId,
                   presentCompletedSeqId,
+                  completedPresentOrdinal,
                   presentSubmitted,
                   presentEncoded,
                   presentOutstanding,
@@ -280,6 +332,11 @@ CommandComplete ==
  * PresentComplete
  * Signals the oldest outstanding present token only after its command buffer
  * has completed. This is the frame-latency fence signal.
+ *
+ * Ordinal variant: this is also the single action that retires a present in
+ * ordinal terms, so completedPresentOrdinal advances by exactly one here —
+ * the same lockstep the C++ side keeps between presentCompletedSeqId_ and
+ * completedPresentOrdinal_ in drainCompletedSequence.
  *)
 PresentComplete ==
   /\ ~stop
@@ -290,6 +347,7 @@ PresentComplete ==
      /\ presentCompletedSeqId' = s
      /\ presentOutstanding'    = presentOutstanding \ {s}
      /\ presentQueue'          = Tail(presentQueue)
+  /\ completedPresentOrdinal' = completedPresentOrdinal + 1
   /\ UNCHANGED << currentSeqId,
                   lastCommittedSeqId,
                   lastEncodedSeqId,
@@ -340,6 +398,7 @@ TypeOK ==
   /\ lastEncodedSeqId \in SeqId0
   /\ completedSeqId \in SeqId0
   /\ presentCompletedSeqId \in SeqId0
+  /\ completedPresentOrdinal \in SeqId0
   /\ presentSubmitted \subseteq SeqIds
   /\ presentEncoded \subseteq SeqIds
   /\ presentOutstanding \subseteq SeqIds
@@ -382,12 +441,39 @@ PresentQueueSafety ==
   /\ StrictlyIncreasing(presentQueue)
   /\ \A s \in presentOutstanding : s > presentCompletedSeqId
 
+(*
+ * PresentOrdinalCorrespondence
+ * completedPresentOrdinal always counts exactly the retired presents (the
+ * complement of presentOutstanding within presentSubmitted), so
+ * PresentOrdinal - completedPresentOrdinal equals OutstandingPresentCount.
+ * This is what makes the Nat subtraction in CanAcceptPresentOrdinal safe and
+ * is the load-bearing lemma behind PresentOrdinalWaitIsomorphism below.
+ *)
+PresentOrdinalCorrespondence ==
+  /\ completedPresentOrdinal <= PresentOrdinal
+  /\ completedPresentOrdinal = Cardinality(presentSubmitted \ presentOutstanding)
+  /\ PresentOrdinal - completedPresentOrdinal = OutstandingPresentCount
+
+(*
+ * PresentOrdinalWaitIsomorphism
+ * The commit-replay offload's present-ordinal boundary wait
+ * (dxmt9::presentOrdinalBoundaryTarget / CommandQueue::waitPresentOrdinalBoundary)
+ * must admit exactly the same set of states as the existing seqId-based
+ * frame-latency wait (CanAcceptPresent) — the TLA+ binding for "the offload
+ * pacing is order-isomorphic to the inline boundary" documented on
+ * presentOrdinalBoundaryTarget in dxmt9_command_queue.hpp.
+ *)
+PresentOrdinalWaitIsomorphism ==
+  CanAcceptPresentOrdinal = CanAcceptPresent
+
 Safety ==
   /\ TypeOK
   /\ SeqTimelineSafety
   /\ PresentCompletionSafety
   /\ OutstandingPresentBound
   /\ PresentQueueSafety
+  /\ PresentOrdinalCorrespondence
+  /\ PresentOrdinalWaitIsomorphism
 
 (* ================================================================
    Temporal safety properties

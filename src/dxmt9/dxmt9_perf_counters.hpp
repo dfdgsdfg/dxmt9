@@ -1267,6 +1267,16 @@ void countPresentBoundarySkipped();
 void countPresentBoundaryDeferred();
 void countPresentBoundaryDeferredWait();
 void countPresentBoundaryWait(std::uint64_t nanoseconds);
+// Commit-replay offload present-ordinal boundary (TLA+: PresentFrameLatency
+// ordinal variant). Split into two calls (unlike countPresentBoundaryWait)
+// to match CommandQueue::waitPresentOrdinalBoundary's pre-wait/post-wait
+// call sites.
+void countPresentOrdinalBoundaryWait();
+void countPresentOrdinalBoundaryWaitNs(std::uint64_t nanoseconds);
+// Incremented once per present retired in drainCompletedSequence, alongside
+// presentCompletedSeqId — the ordinal counterpart consumed by
+// waitPresentOrdinalBoundary.
+void countCompletedPresentOrdinal();
 void countPresentEncoded();
 void countPresentSkipped();
 void countPresentFullscreen();

@@ -1838,6 +1838,9 @@ struct Counters {
   std::atomic<std::uint64_t> presentBoundaryWaits{0};
   std::atomic<std::uint64_t> presentBoundaryWaitNs{0};
   std::atomic<std::uint64_t> presentBoundaryWaitMaxNs{0};
+  std::atomic<std::uint64_t> presentOrdinalBoundaryWaits{0};
+  std::atomic<std::uint64_t> presentOrdinalBoundaryWaitNs{0};
+  std::atomic<std::uint64_t> completedPresentOrdinal{0};
   std::atomic<std::uint64_t> presentEncoded{0};
   std::atomic<std::uint64_t> presentSkipped{0};
   std::atomic<std::uint64_t> presentFullscreen{0};
@@ -4231,6 +4234,9 @@ constexpr CounterEntry kCounterTable[] = {
     {"present_boundary_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.5},
     {"present_boundary_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.95},
     {"present_boundary_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::presentBoundaryWaitRing, 0.99},
+    {"present_ordinal_boundary_waits", CounterEntry::Kind::UnsignedCount, &Counters::presentOrdinalBoundaryWaits, nullptr, nullptr, 0.0},
+    {"present_ordinal_boundary_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::presentOrdinalBoundaryWaitNs, nullptr, nullptr, 0.0},
+    {"completed_present_ordinal", CounterEntry::Kind::UnsignedCount, &Counters::completedPresentOrdinal, nullptr, nullptr, 0.0},
     {"present_encoded", CounterEntry::Kind::UnsignedCount, &Counters::presentEncoded, nullptr, nullptr, 0.0},
     {"present_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentSkipped, nullptr, nullptr, 0.0},
     {"present_full", CounterEntry::Kind::UnsignedCount, &Counters::presentFullscreen, nullptr, nullptr, 0.0},
@@ -10002,6 +10008,18 @@ void countPresentBoundaryWait(std::uint64_t nanoseconds) {
   add(counters().presentBoundaryWaitNs, nanoseconds);
   updateMax(counters().presentBoundaryWaitMaxNs, nanoseconds);
   recordRing(counters().presentBoundaryWaitRing, nanoseconds);
+}
+
+void countPresentOrdinalBoundaryWait() {
+  add(counters().presentOrdinalBoundaryWaits);
+}
+
+void countPresentOrdinalBoundaryWaitNs(std::uint64_t nanoseconds) {
+  add(counters().presentOrdinalBoundaryWaitNs, nanoseconds);
+}
+
+void countCompletedPresentOrdinal() {
+  add(counters().completedPresentOrdinal);
 }
 
 void countPresentEncoded() {

@@ -2644,6 +2644,20 @@ bool shouldApplyPresentBoundary(const core::SwapDesc&) {
   return resolveBoundaryPolicyFromEnv() != BoundaryPolicy::Disabled;
 }
 
+// DXMT9_OFFLOAD_COMMIT_REPLAY — the commit-replay offload path paces
+// present frame-latency itself via CommandQueue::waitPresentOrdinalBoundary
+// from the PE side, keyed on a present ordinal instead of a queue seqId.
+// When enabled, submitPresent() must not also drain/apply the inline
+// seqId-based boundary below, or the two mechanisms would double-wait on
+// the same present token.
+bool offloadCommitReplayEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+  }();
+  return enabled;
+}
+
 std::uint64_t presentBoundaryTargetSeqId(std::uint64_t presentSeqId,
                                          std::uint32_t maxFrameLatency) {
   if (presentSeqId == 0) {
@@ -3887,7 +3901,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   perf::countSubmitPresent();
   PerfScope scope(perf::countSubmitPresentCpuTime);
   const BoundaryPolicy boundaryPolicy = resolveBoundaryPolicyFromEnv();
-  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+  if (!offloadCommitReplayEnabled() && boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     drainDeferredPresentBoundary();
   }
@@ -4002,7 +4016,13 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     }
   }
 
-  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+  if (offloadCommitReplayEnabled()) {
+    // The commit-replay offload path paces itself through
+    // dxmt9::Device::waitPresentOrdinalBoundary from the PE side; skip the
+    // inline seqId-based boundary here so the two mechanisms don't
+    // double-wait on the same present token.
+    perf::countPresentBoundarySkipped();
+  } else if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     perf::countPresentBoundaryApplied();
     deferPresentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
   } else if (shouldApplyPresentBoundary(queuedDesc)) {
@@ -4110,6 +4130,42 @@ void CommandQueue::drainDeferredPresentBoundary() {
   }
   perf::countPresentBoundaryWait(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+}
+
+// Commit-replay offload present-ordinal boundary. Mirrors presentBoundary /
+// deferPresentBoundary above, but paces on completedPresentOrdinal_ (a count
+// of retired presents) rather than a chunk seqId, since the offload path's
+// caller (src/d3d9) tracks its own present ordinal instead of a queue seqId.
+// TLA+: PresentFrameLatency ordinal variant (WaitOrdinal /
+// PresentOrdinalWaitIsomorphism in PresentFrameLatency.tla).
+//
+// The policy/target mapping itself is the pure planPresentOrdinalWait()
+// (dxmt9_command_queue.hpp) so it is unit-testable without a live queue;
+// this method only owns the mutex + condition-variable mechanics.
+void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
+                                              std::uint32_t maxFrameLatency) {
+  const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
+  std::unique_lock lock(mutex_);
+  const PresentOrdinalWaitPlan plan = planPresentOrdinalWait(
+      policy, presentOrdinal, maxFrameLatency, deferredPresentOrdinalTarget_);
+  // Ordinals are produced by the single app-thread commit path (strictly
+  // increasing), so the stored deferred target only ever needs to move
+  // forward — no reset-to-0 case exists here, unlike a completion
+  // watermark that can be consumed and re-armed.
+  deferredPresentOrdinalTarget_ = plan.storedDeferredTarget;
+  const std::uint64_t targetOrdinal = plan.waitTargetOrdinal;
+  if (targetOrdinal == 0 || completedPresentOrdinal_ >= targetOrdinal) {
+    return;
+  }
+  perf::countPresentOrdinalBoundaryWait();
+  const auto waitStarted = std::chrono::steady_clock::now();
+  presentCompletedCv_.wait(lock, [&] {
+    return stop_ || completedPresentOrdinal_ >= targetOrdinal;
+  });
+  DXMT_ASSERT(stop_ || completedPresentOrdinal_ >= targetOrdinal);
+  perf::countPresentOrdinalBoundaryWaitNs(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - waitStarted).count()));
 }
 
 void CommandQueue::notePresentDequeued(std::uint64_t seqId) {
@@ -5028,6 +5084,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
       .presentCompletedSeqId = &presentCompletedSeqId_,
+      .completedPresentOrdinal = &completedPresentOrdinal_,
       .lastCommittedSeqId = &lastCommittedSeqId_,
       .slots = std::span<core::ChunkSlot>(slots_.data(), slots_.size()),
       .mutex = &mutex_,

@@ -305,6 +305,9 @@ class DeviceImpl final : public Device {
     };
     queue_.submitPresent(augmented);
   }
+  void waitPresentOrdinalBoundary(std::uint64_t ordinal) override {
+    queue_.waitPresentOrdinalBoundary(ordinal, maxFrameLatency_);
+  }
   void flush() override { queue_.submitFlush(); }
   core::HResult waitForVBlank(const core::SwapDesc&) override { return queue_.waitForVBlank(); }
   bool readbackSurface(const core::ReadbackDesc& desc, core::ReadbackPixels& pixels) override {
