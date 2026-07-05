@@ -3097,6 +3097,13 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     return commitChunkFail("offload-bad-wire-blob", 0xffffffffu,
                            static_cast<std::uint32_t>(wireBlob.status));
   }
+  // Reproduce the committing thread's wow64 client-call context: the
+  // pointer-decode helpers consult a thread_local depth, and without it the
+  // worker resolves unregistered 32-bit wire values as raw pointers.
+  std::optional<ScopedWow64ClientCall> wow64Scope;
+  if (chunk.wow64ClientCall) {
+    wow64Scope.emplace();
+  }
   const auto replayCpuStart = std::chrono::steady_clock::now();
   const int32_t hr = replayImportedChunk(d, wireBlob.chunk, chunk.skipDrawResourceMarking,
                                         chunk.bridgeCommitStart, replayStart);
@@ -3315,6 +3322,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     // sync bulk mark plus the wrapper addrefs still cover liveness up to the
     // deferred replay itself.
     raw.skipDrawResourceMarking = false;
+    raw.wow64ClientCall = requiresWow64PointerShadow();
     raw.bridgeCommitStart = bridgeCommitStart;
     raw.hasPresent = importedChunkHasPresentRecord(importedChunk);
     retainWrappersForOffload(importedChunk, raw);

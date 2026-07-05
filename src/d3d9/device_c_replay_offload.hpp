@@ -33,6 +33,13 @@ struct RawCommandChunk {
   uint32_t recordBytes = 0;
   bool hasPresent = false;
   bool skipDrawResourceMarking = false;
+  // Wow64 pointer-decode semantics are carried by a thread_local
+  // (g_wow64ClientCallDepth) on the committing app thread. The deferred
+  // replay must reproduce that context on the worker or wireValuePtr's
+  // final reinterpret_cast fallback treats unregistered 32-bit tokens as
+  // raw pointers (garbage vtable -> jump to 0, which wedges Wine's
+  // signal handling on a non-Wine thread).
+  bool wow64ClientCall = false;
   std::vector<RetainedWireHandle> retainedWrappers;
   std::chrono::steady_clock::time_point bridgeCommitStart{};
 };
