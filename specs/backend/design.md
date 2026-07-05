@@ -524,6 +524,36 @@ optimization exists only to create source availability for R-BACK-2.40 and
 R-BACK-2.43; it does not relax ordered completion, Present semantic boundaries,
 or the locality gates above.
 
+#### Commit-Replay Offload (opt-in)
+
+`DXMT9_OFFLOAD_COMMIT_REPLAY=1` moves the record-replay phase of
+`dxmt9c_device_commit_chunk` off the app thread onto a device-owned replay
+worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
+The contract:
+
+- The synchronous phase keeps wire header/range validation, handle generation
+  checks, and `markChunkResources`; the boundary is the existing
+  `noteCommitChunkReplayStartForCompletionGap()` marker. Everything after it
+  (record replay, draw-submission construction, publish) runs on the worker
+  via a bounded FIFO raw-chunk queue holding unix-owned copies of the wire
+  blob plus addref'd wrapper retention for every record-resolved object.
+- Present pacing re-anchors on the app thread: present-bearing commits wait a
+  present-ordinal frame-latency boundary
+  (`CommandQueue::waitPresentOrdinalBoundary`, pure mapping
+  `planPresentOrdinalWait`) that honors the resolved `BoundaryPolicy` and is
+  order-isomorphic to the inline present boundary (TLA
+  `PresentFrameLatency` ordinal variant, `PresentOrdinalWaitIsomorphism`).
+  `submitPresent` suppresses its inline boundary in offload mode; the worker
+  is never parked on pacing.
+- Direct (non-chunk) device calls drain the raw queue first (fence prologue in
+  the `device_c_bridge_*` wrapper layer), so server-state reads and releases
+  observe fully replayed state.
+- Replay failures fail-stop the worker (debug asserts; release poisons later
+  commits, releases retained wrappers of abandoned chunks, and aborts pending
+  ordinal waits). The historical per-record synchronous HRESULT
+  short-circuit of `commit_chunk` does not hold in offload mode.
+- With the flag unset the entire path is byte-identical to the inline replay.
+
 ```mermaid
 sequenceDiagram
   participant Q as Queue
