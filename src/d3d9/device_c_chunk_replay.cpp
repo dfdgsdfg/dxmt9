@@ -2030,183 +2030,12 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
                                          idxTypeFromD3D(packet.indexFormat), packet.stride);
 }
 
-}  // namespace
-
-extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
-  // V1 boundary B2 — wall-clock latency of one commit_chunk bridge call.
-  // This includes importer validation, handle/resource marking, record
-  // replay, and queue submission construction. It excludes asynchronous
-  // encode/GPU work after this call returns.
-  const auto bridgeCommitStart = std::chrono::steady_clock::now();
-  auto commitChunkStageStart = bridgeCommitStart;
-  if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
-    return commitChunkFail("bad-header");
-  }
-  if (peRecorderStatsEnabled()) {
-    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
-                      "unix_commit_chunk_entry device=%p native_tid=0x%llx "
-                      "pthread_self=0x%llx recordCount=%u recordBytes=%u "
-                      "handleCount=%u records=0x%llx handles=0x%llx",
-                      static_cast<void*>(d),
-                      static_cast<unsigned long long>(currentNativeThreadId()),
-                      static_cast<unsigned long long>(currentPthreadSelfBits()),
-                      chunk->recordCount, chunk->recordBytes, chunk->handleCount,
-                      static_cast<unsigned long long>(wireHandleValue(chunk->records)),
-                      static_cast<unsigned long long>(wireHandleValue(chunk->handles)));
-  }
-  if (auto* q = findDirtyQueue(d)) {
-    q->noteCommitChunkEntryForCompletionGap();
-  }
-  const auto* records = chunk->recordBytes != 0
-                            ? wireHandlePtr<const dxmt9::core::u8>(chunk->records)
-                            : nullptr;
-  if (!records && chunk->recordBytes != 0) {
-    return commitChunkFail("missing-records");
-  }
-
-  ImportedWireChunkView importedChunk{};
-  const auto wireBlob = makeImportedWireChunkBlobView(records, chunk->recordBytes);
-  if (!wireBlob.valid()) {
-    return commitChunkFail("bad-wire-blob", 0xffffffffu,
-                           static_cast<std::uint32_t>(wireBlob.status));
-  }
-  importedChunk = wireBlob.chunk;
-  if ((chunk->recordCount != 0 && importedChunk.recordCount != chunk->recordCount) ||
-      (chunk->handleCount != 0 && importedChunk.handleCount != chunk->handleCount)) {
-    return commitChunkFail("count-mismatch", importedChunk.recordCount,
-                           importedChunk.handleCount);
-  }
-
-  const auto validation = validateImportedWireChunk(importedChunk);
-  if (!validation.valid()) {
-    return commitChunkFail("validation", validation.failedRecordIndex,
-                           static_cast<std::uint32_t>(validation.status));
-  }
-  if (auto* q = findDirtyQueue(d)) {
-    q->noteCommitChunkRecordShapeForCompletionGap(
-        summarizeNoEnqueueCommitChunkRecordShape(importedChunk));
-  }
-  auto commitChunkStageEnd = std::chrono::steady_clock::now();
-  dxmt9::perf::countCommitChunkImportCpuTime(static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          commitChunkStageEnd - commitChunkStageStart).count()));
-  commitChunkStageStart = commitChunkStageEnd;
-
-  // Phase 4 / 18: validate and retain only handles selected by record
-  // handle ranges.
-  //
-  // The wire payload from PE carries the SERVER-SIDE D9C wrapper
-  // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
-  // not the backend's core::Handle. Decode each pointer to its
-  // underlying core::*::handle() value before handing the entry list
-  // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
-  // Surface,Buffer} on a wrapper-pointer-as-handle would never match
-  // and the bulk mark would silently be a no-op.
-  bool didBulkMarkResources = false;
-  if (importedChunk.handleCount > 0) {
-    // Cross-side generation check (wire-record bounds-checkable, per
-    // `agents/rules/codebase_conventions.rules.md`): when a producer
-    // stamped a non-NONE generation into the wire handle entry, decode
-    // the wrapper's current `core::Handle.value` and verify the stamped
-    // generation matches the encoded generation. A mismatch indicates a
-    // zombie / use-after-free wrapper pointer (the slot was released and
-    // re-used between PE record and unix import) and the chunk MUST be
-    // rejected before any record is dispatched. NONE-stamped entries are
-    // the legacy path; they pass through unchanged so the PE recorder's
-    // existing opaque-pointer encoding still imports.
-    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
-      const auto& entry = importedChunk.handles[i];
-      if (entry.generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
-        continue;
-      }
-      if (entry.opaqueHandle == 0) {
-        continue;
-      }
-      dxmt9::core::Handle resolved{};
-      switch (entry.kind) {
-      case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
-        auto* wrapper = wireValuePtr<D9CTexture>(entry.opaqueHandle);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case D9C_CHUNK_HANDLE_KIND_SURFACE: {
-        auto* wrapper = wireValuePtr<D9CSurface>(entry.opaqueHandle);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case D9C_CHUNK_HANDLE_KIND_BUFFER: {
-        auto* wrapper = wireValuePtr<D9CBuffer>(entry.opaqueHandle);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case D9C_CHUNK_HANDLE_KIND_SHADER:
-      case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-        // Shaders / vertex decls have no `core::Handle` representation
-        // on the server side; the producer must not stamp a non-NONE
-        // generation for these kinds. Treating any stamped value as a
-        // mismatch keeps the importer honest about the supported set.
-        return commitChunkFail("bad-handle-generation", i, entry.kind);
-      default:
-        return commitChunkFail("bad-handle-generation", i, entry.kind);
-      }
-      if (resolved.value == 0) {
-        // Wrapper resolved to a null core handle — the producer stamped
-        // a generation but the wrapper is no longer live. This is the
-        // exact zombie case the cross-side check is meant to catch.
-        return commitChunkFail("bad-handle-generation", i, entry.generation);
-      }
-      if (!d9c_command_chunk_wire_handle_generation_matches(
-              entry.generation, resolved.value)) {
-        return commitChunkFail("bad-handle-generation", i, entry.generation);
-      }
-    }
-    ImportedChunkHandleSet retainedWireHandles;
-    if (!collectImportedWireChunkHandles(importedChunk, retainedWireHandles)) {
-      return commitChunkFail("collect-handles");
-    }
-    const auto retainedEntries = makeImportedChunkHandleEntries(retainedWireHandles);
-
-    std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
-    coreEntries.reserve(retainedEntries.size());
-    for (const auto& handle : retainedEntries) {
-      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
-      const auto wirePtr = handle.handle;
-      if (wirePtr == 0) continue;
-      dxmt9::core::Handle resolved{};
-      switch (kind) {
-      case dxmt9::core::ChunkHandleKind::Texture: {
-        auto* wrapper = wireValuePtr<D9CTexture>(wirePtr);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case dxmt9::core::ChunkHandleKind::Surface: {
-        auto* wrapper = wireValuePtr<D9CSurface>(wirePtr);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case dxmt9::core::ChunkHandleKind::Buffer: {
-        auto* wrapper = wireValuePtr<D9CBuffer>(wirePtr);
-        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
-        break;
-      }
-      case dxmt9::core::ChunkHandleKind::Shader:
-      case dxmt9::core::ChunkHandleKind::VertexDecl:
-        // No pool retention table for shaders / vertex decls — skip.
-        break;
-      }
-      if (resolved.value == 0) continue;
-      coreEntries.push_back(dxmt9::core::ChunkHandleEntry{
-          .kind = kind,
-          .handle = resolved,
-      });
-    }
-    if (!coreEntries.empty()) {
-      if (auto upper = d->dev().upperDevice()) {
-        upper->markChunkResources(coreEntries);
-        didBulkMarkResources = true;
-      }
-    }
-  }
+int32_t replayImportedChunk(D9CDevice* d,
+                            const ImportedWireChunkView& importedChunk,
+                            bool skipDrawResourceMarking,
+                            std::chrono::steady_clock::time_point bridgeCommitStart,
+                            std::chrono::steady_clock::time_point replayStageStart) {
+  auto commitChunkStageStart = replayStageStart;
 
   // Phase 14: bulk markChunkResources has already pinned every resource
   // in this chunk against its seqId. Suppress the submitDrawRun
@@ -2220,17 +2049,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       if (upper) upper->setSkipDrawResourceMarking(false);
     }
   } resetGuard{};
-  if (didBulkMarkResources) {
+  if (skipDrawResourceMarking) {
     if (auto upper = d->dev().upperDevice()) {
       upper->setSkipDrawResourceMarking(true);
       resetGuard.upper = std::move(upper);
     }
   }
-  commitChunkStageEnd = std::chrono::steady_clock::now();
-  dxmt9::perf::countCommitChunkHandleCpuTime(static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          commitChunkStageEnd - commitChunkStageStart).count()));
-  commitChunkStageStart = commitChunkStageEnd;
   if (auto* q = findDirtyQueue(d)) {
     q->noteCommitChunkReplayStartForCompletionGap();
   }
@@ -2988,7 +2812,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (recordIndex != importedChunk.recordCount) {
     return commitChunkFail("truncated-records", recordIndex, importedChunk.recordCount);
   }
-  commitChunkStageEnd = std::chrono::steady_clock::now();
+  auto commitChunkStageEnd = std::chrono::steady_clock::now();
   const auto replayCpuNs = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           commitChunkStageEnd - commitChunkStageStart).count());
@@ -3010,6 +2834,193 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       std::chrono::duration_cast<std::chrono::nanoseconds>(bridgeCommitDelta)
           .count()));
   return dxmt9::core::D3D_OK;
+}
+
+}  // namespace
+
+extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChunk* chunk) {
+  // V1 boundary B2 — wall-clock latency of one commit_chunk bridge call.
+  // This includes importer validation, handle/resource marking, record
+  // replay, and queue submission construction. It excludes asynchronous
+  // encode/GPU work after this call returns.
+  const auto bridgeCommitStart = std::chrono::steady_clock::now();
+  auto commitChunkStageStart = bridgeCommitStart;
+  if (!d || !chunk || chunk->version != D9C_COMMAND_CHUNK_VERSION) {
+    return commitChunkFail("bad-header");
+  }
+  if (peRecorderStatsEnabled()) {
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                      "unix_commit_chunk_entry device=%p native_tid=0x%llx "
+                      "pthread_self=0x%llx recordCount=%u recordBytes=%u "
+                      "handleCount=%u records=0x%llx handles=0x%llx",
+                      static_cast<void*>(d),
+                      static_cast<unsigned long long>(currentNativeThreadId()),
+                      static_cast<unsigned long long>(currentPthreadSelfBits()),
+                      chunk->recordCount, chunk->recordBytes, chunk->handleCount,
+                      static_cast<unsigned long long>(wireHandleValue(chunk->records)),
+                      static_cast<unsigned long long>(wireHandleValue(chunk->handles)));
+  }
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkEntryForCompletionGap();
+  }
+  const auto* records = chunk->recordBytes != 0
+                            ? wireHandlePtr<const dxmt9::core::u8>(chunk->records)
+                            : nullptr;
+  if (!records && chunk->recordBytes != 0) {
+    return commitChunkFail("missing-records");
+  }
+
+  ImportedWireChunkView importedChunk{};
+  const auto wireBlob = makeImportedWireChunkBlobView(records, chunk->recordBytes);
+  if (!wireBlob.valid()) {
+    return commitChunkFail("bad-wire-blob", 0xffffffffu,
+                           static_cast<std::uint32_t>(wireBlob.status));
+  }
+  importedChunk = wireBlob.chunk;
+  if ((chunk->recordCount != 0 && importedChunk.recordCount != chunk->recordCount) ||
+      (chunk->handleCount != 0 && importedChunk.handleCount != chunk->handleCount)) {
+    return commitChunkFail("count-mismatch", importedChunk.recordCount,
+                           importedChunk.handleCount);
+  }
+
+  const auto validation = validateImportedWireChunk(importedChunk);
+  if (!validation.valid()) {
+    return commitChunkFail("validation", validation.failedRecordIndex,
+                           static_cast<std::uint32_t>(validation.status));
+  }
+  if (auto* q = findDirtyQueue(d)) {
+    q->noteCommitChunkRecordShapeForCompletionGap(
+        summarizeNoEnqueueCommitChunkRecordShape(importedChunk));
+  }
+  auto commitChunkStageEnd = std::chrono::steady_clock::now();
+  dxmt9::perf::countCommitChunkImportCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          commitChunkStageEnd - commitChunkStageStart).count()));
+  commitChunkStageStart = commitChunkStageEnd;
+
+  // Phase 4 / 18: validate and retain only handles selected by record
+  // handle ranges.
+  //
+  // The wire payload from PE carries the SERVER-SIDE D9C wrapper
+  // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
+  // not the backend's core::Handle. Decode each pointer to its
+  // underlying core::*::handle() value before handing the entry list
+  // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
+  // Surface,Buffer} on a wrapper-pointer-as-handle would never match
+  // and the bulk mark would silently be a no-op.
+  bool didBulkMarkResources = false;
+  if (importedChunk.handleCount > 0) {
+    // Cross-side generation check (wire-record bounds-checkable, per
+    // `agents/rules/codebase_conventions.rules.md`): when a producer
+    // stamped a non-NONE generation into the wire handle entry, decode
+    // the wrapper's current `core::Handle.value` and verify the stamped
+    // generation matches the encoded generation. A mismatch indicates a
+    // zombie / use-after-free wrapper pointer (the slot was released and
+    // re-used between PE record and unix import) and the chunk MUST be
+    // rejected before any record is dispatched. NONE-stamped entries are
+    // the legacy path; they pass through unchanged so the PE recorder's
+    // existing opaque-pointer encoding still imports.
+    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
+      const auto& entry = importedChunk.handles[i];
+      if (entry.generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
+        continue;
+      }
+      if (entry.opaqueHandle == 0) {
+        continue;
+      }
+      dxmt9::core::Handle resolved{};
+      switch (entry.kind) {
+      case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
+        auto* wrapper = wireValuePtr<D9CTexture>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_SURFACE: {
+        auto* wrapper = wireValuePtr<D9CSurface>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_BUFFER: {
+        auto* wrapper = wireValuePtr<D9CBuffer>(entry.opaqueHandle);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case D9C_CHUNK_HANDLE_KIND_SHADER:
+      case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+        // Shaders / vertex decls have no `core::Handle` representation
+        // on the server side; the producer must not stamp a non-NONE
+        // generation for these kinds. Treating any stamped value as a
+        // mismatch keeps the importer honest about the supported set.
+        return commitChunkFail("bad-handle-generation", i, entry.kind);
+      default:
+        return commitChunkFail("bad-handle-generation", i, entry.kind);
+      }
+      if (resolved.value == 0) {
+        // Wrapper resolved to a null core handle — the producer stamped
+        // a generation but the wrapper is no longer live. This is the
+        // exact zombie case the cross-side check is meant to catch.
+        return commitChunkFail("bad-handle-generation", i, entry.generation);
+      }
+      if (!d9c_command_chunk_wire_handle_generation_matches(
+              entry.generation, resolved.value)) {
+        return commitChunkFail("bad-handle-generation", i, entry.generation);
+      }
+    }
+    ImportedChunkHandleSet retainedWireHandles;
+    if (!collectImportedWireChunkHandles(importedChunk, retainedWireHandles)) {
+      return commitChunkFail("collect-handles");
+    }
+    const auto retainedEntries = makeImportedChunkHandleEntries(retainedWireHandles);
+
+    std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
+    coreEntries.reserve(retainedEntries.size());
+    for (const auto& handle : retainedEntries) {
+      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
+      const auto wirePtr = handle.handle;
+      if (wirePtr == 0) continue;
+      dxmt9::core::Handle resolved{};
+      switch (kind) {
+      case dxmt9::core::ChunkHandleKind::Texture: {
+        auto* wrapper = wireValuePtr<D9CTexture>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Surface: {
+        auto* wrapper = wireValuePtr<D9CSurface>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Buffer: {
+        auto* wrapper = wireValuePtr<D9CBuffer>(wirePtr);
+        if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
+        break;
+      }
+      case dxmt9::core::ChunkHandleKind::Shader:
+      case dxmt9::core::ChunkHandleKind::VertexDecl:
+        // No pool retention table for shaders / vertex decls — skip.
+        break;
+      }
+      if (resolved.value == 0) continue;
+      coreEntries.push_back(dxmt9::core::ChunkHandleEntry{
+          .kind = kind,
+          .handle = resolved,
+      });
+    }
+    if (!coreEntries.empty()) {
+      if (auto upper = d->dev().upperDevice()) {
+        upper->markChunkResources(coreEntries);
+        didBulkMarkResources = true;
+      }
+    }
+  }
+
+  commitChunkStageEnd = std::chrono::steady_clock::now();
+  dxmt9::perf::countCommitChunkHandleCpuTime(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          commitChunkStageEnd - commitChunkStageStart).count()));
+  commitChunkStageStart = commitChunkStageEnd;
+  return replayImportedChunk(d, importedChunk, didBulkMarkResources,
+                             bridgeCommitStart, commitChunkStageStart);
 }
 
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,
