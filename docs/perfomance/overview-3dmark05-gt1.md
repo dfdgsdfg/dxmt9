@@ -1997,6 +1997,15 @@ negative). Remaining residual before promotion: `bridge_commit_latency`
 by worker replay throughput (`9.333ms/present`), so worker replay cost and
 queue-bound tuning are the next levers, judged with a dedicated backpressure
 counter and time-aligned visual anchors.
+[[present-pacing-offload-backpressure-attribution.191]] then kills that
+residual hypothesis with dedicated counters: the app-thread commit wall is
+`offload_commit_app_cpu_ms=1.083ms/present` (the spec mechanism gate passes;
+`bridge_commit_latency` measures commit-to-replay pipeline latency under
+offload), `offload_push_backpressure_waits=0`, and the worker idles
+`44.792ms/present` starved by the producer. dxmt9's unix-side app-thread
+cost is now `~1.8%` of the frame; the offload lever is exhausted and the
+average-FPS frontier moves to PE-side recording cost (needs a
+non-perturbing measurement first) or the game's own CPU.
 
 Related CPU-side counter design doc: [[overview]].
 
