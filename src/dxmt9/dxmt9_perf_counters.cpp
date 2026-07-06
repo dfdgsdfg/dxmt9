@@ -1644,6 +1644,13 @@ struct Counters {
   // Drain-fence prologue (drainDeferredReplay).
   std::atomic<std::uint64_t> offloadDrainFenceWaits{0};
   std::atomic<std::uint64_t> offloadDrainFenceWaitNs{0};
+  // Offload backpressure attribution: app-thread commit wall (entry to
+  // offload-branch return, incl. push/ordinal waits), producer push waits
+  // against the bounded raw queue, and worker pop-idle time.
+  std::atomic<std::uint64_t> offloadCommitAppNs{0};
+  std::atomic<std::uint64_t> offloadPushBackpressureWaits{0};
+  std::atomic<std::uint64_t> offloadPushBackpressureWaitNs{0};
+  std::atomic<std::uint64_t> offloadWorkerIdleWaitNs{0};
   std::atomic<std::uint64_t> completionEnqueueSamples{0};
   std::atomic<std::uint64_t> completionEnqueuePendingDepthMax{0};
   std::atomic<std::uint64_t> completionEnqueueWhileWaiting{0};
@@ -3926,6 +3933,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"offload_replay_queue_depth_gt4", CounterEntry::Kind::UnsignedCount, &Counters::offloadReplayQueueDepthGt4, nullptr, nullptr, 0.0},
     {"offload_drain_fence_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadDrainFenceWaits, nullptr, nullptr, 0.0},
     {"offload_drain_fence_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadDrainFenceWaitNs, nullptr, nullptr, 0.0},
+    {"offload_commit_app_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadCommitAppNs, nullptr, nullptr, 0.0},
+    {"offload_push_backpressure_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadPushBackpressureWaits, nullptr, nullptr, 0.0},
+    {"offload_push_backpressure_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadPushBackpressureWaitNs, nullptr, nullptr, 0.0},
+    {"offload_worker_idle_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadWorkerIdleWaitNs, nullptr, nullptr, 0.0},
     {"completion_enqueue_samples", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueSamples, nullptr, nullptr, 0.0},
     {"completion_enqueue_pending_depth_max", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueuePendingDepthMax, nullptr, nullptr, 0.0},
     {"completion_enqueue_while_waiting", CounterEntry::Kind::UnsignedCount, &Counters::completionEnqueueWhileWaiting, nullptr, nullptr, 0.0},
@@ -9514,6 +9525,22 @@ void countOffloadDrainFenceWait() {
 
 void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds) {
   add(counters().offloadDrainFenceWaitNs, nanoseconds);
+}
+
+void countOffloadCommitAppCpuTime(std::uint64_t nanoseconds) {
+  add(counters().offloadCommitAppNs, nanoseconds);
+}
+
+void countOffloadPushBackpressureWait() {
+  add(counters().offloadPushBackpressureWaits);
+}
+
+void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds) {
+  add(counters().offloadPushBackpressureWaitNs, nanoseconds);
+}
+
+void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds) {
+  add(counters().offloadWorkerIdleWaitNs, nanoseconds);
 }
 
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,

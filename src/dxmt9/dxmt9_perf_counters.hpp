@@ -1193,6 +1193,12 @@ void countOffloadReplayQueueDepth(std::uint64_t depthBeforePush);
 // count-only-when-actually-waited convention.
 void countOffloadDrainFenceWait();
 void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds);
+// Offload backpressure attribution (count-only-when-actually-waited for the
+// push/idle pair; commit-app is the app thread's full offload-branch wall).
+void countOffloadCommitAppCpuTime(std::uint64_t nanoseconds);
+void countOffloadPushBackpressureWait();
+void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds);
+void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds);
 void countCompletionEnqueue(std::uint64_t pendingDepthAfterPush,
                             bool whileWaiting,
                             bool hasPresent);

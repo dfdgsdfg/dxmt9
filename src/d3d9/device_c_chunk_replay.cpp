@@ -3350,6 +3350,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         upper->waitPresentOrdinalBoundary(d->presentOrdinal);
       }
     }
+    // App-thread commit wall for the offload branch (validation/import +
+    // copy/retain/push incl. backpressure + ordinal wait). This — not
+    // bridge_commit_latency, which the deferred replay closes at
+    // worker-replay end and therefore measures commit->replay pipeline
+    // latency — is the producer-serial cost the offload is meant to shrink.
+    countDurationSince(bridgeCommitStart,
+                       dxmt9::perf::countOffloadCommitAppCpuTime);
     return dxmt9::core::D3D_OK;
   }
 

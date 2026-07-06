@@ -44,6 +44,18 @@ struct RawCommandChunk {
   std::chrono::steady_clock::time_point bridgeCommitStart{};
 };
 
+// Perf hooks (defined in device_c_replay_offload.cpp) — invoked only when a
+// wait actually occurred, so the uncontended queue paths stay a predicate
+// check with no counter traffic.
+void notePushBackpressureWait(std::uint64_t nanoseconds);
+void noteWorkerIdleWait(std::uint64_t nanoseconds);
+
+// Raw-queue bounds (read-once): DXMT9_OFFLOAD_QUEUE_CHUNKS (default 64) and
+// DXMT9_OFFLOAD_QUEUE_BYTES (default 8 MiB) — the backpressure tuning lever
+// for the offload scouts.
+std::size_t offloadQueueMaxChunks();
+std::size_t offloadQueueMaxBytes();
+
 // Single-consumer queue: exactly one ReplayOffloadWorker thread is expected
 // to call pop() / markReplayDone(); any number of producer threads may call
 // push() concurrently. `inFlight_` is a plain bool (not a counter) because
@@ -66,7 +78,7 @@ class ReplayOffloadQueue {
   // itself when push() refuses the chunk.
   bool push(RawCommandChunk&& chunk) {
     std::unique_lock lock(mutex_);
-    spaceCv_.wait(lock, [&] {
+    const auto admissible = [&] {
       // Oversized-chunk admission: a chunk bigger than maxBytes_ must still
       // be admitted once the queue is empty, or it could never be pushed
       // and would deadlock the producer forever. The count bound
@@ -74,7 +86,15 @@ class ReplayOffloadQueue {
       return stop_ || (queue_.size() < maxChunks_ &&
                        (queue_.empty() ||
                         queuedBytes_ + chunk.recordBytes <= maxBytes_));
-    });
+    };
+    if (!admissible()) {
+      // Producer backpressure: counted only when the bound actually blocks.
+      const auto waitStart = std::chrono::steady_clock::now();
+      spaceCv_.wait(lock, admissible);
+      notePushBackpressureWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - waitStart).count()));
+    }
     if (stop_) return false;  // chunk not touched -- see guarantee above.
     queuedBytes_ += chunk.recordBytes;
     queue_.push_back(std::move(chunk));
@@ -84,7 +104,14 @@ class ReplayOffloadQueue {
 
   bool pop(RawCommandChunk& out) {
     std::unique_lock lock(mutex_);
-    workCv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+    if (!stop_ && queue_.empty()) {
+      // Worker idle: counted only when the queue is actually empty.
+      const auto waitStart = std::chrono::steady_clock::now();
+      workCv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+      noteWorkerIdleWait(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - waitStart).count()));
+    }
     if (queue_.empty()) return false;  // stop_ with empty queue
     out = std::move(queue_.front());
     queue_.pop_front();
@@ -189,7 +216,7 @@ class ReplayOffloadWorker {
  public:
   // Queue bound: 64 chunks / 8 MiB ~= 2+ frames of GT1 chunks (about
   // 14 chunks/present, ~200 KB/present).
-  ReplayOffloadWorker() : queue_(64, 8u << 20) {}
+  ReplayOffloadWorker() : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()) {}
   ~ReplayOffloadWorker() { stop(); }
 
   ReplayOffloadWorker(const ReplayOffloadWorker&) = delete;

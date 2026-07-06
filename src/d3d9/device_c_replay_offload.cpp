@@ -57,6 +57,44 @@ bool offloadCommitReplayEnabled() {
   return enabled;
 }
 
+namespace {
+
+std::size_t offloadQueueSizeFromEnv(const char* name, std::size_t fallback) {
+  const char* value = std::getenv(name);
+  if (!value || value[0] == '\0') {
+    return fallback;
+  }
+  char* end = nullptr;
+  const unsigned long long parsed = std::strtoull(value, &end, 10);
+  if (end == value || parsed == 0ull) {
+    return fallback;
+  }
+  return static_cast<std::size_t>(parsed);
+}
+
+}  // namespace
+
+std::size_t offloadQueueMaxChunks() {
+  static const std::size_t chunks =
+      offloadQueueSizeFromEnv("DXMT9_OFFLOAD_QUEUE_CHUNKS", 64u);
+  return chunks;
+}
+
+std::size_t offloadQueueMaxBytes() {
+  static const std::size_t bytes =
+      offloadQueueSizeFromEnv("DXMT9_OFFLOAD_QUEUE_BYTES", 8u << 20);
+  return bytes;
+}
+
+void notePushBackpressureWait(std::uint64_t nanoseconds) {
+  dxmt9::perf::countOffloadPushBackpressureWait();
+  dxmt9::perf::countOffloadPushBackpressureWaitNs(nanoseconds);
+}
+
+void noteWorkerIdleWait(std::uint64_t nanoseconds) {
+  dxmt9::perf::countOffloadWorkerIdleWaitNs(nanoseconds);
+}
+
 void ReplayOffloadWorker::start(D9CDevice* device) {
   thread_ = std::thread([this, device] { run(device); });
 }
