@@ -1979,6 +1979,24 @@ H188 run-ahead window was a carrier phenomenon (H187's `32966.656ms` boundary
 wait), not a boundary one. Boundary-timing knobs are exhausted as isolated
 levers; the average-FPS owners are producer/replay serial-time reduction and a
 carrier that opens overlap without slowing the producer.
+[[present-pacing-commit-replay-offload.190]] then lands the first such
+producer-side win: `DXMT9_OFFLOAD_COMMIT_REPLAY=1` (raw-chunk queue + replay
+worker + present-ordinal pacing, `specs/backend/design.md` §Commit-Replay
+Offload) moves the `~8.5ms/present` commit replay off the app thread and gains
+`+10.9%` presents (`1800 -> 1996`) with errors at zero and CB/sub-CB flat.
+Three integration lessons rode along: the worker must carry the committing
+thread's wow64 client-call thread_local (else `wireValuePtr` reinterprets
+unregistered 32-bit wire values and jumps to 0, wedging Wine signal handling
+on a non-Wine thread); per-frame direct calls (`Begin/EndScene`) must not
+drain-fence (670 fences/478 presents serialized the pipeline to 12fps before
+the exemption); and frame-index captures are not same-scene across
+different-fps runs (the 22fps candidate reaches frame 912 at `t≈45s`, before
+the firefight burst — `frame001040` shows full effects, full-cbuf oracle
+negative). Remaining residual before promotion: `bridge_commit_latency`
+`12.967ms/present` is raw-queue push backpressure — the app is now throttled
+by worker replay throughput (`9.333ms/present`), so worker replay cost and
+queue-bound tuning are the next levers, judged with a dedicated backpressure
+counter and time-aligned visual anchors.
 
 Related CPU-side counter design doc: [[overview]].
 
