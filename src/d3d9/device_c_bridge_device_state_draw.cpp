@@ -41,13 +41,16 @@ extern "C" int32_t dxmt9c_device_present(D9CDevice* arg0, const D9CRect* src, co
   return dxmt9p_device_present(arg0, src, dst, destWindowOverride, dirtyRegion, flags);
 }
 
+// Scene markers are deliberately NOT drain-fenced: begin/endScene are pure
+// scene-flag toggles (core_state.cpp Device::beginScene/endScene) with no
+// replay-dependent reads, and they arrive once per frame — fencing them
+// forces a full pipeline drain every frame, which defeats the offload's
+// producer/worker overlap (measured 12 fps vs 16 fps baseline).
 extern "C" int32_t dxmt9c_device_begin_scene(D9CDevice* arg0) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_begin_scene(arg0);
 }
 
 extern "C" int32_t dxmt9c_device_end_scene(D9CDevice* arg0) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_end_scene(arg0);
 }
 
