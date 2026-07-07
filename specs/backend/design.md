@@ -529,7 +529,7 @@ or the locality gates above.
 `DXMT9_OFFLOAD_COMMIT_REPLAY=1` moves the record-replay phase of
 `dxmt9c_device_commit_chunk` off the app thread onto a device-owned replay
 worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
-The contract:
+The observable contract is `R-BACK-2.51`. The mechanics:
 
 - The synchronous phase keeps wire header/range validation, handle generation
   checks, and `markChunkResources`; the boundary is the existing

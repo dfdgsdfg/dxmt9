@@ -4133,43 +4133,44 @@ void CommandQueue::drainDeferredPresentBoundary() {
 }
 
 // Commit-replay offload present-ordinal boundary. Mirrors presentBoundary /
-// deferPresentBoundary above, but paces on completedPresentOrdinal_ (a count
-// of retired presents) rather than a chunk seqId, since the offload path's
-// caller (src/d3d9) tracks its own present ordinal instead of a queue seqId.
+// deferPresentBoundary above, but paces on
+// presentOrdinalGate_.completedOrdinal (a count of retired presents) rather
+// than a chunk seqId, since the offload path's caller (src/d3d9) tracks its
+// own present ordinal instead of a queue seqId.
 // TLA+: PresentFrameLatency ordinal variant (WaitOrdinal /
 // PresentOrdinalWaitIsomorphism in PresentFrameLatency.tla).
 //
 // The policy/target mapping itself is the pure planPresentOrdinalWait()
 // (dxmt9_command_queue.hpp) so it is unit-testable without a live queue;
-// this method only owns the mutex + condition-variable mechanics.
+// the wait-state mechanics themselves are the pure PresentOrdinalGate
+// (also dxmt9_command_queue.hpp, unit-tested by
+// present_ordinal_boundary_spec.cpp); this method only owns the mutex +
+// condition-variable mechanics around them.
 void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
                                               std::uint32_t maxFrameLatency) {
   const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
   std::unique_lock lock(mutex_);
   const PresentOrdinalWaitPlan plan = planPresentOrdinalWait(
-      policy, presentOrdinal, maxFrameLatency, deferredPresentOrdinalTarget_);
+      policy, presentOrdinal, maxFrameLatency, presentOrdinalGate_.deferredTarget);
   // Ordinals are produced by the single app-thread commit path (strictly
   // increasing), so the stored deferred target only ever needs to move
   // forward — no reset-to-0 case exists here, unlike a completion
   // watermark that can be consumed and re-armed.
-  deferredPresentOrdinalTarget_ = plan.storedDeferredTarget;
+  presentOrdinalGate_.deferredTarget = plan.storedDeferredTarget;
   const std::uint64_t targetOrdinal = plan.waitTargetOrdinal;
-  if (targetOrdinal == 0 || completedPresentOrdinal_ >= targetOrdinal ||
-      presentOrdinalWaitsAborted_) {
-    // presentOrdinalWaitsAborted_: a dead offload worker can never advance
-    // completedPresentOrdinal_ again (see abortPresentOrdinalWaits() doc),
-    // so return immediately instead of counting/starting a wait that would
+  if (!presentOrdinalGate_.needsWait(targetOrdinal)) {
+    // presentOrdinalGate_.aborted: a dead offload worker can never advance
+    // completedOrdinal again (see abortPresentOrdinalWaits() doc), so
+    // return immediately instead of counting/starting a wait that would
     // otherwise never be satisfied by real progress.
     return;
   }
   perf::countPresentOrdinalBoundaryWait();
   const auto waitStarted = std::chrono::steady_clock::now();
   presentCompletedCv_.wait(lock, [&] {
-    return stop_ || presentOrdinalWaitsAborted_ ||
-           completedPresentOrdinal_ >= targetOrdinal;
+    return presentOrdinalGate_.waitDone(targetOrdinal, stop_);
   });
-  DXMT_ASSERT(stop_ || presentOrdinalWaitsAborted_ ||
-              completedPresentOrdinal_ >= targetOrdinal);
+  DXMT_ASSERT(presentOrdinalGate_.waitDone(targetOrdinal, stop_));
   perf::countPresentOrdinalBoundaryWaitNs(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStarted).count()));
@@ -4177,7 +4178,7 @@ void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
 
 void CommandQueue::abortPresentOrdinalWaits() {
   std::lock_guard lock(mutex_);
-  presentOrdinalWaitsAborted_ = true;
+  presentOrdinalGate_.aborted = true;
   presentCompletedCv_.notify_all();
 }
 
@@ -5097,7 +5098,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .inflightCount = &inflightCount_,
       .completedSeqId = &completedSeqId_,
       .presentCompletedSeqId = &presentCompletedSeqId_,
-      .completedPresentOrdinal = &completedPresentOrdinal_,
+      .completedPresentOrdinal = &presentOrdinalGate_.completedOrdinal,
       .lastCommittedSeqId = &lastCommittedSeqId_,
       .slots = std::span<core::ChunkSlot>(slots_.data(), slots_.size()),
       .mutex = &mutex_,

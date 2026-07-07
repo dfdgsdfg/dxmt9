@@ -150,6 +150,12 @@ New counters (normal counter-table + callsite audit discipline):
 - `offload_replay_queue_depth` (+p50/p95 ring) — raw-queue backlog.
 - `present_ordinal_boundary_waits` / `present_ordinal_boundary_wait_ms`.
 - `offload_drain_fence_waits` / `offload_drain_fence_wait_ms`.
+- `offload_commit_app_cpu_ms` — app-thread offload-branch wall time (entry to
+  return), added by H191 to attribute the mechanism gate directly instead of
+  through `bridge_commit_latency`'s pipeline-latency reading.
+- `offload_push_backpressure_waits` / `offload_push_backpressure_wait_ms` —
+  counted only when the bounded raw-chunk queue actually blocks a push
+  (H191).
 
 ## Proof Protocol
 
@@ -158,10 +164,16 @@ Paired 120 s no-gputrace scouts on the same day/HEAD, identical flags except
 `scripts/tools/compare_3dmark05_p4_pair.py` (or a sibling mode):
 
 1. **FPS**: presents above baseline beyond the ±5% noise band.
-2. **Mechanism**: candidate `bridge_commit_latency` minus
-   `present_ordinal_boundary_wait_ms` ≤ 2 ms/present (raw handoff only) and
-   `offload_replay_cpu_ms` ≈ the removed replay time appearing on the encode
-   side.
+2. **Mechanism**: candidate `offload_commit_app_cpu_ms` ≤ 2 ms/present (raw
+   handoff only; measured `1.083`) and `offload_push_backpressure_waits` ≈ 0
+   (the bounded raw-chunk queue never throttles the app thread). `offload_replay_cpu_ms`
+   ≈ the removed replay time appearing on the worker side.
+   `bridge_commit_latency` is not the mechanism-gate counter: it measures
+   commit→replay pipeline latency under offload (queue residency until the
+   deferred replay closes it at worker-replay end), not app-thread blocking —
+   H190 read `12.97 ms/present` on that counter and H191's dedicated
+   attribution counters closed the gate against the correct app-thread cost
+   instead (H191/H193 evidence).
 3. **Locality (non-increase)**: CB, sub-CB, `render_pass_begin`, tile
    preservation per present — all at or below baseline (+2% slack).
 4. **Correctness**: `status=pass`, `gpu_command_buffer_errors=0`,

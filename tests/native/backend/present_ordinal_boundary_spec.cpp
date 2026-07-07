@@ -1,15 +1,23 @@
 // Pure spec for dxmt9::presentOrdinalBoundaryTarget — the app-side ordinal
 // frame-latency target used by the commit-replay offload path — and for
 // dxmt9::planPresentOrdinalWait, the pure policy/wait-target mapping that
-// CommandQueue::waitPresentOrdinalBoundary delegates to.
+// CommandQueue::waitPresentOrdinalBoundary delegates to. Also covers
+// dxmt9::PresentOrdinalGate — the extracted cv/flag mechanics consulted by
+// CommandQueue::waitPresentOrdinalBoundary / abortPresentOrdinalWaits (gap.md
+// offload row: no direct test previously existed for the abort mechanics).
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 struct TestFailure : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -118,6 +126,134 @@ void testPlannerDeferredUint64MaxSaturates() {
   check(plan.storedDeferredTarget != 0,
         "sanity: target(kMax, latency=1) is a large nonzero value, not the overflow-wrapped 0 case");
 }
+
+// --- PresentOrdinalGate: needsWait/waitDone truth tables ------------------
+
+void testGateNeedsWaitTruthTable() {
+  using dxmt9::PresentOrdinalGate;
+  PresentOrdinalGate gate;
+
+  // Zero target: never waits regardless of other state.
+  gate.completedOrdinal = 0;
+  gate.aborted = false;
+  check(!gate.needsWait(0), "needsWait(0) is always false");
+
+  // Satisfied: completedOrdinal already reached the target.
+  gate.completedOrdinal = 5;
+  gate.aborted = false;
+  check(!gate.needsWait(5), "needsWait false when completedOrdinal == target");
+  check(!gate.needsWait(4), "needsWait false when completedOrdinal > target");
+
+  // Aborted: sticky release valve short-circuits even a pending target.
+  gate.completedOrdinal = 0;
+  gate.aborted = true;
+  check(!gate.needsWait(10), "needsWait false once aborted, even if pending");
+
+  // Pending: nonzero target, not aborted, not yet satisfied -> must wait.
+  gate.completedOrdinal = 3;
+  gate.aborted = false;
+  check(gate.needsWait(10), "needsWait true for a pending, non-aborted target");
+}
+
+void testGateWaitDoneTruthTable() {
+  using dxmt9::PresentOrdinalGate;
+  PresentOrdinalGate gate;
+
+  // Stopped: releases regardless of ordinal/abort state.
+  gate.completedOrdinal = 0;
+  gate.aborted = false;
+  check(gate.waitDone(10, /*stopped=*/true), "waitDone true when stopped");
+
+  // Aborted: releases even though the ordinal never reached target.
+  gate.completedOrdinal = 0;
+  gate.aborted = true;
+  check(gate.waitDone(10, /*stopped=*/false), "waitDone true when aborted");
+
+  // Satisfied: ordinal reached (or passed) target.
+  gate.completedOrdinal = 10;
+  gate.aborted = false;
+  check(gate.waitDone(10, /*stopped=*/false), "waitDone true when completedOrdinal >= target");
+  gate.completedOrdinal = 11;
+  check(gate.waitDone(10, /*stopped=*/false), "waitDone true when completedOrdinal > target");
+
+  // None of the above: still pending.
+  gate.completedOrdinal = 3;
+  gate.aborted = false;
+  check(!gate.waitDone(10, /*stopped=*/false), "waitDone false while pending and not stopped/aborted");
+}
+
+// --- PresentOrdinalGate: real cv release mechanics ------------------------
+//
+// Mirrors the release-build hang fix: a waiter parked on waitDone() as its
+// condition-variable predicate must be released either by advancing
+// completedOrdinal past the target, or by the sticky abort path (which is
+// what abortPresentOrdinalWaits() drives in production so a dead offload
+// worker can never leave an app thread parked forever).
+
+void testGateCvReleasedByAbort() {
+  using dxmt9::PresentOrdinalGate;
+  std::mutex mutex;
+  std::condition_variable cv;
+  PresentOrdinalGate gate;
+  gate.completedOrdinal = 0;
+  constexpr std::uint64_t kTarget = 100;
+
+  std::atomic<bool> waiting{false};
+  std::atomic<bool> released{false};
+  std::thread waiter([&] {
+    std::unique_lock lock(mutex);
+    waiting.store(true);
+    cv.wait(lock, [&] { return gate.waitDone(kTarget, /*stopped=*/false); });
+    released.store(true);
+  });
+
+  while (!waiting.load()) {
+    std::this_thread::yield();
+  }
+  // Give the waiter a chance to actually enter cv.wait() before releasing it.
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  check(!released.load(), "waiter must still be parked before abort is set");
+
+  {
+    std::lock_guard lock(mutex);
+    gate.aborted = true;
+  }
+  cv.notify_all();
+  waiter.join();
+  check(released.load(), "setting aborted + notify_all releases the cv waiter");
+}
+
+void testGateCvReleasedByAdvancingCompletedOrdinal() {
+  using dxmt9::PresentOrdinalGate;
+  std::mutex mutex;
+  std::condition_variable cv;
+  PresentOrdinalGate gate;
+  gate.completedOrdinal = 0;
+  constexpr std::uint64_t kTarget = 100;
+
+  std::atomic<bool> waiting{false};
+  std::atomic<bool> released{false};
+  std::thread waiter([&] {
+    std::unique_lock lock(mutex);
+    waiting.store(true);
+    cv.wait(lock, [&] { return gate.waitDone(kTarget, /*stopped=*/false); });
+    released.store(true);
+  });
+
+  while (!waiting.load()) {
+    std::this_thread::yield();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  check(!released.load(), "waiter must still be parked before the ordinal reaches target");
+
+  {
+    std::lock_guard lock(mutex);
+    gate.completedOrdinal = kTarget;
+  }
+  cv.notify_all();
+  waiter.join();
+  check(released.load(), "advancing completedOrdinal to target + notify_all releases the cv waiter");
+}
 }  // namespace
 
 int main() {
@@ -130,6 +266,10 @@ int main() {
     testPlannerDeferredWaitsOnPreviouslyStoredTarget();
     testPlannerDeferredMonotonicMaxRetention();
     testPlannerDeferredUint64MaxSaturates();
+    testGateNeedsWaitTruthTable();
+    testGateWaitDoneTruthTable();
+    testGateCvReleasedByAbort();
+    testGateCvReleasedByAdvancingCompletedOrdinal();
   } catch (const TestFailure& e) {
     std::cerr << "present_ordinal_boundary_spec failed: " << e.what() << '\n';
     return 1;

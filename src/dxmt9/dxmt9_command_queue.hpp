@@ -119,6 +119,27 @@ inline PresentOrdinalWaitPlan planPresentOrdinalWait(
           storedDeferredTarget};
 }
 
+// Present-ordinal frame-latency gate for the commit-replay offload path.
+// Owns only the ordinal watermark, the sticky abort flag, and the deferred
+// target; the caller supplies the mutex/cv it shares with present
+// completion publication. Extracted so the wait/abort mechanics are
+// unit-testable without a live queue (gap.md offload row).
+struct PresentOrdinalGate {
+  std::uint64_t completedOrdinal = 0;
+  std::uint64_t deferredTarget = 0;
+  bool aborted = false;
+
+  // Returns true if the caller must wait on `cv` for `waitTarget` (already
+  // computed by planPresentOrdinalWait); encapsulates the abort/satisfied
+  // early-outs. Caller holds `lock`.
+  bool needsWait(std::uint64_t waitTarget) const {
+    return waitTarget != 0 && !aborted && completedOrdinal < waitTarget;
+  }
+  bool waitDone(std::uint64_t waitTarget, bool stopped) const {
+    return stopped || aborted || completedOrdinal >= waitTarget;
+  }
+};
+
 class CommandQueue {
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
@@ -266,15 +287,15 @@ class CommandQueue {
   void deferPresentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency);
   void drainDeferredPresentBoundary();
   // Commit-replay offload present-ordinal boundary — mirrors presentBoundary
-  // / deferPresentBoundary but paces on completedPresentOrdinal_ (a count of
-  // retired presents) instead of a chunk seqId. Used by the PE-side offload
-  // path via dxmt9::Device::waitPresentOrdinalBoundary once submitPresent's
-  // own boundary is suppressed (DXMT9_OFFLOAD_COMMIT_REPLAY).
+  // / deferPresentBoundary but paces on presentOrdinalGate_.completedOrdinal
+  // (a count of retired presents) instead of a chunk seqId. Used by the
+  // PE-side offload path via dxmt9::Device::waitPresentOrdinalBoundary once
+  // submitPresent's own boundary is suppressed (DXMT9_OFFLOAD_COMMIT_REPLAY).
   void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency);
   // Sticky abort for waitPresentOrdinalBoundary waiters. Set once by
   // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) when
-  // a deferred commit-replay failure means completedPresentOrdinal_ can
-  // never advance again -- without this, an app thread already blocked in
+  // a deferred commit-replay failure means presentOrdinalGate_.completedOrdinal
+  // can never advance again -- without this, an app thread already blocked in
   // waitPresentOrdinalBoundary (or one that arrives after the failure) would
   // wait forever in a release build, since DXMT_ASSERT does not abort
   // outside debug builds. Never cleared (there is no path back from a
@@ -498,7 +519,7 @@ class CommandQueue {
   //   presentDequeuedSeqId_       -> encode progress diagnostic lane
   //   completedPresentSeqQueue_   -> command-completed present tokens
   //   presentCompletedSeqId_      -> presentCompletedSeqId
-  //   completedPresentOrdinal_    -> completedPresentOrdinal (ordinal variant)
+  //   presentOrdinalGate_.completedOrdinal -> completedPresentOrdinal (ordinal variant)
   //
   // These are raw-pointer-bound into queueLifecycle_ via bindSelfLifecycle.
   // Callers that need to read completedSeqId_ (e.g., DeviceImpl's
@@ -508,13 +529,13 @@ class CommandQueue {
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
-  std::uint64_t completedPresentOrdinal_ = 0;  // presents retired (offload ordinal wait)
   std::uint64_t deferredPresentBoundaryTargetSeqId_ = 0; // next-Present run-ahead boundary
-  std::uint64_t deferredPresentOrdinalTarget_ = 0;
-  // Sticky, mutex_-guarded release valve for waitPresentOrdinalBoundary; see
-  // abortPresentOrdinalWaits() doc above. Guarded by mutex_ like the other
-  // present-ordinal state above it.
-  bool presentOrdinalWaitsAborted_ = false;
+  // Commit-replay offload present-ordinal frame-latency gate: owns the
+  // retired-present watermark, the deferred-policy target, and the sticky
+  // abort flag consulted by waitPresentOrdinalBoundary /
+  // abortPresentOrdinalWaits (see those methods' docs). Guarded by mutex_
+  // like the other present-ordinal state above it.
+  PresentOrdinalGate presentOrdinalGate_{};
 
   std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.

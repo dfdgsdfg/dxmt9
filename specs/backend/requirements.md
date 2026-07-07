@@ -411,6 +411,28 @@ increases or `completion_wait_without_enqueue_ms` decreases). Runtime FPS or
 Xcode-counter evidence must not be promoted until the visual gate and the
 R-BACK-2.48 locality gates pass.
 
+**R-BACK-2.51** *(Commit-replay offload contract.)* The opt-in commit-replay
+offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`) must (a) keep wire header/range
+validation, import, and handle-marking synchronous on the app thread before
+any record is handed off; (b) preserve record order by draining the
+raw-chunk queue through a single FIFO replay worker, never reordering or
+parallelizing replay across chunks; (c) pace present-bearing commits with a
+present-ordinal frame-latency boundary
+(`CommandQueue::waitPresentOrdinalBoundary`) that honors the resolved
+`BoundaryPolicy` and stays order-isomorphic to the inline present boundary;
+(d) drain all deferred replay work before any direct (non-chunk) device call
+observes or mutates unix-side state; (e) fail-stop on a deferred replay
+failure — poisoning later commits and aborting pending present-ordinal
+waits — without synthesizing a per-record HRESULT for a chunk that failed
+after its synchronous validation phase already returned success; and (f)
+remain byte-identical to the inline (non-offload) replay path when the flag
+is unset. See `specs/backend/design.md` §Commit-Replay Offload for the
+architecture. Verified by `dxmt9-replay-offload-queue-spec` (raw-queue
+FIFO/bound/drain-fence rules), `dxmt9-present-ordinal-boundary-spec`
+(ordinal target math, planner policy mapping, and the `PresentOrdinalGate`
+wait/abort mechanics), and the `PresentFrameLatency.tla` ordinal-variant
+invariants (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`.
+
 ---
 
 ## 3. Pipeline State Objects
