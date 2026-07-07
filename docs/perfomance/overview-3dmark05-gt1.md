@@ -2006,6 +2006,15 @@ offload), `offload_push_backpressure_waits=0`, and the worker idles
 cost is now `~1.8%` of the frame; the offload lever is exhausted and the
 average-FPS frontier moves to PE-side recording cost (needs a
 non-perturbing measurement first) or the game's own CPU.
+[[present-pacing-pe-cost-verification.192]] then verifies the PE cost with an
+overhead-corrected stats pair: the stats mode itself perturbs `34%`
+(`~1.5µs` per timed scope × `~20,400` scopes/present under wow64/Rosetta),
+and the corrected PE recording cost is `~10±3ms/present` (15-20% of the
+frame) — real and attackable. The const chain is the top reducible item
+(`constFlush ~4.3ms` true, `4206` one-register `SetVertexShaderConstantF`
+calls collapsing into `645` flush records per present); half of the PE cost
+is worth `~+8-10%` FPS, and the remaining `~45-48ms/frame` is the game's
+own Rosetta-translated CPU plus Wine thunking.
 
 Related CPU-side counter design doc: [[overview]].
 
