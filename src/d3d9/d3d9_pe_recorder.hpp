@@ -888,6 +888,19 @@ public:
         return hr;
     }
 
+    // Const records (SET_VS_CONST_F..SET_PS_CONST_B, device_c.h:642-659)
+    // carry no object references by construction: they are raw
+    // float/int/bool register arrays with no wrapper handles anywhere in
+    // their payload. retainRecordPayloadObjects/collectRecordPayloadWireHandles
+    // (default cases below) and collectAppendTimeExtraWireHandles (default
+    // case, d3d9_pe_device.cpp) already no-op for these types today, so
+    // skipping the pipeline for them changes no behavior. Extending this
+    // list requires proving the new record type never references wrappers.
+    static constexpr bool recordTypeIsHandleFree(std::uint32_t type) noexcept {
+        return type >= D9C_COMMAND_RECORD_SET_VS_CONST_F &&
+               type <= D9C_COMMAND_RECORD_SET_PS_CONST_B;
+    }
+
     template<typename WriteFn, typename AppendExtraFn, typename FlushFn>
     HRESULT appendRecordDirect(std::uint32_t type,
                                std::size_t bytes,
@@ -919,6 +932,21 @@ public:
         wireRecord.payloadSize = static_cast<std::uint32_t>(bytes);
         wireRecord.firstHandle = 0;
         wireRecord.handleCount = 0;
+
+        if (recordTypeIsHandleFree(type)) {
+            // Same firstHandle/handleCount the general path below would
+            // produce here (no handles are ever appended for these types),
+            // just without the retain/collect/extra-handle call overhead.
+            wireRecord.firstHandle =
+                static_cast<std::uint32_t>(chunk_.handleArena.size());
+            chunk_.wireRecords.push_back(wireRecord);
+            ++chunk_.recordCount;
+            if (chunk_.recordCount >= maxRecords ||
+                chunk_.payloadArena.size() >= maxBytes) {
+                return flushForCapacity(PeRecorderFlushReason::CapacityPost);
+            }
+            return S_OK;
+        }
 
         D3D9PePendingCommandRetainer::Acquired acquired{};
         const auto firstHandle = chunk_.handleArena.size();

@@ -9118,6 +9118,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
+        // Hold the recorder lock across the const-flush + draw-record append
+        // pair: recorderMutex_ is recursive, so the nested per-append
+        // acquisitions below become cheap re-entries instead of repeated
+        // cold lock/unlock cycles on this hot path.
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         // Drain any accumulated const dirty ranges into chunk records FIRST,
         // so the chunk replays "consts → draw" in API order.
         const HRESULT constHr = flushPendingConsts();
@@ -9140,6 +9145,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                              UINT startIndex,
                                              UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
+        // See appendDrawPrimitiveRecord: recursive re-entry on an
+        // already-held recorderMutex_ is cheaper than the repeated cold
+        // acquisitions the nested const-flush + draw appends would do.
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitive record{};
@@ -9192,6 +9201,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                bool overrideVertexShaderNull = false,
                                                bool forceFullSnapshot = false) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
+        // See appendDrawPrimitiveRecord: recursive re-entry on an
+        // already-held recorderMutex_ is cheaper than the repeated cold
+        // acquisitions the nested const-flush + draw appends would do.
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawPrimitiveUP header{};
@@ -9290,6 +9303,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                       bool overrideVertexShaderNull = false,
                                                       bool forceFullSnapshot = false) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
+        // See appendDrawPrimitiveRecord: recursive re-entry on an
+        // already-held recorderMutex_ is cheaper than the repeated cold
+        // acquisitions the nested const-flush + draw appends would do.
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
         D9CCommandRecordDrawIndexedPrimitiveUP header{};
@@ -9512,18 +9529,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const std::int64_t flushEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
-        std::vector<std::pair<uint32_t, uint32_t>> runs;
-        if (dxmt9SplitSparseConstRecordsEnabled()) {
-            runs = collectConstDirtyRuns(shadow);
-        }
-        if (runs.empty()) {
-            runs.emplace_back(shadow.dirtyStart, shadow.dirtyEnd);
-        }
         HRESULT hr = S_OK;
         std::uint32_t flushedRecords = 0u;
         std::uint32_t flushedRegs = 0u;
-        for (const auto& [start, end] : runs) {
-            if (end <= start) continue;
+        // Emits one D9C_COMMAND_RECORD_SET_*_CONST_* record for [start, end)
+        // and updates the flush counters above; shared by both branches
+        // below so their per-run bodies stay byte-for-byte identical.
+        const auto emitRun = [&](uint32_t start, uint32_t end) {
+            if (end <= start) return;
             const uint32_t count = end - start;
             const auto* data =
                 shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
@@ -9540,7 +9553,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                          currentPixelShaderHash(),
                                          start, count, dirtyRegs, count);
             }
-            if (FAILED(hr)) break;
+        };
+        if (dxmt9SplitSparseConstRecordsEnabled()) {
+            // Diagnostic path: unchanged vector-of-runs logic.
+            std::vector<std::pair<uint32_t, uint32_t>> runs =
+                collectConstDirtyRuns(shadow);
+            if (runs.empty()) {
+                runs.emplace_back(shadow.dirtyStart, shadow.dirtyEnd);
+            }
+            for (const auto& [start, end] : runs) {
+                emitRun(start, end);
+                if (FAILED(hr)) break;
+            }
+        } else {
+            // Default path: the historical merged range is always exactly
+            // one run, so emit it directly without building a std::vector.
+            emitRun(shadow.dirtyStart, shadow.dirtyEnd);
         }
         recordPeConstFlushCpu(recordType, flushEntryNs, flushedRecords,
                               flushedRegs);
