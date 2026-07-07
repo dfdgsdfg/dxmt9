@@ -294,7 +294,8 @@ cleanup_tmp() {
 trap cleanup_tmp EXIT
 
 run_probe_dry_run() {
-  if ! env "${probe_env_args[@]}" bash "$wrapper" "${probe_args[@]}" --dry-run >"$dry_stdout" 2>"$dry_stderr"; then
+  # bash 3.2 + set -u rejects empty-array [@] expansion; guard with the + idiom.
+  if ! env ${probe_env_args[@]+"${probe_env_args[@]}"} bash "$wrapper" "${probe_args[@]}" --dry-run >"$dry_stdout" 2>"$dry_stderr"; then
     cat "$dry_stdout"
     cat "$dry_stderr" >&2
     fail "probe dry-run failed"
@@ -506,7 +507,7 @@ cleanup_children() {
 }
 trap 'status=$?; cleanup_children; cleanup_tmp; exit "$status"' EXIT INT TERM
 
-env "${probe_env_args[@]}" bash "$wrapper" "${probe_args[@]}" >"$wrapper_log" 2>&1 &
+env ${probe_env_args[@]+"${probe_env_args[@]}"} bash "$wrapper" "${probe_args[@]}" >"$wrapper_log" 2>&1 &
 wrapper_pid=$!
 printf 'system_trace_wrapper_pid: %s\n' "$wrapper_pid"
 
