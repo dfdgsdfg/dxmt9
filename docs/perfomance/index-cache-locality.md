@@ -44,6 +44,7 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | H23 | Current real-texture semantic replay summaries provide the missing final-writer oracle | rejected by gate | [[hidden-backend-storage-shape.20]] (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
 | H24 | Gate/class/primitive-shape telemetry can classify the remaining opaque-depth CPU side-effect before another Xcode spend | accepted; frame60 hot rows have `102/102` candidate gate-pass and `0` gate-fail, so the blocker is valid candidate construction/cache lookup, not hot-row failed-gate waste | [[index-cache-locality-cpucost.18]] |
 | H25 | The commit-replay offload absorbs the candidate/lookup CPU tax at FPS parity | accepted; with `DXMT9_OFFLOAD_COMMIT_REPLAY=1` the opt-in runs at `1999 -> 1980` presents (`-0.95%`, noise) while applying `333,283` reordered-buffer hits (`~168` draws/present, `67` buffers created) — the `~0.24ms/present` build/select/lookup cost lands on worker/encode threads with idle headroom, so the runtime promotion blocker is gone; remaining formal gate is a paired offload+opt-in `.gputrace` proof | [[index-cache-locality-offload-synergy.19]] |
+| H26 | The paired offload+opt-in `.gputrace` proof passes every promotion gate | accepted; frame60 finalizer verdict "all requested requirement gates were satisfied" vs the June baseline: target rows `60/0+60/1` GPU `-7.39%`, VS buffer write `-16.54%`, VS invocations `-14.12%` (identical to the historical proof), `175` candidate draws with miss32 `582,658 -> 450,807`; stable-frame, PSO-attribution, and coverage gates all pass, so the opt-in's evidence is complete — its default remains coupled to the offload because the CPU tax is only absorbed there | [[index-cache-locality-offload-promotion-proof.20]] |
 
 ## Verification methods
 
@@ -394,4 +395,6 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [[hidden-backend-storage-shape.20]] — automated final-writer replay gate;
   attaches the current real-texture semantic summaries and blocks this
   sample-visible locality set before Xcode.
+- [[index-cache-locality-offload-synergy.19]] — commit-replay offload absorbs the opt-in's CPU tax at FPS parity; runtime promotion blocker removed.
+- [[index-cache-locality-offload-promotion-proof.20]] — formal offload+opt-in promotion proof passed every gate (target GPU `-7.39%`, VS write `-16.54%`, VS invocations `-14.12%`).
 - [[overview-3dmark05-gt1]] — root priority DAG and synthesis (this is the accepted win it points to).
