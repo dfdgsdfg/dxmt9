@@ -2015,6 +2015,13 @@ frame) — real and attackable. The const chain is the top reducible item
 calls collapsing into `645` flush records per present); half of the PE cost
 is worth `~+8-10%` FPS, and the remaining `~45-48ms/frame` is the game's
 own Rosetta-translated CPU plus Wine thunking.
+The offload also unblocks the accepted GPU win:
+[[index-cache-locality-offload-synergy.19]] shows the opaque-depth
+index-cache opt-in at FPS parity under offload (`1999 -> 1980` presents,
+noise) while applying `333,283` reordered-buffer hits — the CPU tax that
+kept it off the `perf` default is absorbed by worker/encode idle headroom,
+leaving a paired offload+opt-in `.gputrace` proof as the last formal
+promotion gate.
 
 Related CPU-side counter design doc: [[overview]].
 
