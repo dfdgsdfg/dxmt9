@@ -2022,6 +2022,13 @@ noise) while applying `333,283` reordered-buffer hits — the CPU tax that
 kept it off the `perf` default is absorbed by worker/encode idle headroom,
 leaving a paired offload+opt-in `.gputrace` proof as the last formal
 promotion gate.
+[[present-pacing-pe-const-overhead-cut.193]] then tests H192's fixed-cost
+attribution directly: stripping the per-record machinery (handle-free
+append fast path, single-lock draw+flush batching, vector-free flush;
+byte-identical wire) moves nothing (`~+0.55%`, noise). The PE budget's
+low end is now suspect; before more PE work the cost needs a
+non-perturbing re-measurement, and the better-supported next move is
+consolidating the two proven opt-ins through their formal promotion gates.
 
 Related CPU-side counter design doc: [[overview]].
 
