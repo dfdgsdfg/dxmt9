@@ -4353,6 +4353,11 @@ env_args=(
   "DXMT_DISABLE_AUTO_EXPAND_INDEXED=1"
   "DXMT_3DMARK05_RESULT_FILE=$result_file"
   "DXMT_3DMARK05_LOG=$output_dir/3dmark05-direct.log"
+  # The shared perf experiment profile defaults the promoted offload+index-cache
+  # pair on (H195 promotion proof). This diagnostic wrapper stays explicit so
+  # documented probe recipes and A/B baselines keep their historical shape:
+  # off unless the caller exports the env or passes the wrapper opt-in flag.
+  "DXMT9_OFFLOAD_COMMIT_REPLAY=${DXMT9_OFFLOAD_COMMIT_REPLAY:-0}"
 )
 
 if (( encoder_breakdown_enabled )); then
@@ -4671,6 +4676,11 @@ fi
 
 if (( optimize_opaque_depth_index_cache )); then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1")
+else
+  # Pin against the perf-profile default (see the env_args comment above):
+  # without the wrapper opt-in flag, probes stay index-cache-off unless the
+  # caller exported the env explicitly.
+  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-0}")
 fi
 
 if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then

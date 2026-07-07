@@ -17,7 +17,7 @@ harnesses:
 | `DXMT_EXPERIMENT_WINE_DLLOVERRIDES` | Wine `WINEDLLOVERRIDES` snippet for the experiment harness |
 | `DXMT_EXPERIMENT_WINE_ID` | Select a Wine manifest entry for experiment runs |
 | `DXMT_EXPERIMENT_CX_BOTTLE` | Select a CrossOver bottle for experiment launchers |
-| `DXMT_EXPERIMENT_PROFILE` | Select the experiment runtime profile (`debug` / `perf`); `perf` selects the shared GT1 perf-path runtime defaults. Falls back to `DXMT_PROFILE`, then `debug` |
+| `DXMT_EXPERIMENT_PROFILE` | Select the experiment runtime profile (`debug` / `perf`); `perf` selects the shared GT1 perf-path runtime defaults, which since the H195 promotion proof include the `DXMT9_OFFLOAD_COMMIT_REPLAY=1` + `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` pair (caller env always overrides; `run_3dmark05_perf_probe.sh` pins both back to explicit values for probe reproducibility). Falls back to `DXMT_PROFILE`, then `debug` |
 | `DXMT_3DMARK05_DIRECT` | Use the direct-prefix 3DMark05 launcher path instead of the supervised `run_experiment.py` flow |
 | `DXMT_3DMARK05_LOG` | Log path for the direct 3DMark05 launcher path |
 | `DXMT_ASSERT` | Enable runtime assertions in experiment runs (also a log-failure marker scanned by mini-replay) |
