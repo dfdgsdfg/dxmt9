@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H212` - Post-cache producer re-sample (accepted attribution: guest blob `~36ms/present` is the wall, dxmt9-named producer cost down to `~3ms/present`; next owner is decimated PE stats to split game vs PE `d3d9.dll`).
+Latest tracked row: `H213` - Decimated PE stats size the recorder core at `~8.5ms/present` (`16-18%` of the producer wall; H212 resolved to the Plan-B side — the `~5.1-5.6ms/present` const chain gives an inline-const-delta wire change a `~+10%` FPS ceiling).
 
 ## Start Here
 
