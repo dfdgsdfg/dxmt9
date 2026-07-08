@@ -442,8 +442,11 @@ invariants (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`.
 
 **R-BACK-2.52** *(Inline const delta contract.)* The opt-in inline-const-delta
 wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first use) must
-(a) remain byte-identical on the wire and in replay behavior when the flag is
-unset; (b) when set, let `Draw*` records carry per-shadow merged
+(a) when the flag is unset, keep replay behavior identical, keep every
+pre-existing packet field at its pre-change offset, and append zero
+const-payload bytes (the fixed per-section `{valid,start,count}` header block
+is an additive tail whose cross-build safety clause (g) gates);
+(b) when set, let `Draw*` records carry per-shadow merged
 constant-delta sections (VS/PS × float/int/bool, each `{valid, startRegister,
 registerCount}` plus payload, mirroring the `D9CCommandRecordSetConst`
 element-size rules) instead of emitting standalone
