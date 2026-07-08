@@ -8,7 +8,7 @@ date: 2026-07-06
 type: no-gputrace
 status: accepted-offload-fps-win
 source: experiments/output/app-d3d9-3dmark05-replay-offload-baseline-r0c-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-candidate-r5b-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-candidate-r4-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-fullcbuf-diag-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-timephase-diag-20260706/result.json; traces/app-d3d9-3dmark05-replay-offload-baseline-r0c-20260706/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-replay-offload-candidate-r5b-20260706/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-replay-offload-timephase-diag-20260706/analysis/captures/frame001040.bmp; docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md
-related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-deferred-boundary-isolated.189.md; specs/backend/design.md
+related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-deferred-boundary-isolated.189.md; specs/backend/spec.md
 ---
 
 # Present-Pacing H190 - Commit-replay offload first runtime proof
@@ -18,7 +18,7 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 H189 closed pacing knobs as isolated levers: the GT1 wall is the
 producer/replay serial path (`commit_chunk` replay ~8.5 ms/present on the app
 thread). Does `DXMT9_OFFLOAD_COMMIT_REPLAY=1` (raw-chunk queue + device-owned
-replay worker + present-ordinal pacing, `specs/backend/design.md`
+replay worker + present-ordinal pacing, `specs/backend/spec.md`
 §Commit-Replay Offload) raise GT1 FPS on the real Wine/wow64 path?
 
 ## Runs

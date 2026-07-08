@@ -16,7 +16,7 @@ current `dxmt9` runtime.
 | `references/` | yes | Reference screenshots. |
 | `CATALOGUE.toml` | yes | Manifest of every experiment. |
 
-Spec: `specs/experiments/runtime/{requirements,design}.md`.
+Spec: `specs/experiments/runtime/{requirements,spec}.md`.
 
 Primary entrypoint:
 

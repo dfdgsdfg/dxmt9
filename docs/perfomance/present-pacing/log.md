@@ -2256,7 +2256,7 @@ levers; the average-FPS owners are producer/replay serial-time reduction and a
 carrier that opens overlap without slowing the producer.
 [present-pacing-commit-replay-offload.190](present-pacing-commit-replay-offload.190.md) then lands the first such
 producer-side win: `DXMT9_OFFLOAD_COMMIT_REPLAY=1` (raw-chunk queue + replay
-worker + present-ordinal pacing, `specs/backend/design.md` §Commit-Replay
+worker + present-ordinal pacing, `specs/backend/spec.md` §Commit-Replay
 Offload) moves the `~8.5ms/present` commit replay off the app thread and gains
 `+10.9%` presents (`1800 -> 1996`) with errors at zero and CB/sub-CB flat.
 Three integration lessons rode along: the worker must carry the committing

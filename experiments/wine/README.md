@@ -4,8 +4,8 @@ Operator workflow for the Wine root manifest used by wild experiments.
 
 - **Manifest:** `manifest.toml` (committed). Lists every Wine root the harness may use.
 - **Manifest schema:** `specs/experiments/assets/wine-manifest.schema.toml`.
-- **Runtime spec:** `specs/experiments/runtime/{requirements,design}.md`.
-- **macdrv symbol-bridge spec:** `specs/winemetal/{requirements,design}.md`. Authoritative for which Wine builds actually work and why.
+- **Runtime spec:** `specs/experiments/runtime/{requirements,spec}.md`.
+- **macdrv symbol-bridge spec:** `specs/winemetal/{requirements,spec}.md`. Authoritative for which Wine builds actually work and why.
 
 ## Recommended setup: Sikarugir pre-built Wine (path A)
 

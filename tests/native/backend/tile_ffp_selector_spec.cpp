@@ -1,7 +1,7 @@
 // R-BACK-13.1..13.6 — focused per-pass tile-FFP selector spec.
 //
 // Pure value-transform tests for selectTileFfpForPass(). Covers the
-// selection flow described in specs/backend/design.md §13.1:
+// selection flow described in specs/backend/spec.md §13.1:
 //   - !supportsApple3                      -> Portable, GpuFamily
 //   - PS not fixed-function                -> Portable, NotFfp
 //   - textured FFP                         -> Portable, UnsupportedState

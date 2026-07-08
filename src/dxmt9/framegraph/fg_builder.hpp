@@ -2,13 +2,13 @@
 
 // Frame Graph builder (Task B2, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §4 (Frame Graph Builder):
+// Spec: specs/d3d9-renderer/spec.md §4 (Frame Graph Builder):
 //   §4.1 chunk-record → builder action, §4.2 dependency edge inference,
 //   §4.3 determinism (R-BACK-32.2).
 //
 // SCOPE — L1 ONLY.
 //   A single forward pass over ONE already-imported `core::ChunkSlot`
-//   (design.md §2.1: ChunkSlot IS the spec's `ChunkView`) produces the
+//   (spec.md §2.1: ChunkSlot IS the spec's `ChunkView`) produces the
 //   `framegraph::FrameGraph` declared in fg_dag.hpp (B1). The graph references
 //   draws as lightweight `DrawRef`s into the source slot — no decoded
 //   geometry/binding payload is copied (deferred to the L2 DrawDescriptor).
@@ -20,7 +20,7 @@
 //   (color0..N + depth handles) — the same `AttachmentKey` the encoder splits
 //   on — plus clear / present / blit / readback command boundaries.
 //
-// DETERMINISM (R-BACK-32.2 / design.md §4.3).
+// DETERMINISM (R-BACK-32.2 / spec.md §4.3).
 //   Reads nothing but the supplied ChunkSlot — no clock, thread-id, or RNG.
 //   Building the same graph twice from the same slot yields byte-equal
 //   contents (asserted by fg_builder_spec.cpp).
@@ -36,7 +36,7 @@ namespace dxmt9::framegraph {
 // `slot` is borrowed for the duration of the call only; the returned graph
 // holds DrawRef indices into the slot's command/param SoA, NOT pointers into
 // it, so the graph outlives the borrow safely. `frame_id` is stamped onto the
-// graph (the slot carries a seqId, not a frame id; design.md §3.5 notes the
+// graph (the slot carries a seqId, not a frame id; spec.md §3.5 notes the
 // frame id is caller-supplied).
 FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id = 0);
 

@@ -2,11 +2,11 @@
 
 // Frame Graph optimizer pipeline (Tasks B3-B8, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §5 (Optimizer Pipeline) and
+// Spec: specs/d3d9-renderer/spec.md §5 (Optimizer Pipeline) and
 //   requirements.md R-BACK-32.5 (fixed pass order), R-BACK-33 (memoryless),
 //   R-BACK-34 (passcoalesce).
 //
-// Fixed pipeline order (R-BACK-32.5, design.md §5):
+// Fixed pipeline order (R-BACK-32.5, spec.md §5):
 //   lifetime -> passcoalesce -> memoryless -> dce -> reorder -> loadstore
 //
 // The ordering is load-bearing:
@@ -94,7 +94,7 @@ struct MemorylessObservation {
 };
 
 // ---------------------------------------------------------------------------
-// TransientAttachmentPool (design.md §5.3) — DEVICE-GATED.
+// TransientAttachmentPool (spec.md §5.3) — DEVICE-GATED.
 //
 // The pool hands out MTLStorageModeMemoryless alias textures. acquire() touches
 // the Metal device and therefore CANNOT run in the native (device-free) test

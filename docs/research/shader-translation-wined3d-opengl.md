@@ -97,7 +97,7 @@ The IR is a value type: instruction array + per-shader metadata
 (declarations, semantic table, used-constant range, sampler table, version,
 flags). It is not SSA or CFG-based; analysis is forward sweeps over the
 instruction array, the same shape as dxmt9's `SpirvModule` /
-`D3DDecodedInstruction` vector (`specs/d3d9/shader/design.md` §2).
+`D3DDecodedInstruction` vector (`specs/d3d9/shader/spec.md` §2).
 
 What wined3d records that is worth noting:
 
@@ -160,7 +160,7 @@ covers:
 - fog mode + vertex/pixel fog selection.
 
 The FFP key set in wined3d is the *same conceptual key set* that dxmt9
-documents at `specs/d3d9/shader/design.md` §3.1. The actual bit-packing
+documents at `specs/d3d9/shader/spec.md` §3.1. The actual bit-packing
 and field names differ.
 
 ---
@@ -183,7 +183,7 @@ up). Wined3d still injects a **position fixup**, because:
   with `1/w`; the VS converts them to clip space using viewport
   dimensions supplied via a uniform.
 
-For dxmt9 the equivalent decisions live in `specs/d3d9/shader/design.md`
+For dxmt9 the equivalent decisions live in `specs/d3d9/shader/spec.md`
 §3.2 (half-pixel) and §3.3 (V-axis policy). Both projects share the same
 structural decision: own the position fixup in the translator, don't
 hide it in the application's shader code.
@@ -208,7 +208,7 @@ at the end of the pixel shader, gated on
 combination produces a separately-keyed shader variant.
 
 dxmt9 does the same thing in MSL (`discard_fragment()` instead of
-`discard;`). See `specs/d3d9/shader/design.md` §3.4.
+`discard;`). See `specs/d3d9/shader/spec.md` §3.4.
 
 ### Fog
 
@@ -222,7 +222,7 @@ emitter:
 - handles fog colour and fog start/end through uniforms.
 
 The FFP key bits `fogMode`, `fogFromVertex`, and `rangeFog` are mirrored
-in dxmt9's FFP key (`design.md` §3.1).
+in dxmt9's FFP key (`spec.md` §3.1).
 
 ### Constants and Uniforms
 
@@ -337,7 +337,7 @@ old binaries are not loaded after a driver upgrade.
 dxmt9's `MTLBinaryArchive` plays the same role with similar lifecycle
 (`DXMT9_PREWARM`, `DXMT_DISABLE_SHADER_ARCHIVE` env knobs in
 `agents/rules/environment_variables.rules.md`). The hash composition
-described in `specs/d3d9/shader/design.md` §7 follows the same logic:
+described in `specs/d3d9/shader/spec.md` §7 follows the same logic:
 any change to the emitted code must change the key.
 
 ---
@@ -347,8 +347,8 @@ any change to the emitted code must change the key.
 | Wined3d pattern | dxmt9 equivalent |
 |---|---|
 | One decoded IR feeds multiple backends. | dxmt9's `SpirvModule` could similarly serve future targets. |
-| State-key shader variants instead of per-call shader patches. | dxmt9 cache key composition in `specs/d3d9/shader/design.md` §7. |
-| FFP key as a value type hashed into the program cache. | `FFPKeyVS` / `FFPKeyPS` in `specs/d3d9/shader/design.md` §3.1. |
+| State-key shader variants instead of per-call shader patches. | dxmt9 cache key composition in `specs/d3d9/shader/spec.md` §7. |
+| FFP key as a value type hashed into the program cache. | `FFPKeyVS` / `FFPKeyPS` in `specs/d3d9/shader/spec.md` §3.1. |
 | Translator-injected constant slot for position fixup, alpha ref, fog. | Same pattern in dxmt9 (constant slot for `(1/vpW, 1/vpH)` etc.). |
 | CS thread isolates shader compile latency. | dxmt9 unix importer / queue split. |
 | Disk-backed program binary cache keyed on translator + driver version. | `MTLBinaryArchive` with version-mixed hash. |
@@ -379,7 +379,7 @@ implementation code.
   because the GL driver compiles it. Metal also compiles MSL text, so
   dxmt9 emits text — but this is not the long-term ceiling. If a future
   refactor introduces an internal SSA / typed IR pass (e.g. for the FP16
-  precision pass in `specs/d3d9/shader/design.md` §4), it should be
+  precision pass in `specs/d3d9/shader/spec.md` §4), it should be
   driven by Metal-side observability, not by mimicking GLSL emission.
 
 ---
@@ -413,7 +413,7 @@ implement dxmt9's response.
   policy for SM 1.x? If yes, does it correlate with `_pp` hints, and
   does it produce a measurable register-pressure or varying-packing win
   on any host GL driver? (Relevant to dxmt9's FP16 hypothesis in
-  `specs/d3d9/shader/design.md` §4.)
+  `specs/d3d9/shader/spec.md` §4.)
 - How does wined3d handle the SM 1.x texture-stage register file (`t0`,
   `t1`, ...) under SM 1.4 dependent reads, and how does it interact with
   the GL sampler-object binding sweep?

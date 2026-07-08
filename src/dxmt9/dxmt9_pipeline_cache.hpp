@@ -525,7 +525,7 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
                                        std::optional<bool> forceTextureWhiteOverride = std::nullopt);
 
 // R-BACK-13.* — per-pass tile-shader FFP classifier/selector. Encapsulates
-// the selection flow described in design.md §13.1. Pure value transform; no
+// the selection flow described in spec.md §13.1. Pure value transform; no
 // Metal calls. Reads the pixel-key + alpha-test reference + A2C state from
 // `state` and combines with `supportsApple3`.
 //
@@ -536,7 +536,7 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
 //   4. classifyTileFfpEligibility() -> reason          -> Portable, reason
 //
 // `reason == None` implies the tile path is eligible/chosen.
-// `reason == GpuFamily` is recorded but design.md §13.3 does NOT bump
+// `reason == GpuFamily` is recorded but spec.md §13.3 does NOT bump
 // tileFfpFallbackByReason for it (it's not an "almost made it" case);
 // the encoder bumps the dedicated GpuFamily fallback counter.
 enum class TileFfpDecision : std::uint8_t { Tile, Portable };

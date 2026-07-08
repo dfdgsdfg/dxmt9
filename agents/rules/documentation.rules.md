@@ -99,7 +99,7 @@ bash scripts/check/verify_tla.sh
 | `AGENTS.md` | What local repository context should agents know before working? | Medium | Workspace or folder |
 | `agents/rules/*.rules.md` | What recurring project rule prevents future mistakes? | Long | Project-wide |
 | `specs/{area}/*.md` | What must dxmt9 do, and what design owns it? | Long | One subsystem or concern |
-| `specs/gap.md` | What is not implemented, partial, or newly accepted? | Active | Whole project |
+| `specs/gap.md` + `specs/<topic>/gap.md` | What is not implemented, partial, or newly accepted? | Active | Root rollup + topic owner |
 | `docs/perfomance/` | What performance bottleneck, experiment, evidence, and next gate is known? | Active | Performance model and experiment graph |
 
 Decision flow:
@@ -108,7 +108,9 @@ Decision flow:
 - Reusable rule, pitfall, or project convention: update `agents/rules/`.
 - Requirements, architecture, verification, or compatibility contract: update
   `specs/`.
-- Implementation status or missing evidence: update `specs/gap.md`.
+- Implementation status or missing evidence: update the owning
+  `specs/<topic>/gap.md`; update `specs/gap.md` only for root rollup or
+  navigation changes.
 - Performance bottleneck model, 3DMark05 GT1 experiment result, Xcode/gputrace
   proof, no-gputrace smoke, cleanup provenance, or next performance gate:
   update `docs/perfomance/`.

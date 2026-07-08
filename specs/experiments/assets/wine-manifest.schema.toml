@@ -2,7 +2,7 @@
 # Reference document — not a live manifest. The actual manifest at
 # experiments/wine/manifest.toml is hand-maintained per machine.
 #
-# Spec: specs/experiments/runtime/{requirements,design}.md §3.
+# Spec: specs/experiments/runtime/{requirements,spec}.md §3.
 #
 # Required fields per [[wine]] entry:
 #   id       — unique key, referenced from CATALOGUE.toml [[app]].wine_id.

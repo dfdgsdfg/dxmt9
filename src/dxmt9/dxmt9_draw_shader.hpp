@@ -32,7 +32,7 @@ struct ShaderSourceContext {
   // R-BACK-12.22..12.26 — when true, the FFP and DXBC->MSL emitters route
   // per-stage uniform reads through `ArgbufLayout` at slot 30 instead of
   // dedicated slots 0/3 and individual texture/sampler slots. The vertex
-  // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (design.md
+  // stream (slot 1) and `DrawVolatile` (slot 5) stay direct (spec.md
   // §11.4). This is set from `ShaderVariantKey::argbufHybridMode`.
   bool argbufHybridMode = false;
   // Stage 2b direct-cbuf ABI candidate. When set alongside

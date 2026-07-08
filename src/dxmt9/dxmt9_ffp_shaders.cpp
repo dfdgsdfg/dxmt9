@@ -597,7 +597,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
   // R-BACK-12.22..12.26 MSL routing — when argbufHybrid is set the entry
   // point takes a single argument buffer at slot 30 instead of dedicated
   // slots 0/3. Vertex stream stays at slot 1 and DrawVolatile at slot 5
-  // (design.md §11.4). Body code re-aliases `vsConsts`/`ffpVs` references
+  // (spec.md §11.4). Body code re-aliases `vsConsts`/`ffpVs` references
   // off the argbuf so the existing reads (e.g. `ffpVs.halfPixelFixup`,
   // `ffpVs.ffpWorldViewProj[0]`, helper calls taking
   // `constant FfpVsConsts&`) compile unchanged.

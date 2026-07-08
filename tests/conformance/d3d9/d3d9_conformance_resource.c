@@ -3911,7 +3911,7 @@ done_d3d9:
  * is also bindable as a shader resource — used by UE3/UE4-era titles
  * for depth-of-field and screen-space ambient occlusion. dxmt9 maps it
  * onto MTLPixelFormatDepth32Float with both ShaderRead + RenderTarget
- * usage. See specs/gap_d3d9.md §C.5.
+ * usage. See specs/d3d9/gap_d3d9.md §C.5.
  *
  * Behavioural oracle: Wine `dlls/wined3d/utils.c` registers
  * WINED3DFMT_INTZ with depth + texture-can-sample attributes, gated on

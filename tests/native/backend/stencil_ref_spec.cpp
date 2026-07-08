@@ -270,7 +270,7 @@ void testEncoderForwardsStencilRefTwoSided() {
 }
 
 // ---------------------------------------------------------------------------
-// D3DRS_TWOSIDEDSTENCILMODE (185) per-face stencil ops — gap_d3d9 B.10#7.
+// D3DRS_TWOSIDEDSTENCILMODE (185) per-face stencil ops — specs/d3d9/gap_d3d9.md B.10#7.
 //
 // D3D9 semantics: when D3DRS_TWOSIDEDSTENCILMODE is FALSE (default) back
 // faces use the SAME stencil ops as front (D3DRS_STENCILFAIL/ZFAIL/PASS/

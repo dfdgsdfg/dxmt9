@@ -7,7 +7,7 @@ title: Batch Carrier Is Not A Standalone Current Lever
 date: 2026-06-19
 type: code-audit
 status: rejected-standalone-lever
-source: experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-current-r1-20260618/result-perf-counter-comparison.md, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, specs/backend/design.md
+source: experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-current-r1-20260618/result-perf-counter-comparison.md, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, specs/backend/spec.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-current-code.73.md, docs/perfomance/present-pacing/present-pacing-noenqueue-compare-closure.80.md, docs/perfomance/present-pacing/present-pacing-ready-depth-compare.81.md
 ---
 

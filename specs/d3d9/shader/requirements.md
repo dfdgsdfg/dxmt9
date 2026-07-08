@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Shader IR and Translator Requirements"
+description: "D3D9 / Shader requirements and compatibility contracts."
+tags: [specs, d3d9, shader, requirements]
+---
+
 # Shader IR and Translator Requirements
 
 The dxmt9 shader translator turns D3D9 vertex and pixel shader bytecode (SM1.x /
@@ -91,7 +98,7 @@ produce a hash-keyed cache entry and must honour every semantic requirement in
 ## 2. Semantic Translation Contract
 
 This section consolidates D3D9 → Metal semantic rewrites that the translator
-owns. They were previously split between `specs/d3d9/design.md` §5 (FFP key),
+owns. They were previously split between `specs/d3d9/spec.md` §5 (FFP key),
 §7 (half-pixel offset), and §8 (alpha test); the translator must now treat
 them as a single coherent contract.
 
@@ -175,7 +182,7 @@ clamped against `0.0` / `1.0`, a `Half` output against `0.0h` / `1.0h`.
 
 This section is the shader-layer contract that backs the FP16 and VSOut-trim
 candidates. The rationale and rejected-hypothesis history are documented in
-`design.md` §8 (Performance-Driven Decisions Log).
+`spec.md` §8 (Performance-Driven Decisions Log).
 
 ### 3.1 Per-Register Precision
 
@@ -260,7 +267,7 @@ opt-in pass) to default-on MUST require all of the following:
   gate;
 - at least one Xcode encoder export shows
   `VS Buffer Device Memory Bytes Written` decreasing from off → on at the
-  3DMark05 GT1 baseline scale documented in `design.md` §8.1.
+  3DMark05 GT1 baseline scale documented in `spec.md` §8.1.
 
 Until every condition above is met, the opt-in MUST remain off in production
 builds. Promotion without measurable counter movement is forbidden — a
@@ -307,7 +314,7 @@ default emit. Removing any of these passes must fail an audit test.
 
 ### 4.3 Optional / Opt-In Passes
 
-**R-CORE-SHADER-4.6** Optional passes are tracked in `specs/gap.md` until their
+**R-CORE-SHADER-4.6** Optional passes are tracked in `specs/d3d9/gap.md` until their
 correctness oracle (§8) is green:
 
 - VSOut liveness (current opt-in: `DXMT9_TRIM_UNUSED_VARYINGS`).
@@ -571,5 +578,5 @@ cases at the SM boundary: a `ps_1_4` IR mutated to `ps_2_0` must lose the
 clamp, and the reverse must add it.
 
 **R-CORE-SHADER-8.11** A requirement in this document that is not yet fully
-implemented or not yet fully evidenced must have a row in `specs/gap.md`.
-TODOs must not be hidden inside `requirements.md` or `design.md`.
+implemented or not yet fully evidenced must have a row in `specs/d3d9/gap.md`.
+TODOs must not be hidden inside `requirements.md` or `spec.md`.

@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Capability Requirements (D3DCAPS9)"
+description: "D3D9 / Caps requirements and compatibility contracts."
+tags: [specs, d3d9, caps, requirements]
+---
+
 # Capability Requirements (D3DCAPS9)
 
 This document defines the normative `D3DCAPS9` contract for

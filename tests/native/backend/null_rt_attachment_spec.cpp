@@ -1,7 +1,7 @@
 // R-FORMAT-12 — D3DFMT_NULL depth-only (colorless) render-pass attachment
 // decisions.
 //
-// Spec: specs/d3d9/formats/{requirements,design}.md "NULL render target"
+// Spec: specs/d3d9/formats/{requirements,spec}.md "NULL render target"
 // note + R-FORMAT-12. Implementation under test:
 //   - encoders::renderPassAdmitsRt0      (begin-pass admission for a NULL RT0)
 //   - encoders::colorAttachmentIncluded  (per-slot color-attachment filter)

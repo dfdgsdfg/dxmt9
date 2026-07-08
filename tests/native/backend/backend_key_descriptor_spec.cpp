@@ -337,7 +337,7 @@ void testDepthStencilKeyReflectsDepthAndStencilState() {
   desc.rs.values[RS_STENCIL_CCW_ZFAIL] = static_cast<u32>(StencilOp::Invert);
   desc.rs.values[RS_STENCIL_CCW_PASS] = static_cast<u32>(StencilOp::Incr);
   // CCW ops are only honored on the back face when D3DRS_TWOSIDEDSTENCILMODE is
-  // enabled (gap_d3d9 B.10#7); without it, the back face mirrors the front.
+  // enabled (specs/d3d9/gap_d3d9.md B.10#7); without it, the back face mirrors the front.
   desc.rs.values[RS_TWO_SIDED_STENCIL_MODE] = 1u;
 
   const auto hot = makeFlatDrawStateRecord(desc);

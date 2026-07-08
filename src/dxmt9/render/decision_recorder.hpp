@@ -2,7 +2,7 @@
 
 // IDecisionRecorder — divergence-logging seam for the modern-renderer
 // transition (Task A9, R-BACK-39.3; cross-spec ownership noted in
-// specs/d3d9-renderer/design.md §15.4 and specs/backend/design.md §3.1).
+// specs/d3d9-renderer/spec.md §15.4 and specs/backend/spec.md §3.1).
 //
 // PURPOSE / SCOPE (L0 SCAFFOLD ONLY).
 //   R-BACK-39.3 requires a side-effect-neutral divergence logger behind

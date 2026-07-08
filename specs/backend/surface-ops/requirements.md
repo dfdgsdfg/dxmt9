@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Surface Operations Requirements"
+description: "Backend / Surface Ops requirements and compatibility contracts."
+tags: [specs, backend, surface-ops, requirements]
+---
+
 # Surface Operations Requirements
 
 Surface operations are non-draw D3D9 commands that copy, scale, fill, or read back

@@ -1,9 +1,16 @@
+---
+type: "Spec Requirements"
+title: "Format Requirements"
+description: "D3D9 / Formats requirements and compatibility contracts."
+tags: [specs, d3d9, formats, requirements]
+---
+
 # Format Requirements
 
 This document defines the normative D3D9 format support contract for
 `D3DFORMAT` classification, `CheckDeviceFormat()`, and format conversion checks.
 Concrete D3D-to-Metal mapping tables and data-layout notes live in
-`specs/d3d9/formats/design.md`.
+`specs/d3d9/formats/spec.md`.
 
 ## Classification Contract
 
@@ -41,7 +48,7 @@ and `D3DFMT_A8L8` combined with `D3DUSAGE_RENDERTARGET` return
 **R-FORMAT-5** If `CheckFormat` is Optional, dxmt9 must query device capability at
 init time and return `D3D_OK` only when the capability is confirmed.
 
-**R-FORMAT-6** Any format not listed in `specs/d3d9/formats/design.md` must return
+**R-FORMAT-6** Any format not listed in `specs/d3d9/formats/spec.md` must return
 `D3DERR_NOTAVAILABLE`.
 
 **R-FORMAT-7** The format classifier must be centralised. FOURCC and
@@ -66,7 +73,7 @@ receives data.
 These FOURCC values are not ordinary storage formats; they are command
 triggers or capability probes that D3D9 titles drive through the format
 and render-state surfaces. Concrete Metal mechanisms live in
-`specs/d3d9/formats/design.md` (§ Vendor Pseudo-Formats).
+`specs/d3d9/formats/spec.md` (§ Vendor Pseudo-Formats).
 
 **R-FORMAT-11** `D3DFMT_RESZ` (`MAKEFOURCC('R','E','S','Z')`) is an
 **Optional** *command* pseudo-format that resolves a multisampled depth

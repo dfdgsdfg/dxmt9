@@ -778,7 +778,7 @@ void testAlphaToCoverageRenderStateHack() {
 }
 
 void testSamplerLodBiasVariantBit() {
-  // D3DSAMP_MIPMAPLODBIAS PSO-variant gating (gap_d3d9 B.3): the variant key
+  // D3DSAMP_MIPMAPLODBIAS PSO-variant gating (specs/d3d9/gap_d3d9.md B.3): the variant key
   // carries a `samplerLodBias` bit driven by the single predicate
   // `anySamplerLodBiasNonzero`. It is true iff some active sampler stage's
   // SAMP_MIPMAP_LOD_BIAS bit-casts to a non-zero float. bias-on and bias-off

@@ -1075,14 +1075,14 @@ void countStage1Bytes(std::uint64_t bytes);
 //                          dxmt9 cannot lower (TANGENT=6, BINORMAL=7,
 //                          TESSFACTOR=8, FOG=11, DEPTH=12, SAMPLE=13).
 //                          Single category counter — per-code
-//                          inventory lives in specs/gap_d3d9.md §A.4.
+//                          inventory lives in specs/d3d9/gap_d3d9.md §A.4.
 //   * decl_method_unsupported: a vertex-declaration DCL method code
 //                          (D3DDECLMETHOD) is non-DEFAULT (PARTIALU=1,
 //                          PARTIALV=2, CROSSUV=3, UV=4, LOOKUP=5,
 //                          LOOKUPPRESAMPLED=6). dxmt9 only honors the
 //                          DEFAULT (0) read path; the rest require
 //                          tessellator stages with no Metal mapping.
-//                          See specs/gap_d3d9.md §A.5.
+//                          See specs/d3d9/gap_d3d9.md §A.5.
 void countShaderDecoderRejectTruncated();
 void countShaderDecoderRejectUnsupportedVersion();
 void countShaderDecoderRejectOobRegister();

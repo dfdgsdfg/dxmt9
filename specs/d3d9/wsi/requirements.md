@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Window System Integration Requirements"
+description: "D3D9 / WSI requirements and compatibility contracts."
+tags: [specs, d3d9, wsi, requirements]
+---
+
 # Window System Integration Requirements
 
 WSI maps the Win32 `HWND` supplied to D3D9 device and swap-chain creation onto a

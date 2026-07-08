@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Benchmarks Requirements"
+description: "Benchmarks requirements and compatibility contracts."
+tags: [specs, benchmarks, requirements]
+---
+
 # Benchmarks Requirements
 
 Benchmarks measure the performance of dxmt9 and compare it against reference

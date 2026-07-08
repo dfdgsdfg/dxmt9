@@ -190,7 +190,7 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 //
 // `lookaheadSlot` + `lookaheadStartIndex` (R-BACK-15.7/15.8): when non-null,
 // the encoder runs the depth/stencil DontCare-store proof described in
-// specs/backend/render-pass-actions/design.md section 4.2 and the narrower
+// specs/backend/render-pass-actions/spec.md section 4.2 and the narrower
 // color next-clear DontCare-store proof. Depth records the reason in
 // render_pass_depth_proof_* counters. Pass nullptr to keep the legacy
 // unconditional-Store behavior for callers without chunk records.
@@ -239,7 +239,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     RenderPassActionSummary* actionSummary = nullptr);
 
 // Depth/stencil DontCare-store look-ahead (R-BACK-15.7,
-// specs/backend/render-pass-actions/design.md section 4.2). Returns the
+// specs/backend/render-pass-actions/spec.md section 4.2). Returns the
 // specific proof result for the remaining records in `slot` after
 // `startCommandIndex`. Allow results mean DontCare-store is safe. Block
 // results explain why the encoder must Store instead.
@@ -424,7 +424,7 @@ bool encodeDraw(EncodeContext& ctx,
                  // while the Stage 2 PSO reads slot 30. Direct slot 0 / 3
                  // Stage 1 shadow binds are skipped in this mode.
                  // DrawVolatile (slot 5) and the vertex stream (slot 1)
-                 // are unchanged in either mode (design.md §11.2).
+                 // are unchanged in either mode (spec.md §11.2).
                  bool argbufHybridMode = false,
                  // R-BACK-12.22..12.26 (resource-array sub-mode) — when
                  // true (only ever alongside argbufHybridMode), the

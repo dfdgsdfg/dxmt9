@@ -1,4 +1,4 @@
-// gap_d3d9 §B.10#10 / §B.2 — FFP triadic texture-stage args.
+// specs/d3d9/gap_d3d9.md §B.10#10 / §B.2 — FFP triadic texture-stage args.
 //
 // Covers the third argument (`D3DTSS_COLORARG0` / `D3DTSS_ALPHAARG0`)
 // consumed by the triadic texture ops `D3DTOP_MULTIPLYADD` (25) and

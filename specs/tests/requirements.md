@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Tests Requirements"
+description: "Tests requirements and compatibility contracts."
+tags: [specs, tests, requirements]
+---
+
 # Tests Requirements
 
 Tests are controlled programs that validate specific aspects of the translation layer
@@ -102,11 +109,11 @@ feed explicit input records and assert exact output packets, ordering,
 resource-reference sets, bridge operation counts, and allocation behaviour
 without relying on Metal execution, timing, or Wine window state.
 
-**R-TEST-0.9** Test evidence status must be tracked in `specs/gap.md`, not in a
+**R-TEST-0.9** Test evidence status must be tracked in `specs/tests/gap.md`, not in a
 separate tests-only status inventory. Durable acceptance rules belong in this
-requirements document, implementation mechanics belong in `specs/tests/design.md`,
+requirements document, implementation mechanics belong in `specs/tests/spec.md`,
 and current evidence, remaining gaps, and next acceptance focus belong in
-`specs/gap.md`.
+`specs/tests/gap.md`.
 
 ---
 
@@ -639,7 +646,7 @@ third-party LGPL fixture.
 | `Capture()` / `Apply()` | invalid calls while recording, restore ordering, derived-cache invalidation, render-target interactions, shaders/constants, lights, transforms, render states, texture stage states, sampler states, textures, autogen-mipmap bits, vertex declarations/FVF, and stream/index bindings |
 
 **R-TEST-12.6** These conformance tests are allowed to fail during test-first
-implementation, but any failing case must be listed in `specs/gap.md` with the
+implementation, but any failing case must be listed in `specs/tests/gap.md` with the
 corresponding Wine source anchor and implementation owner area.
 
 **R-TEST-12.7** The conformance subset must not require Windows access

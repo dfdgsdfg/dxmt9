@@ -8,7 +8,7 @@ date: 2026-06-28
 type: no-gputrace
 status: diagnostic-safe-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-draw-continuation-boundary-r1-20260628/result.json, experiments/output/app-d3d9-3dmark05-encode-session-draw-continuation-boundary-r1-20260628/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-draw-continuation-boundary-r1-20260628/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-draw-continuation-boundary-r1-20260628/actual.png
-related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-active-entry-loss.177.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-active-entry-loss.177.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H178 - EncodeSession Draw-Continuation Source Publish

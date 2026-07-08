@@ -1542,7 +1542,7 @@ struct Counters {
   std::atomic<std::uint64_t> shaderDecoderRejectTempFloat16Unsupported{0};
   std::atomic<std::uint64_t> shaderDecoderRejectLabelUnsupported{0};
   // D3DDECLUSAGE / D3DDECLMETHOD safe-reject buckets — see
-  // specs/gap_d3d9.md §A.4 / §A.5. A category-level counter per side
+  // specs/d3d9/gap_d3d9.md §A.4 / §A.5. A category-level counter per side
   // keeps kCounterTable compact while still surfacing a real binary
   // that hits one of the unsupported codes.
   std::atomic<std::uint64_t> shaderDecoderRejectDeclUsageUnsupported{0};

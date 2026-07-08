@@ -1085,7 +1085,7 @@ void testIntzDepthSampleableFormatMapping() {
 }
 
 // D3DFMT_NULL — colorless render target (R-FORMAT-12,
-// specs/d3d9/formats/design.md "NULL render target"). Creating a NULL
+// specs/d3d9/formats/spec.md "NULL render target"). Creating a NULL
 // render-target surface must SUCCEED but allocate no GPU color backing; the
 // surface is flagged as a null render target so the backend render pass
 // can omit the color attachment. Lock/LockRect returns dummy CPU scratch per

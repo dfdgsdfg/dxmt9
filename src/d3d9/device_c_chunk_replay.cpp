@@ -283,7 +283,7 @@ void markDirtyFromDrawPacketState(dxmt9::CommandQueue* q,
   }
   if (packet.transformCount > 0) q->applyDirtyTransformChange();
   // Light slot/enable + material deltas share the FFP VS uniform
-  // block with transforms (design.md §10 — lights[8] sits next to
+  // block with transforms (spec.md §10 — lights[8] sits next to
   // worldViewMatrix); folded into the transforms-bit so the FFP VS
   // uniform block re-uploads.
   if (packet.lightSlotMask != 0 ||

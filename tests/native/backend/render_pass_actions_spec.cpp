@@ -1,6 +1,6 @@
 // R-BACK-15.16 — render-pass load/store action policy assertions.
 //
-// Spec: specs/backend/render-pass-actions/design.md sections 2 + 6.
+// Spec: specs/backend/render-pass-actions/spec.md sections 2 + 6.
 // Implementation under test:
 //   - encoders::depthStoreProofForLookahead / nextDepthOperationIsClear.
 //   - encoders::nextColorOperationIsClear.
@@ -14,7 +14,7 @@
 // device, so we mirror the spec's decision tree as a pure `applyColorPolicy`
 // transcription and assert the four ordered-precedence branches against
 // it. The transcription is a one-to-one copy of the rules in
-// design.md section 2.1; if the live encoder ever diverges, the integration
+// spec.md section 2.1; if the live encoder ever diverges, the integration
 // + counter coverage in G1/G3 picks up the regression in
 // dxmt9-allocation-counter-spec and the perf-counter histogram.
 //
@@ -183,7 +183,7 @@ void appendPresent(ChunkSlot& slot, Handle source) {
   slot.appendPresent(SwapDesc{}, source);
 }
 
-// One-to-one transcription of design.md section 2.1 (color load action
+// One-to-one transcription of spec.md section 2.1 (color load action
 // precedence). This mirrors the live `beginRenderPass` policy without
 // pulling in `WMTRenderPassInfo` / Metal device construction. Cases 1-2
 // in the requirements list assert against this transcription so the
@@ -211,7 +211,7 @@ void testDefaultsLoadAndStore() {
   // R-BACK-15.1 / R-BACK-15.2: a chunk with one DrawRun, no pending clear,
   // and the color attachment already in the per-CB touched set must
   // default to Load+Store. The decision-table transcription tracks the
-  // live encoder's precedence chain (see design.md section 2.1).
+  // live encoder's precedence chain (see spec.md section 2.1).
   ColorPolicyInputs in{};
   in.handleInTouchedSet = true;  // not first use → not DontCare-load
   checkEq(applyColorLoadPolicy(in), WMTLoadActionLoad,

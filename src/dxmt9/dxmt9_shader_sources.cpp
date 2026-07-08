@@ -585,7 +585,7 @@ std::string makeShaderPreludeArgbufHybrid(const ShaderPreludeOptions& options) {
   // entry-point binding shape.
   std::ostringstream out;
   out << makeShaderPrelude(options);
-  // ArgbufLayout mirrors the per-encoder argbuf shape (design.md §11.2).
+  // ArgbufLayout mirrors the per-encoder argbuf shape (spec.md §11.2).
   // [[id(N)]] attributes pin the descriptor indices so the host-side
   // MTLArgumentEncoder layout stays compatible across MSL versions.
   // The argbuf carries only the four per-frequency constant-buffer
@@ -626,7 +626,7 @@ std::string makeShaderPreludeArgbufResourceArray(const ShaderPreludeOptions& opt
   std::ostringstream out;
   out << makeShaderPrelude(options);
   // ArgbufLayout mirrors the per-encoder argbuf shape with texture/sampler
-  // arrays appended (design.md §11.2, resource-array sub-mode). [[id(N)]]
+  // arrays appended (spec.md §11.2, resource-array sub-mode). [[id(N)]]
   // attributes pin the descriptor indices so the host MTLArgumentEncoder
   // descriptor table (buildResourceArrayArgumentDescriptors) and the MSL
   // struct stay layout-compatible. The texture array is homogeneously typed

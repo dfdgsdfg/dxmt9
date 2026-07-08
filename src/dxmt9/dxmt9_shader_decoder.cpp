@@ -79,13 +79,13 @@ enum class DecoderRejectReason : u32 {
   // tokens for which dxmt9 has no Metal lowering. Without this reject
   // the decoder forwards the usage code unchanged and the binding loop
   // silently picks the first vertex-element match, misbinding the
-  // attribute. See specs/gap_d3d9.md §A.4.
+  // attribute. See specs/d3d9/gap_d3d9.md §A.4.
   DeclUsageUnsupported,
   // D3DDECLMETHOD values 1..6 (PARTIALU, PARTIALV, CROSSUV, UV, LOOKUP,
   // LOOKUPPRESAMPLED) require N-patch / displacement-map tessellator
   // stages that dxmt9 does not implement. Only DEFAULT (0) — a direct
   // per-vertex read at the given offset — is supported. See
-  // specs/gap_d3d9.md §A.5.
+  // specs/d3d9/gap_d3d9.md §A.5.
   DeclMethodUnsupported,
 };
 

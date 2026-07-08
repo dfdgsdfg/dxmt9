@@ -308,7 +308,7 @@ enum class Format : u32 {
   // 4x16-bit SIGNED normalized bump/color format. D3DFMT_Q16W16V16U16
   // (code 110). Mirrors the unsigned A16B16G16R16 but is backed by the
   // signed Metal pixel format MTLPixelFormatRGBA16Snorm. See
-  // specs/gap_d3d9.md §C.12 #7.
+  // specs/d3d9/gap_d3d9.md §C.12 #7.
   Q16W16V16U16,
   G16R16,
   A2R10G10B10,
@@ -343,7 +343,7 @@ enum class Format : u32 {
   D32F_LOCKABLE,
   // Lockable 32-bit depth. D3DFMT_D32_LOCKABLE (code 84). Metal has no
   // 32-bit-int depth pixel format, so this mirrors D32F_LOCKABLE onto
-  // MTLPixelFormatDepth32Float. See specs/gap_d3d9.md §C.12 #7.
+  // MTLPixelFormatDepth32Float. See specs/d3d9/gap_d3d9.md §C.12 #7.
   D32_LOCKABLE,
   D16_LOCKABLE,
   D15S1,
@@ -354,7 +354,7 @@ enum class Format : u32 {
   // texture that is also sampleable as a single-channel R32F-equivalent
   // shader resource. UE3/UE4-era titles depend on it for SSAO / DoF.
   // Backed by MTLPixelFormatDepth32Float; sampled returns depth in .r.
-  // See specs/gap_d3d9.md §C.5.
+  // See specs/d3d9/gap_d3d9.md §C.5.
   INTZ,
   // Vendor depth-as-texture pseudo-formats. FOURCC 'DF16' (0x36314644)
   // and 'DF24' (0x34324644). Like INTZ, these expose a depth-stencil
@@ -362,7 +362,7 @@ enum class Format : u32 {
   // shadow-mapping titles depend on them. DF16 is 16-bit depth (backed by
   // MTLPixelFormatDepth16Unorm); DF24 is 24-bit depth which has no direct
   // Metal equivalent, so it mirrors INTZ onto MTLPixelFormatDepth32Float.
-  // See specs/gap_d3d9.md §C.5.
+  // See specs/d3d9/gap_d3d9.md §C.5.
   DF16,
   DF24,
   // Vendor FOURCC pseudo-formats — classification only (the runtime
@@ -490,7 +490,7 @@ inline constexpr u32 RS_POINTSIZE_MAX = 166;
 // depth texture by writing this exact sentinel to D3DRS_POINTSIZE
 // (D3D9 code 154) while the multisampled depth surface is bound as a
 // texture. Any non-sentinel D3DRS_POINTSIZE write keeps its ordinary
-// point-size meaning. See specs/d3d9/formats/{requirements,design}.md.
+// point-size meaning. See specs/d3d9/formats/{requirements,spec}.md.
 inline constexpr u32 kReszDepthResolveSentinel = 0x7FA05000u;
 
 // Pure value transform: true iff this SetRenderState(key, value) write is the

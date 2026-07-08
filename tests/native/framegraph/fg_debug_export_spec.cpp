@@ -1,6 +1,6 @@
 // Pure-data spec for the Frame Graph DAG debug export (Task B10, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §3.5, requirements.md R-BACK-39.7.
+// Spec: specs/d3d9-renderer/spec.md §3.5, requirements.md R-BACK-39.7.
 //
 // Device-free: no Metal, no ChunkSlot encode. Builds a small hand FrameGraph
 // (like fg_dag_spec.cpp) including an A->B->A attachment re-entry, then asserts
@@ -58,7 +58,7 @@ std::size_t countOccurrences(const std::string& haystack,
 //   pass0 (Render rt0,ds), pass1 (Render other), pass2 (Render rt0,ds again).
 // rt0 is written by pass0, read by pass2 (the re-entry); edges carry rt0 and ds
 // from pass0 into pass2, so the re-entry shows as two edges sharing a later
-// consumer pass (design.md §3.5).
+// consumer pass (spec.md §3.5).
 FrameGraph buildReentrySample() {
   FrameGraph graph;
   graph.frame_id = 60;
@@ -138,7 +138,7 @@ void testJsonShape() {
   const FrameGraph graph = buildReentrySample();
   const std::string json = serializeDagJson(graph, 1422, "post-opt");
 
-  // Top-level framing keys (design.md §3.5).
+  // Top-level framing keys (spec.md §3.5).
   check(contains(json, "\"frame_id\": 60"), "json carries frame_id");
   check(contains(json, "\"chunk_seq_id\": 1422"), "json carries chunk_seq_id");
   check(contains(json, "\"stage\": \"post-opt\""), "json carries stage");

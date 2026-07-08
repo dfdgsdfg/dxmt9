@@ -7,7 +7,7 @@ title: Gate Stamp-Only Draw-Run State Elision
 date: 2026-06-14
 type: implementation
 status: implemented-cpu-micro-win-default-off
-source: src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_backend_types.hpp, include/dxmt9/core_snapshots.hpp, src/dxmt9/dxmt9_perf_counters.cpp, tests/native/backend/dod_replay_observer_spec.cpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_encoder.rules.md, specs/backend/design.md, specs/gap.md, experiments/output/app-d3d9-3dmark05-drawrun-genlane-baseline-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-drawrun-genlane-elide-r1-20260614/result.json, traces/app-d3d9-3dmark05-drawrun-genlane-elide-r1-20260614/analysis/frame60-perf-counter-comparison.md
+source: src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_backend_types.hpp, include/dxmt9/core_snapshots.hpp, src/dxmt9/dxmt9_perf_counters.cpp, tests/native/backend/dod_replay_observer_spec.cpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_encoder.rules.md, specs/backend/spec.md, specs/archicture/gap.md, experiments/output/app-d3d9-3dmark05-drawrun-genlane-baseline-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-drawrun-genlane-elide-r1-20260614/result.json, traces/app-d3d9-3dmark05-drawrun-genlane-elide-r1-20260614/analysis/frame60-perf-counter-comparison.md
 ---
 
 # Gate Stamp-Only Draw-Run State Elision

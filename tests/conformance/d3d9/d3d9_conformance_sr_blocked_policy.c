@@ -1,7 +1,7 @@
 /*
  * D3D9 PE conformance — narrow public-ABI scaffolds for visual.c oracle
  * entries whose full rasterization aspect requires shader-runner DSL /
- * oracle infrastructure that is not yet present (see specs/gap.md).
+ * oracle infrastructure that is not yet present (see specs/d3d9/gap.md).
  *
  * Each scaffold captures only the portion of the contract that is
  * observable through the public D3D9 ABI: state round-trips, declaration
@@ -24,7 +24,7 @@
  *
  * Note: the full rasterization aspect of this oracle requires SR
  * runner DSL / oracle infrastructure that is not yet present
- * (see specs/gap.md). This PE-side scaffold captures the public
+ * (see specs/d3d9/gap.md). This PE-side scaffold captures the public
  * ABI portion of the contract — D3DTOP_BUMPENVMAP /
  * D3DTOP_BUMPENVMAPLUMINANCE TSS round-trip, BUMPENVMAT/LSCALE/LOFFSET
  * DWORD-encoded float round-trip, and the TextureOpCaps surface.
@@ -116,7 +116,7 @@ done_d3d9:
  *
  * Note: the full rasterization aspect of this oracle requires SR
  * runner DSL / oracle infrastructure that is not yet present
- * (see specs/gap.md). This PE-side scaffold captures the public
+ * (see specs/d3d9/gap.md). This PE-side scaffold captures the public
  * ABI portion of the contract — CreateVertexDeclaration acceptance
  * of D3DDECLUSAGE_POSITIONT, GetDeclaration round-trip, and the
  * implicit FVF→decl translation for D3DFVF_XYZRHW.
@@ -213,7 +213,7 @@ done_d3d9:
  *
  * Note: the full rasterization aspect of this oracle requires SR
  * runner DSL / oracle infrastructure that is not yet present
- * (see specs/gap.md). This PE-side scaffold captures the public
+ * (see specs/d3d9/gap.md). This PE-side scaffold captures the public
  * ABI portion of the contract — CreatePixelShader rejects NULL,
  * accepts a minimal ps_3_0 bytecode when the device caps report
  * ps_3_0, and exposes the PS20Caps surface without crashing.
@@ -293,7 +293,7 @@ done_d3d9:
  *
  * Note: the full rasterization aspect of this oracle requires SR
  * runner DSL / oracle infrastructure that is not yet present
- * (see specs/gap.md). This PE-side scaffold captures the public
+ * (see specs/d3d9/gap.md). This PE-side scaffold captures the public
  * ABI portion of the contract — FP-precision-adjacent caps surface
  * (PS20Caps.NumInstructionSlots, MaxPixelShader30InstructionSlots,
  * PrimitiveMiscCaps & D3DPMISCCAPS_FOGANDSPECULARALPHA). NaN/Inf

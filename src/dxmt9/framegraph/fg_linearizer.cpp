@@ -3,7 +3,7 @@
 // Part 1 — planLinearization() — is the device-free testable core.
 // Part 2 — executeLinearization() — is the device-gated executor (wired by B12).
 //
-// design.md §6: for each PassNode in (optimized) order, open the pass, emit its
+// spec.md §6: for each PassNode in (optimized) order, open the pass, emit its
 // draws in order, close the pass; Present / Blit passes are single ops. Dead
 // passes (DCE, flags.dead) are skipped. Under default OptimizerOptions the plan
 // reproduces the chunk's natural pass/draw OP ORDER (the parity baseline, §14 L1
@@ -107,7 +107,7 @@ void planLinearization(const FrameGraph& graph, LinearizationPlan& plan) {
   for (std::size_t p = 0; p < graph.passes.size(); ++p) {
     const PassNode& pass = graph.passes[p];
     if (pass.flags.dead) {
-      continue;  // DCE-dropped (design.md §5.1); excluded from linear order.
+      continue;  // DCE-dropped (spec.md §5.1); excluded from linear order.
     }
     const u32 pass_index = static_cast<u32>(p);
     switch (pass.kind) {

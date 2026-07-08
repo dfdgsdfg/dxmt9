@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Backend Requirements"
+description: "Backend requirements and compatibility contracts."
+tags: [specs, backend, requirements]
+---
+
 # Backend Requirements
 
 The backend receives committed command chunks from the core and is responsible for
@@ -426,7 +433,7 @@ failure — poisoning later commits and aborting pending present-ordinal
 waits — without synthesizing a per-record HRESULT for a chunk that failed
 after its synchronous validation phase already returned success; and (f)
 remain byte-identical to the inline (non-offload) replay path when the flag
-is unset. See `specs/backend/design.md` §Commit-Replay Offload for the
+is unset. See `specs/backend/spec.md` §Commit-Replay Offload for the
 architecture. Verified by `dxmt9-replay-offload-queue-spec` (raw-queue
 FIFO/bound/drain-fence rules), `dxmt9-present-ordinal-boundary-spec`
 (ordinal target math, planner policy mapping, and the `PresentOrdinalGate`
@@ -492,11 +499,11 @@ be cached persistently across process restarts, keyed by a stable hash of the in
 (bytecode content hash or FFP key value plus variant parameters). Recompilation on
 cache hit is not permitted.
 
-**R-BACK-4.4** The half-pixel offset correction (as specified in core/design §7) must
+**R-BACK-4.4** The half-pixel offset correction (as specified in core/spec §7) must
 be applied to every vertex shader before translation. The translation output must
 include this correction.
 
-**R-BACK-4.5** Alpha test (as specified in core/design §8) must be encoded in pixel
+**R-BACK-4.5** Alpha test (as specified in core/spec §8) must be encoded in pixel
 shader variants when required by the key. The pixel shader must execute
 `discard_fragment()` for failing fragments before any color output.
 
@@ -671,7 +678,7 @@ compatibility per-call draw/state fallback.
 
 Detailed API contracts, validation rules, and bridge-recording policy are defined in
 [`surface-ops/requirements.md`](surface-ops/requirements.md). The backend design for
-Metal replay is defined in [`surface-ops/design.md`](surface-ops/design.md).
+Metal replay is defined in [`surface-ops/spec.md`](surface-ops/spec.md).
 
 **R-BACK-9.1** `submitSurfaceCopy()` (used by `UpdateSurface` and `UpdateTexture`)
 must correctly copy all specified mip levels and cube/array slices. Row pitch and

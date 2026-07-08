@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate specs/gap_d3d9_wine_test.md directly from MANIFEST data.
+"""Generate specs/tests/gap_d3d9_wine_test.md directly from MANIFEST data.
 
 For each `START_TEST` test function in
 `~/workspaces/wine/dlls/d3d9/tests/{visual,device,d3d9ex,stateblock}.c`,
@@ -35,7 +35,7 @@ WINE_ROOT = Path(os.environ.get("WINE_REPO", str(REPO.parent / "wine")))
 WINE = WINE_ROOT / "dlls" / "d3d9" / "tests"
 PE_MANIFEST = REPO / "tests" / "conformance" / "d3d9" / "MANIFEST.toml"
 CORPUS_MANIFEST = REPO / "tests" / "shader_runner" / "corpus" / "MANIFEST.toml"
-OUT = REPO / "specs" / "gap_d3d9_wine_test.md"
+OUT = REPO / "specs" / "tests" / "gap_d3d9_wine_test.md"
 
 
 def _git_capture(root: Path) -> dict[str, str]:
@@ -365,6 +365,13 @@ def main() -> None:
     self_prov = dxmt9_provenance()
 
     lines: list[str] = []
+    lines.append("---")
+    lines.append('type: "Spec Gap"')
+    lines.append('title: "Wine D3D9 Test Inventory"')
+    lines.append('description: "Spec implementation and evidence gap tracker."')
+    lines.append("tags: [specs, gap, tests, wine-d3d9]")
+    lines.append("---")
+    lines.append("")
     lines.append("# Wine D3D9 Test Inventory")
     lines.append("")
     lines.append("Inventory of every Wine `dlls/d3d9/tests/{visual,device,d3d9ex,stateblock}.c`")

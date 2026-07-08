@@ -1,6 +1,6 @@
 // R-FORMAT-11 — RESZ MSAA→INTZ depth resolve.
 //
-// Spec: specs/d3d9/formats/{requirements,design}.md R-FORMAT-11. Two seams
+// Spec: specs/d3d9/formats/{requirements,spec}.md R-FORMAT-11. Two seams
 // under test, both deterministic and GPU-free:
 //
 //   (a) RESZ trigger detection — the pure value transform

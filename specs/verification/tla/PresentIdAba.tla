@@ -60,7 +60,7 @@
  *
  * Requirement traceability:
  *   R-VERIF-3.4    Lifetime invariants must be formally checked
- *   backend/design.md §X.Y  PresenterSlot reuse safety (forward-looking)
+ *   backend/spec.md §X.Y  PresenterSlot reuse safety (forward-looking)
  *)
 
 EXTENDS Naturals, FiniteSets, Sequences

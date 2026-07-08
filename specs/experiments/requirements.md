@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Experiments Requirements"
+description: "Experiments requirements and compatibility contracts."
+tags: [specs, experiments, requirements]
+---
+
 # Experiments Requirements
 
 Experiments are uncontrolled, end-to-end integration runs against real D3D9

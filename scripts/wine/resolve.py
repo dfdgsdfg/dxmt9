@@ -1,6 +1,6 @@
 """Wine root manifest loader and resolver.
 
-Spec: specs/experiments/runtime/{requirements,design}.md.
+Spec: specs/experiments/runtime/{requirements,spec}.md.
 
 Loads experiments/wine/manifest.toml and resolves a wine_id (per CLI flag,
 env var, or CATALOGUE) to a concrete wine root path. Validates that the

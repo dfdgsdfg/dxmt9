@@ -1,9 +1,9 @@
 // Frame Graph builder (Task B2, L1). See fg_builder.hpp for scope/contract.
 //
-// design.md §4.1 maps chunk-record kinds onto builder actions. The real input
+// spec.md §4.1 maps chunk-record kinds onto builder actions. The real input
 // is the imported `core::ChunkSlot` SoA, so the mapping is read against
 // `ChunkSlot::commandHeaders` (MetalCommandKind + payload index), not the
-// PE-side wire enum (design.md §2.1):
+// PE-side wire enum (spec.md §2.1):
 //
 //   MetalCommandKind::DrawRun  -> append DrawRef(s) to the current Render pass;
 //                                 start a new pass when the attachment set
@@ -395,7 +395,7 @@ private:
     const ResourceHandle source{command.readback->source.value};
     noteAccess(source, pass_index, AccessKind::Read, AccessStage::Copy);
     // CPU readback: mark the readback classifier bit on the source so DCE /
-    // memoryless cross-chunk safety gates (design.md §5.1/§5.3) can see it.
+    // memoryless cross-chunk safety gates (spec.md §5.1/§5.3) can see it.
     if (source.value != 0) {
       resourceFor(source).classifier_flags.readback_seen = true;
     }

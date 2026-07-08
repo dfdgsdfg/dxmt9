@@ -1,3 +1,10 @@
+---
+type: "Spec Support"
+title: "Boundary-isolated counter schema"
+description: "Boundary-isolated counter schema support document."
+tags: [specs, benchmarks, boundary-counter-schema]
+---
+
 # Boundary-isolated counter schema
 
 Reporting contract for the V1 boundary-isolation benchmarks. Each

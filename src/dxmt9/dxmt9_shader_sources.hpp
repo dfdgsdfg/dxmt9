@@ -148,7 +148,7 @@ bool fsHalfPrecisionEnabled();
 // the same per-category uniform struct definitions as makeShaderPrelude,
 // then declares an `ArgbufLayout` MSL struct that wraps the four
 // per-frequency constant-buffer pointers at the layout offsets
-// described in design.md §11.2:
+// described in spec.md §11.2:
 //
 //   struct ArgbufLayout {
 //     constant VsConsts*    vsConsts [[id(0)]];
@@ -163,7 +163,7 @@ bool fsHalfPrecisionEnabled();
 // resources stay on direct `[[texture(N)]]` / `[[sampler(N)]]`
 // binding — the validated Stage 1 lane is retained for resource binds.
 // `DrawVolatile` (slot 5, setVertexBytes) and the vertex stream (slot 1)
-// also stay direct. See R-BACK-12.23 / design.md §11.2.
+// also stay direct. See R-BACK-12.23 / spec.md §11.2.
 std::string makeShaderPreludeArgbufHybrid(bool withClipDistances);
 std::string makeShaderPreludeArgbufHybrid(const ShaderPreludeOptions& options);
 

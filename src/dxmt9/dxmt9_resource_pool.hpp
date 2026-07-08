@@ -413,7 +413,7 @@ struct Pool {
   // construction and ANDs the result with `supportsApple3_`. Per-encoder
   // selection reads this via `argbufHybridEnabled()`; the bool is the
   // single source of truth for "is the device eligible for Stage 2",
-  // matching the Apple-Silicon-only contract in design.md §11.1.
+  // matching the Apple-Silicon-only contract in spec.md §11.1.
   bool argbufHybridEnabled_ = false;
   void setArgbufHybridEnabled(bool value) noexcept { argbufHybridEnabled_ = value; }
   bool argbufHybridEnabled() const noexcept { return argbufHybridEnabled_; }

@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Query Requirements"
+description: "D3D9 / Queries requirements and compatibility contracts."
+tags: [specs, d3d9, queries, requirements]
+---
+
 # Query Requirements
 
 D3D9 queries expose asynchronous GPU progress and query data through

@@ -111,7 +111,7 @@ ResourceArrayArgumentDescriptors buildResourceArrayArgumentDescriptors();
 // cached on `resources::Pool::argbufHybridEnabled_` at queue init; this
 // helper exposes the predicate shape so tests can assert it without
 // instantiating a real WMT::Device. Returns true iff both inputs hold,
-// matching design.md §11.1.
+// matching spec.md §11.1.
 //
 // `argumentBuffersTier` is the WMTArgumentBuffersTier value (0=Tier1,
 // 1=Tier2). `apple3` is the cached `supportsFamily(Apple3)` result.

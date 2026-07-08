@@ -2,7 +2,7 @@
 
 // Frame Graph DAG debug export (Task B10, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §3.5 (DAG Debug Export),
+// Spec: specs/d3d9-renderer/spec.md §3.5 (DAG Debug Export),
 //       requirements.md R-BACK-39.7.
 //
 // PURE READ TRANSFORM.
@@ -16,7 +16,7 @@
 //   `DagSnapshot` intermediate (built once by `buildSnapshot`). No format walks
 //   the live `FrameGraph` independently — the snapshot is the single field-walk
 //   over passes/resources/edges, so the three text formats can never disagree
-//   about which nodes/edges exist (design.md §3.5, R-BACK-39.7 "one
+//   about which nodes/edges exist (spec.md §3.5, R-BACK-39.7 "one
 //   serialization pass — no format re-walks the DAG").
 //
 // DETERMINISM (R-BACK-32.2).
@@ -55,7 +55,7 @@ struct SnapshotAccess {
 //
 // This is L1-debug only: it carries a BOUNDED, cheaply-resolved per-draw
 // summary read out of the source core::ChunkSlot hot state for the JSON dump.
-// It is NOT the deferred L2 production `DrawDescriptor` (design.md §3.3), which
+// It is NOT the deferred L2 production `DrawDescriptor` (spec.md §3.3), which
 // carries per-draw geometry/bindings for the mesh / GPU-driven path and remains
 // a separate, deferred production data structure. Field sources (resolved by
 // `buildSnapshot` from `slot.drawRunCommandAt(command_index)`):
@@ -125,7 +125,7 @@ struct DagSnapshot {
 
 // Single field-walk over the FrameGraph. `chunk_seq_id` / `stage` are
 // caller-supplied (the FrameGraph carries frame_id but not the chunk seq id,
-// which onChunkReady sources from its ImportContext — design.md §3.5).
+// which onChunkReady sources from its ImportContext — spec.md §3.5).
 //
 // `slot` is the source ChunkSlot the FrameGraph's DrawRefs index into. It is
 // OPTIONAL: when non-null AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set, each
@@ -148,7 +148,7 @@ std::string serializeDagJson(const DagSnapshot& snapshot);
 std::string serializeDagMermaid(const DagSnapshot& snapshot);
 std::string serializeDagDot(const DagSnapshot& snapshot);
 
-// design.md §3.5 JSON object (frame_id, chunk_seq_id, stage, passes[],
+// spec.md §3.5 JSON object (frame_id, chunk_seq_id, stage, passes[],
 // resources[] with chronological accesses[], edges[]). Handle values use hex.
 // The optional `slot` enables the DEBUG-ONLY per-draw `draws_detail` extension
 // (see buildSnapshot). Defaulted nullptr keeps the existing call sites and

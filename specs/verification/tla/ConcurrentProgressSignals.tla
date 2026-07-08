@@ -6,7 +6,7 @@
  * three architectural progress axes. Required by R-ARCH-6.8 and R-ARCH-6.9.
  *
  * The dxmt9 architecture exposes three independently advancing progress signals
- * (design.md §6.5):
+ * (spec.md §6.5):
  *
  *   completedSeqId         — advanced by every command-buffer completion;
  *                            consumed by query resolution and readback waits.
@@ -30,7 +30,7 @@
  * Requirement traceability:
  *   R-ARCH-6.8  Pacing axes must be independent
  *   R-ARCH-6.9  Pacing independence must be observable
- *   design.md §6.5  Pacing Independence (cross-axis non-blocking contract)
+ *   spec.md §6.5  Pacing Independence (cross-axis non-blocking contract)
  *
  * Properties verified:
  *   Safety   — TypeOK, PacingOrdering, RingOccupancyBound,
@@ -273,7 +273,7 @@ TypeOK ==
 (*
  * PacingOrdering — the SOLE ordering invariant linking the three axes.
  * A present token can never advance ahead of the underlying command buffer
- * completion. design.md §6.5 calls this out as the only relationship.
+ * completion. spec.md §6.5 calls this out as the only relationship.
  *)
 PacingOrdering ==
   presentCompletedSeqId <= completedSeqId

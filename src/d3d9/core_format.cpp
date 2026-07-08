@@ -70,7 +70,7 @@ const std::vector<FormatEntry> &formatEntries() {
       // Q16W16V16U16 — 4x16-bit signed normalized bump/color format, the
       // signed twin of A16B16G16R16. Backed by RGBA16Snorm on Metal. Same
       // table shape as A16B16G16R16 (8 bpp, color render target, lockable),
-      // only the backend pixel format differs. See specs/gap_d3d9.md §C.12 #7.
+      // only the backend pixel format differs. See specs/d3d9/gap_d3d9.md §C.12 #7.
       {{Format::Q16W16V16U16, BackendPixelFormat::RGBA16Snorm,
         FormatClass::Required, 8, true, false, false, true}},
       {{Format::G16R16, BackendPixelFormat::RG16Unorm, FormatClass::Required, 4,
@@ -132,7 +132,7 @@ const std::vector<FormatEntry> &formatEntries() {
       // D32_LOCKABLE — lockable 32-bit depth. Metal has no 32-bit-int depth
       // pixel format, so it mirrors D32F_LOCKABLE onto Depth32Float (4 bpp,
       // depth-stencil, not a color render target, lockable). See
-      // specs/gap_d3d9.md §C.12 #7.
+      // specs/d3d9/gap_d3d9.md §C.12 #7.
       {{Format::D32_LOCKABLE, BackendPixelFormat::Depth32Float,
         FormatClass::Required, 4, false, true, false, true}},
       {{Format::D16_LOCKABLE, BackendPixelFormat::Depth16Unorm,
@@ -157,7 +157,7 @@ const std::vector<FormatEntry> &formatEntries() {
       // 16-bit depth (Depth16Unorm, 2 bpp). DF24 is 24-bit depth, which has
       // no Metal-native target, so it reuses INTZ's Depth32Float (4 bpp) —
       // depth precision is over-provisioned, which is safe for the shadow-map
-      // sampling these formats are used for. See specs/gap_d3d9.md §C.5.
+      // sampling these formats are used for. See specs/d3d9/gap_d3d9.md §C.5.
       {{Format::DF16, BackendPixelFormat::Depth16Unorm, FormatClass::Optional,
         2, false, true, false, false}},
       {{Format::DF24, BackendPixelFormat::Depth32Float, FormatClass::Optional,

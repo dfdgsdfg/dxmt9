@@ -119,7 +119,7 @@ AccessKind accessKindOf(const AccessLog& log) {
 // clear(rt0/ds) -> 2 draws to rt0/ds -> set rt1 (draw) -> present.
 // The fixture's RT change is expressed as a draw whose attachment set differs,
 // which is exactly how the imported ChunkSlot carries an RT switch (per-draw
-// FlatDrawStateRecord hot state, design.md §2.1 / §4.1).
+// FlatDrawStateRecord hot state, spec.md §2.1 / §4.1).
 ChunkSlot buildScenario() {
   ChunkSlot slot;
   const Handle rt0{0xA000u};

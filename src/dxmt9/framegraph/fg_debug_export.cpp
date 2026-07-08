@@ -1,6 +1,6 @@
 // Frame Graph DAG debug export (Task B10, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §3.5, requirements.md R-BACK-39.7.
+// Spec: specs/d3d9-renderer/spec.md §3.5, requirements.md R-BACK-39.7.
 //
 // See fg_debug_export.hpp for the ownership / determinism / one-snapshot
 // contract. This file holds the pure serializers and the side-effect-neutral
@@ -116,7 +116,7 @@ const char* storeActionName(StoreAction action) {
   return "Unknown";
 }
 
-// "<Load>/<Store>" for the load_store JSON / labels (matches design.md sample).
+// "<Load>/<Store>" for the load_store JSON / labels (matches spec.md sample).
 std::string loadStorePair(LoadAction load, StoreAction store) {
   std::string out = loadActionName(load);
   out.push_back('/');

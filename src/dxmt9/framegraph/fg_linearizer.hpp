@@ -2,7 +2,7 @@
 
 // Frame Graph linearizer (Task B9, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §6 (Linearizer), §14 L1 (R-BACK-39.1
+// Spec: specs/d3d9-renderer/spec.md §6 (Linearizer), §14 L1 (R-BACK-39.1
 //   byte-identical parity baseline), §15 (IExternalDrawEmitter split).
 //
 // TWO-PART DESIGN (full encode is device-gated — same constraint A8 found):
@@ -23,7 +23,7 @@
 //      device-gated boundary note on the declaration). B12 calls it from
 //      FrameGraphBackend::onChunkReady.
 //
-// L1 CORRECTNESS (design.md §14 L1 / R-BACK-39.1):
+// L1 CORRECTNESS (spec.md §14 L1 / R-BACK-39.1):
 //   Under default OptimizerOptions{} (no feature passes), the plan MUST
 //   reproduce the source chunk's natural pass/draw order — BeginPass /
 //   EmitDraw.../ EndPass per render pass, draws in original submission order,
@@ -80,7 +80,7 @@ struct LinearOp {
   friend bool operator==(const LinearOp&, const LinearOp&) = default;
 };
 
-// The device-free linearization artifact (design.md §6 / §14 L1). The ops are
+// The device-free linearization artifact (spec.md §6 / §14 L1). The ops are
 // in final submission order; for a render pass it is
 // BeginPass, EmitDraw*, EndPass; Present / Blit passes are single ops.
 struct LinearizationPlan {

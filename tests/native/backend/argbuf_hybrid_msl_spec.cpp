@@ -5,7 +5,7 @@
 // flips the entry-point binding shape from dedicated slots 0/3 (plus
 // per-stage texture/sampler slots) to a single ArgbufLayout argument
 // buffer at slot 30, while keeping the vertex stream (slot 1) and
-// DrawVolatile (slot 5) on direct binding (design.md §11.4).
+// DrawVolatile (slot 5) on direct binding (spec.md §11.4).
 //
 // Stage 1 (argbufHybridMode=false) keeps emitting buffer(0)/buffer(3)
 // declarations so existing PSOs are unaffected. Stage 2
@@ -146,7 +146,7 @@ void testFfpVertexStage2Bindings() {
   const auto src = dxmt9::ffp::makeFfpVertexSource(*desc.vertexShader.vertexKey,
                                                     makeContext(desc, /*argbufHybridMode=*/true));
   // Stage 2: one buffer(30) argbuf, no buffer(0) or buffer(3); stream0
-  // and DrawVolatile stay at their direct slots (design.md §11.4).
+  // and DrawVolatile stay at their direct slots (spec.md §11.4).
   checkContains(src, "[[buffer(30)]]",
                 "Stage 2 FFP vertex binds argbuf at slot 30");
   checkContains(src, "ArgbufLayout& abuf",
@@ -512,7 +512,7 @@ void testTranslatedVertexStage2Bindings() {
                 "Stage 2 translated vertex aliases vsConsts off the argbuf");
   checkContains(src, "abuf.ffpVs",
                 "Stage 2 translated vertex aliases ffpVs off the argbuf");
-  // Vertex stream + DrawVolatile remain on direct binding (design.md §11.4).
+  // Vertex stream + DrawVolatile remain on direct binding (spec.md §11.4).
   checkContains(src, "device const uchar* stream0 [[buffer(1)]]",
                 "Stage 2 translated vertex keeps stream0 direct at slot 1");
   checkContains(src, "constant DrawVolatile& drawVolatile [[buffer(5)]]",

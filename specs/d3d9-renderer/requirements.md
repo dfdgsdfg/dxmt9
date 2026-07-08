@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "D3D9 Renderer (Modern Path) Requirements"
+description: "D3D9 Renderer requirements and compatibility contracts."
+tags: [specs, d3d9-renderer, requirements]
+---
+
 # D3D9 Renderer (Modern Path) Requirements
 
 This spec defines an opt-in **modern rendering path** that consumes the same PE
@@ -131,7 +138,7 @@ features when `DXMT9_RENDER_MODE=framegraph`. Tokens:
 
 | Token | Feature |
 |---|---|
-| `dce` | dead-pass elimination (chunk-conservative; off when token absent) per design.md §5.1 |
+| `dce` | dead-pass elimination (chunk-conservative; off when token absent) per spec.md §5.1 |
 | `passcoalesce` | same-RT / depth re-entry coalescing per §5 |
 | `memoryless` | transient RT virtual-attachment promotion per §4 |
 | `objectschedule` | object shader as draw scheduler per §6 |
@@ -170,7 +177,7 @@ entire chunk to the traditional path. Compatibility classifiers per §6 / §7.
 `MTLRenderCommandEncoder` the modern path opened for the current pass — the
 modern linearizer owns the encoder lifecycle. The backend must therefore
 expose an **`IExternalDrawEmitter`** contract on the
-`ArgumentEncodingContext` defined in `specs/backend/design.md` §4: the AEC
+`ArgumentEncodingContext` defined in `specs/backend/spec.md` §4: the AEC
 must split its draw-emission code path from its pass-lifecycle code path so
 the modern linearizer can call the draw-emission path with an
 externally-owned encoder argument. The traditional path keeps its existing
@@ -195,7 +202,7 @@ cannot construct an `ExternalPassContext` faithful to the current chunk
 touched-set assumption), the renderer must fall back the **whole render
 pass**, not a single draw — emitting the entire pass through the
 traditional path while still owning the surrounding chunk DAG. Design.md
-§15 specifies the contract; the pass-level escape valve is design.md §15.5.
+§15 specifies the contract; the pass-level escape valve is spec.md §15.5.
 
 **R-BACK-31.6** Switching renderers between presents is not supported. The
 backend factory resolves the renderer at process init and the choice persists
@@ -227,7 +234,7 @@ variant and vice versa. Existing backend variant bits (e.g.
 `RendererVariantKey`; this avoids any modern-path lane silently
 overwriting or shadowing a traditional-path entry in the on-disk archive
 or in the in-memory cache. The L0 refactor (§12, R-BACK-41.1) lands
-this key extension together with the renderer factory; see design.md
+this key extension together with the renderer factory; see spec.md
 §16 for the shared-cache namespace implementation.
 
 ---
@@ -296,7 +303,7 @@ in this order:
 3. Memoryless virtual-attachment promotion (§4) — runs **after**
    passcoalesce so single-pass collapse is observable; promotion candidates
    are decided here, alias allocation happens here.
-4. Dead-pass elimination (chunk-conservative; §design.md 5.1) — runs
+4. Dead-pass elimination (chunk-conservative; §spec.md 5.1) — runs
    **after** memoryless so it can use memoryless-eligibility as one of
    its cross-chunk safety gates; off when the `dce` feature token is
    absent.
@@ -310,7 +317,7 @@ Each optimizer pass must be independently switchable by a feature token;
 pass order must not change behind a token; turning a pass off must produce a
 correct, slower graph. The reordering follows from R-BACK-33.2's
 requirement that memoryless eligibility check the single-Metal-pass
-collapse (which only exists after passcoalesce), design.md §5.1's
+collapse (which only exists after passcoalesce), spec.md §5.1's
 requirement that DCE consult memoryless eligibility for cross-chunk
 safety, and the load/store contracts in
 `specs/backend/render-pass-actions/requirements.md` §3-§6 which depend on
@@ -321,7 +328,7 @@ traditional path when no features are enabled (`DXMT9_RENDERER_FEATURES=`).
 This identity is the parity baseline used by §10 validation.
 
 **R-BACK-32.7** Frame Graph emission must use the existing unix-side encoder
-APIs in `specs/backend/design.md` §4-§5. The graph linearizes the optimized
+APIs in `specs/backend/spec.md` §4-§5. The graph linearizes the optimized
 DAG and calls the same encoder primitives the traditional path calls. Pass
 boundaries map 1:1 to `MTLRenderCommandEncoder` lifetimes per `R-BACK-2.4`.
 
@@ -402,7 +409,7 @@ profile default to `strict` per R-BACK-40.1.
 inside the encoder before pass end — is the only correctness-safe recovery
 path available on Apple Silicon TBDR, but it doubles the pass's
 fragment-stage work and defeats the bandwidth motivation. The current spec
-does **not** require this path; it is recorded in design.md §16 as an open
+does **not** require this path; it is recorded in spec.md §16 as an open
 research path for a future layer.
 
 **R-BACK-33.6** When `memoryless` is disabled, the optimizer must not
@@ -465,7 +472,7 @@ this without exception.
 **R-BACK-35.1** When `mesh` is enabled, the renderer must compile, for selected
 D3D9 vertex shader hashes, a **mesh shader pipeline state object** in addition
 to the existing translated vertex/fragment PSO. The mesh PSO accepts a
-`DrawDescriptor` (defined in `design.md`) as input and produces vertices and
+`DrawDescriptor` (defined in `spec.md`) as input and produces vertices and
 primitives into mesh shader output buffers consumed by the fragment shader.
 
 **R-BACK-35.2** Mesh shader compilation must use a **cluster strategy**: D3D9
@@ -491,7 +498,7 @@ spec landing. A draw is **mesh-eligible at L2/L3** when **all** of:
 - the primitive count exceeds `DXMT9_RENDERER_MESH_PRIMITIVE_THRESHOLD`
   (default `64`),
 - the draw's resource binding footprint fits the modern path's
-  `DrawDescriptor` shape (see design.md §3.3): VB stream count ≤ D3D9
+  `DrawDescriptor` shape (see spec.md §3.3): VB stream count ≤ D3D9
   `MaxStreams` (`16`, per `specs/d3d9/caps/`), texture binding count ≤ D3D9
   sampler stage count (`20` = 16 PS + 4 VS, per
   `specs/d3d9/requirements.md` `R-CORE-*` sampler stage contract), and
@@ -503,7 +510,7 @@ The topology / non-indexed restriction is a deliberate landing narrowness:
 mesh-shader codegen, primitive-assembly templates, and
 `DrawDescriptor.ib_count`-based dispatch sizing all assume indexed
 triangle-list. Future expansion to TRIANGLESTRIP and non-indexed draws is
-recorded as a separate descriptor extension in design.md §3.3 / §16 open
+recorded as a separate descriptor extension in spec.md §3.3 / §16 open
 questions; until that expansion lands and ships acceptance evidence per
 R-BACK-41.6, every non-`TRIANGLELIST` / non-indexed draw must take the
 traditional encoder path under `R-BACK-31.5` `allow` mode.
@@ -537,14 +544,14 @@ allocation.
 
 **R-BACK-35.5** Object shader culling must be **conservative**: a draw
 may only be culled when **both** (a) the draw has a valid bounding box
-from one of the explicit sources documented in design.md §3.3
+from one of the explicit sources documented in spec.md §3.3
 (`flags.bbox_valid == 1`), **and** (b) that bounding box has no overlap
 with the view frustum. Marginal cases (touching frustum planes) must
 default to dispatch. A draw without a valid bbox
 (`flags.bbox_valid == 0`) must always dispatch — guessing a bbox would
 silently drop visible draws and break D3D9 correctness. The CommandChunk
 contract per R-BACK-30.6 is preserved; bbox population is the modern
-path's own responsibility from one of the design.md §3.3 sources, not a
+path's own responsibility from one of the spec.md §3.3 sources, not a
 PE-side addition. Culling metrics must surface as `framegraph_object_cull_*`
 counters (§10), and the no-valid-bbox case must increment
 `framegraph_object_cull_skipped_no_bbox` so the lost-win can be
@@ -591,7 +598,7 @@ at the end of each render pass. The ICB population path depends on whether
   encoding indirect commands directly. No object shader compute pre-pass
   runs.
 - `gpudriven` **with** `objectschedule`: the object shader compute
-  pre-pass (design.md §7.2) reads `DrawDescriptor[]`, performs frustum
+  pre-pass (spec.md §7.2) reads `DrawDescriptor[]`, performs frustum
   cull and batching, and writes indirect commands into the ICB.
   `executeCommandsInBuffer` then runs the ICB.
 
@@ -642,7 +649,7 @@ ICB instances. The selected `mesh` and `objectschedule` features without
 
 **R-BACK-37.5** Mesh / GPU-driven paths consume raw GPU addresses for
 vertex buffers, index buffers, and constant buffers stored inside
-`DrawDescriptor` (design.md §3.3 `ib_pointer`, `vb_pointers`,
+`DrawDescriptor` (spec.md §3.3 `ib_pointer`, `vb_pointers`,
 `vs_cb_pointer`, `ps_cb_pointer`). These raw-pointer buffers do **not**
 acquire residency through the bindless heap defined by R-BACK-37.1; the
 modern path must therefore explicitly track and assert residency for
@@ -687,7 +694,7 @@ handle set entry.
 
 **R-BACK-37.1** When `bindless` is enabled, the renderer must maintain a
 per-frame **bindless texture heap** and a **bindless sampler heap**.
-`DrawDescriptor` (design.md §3.3) stores per-stage slot identifiers wide
+`DrawDescriptor` (spec.md §3.3) stores per-stage slot identifiers wide
 enough to address the configured heap caps from R-BACK-37.3
 (`BINDLESS_TEXTURES_MAX` default `4096`, `BINDLESS_SAMPLERS_MAX` default
 `1024`): the implementation must use at least `uint16_t` for both texture
@@ -696,7 +703,7 @@ caps are raised. `uint8_t` slot fields are **not** sufficient and are
 explicitly disallowed because the sampler cap exceeds `255`. The
 `DrawDescriptor` must additionally carry a per-draw
 `bindless_key_hash` (`uint64_t`) that hashes the active texture+sampler
-binding set in stable canonical order; the object shader (design.md §7.3)
+binding set in stable canonical order; the object shader (spec.md §7.3)
 uses this hash for the R-BACK-35.6 batching predicate without
 re-walking the slot arrays. Heap residency must follow the residency
 contract in `specs/backend/requirements.md` for shared resources; the
@@ -827,7 +834,7 @@ mutate the PSO/shader cache or `MTLBinaryArchive`, must not touch the
 queue-level fence state. The recorder operates on a sidecar copy of the
 state the traditional path would have read — state the
 `TraditionalBackend` exposes through a new `IDecisionRecorder` interface
-in `specs/backend/design.md` — so capturing it has zero observable
+in `specs/backend/spec.md` — so capturing it has zero observable
 side-effect on the shared queue, cache, presenter, or resource
 infrastructure. The modern path then compares its own decision sequence
 against the recorder's and logs each divergence point with chunk-record
@@ -893,7 +900,7 @@ The DAG debug dump is **backend-agnostic**: it must be available whenever
 `DXMT9_RENDERER_DUMP_DAG` is set, on BOTH the `traditional` and `framegraph`
 render modes, decoupled from `DXMT9_RENDER_MODE`. Because the dump is a pure
 observation side-channel — which backend actually encodes a chunk is irrelevant
-to it — both backends own the shared observer (`render::DagObserver`, design.md
+to it — both backends own the shared observer (`render::DagObserver`, spec.md
 §2.1 / §3.5) and invoke it from `onChunkReady` before delegating to
 `encoders::encodeChunk`. On the `traditional` path the DAG is built purely for
 observation against default (all-off) optimizer options — the order-preserving
@@ -974,7 +981,7 @@ historical output and the device-free golden serializers (which pass no slot)
 are unaffected; it is a pure read that touches no Metal state and leaves the
 encode byte-identical, exactly like the rest of R-BACK-39.7. `draws_detail` is
 explicitly **L1-debug**: it is NOT the deferred L2 production `DrawDescriptor`
-(design.md §3.3) that carries per-draw geometry/bindings for the
+(spec.md §3.3) that carries per-draw geometry/bindings for the
 mesh / GPU-driven path — that remains a SEPARATE, deferred production data
 structure. `framegraph::resolveDumpDagDraws(env)` is the pure resolver and
 `dumpDagDraws()` reads the env once with the `dumpDagFrame()` static-const

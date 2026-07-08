@@ -125,7 +125,7 @@ void test_vendor_policy_intz_caps(const struct d3d9_api *api)
     /*
      * dxmt9 now exposes INTZ as a sampleable depth-stencil texture
      * format via the Metal Depth32Float_Stencil8 path (commit 36935fb
-     * closed gap_d3d9.md §C.5 row INTZ via track G1-3). The
+     * closed specs/d3d9/gap_d3d9.md §C.5 row INTZ via track G1-3). The
      * CheckDeviceFormat query reports S_OK for the
      * USAGE_DEPTHSTENCIL + RTYPE_TEXTURE pair; a dedicated readback
      * oracle for INTZ depth-as-sampler readback lives in the

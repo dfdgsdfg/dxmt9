@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "winemetal Requirements — Wine macdrv Symbol Bridge"
+description: "Winemetal requirements and compatibility contracts."
+tags: [specs, winemetal, requirements]
+---
+
 # winemetal Requirements — Wine macdrv Symbol Bridge
 
 This spec governs how dxmt9 reaches the macOS-side Cocoa/Metal helpers
@@ -248,7 +255,7 @@ state.
 **R-WMB-7.3** The remediation hint must list, in order:
 1. "Use a Wine build that exposes macdrv symbols (CrossOver Wine 24+, or a Heroic build patched per `wine/patches/winemac-expose-symbols-<ver>.patch`)."
 2. "If you have a custom Wine, run `scripts/wine/check_patch.py <root>` to confirm the symbols are visible."
-3. A link to this spec (`specs/winemetal/{requirements,design}.md`).
+3. A link to this spec (`specs/winemetal/{requirements,spec}.md`).
 
 **R-WMB-7.4** The presenter
 (`src/dxmt9/dxmt9_presenter_macdrv.cpp::acquireLayerForHwnd`) emits

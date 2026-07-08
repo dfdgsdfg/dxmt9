@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "D3D9 Layer Requirements"
+description: "D3D9 requirements and compatibility contracts."
+tags: [specs, d3d9, requirements]
+---
+
 # D3D9 Layer Requirements
 
 The D3D9 layer is the API frontend for applications running under Wine. It

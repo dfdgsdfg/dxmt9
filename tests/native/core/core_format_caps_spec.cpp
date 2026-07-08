@@ -66,7 +66,7 @@ void testFormatAndCaps() {
   checkEq(identifier.monitor, 1u, "adapter monitor");
   checkEq(factory.getAdapterMonitor(0), 1u, "adapter monitor lookup");
 
-  // gap.md §C.7 — D3DCAPS9::AlphaCmpCaps must be sourced from the
+  // specs/d3d9/gap_d3d9.md §C.7 — D3DCAPS9::AlphaCmpCaps must be sourced from the
   // dedicated alphaCmpCaps slot (not from alphaBlendCaps) and must
   // expose the standard D3D9 comparison set. Every Metal-capable GPU
   // supports all eight comparison ops.
@@ -96,12 +96,12 @@ void testFormatAndCaps() {
   dxmt9::d3d9::devicec::fillCCaps(caps0, &cCaps);
   checkEq(cCaps.alphaCmpCaps, caps0.alphaCmpCaps,
           "fillCCaps must mirror core::DeviceCaps::alphaCmpCaps into the "
-          "dedicated D9CCaps::alphaCmpCaps slot (gap.md §C.7 fix)");
+          "dedicated D9CCaps::alphaCmpCaps slot (specs/d3d9/gap_d3d9.md §C.7 fix)");
   checkEq(cCaps.alphaBlendCaps, caps0.alphaCmpCaps,
           "fillCCaps must keep the legacy alphaBlendCaps carrier in sync "
           "for back-compat with older PE bridge reads");
 
-  // gap.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier must be a
+  // specs/d3d9/gap_d3d9.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier must be a
   // non-zero, byte-stable per-adapter GUID. Several legacy D3D9
   // titles refuse to launch when it's the zero GUID (they use it as
   // an installation fingerprint).
@@ -223,7 +223,7 @@ void testSigned3DcAndUnsupportedFormatCaps() {
 }
 
 void testVendorDepthPseudoFormats() {
-  // gap_d3d9.md §C.5 — DF16/DF24 are vendor depth-as-texture pseudo-
+  // specs/d3d9/gap_d3d9.md §C.5 — DF16/DF24 are vendor depth-as-texture pseudo-
   // formats (FOURCC 'DF16'/'DF24'), handled exactly like INTZ: a
   // depth-stencil texture that is also sampleable. They previously fell
   // through fmtFromD3D to Format::Unknown -> NOTAVAILABLE.
@@ -279,7 +279,7 @@ void testVendorDepthPseudoFormats() {
 }
 
 void testD32LockableAndQ16W16V16U16Formats() {
-  // gap_d3d9.md §C.12 #7 — D3DFMT_D32_LOCKABLE (code 84) and
+  // specs/d3d9/gap_d3d9.md §C.12 #7 — D3DFMT_D32_LOCKABLE (code 84) and
   // D3DFMT_Q16W16V16U16 (code 110) previously fell through fmtFromD3D to
   // Format::Unknown -> NOTAVAILABLE. D32_LOCKABLE mirrors the existing
   // D32F_LOCKABLE (lockable 32-bit depth; Metal has no 32-bit-int depth so
@@ -506,7 +506,7 @@ void testDeviceCPresentIntervalMapping() {
   checkEq(dxmt9::d3d9::devicec::ppFromC(cParams).presentationInterval, PresentInterval::Immediate,
           "present params preserve immediate interval");
 
-  // gap_d3d9 C.12: MultiSampleQuality / Flags / FullScreen_RefreshRateInHz must
+  // specs/d3d9/gap_d3d9.md C.12: MultiSampleQuality / Flags / FullScreen_RefreshRateInHz must
   // propagate from the C ABI struct into core::PresentParameters via ppFromC.
   D9CPresentParams cMs{};
   cMs.multiSampleQuality = 3u;

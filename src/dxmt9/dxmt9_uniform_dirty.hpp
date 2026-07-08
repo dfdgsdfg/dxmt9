@@ -18,7 +18,7 @@ namespace dxmt9::uniform {
 
 // Single-bit dirty markers, one per uniform category the encoder may
 // sub-allocate / bind. Values are uint16_t so DirtyState::mask packs all
-// of them in a single field. Ordering matches design.md §4.
+// of them in a single field. Ordering matches spec.md §4.
 enum class DirtyBit : std::uint16_t {
   VsF             = 1u << 0,
   VsI             = 1u << 1,

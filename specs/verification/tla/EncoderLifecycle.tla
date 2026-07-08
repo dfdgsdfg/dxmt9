@@ -9,7 +9,7 @@
  *   Blit    — UpdateSurface, UpdateTexture, same-size StretchRect, mipmap gen
  *   Compute — reserved (triangle fan expansion, future use)
  *
- * Architectural rules (from backend/design.md §3, backend/requirements.md §2):
+ * Architectural rules (from backend/spec.md §3, backend/requirements.md §2):
  *   (1) At most one encoder is active at any time.
  *   (2) Switching encoder kind requires ending the current encoder first.
  *   (3) SetRenderTarget() during a scene terminates the current Render encoder
@@ -24,7 +24,7 @@
  *       diagnostic only: a FALSE-POSITIVE Bloom hit (Bloom said "maybe" and
  *       the exact check found no conflict) is recorded in a counter and
  *       observable, but the encoder is never split because of it
- *       (R-BACK-2.28, design.md §9.1, §9.2).
+ *       (R-BACK-2.28, spec.md §9.1, §9.2).
  *
  * Requirement traceability:
  *   R-BACK-2.4   Merge draw calls sharing render targets (no unnecessary split)
@@ -354,7 +354,7 @@ ExactHazardBlocksMerge ==
      => ~ NoExactHazard(nr, nw)
 
 (*
- * BloomNeverForcesSplit (R-BACK-2.28, design.md §9.1, §9.2)
+ * BloomNeverForcesSplit (R-BACK-2.28, spec.md §9.1, §9.2)
  *
  * Encoder splits (HazardDetected) must be driven SOLELY by an exact RAW /
  * WAR / WAW handle-set overlap, never by the probabilistic Bloom signal.

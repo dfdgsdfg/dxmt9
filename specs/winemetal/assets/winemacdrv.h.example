@@ -4,7 +4,7 @@
 // no implementation. The functions are implemented in winemac.so and
 // reached at runtime via dlsym after the Wine build re-exports them
 // with __attribute__((visibility("default"))). See
-// specs/winemetal/{requirements,design}.md for the contract.
+// specs/winemetal/{requirements,spec}.md for the contract.
 //
 // This is a REFERENCE EXAMPLE shipped alongside the spec. The live
 // header at include/winemetal/winemacdrv.h is maintained per Wine

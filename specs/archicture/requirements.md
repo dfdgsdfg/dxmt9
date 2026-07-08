@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Architecture Requirements"
+description: "Archicture requirements and compatibility contracts."
+tags: [specs, archicture, requirements]
+---
+
 # Architecture Requirements
 
 This document defines project-wide architecture contracts for dxmt9. Subsystem
@@ -30,7 +37,7 @@ call per D3D9 operation.
 **R-ARCH-1.3** Intentional divergence from upstream DXMT must be justified by one
 of: Wine PE/unix boundary constraints, ABI stability, D3D9-specific semantics,
 Metal/macOS host constraints, or data-oriented ownership. Divergence must be
-documented in the owning `design.md`.
+documented in the owning `spec.md`.
 
 **R-ARCH-1.4** D3D7 and D3D8 compatibility layers must lower into the D3D9
 frontend model before work enters the shared backend architecture. They must not
@@ -147,7 +154,8 @@ use different record layouts where the Wine boundary requires POD or C ABI
 storage.
 
 **R-ARCH-5.4** Any architecture requirement that is not implemented or not
-evidenced must be tracked in `specs/gap.md` with the owning `R-ARCH-*` IDs.
+evidenced must be tracked in `specs/archicture/gap.md` with the owning
+`R-ARCH-*` IDs.
 
 ---
 
@@ -218,7 +226,7 @@ heuristics.
 ## 7. Minimal-Copy Policy
 
 This section consolidates the copy and ownership rules that are otherwise spread
-across R-ARCH-2.4/2.5, R-ARCH-6.4/6.6, `design.md` §2.2, and the backend
+across R-ARCH-2.4/2.5, R-ARCH-6.4/6.6, `spec.md` §2.2, and the backend
 specializations (R-BACK-2.17, R-BACK-2.23, R-BACK-2.26, R-BACK-5.7,
 R-BACK-12.13, R-CORE-11.11). It states the warm-path materialization floor: each
 unique encoder-visible record or payload must reach owned storage at most once,

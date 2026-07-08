@@ -3166,7 +3166,7 @@ static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTe
  * is unit-pinned by core::isReszDepthResolveSentinel (core_constants.hpp); it
  * is duplicated here as a literal because this PE translation unit speaks the
  * C ABI (device_c.h), not the C++ core header. See
- * specs/d3d9/formats/{requirements,design}.md. */
+ * specs/d3d9/formats/{requirements,spec}.md. */
 static constexpr DWORD kReszDepthResolveSentinel = 0x7FA05000u;
 
 /* =========================================================================

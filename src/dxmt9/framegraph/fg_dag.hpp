@@ -2,7 +2,7 @@
 
 // Frame Graph DAG data structures (Task B1, L1).
 //
-// Spec: specs/d3d9-renderer/design.md §3 (Frame Graph Data Structures).
+// Spec: specs/d3d9-renderer/spec.md §3 (Frame Graph Data Structures).
 //   §3.1 PassNode, §3.2 ResourceNode, §3.4 FrameGraph container.
 //
 // SCOPE — L1 ONLY.
@@ -13,7 +13,7 @@
 //   pair into the chunk's SoA draw-run arrays rather than carrying any decoded
 //   per-draw geometry/binding payload.
 //
-//   The full mesh DrawDescriptor from design.md §3.3 (vb_pointers, bindless
+//   The full mesh DrawDescriptor from spec.md §3.3 (vb_pointers, bindless
 //   indices, bbox, …) is DEFERRED TO L2 and is intentionally NOT declared here.
 //
 // DETERMINISM (R-BACK-32.2).
@@ -23,7 +23,7 @@
 // DATA-ORIENTED SHAPE.
 //   PassNode / ResourceNode / Edge / DrawRef are flat POD-friendly records.
 //   ResourceNode carries a per-frame std::vector access log; the whole graph is
-//   per-frame build scratch (design.md §3.4 "rebuilt every frame"), so the
+//   per-frame build scratch (spec.md §3.4 "rebuilt every frame"), so the
 //   per-frame vectors are acceptable build-time storage, not a hot-path
 //   per-draw allocation.
 
@@ -48,7 +48,7 @@ using core::u64;
 using TextureHandle = core::TextureHandle;
 using ResourceHandle = core::Handle;
 
-// design.md §3.1 — pass kinds the builder emits.
+// spec.md §3.1 — pass kinds the builder emits.
 enum class PassKind : u8 {
   Render,
   Compute,
@@ -57,7 +57,7 @@ enum class PassKind : u8 {
   Sync,
 };
 
-// design.md §3.1 AttachmentSet. Color count is bounded by the D3D9 backend
+// spec.md §3.1 AttachmentSet. Color count is bounded by the D3D9 backend
 // render-target cap (core::kMaxRenderTargets = 4); the array is sized to the
 // spec's 8 so a wider Metal target set never under-sizes the field. depth is
 // the depth/stencil attachment handle.
@@ -69,7 +69,7 @@ struct AttachmentSet {
   friend bool operator==(const AttachmentSet&, const AttachmentSet&) = default;
 };
 
-// L1 lightweight draw reference (design.md §3.1 DrawRange + L1 scope note).
+// L1 lightweight draw reference (spec.md §3.1 DrawRange + L1 scope note).
 //
 // `first`/`count` index into FrameGraph::draws. Each entry of FrameGraph::draws
 // is a DrawRef into the source core::ChunkSlot: `command_index` selects the
@@ -93,7 +93,7 @@ struct DrawRef {
   friend bool operator==(const DrawRef&, const DrawRef&) = default;
 };
 
-// design.md §3.5 — load/store action selected by the optimizer (loadstore.cpp,
+// spec.md §3.5 — load/store action selected by the optimizer (loadstore.cpp,
 // §5.5). B1 only declares the storage; the optimizer populates it.
 enum class LoadAction : u8 {
   DontCare,
@@ -115,7 +115,7 @@ struct LoadStorePolicy {
   friend bool operator==(const LoadStorePolicy&, const LoadStorePolicy&) = default;
 };
 
-// design.md §3.1 PassNode::flags + §5.1 DCE gates that read pass flags.
+// spec.md §3.1 PassNode::flags + §5.1 DCE gates that read pass flags.
 struct PassFlags {
   bool contains_lock = false;             // forces flush boundary (R-BACK-32.4)
   bool contains_occlusion_query = false;  // DCE-protected (§5.1)
@@ -126,7 +126,7 @@ struct PassFlags {
   friend bool operator==(const PassFlags&, const PassFlags&) = default;
 };
 
-// design.md §3.1 PassNode.
+// spec.md §3.1 PassNode.
 struct PassNode {
   PassKind kind = PassKind::Render;
   AttachmentSet targets{};
@@ -138,7 +138,7 @@ struct PassNode {
   friend bool operator==(const PassNode&, const PassNode&) = default;
 };
 
-// design.md §3.2 ResidencyClass. Default Persistent (memoryless promotion is a
+// spec.md §3.2 ResidencyClass. Default Persistent (memoryless promotion is a
 // later optimizer decision, §5.3).
 enum class ResidencyClass : u8 {
   Persistent,
@@ -146,7 +146,7 @@ enum class ResidencyClass : u8 {
   Memoryless,
 };
 
-// design.md §3.2 AccessLog access_kind / stage enumerations. Kept as u8 fields
+// spec.md §3.2 AccessLog access_kind / stage enumerations. Kept as u8 fields
 // in AccessLog (matching the spec layout) with named constants for readability.
 enum class AccessKind : u8 {
   Read,
@@ -163,7 +163,7 @@ enum class AccessStage : u8 {
   Copy,
 };
 
-// design.md §3.2 AccessLog.
+// spec.md §3.2 AccessLog.
 struct AccessLog {
   u32 pass_index = 0;
   u8 access_kind = static_cast<u8>(AccessKind::Read);
@@ -172,7 +172,7 @@ struct AccessLog {
   friend bool operator==(const AccessLog&, const AccessLog&) = default;
 };
 
-// design.md §3.2 ResourceNode classifier_flags bits (lock/readback/cross_frame).
+// spec.md §3.2 ResourceNode classifier_flags bits (lock/readback/cross_frame).
 struct ResourceClassifierFlags {
   bool lock_seen = false;
   bool readback_seen = false;
@@ -181,7 +181,7 @@ struct ResourceClassifierFlags {
   friend bool operator==(const ResourceClassifierFlags&, const ResourceClassifierFlags&) = default;
 };
 
-// design.md §3.2 ResourceNode.
+// spec.md §3.2 ResourceNode.
 struct ResourceNode {
   ResourceHandle handle{};
   std::vector<AccessLog> accesses;  // chronological; per-frame build scratch
@@ -193,7 +193,7 @@ struct ResourceNode {
   friend bool operator==(const ResourceNode&, const ResourceNode&) = default;
 };
 
-// design.md §3.4 Edge (src_pass, dst_pass, resource). Producer→consumer
+// spec.md §3.4 Edge (src_pass, dst_pass, resource). Producer→consumer
 // dependency, inferred in §4.2 from access logs.
 struct Edge {
   u32 src_pass = 0;
@@ -203,7 +203,7 @@ struct Edge {
   friend bool operator==(const Edge&, const Edge&) = default;
 };
 
-// design.md §3.4 FrameGraph container. Rebuilt every frame (only the
+// spec.md §3.4 FrameGraph container. Rebuilt every frame (only the
 // memoryless ResourceNode observation pool carries forward, handled elsewhere).
 struct FrameGraph {
   std::vector<PassNode> passes;

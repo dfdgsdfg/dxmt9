@@ -8,7 +8,7 @@ date: 2026-07-06
 type: no-gputrace
 status: accepted-attribution-offload-lever-exhausted
 source: experiments/output/app-d3d9-3dmark05-replay-offload-attrib-r6-20260706/result.json; docs/perfomance/present-pacing/present-pacing-commit-replay-offload.190.md; docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md
-related: docs/perfomance/present-pacing/index.md; specs/backend/design.md
+related: docs/perfomance/present-pacing/index.md; specs/backend/spec.md
 ---
 
 # Present-Pacing H191 - Offload backpressure attribution

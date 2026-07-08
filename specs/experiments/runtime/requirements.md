@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Experiments Runtime Requirements — Wine, Prefix, External Apps"
+description: "Experiments / Runtime requirements and compatibility contracts."
+tags: [specs, experiments, runtime, requirements]
+---
+
 # Experiments Runtime Requirements — Wine, Prefix, External Apps
 
 This spec governs how dxmt9 manages the **non-source artifacts** that wild
@@ -18,7 +25,7 @@ Scope keywords used below: **wine root**, **prefix**, **install**,
 **R-RT-1.1** This spec applies to *wild* experiments only — runs that load a
 real D3D9 binary into Wine and exercise dxmt9's PE-side `d3d9.dll` /
 `winemetal.dll`. Native macOS experiments (those covered by
-`specs/experiments/design.md` §2 — `DYLD_INSERT_LIBRARIES`) are out of scope
+`specs/experiments/spec.md` §2 — `DYLD_INSERT_LIBRARIES`) are out of scope
 and continue to use no Wine, no prefix, no external install.
 
 **R-RT-1.2** The system manages three categories of non-source artifact:

@@ -9937,7 +9937,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       depthSurface && depthSurface->texture && depthSurface->desc.depthStencil) {
     const bool clearDepth = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, false);
     const bool clearStencil = clearMatchesDepthStencilAttachment(clear, hot.depthStencil.handle, true);
-    // R-BACK-15.7 simple form (specs/backend/render-pass-actions/design.md
+    // R-BACK-15.7 simple form (specs/backend/render-pass-actions/spec.md
     // section 4.2): in-chunk look-ahead — if the very next op on this
     // depth handle is a Clear, the about-to-be-stored tile contents are
     // immediately discarded, so we can DontCare-store. R-BACK-15.14:
@@ -10873,7 +10873,7 @@ bool encodeDraw(EncodeContext& ctx,
   // newRenderPipelineStateWithTileDescriptor: — is bound with the ordinary
   // `setRenderPipelineState:`, NOT `setTileRenderPipelineState:` (which the
   // M1 render encoder does not respond to and throws an unrecognized-selector
-  // NSException for). This matches design.md §13.5. Because that overwrites
+  // NSException for). This matches spec.md §13.5. Because that overwrites
   // the render PSO, we rebind the base-colour PSO after the dispatch so any
   // subsequent draw in a DrawRun (which skips the base-state bind) still has
   // its base-colour pipeline current.
@@ -15415,7 +15415,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             // Bind slot 30 — vertex + fragment. The render encoder reads
             // from this single argbuf for the duration of the pass; the
             // slot-30 bind is the only argbuf-related bind on the encoder
-            // (per design.md §11.2; setVertexBytes(slot=5) / vertex stream
+            // (per spec.md §11.2; setVertexBytes(slot=5) / vertex stream
             // slot 1 stay direct).
             traceRenderPassProgress("before-argbuf-bind", lookaheadStartIndex,
                                     clear.has_value());
@@ -15450,7 +15450,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         }
       } else {
         perf::countStage1Encoder();
-        // Stage 1 byte total so the regression test in design.md §11.5
+        // Stage 1 byte total so the regression test in spec.md §11.5
         // can compare Stage 2's expected savings. Bytes scale with the
         // four per-frequency UBOs the encoder may upload (worst-case,
         // dirty-mask all set on encoder open). Stage 2's counter bumps

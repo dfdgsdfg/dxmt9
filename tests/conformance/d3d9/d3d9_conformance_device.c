@@ -3157,7 +3157,7 @@ void test_multi_adapter(const struct d3d9_api *api)
                 D3D_OK);
 
         /*
-         * gap.md §C.7 — AlphaCmpCaps must be sourced from the
+         * specs/d3d9/gap_d3d9.md §C.7 — AlphaCmpCaps must be sourced from the
          * dedicated alphaCmpCaps slot, not from alphaBlendCaps.
          * Every Metal-capable GPU supports the full eight-op
          * comparison set; assert at least the three ops that legacy
@@ -3171,7 +3171,7 @@ void test_multi_adapter(const struct d3d9_api *api)
                 | D3DPCMPCAPS_LESSEQUAL));
 
         /*
-         * gap.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier
+         * specs/d3d9/gap_d3d9.md §C.9 — D3DADAPTER_IDENTIFIER9::DeviceIdentifier
          * must be a non-zero, byte-stable per-adapter GUID. Several
          * legacy D3D9 titles use it as an installation fingerprint
          * and refuse to launch when it's the zero GUID.

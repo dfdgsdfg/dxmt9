@@ -352,7 +352,7 @@ void testComWrappersEx() {
   checkEq(device->SetConvolutionMonoKernel(), E_NOTIMPL, "mono kernel not impl");
   checkEq(device->ComposeRects(), E_NOTIMPL, "compose rects not impl");
 
-  // ── gap_d3d9 §D: regression gates for silent-S_OK COM stubs ──────────────
+  // ── specs/d3d9/gap_d3d9.md §D: regression gates for silent-S_OK COM stubs ──────────────
   // These methods are documented no-ops on Metal/Apple Silicon that match
   // Wine's S_OK contract. They have no observable side effect, so without an
   // explicit assertion a regression (e.g. an accidental E_NOTIMPL, or a stale
@@ -360,7 +360,7 @@ void testComWrappersEx() {
   // verified on master so a behavioral drift is caught here.
 
   // CheckResourceResidency is a no-op that ignores its resource span entirely;
-  // a non-empty span must still return S_OK (gap_d3d9 D — residency stub). The
+  // a non-empty span must still return S_OK (specs/d3d9/gap_d3d9.md D — residency stub). The
   // stub never dereferences the entries, so opaque sentinel pointers suffice.
   int residencySentinel = 0;
   void* residencyResources[2] = {device, &residencySentinel};
@@ -368,7 +368,7 @@ void testComWrappersEx() {
           "check resource residency ignores non-empty span");
 
   // SetGPUThreadPriority accepts any value as a no-op; GetGPUThreadPriority is
-  // hardwired to report 0 and does NOT track prior Set calls (gap_d3d9 D —
+  // hardwired to report 0 and does NOT track prior Set calls (specs/d3d9/gap_d3d9.md D —
   // gpu thread priority stub). Pin both the zero-priority round-trip across a
   // Set(0) and the always-zero readback after a non-zero Set.
   checkEq(device->SetGPUThreadPriority(0), D3D_OK, "set gpu priority zero");

@@ -1,5 +1,5 @@
 ---
-description: dxmt9 spec authoring rules for requirements, design, DOD ownership, Wine conformance, verification, benchmarks, and gap tracking
+description: dxmt9 spec authoring rules for requirements, spec docs, DOD ownership, Wine conformance, verification, benchmarks, and gap tracking
 paths:
   - "specs/**/*.md"
 globs: "specs/**/*.md"
@@ -29,15 +29,22 @@ Root `specs/` is multi-topic. Each major concern lives in a topic folder:
 | `specs/benchmarks/` | Performance workloads, baselines, regression policy |
 | `specs/experiments/` | Wild integration experiments and fuzzy pass criteria |
 | `specs/d3d7/`, `specs/d3d8/` | Compatibility shim layers |
-| `specs/gap.md` | Current implementation/evidence gap tracker |
+| `specs/<topic>/gap.md` | Topic-owned implementation/evidence gap tracker |
+| `specs/<topic>/log.md` | Topic-owned maintenance history and retired detail |
+| `specs/gap.md` | Root gap index and cross-topic rollup |
 
-Every topic should have `requirements.md` and `design.md` unless it is an
-intentional single-purpose support doc such as `specs/gap.md`.
+Every topic should have `requirements.md` and `spec.md` unless it is an
+intentional single-purpose support doc such as a gap inventory.
+
+Durable `specs/**/*.md` documents should carry lightweight YAML frontmatter with
+`type`, `title`, `description`, and `tags` keys. Keep it descriptive, not a
+state tracker. Exclude `specs/README.md`, local-only `*.plan.md`, and
+`specs/**/plan.md` files.
 
 `specs/**/plan.md` and `*.plan.md` files are local-only and gitignored. Do not
 commit implementation plans. Promote durable ordering constraints into
-`design.md`, missing work into `specs/gap.md`. Plan structure rules live in
-[Implementation Plans](#implementation-plans) below.
+`spec.md`, missing work into the owning `specs/<topic>/gap.md`. Plan
+structure rules live in [Implementation Plans](#implementation-plans) below.
 
 ## Requirement IDs
 
@@ -59,19 +66,19 @@ Requirements are written as numbered contracts with stable IDs:
 Rules:
 
 - One requirement should state one observable contract.
-- Keep IDs stable. If a requirement is removed, update references in design,
-  tests, benchmarks, verification docs, and `specs/gap.md`.
+- Keep IDs stable. If a requirement is removed, update references in spec docs,
+  tests, benchmarks, verification docs, and the owning gap document.
 - Use normative language: "must", "must not", "may", "should".
 - Avoid vague criteria such as "works correctly", "optimize", or "support later".
 - State the compatibility scope: Windows D3D9 behavior, Wine runtime behavior,
   DXMT-compatible architecture, or data-oriented transform design.
 
-## Design Docs
+## Spec Docs
 
-`design.md` explains the chosen architecture for the requirements. It should make
+`spec.md` explains the chosen architecture for the requirements. It should make
 ownership and ordering obvious.
 
-Required design content for non-trivial topics:
+Required `spec.md` content for non-trivial topics:
 
 - **Ownership:** which module owns validation, state, resource lifetime,
   scheduling, and failure reporting.
@@ -140,7 +147,7 @@ Tests must map back to requirement IDs or explicit gap rows.
 | Wine PE conformance executables | Public D3D9 ABI, COM, HRESULT, loader, and window behavior |
 | TLA+ / assertions | Queue, resource lifetime, encoder lifecycle, query sequence safety |
 | Benchmarks | Bridge-op budget, command batching, throughput, frame timing |
-| `specs/gap.md` | Missing, partial, or newly required evidence |
+| `specs/<topic>/gap.md` | Missing, partial, or newly required evidence |
 
 Rules:
 
@@ -148,7 +155,8 @@ Rules:
 - Queue and bridge behavior should be observable without sleeps or GPU timing.
 - Runtime shader probes complement, but do not replace, source/IR and descriptor
   assertions.
-- If a requirement cannot be verified yet, add or update a `specs/gap.md` row.
+- If a requirement cannot be verified yet, add or update the owning
+  `specs/<topic>/gap.md` row.
 
 ## Benchmarks
 
@@ -168,8 +176,20 @@ per-state or per-draw bridge calls.
 
 ## Gap Tracking
 
-Update `specs/gap.md` whenever a spec adds a requirement that is not fully
-implemented or not fully evidenced.
+Update the owning `specs/<topic>/gap.md` whenever a spec adds a requirement that
+is not fully implemented or not fully evidenced. Keep `specs/gap.md` as a root
+index and cross-topic rollup; do not put detailed status rows there unless no
+topic owner exists yet.
+
+Detailed inventory docs may live next to the owning topic gap when a matrix is
+too large for the topic overview. Current durable inventories are
+`specs/d3d9/gap_d3d9.md` for D3D9 API coverage and
+`specs/tests/gap_d3d9_wine_test.md` for Wine D3D9 conformance coverage.
+
+Keep root `specs/gap.md` concise: it should provide only the project-level
+overview, domain ownership links, and inventory pointers. Move older detail,
+structural migrations, and non-current notes to the owning `specs/<topic>/log.md`
+instead of expanding the root overview.
 
 Gap rows should include:
 
@@ -178,9 +198,9 @@ Gap rows should include:
 - missing evidence or implementation work,
 - requirement IDs that own the gap.
 
-Do not hide TODOs in `requirements.md` or `design.md`. Long-lived missing work
-belongs in `specs/gap.md`; session-local sequencing belongs in ignored `plan.md`
-or a scratchpad.
+Do not hide TODOs in `requirements.md` or `spec.md`. Long-lived missing work
+belongs in the owning topic gap; session-local sequencing belongs in ignored
+`plan.md` or a scratchpad.
 
 ## Implementation Plans
 
@@ -193,7 +213,7 @@ file/state conflicts visible upfront.
 
 | Pattern | Use when |
 |---------|----------|
-| `specs/<topic>/plan.md` | Plan belongs to a single topic with `requirements.md` + `design.md` (e.g., `specs/backend/draw-uniforms/plan.md`, `specs/verification/plan.md`). |
+| `specs/<topic>/plan.md` | Plan belongs to a single topic with `requirements.md` + `spec.md` (e.g., `specs/backend/draw-uniforms/plan.md`, `specs/verification/plan.md`). |
 | `specs/<scope>.plan.md` | Plan is a cross-cutting refactor or staging that does not fit a single topic (e.g., `specs/round2-module-splits.plan.md`). |
 
 Both patterns are matched by `.gitignore`. Do not invent a third naming.
@@ -204,7 +224,7 @@ A plan must contain enough for a fresh agent (no session context) to dispatch
 parallel work safely. Every plan needs the following, in this order:
 
 1. **Goal + Architecture** — one paragraph stating what is built and the
-   high-level approach. Link to the spec's `requirements.md` / `design.md` if
+   high-level approach. Link to the spec's `requirements.md` / `spec.md` if
    one exists; the plan does not restate them.
 2. **Task DAG** — a Mermaid `flowchart` (or `graph TD`) that shows every task,
    its dependencies, and the parallel batches/waves. Use class colours per
@@ -228,21 +248,21 @@ Optional sections that improve large or risky plans:
 - **Open issues** — coordination decisions that must be resolved before
   dispatch (e.g., counter-symbol header location, ordering of merges).
 - **Sync points** — table of `(trigger event → doc/spec edit)` pairs so
-  `gap.md`, `design.md`, and cross-references stay in step as tracks land.
+  `gap.md`, `spec.md`, and cross-references stay in step as tracks land.
 - **Parallelization protocol** — exact dispatch / merge / cherry-pick sequence
   when worktree-based parallel execution is the recommended path.
 
-### Plan vs. Design vs. Gap
+### Plan vs. Spec vs. Gap
 
 | Doc | Holds | Lifetime |
 |-----|-------|----------|
 | `plan.md` | Execution staging, task DAG, file conflict matrix, batch gates | Single round of work; discarded after merge |
-| `design.md` | Durable ownership, ordering, ABI, failure behavior | Permanent |
+| `spec.md` | Durable ownership, ordering, ABI, failure behavior | Permanent |
 | `requirements.md` | Numbered contracts with stable IDs | Permanent |
 | `gap.md` | Implementation/evidence shortfalls | Active until closed |
 
 If a plan discovers a durable rule (e.g., "PE side never resolves Metal buffer
-slot indices"), promote that line into `design.md` before the plan is
+slot indices"), promote that line into `spec.md` before the plan is
 discarded. If it discovers missing evidence, add a `gap.md` row. The plan
 itself stays local.
 
@@ -263,7 +283,7 @@ itself stays local.
 
 ### Plan Authoring Workflow
 
-1. Read the topic's `requirements.md` and `design.md` first; the plan exists
+1. Read the topic's `requirements.md` and `spec.md` first; the plan exists
    only to stage their implementation.
 2. Decompose into tasks small enough that one agent can finish each in a
    single dispatch (≤ a few files, ≤ a few hours of agent time).
@@ -290,15 +310,15 @@ requirements or design, such as:
 
 Each research note should state subject, why it exists, findings, and implications.
 Once a finding becomes a hard rule, move the rule into `requirements.md` or
-`design.md` and link the research note.
+`spec.md` and link the research note.
 
 ## Workflow
 
 1. Update `requirements.md` when behavior or compatibility scope changes.
-2. Update `design.md` when ownership, data layout, ABI, ordering, or failure
+2. Update `spec.md` when ownership, data layout, ABI, ordering, or failure
    behavior changes.
 3. Update tests/verification/benchmarks specs when the acceptance evidence changes.
-4. Update `specs/gap.md` for anything partial or missing.
+4. Update the owning `specs/<topic>/gap.md` for anything partial or missing.
 5. Run a focused markdown check such as `git diff --check`.
 
 ## Anti-Patterns
@@ -306,7 +326,7 @@ Once a finding becomes a hard rule, move the rule into `requirements.md` or
 - Committing `plan.md` or `*.plan.md`.
 - Plans without a Mermaid task DAG (parallelism becomes invisible).
 - Plans without a file-conflict matrix (parallel batches become unsafe).
-- Plans that restate `requirements.md` or `design.md` instead of linking.
+- Plans that restate `requirements.md` or `spec.md` instead of linking.
 - Adding a requirement without an ID.
 - Adding a design choice without an owner.
 - Treating Wine source structure as mandatory architecture.

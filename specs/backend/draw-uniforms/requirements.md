@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Draw Uniforms Layout Requirements"
+description: "Backend / Draw Uniforms requirements and compatibility contracts."
+tags: [specs, backend, draw-uniforms, requirements]
+---
+
 # Draw Uniforms Layout Requirements
 
 dxmt9 must split per-draw shader uniforms and fixed-function state across
@@ -9,10 +16,10 @@ These requirements describe the contract owned by the backend encode path
 and the generated MSL shader sources. The PE D3D9 layer is unchanged: it
 records D3D9 `Set*` semantics into chunk records as today; backend-owned
 dirty masks and binding categories are derived during chunk import. The
-design that satisfies these requirements lives in `design.md`.
+design that satisfies these requirements lives in `spec.md`.
 
 Traceability: `R-BACK-12.1` through `R-BACK-12.21`. Cross-references:
-`specs/backend/design.md` (encode path), `specs/d3d9/design.md` (state
+`specs/backend/spec.md` (encode path), `specs/d3d9/spec.md` (state
 shadow source), `docs/perfomance-bottleneck.md` (empirical motivation).
 
 ---
@@ -81,14 +88,14 @@ Slot 2 and slots 4, 6+ remain reserved.
 ### 2.2 Texture and sampler slots unchanged (`R-BACK-12.6`)
 
 `[[texture(0..7)]]` and `[[sampler(0..7)]]` bindings on the fragment stage
-must continue to follow the existing contract in `specs/d3d9/design.md`.
+must continue to follow the existing contract in `specs/d3d9/spec.md`.
 This spec does not modify resource binding.
 
 ### 2.3 Vertex stream slot unchanged (`R-BACK-12.7`)
 
 VS slot 1 must continue to host the active vertex stream's transient or
 resident buffer slice. The pre-existing UP-vertex / UP-index slab paths
-(documented in `specs/backend/design.md`) are unaffected.
+(documented in `specs/backend/spec.md`) are unaffected.
 
 ---
 
@@ -188,7 +195,7 @@ invalidates stale entries. No additional invalidation logic is required.
 
 Each of the five structures must declare a `static_assert` on its
 `sizeof()` matching a specified value. The values are recorded in
-`design.md` and updated only when the layout intentionally changes.
+`spec.md` and updated only when the layout intentionally changes.
 
 ---
 

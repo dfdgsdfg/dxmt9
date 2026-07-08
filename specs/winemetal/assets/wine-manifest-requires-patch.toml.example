@@ -2,7 +2,7 @@
 # fields added to experiments/wine/manifest.toml when this spec lands.
 # Reference document — not a live manifest.
 #
-# Spec: specs/winemetal/{requirements,design}.md §5.
+# Spec: specs/winemetal/{requirements,spec}.md §5.
 #
 # Each [[wine]] entry uses the existing schema from
 # specs/experiments/assets/wine-manifest.schema.toml plus two

@@ -1,6 +1,6 @@
 """Wine prefix bootstrap for dxmt9 experiments.
 
-Spec: specs/experiments/runtime/{requirements,design}.md §4 (prefix lifecycle,
+Spec: specs/experiments/runtime/{requirements,spec}.md §4 (prefix lifecycle,
 R-RT-4.x).
 
 Creates experiments/prefixs/<name>/ via `wineboot --init`, then symlinks

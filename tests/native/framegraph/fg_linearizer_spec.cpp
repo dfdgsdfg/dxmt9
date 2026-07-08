@@ -5,7 +5,7 @@
 // / EmitDraw / EmitClear / EndPass / Present / Blit). This spec builds synthetic
 // ChunkSlots (same SoA fixture style as fg_builder_spec.cpp), runs
 // buildFrameGraph -> runOptimizer -> planLinearization, and asserts:
-//   - PARITY BASELINE (design.md §14 L1 / R-BACK-39.1): under default
+//   - PARITY BASELINE (spec.md §14 L1 / R-BACK-39.1): under default
 //     OptimizerOptions{} the plan reproduces the chunk's natural pass/draw
 //     order (BeginPass/EmitDraw.../EndPass per pass, draws in submission order,
 //     Present last).

@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Render-Pass Load/Store Action Requirements"
+description: "Backend / Render Pass Actions requirements and compatibility contracts."
+tags: [specs, backend, render-pass-actions, requirements]
+---
+
 # Render-Pass Load/Store Action Requirements
 
 dxmt9 must reduce Apple-Silicon TBDR tile preservation cost by avoiding
@@ -7,7 +14,7 @@ boundaries that do not require content preservation.
 These requirements describe the contract owned by the backend encode path
 (`beginRenderPass`, encoder split decisions in `encodeChunk`) and the queue's
 per-command-buffer tracking state. The design that satisfies them lives in
-`design.md`.
+`spec.md`.
 
 Traceability: `R-BACK-15.1` through `R-BACK-15.16`. Cross-references:
 `specs/backend/requirements.md` `R-BACK-2.5` (clear-as-load-action),

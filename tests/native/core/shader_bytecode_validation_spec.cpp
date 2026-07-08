@@ -203,7 +203,7 @@ constexpr u32 kD3DSPR_LABEL = 18u;
 // D3DDECLUSAGE / D3DDECLMETHOD constants used by the new boundary cases
 // below. Self-contained — canonical definitions live in
 // dxmt9_shader_decoder.hpp / Wine d3d9types.h. See
-// specs/gap_d3d9.md §A.4/§A.5.
+// specs/d3d9/gap_d3d9.md §A.4/§A.5.
 constexpr u32 kD3DDeclUsageTangent = 6u;
 constexpr u32 kD3DDeclUsageBinormal = 7u;
 constexpr u32 kD3DDeclUsageTessFactor = 8u;

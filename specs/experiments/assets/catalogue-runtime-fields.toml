@@ -2,7 +2,7 @@
 # experiments/CATALOGUE.toml when the app is a wild experiment.
 # Reference document — not the live CATALOGUE.toml.
 #
-# Spec: specs/experiments/runtime/{requirements,design}.md §5.
+# Spec: specs/experiments/runtime/{requirements,spec}.md §5.
 #
 # Existing fields (name/source/license/binary/launcher/...) are unchanged.
 # The runtime fields below apply only when requires_wine = true and the

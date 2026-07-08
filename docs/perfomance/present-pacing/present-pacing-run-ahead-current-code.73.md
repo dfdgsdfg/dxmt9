@@ -7,7 +7,7 @@ title: Current HEAD Has No Run-Ahead Runtime Knob
 date: 2026-06-18
 type: code-audit
 status: accepted-current-code
-source: src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_queue.hpp; agents/rules/environment_variables_present.rules.md; specs/backend/design.md; specs/gap.md; docs/perfomance/present-pacing/index.md
+source: src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_queue.hpp; agents/rules/environment_variables_present.rules.md; specs/backend/spec.md; specs/backend/gap.md; docs/perfomance/present-pacing/index.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md; docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md; docs/perfomance/present-pacing/present-pacing-run-ahead-cpu-ready.70.md
 ---
 
@@ -33,7 +33,7 @@ ready-slot coalescing experiments described by H74/H75?
 ## Observation
 
 The current source no longer honors the historical run-ahead envs. The present
-rules file and `specs/gap.md` still described them as if they were available,
+rules file and `specs/backend/gap.md` still described them as if they were available,
 but the implementation has been reverted. The queue now has a small
 future-facing completion carrier for R-BACK-2.41, but no code path fills it from
 multiple ready slots yet:

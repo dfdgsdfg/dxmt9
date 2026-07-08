@@ -47,7 +47,7 @@ constexpr std::uint16_t bitValue(DirtyBit bit) {
 }
 
 // R-BACK-12.8 — bitmask granularity. Each category must have a distinct
-// power-of-two value matching design.md §4.
+// power-of-two value matching spec.md §4.
 void testBitmaskGranularity() {
   checkEq(bitValue(DirtyBit::VsF), 1u << 0, "VsF == 1<<0");
   checkEq(bitValue(DirtyBit::VsI), 1u << 1, "VsI == 1<<1");

@@ -1,6 +1,6 @@
 #pragma once
 
-// design.md §15 IExternalDrawEmitter — narrow interface that lets an external
+// spec.md §15 IExternalDrawEmitter — narrow interface that lets an external
 // (e.g. modern-renderer) caller drive the existing free-function draw/clear
 // encode path without re-implementing it.
 //

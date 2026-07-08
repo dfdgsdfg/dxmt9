@@ -5,7 +5,7 @@ projects, framed as concrete trade-offs (pros / cons / when each shape wins)
 rather than as a documentation diff.
 
 Sources:
-- `specs/archicture/design.md` — dxmt9 architecture.
+- `specs/archicture/spec.md` — dxmt9 architecture.
 - `docs/research/dxmt.md` — DXMT (D3D11→Metal on Wine).
 - `docs/research/dxvk-d3d9.md` — DXVK D3D9 (D3D9→Vulkan).
 - `docs/research/wine-d3d9.md` — Wine builtin D3D9 over wined3d.
@@ -538,7 +538,7 @@ title exhibits any of:
 | `encode_chunk_cpu_ms` and `completion_wait_ms` persistently equal at frame budget | single-CB-per-chunk is the bottleneck; G-axis multi-CB target is mandatory (SFIV 2026-05-10 measurement falsifies the implicit "1 chunk = 1 CB" choice) |
 
 These are all observable. The benchmark and counter design in
-`specs/archicture/design.md` §7 already enumerates the relevant signals
+`specs/archicture/spec.md` §7 already enumerates the relevant signals
 (`bridge ops/frame`, `encoder split count`, `pre-acquire wait`, etc.) so the
 hypothesis can be falsified with evidence rather than assumed.
 
@@ -546,7 +546,7 @@ hypothesis can be falsified with evidence rather than assumed.
 
 ## See Also
 
-- `specs/archicture/design.md` — authoritative dxmt9 architecture.
+- `specs/archicture/spec.md` — authoritative dxmt9 architecture.
 - `docs/research/dxmt.md` — DXMT reference notes.
 - `docs/research/dxvk-d3d9.md` — DXVK D3D9 reference notes.
 - `docs/research/wine-d3d9.md` — Wine D3D9 reference notes.

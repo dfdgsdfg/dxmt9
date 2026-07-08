@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "D3D7 / DirectDraw 7 Layer Requirements"
+description: "D3D7 requirements and compatibility contracts."
+tags: [specs, d3d7, requirements]
+---
+
 # D3D7 / DirectDraw 7 Layer Requirements
 
 The D3D7 layer exposes `IDirectDraw7`, `IDirect3D7`, `IDirect3DDevice7`, and

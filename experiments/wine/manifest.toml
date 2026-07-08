@@ -9,7 +9,7 @@
 # product. Heroic / Gcenx redistributed builds (Wine-11.x, Wine-11.x-DXMT,
 # Wine-Crossover-23.7.1-1) all ship a stripped winemac.so. CrossOver 26's
 # wow64 additionally rejects NtQueryVirtualMemory(MemoryWineImageInfo)
-# — see specs/winemetal/design.md §9.
+# — see specs/winemetal/spec.md §9.
 
 manifest_version = 1
 
@@ -54,7 +54,7 @@ notes          = "winemac.so md5-identical to vanilla Wine-11.7 (67afe1eb6fab5b9
 # ─── Documented-as-broken: CodeWeavers CrossOver product. ────────────────
 # Three independent blockers audited on CrossOver 26 (wine-11.0-8709) on
 # 2026-05-11. See specs/winemetal/{requirements.md §6.2 crossover-26 row,
-# design.md §9 "What is not a workflow"} for the full PoC writeup.
+# spec.md §9 "What is not a workflow"} for the full PoC writeup.
 [[wine]]
 id             = "crossover-26"
 source         = "crossover"

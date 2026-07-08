@@ -19,7 +19,7 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | `agents/rules/metal_debugging.rules.md` | GPU-side debugging: frame capture, `.gputrace`, signposts, perf counters, 3DMark05 GT1 probe toolkit. |
 | `agents/rules/test_wild.rules.md` | Running against real D3D9 binaries under Wine (runtime selection — must use Sikarugir/symbol-exposing `winemac.so`). |
 | `agents/rules/documentation*.rules.md` | Writing docs/specs/rules (English-only for rules/specs; AGENTS.md vs rules vs specs decision flow). |
-| `specs/gap.md`, `specs/gap_d3d9*.md` | Implementation status / missing evidence before assuming a feature exists. |
+| `specs/gap.md`, `specs/<domain>/gap.md`, `specs/d3d9/gap_d3d9.md`, `specs/tests/gap_d3d9_wine_test.md` | Implementation status / missing evidence before assuming a feature exists. |
 | `docs/perfomance/overview-3dmark05-gt1.md` | Performance investigation history (experiment knowledge graph). |
 
 ## Architecture

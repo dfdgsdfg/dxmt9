@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
 # REFERENCE EXAMPLE — dxmt9 macdrv-symbol-expose patch shape.
-# Spec: specs/winemetal/{requirements,design}.md §4.
+# Spec: specs/winemetal/{requirements,spec}.md §4.
 #
 # The live patch lives at:
 #   wine/patches/winemac-expose-symbols-<wine-version>.patch

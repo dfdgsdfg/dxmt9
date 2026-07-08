@@ -5,7 +5,7 @@ SFIV, Anno 1404, etc.) in `experiments/`. They cover the host Wine
 runtime, not the dxmt9 build itself.
 
 > **Spec:** the mechanics of the manifest, prefix bootstrap, and apps_3rd
-> layout are defined in `specs/experiments/runtime/{requirements,design}.md`.
+> layout are defined in `specs/experiments/runtime/{requirements,spec}.md`.
 > This rule covers operational guidance only.
 
 ## Rule: Default to the Sikarugir-Engines Wine runtime

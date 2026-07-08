@@ -45,7 +45,7 @@ output under `experiments/output/dx9-present-policy-ab/<tag>-<B>-*/`.
 `BOUNDARY_COUNTER_FIELDS`. `specs/backend/requirements.md` carries
 R-BACK-2.29..2.34. R-BACK-2.34 default-flipped policy (Y1 / 2026-05-10)
 based on X1 chain-probe evidence (`docs/boundary-baseline-measurements.md`).
-`specs/gap.md` row reflects ⚠️ partial with the Y1 flip rationale.
+`specs/backend/gap.md` row reflects ⚠️ partial with the Y1 flip rationale.
 
 ## Critical Gaps & ROI
 
@@ -164,4 +164,4 @@ app oracle) holds. Next-cycle priorities, in ROI order:
 - `docs/sfiv-benchmark-measurement.md` — SFIV oracle, U1 + S3 A/Bs.
 - `specs/benchmarks/boundary-counter-schema.md` — counter contract.
 - `specs/backend/requirements.md` — R-BACK-2.29..2.34.
-- `specs/gap.md` — submission grain row.
+- `specs/backend/gap.md` — submission grain row.

@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "D3D8 Layer Requirements"
+description: "D3D8 requirements and compatibility contracts."
+tags: [specs, d3d8, requirements]
+---
+
 # D3D8 Layer Requirements
 
 The D3D8 layer is a shim that translates the `IDirect3D8` / `IDirect3DDevice8`

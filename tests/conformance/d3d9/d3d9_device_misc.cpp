@@ -208,7 +208,7 @@ void device_utility_creation_flags() {
   CHECK(device == nullptr);
 }
 
-// gap_d3d9 D.* — regression gates for the remaining silent-S_OK COM stubs.
+// specs/d3d9/gap_d3d9.md D.* — regression gates for the remaining silent-S_OK COM stubs.
 // These exercise the pure state round-trip / documented returns, not real
 // per-primitive clip results or N-Patch tessellation (dxmt9 and Wine both
 // treat these as state-only / no-op on the Metal path).
@@ -217,7 +217,7 @@ void device_com_stub_returns() {
   if (!fixture.init("device_com_stub_returns")) return;
 
   // SetClipStatus / GetClipStatus — Wine-matching storage-free stub with a
-  // defined default (gap_d3d9 B.8). dxmt9 has no per-vertex clip-flag
+  // defined default (specs/d3d9/gap_d3d9.md B.8). dxmt9 has no per-vertex clip-flag
   // accumulation path (neither does wined3d), so SetClipStatus accepts without
   // storing and GetClipStatus reports the "everything visible / nothing clipped"
   // default rather than echoing a meaningless seed. Null is rejected with

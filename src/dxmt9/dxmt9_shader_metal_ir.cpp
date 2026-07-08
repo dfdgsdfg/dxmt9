@@ -1331,7 +1331,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (argbufHybrid) {
       // R-BACK-12.22..12.26 MSL routing — single argbuf at slot 30
       // replaces slots 0/3. Vertex stream and DrawVolatile stay direct
-      // (design.md §11.4). Re-alias `vsConsts`/`ffpVs` references off
+      // (spec.md §11.4). Re-alias `vsConsts`/`ffpVs` references off
       // the argbuf so downstream emission continues to read by name.
       out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
       out << "                     constant ArgbufLayout& abuf [[buffer("

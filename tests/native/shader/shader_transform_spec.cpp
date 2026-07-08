@@ -233,7 +233,7 @@ std::string translatePixel(std::span<const u32> words) {
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
-// D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) is gated behind the
+// D3DSAMP_MIPMAPLODBIAS (specs/d3d9/gap_d3d9.md B.3) is gated behind the
 // ShaderSourceContext::samplerLodBias variant flag. This overload threads the
 // flag so the spec can assert both the bias-on emit and the byte-identical
 // bias-off emit (no slot-4 param, plain sample()).
@@ -1768,7 +1768,7 @@ void testPs20SamplerRegisterSlotMapping() {
 }
 
 void testPs20MipLodBiasEmitsShaderSideBias() {
-  // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3) is applied at sample time in MSL
+  // D3DSAMP_MIPMAPLODBIAS (specs/d3d9/gap_d3d9.md B.3) is applied at sample time in MSL
   // via texture.sample(sampler, coord, bias(b)) — Metal's MTLSamplerDescriptor
   // has no LOD-bias field. The per-sampler bias rides a dedicated uniform
   // (`SamplerLodBias`) bound at fragment buffer slot 4. When the variant flag
@@ -1787,7 +1787,7 @@ void testPs20MipLodBiasEmitsShaderSideBias() {
 }
 
 void testPs20MipLodBiasClearOmitsShaderSideBias() {
-  // gap_d3d9 B.3 PSO-variant gating: when no active sampler carries a non-zero
+  // specs/d3d9/gap_d3d9.md B.3 PSO-variant gating: when no active sampler carries a non-zero
   // LOD bias the variant flag is CLEAR, and the emitted MSL must be the
   // pre-feature form — NO slot-4 SamplerLodBias param and a plain
   // sample(sampler, coord) with no bias() argument. This keeps the common
@@ -1804,7 +1804,7 @@ void testPs20MipLodBiasClearOmitsShaderSideBias() {
 }
 
 void testFfpMipLodBiasEmitsShaderSideBias() {
-  // Same gap_d3d9 B.3 contract for the fixed-function pixel path: with the
+  // Same specs/d3d9/gap_d3d9.md B.3 contract for the fixed-function pixel path: with the
   // variant flag SET a textured FFP stage threads its per-sampler LOD bias
   // through bias() on the stage sample. The `SamplerLodBias` uniform is
   // declared and bound at slot 4.
@@ -1829,7 +1829,7 @@ void testFfpMipLodBiasEmitsShaderSideBias() {
 }
 
 void testFfpMipLodBiasClearOmitsShaderSideBias() {
-  // gap_d3d9 B.3 PSO-variant gating, FFP path: when the variant flag is CLEAR
+  // specs/d3d9/gap_d3d9.md B.3 PSO-variant gating, FFP path: when the variant flag is CLEAR
   // the textured FFP fragment must be the pre-feature form — no slot-4
   // SamplerLodBias param and a plain stage sample with no bias() argument.
   FfpPixelKey key{};

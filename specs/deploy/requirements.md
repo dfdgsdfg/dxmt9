@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Deployment Requirements"
+description: "Deploy requirements and compatibility contracts."
+tags: [specs, deploy, requirements]
+---
+
 # Deployment Requirements
 
 dxmt9 must support two deployment modes:

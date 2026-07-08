@@ -1,3 +1,10 @@
+---
+type: "Spec Requirements"
+title: "Verification Requirements"
+description: "Verification requirements and compatibility contracts."
+tags: [specs, verification, requirements]
+---
+
 # Verification Requirements
 
 The verification layer provides machine-checked evidence that the most
@@ -153,7 +160,7 @@ until the encoder is ended and a new one is opened.
 
 ## 5. Query Resolution
 
-Traceability: R-CORE-8.1, R-CORE-8.2, d3d9/queries/design.md §2–3
+Traceability: R-CORE-8.1, R-CORE-8.2, d3d9/queries/spec.md §2–3
 
 **R-VERIF-5.1** The formal spec must prove that a query is never
 transitioned to the Resolved state before `completedSeqId >= issuedSeqId`
