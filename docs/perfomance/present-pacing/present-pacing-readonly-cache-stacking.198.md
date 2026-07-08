@@ -6,7 +6,7 @@ order: 198
 title: Readonly Cache Stacks With The Promoted Pair For +26% Cumulative
 date: 2026-07-08
 type: no-gputrace
-status: accepted-stacking-confirm
+status: accepted-fps-promotion
 source: experiments/output/app-d3d9-3dmark05-h197-stacking-r1-20260708/result.json; experiments/output/app-d3d9-3dmark05-h196-readonly-cache-r1-20260708/result.json; docs/perfomance/present-pacing/present-pacing-readonly-managed-buffer-cache.197.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-producer-sampling-attribution.196.md
 ---
@@ -54,10 +54,15 @@ pipeline stays producer-bound). Map mutex wait stays collapsed
 (`45.2` / `3,924`); a same-frame or `v0.0.3`-anchor visual check remains
 the promotion gate, together with an H194-style full-demo long confirm.
 
-## Remaining before promoting the cache
+## Promotion
 
-- Visual gate (anchor comparison or same-frame proof).
-- Long-window confirm pair (H194 pattern, `--timeout 150`).
-- Recommended hardening from the H197 review: an env kill-switch
-  (readonly-lock writes by non-conforming apps now diverge silently) and
-  PE-side cache hit/miss/invalidate counters under `DXMT9_PE_RECORDER_STATS`.
+**Promoted 2026-07-08 by maintainer decision** on this stacking confirm plus
+the smoke-level visual evidence (eyeball of the stacking `actual.png`: full
+combat scene with tracers, volumetric lighting, floor reflections, no defect
+classes; demo time `0:57.5` vs `0:46.5` at equal 70s wall is an independent
+throughput corroboration). The cache is unconditional in code (no env gate),
+so promotion is a documentation state. Waived at promotion time and still
+recommended as follow-ups: an H194-style full-demo long confirm, a strict
+same-frame/anchor visual gate, an env kill-switch (readonly-lock writes by
+non-conforming apps now diverge silently), and PE-side cache
+hit/miss/invalidate counters under `DXMT9_PE_RECORDER_STATS`.

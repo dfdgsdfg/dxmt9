@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H211` - Readonly cache stacks with the promoted pair (accepted stacking confirm: `2,271` presents, `+13.0%` vs pair-on population, `+26.2%` cumulative; visual gate + long confirm remain before promotion).
+Latest tracked row: `H211` - Readonly cache stacks with the promoted pair (accepted FPS promotion: `2,271` presents, `+13.0%` vs pair-on population, `+26.2%` cumulative; long confirm + strict visual gate + hardening remain as follow-ups).
 
 ## Start Here
 
