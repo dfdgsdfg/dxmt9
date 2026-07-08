@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
@@ -80,6 +81,7 @@ void testWireRecordsStayPod() {
   checkPodWireShape<D9CDrawPacketSamplerState>("D9CDrawPacketSamplerState");
   checkPodWireShape<D9CDrawPacketTransform>("D9CDrawPacketTransform");
   checkPodWireShape<D9CDrawPacketStreamSource>("D9CDrawPacketStreamSource");
+  checkPodWireShape<D9CDrawPacketConstDeltaSection>("D9CDrawPacketConstDeltaSection");
   checkPodWireShape<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket");
   checkPodWireShape<D9CDrawIndexedPrimitivePacket>("D9CDrawIndexedPrimitivePacket");
   checkPodWireShape<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket");
@@ -193,7 +195,7 @@ void testDrawPacketLayouts() {
   checkSizeAlign<D9CDrawPacketTransform>("D9CDrawPacketTransform", 72u, 4u);
   checkSizeAlign<D9CDrawPacketStreamSource>("D9CDrawPacketStreamSource", 16u, 4u);
 
-  checkSizeAlign<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket", 4808u, 4u);
+  checkSizeAlign<D9CDrawPrimitivePacket>("D9CDrawPrimitivePacket", 4880u, 4u);
   checkEq(offsetof(D9CDrawPrimitivePacket, renderStateCount), std::size_t{0},
           "draw packet render-state count offset");
   checkEq(offsetof(D9CDrawPrimitivePacket, textureMask), std::size_t{516},
@@ -234,55 +236,62 @@ void testDrawPacketLayouts() {
           "draw packet start vertex offset");
   checkEq(offsetof(D9CDrawPrimitivePacket, primitiveCount), std::size_t{4804},
           "draw packet primitive count offset");
+  // R-BACK-2.52: const-delta section headers land immediately after
+  // primitiveCount, at exactly the byte offset the pre-T1 struct ended at
+  // (4808 == the old sizeof(D9CDrawPrimitivePacket)). This is the
+  // off-path byte-identical proof for every pre-existing field above: none
+  // of their offsets moved, and the new block is additive at the tail.
+  checkEq(offsetof(D9CDrawPrimitivePacket, constDeltaSections), std::size_t{4808},
+          "draw packet const-delta sections offset");
 
   checkSizeAlign<D9CDrawIndexedPrimitivePacket>(
-      "D9CDrawIndexedPrimitivePacket", 4840u, 4u);
+      "D9CDrawIndexedPrimitivePacket", 4912u, 4u);
   checkEq(offsetof(D9CDrawIndexedPrimitivePacket, state), std::size_t{0},
           "indexed draw state offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, baseVertex), std::size_t{4808},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, baseVertex), std::size_t{4880},
           "indexed draw base vertex offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, primitiveCount), std::size_t{4824},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, primitiveCount), std::size_t{4896},
           "indexed draw primitive count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibValid), std::size_t{4828},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibValid), std::size_t{4900},
           "indexed draw IB valid offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibHandle), std::size_t{4832},
+  checkEq(offsetof(D9CDrawIndexedPrimitivePacket, ibHandle), std::size_t{4904},
           "indexed draw IB handle offset");
 
-  checkSizeAlign<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket", 4824u, 4u);
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, primitiveCount), std::size_t{4808},
+  checkSizeAlign<D9CDrawPrimitiveUPPacket>("D9CDrawPrimitiveUPPacket", 4896u, 4u);
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, primitiveCount), std::size_t{4880},
           "draw primitive UP count offset");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, stride), std::size_t{4812},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, stride), std::size_t{4884},
           "draw primitive UP stride offset");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataOffset), std::size_t{4816},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataOffset), std::size_t{4888},
           "draw primitive UP vertex data offset field");
-  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataSize), std::size_t{4820},
+  checkEq(offsetof(D9CDrawPrimitiveUPPacket, vertexDataSize), std::size_t{4892},
           "draw primitive UP vertex data size field");
 
   checkSizeAlign<D9CDrawIndexedPrimitiveUPPacket>(
-      "D9CDrawIndexedPrimitiveUPPacket", 4844u, 4u);
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, minVertex), std::size_t{4808},
+      "D9CDrawIndexedPrimitiveUPPacket", 4916u, 4u);
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, minVertex), std::size_t{4880},
           "indexed UP min vertex offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, numVertices), std::size_t{4812},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, numVertices), std::size_t{4884},
           "indexed UP vertex count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, primitiveCount), std::size_t{4816},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, primitiveCount), std::size_t{4888},
           "indexed UP primitive count offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexFormat), std::size_t{4820},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexFormat), std::size_t{4892},
           "indexed UP index format offset");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexDataOffset), std::size_t{4828},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, indexDataOffset), std::size_t{4900},
           "indexed UP index data offset field");
-  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, vertexDataOffset), std::size_t{4836},
+  checkEq(offsetof(D9CDrawIndexedPrimitiveUPPacket, vertexDataOffset), std::size_t{4908},
           "indexed UP vertex data offset field");
 }
 
 void testCommandRecordLayouts() {
   checkSizeAlign<D9CCommandRecordDrawPrimitive>(
-      "D9CCommandRecordDrawPrimitive", 4816u, 4u);
+      "D9CCommandRecordDrawPrimitive", 4888u, 4u);
   checkSizeAlign<D9CCommandRecordDrawIndexedPrimitive>(
-      "D9CCommandRecordDrawIndexedPrimitive", 4848u, 4u);
+      "D9CCommandRecordDrawIndexedPrimitive", 4920u, 4u);
   checkSizeAlign<D9CCommandRecordDrawPrimitiveUP>(
-      "D9CCommandRecordDrawPrimitiveUP", 4832u, 4u);
+      "D9CCommandRecordDrawPrimitiveUP", 4904u, 4u);
   checkSizeAlign<D9CCommandRecordDrawIndexedPrimitiveUP>(
-      "D9CCommandRecordDrawIndexedPrimitiveUP", 4852u, 4u);
+      "D9CCommandRecordDrawIndexedPrimitiveUP", 4924u, 4u);
   checkSizeAlign<D9CCommandRecordSetConst>("D9CCommandRecordSetConst", 16u, 4u);
   checkSizeAlign<D9CCommandRecordClear>("D9CCommandRecordClear", 32u, 4u);
   checkSizeAlign<D9CCommandRecordPresent>(
@@ -302,7 +311,7 @@ void testCommandRecordLayouts() {
   // RESZ depth-resolve mirrors Readback's two-handle shape exactly.
   checkSizeAlign<D9CCommandRecordReszDepthResolve>(
       "D9CCommandRecordReszDepthResolve", 24u, alignof(std::uint64_t));
-  checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4816u, 4u);
+  checkSizeAlign<D9CCommandRecordApplyState>("D9CCommandRecordApplyState", 4888u, 4u);
   checkSizeAlign<D9CCommandChunk>("D9CCommandChunk", 32u, 4u);
   checkSizeAlign<D9CChunkHandleEntry>(
       "D9CChunkHandleEntry", 16u, alignof(std::uint64_t));
@@ -654,6 +663,242 @@ void testDrawPacketDeltaDefaults() {
   checkEq(packet.tssCount, 0u, "default packet has no TSS delta");
   checkEq(packet.samplerStateCount, 0u, "default packet has no sampler delta");
   checkEq(packet.transformCount, 0u, "default packet has no transform delta");
+  for (uint32_t kind = 0; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT; ++kind) {
+    checkEq(packet.constDeltaSections[kind].valid, 0u,
+            "default packet has no const-delta section delta");
+    checkEq(packet.constDeltaSections[kind].startRegister, 0u,
+            "default packet const-delta section start defaults to zero");
+    checkEq(packet.constDeltaSections[kind].registerCount, 0u,
+            "default packet const-delta section count defaults to zero");
+  }
+}
+
+// R-BACK-2.52 (inline const delta, DXMT9_PE_INLINE_CONST_DELTA): pins the
+// wire schema T1 owns — six optional per-draw const-delta sections plus
+// their trailing-payload encode/decode helpers. NO fold logic (PE recorder)
+// or apply logic (unix importer) is exercised here; those are T2/T3.
+void testInlineConstDeltaSections() {
+  // Canonical wire order / register-file caps (R-BACK-2.52(b)).
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_VS_F, 0, "const-delta VS F kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_VS_I, 1, "const-delta VS I kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_VS_B, 2, "const-delta VS B kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_PS_F, 3, "const-delta PS F kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_PS_I, 4, "const-delta PS I kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_PS_B, 5, "const-delta PS B kind index");
+  checkEq(D9C_DRAW_PACKET_CONST_DELTA_COUNT, 6, "const-delta section count");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_VS_F, 256, "VS F register-file cap");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_VS_I, 16, "VS I register-file cap");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_VS_B, 16, "VS B register-file cap");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_PS_F, 224, "PS F register-file cap");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_PS_I, 16, "PS I register-file cap");
+  checkEq(D9C_DRAW_PACKET_MAX_CONST_PS_B, 16, "PS B register-file cap");
+
+  // Section header shape: {valid, startRegister, registerCount}, 12 bytes.
+  checkSizeAlign<D9CDrawPacketConstDeltaSection>(
+      "D9CDrawPacketConstDeltaSection", 12u, 4u);
+  checkEq(offsetof(D9CDrawPacketConstDeltaSection, valid), std::size_t{0},
+          "const-delta section valid offset");
+  checkEq(offsetof(D9CDrawPacketConstDeltaSection, startRegister), std::size_t{4},
+          "const-delta section start-register offset");
+  checkEq(offsetof(D9CDrawPacketConstDeltaSection, registerCount), std::size_t{8},
+          "const-delta section register-count offset");
+
+  // Cap / elem-size lookups (R-BACK-2.52(b) element-size rules mirror
+  // D9CCommandRecordSetConst: F/I = 16 bytes/register, B = 4 bytes/register).
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_VS_F),
+          256u, "VS F cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_VS_I),
+          16u, "VS I cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_VS_B),
+          16u, "VS B cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_PS_F),
+          224u, "PS F cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_PS_I),
+          16u, "PS I cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_PS_B),
+          16u, "PS B cap lookup");
+  checkEq(d9c_draw_packet_const_delta_section_cap(D9C_DRAW_PACKET_CONST_DELTA_COUNT),
+          0u, "cap lookup rejects an out-of-range kind");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_VS_F),
+          16u, "VS F element size");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_PS_F),
+          16u, "PS F element size");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_VS_I),
+          16u, "VS I element size");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_PS_I),
+          16u, "PS I element size");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_VS_B),
+          4u, "VS B element size");
+  checkEq(d9c_draw_packet_const_delta_section_elem_size(D9C_DRAW_PACKET_CONST_DELTA_PS_B),
+          4u, "PS B element size");
+
+  // --- (a) off-path byte-identical: every section left invalid appends
+  // zero payload bytes, and each record kind's total wire size equals
+  // exactly sizeof(that fixed record) — no register-file-sized growth. ---
+  {
+    D9CDrawPrimitivePacket packet{};
+    checkEq(d9c_draw_packet_const_delta_payload_bytes(&packet), 0u,
+            "off-path packet has zero const-delta payload bytes");
+    check(d9c_draw_packet_const_delta_sections_valid(&packet),
+          "off-path packet passes const-delta section validation");
+    checkEq(d9c_command_record_draw_primitive_const_delta_offset(),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitive)),
+            "DrawPrimitive const-delta base offset is the fixed record end");
+    checkEq(d9c_command_record_draw_primitive_total_size(&packet),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitive)),
+            "off-path DrawPrimitive total size matches today's fixed record size");
+    checkEq(d9c_command_record_draw_indexed_primitive_const_delta_offset(),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawIndexedPrimitive)),
+            "DrawIndexedPrimitive const-delta base offset is the fixed record end");
+    checkEq(d9c_command_record_draw_indexed_primitive_total_size(&packet),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawIndexedPrimitive)),
+            "off-path DrawIndexedPrimitive total size matches today's fixed record size");
+
+    D9CDrawPrimitiveUPPacket upPacket{};
+    upPacket.vertexDataOffset = sizeof(D9CCommandRecordDrawPrimitiveUP);
+    upPacket.vertexDataSize = 128u;
+    checkEq(d9c_command_record_draw_primitive_up_const_delta_offset(&upPacket),
+            upPacket.vertexDataOffset + upPacket.vertexDataSize,
+            "DrawPrimitiveUP const-delta base offset chains after vertex data");
+    checkEq(d9c_command_record_draw_primitive_up_total_size(&upPacket),
+            upPacket.vertexDataOffset + upPacket.vertexDataSize,
+            "off-path DrawPrimitiveUP total size matches vertex-data end (no growth)");
+
+    D9CDrawIndexedPrimitiveUPPacket indexedUpPacket{};
+    indexedUpPacket.indexDataOffset = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP);
+    indexedUpPacket.indexDataSize = 64u;
+    indexedUpPacket.vertexDataOffset =
+        indexedUpPacket.indexDataOffset + indexedUpPacket.indexDataSize;
+    indexedUpPacket.vertexDataSize = 96u;
+    checkEq(d9c_command_record_draw_indexed_primitive_up_const_delta_offset(&indexedUpPacket),
+            indexedUpPacket.vertexDataOffset + indexedUpPacket.vertexDataSize,
+            "DrawIndexedPrimitiveUP const-delta base offset chains after vertex data");
+    checkEq(d9c_command_record_draw_indexed_primitive_up_total_size(&indexedUpPacket),
+            indexedUpPacket.vertexDataOffset + indexedUpPacket.vertexDataSize,
+            "off-path DrawIndexedPrimitiveUP total size matches vertex-data end (no growth)");
+
+    checkEq(d9c_command_record_draw_primitive_up_const_delta_offset(nullptr),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitiveUP)),
+            "null DrawPrimitiveUP packet falls back to fixed record size");
+    checkEq(d9c_command_record_draw_indexed_primitive_up_const_delta_offset(nullptr),
+            static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)),
+            "null DrawIndexedPrimitiveUP packet falls back to fixed record size");
+  }
+
+  // --- (b) each section's exact encoded bytes: start/count/payload
+  // placement, packed contiguously in canonical order skipping invalid
+  // sections. ---
+  {
+    D9CDrawPrimitivePacket packet{};
+    auto& vsF = packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_F];
+    vsF.valid = 1;
+    vsF.startRegister = 4;
+    vsF.registerCount = 3;
+    checkEq(d9c_draw_packet_const_delta_section_payload_bytes(
+                D9C_DRAW_PACKET_CONST_DELTA_VS_F, &vsF),
+            48u, "VS F(start=4,count=3) payload is 3*16 bytes");
+    check(d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_VS_F, vsF.startRegister, vsF.registerCount),
+          "VS F(4,3) is within the 256-register cap");
+    checkEq(d9c_draw_packet_const_delta_section_local_offset(
+                &packet, D9C_DRAW_PACKET_CONST_DELTA_VS_F),
+            0u, "first populated section starts at local offset 0");
+    checkEq(d9c_draw_packet_const_delta_payload_bytes(&packet), 48u,
+            "single-section packet payload total is just that section");
+
+    auto& psB = packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_B];
+    psB.valid = 1;
+    psB.startRegister = 0;
+    psB.registerCount = 2;
+    checkEq(d9c_draw_packet_const_delta_section_payload_bytes(
+                D9C_DRAW_PACKET_CONST_DELTA_PS_B, &psB),
+            8u, "PS B(start=0,count=2) payload is 2*4 bytes");
+    // VS I / VS B / PS F / PS I are all invalid, so PS B packs immediately
+    // after VS F's 48 bytes — invalid sections contribute zero bytes.
+    checkEq(d9c_draw_packet_const_delta_section_local_offset(
+                &packet, D9C_DRAW_PACKET_CONST_DELTA_PS_B),
+            48u, "second populated section packs after the first, skipping gaps");
+    checkEq(d9c_draw_packet_const_delta_payload_bytes(&packet), 56u,
+            "two-section packet payload total is the sum of both sections");
+
+    // Record-relative slice resolution for a DrawPrimitive record base.
+    const std::uint32_t base = d9c_command_record_draw_primitive_const_delta_offset();
+    const auto vsFSlice = d9c_draw_packet_const_delta_section_slice(
+        &packet, base, D9C_DRAW_PACKET_CONST_DELTA_VS_F);
+    checkEq(vsFSlice.payloadOffset, base + 0u, "VS F slice offset is record base + 0");
+    checkEq(vsFSlice.payloadSize, 48u, "VS F slice size is 48 bytes");
+    const auto psBSlice = d9c_draw_packet_const_delta_section_slice(
+        &packet, base, D9C_DRAW_PACKET_CONST_DELTA_PS_B);
+    checkEq(psBSlice.payloadOffset, base + 48u, "PS B slice offset is record base + 48");
+    checkEq(psBSlice.payloadSize, 8u, "PS B slice size is 8 bytes");
+
+    // Invalid sections resolve to a zero-size slice regardless of base.
+    const auto vsISlice = d9c_draw_packet_const_delta_section_slice(
+        &packet, base, D9C_DRAW_PACKET_CONST_DELTA_VS_I);
+    checkEq(vsISlice.payloadOffset, 0u, "invalid section slice offset is zero");
+    checkEq(vsISlice.payloadSize, 0u, "invalid section slice size is zero");
+    const auto badKindSlice = d9c_draw_packet_const_delta_section_slice(
+        &packet, base, D9C_DRAW_PACKET_CONST_DELTA_COUNT);
+    checkEq(badKindSlice.payloadSize, 0u,
+            "out-of-range kind slice size is zero");
+
+    check(d9c_draw_packet_const_delta_sections_valid(&packet),
+          "packet with two well-formed sections passes validation");
+  }
+
+  // --- Exercise every section kind's exact per-register byte accounting
+  // once, matching D9CCommandRecordSetConst's element-size rules. ---
+  {
+    const std::pair<std::uint32_t, std::uint32_t> kindsAndElemSizes[] = {
+        {D9C_DRAW_PACKET_CONST_DELTA_VS_F, 16u},
+        {D9C_DRAW_PACKET_CONST_DELTA_VS_I, 16u},
+        {D9C_DRAW_PACKET_CONST_DELTA_VS_B, 4u},
+        {D9C_DRAW_PACKET_CONST_DELTA_PS_F, 16u},
+        {D9C_DRAW_PACKET_CONST_DELTA_PS_I, 16u},
+        {D9C_DRAW_PACKET_CONST_DELTA_PS_B, 4u},
+    };
+    for (const auto& [kind, elemSize] : kindsAndElemSizes) {
+      D9CDrawPacketConstDeltaSection section{};
+      section.valid = 1;
+      section.startRegister = 1;
+      section.registerCount = 5;
+      checkEq(d9c_draw_packet_const_delta_section_payload_bytes(kind, &section),
+              elemSize * 5u, "per-kind payload bytes match the element-size rule");
+      check(d9c_draw_packet_const_delta_section_range_valid(kind, 1u, 5u),
+            "small in-cap range is valid for every kind");
+    }
+  }
+
+  // --- (c) a section exceeding its register-file cap is rejected by the
+  // validation helper, and the whole-packet validator catches it too. ---
+  {
+    check(!d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_VS_F, 254u, 3u),
+          "VS F(254,3) exceeds the 256-register cap (254+3=257)");
+    check(d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_VS_F, 253u, 3u),
+          "VS F(253,3) exactly fills the 256-register cap");
+    check(!d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_VS_I, 15u, 2u),
+          "VS I(15,2) exceeds the 16-register cap");
+    check(!d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_PS_F, 224u, 1u),
+          "PS F(224,1) exceeds the 224-register cap");
+    check(!d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_PS_B, 0u, 0u),
+          "a valid=1 section with registerCount=0 is malformed");
+    check(!d9c_draw_packet_const_delta_section_range_valid(
+              D9C_DRAW_PACKET_CONST_DELTA_COUNT, 0u, 1u),
+          "an unrecognized kind is never a valid range");
+
+    D9CDrawPrimitivePacket packet{};
+    auto& vsF = packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_F];
+    vsF.valid = 1;
+    vsF.startRegister = 254;
+    vsF.registerCount = 3;
+    check(!d9c_draw_packet_const_delta_sections_valid(&packet),
+          "whole-packet validator rejects a single out-of-cap section");
+  }
 }
 
 }  // namespace
@@ -671,6 +916,7 @@ int main() {
     testVariableRecordSizes();
     testHandleKindCompatibility();
     testDrawPacketDeltaDefaults();
+    testInlineConstDeltaSections();
   } catch (const TestFailure& e) {
     std::cerr << "chunk_record_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

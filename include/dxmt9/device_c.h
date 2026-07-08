@@ -263,6 +263,62 @@ typedef struct D9CDrawPacketStreamSource {
     uint32_t stride;
 } D9CDrawPacketStreamSource;
 
+/* R-BACK-2.52 (inline const delta, opt-in via DXMT9_PE_INLINE_CONST_DELTA):
+ * register-file caps for the six per-draw const-delta sections below. These
+ * mirror the D3D9 register-file limits enforced PE-side by
+ * D3D9DeviceImpl::kVsConstFMax / kVsConstIMax / kVsConstBMax / kPsConstFMax /
+ * kPsConstIMax / kPsConstBMax (d3d9_pe_device.cpp) — a section can never
+ * legally exceed one full register file, so a producer that disagrees with
+ * these caps has a schema bug, not a legitimately wider register file. */
+#define D9C_DRAW_PACKET_MAX_CONST_VS_F 256
+#define D9C_DRAW_PACKET_MAX_CONST_VS_I 16
+#define D9C_DRAW_PACKET_MAX_CONST_VS_B 16
+#define D9C_DRAW_PACKET_MAX_CONST_PS_F 224
+#define D9C_DRAW_PACKET_MAX_CONST_PS_I 16
+#define D9C_DRAW_PACKET_MAX_CONST_PS_B 16
+
+/* Canonical wire order for the six inline const-delta sections — also the
+ * index into D9CDrawPrimitivePacket::constDeltaSections[]. Mirrors the
+ * PeConstShadowBlock field order (d3d9_pe_const_shadow.hpp: vsConstF,
+ * vsConstI, vsConstB, psConstF, psConstI, psConstB) and the
+ * D9C_COMMAND_RECORD_SET_*_CONST_* record-type grouping below. */
+enum {
+    D9C_DRAW_PACKET_CONST_DELTA_VS_F = 0,
+    D9C_DRAW_PACKET_CONST_DELTA_VS_I = 1,
+    D9C_DRAW_PACKET_CONST_DELTA_VS_B = 2,
+    D9C_DRAW_PACKET_CONST_DELTA_PS_F = 3,
+    D9C_DRAW_PACKET_CONST_DELTA_PS_I = 4,
+    D9C_DRAW_PACKET_CONST_DELTA_PS_B = 5,
+    D9C_DRAW_PACKET_CONST_DELTA_COUNT = 6,
+};
+
+/* R-BACK-2.52: fixed-size header for one folded shader-constant delta
+ * section carried inline on a Draw* packet instead of a standalone
+ * D9C_COMMAND_RECORD_SET_*_CONST_* record. `valid` is 0 unless
+ * DXMT9_PE_INLINE_CONST_DELTA folded a non-empty merged-dirty-range for
+ * this (stage,type) into the draw; a valid section always has
+ * registerCount > 0 (see d9c_draw_packet_const_delta_section_range_valid
+ * below). The actual register bytes do NOT live in this header — they ride
+ * a trailing variable payload area after the fixed record (see the
+ * d9c_command_record_draw_*_const_delta_offset / d9c_draw_packet_const_delta_*
+ * helpers following D9CCommandRecordSetConst below), exactly like the Clear
+ * record's rect-array-at-offset pattern (D9CCommandRecordClear::rectOffset).
+ * This keeps the schema's always-present per-draw cost at
+ * D9C_DRAW_PACKET_CONST_DELTA_COUNT * sizeof(D9CDrawPacketConstDeltaSection)
+ * bytes (72 today) rather than a fixed worst-case register-file allocation
+ * (~3KB+) on every draw packet whether or not the flag is set — the off
+ * path (every section left `valid=0`) appends zero payload bytes, which is
+ * the R-BACK-2.52(a) byte-identical-off-path guarantee this schema
+ * provides: no pre-existing field's offset or value changes, and no
+ * register-file-sized data is ever appended unless a section is actually
+ * populated. Element sizes mirror D9CCommandRecordSetConst: F/I = 16
+ * bytes/register, B = 4 bytes/register. */
+typedef struct D9CDrawPacketConstDeltaSection {
+    uint32_t valid;
+    uint32_t startRegister;
+    uint32_t registerCount;
+} D9CDrawPacketConstDeltaSection;
+
 /* Canonical wire format: delta + PE shadow → effective state via
  * ordered server replay.
  *
@@ -355,6 +411,15 @@ typedef struct D9CDrawPrimitivePacket {
     uint32_t primitiveType;
     uint32_t startVertex;
     uint32_t primitiveCount;
+    /* R-BACK-2.52: inline const-delta section headers (opt-in via
+     * DXMT9_PE_INLINE_CONST_DELTA). See D9CDrawPacketConstDeltaSection above
+     * for the per-section shape and the const-delta payload/offset helpers
+     * following D9CCommandRecordSetConst below for where the actual
+     * register bytes ride on the wire. Default-constructed / off-path
+     * packets leave every section `valid=0`; the header block itself is
+     * always present (fixed schema cost, D9C_DRAW_PACKET_CONST_DELTA_COUNT
+     * entries), but zero payload bytes are ever appended when unused. */
+    D9CDrawPacketConstDeltaSection constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_COUNT];
 } D9CDrawPrimitivePacket;
 
 typedef struct D9CDrawIndexedPrimitivePacket {
@@ -751,6 +816,246 @@ typedef struct D9CCommandRecordSetConst {
      * For *_CONST_I: int32[count*4]
      * For *_CONST_B: uint32[count] */
 } D9CCommandRecordSetConst;
+
+/* R-BACK-2.52: inline const-delta encode/decode helpers. These compute
+ * where a Draw* record's six optional const-delta sections' payload bytes
+ * live on the wire and validate their register ranges; they do not decide
+ * WHEN to fold constants into a draw (PE recorder) or apply sections to
+ * server-side state (unix importer) — see specs/backend/spec.md
+ * "Inline Const Delta (opt-in)" and specs/backend/requirements.md
+ * R-BACK-2.52 for those call sites.
+ *
+ * Const-delta payload placement mirrors each Draw* record kind's existing
+ * trailing-region convention: DrawPrimitive / DrawIndexedPrimitive have no
+ * other trailing region, so their const-delta payload area begins
+ * immediately after the fixed record (like D9CCommandRecordClear::rectOffset
+ * begins immediately after D9CCommandRecordClear). DrawPrimitiveUP /
+ * DrawIndexedPrimitiveUP already carry a trailing vertex-data region (and
+ * IndexedUP an index-data region before that); the const-delta payload area
+ * is chained immediately after whichever trailing region is last
+ * (vertexDataOffset + vertexDataSize), exactly the way
+ * D9CDrawIndexedPrimitiveUPPacket::vertexDataOffset itself already chains
+ * after the index-data region in appendDrawIndexedPrimitiveUPRecordWithFvf
+ * (d3d9_pe_device.cpp). */
+
+/* Register-file cap for a const-delta section kind
+ * (D9C_DRAW_PACKET_CONST_DELTA_*). Returns 0 for an unrecognized kind,
+ * which can therefore never be a valid section. */
+static inline uint32_t d9c_draw_packet_const_delta_section_cap(uint32_t kind) {
+    switch (kind) {
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_F: return D9C_DRAW_PACKET_MAX_CONST_VS_F;
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_I: return D9C_DRAW_PACKET_MAX_CONST_VS_I;
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_B: return D9C_DRAW_PACKET_MAX_CONST_VS_B;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_F: return D9C_DRAW_PACKET_MAX_CONST_PS_F;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_I: return D9C_DRAW_PACKET_MAX_CONST_PS_I;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_B: return D9C_DRAW_PACKET_MAX_CONST_PS_B;
+    default: return 0u;
+    }
+}
+
+/* Bytes per register for a const-delta section kind — mirrors
+ * D9CCommandRecordSetConst: float4/int4 = 16 bytes/register, bool = 4
+ * bytes/register. Returns 0 for an unrecognized kind. */
+static inline uint32_t d9c_draw_packet_const_delta_section_elem_size(uint32_t kind) {
+    switch (kind) {
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_F:
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_F:
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_I:
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_I:
+        return 16u;
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_B:
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_B:
+        return 4u;
+    default: return 0u;
+    }
+}
+
+/* R-BACK-2.52(c): validates one section's register range against the D3D9
+ * register-file cap for its kind, overflow-safe. A `valid=1` section MUST
+ * have registerCount > 0 — a zero-length "valid" range is malformed
+ * (producers use valid=0 for "no section" instead). Callers MUST run this
+ * before retaining or applying a section's payload bytes; a failing range
+ * is a malformed packet and must reject the whole chunk exactly like any
+ * other wire bounds violation. */
+static inline int d9c_draw_packet_const_delta_section_range_valid(
+    uint32_t kind, uint32_t startRegister, uint32_t registerCount) {
+    const uint32_t cap = d9c_draw_packet_const_delta_section_cap(kind);
+    if (cap == 0u || registerCount == 0u) return 0;
+    return startRegister <= cap && registerCount <= cap - startRegister;
+}
+
+/* Trailing payload byte size for one section, or 0 when the section is
+ * invalid / kind is unrecognized. Does NOT validate the range against the
+ * register-file cap — call d9c_draw_packet_const_delta_section_range_valid
+ * first (or d9c_draw_packet_const_delta_sections_valid for all six). */
+static inline uint32_t d9c_draw_packet_const_delta_section_payload_bytes(
+    uint32_t kind, const D9CDrawPacketConstDeltaSection* section) {
+    if (!section || !section->valid) return 0u;
+    return section->registerCount * d9c_draw_packet_const_delta_section_elem_size(kind);
+}
+
+/* R-BACK-2.52(c): validates every const-delta section header in `packet`
+ * against its register-file cap. Returns non-zero iff every section is
+ * either invalid (valid=0) or a well-formed in-cap range. Does not bounds
+ * check the trailing payload bytes against the record's actual wire
+ * length — pair with d9c_draw_packet_const_delta_payload_bytes and the
+ * record's payloadSize/header.size before retaining or applying any
+ * section. */
+static inline int d9c_draw_packet_const_delta_sections_valid(
+    const D9CDrawPrimitivePacket* packet) {
+    if (!packet) return 0;
+    for (uint32_t kind = 0; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT; ++kind) {
+        const D9CDrawPacketConstDeltaSection* section = &packet->constDeltaSections[kind];
+        if (!section->valid) continue;
+        if (!d9c_draw_packet_const_delta_section_range_valid(
+                kind, section->startRegister, section->registerCount)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Total trailing const-delta payload bytes for all six sections of
+ * `packet`, in canonical wire order (VS F, VS I, VS B, PS F, PS I, PS B).
+ * This is the number of bytes the encoder must append after the record's
+ * const-delta base offset (see the per-record-kind offset helpers below)
+ * when any section is valid, and exactly 0 when every section is invalid —
+ * the off path therefore never appends register-file-sized bytes. */
+static inline uint32_t d9c_draw_packet_const_delta_payload_bytes(
+    const D9CDrawPrimitivePacket* packet) {
+    if (!packet) return 0u;
+    uint32_t total = 0u;
+    for (uint32_t kind = 0; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT; ++kind) {
+        total += d9c_draw_packet_const_delta_section_payload_bytes(
+            kind, &packet->constDeltaSections[kind]);
+    }
+    return total;
+}
+
+/* Byte offset of section `kind`'s payload within the packet's trailing
+ * const-delta payload area (relative to the area's own start, NOT the
+ * whole record — add a d9c_command_record_draw_*_const_delta_offset() base
+ * below for a record-relative offset). Sections are packed contiguously in
+ * canonical order, skipping invalid sections, so a section's local offset
+ * is the sum of every earlier valid section's payload bytes. */
+static inline uint32_t d9c_draw_packet_const_delta_section_local_offset(
+    const D9CDrawPrimitivePacket* packet, uint32_t kind) {
+    if (!packet || kind >= D9C_DRAW_PACKET_CONST_DELTA_COUNT) return 0u;
+    uint32_t offset = 0u;
+    for (uint32_t k = 0; k < kind; ++k) {
+        offset += d9c_draw_packet_const_delta_section_payload_bytes(
+            k, &packet->constDeltaSections[k]);
+    }
+    return offset;
+}
+
+/* Record-relative byte offset where a DrawPrimitive record's trailing
+ * const-delta payload area begins. DrawPrimitive carries no other trailing
+ * region, so this is simply the end of the fixed record. */
+static inline uint32_t d9c_command_record_draw_primitive_const_delta_offset(void) {
+    return (uint32_t)sizeof(D9CCommandRecordDrawPrimitive);
+}
+
+/* Record-relative byte offset where a DrawIndexedPrimitive record's
+ * trailing const-delta payload area begins. Same rationale as the
+ * DrawPrimitive helper above — DrawIndexedPrimitive carries no other
+ * trailing region. */
+static inline uint32_t d9c_command_record_draw_indexed_primitive_const_delta_offset(void) {
+    return (uint32_t)sizeof(D9CCommandRecordDrawIndexedPrimitive);
+}
+
+/* Record-relative byte offset where a DrawPrimitiveUP record's trailing
+ * const-delta payload area begins. DrawPrimitiveUP already carries a
+ * trailing vertex-data region at packet.vertexDataOffset/.vertexDataSize;
+ * the const-delta payload area is chained immediately after it. Falls back
+ * to the fixed record size when `packet` is null (defensive; a real
+ * producer always has vertexDataOffset >= sizeof(record)). */
+static inline uint32_t d9c_command_record_draw_primitive_up_const_delta_offset(
+    const D9CDrawPrimitiveUPPacket* packet) {
+    if (!packet) return (uint32_t)sizeof(D9CCommandRecordDrawPrimitiveUP);
+    return packet->vertexDataOffset + packet->vertexDataSize;
+}
+
+/* Record-relative byte offset where a DrawIndexedPrimitiveUP record's
+ * trailing const-delta payload area begins. Chains after the record's
+ * vertex-data region, which itself already chains after the index-data
+ * region (see appendDrawIndexedPrimitiveUPRecordWithFvf in
+ * d3d9_pe_device.cpp) — vertex data is always the last known trailing
+ * region for this record kind. */
+static inline uint32_t d9c_command_record_draw_indexed_primitive_up_const_delta_offset(
+    const D9CDrawIndexedPrimitiveUPPacket* packet) {
+    if (!packet) return (uint32_t)sizeof(D9CCommandRecordDrawIndexedPrimitiveUP);
+    return packet->vertexDataOffset + packet->vertexDataSize;
+}
+
+/* Total wire size for a DrawPrimitive record given its (possibly
+ * const-delta-bearing) packet — the value the encoder stores in
+ * header.header.size and passes to appendCommandRecordDirect. Equals
+ * sizeof(D9CCommandRecordDrawPrimitive) when every section is invalid (off
+ * path, R-BACK-2.52(a)). */
+static inline uint32_t d9c_command_record_draw_primitive_total_size(
+    const D9CDrawPrimitivePacket* packet) {
+    return d9c_command_record_draw_primitive_const_delta_offset() +
+           d9c_draw_packet_const_delta_payload_bytes(packet);
+}
+
+/* Total wire size for a DrawIndexedPrimitive record given its packet's
+ * shared state (record.packet.state). Equals
+ * sizeof(D9CCommandRecordDrawIndexedPrimitive) when every section is
+ * invalid. */
+static inline uint32_t d9c_command_record_draw_indexed_primitive_total_size(
+    const D9CDrawPrimitivePacket* packet) {
+    return d9c_command_record_draw_indexed_primitive_const_delta_offset() +
+           d9c_draw_packet_const_delta_payload_bytes(packet);
+}
+
+/* Total wire size for a DrawPrimitiveUP record given its full packet
+ * (including the existing vertex-data trailing region). Equals
+ * vertexDataOffset + vertexDataSize when every section is invalid. */
+static inline uint32_t d9c_command_record_draw_primitive_up_total_size(
+    const D9CDrawPrimitiveUPPacket* packet) {
+    if (!packet) return (uint32_t)sizeof(D9CCommandRecordDrawPrimitiveUP);
+    return d9c_command_record_draw_primitive_up_const_delta_offset(packet) +
+           d9c_draw_packet_const_delta_payload_bytes(&packet->state);
+}
+
+/* Total wire size for a DrawIndexedPrimitiveUP record given its full packet
+ * (including the existing index/vertex-data trailing regions). Equals
+ * vertexDataOffset + vertexDataSize when every section is invalid. */
+static inline uint32_t d9c_command_record_draw_indexed_primitive_up_total_size(
+    const D9CDrawIndexedPrimitiveUPPacket* packet) {
+    if (!packet) return (uint32_t)sizeof(D9CCommandRecordDrawIndexedPrimitiveUP);
+    return d9c_command_record_draw_indexed_primitive_up_const_delta_offset(packet) +
+           d9c_draw_packet_const_delta_payload_bytes(&packet->state);
+}
+
+/* Resolves the record-relative payload slice for section `kind`, given the
+ * record's decoded packet and the record-relative base offset of its
+ * const-delta payload area (from the
+ * d9c_command_record_draw_*_const_delta_offset helpers above). Returns a
+ * zero-size slice when the section is invalid. Callers (the unix importer)
+ * MUST additionally run d9c_draw_packet_const_delta_sections_valid and
+ * confirm payloadOffset+payloadSize fits within the record's actual
+ * wireRecord.payloadSize before touching any byte at this offset — the
+ * same discipline as d9c_command_chunk_wire_record_ranges_valid above. */
+static inline D9CCommandChunkWirePayloadSlice
+d9c_draw_packet_const_delta_section_slice(
+    const D9CDrawPrimitivePacket* packet,
+    uint32_t recordConstDeltaBaseOffset,
+    uint32_t kind) {
+    D9CCommandChunkWirePayloadSlice slice;
+    slice.payloadOffset = 0u;
+    slice.payloadSize = 0u;
+    if (!packet || kind >= D9C_DRAW_PACKET_CONST_DELTA_COUNT) return slice;
+    const D9CDrawPacketConstDeltaSection* section = &packet->constDeltaSections[kind];
+    const uint32_t bytes =
+        d9c_draw_packet_const_delta_section_payload_bytes(kind, section);
+    if (bytes == 0u) return slice;
+    slice.payloadOffset = recordConstDeltaBaseOffset +
+        d9c_draw_packet_const_delta_section_local_offset(packet, kind);
+    slice.payloadSize = bytes;
+    return slice;
+}
 
 /* Standalone clear record. Variable-size: rect array (D9CRect[count])
  * follows the fixed header at rectOffset. count==0 → full-target clear. */
