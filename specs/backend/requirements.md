@@ -440,6 +440,31 @@ FIFO/bound/drain-fence rules), `dxmt9-present-ordinal-boundary-spec`
 wait/abort mechanics), and the `PresentFrameLatency.tla` ordinal-variant
 invariants (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`.
 
+**R-BACK-2.52** *(Inline const delta contract.)* The opt-in inline-const-delta
+wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first use) must
+(a) remain byte-identical on the wire and in replay behavior when the flag is
+unset; (b) when set, let `Draw*` records carry per-shadow merged
+constant-delta sections (VS/PS × float/int/bool, each `{valid, startRegister,
+registerCount}` plus payload, mirroring the `D9CCommandRecordSetConst`
+element-size rules) instead of emitting standalone
+`D9C_COMMAND_RECORD_SET_*_CONST_*` records for constants consumed by that
+draw; (c) validate every section at import — register range against the
+D3D9 register-file limits and payload length against the record header —
+before any state is applied or any handle is retained, rejecting the chunk on
+violation exactly like other malformed packets; (d) apply const sections with
+replay semantics observably equivalent to replaying the equivalent standalone
+const records immediately before the same draw, preserving chunk order;
+(e) keep standalone const records for every non-`Draw*` consumer of shader
+constants (`ProcessVertices`, chunk-barrier and chunk-end const drains) — the
+inline path may fold only constants that the carrying draw consumes; (f) not
+introduce new draw-run break classes: a const-bearing packet may break a
+coalesced run at most where the equivalent standalone const record breaks it
+today; and (g) bump the PE/unix wire schema so the existing
+`DXMT9_WINEMETAL_CALL_ABI_HASH` handshake refuses mixed builds. Verified by
+the PE record byte-pinning specs (off-path unchanged plus new inline-section
+rows) and an on/off replay-equivalence spec following the
+`pe_full_snapshot_equivalence_spec` pattern.
+
 ---
 
 ## 3. Pipeline State Objects
