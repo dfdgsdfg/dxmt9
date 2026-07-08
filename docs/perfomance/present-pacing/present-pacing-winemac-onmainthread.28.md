@@ -185,4 +185,4 @@ producer-running negative scouts.
 
 **Related.** [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) ·
 [present-pacing-xctrace-threadstate.18](present-pacing-xctrace-threadstate.18.md) · [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md)
-· [present-pacing](../present-pacing.md).
+· [present-pacing](index.md).

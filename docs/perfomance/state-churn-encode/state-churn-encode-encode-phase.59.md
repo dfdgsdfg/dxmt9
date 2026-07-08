@@ -113,7 +113,7 @@ skipping it saves about `242ms` over `1680` presents. This does **not** explain
 the current FPS ceiling: queue submission, replay, encode, and
 completion/present pacing remain essentially unchanged.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) ·
 [state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) ·
 [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) · [snapshot-cache-snapshot.20](../snapshot-cache/snapshot-cache-snapshot.20.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

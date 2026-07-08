@@ -114,6 +114,6 @@ fewer dirty VS uploads, or a storage model that avoids rebuilding/repointing a
 fresh per-draw argument-buffer table, while preserving the correctness fixes
 from phases 23 and 32.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
 [state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md) · [state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md)
 · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: analysis
 status: accepted-next-scope
 source: src/dxmt9/dxmt9_shader_sources.cpp, src/dxmt9/dxmt9_shader_sources.hpp, src/dxmt9/dxmt9_shader_metal_ir.cpp, src/dxmt9/dxmt9_ffp_shaders.cpp, src/dxmt9/dxmt9_argbuf_hybrid.cpp, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.67.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.68.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.132.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.132.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.132.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 133 - Stage 2 Argbuf ABI Candidate Triage
@@ -101,7 +101,7 @@ For GT1 runtime proof, use the same visual/P4 gate as phase 132. A local
 `encode_draw_argbuf_setup_cpu_ms` reduction is not enough if
 `completion_wait_without_enqueue` rises or frame sampling stays flat.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) ·
 [state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md) ·
 [state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·

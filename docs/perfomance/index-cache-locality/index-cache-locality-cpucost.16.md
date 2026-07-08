@@ -95,6 +95,6 @@ positive hits. The remaining plausible CPU paths are narrower:
 - increase semantic-safe GPU payoff so the existing eligible-decision stream
   is worth paying in the default profile.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md) · [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md) ·
 [index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md).

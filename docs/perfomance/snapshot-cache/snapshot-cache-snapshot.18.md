@@ -96,6 +96,6 @@ remaining wall-clock or queued-submission cost. The larger copy-policy frontier
 remains raw-run / generation-lane state N-1 materialization, direct construction
 into queue-owned storage, or interned compact draw-state storage.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) ·
 [snapshot-cache-snapshot.17](snapshot-cache-snapshot.17.md) · [state-churn-encode-encode-phase.44](../state-churn-encode/state-churn-encode-encode-phase.44.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

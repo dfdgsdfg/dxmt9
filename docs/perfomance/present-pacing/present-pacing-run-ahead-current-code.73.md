@@ -7,7 +7,7 @@ title: Current HEAD Has No Run-Ahead Runtime Knob
 date: 2026-06-18
 type: code-audit
 status: accepted-current-code
-source: src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_queue.hpp; agents/rules/environment_variables_present.rules.md; specs/backend/design.md; specs/gap.md; docs/perfomance/present-pacing.md
+source: src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_queue.hpp; agents/rules/environment_variables_present.rules.md; specs/backend/design.md; specs/gap.md; docs/perfomance/present-pacing/index.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md; docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md; docs/perfomance/present-pacing/present-pacing-run-ahead-cpu-ready.70.md
 ---
 

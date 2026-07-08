@@ -36,4 +36,4 @@ layout and below named tiled-buffer counters. Next proof must shift to Metal
 compiler/backend spill, hidden VS private scratch, and primitive/binning
 parameter storage — not field liveness.
 
-**Related.** [vsout-layout](../vsout-layout.md) · narrowed from [vsout-layout-varying.01](vsout-layout-varying.01.md) · companion semantic-safe replay [vsout-layout-varying.03](vsout-layout-varying.03.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [shader-codegen](../shader-codegen.md) · [mini-replay-bisection](../mini-replay-bisection.md).
+**Related.** [vsout-layout](index.md) · narrowed from [vsout-layout-varying.01](vsout-layout-varying.01.md) · companion semantic-safe replay [vsout-layout-varying.03](vsout-layout-varying.03.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) · [shader-codegen](../shader-codegen/index.md) · [mini-replay-bisection](../mini-replay-bisection/index.md).

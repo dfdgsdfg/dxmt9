@@ -105,5 +105,5 @@ remaining local uniform hash target is VS indexed-float fallback; the broader
 frame-rate target remains CPU cadence / present completion overlap and backend
 encode work, not this non-constant hash path.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

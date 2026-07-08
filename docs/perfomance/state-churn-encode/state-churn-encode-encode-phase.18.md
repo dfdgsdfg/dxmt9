@@ -166,6 +166,6 @@ newly actionable cbuf target is the `hashConstantBufferBytes()` path.
    into category dispatch, timer overhead, and helper call cost before changing
    constants layout.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md) ·
-[const-upload](../const-upload.md).
+[const-upload](../const-upload/index.md).

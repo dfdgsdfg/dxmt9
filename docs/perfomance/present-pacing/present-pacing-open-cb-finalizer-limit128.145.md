@@ -8,7 +8,7 @@ date: 2026-06-20
 type: no-gputrace
 status: rejected-runtime
 source: experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-limit128-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-limit128-r1/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-open-cb-session-finalizer-api.144.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-session-finalizer-api.144.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md
 ---
 
 # Present-Pacing H145 - Open-CB Finalizer Limit128 Runtime Scout

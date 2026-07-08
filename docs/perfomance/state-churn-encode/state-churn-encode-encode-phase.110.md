@@ -8,7 +8,7 @@ date: 2026-06-15
 type: runtime-scout
 status: accepted-attribution-not-fps-proof
 source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-cbuf-probe-split-rerun/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-cbuf-probe-split-rerun/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-cbuf-probe-split-rerun/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.109.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.109.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 110 - Argbuf Reopen Probe Split Rerun
@@ -131,4 +131,4 @@ true cbuf update child, but cached repoint plus content probe is now large
 enough to rank as a separate candidate.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
-[state-churn-encode-encode-phase.109](state-churn-encode-encode-phase.109.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.109](state-churn-encode-encode-phase.109.md) · [state-churn-encode](index.md).

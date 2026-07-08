@@ -39,6 +39,6 @@ transient upload bytes. Because `gpu_command_buffer_time_ms` stays in class,
 VS/FFP-VS cbuf writes are NOT the primary GT1 GPU limiter. Next targets: stream/
 IB churn and render-pass/store, with the `13.8%` indexed/full-struct VS fallback.
 
-**Related.** [const-upload](../const-upload.md) · prev: [const-upload-range.01](const-upload-range.01.md) · next:
+**Related.** [const-upload](index.md) · prev: [const-upload-range.01](const-upload-range.01.md) · next:
 [const-upload-dirtyrange.02](const-upload-dirtyrange.02.md) (the Xcode capture confirming GPU unmoved) ·
-[state-churn-encode](../state-churn-encode.md) · [render-pass-store](../render-pass-store.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+[state-churn-encode](../state-churn-encode/index.md) · [render-pass-store](../render-pass-store/index.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

@@ -72,6 +72,6 @@ final-color/final-writer oracle, or a new non-reorder backend mechanism that
 preflights meaningful bytes/invocation or hidden-backend proxy movement before
 capture.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md)
-· [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) ·
-[mini-replay-bisection](../mini-replay-bisection.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md)
+· [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) ·
+[mini-replay-bisection](../mini-replay-bisection/index.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

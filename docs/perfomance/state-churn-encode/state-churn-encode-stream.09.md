@@ -114,14 +114,14 @@ new mechanism also changes VS invocations, primitive/binning shape, or an Apple
 backend path below visible VSOut.
 
 CPU conclusions are separate. Stream/IB handle churn still explains draw-run
-breaks and stream-bind CPU cost in [state-churn-encode](../state-churn-encode.md), but it is not the
+breaks and stream-bind CPU cost in [state-churn-encode](index.md), but it is not the
 current GPU-frame limiter.
 
 **Verdict.** Rejected as first-order GPU owner. Accepted as a useful negative
 gate: it prevents spending more Xcode budget on stream/IB handle identity and
-pushes the remaining GPU investigation back to [hidden-backend-storage](../hidden-backend-storage.md),
-[tvb-mechanism-proof](../tvb-mechanism-proof.md), and correctness-safe locality work.
+pushes the remaining GPU investigation back to [hidden-backend-storage](../hidden-backend-storage/index.md),
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md), and correctness-safe locality work.
 
 **Related.** [state-churn-encode-stream.08](state-churn-encode-stream.08.md) ·
-[state-churn-encode-stream.07](state-churn-encode-stream.07.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
-[index-cache-locality](../index-cache-locality.md).
+[state-churn-encode-stream.07](state-churn-encode-stream.07.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) ·
+[index-cache-locality](../index-cache-locality/index.md).

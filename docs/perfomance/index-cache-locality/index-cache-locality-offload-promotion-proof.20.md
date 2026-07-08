@@ -8,7 +8,7 @@ date: 2026-07-08
 type: gputrace-xcode
 status: accepted-promotion-proof
 source: traces/app-d3d9-3dmark05-consol-gputrace-proof-20260707/analysis/frame60-xcode-dxmt-comparison.md; traces/app-d3d9-3dmark05-consol-gputrace-proof-20260707/analysis/frame60-xcode-dxmt-joined-summary.csv; traces/app-d3d9-3dmark05-consol-gputrace-proof-20260707/analysis/frame60-counters-xcode.csv; experiments/output/app-d3d9-3dmark05-consol-gputrace-proof-20260707/result.json; docs/perfomance/present-pacing/present-pacing-consolidation-long-confirm.194.md
-related: docs/perfomance/index-cache-locality.md; docs/perfomance/index-cache-locality/index-cache-locality-offload-synergy.19.md; specs/backend/requirements.md
+related: docs/perfomance/index-cache-locality/index.md; docs/perfomance/index-cache-locality/index-cache-locality-offload-synergy.19.md; specs/backend/requirements.md
 ---
 
 # Index-Cache Locality 20 - Offload+opt-in promotion proof

@@ -109,6 +109,6 @@ can alter FFP shader keys. Chasing that larger subset would require a stronger
 semantic key or post-build verification path, and the measured safe subset is
 too small to move P4/completion wait.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
-[snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) · [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
+[snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) · [state-churn-encode](../state-churn-encode/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

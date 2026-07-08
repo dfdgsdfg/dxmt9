@@ -52,4 +52,4 @@ points at the fmt16/R32F `PixelFormatView` resource, not the X8 alias path. The
 surviving owner is below MSL-visible structure: hidden Apple GPU
 vertex/tiler/parameter backend storage.
 
-**Related.** [attachment-pixelformat](../attachment-pixelformat.md) · last in the X8 sequence, follows the sampler-binding attribution [attachment-pixelformat-x8.02](attachment-pixelformat-x8.02.md) · confirms the [hidden-backend-storage](../hidden-backend-storage.md) owner survives · offline codegen echoes [shader-codegen](../shader-codegen.md) (visible temp/scratch too small) · refutes pixel-format as the [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) first-order owner.
+**Related.** [attachment-pixelformat](index.md) · last in the X8 sequence, follows the sampler-binding attribution [attachment-pixelformat-x8.02](attachment-pixelformat-x8.02.md) · confirms the [hidden-backend-storage](../hidden-backend-storage/index.md) owner survives · offline codegen echoes [shader-codegen](../shader-codegen/index.md) (visible temp/scratch too small) · refutes pixel-format as the [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) first-order owner.

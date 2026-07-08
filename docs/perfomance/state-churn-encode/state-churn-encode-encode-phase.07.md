@@ -122,6 +122,6 @@ larger probe bucket mean "make the cache bigger" is not the first proof target.
    moves without visual regression; this CPU path does not justify Xcode budget
    by itself.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) ·
-[state-churn-encode-encode-phase.06](state-churn-encode-encode-phase.06.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.06](state-churn-encode-encode-phase.06.md) · [present-pacing](../present-pacing/index.md).

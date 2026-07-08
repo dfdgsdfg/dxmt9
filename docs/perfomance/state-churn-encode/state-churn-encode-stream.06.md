@@ -93,5 +93,5 @@ resource-pool design change because the current `BufferRecord` model has no
 slice/base-offset abstraction.
 
 **Related.** [state-churn-encode-stream.05](state-churn-encode-stream.05.md) ·
-[state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](../state-churn-encode.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md).
+[state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](index.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md).

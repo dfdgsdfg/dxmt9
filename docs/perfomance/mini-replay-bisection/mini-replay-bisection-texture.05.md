@@ -97,8 +97,8 @@ The next useful reorder work is not another broad promotion; it is either:
 - or design a final-color/occlusion oracle that proves owner movement is masked
   over a wider replay/pass.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
 [mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) ·
 [mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
-[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) · [index-cache-locality](../index-cache-locality/index.md).

@@ -84,7 +84,7 @@ that class is now gated. The remaining encode owners are still argbuf setup,
 cbuf update/probe/repoint residual, binding-packet identity width, shader stream
 bind diversity, issue cost, and the broader pre-publish replay/snapshot cadence.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) ·
 [state-churn-encode-encode-phase.49](state-churn-encode-encode-phase.49.md) ·
 [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).

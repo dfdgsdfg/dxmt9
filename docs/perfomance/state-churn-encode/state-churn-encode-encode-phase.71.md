@@ -82,4 +82,4 @@ how much of `encode_slot_pso_prefetch_draw_lookup_cpu_ms` that could elide.
 Only after that proof should a handle/key reuse cache be promoted.
 
 **Related.** [state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) ·
-[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](../state-churn-encode.md).
+[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](index.md).

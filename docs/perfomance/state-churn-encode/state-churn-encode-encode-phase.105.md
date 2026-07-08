@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling
 status: accepted-compare-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 105 - Argbuf CPU Compare Gates
@@ -72,4 +72,4 @@ average-FPS fix until frame sampling, completion wait, or no-enqueue stage
 shape also moves.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling+experiment
 status: accepted-current-attribution
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-regsum-r3-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-regsum-r3-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-regsum-r3-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.134.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.134.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 137 - Argbuf Payload Delta Bucket Register Share
@@ -138,7 +138,7 @@ targets should be:
 3. Keep P4/frame gates as promotion criteria; local `0.55ms/present` VS cbuf
    CPU cannot explain the full `8-22fps` wall-clock limit alone.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.134](state-churn-encode-encode-phase.134.md) ·
 [state-churn-encode-encode-phase.136](state-churn-encode-encode-phase.136.md) ·
 [state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md).

@@ -123,4 +123,4 @@ probe is not justified by current counters.
 
 **Related.** [state-churn-encode-encode-phase.85](state-churn-encode-encode-phase.85.md) ·
 [state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) · [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md)
-· [state-churn-encode](../state-churn-encode.md).
+· [state-churn-encode](index.md).

@@ -8,7 +8,7 @@ date: 2026-07-07
 type: no-gputrace
 status: accepted-long-confirm
 source: experiments/output/app-d3d9-3dmark05-consol-baseline-long-20260707/result.json; experiments/output/app-d3d9-3dmark05-consol-candidate-long-r3-20260707/result.json; experiments/output/app-d3d9-3dmark05-consol-candidate-long-20260707/result.json; docs/perfomance/index-cache-locality/index-cache-locality-offload-synergy.19.md
-related: docs/perfomance/present-pacing.md; specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md; specs/backend/requirements.md
 ---
 
 # Present-Pacing H194 - Consolidation long confirm

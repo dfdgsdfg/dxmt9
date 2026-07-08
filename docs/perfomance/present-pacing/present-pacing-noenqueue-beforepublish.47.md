@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-attribution
 source: experiments/output/app-d3d9-3dmark05-noenqueue-beforepublish-r1/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-beforepublish-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-beforepublish-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-noenqueue-beforepublish-r1/actual.png
-related: docs/perfomance/present-pacing/present-pacing-current-p2p3.46.md, docs/perfomance/present-pacing/present-pacing-direct-cbuf.45.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-current-p2p3.46.md, docs/perfomance/present-pacing/present-pacing-direct-cbuf.45.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 47 - No-Enqueue Commit Chunks Before Publish Scout

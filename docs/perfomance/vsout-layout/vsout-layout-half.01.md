@@ -49,4 +49,4 @@ runs, and shifts a small slice of the backend bucket (`-2.44%` VS write,
 (`+3.40%`). It is not the dominant owner. (Follow-up audit noted `clip_distance`
 is already absent from the hot rows, so it is not a remaining width axis.)
 
-**Related.** [vsout-layout](../vsout-layout.md) · last in the visible-width sequence after [vsout-layout-position.02](vsout-layout-position.02.md) · refutes precision-width as owner, confirms [hidden-backend-storage](../hidden-backend-storage.md) · gated by [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [shader-codegen](../shader-codegen.md).
+**Related.** [vsout-layout](index.md) · last in the visible-width sequence after [vsout-layout-position.02](vsout-layout-position.02.md) · refutes precision-width as owner, confirms [hidden-backend-storage](../hidden-backend-storage/index.md) · gated by [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [shader-codegen](../shader-codegen/index.md).

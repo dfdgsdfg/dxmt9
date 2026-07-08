@@ -411,7 +411,7 @@ brief):
   source honors none of those historical envs. The opt-in open-CB
   `EncodeSession` carrier is separate diagnostic infrastructure and remains
   gated by the §2.2.3 promotion requirements, not a reintroduced A/C/B carrier.
-- Performance model — `docs/perfomance/present-pacing.md` (H10 under-pipelining,
+- Performance model — `docs/perfomance/present-pacing/index.md` (H10 under-pipelining,
   H54/H56 draw-count-carrier rejection, H57 locality gates, H73 run-ahead design
   gate, H108–H116/H134–H136 open-CB and render-session-carry failures).
 

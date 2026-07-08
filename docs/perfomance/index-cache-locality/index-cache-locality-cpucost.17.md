@@ -104,5 +104,5 @@ changing the default builder. Future index-cache CPU work should focus on
 cheaper cold-miss candidate construction or narrower eligible-subclass proof,
 not local LRU miss-path normalization.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.16](index-cache-locality-cpucost.16.md) · [baselines-visual-capture.02](../baselines/baselines-visual-capture.02.md).

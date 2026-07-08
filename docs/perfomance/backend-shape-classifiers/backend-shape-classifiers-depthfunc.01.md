@@ -40,4 +40,4 @@ VS-buffer-write owner — VS write effectively unchanged, GPU time regresses, an
 the small depth-write delta is far too small to explain the ~1.6 GiB bucket.
 Keep in the rejected state-shape set.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · companion to [backend-shape-classifiers-depthwrite.01](backend-shape-classifiers-depthwrite.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · related [mini-replay-bisection](../mini-replay-bisection.md) depth probes.
+**Related.** [backend-shape-classifiers](index.md) · companion to [backend-shape-classifiers-depthwrite.01](backend-shape-classifiers-depthwrite.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md) · related [mini-replay-bisection](../mini-replay-bisection/index.md) depth probes.

@@ -123,5 +123,5 @@ indexed-float constant fallback or a deeper direct-construct/interned-state
 design. Average FPS still needs pacing/overlap movement or a larger end-to-end
 CPU reduction.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

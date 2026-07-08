@@ -106,5 +106,5 @@ uniform build. It is either:
 2. a proof that a subset of VS indexed-float shaders can hash narrower ranges
    without changing `DrawUniformPayload` identity.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
 [state-churn-encode-encode-phase.46](../state-churn-encode/state-churn-encode-encode-phase.46.md).

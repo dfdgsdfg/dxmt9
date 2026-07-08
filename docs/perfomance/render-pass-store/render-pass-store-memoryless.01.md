@@ -87,7 +87,7 @@ post-process intermediates).
 **Result / status.** Currently a proposal — no implementation, no GT1
 measurement. Implementation cost estimate is modest for the classifier plus
 storage-mode parameter, but the **landing surface is narrow without P1
-pass-coalescing** (see `H6` in [render-pass-store](../render-pass-store.md)). The honest framing is
+pass-coalescing** (see `H6` in [render-pass-store](index.md)). The honest framing is
 that memoryless promotion is a multiplier on whatever coalesce work makes
 producer+consumer passes mergeable; it is not a standalone GT1 lever.
 
@@ -97,8 +97,8 @@ track. Safe path: implement the classifier and counters first (no behavior
 change), confirm transient share from real D3D9 traces, then promote only
 after coalesce shows producer+consumer same-pass cases.
 
-**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
+**Related.** [render-pass-store](index.md) · [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
 (orthogonal store-action proof) · [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (the
 pass-chain analysis that constrains where memoryless would even apply) ·
-[hidden-backend-storage](../hidden-backend-storage.md) (P0 owner; memoryless is bandwidth-only and does
+[hidden-backend-storage](../hidden-backend-storage/index.md) (P0 owner; memoryless is bandwidth-only and does
 not move the hidden VS-write bucket).

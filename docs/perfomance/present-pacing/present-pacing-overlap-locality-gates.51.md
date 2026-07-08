@@ -8,7 +8,7 @@ date: 2026-06-16
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_compare_3dmark05_perf_counters.py, tests/scripts/test_3dmark05_probe_scripts.py, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/result.json, experiments/output/app-d3d9-3dmark05-drawchunk-limit256-lowoverhead-r1/result.json
-related: docs/perfomance/present-pacing/present-pacing-compare-gates.37.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit-sweep.50.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-compare-gates.37.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit-sweep.50.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 51 - P4 Overlap Locality Gates

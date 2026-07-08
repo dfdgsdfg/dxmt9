@@ -38,7 +38,7 @@ reordering, and the cross-row interactions (`60/0` up, `60/3` down) keep it a
 diagnostic. The shader-dump join confirmed ~80% of visible VSOut is unread yet
 trimming it does not move the bucket — owner is below source-visible stage-out.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
 · prev: [primitive-reorder-diagnostics-reverse.10](primitive-reorder-diagnostics-reverse.10.md) · narrows to: [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md),
 [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md) · safe-subset attempt: [primitive-reorder-diagnostics-reverse.14](primitive-reorder-diagnostics-reverse.14.md)
-· current rerun: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [vsout-layout](../vsout-layout.md).
+· current rerun: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) · [vsout-layout](../vsout-layout/index.md).

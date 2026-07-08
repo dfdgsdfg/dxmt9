@@ -37,4 +37,4 @@ not a strict same-row local result. Evidence that backend shape is sensitive to
 scoped blend/pass composition — the next valid blend experiment must preserve the
 blend equation and isolate same-row backend shape (row-local replay or locality).
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · follows [backend-shape-classifiers-alpha.01](backend-shape-classifiers-alpha.01.md), precedes the precise class-only [backend-shape-classifiers-alpha.03](backend-shape-classifiers-alpha.03.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · motivates [mini-replay-bisection](../mini-replay-bisection.md) row-local approach.
+**Related.** [backend-shape-classifiers](index.md) · follows [backend-shape-classifiers-alpha.01](backend-shape-classifiers-alpha.01.md), precedes the precise class-only [backend-shape-classifiers-alpha.03](backend-shape-classifiers-alpha.03.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md) · motivates [mini-replay-bisection](../mini-replay-bisection/index.md) row-local approach.

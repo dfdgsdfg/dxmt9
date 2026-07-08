@@ -138,5 +138,5 @@ but the production opt-in still should not become the shared `perf` default
 until the `~0.33 ms/present` candidate+lookup tax and the broader
 `encode_draw_index_setup_cpu_ms` increase are reduced or amortized.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.17](index-cache-locality-cpucost.17.md).

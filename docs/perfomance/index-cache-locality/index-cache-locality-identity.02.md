@@ -33,6 +33,6 @@ dxmt CPU writer `0.617MiB`. Hot rows: `60/4` `1091.008MiB` depth-read alpha/scis
 `gpu_vs_buffer_write → hidden_vertex_tiler_parameter_storage`, dxmt CPU writers ≈ 0
 relative to Xcode's bucket. Use only as mini-replay construction input.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-identity.01](index-cache-locality-identity.01.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) (the `2236.981MiB`, `1266B/VS inv` evidence) ·
-[mini-replay-bisection](../mini-replay-bisection.md) · [index-reuse-measurement](../index-reuse-measurement.md) · [vsout-layout](../vsout-layout.md) (184B ruled out).
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-identity.01](index-cache-locality-identity.01.md)
+· [hidden-backend-storage](../hidden-backend-storage/index.md) (the `2236.981MiB`, `1266B/VS inv` evidence) ·
+[mini-replay-bisection](../mini-replay-bisection/index.md) · [index-reuse-measurement](../index-reuse-measurement/index.md) · [vsout-layout](../vsout-layout/index.md) (184B ruled out).

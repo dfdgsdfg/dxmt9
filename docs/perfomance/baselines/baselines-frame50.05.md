@@ -104,5 +104,5 @@ submission remains `6487.666ms`, and submit batch append remains
 `2369.063ms`. These are CPU/pacing owners and do not justify a new Xcode
 gputrace by themselves.
 
-**Related.** [baselines](../baselines.md) · [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md) ·
-[state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md).
+**Related.** [baselines](index.md) · [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md) ·
+[state-churn-encode](../state-churn-encode/index.md) · [present-pacing](../present-pacing/index.md).

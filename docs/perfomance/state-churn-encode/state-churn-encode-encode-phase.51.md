@@ -82,6 +82,6 @@ inner lookup-reserve call. If this path is touched again, the next proof must
 split payload equality compare, lookup bucket walk, payload copy, and lookup
 linking rather than assuming reserve/check overhead owns the bucket.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) ·
-[state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md) · [snapshot-cache](../snapshot-cache.md).
+[state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md) · [snapshot-cache](../snapshot-cache/index.md).

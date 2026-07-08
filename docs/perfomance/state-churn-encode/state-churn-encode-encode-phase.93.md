@@ -127,6 +127,6 @@ The next useful work should be one of:
 - `git diff --check`
 - two wrapper runs listed in **Method**
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.92](state-churn-encode-encode-phase.92.md) ·
-[snapshot-cache](../snapshot-cache.md) · [present-pacing](../present-pacing.md).
+[snapshot-cache](../snapshot-cache/index.md) · [present-pacing](../present-pacing/index.md).

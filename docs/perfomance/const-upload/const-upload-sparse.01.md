@@ -38,6 +38,6 @@ count. But the break count is unchanged, so it does NOT make the scanner cross
 const records, and draw-run coverage did not improve. A byte-volume reduction,
 not a batching fix; GPU impact still unproven (needs Xcode).
 
-**Related.** [const-upload](../const-upload.md) · next: [const-upload-sparse.02](const-upload-sparse.02.md) (the Xcode
-validation that rejects it as a GPU fix) · [state-churn-encode](../state-churn-encode.md) (the draw-run
-batching it does not fix) · [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [const-upload](index.md) · next: [const-upload-sparse.02](const-upload-sparse.02.md) (the Xcode
+validation that rejects it as a GPU fix) · [state-churn-encode](../state-churn-encode/index.md) (the draw-run
+batching it does not fix) · [hidden-backend-storage](../hidden-backend-storage/index.md).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: implementation
 status: accepted-local-copy-cleanup-rejected-fps-owner
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/framegraph/fg_linearizer.cpp, tests/native/backend/dod_replay_observer_spec.cpp, tests/native/core/state_draw_transform_spec.cpp, experiments/output/app-d3d9-3dmark05-uniform-front-copy-elision-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-front-copy-elision-current-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-front-copy-elision-current-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.116.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.116.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 117 - Command-Front Uniform Payload Copy Elision
@@ -108,4 +108,4 @@ with direct compact consumption in prefetch/encoder paths.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-front-copy-elision-current-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
 **Related.** [state-churn-encode-encode-phase.116](state-churn-encode-encode-phase.116.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

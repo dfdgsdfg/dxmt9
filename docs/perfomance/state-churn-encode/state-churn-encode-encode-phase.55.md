@@ -104,6 +104,6 @@ Any pre-open skip must preserve the per-draw argbuf table lifetime rule from
 the dxut-simple overlay fix: a table cannot be reused when any pointed cbuf
 slice changes before older draws have executed.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) ·
 [state-churn-encode-encode-phase.54](state-churn-encode-encode-phase.54.md).

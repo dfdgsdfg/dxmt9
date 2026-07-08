@@ -100,7 +100,7 @@ default-construction work.
 - `meson compile -C build-win32-x86-builtin`
 - `scripts/tools/run_3dmark05_perf_probe.sh --suffix drawrun-discarded-state-probe-r1-20260614 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.44](state-churn-encode-encode-phase.44.md) ·
-[state-churn-encode-encode-phase.46](state-churn-encode-encode-phase.46.md) · [snapshot-cache](../snapshot-cache.md) ·
+[state-churn-encode-encode-phase.46](state-churn-encode-encode-phase.46.md) · [snapshot-cache](../snapshot-cache/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

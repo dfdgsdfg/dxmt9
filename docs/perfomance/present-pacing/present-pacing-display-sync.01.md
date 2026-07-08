@@ -106,7 +106,7 @@ at 11.2 ms/CB versus a 16.67 ms vsync budget". Follow-up investigations:
 - [present-pacing-frame-latency.01](present-pacing-frame-latency.01.md) — `DXMT9_MAX_FRAME_LATENCY=3` +
   `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS=0` (production-safe alternative)
 - [present-pacing-async-acquire.01](present-pacing-async-acquire.01.md) — `DXMT9_PRESENT_ASYNC_ACQUIRE=1`
-- [state-churn-encode](../state-churn-encode.md) — existing topic that owns the per-CB encode cost
+- [state-churn-encode](../state-churn-encode/index.md) — existing topic that owns the per-CB encode cost
   side of this story
 
 **Non-goal.** `DXMT9_LAYER_DISPLAY_SYNC=0` is not a production fix; it

@@ -8,7 +8,7 @@ date: 2026-06-19
 type: workflow-validation
 status: file-route-exported-developertools-attach-blocked
 source: scripts/tools/run_3dmark05_perf_probe.sh --dry-run; scripts/tools/run_3dmark05_perf_probe.sh --xcode-attach-preflight-only; scripts/tools/run_3dmark05_system_trace_sidecar.sh --dry-run; df -m .; /usr/sbin/DevToolsSecurity -status
-related: docs/perfomance/baselines/baselines-gputrace-capture.01.md, docs/perfomance/baselines.md, agents/rules/metal_debugging.rules.md
+related: docs/perfomance/baselines/baselines-gputrace-capture.01.md, docs/perfomance/baselines/index.md, agents/rules/metal_debugging.rules.md
 ---
 
 # gputrace/System Trace Preflight
@@ -150,4 +150,4 @@ on the capture target:
 For H88 specifically, no Xcode replay was needed because the same-day
 no-gputrace P4 gates already reject the candidate as an average-FPS fix.
 
-**Related.** [baselines-gputrace-capture.01](baselines-gputrace-capture.01.md) - [baselines](../baselines.md).
+**Related.** [baselines-gputrace-capture.01](baselines-gputrace-capture.01.md) - [baselines](index.md).

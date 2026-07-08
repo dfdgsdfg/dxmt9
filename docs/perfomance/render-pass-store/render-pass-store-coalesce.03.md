@@ -65,5 +65,5 @@ GPU-capture-free artifact.
 
 **Related.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (WAW edge) ·
 [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) (passcoalesce removes 100%) ·
-[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H13/H14) · [render-pass-store](../render-pass-store.md) ·
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H13/H14) · [render-pass-store](index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

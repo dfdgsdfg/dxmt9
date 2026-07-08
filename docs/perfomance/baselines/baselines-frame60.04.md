@@ -98,5 +98,5 @@ hidden vertex/backend storage, render-pass preservation, and encode CPU
 remaining open. The next GPU-facing work still needs route/counter evidence for
 programmable color/textured rows rather than only a depth-only shortcut.
 
-**Related.** [baselines](../baselines.md) · [baselines-frame60.03](baselines-frame60.03.md) ·
-[hidden-backend-storage-shape.28](../hidden-backend-storage/hidden-backend-storage-shape.28.md) · [present-pacing](../present-pacing.md).
+**Related.** [baselines](index.md) · [baselines-frame60.03](baselines-frame60.03.md) ·
+[hidden-backend-storage-shape.28](../hidden-backend-storage/hidden-backend-storage-shape.28.md) · [present-pacing](../present-pacing/index.md).

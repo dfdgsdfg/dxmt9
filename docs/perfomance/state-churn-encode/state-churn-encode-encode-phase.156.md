@@ -8,7 +8,7 @@ date: 2026-06-19
 type: implementation-runtime-gate
 status: accepted-mechanism-rejected-runtime-promotion
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-h166-compact-submission-r1/3dmark05-perf-summary.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.154.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.155.md, docs/perfomance/snapshot-cache.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.154.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.155.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Encode Phase 156 - Producer compact uniform submission runtime gate

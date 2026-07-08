@@ -163,5 +163,5 @@ the next proof still needs a fixed-workload wallclock gate.
 fallback counts, and any remaining named encode/snapshot bucket. There is no
 Xcode reason to spend `.gputrace` budget from this CPU-only result alone.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
-[snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) · [present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md).

@@ -34,6 +34,6 @@ first-order counter (hot VS write, VS bytes/inv, hidden backend estimate) is
 flat. The broad `60/4` alpha-blended subset is NOT the owner of the hidden
 VS-write bucket; the time win is likely secondary ordering/cache noise.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
-· next: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md) · [hidden-backend-storage](../hidden-backend-storage.md)
-· [vsout-layout](../vsout-layout.md) (bytes/inv unchanged vs visible width).
+**Related.** [primitive-reorder-diagnostics](index.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
+· next: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md) · [hidden-backend-storage](../hidden-backend-storage/index.md)
+· [vsout-layout](../vsout-layout/index.md) (bytes/inv unchanged vs visible width).

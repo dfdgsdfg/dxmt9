@@ -125,6 +125,6 @@ cannot be repurposed for that signal. The remaining production choices are:
 - stop spending reorder/Xcode budget here and return to non-reorder backend
   mechanisms.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
-[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [mini-replay-bisection](index.md) ·
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality/index.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md).

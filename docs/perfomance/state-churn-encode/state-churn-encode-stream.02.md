@@ -36,6 +36,6 @@ Encoder-log aggregation: `stream_metal_binds=1097242` with
 offset changes; `commit_chunk_draw_delta_ib_handle == commit_chunk_draw_delta_ib`.
 The next target is resource-handle alternation, not offset-only caching.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-stream.01](state-churn-encode-stream.01.md) ·
+**Related.** [state-churn-encode](index.md) · prev: [state-churn-encode-stream.01](state-churn-encode-stream.01.md) ·
 next: [state-churn-encode-stream.03](state-churn-encode-stream.03.md) ·
 [state-churn-encode-statedelta.01](state-churn-encode-statedelta.01.md) (state-delta bucket split).

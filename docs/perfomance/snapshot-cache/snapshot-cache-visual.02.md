@@ -8,7 +8,7 @@ date: 2026-06-20
 type: correctness-triage
 status: accepted-current-gate
 source: docs/perfomance/snapshot-cache/snapshot-cache-visual.01.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.169.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.172.md; experiments/output/app-d3d9-3dmark05-h191-current-black-geometry-window-r1/result.json; experiments/output/app-d3d9-3dmark05-h192-full-cbuf-black-geometry-window-r1/result.json; experiments/output/app-d3d9-3dmark05-h192-full-cbuf-black-geometry-window-r1/h191-vs-h192-full-cbuf-black-geometry-window.md; experiments/output/app-d3d9-3dmark05-h196-v003-tag-release-black-geometry-window-r3/result.json; experiments/output/app-d3d9-3dmark05-h199-current-black-geometry-window-r3-f910/result.json; traces/app-d3d9-3dmark05-h192-full-cbuf-black-geometry-window-r1/analysis/h191-vs-h192-offset-pairs.png; traces/app-d3d9-3dmark05-h199-current-black-geometry-window-r3-f910/analysis/h196-v003-vs-h199-current-image-compare.md
-related: docs/perfomance/snapshot-cache.md, docs/perfomance/baselines.md, docs/perfomance/present-pacing.md, docs/perfomance/state-churn-encode.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.169.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.172.md
+related: docs/perfomance/snapshot-cache/index.md, docs/perfomance/baselines/index.md, docs/perfomance/present-pacing/index.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.169.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.172.md
 ---
 
 # Snapshot Cache Visual 02 - Current v0.0.3 Visual Gate and Full-Cbuf Triage

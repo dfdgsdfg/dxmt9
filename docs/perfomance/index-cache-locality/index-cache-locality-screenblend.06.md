@@ -88,6 +88,6 @@ candidate, not a production/default optimization. The current experiment did
 make progress: semantic input is prepared and passes `lsb1`; the remaining
 blocker is specifically stable Xcode movement on the current screen-blend row.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md)
 · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

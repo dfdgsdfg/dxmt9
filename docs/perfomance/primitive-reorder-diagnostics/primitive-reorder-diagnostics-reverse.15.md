@@ -39,6 +39,6 @@ shape-sensitive anomaly, not a stable owner. The real variable is the surroundin
 lower-vertex `60/4` instance (1,068,372 vs ~1.1M vertices; 477B/inv vs ~590B/inv).
 Motivated the scissor-rectangle probe ([primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md)).
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · reruns: [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md)
-· next: [primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md) · [hidden-backend-storage](../hidden-backend-storage.md)
-· [index-cache-locality](../index-cache-locality.md) (screen-blend opt also only moves GPU time, not VS write).
+**Related.** [primitive-reorder-diagnostics](index.md) · reruns: [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md)
+· next: [primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md) · [hidden-backend-storage](../hidden-backend-storage/index.md)
+· [index-cache-locality](../index-cache-locality/index.md) (screen-blend opt also only moves GPU time, not VS write).

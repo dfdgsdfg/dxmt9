@@ -85,7 +85,7 @@ What three steps now confirm together:
 
 This forecloses the present-side knob space. The remaining path is
 **reducing per-CB encode cost so the frame fits in a single 16.67 ms
-vsync slot**. That work lives in [state-churn-encode](../state-churn-encode.md) and the
+vsync slot**. That work lives in [state-churn-encode](../state-churn-encode/index.md) and the
 follow-up [present-pacing-encode-budget.01](present-pacing-encode-budget.01.md).
 
 **Verification that the env var reached the runtime.** Acquire wait

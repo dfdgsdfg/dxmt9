@@ -307,4 +307,4 @@ and
 [MTLCaptureDescriptor.outputURL](https://developer.apple.com/documentation/metal/mtlcapturedescriptor/outputurl)
 docs.
 
-**Related.** [baselines](../baselines.md) · [hidden-backend-storage-shape.26](../hidden-backend-storage/hidden-backend-storage-shape.26.md).
+**Related.** [baselines](index.md) · [hidden-backend-storage-shape.26](../hidden-backend-storage/hidden-backend-storage-shape.26.md).

@@ -42,4 +42,4 @@ view requested. `rt_texture_usage=0x2` is the D3D `UsageRenderTarget` bitset,
 would break the D3D X8 alpha-fill sampling contract if the app later reads alpha.
 Therefore any X8-family suppression must stay an opt-in diagnostic.
 
-**Related.** [attachment-pixelformat](../attachment-pixelformat.md) · follows the R32F probe [attachment-pixelformat-r32f.01](attachment-pixelformat-r32f.01.md) and motivates the broad X8 attempt [attachment-pixelformat-x8.01](attachment-pixelformat-x8.01.md) · shares the `DXMT9_PERF_ENCODER_BREAKDOWN` instrumentation surface with [state-churn-encode](../state-churn-encode.md) · informs [render-pass-store](../render-pass-store.md).
+**Related.** [attachment-pixelformat](index.md) · follows the R32F probe [attachment-pixelformat-r32f.01](attachment-pixelformat-r32f.01.md) and motivates the broad X8 attempt [attachment-pixelformat-x8.01](attachment-pixelformat-x8.01.md) · shares the `DXMT9_PERF_ENCODER_BREAKDOWN` instrumentation surface with [state-churn-encode](../state-churn-encode/index.md) · informs [render-pass-store](../render-pass-store/index.md).

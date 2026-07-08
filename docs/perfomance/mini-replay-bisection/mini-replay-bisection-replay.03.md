@@ -41,6 +41,6 @@ wider encoder2 sequence, not depth/scissor. The sorted-row control (similar VS i
 but only 442.6B/VS inv) proves raw vertex count is insufficient. Next: bisect this
 113-draw replay ([mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md)).
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) ·
-[mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
-[tvb-mechanism-proof](../tvb-mechanism-proof.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) ·
+[mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

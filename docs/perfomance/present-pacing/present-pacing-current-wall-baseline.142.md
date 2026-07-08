@@ -8,7 +8,7 @@ date: 2026-06-20
 type: no-gputrace-current-baseline
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-current-wall-baseline-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-wall-baseline-r1/result.json, experiments/output/app-d3d9-3dmark05-current-wall-baseline-r1/actual.png, experiments/output/app-d3d9-3dmark05-current-wall-baseline-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-wall-baseline-r1/compare-vs-h220.md
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.201.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.201.md
 ---
 
 # Present-Pacing H142 - Current Wall Baseline Refresh

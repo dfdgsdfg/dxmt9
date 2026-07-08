@@ -46,4 +46,4 @@ therefore GPU-side vertex/primitive backend behavior, not CPU state/bind churn.
 optimization.** This confirms primitive/indexed-submission pressure is an active
 first-order classifier.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · directly followed [backend-shape-classifiers-cull.03](backend-shape-classifiers-cull.03.md) · the strongest confirmation of [hidden-backend-storage](../hidden-backend-storage.md) scaling · motivates the accepted [index-cache-locality](../index-cache-locality.md) win (reduce VS invocations within the indexed path) · related [index-reuse-measurement](../index-reuse-measurement.md).
+**Related.** [backend-shape-classifiers](index.md) · directly followed [backend-shape-classifiers-cull.03](backend-shape-classifiers-cull.03.md) · the strongest confirmation of [hidden-backend-storage](../hidden-backend-storage/index.md) scaling · motivates the accepted [index-cache-locality](../index-cache-locality/index.md) win (reduce VS invocations within the indexed path) · related [index-reuse-measurement](../index-reuse-measurement/index.md).

@@ -38,6 +38,6 @@ GPU-time win, but the old VS-write reduction was a diagnostic-context artifact, 
 "reverse these four draws." Hidden Apple vertex/tiler/backend storage (`~1.47GiB`
 hot VS write) remains the dominant owner.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · next: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md)
-(later cache-based screen-blend approach) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md)
-(the reverse-order origin) · [hidden-backend-storage](../hidden-backend-storage.md) · [baselines](../baselines.md) (measure-index-cache).
+**Related.** [index-cache-locality](index.md) · next: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md)
+(later cache-based screen-blend approach) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md)
+(the reverse-order origin) · [hidden-backend-storage](../hidden-backend-storage/index.md) · [baselines](../baselines/index.md) (measure-index-cache).

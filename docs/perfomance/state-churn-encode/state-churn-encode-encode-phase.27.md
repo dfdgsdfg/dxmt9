@@ -139,7 +139,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
   constants without bytecode evidence because indexed addressing requires
   conservative full snapshots.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md) ·
 [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
 [state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md).

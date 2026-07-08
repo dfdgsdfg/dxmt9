@@ -37,6 +37,6 @@ disappears, but `gpu_command_buffer_time_ms` does not move — FFP-VS cbuf was a
 real CPU/upload amplifier, NOT the GPU limiter. Active target shifts to
 `VsConsts` unchanged float-prefix bytes.
 
-**Related.** [const-upload](../const-upload.md) · prev: [const-upload-volatility.01](const-upload-volatility.01.md) · next:
+**Related.** [const-upload](index.md) · prev: [const-upload-volatility.01](const-upload-volatility.01.md) · next:
 [const-upload-range.01](const-upload-range.01.md) · confirms GPU limiter is elsewhere →
-[hidden-backend-storage](../hidden-backend-storage.md) · [state-churn-encode](../state-churn-encode.md) (stream/IB churn unchanged class).
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [state-churn-encode](../state-churn-encode/index.md) (stream/IB churn unchanged class).

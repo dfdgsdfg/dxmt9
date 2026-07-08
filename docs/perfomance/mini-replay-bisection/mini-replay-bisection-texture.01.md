@@ -108,6 +108,6 @@ was to use the sidecars in a real-texture semantic replay. That follow-up is
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md). The sidecar path itself is accepted as
 the reusable capture/input apparatus.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) ·
-[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) · [index-cache-locality](../index-cache-locality/index.md).

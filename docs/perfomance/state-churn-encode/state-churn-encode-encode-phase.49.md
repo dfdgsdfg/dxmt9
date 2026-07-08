@@ -90,7 +90,7 @@ The larger current encode owners remain argbuf setup/cbuf update, stream/index
 bind, pipeline lookup, issue cost, and the still exposed pre-publish
 replay/snapshot path from [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.08](state-churn-encode-encode-phase.08.md) ·
 [state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) ·
 [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).

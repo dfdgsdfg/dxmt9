@@ -112,6 +112,6 @@ Either reduce reopen frequency with a correctness proof that survives the
 per-draw table lifetime rule, or reduce the already-required cbuf repoint/probe
 control work by consolidating dirty classification and component decisions.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
 [state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md).

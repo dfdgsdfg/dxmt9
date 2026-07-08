@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/actual.png
-related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, docs/perfomance/state-churn-encode.md, docs/perfomance/snapshot-cache.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/snapshot-cache/index.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 52 - Current Low-Overhead Scout With State-Elision Active

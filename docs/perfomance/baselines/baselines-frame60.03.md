@@ -196,6 +196,6 @@ present pass churn, hidden TVB/PB backend writes, and completion/present pacing.
 This scout does not replace [baselines-frame60.02](baselines-frame60.02.md) for Xcode GPU bottleneck
 ownership.
 
-**Related.** [baselines](../baselines.md) · [baselines-frame60.02](baselines-frame60.02.md) ·
-[backend-shape-classifiers-alpha.04](../backend-shape-classifiers/backend-shape-classifiers-alpha.04.md) · [present-pacing](../present-pacing.md) ·
-[render-pass-store](../render-pass-store.md).
+**Related.** [baselines](index.md) · [baselines-frame60.02](baselines-frame60.02.md) ·
+[backend-shape-classifiers-alpha.04](../backend-shape-classifiers/backend-shape-classifiers-alpha.04.md) · [present-pacing](../present-pacing/index.md) ·
+[render-pass-store](../render-pass-store/index.md).

@@ -1,6 +1,26 @@
+---
+domain: render-pass-store
+workload: 3DMark05 GT1
+title: "Render-Pass Store — the P1 GPU-memory (tile preservation) track - Historical Log"
+type: domain-log
+status: historical
+updated: 2026-07-08
+source: docs/perfomance/render-pass-store/index.md
+related: docs/perfomance/render-pass-store/index.md; docs/perfomance/render-pass-store/overview.md
+---
+
+# Render-Pass Store — the P1 GPU-memory (tile preservation) track - Historical Log
+
+> Full historical detail moved from the former top-level `render-pass-store.md` overview.
+> Keep [overview](overview.md) current and compact; append long-running chronology,
+> rejected paths, and detailed synthesis here only when it is not already captured in
+> one-experiment leaf documents.
+
+---
+
 # Render-Pass Store — the P1 GPU-memory (tile preservation) track
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -10,7 +30,7 @@ an intervening different pass. It covers the run-level measurement of that
 re-entry budget, the `StoreActionDontCare` live-out proofs that *should* avoid the
 stores, and the pass-chain split that explains why those cheap proofs do not fire
 on GT1. The central GT1 cost owner is still the P0 hidden vertex-stage/TVB write
-bucket ([hidden-backend-storage](hidden-backend-storage.md)); this track is large in absolute GPU-memory
+bucket ([hidden-backend-storage](../hidden-backend-storage/index.md)); this track is large in absolute GPU-memory
 terms (~62 GB tile preservation) but secondary in the priority DAG, and its only
 real lever — dependency-aware pass reordering/coalescing — is still **open**.
 
@@ -18,20 +38,20 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Same RT/depth re-entry is a measurable, large fraction of the tile preservation budget | **accepted (real, actionable)** | [render-pass-store-reentry.01](render-pass-store/render-pass-store-reentry.01.md) |
-| H2 | Re-entry is an immediate duplicate-reopen bug (`same_key_adjacent`) | rejected (`same_key_adjacent=0`) | [render-pass-store-reentry.01](render-pass-store/render-pass-store-reentry.01.md) |
-| H3 | A color/depth live-out `StoreActionDontCare` proof can discard re-entry stores | model representable, GT1 gap | [render-pass-store-dontcare.01](render-pass-store/render-pass-store-dontcare.01.md) |
-| H4 | The conservative color next-clear DontCare proof fires on GT1 | **rejected** (`render_pass_store_action_dontcare=0`; re-entry is preserve-before-load) | [render-pass-store-dontcare.02](render-pass-store/render-pass-store-dontcare.02.md) |
-| H5 | The re-entry budget is dominated by one attachment (single-attachment DontCare would suffice) | rejected (split ~50/50 color/depth) | [render-pass-store-passchain.01](render-pass-store/render-pass-store-passchain.01.md) |
-| H6 | Dependency-aware pass reordering/coalescing is the real lever (most switches change BOTH RT and depth) | **OPEN** — the modern-renderer Frame Graph DAG (RAW+WAR+WAW edges) now makes the candidate/safety judgment machine-decidable per frame; the current frame60 refresh still reports 5/5 pre-opt safe candidates and 0/5 post-opt re-entries, but the device-gated coalesce-execution + byte-equal/preservation proof is still owed | [render-pass-store-passchain.01](render-pass-store/render-pass-store-passchain.01.md), [render-pass-store-coalesce.01](render-pass-store/render-pass-store-coalesce.01.md), [render-pass-store-coalesce.05](render-pass-store/render-pass-store-coalesce.05.md) |
-| H7 | Transient D3D9 intermediate RTs can be allocated as `MTLStorageModeMemoryless` to skip device RAM entirely | **OPEN (proposal)** — landing surface narrow without H6 coalesce; same-pass scope only | [render-pass-store-memoryless.01](render-pass-store/render-pass-store-memoryless.01.md) |
-| H8 | Same-key re-entry is a short ping-pong pattern rather than a long dependency chain | accepted-counter-sample (`distance_1=90.35-90.77%`; one-hop shape is `100%` RT+depth-both-changed) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H9 | One-hop ping-pong is exact-handle random, but depth-pair/true B->A encoder-path stable | accepted-counter-sample (`B 0x...001 -> A 0x...004 @ 2->3` owns `45.57GB`) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H10 | Top one-hop ping-pong is blocked by direct attachment-as-texture reads between B and A | rejected-counter-sample (`3561/3561` raw top rows have `B reads A=none`, `A reads B=none`) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H11 | Top one-hop ping-pong is kept live by present/clear/helper ops | rejected-counter-sample (`3569/3569` raw top rows are `BlockDrawTarget` + `BlockDrawDepth`, not present/clear/helper) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H12 | Top one-hop ping-pong is blocked by distant live-out reuse rather than immediate target reuse | rejected-counter-sample (dominant top patterns report `B next touch=color/depth 1`, `A next touch=color/depth 1`) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H13 | The immediate ping-pong is role-random and needs a global scheduler | rejected-counter-sample (encoder join shows stable role pairs: textured-depth-read <-> opaque-depth-write and screen-blend-depth-read <-> opaque-depth-write) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
-| H14 | The stable role ping-pong also has stable pass-action shape | accepted-counter-sample (depth-read side is `color/depth Load+Store`; opaque depth-write side is `color/depth Clear+Store`) | [render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) |
+| H1 | Same RT/depth re-entry is a measurable, large fraction of the tile preservation budget | **accepted (real, actionable)** | [render-pass-store-reentry.01](render-pass-store-reentry.01.md) |
+| H2 | Re-entry is an immediate duplicate-reopen bug (`same_key_adjacent`) | rejected (`same_key_adjacent=0`) | [render-pass-store-reentry.01](render-pass-store-reentry.01.md) |
+| H3 | A color/depth live-out `StoreActionDontCare` proof can discard re-entry stores | model representable, GT1 gap | [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md) |
+| H4 | The conservative color next-clear DontCare proof fires on GT1 | **rejected** (`render_pass_store_action_dontcare=0`; re-entry is preserve-before-load) | [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md) |
+| H5 | The re-entry budget is dominated by one attachment (single-attachment DontCare would suffice) | rejected (split ~50/50 color/depth) | [render-pass-store-passchain.01](render-pass-store-passchain.01.md) |
+| H6 | Dependency-aware pass reordering/coalescing is the real lever (most switches change BOTH RT and depth) | **OPEN** — the modern-renderer Frame Graph DAG (RAW+WAR+WAW edges) now makes the candidate/safety judgment machine-decidable per frame; the current frame60 refresh still reports 5/5 pre-opt safe candidates and 0/5 post-opt re-entries, but the device-gated coalesce-execution + byte-equal/preservation proof is still owed | [render-pass-store-passchain.01](render-pass-store-passchain.01.md), [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md), [render-pass-store-coalesce.05](render-pass-store-coalesce.05.md) |
+| H7 | Transient D3D9 intermediate RTs can be allocated as `MTLStorageModeMemoryless` to skip device RAM entirely | **OPEN (proposal)** — landing surface narrow without H6 coalesce; same-pass scope only | [render-pass-store-memoryless.01](render-pass-store-memoryless.01.md) |
+| H8 | Same-key re-entry is a short ping-pong pattern rather than a long dependency chain | accepted-counter-sample (`distance_1=90.35-90.77%`; one-hop shape is `100%` RT+depth-both-changed) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H9 | One-hop ping-pong is exact-handle random, but depth-pair/true B->A encoder-path stable | accepted-counter-sample (`B 0x...001 -> A 0x...004 @ 2->3` owns `45.57GB`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H10 | Top one-hop ping-pong is blocked by direct attachment-as-texture reads between B and A | rejected-counter-sample (`3561/3561` raw top rows have `B reads A=none`, `A reads B=none`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H11 | Top one-hop ping-pong is kept live by present/clear/helper ops | rejected-counter-sample (`3569/3569` raw top rows are `BlockDrawTarget` + `BlockDrawDepth`, not present/clear/helper) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H12 | Top one-hop ping-pong is blocked by distant live-out reuse rather than immediate target reuse | rejected-counter-sample (dominant top patterns report `B next touch=color/depth 1`, `A next touch=color/depth 1`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H13 | The immediate ping-pong is role-random and needs a global scheduler | rejected-counter-sample (encoder join shows stable role pairs: textured-depth-read <-> opaque-depth-write and screen-blend-depth-read <-> opaque-depth-write) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H14 | The stable role ping-pong also has stable pass-action shape | accepted-counter-sample (depth-read side is `color/depth Load+Store`; opaque depth-write side is `color/depth Clear+Store`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
 
 ## Verification methods
 
@@ -70,7 +90,7 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
   another Xcode capture on H6.
 
 **Current DAG sidecar observation.** The latest refresh
-([render-pass-store-coalesce.05](render-pass-store/render-pass-store-coalesce.05.md)) runs frame60 ±2 on the current code state.
+([render-pass-store-coalesce.05](render-pass-store-coalesce.05.md)) runs frame60 ±2 on the current code state.
 It reports `5` pre-opt files, `5` same-attachment re-entry pairs, and `5`
 safe-relocatable candidates for frames `58..62`. The matching post-opt summary
 reports `5` files and `0` same-attachment pairs, while run counters report
@@ -130,20 +150,20 @@ flowchart TD
 ## Results synthesis
 
 **Settled.** Same RT/depth re-entry is a real, measurable, large slice of the
-GPU-memory budget: [render-pass-store-reentry.01](render-pass-store/render-pass-store-reentry.01.md) found `2788` same-key
+GPU-memory budget: [render-pass-store-reentry.01](render-pass-store-reentry.01.md) found `2788` same-key
 re-entries (~2.21/present) owning `62.34 GB`, ~37.2% of the `167.73 GB` estimated
 tile preservation budget, while `render_pass_same_key_adjacent=0` rules out a
 trivial immediate-reopen bug. The cheap fix family — `StoreActionDontCare` proofs
-([render-pass-store-dontcare.01](render-pass-store/render-pass-store-dontcare.01.md)) — is correct and tested but does **not** fire
-on GT1: [render-pass-store-dontcare.02](render-pass-store/render-pass-store-dontcare.02.md) reported
+([render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)) — is correct and tested but does **not** fire
+on GT1: [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md) reported
 `render_pass_store_action_dontcare=0` because the re-entry is
 preservation-**before-load**, not preservation-before-clear (contents are later
-Loaded, not discarded). The pass-chain split [render-pass-store-passchain.01](render-pass-store/render-pass-store-passchain.01.md)
+Loaded, not discarded). The pass-chain split [render-pass-store-passchain.01](render-pass-store-passchain.01.md)
 then showed the budget is ~50/50 color/depth (`31.11 GB` each) and that the
 dominant transition (`render_pass_transition_rt_depth_change=10873`, ~8.63/present)
 changes **both** RT and depth, while same-RT/depth-change is `0` — so no
 single-attachment store policy can cover GT1. The current distance run
-[render-pass-store-reentry-distance.01](render-pass-store/render-pass-store-reentry-distance.01.md) further narrows the remaining shape:
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) further narrows the remaining shape:
 same-key re-entry is not a long chain, because `3407 / 3771` to
 `3580 / 3944` re-entries (`90.35-90.77%`) are distance-1 `A -> B -> A`
 ping-pong and the rest are distance `5..8`. The shape follow-up shows the
@@ -202,13 +222,13 @@ simple "store immediately before clear" reading for the dominant role pairs and
 pushes the design toward an explicit ordering/dependency proof for moving
 Load+Store depth-read work around Clear+Store opaque work. A
 companion proposal,
-[render-pass-store-memoryless.01](render-pass-store/render-pass-store-memoryless.01.md), records the
+[render-pass-store-memoryless.01](render-pass-store-memoryless.01.md), records the
 `MTLStorageModeMemoryless` opportunity for transient D3D9 intermediate RTs;
 its landing surface is narrow until coalesce makes producer+consumer share a
 Metal render pass, so it is recorded as an OPEN proposal that multiplies any
-coalesce win rather than a standalone lever. Per the [overview-3dmark05-gt1](overview-3dmark05-gt1.md)
+coalesce win rather than a standalone lever. Per the [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
 priority DAG, this entire P1 GPU-memory track remains secondary to the P0
-hidden-backend write bucket ([hidden-backend-storage](hidden-backend-storage.md)); the cheap, safe
+hidden-backend write bucket ([hidden-backend-storage](../hidden-backend-storage/index.md)); the cheap, safe
 render-pass wins were already shown not to move the GT1 bottleneck.
 
 ## How to run
@@ -257,9 +277,29 @@ GPU-counter proof until the device-gated linearized executor drives the Metal
 stream and passes a byte-equal output gate.
 
 ## Cross-references
-- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.
-- [hidden-backend-storage](hidden-backend-storage.md) — the P0 owner (hidden vertex-stage/TVB write) that dominates GT1 ahead of this track.
-- [const-upload](const-upload.md) — the CPU-side upload-traffic sibling that, like the DontCare proofs here, moves bytes but not the GT1 GPU bottleneck.
-- [baselines](baselines.md) — frame120 reference where `rt=0x30000460000000c,depth=0x300000100000001` re-entry costs 24.643 ms / 73.32% of the frame.
-- [render-pass-store-coalesce.01](render-pass-store/render-pass-store-coalesce.01.md) — the `specs/d3d9-renderer/` Frame Graph DAG + WAR/WAW edges operationalize the H6 re-entry coalesce (candidate/ordering/no-intervening-writer safety) machine-decidably on real GT1 frames (frame50 `P0→P2` WAW on color+depth); coalesce execution is device-gated.
-- [render-pass-store-coalesce.05](render-pass-store/render-pass-store-coalesce.05.md) — current frame60 DAG refresh: 5/5 pre-opt safe candidates, 0 post-opt same-attachment pairs, `81.430GiB` distance-1 RT+depth preservation still structurally eliminable.
+- [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root priority DAG; this is the P1 GPU-memory track, secondary to the P0 hidden-backend bucket.
+- [hidden-backend-storage](../hidden-backend-storage/index.md) — the P0 owner (hidden vertex-stage/TVB write) that dominates GT1 ahead of this track.
+- [const-upload](../const-upload/index.md) — the CPU-side upload-traffic sibling that, like the DontCare proofs here, moves bytes but not the GT1 GPU bottleneck.
+- [baselines](../baselines/index.md) — frame120 reference where `rt=0x30000460000000c,depth=0x300000100000001` re-entry costs 24.643 ms / 73.32% of the frame.
+- [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) — the `specs/d3d9-renderer/` Frame Graph DAG + WAR/WAW edges operationalize the H6 re-entry coalesce (candidate/ordering/no-intervening-writer safety) machine-decidably on real GT1 frames (frame50 `P0→P2` WAW on color+depth); coalesce execution is device-gated.
+- [render-pass-store-coalesce.05](render-pass-store-coalesce.05.md) — current frame60 DAG refresh: 5/5 pre-opt safe candidates, 0 post-opt same-attachment pairs, `81.430GiB` distance-1 RT+depth preservation still structurally eliminable.
+
+## Root 3DMark05 Map Detail Migration - 2026-07-08
+
+Detail migrated from the former long-form root [3DMark05 overview](../overview-3dmark05-gt1.md) so that `render-pass-store` owns its detailed synthesis while the root overview stays cross-domain only.
+
+### From What is settled vs open
+
+- Dependency-aware pass coalescing for same RT/depth re-entry (P1). The current
+  render-pass-store proof rejects direct texture reads, present/clear/helper
+  ownership, and distant live-out for the top rows: dominant `A -> B -> A`
+  patterns immediately touch color/depth targets again at distance `1`. The
+  encoder-role join narrows the selector to textured/screen-blend depth-read
+  passes alternating with opaque untextured depth-write passes; exact handle
+  identity rotates and is not the useful selector. The pass-action follow-up
+  confirms the stable shape: the depth-read side is color/depth `Load+Store`,
+  while the opaque depth-write side is color/depth `Clear+Store`. This rejects a
+  simple redundant-store-before-clear interpretation for the dominant pairs; the
+  next proof has to preserve D3D9 ordering while moving or coalescing
+  `Load+Store` depth-read work around `Clear+Store` opaque work.
+  [render-pass-store](index.md)

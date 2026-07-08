@@ -133,7 +133,7 @@ target is not raw payload byte copying. The first-order children are:
 | Consecutive uniform handle reuse inside a batch | If adjacent submissions share payload/hash, pass the known handle instead of probing the lookup table again |
 | More effective batch coalescing | Larger records/group would amortize one state append and one record publication over more draws |
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
 [state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md) ·
 [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md).

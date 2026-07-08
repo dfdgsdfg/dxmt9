@@ -82,5 +82,5 @@ domain-specific frontier, not a general heap:
 
 Do not promote `DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER` beyond diagnostic use.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.11](index-cache-locality-cpucost.11.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

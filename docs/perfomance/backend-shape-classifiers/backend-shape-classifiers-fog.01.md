@@ -39,4 +39,4 @@ VS-write bucket, the hidden backend estimate, VS invocation count, or VS bytes
 per invocation. Fog-factor reads and the fog blend path are a secondary
 fragment/raster cost, not the ~1.63 GiB hidden vertex/backend write owner.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · companion to [backend-shape-classifiers-texture.01](backend-shape-classifiers-texture.01.md) (the other secondary fragment-cost classifier) · refutes fog as the [hidden-backend-storage](../hidden-backend-storage.md) owner · refutes [vsout-layout](../vsout-layout.md) fogFactor width as the owner.
+**Related.** [backend-shape-classifiers](index.md) · companion to [backend-shape-classifiers-texture.01](backend-shape-classifiers-texture.01.md) (the other secondary fragment-cost classifier) · refutes fog as the [hidden-backend-storage](../hidden-backend-storage/index.md) owner · refutes [vsout-layout](../vsout-layout/index.md) fogFactor width as the owner.

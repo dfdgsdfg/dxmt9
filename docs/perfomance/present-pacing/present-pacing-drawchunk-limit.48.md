@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-attribution-rejected-knob
 source: experiments/output/app-d3d9-3dmark05-noenqueue-chunkshape-r1/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-chunkshape-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-chunkshape-r1/actual.png, experiments/output/app-d3d9-3dmark05-drawchunk-limit64-r1/result.json, experiments/output/app-d3d9-3dmark05-drawchunk-limit64-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-drawchunk-limit64-r1/analysis/frame60-perf-counter-comparison.md, experiments/output/app-d3d9-3dmark05-drawchunk-limit64-r1/actual.png
-related: docs/perfomance/present-pacing/present-pacing-noenqueue-beforepublish.47.md, docs/perfomance/present-pacing/present-pacing-current-p2p3.46.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-noenqueue-beforepublish.47.md, docs/perfomance/present-pacing/present-pacing-current-p2p3.46.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 48 - Before-Publish Chunk Shape and Draw-Chunk Limit A/B

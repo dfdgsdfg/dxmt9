@@ -92,6 +92,6 @@ default path. The next work should move away from F2 allocation churn and back
 to the proven larger owners: snapshot/cache lookup, state/layout copy width,
 and stronger same-generation state/layout copy elision.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.34](state-churn-encode-encode-phase.34.md) ·
 [state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md).

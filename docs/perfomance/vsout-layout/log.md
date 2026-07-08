@@ -1,6 +1,26 @@
+---
+domain: vsout-layout
+workload: 3DMark05 GT1
+title: "VSOut Layout — visible varying-width attempts to explain the VS-write bucket - Historical Log"
+type: domain-log
+status: historical
+updated: 2026-07-08
+source: docs/perfomance/vsout-layout/index.md
+related: docs/perfomance/vsout-layout/index.md; docs/perfomance/vsout-layout/overview.md
+---
+
+# VSOut Layout — visible varying-width attempts to explain the VS-write bucket - Historical Log
+
+> Full historical detail moved from the former top-level `vsout-layout.md` overview.
+> Keep [overview](overview.md) current and compact; append long-running chronology,
+> rejected paths, and detailed synthesis here only when it is not already captured in
+> one-experiment leaf documents.
+
+---
+
 # VSOut Layout — visible varying-width attempts to explain the VS-write bucket
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -18,13 +38,13 @@ the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Trimming unused varyings (`DXMT9_TRIM_UNUSED_VARYINGS`) shrinks the VS-write bucket | rejected | [vsout-layout-varying.01](vsout-layout/vsout-layout-varying.01.md) |
-| H2 | Exact FS-read liveness trim (keep only fields the FS reads) moves it where blanket trim did not | rejected | [vsout-layout-varying.02](vsout-layout/vsout-layout-varying.02.md) |
-| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | [vsout-layout-varying.03](vsout-layout/vsout-layout-varying.03.md) |
-| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | [vsout-layout-pointsize.01](vsout-layout/vsout-layout-pointsize.01.md) |
-| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | [vsout-layout-position.01](vsout-layout/vsout-layout-position.01.md) |
-| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | [vsout-layout-position.02](vsout-layout/vsout-layout-position.02.md) |
-| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | [vsout-layout-half.01](vsout-layout/vsout-layout-half.01.md) |
+| H1 | Trimming unused varyings (`DXMT9_TRIM_UNUSED_VARYINGS`) shrinks the VS-write bucket | rejected | [vsout-layout-varying.01](vsout-layout-varying.01.md) |
+| H2 | Exact FS-read liveness trim (keep only fields the FS reads) moves it where blanket trim did not | rejected | [vsout-layout-varying.02](vsout-layout-varying.02.md) |
+| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | [vsout-layout-varying.03](vsout-layout-varying.03.md) |
+| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) |
+| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | [vsout-layout-position.01](vsout-layout-position.01.md) |
+| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | [vsout-layout-position.02](vsout-layout-position.02.md) |
+| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | [vsout-layout-half.01](vsout-layout-half.01.md) |
 
 ## Verification methods
 
@@ -100,7 +120,7 @@ width to remove.
 Nothing in this domain is still open: visible VSOut width is closed as the owner.
 The surviving owner is hidden Apple GPU vertex-stage / tiler / parameter (TVB)
 backend storage that scales with VS-invocation count × per-vertex VSOut bytes — see
-[hidden-backend-storage](hidden-backend-storage.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md).
 
 ## How to run
 Every experiment here is a 3DMark05 GT1 run via the standard wrapper. Capture a
@@ -119,13 +139,32 @@ bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix half-vsout --frame 6
 ```
 
 The mini-replay FS-read liveness axis (`--trim-vsout-to-fs-reads`) is run through
-the [mini-replay-bisection](mini-replay-bisection.md) harness. The exact per-experiment flags live in each
+the [mini-replay-bisection](../mini-replay-bisection/index.md) harness. The exact per-experiment flags live in each
 leaf's `**Method.**` field. See `agents/rules/environment_variables.rules.md` for
 env-var meanings and `agents/rules/metal_debugging.rules.md` for the full workflow.
 
 ## Cross-references
-- [hidden-backend-storage](hidden-backend-storage.md) — the surviving owner this whole domain points to (hidden TVB/parameter storage, VS-write density model).
-- [tvb-mechanism-proof](tvb-mechanism-proof.md) — the `--require-tvb-mechanism-proof` gate that half-VSOut failed; the accepted row-local mechanism proof.
-- [shader-codegen](shader-codegen.md) — sibling axis testing vertex temp/scratch trim and offline Metal codegen (also below visible stage-out).
-- [backend-shape-classifiers](backend-shape-classifiers.md) — where the correctness-invalid position-only / fragment-only diagnostics live as state-shape classifiers.
-- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root map and priority DAG.
+- [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving owner this whole domain points to (hidden TVB/parameter storage, VS-write density model).
+- [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) — the `--require-tvb-mechanism-proof` gate that half-VSOut failed; the accepted row-local mechanism proof.
+- [shader-codegen](../shader-codegen/index.md) — sibling axis testing vertex temp/scratch trim and offline Metal codegen (also below visible stage-out).
+- [backend-shape-classifiers](../backend-shape-classifiers/index.md) — where the correctness-invalid position-only / fragment-only diagnostics live as state-shape classifiers.
+- [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root map and priority DAG.
+
+## Root 3DMark05 Map Detail Migration - 2026-07-08
+
+Detail migrated from the former long-form root [3DMark05 overview](../overview-3dmark05-gt1.md) so that `vsout-layout` owns its detailed synthesis while the root overview stays cross-domain only.
+
+### From What is settled vs open
+
+- Visible `VSOut`/varying width, point-size, half-precision varyings. [vsout-layout](index.md)
+- Translated-shader temp/scratch sizing; owner is below AIR. [shader-codegen](../shader-codegen/index.md)
+- Current primitive-order-preserving backend-shape probes: half-VSOut moves
+  bytes/inv only `-1.94%` and regresses GPU, so it fails the non-reorder gate.
+  Offline `live-vsout` also left `60/2`/`60/1` scratch unchanged, and the
+  scoped `60/0` Xcode counter gate then rejected the remaining visible-width
+  candidate outright. [hidden-backend-storage](../hidden-backend-storage/index.md)
+
+- Whether an actual Apple position-only/binning path can avoid hidden
+  MSL position-attribute / parameter storage. The existing position-only VSOut probe is a
+  correctness-invalid visible-output diagnostic, not proof that this backend
+  path was enabled or impossible. [vsout-layout](index.md), [shader-codegen](../shader-codegen/index.md)

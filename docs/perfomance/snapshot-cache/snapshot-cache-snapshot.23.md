@@ -166,6 +166,6 @@ candidate must be paired with the present-pacing gates from
 
 Without the last P4 movement, classify the candidate as a local CPU cleanup only.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) ·
 [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) · [snapshot-cache-snapshot.22](snapshot-cache-snapshot.22.md) ·
 [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

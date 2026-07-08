@@ -158,5 +158,5 @@ before mutating behavior.
 3. If build remains hot after residual split, target `buildVsConsts()` /
    `buildPsConsts()` copy/hash locality rather than Metal buffer calls.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) · [const-upload](../const-upload.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) · [const-upload](../const-upload/index.md).

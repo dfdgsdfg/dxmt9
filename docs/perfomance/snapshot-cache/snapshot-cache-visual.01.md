@@ -8,7 +8,7 @@ date: 2026-06-18
 type: correctness-fix
 status: accepted-correctness-fix
 source: src/dxmt9/dxmt9_backend_types.hpp; tests/native/backend/dod_replay_observer_spec.cpp; experiments/output/app-d3d9-3dmark05-visual-uniform-prefix-fix-r1-20260617/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-visual-full-cbuf-oracle-r1-20260617/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-visual-uniform-prefix-fix-r1-20260617/analysis/fix-contact.png; traces/app-d3d9-3dmark05-visual-full-cbuf-oracle-r1-20260617/analysis/full-cbuf-contact.png
-related: docs/perfomance/snapshot-cache.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md
+related: docs/perfomance/snapshot-cache/index.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md
 ---
 
 # Snapshot Cache Visual 01 - Compact Uniform Storage Preserves Metal ABI Prefix

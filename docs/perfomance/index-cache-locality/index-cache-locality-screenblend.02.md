@@ -37,7 +37,7 @@ same-input FS probes showed small image differences. Later
 [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) formalizes the only allowed promotion path:
 explicit exact/`lsb1` semantic policy.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-screenblend.01](index-cache-locality-screenblend.01.md)
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-screenblend.01](index-cache-locality-screenblend.01.md)
 · next: [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md) · [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md)
 · [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md)
-(50/2 left untouched there) · [hidden-backend-storage](../hidden-backend-storage.md).
+(50/2 left untouched there) · [hidden-backend-storage](../hidden-backend-storage/index.md).

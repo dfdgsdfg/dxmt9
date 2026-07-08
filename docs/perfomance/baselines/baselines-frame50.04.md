@@ -112,16 +112,16 @@ ordinary run noise of [baselines-frame50.03](baselines-frame50.03.md) /
 This run also clarifies the current residual budget:
 
 - Wallclock/pacing: `completion_wait_ms` is still ~31 s, all previous
-  evidence says it is present/display-sync paced ([present-pacing](../present-pacing.md)).
+  evidence says it is present/display-sync paced ([present-pacing](../present-pacing/index.md)).
 - CPU encode: `encode_draw_cpu_ms` is still ~16 s; current bind-skip work
   did not move wallclock, so the next CPU attribution needs sampling or
   finer internal timers, not more broad bind-cache guesses.
 - PE-side state rebuild: `d3d9_snapshot_draw_submission_cpu_ms` is ~19.7 s
-  and remains a major parallel CPU budget ([snapshot-cache](../snapshot-cache.md)).
+  and remains a major parallel CPU budget ([snapshot-cache](../snapshot-cache/index.md)).
 - GPU/pass traffic: `gpu_command_buffer_time_ms` and tile preservation are
   stable; no new Xcode budget is justified unless a candidate preflight moves
   VS invocations, hidden-backend proxy bytes, or a semantic-safe locality gate.
 
-**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
-[baselines-frame50.03](baselines-frame50.03.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md) ·
-[snapshot-cache](../snapshot-cache.md) · [render-pass-store](../render-pass-store.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [baselines](index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
+[baselines-frame50.03](baselines-frame50.03.md) · [present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md) ·
+[snapshot-cache](../snapshot-cache/index.md) · [render-pass-store](../render-pass-store/index.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

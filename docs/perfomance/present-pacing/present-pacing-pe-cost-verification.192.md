@@ -8,7 +8,7 @@ date: 2026-07-07
 type: no-gputrace
 status: accepted-pe-cost-verified
 source: experiments/output/app-d3d9-3dmark05-pe-cost-stats-r7-20260707/result.json; experiments/output/app-d3d9-3dmark05-pe-cost-nostats-r8-20260707/result.json; docs/perfomance/present-pacing/present-pacing-offload-backpressure-attribution.191.md
-related: docs/perfomance/present-pacing.md; docs/perfomance/present-pacing/present-pacing-pe-hotsetter-split.61.md; docs/perfomance/present-pacing/present-pacing-pe-const-apply-split.60.md
+related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-pe-hotsetter-split.61.md; docs/perfomance/present-pacing/present-pacing-pe-const-apply-split.60.md
 ---
 
 # Present-Pacing H192 - PE recording cost verification

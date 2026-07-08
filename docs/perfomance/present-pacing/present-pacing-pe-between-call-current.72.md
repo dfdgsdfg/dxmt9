@@ -8,7 +8,7 @@ date: 2026-06-18
 type: experiment
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-current-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-current-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-current-r1-20260618/actual.png
-related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/snapshot-cache.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/snapshot-cache/index.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Present Pacing 72 - Current PE Between-Call Attribution After Uniform ABI-Prefix Fix

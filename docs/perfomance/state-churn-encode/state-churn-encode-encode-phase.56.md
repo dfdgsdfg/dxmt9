@@ -97,5 +97,5 @@ repoint/probe path. A narrower VS-source identity improvement would need a new
 counter proving that the `812k` VS misses are false misses, not real uniform
 payload changes.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md).

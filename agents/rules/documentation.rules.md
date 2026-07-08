@@ -70,6 +70,22 @@ bash scripts/check/verify_tla.sh
 - Link to existing docs instead of repeating them.
 - In `docs/perfomance/`, use standard Markdown links with explicit relative
   `.md` targets; do not add Obsidian/wiki-style `[[...]]` cross-references.
+- In `docs/perfomance/`, use `index.md` as the root entry point, keep
+  `overview.md` for the general dxmt9 performance model, keep
+  `overview-3dmark05-gt1.md` for the 3DMark05 GT1 investigation map, and use
+  the shared root `log.md` for root-document maintenance history.
+- Keep `docs/perfomance/overview-3dmark05-gt1.md` as a cross-domain map only:
+  whole-experiment axes, current gates, and domain pointers. Move detailed
+  verdict tables, long synthesis, and experiment chronology into the owning
+  domain `overview.md` or `log.md`.
+- In `docs/perfomance/`, domain pages live under
+  `docs/perfomance/<domain>/`: use `index.md` as the domain landing page,
+  `overview.md` for the current compact conclusion, and `log.md` for older
+  rolled-up detail. Do not recreate top-level `docs/perfomance/<domain>.md`
+  files.
+- Domain `index.md`, `overview.md`, and `log.md` files should carry YAML
+  frontmatter with `domain`, `workload`, `title`, `type`, `status`, `updated`,
+  `source`, and `related` keys.
 - Use inline code for requirement IDs, commands, files, and env vars.
 - Keep Mermaid diagrams for ordering, ownership, and state machines where prose
   would hide the important dependency.
@@ -84,7 +100,7 @@ bash scripts/check/verify_tla.sh
 | `agents/rules/*.rules.md` | What recurring project rule prevents future mistakes? | Long | Project-wide |
 | `specs/{area}/*.md` | What must dxmt9 do, and what design owns it? | Long | One subsystem or concern |
 | `specs/gap.md` | What is not implemented, partial, or newly accepted? | Active | Whole project |
-| `docs/perfomance/*.md` | What performance bottleneck, experiment, evidence, and next gate is known? | Active | Performance model and experiment graph |
+| `docs/perfomance/` | What performance bottleneck, experiment, evidence, and next gate is known? | Active | Performance model and experiment graph |
 
 Decision flow:
 

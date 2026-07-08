@@ -33,6 +33,6 @@ less geometry, so it is not causal. Shared-row deltas show no target win: target
 reversal is no longer a candidate fix path. The aggregate "win" is frame-shape
 contamination, not VS-write reduction.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.05](primitive-reorder-diagnostics-reverse.05.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.05](primitive-reorder-diagnostics-reverse.05.md)
 · next: [primitive-reorder-diagnostics-reverse.07](primitive-reorder-diagnostics-reverse.07.md) · gate source: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
-· later clean rerun: [primitive-reorder-diagnostics-reverse.18](primitive-reorder-diagnostics-reverse.18.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+· later clean rerun: [primitive-reorder-diagnostics-reverse.18](primitive-reorder-diagnostics-reverse.18.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

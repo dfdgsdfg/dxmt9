@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling+experiment
 status: superseded-by-phase136
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-width-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-width-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-width-r1-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.134.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.134.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 135 - Argbuf Payload Delta Float Width Attribution
@@ -137,7 +137,7 @@ The follow-up phase 136 replaces this leaf's width numbers with an owned-payload
 histogram. It shows `<=16` VS rows are still common, but the `>64` tail is not a
 small artifact and the VS upload/changed-byte ratio is only `1.13x`.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·
 [state-churn-encode-encode-phase.134](state-churn-encode-encode-phase.134.md) ·
 [state-churn-encode-encode-phase.136](state-churn-encode-encode-phase.136.md).

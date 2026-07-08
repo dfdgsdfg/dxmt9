@@ -8,7 +8,7 @@ date: 2026-07-07
 type: no-gputrace
 status: accepted-cpu-tax-absorbed
 source: experiments/output/app-d3d9-3dmark05-synergy-idxcache-r9-20260707/result.json; experiments/output/app-d3d9-3dmark05-pe-cost-nostats-r8-20260707/result.json; docs/perfomance/present-pacing/present-pacing-offload-backpressure-attribution.191.md
-related: docs/perfomance/index-cache-locality.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.18.md; docs/perfomance/present-pacing/present-pacing-commit-replay-offload.190.md
+related: docs/perfomance/index-cache-locality/index.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.18.md; docs/perfomance/present-pacing/present-pacing-commit-replay-offload.190.md
 ---
 
 # Index-Cache Locality 19 - Offload absorbs the CPU tax

@@ -130,7 +130,7 @@ candidate directions:
 - use `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1` for legacy-placement A/B until
   broader workloads clear cold-pipeline risk.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md) ·
-[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [present-pacing](../present-pacing.md) ·
+[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [present-pacing](../present-pacing/index.md) ·
 [present-pacing-publish-pso-prefetch.26](../present-pacing/present-pacing-publish-pso-prefetch.26.md).

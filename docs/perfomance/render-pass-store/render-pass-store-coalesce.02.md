@@ -86,5 +86,5 @@ byte-equal output + measure the preservation-byte reduction against the
 
 **Related.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (DAG/WAW makes it decidable) ·
 [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) ·
-[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) · [render-pass-store](../render-pass-store.md) ·
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) · [render-pass-store](index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

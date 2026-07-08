@@ -105,5 +105,5 @@ If a future cbuf change touches identity inputs again, pair the no-gputrace
 counter smoke with either a same-input replay image proof or an explicit user
 visual check of the GT1 scene.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) · [present-pacing](../present-pacing/index.md).

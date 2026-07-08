@@ -58,5 +58,5 @@ linear-scaling law that [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof
 underpins the central finding that the GT1 cost is hidden GPU-side
 vertex/tiler/parameter storage.
 
-**Related.** [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md) · [index-cache-locality](../index-cache-locality.md) · [vsout-layout](../vsout-layout.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [tvb-mechanism-proof](index.md) · [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [index-cache-locality](../index-cache-locality/index.md) · [vsout-layout](../vsout-layout/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

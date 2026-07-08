@@ -46,5 +46,5 @@ scripts/tools/run_3dmark05_perf_probe.sh \
 snapshot CPU dropped only ~3%. The remaining bottleneck is NOT const-only churn —
 motivates per-miss-reason instrumentation to find what still rebuilds.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · prev [snapshot-cache-snapshot.01](snapshot-cache-snapshot.01.md) · next
-[snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) · [const-upload](../const-upload.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [snapshot-cache](index.md) · prev [snapshot-cache-snapshot.01](snapshot-cache-snapshot.01.md) · next
+[snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) · [const-upload](../const-upload/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

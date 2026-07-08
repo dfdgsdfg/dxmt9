@@ -35,6 +35,6 @@ carries no per-draw stream/IB handles.
 batching fix worth designing is a draw-run payload that carries per-draw stream
 and IB bindings; an offset-only rule is not aligned with the shape.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-statedelta.01](state-churn-encode-statedelta.01.md) ·
+**Related.** [state-churn-encode](index.md) · prev: [state-churn-encode-statedelta.01](state-churn-encode-statedelta.01.md) ·
 next: [state-churn-encode-statedelta.03](state-churn-encode-statedelta.03.md) ·
 [state-churn-encode-binding.01](state-churn-encode-binding.01.md) (the override fix this motivated).

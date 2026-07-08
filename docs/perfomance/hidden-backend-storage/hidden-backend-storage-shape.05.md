@@ -105,8 +105,8 @@ The next GPU work should therefore be one of two proof families:
   `60/0 live-vsout` first; `60/2`/`60/1` visible-width-only retries are low
   priority.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) ·
 [hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md) · [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) ·
 [mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) · [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md) ·
-[index-cache-locality](../index-cache-locality.md).
+[index-cache-locality](../index-cache-locality/index.md).

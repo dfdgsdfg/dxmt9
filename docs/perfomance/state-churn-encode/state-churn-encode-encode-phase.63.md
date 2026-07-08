@@ -122,6 +122,6 @@ The remaining argbuf levers are therefore:
 Do not spend another GT1 probe on a full-payload-vs-component-hash argbuf
 shortcut unless the uniform payload builder or constant upload model changes.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
 [state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) ·
 [state-churn-encode-encode-phase.62](state-churn-encode-encode-phase.62.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

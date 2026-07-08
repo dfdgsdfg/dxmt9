@@ -134,5 +134,5 @@ would need a stronger cache identity or plan reuse keyed by draw-state plus
 volatile fields; broad equality weakening is not justified because full
 sampler-state equality is the safety boundary.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

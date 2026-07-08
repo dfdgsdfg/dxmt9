@@ -47,7 +47,7 @@ primitives `r=0.977`, VS invocations `r=0.971`, dxmt CPU writers `r=0.188`,
 FS invocations `r=0.034`. Rejects dxmt writers, visible `VSOut` width, fragment
 volume, and named tiled counters alone as the owner.
 
-**Related.** [hidden-backend-storage-scaling.01](hidden-backend-storage-scaling.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage-scaling.01](hidden-backend-storage-scaling.01.md) · [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-density.01](hidden-backend-storage-density.01.md) · [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md) ·
-[vsout-layout](../vsout-layout.md) · [backend-shape-classifiers](../backend-shape-classifiers.md) · [index-cache-locality](../index-cache-locality.md) ·
+[vsout-layout](../vsout-layout/index.md) · [backend-shape-classifiers](../backend-shape-classifiers/index.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

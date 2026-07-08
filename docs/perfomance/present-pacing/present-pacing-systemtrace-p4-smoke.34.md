@@ -198,4 +198,4 @@ needs a targeted positive wait sample or must move
   produced about `601MiB` of trace plus probe artifacts.
 
 **Related.** [present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
-[present-pacing-lowoverhead-refresh.33](present-pacing-lowoverhead-refresh.33.md) · [present-pacing](../present-pacing.md).
+[present-pacing-lowoverhead-refresh.33](present-pacing-lowoverhead-refresh.33.md) · [present-pacing](index.md).

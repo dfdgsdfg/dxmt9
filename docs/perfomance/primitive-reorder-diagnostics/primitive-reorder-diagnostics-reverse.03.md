@@ -41,6 +41,6 @@ wins in some rows for larger losses in others and drifts frame shape (fails the
 5% gate, [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)). Useful only as a
 classifier: order moves the hidden bucket, but no broad subset is clean.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
-· next: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [hidden-backend-storage](../hidden-backend-storage.md)
-· [index-reuse-measurement](../index-reuse-measurement.md) (state-class attribution motivated by these row trades).
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
+· next: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [hidden-backend-storage](../hidden-backend-storage/index.md)
+· [index-reuse-measurement](../index-reuse-measurement/index.md) (state-class attribution motivated by these row trades).

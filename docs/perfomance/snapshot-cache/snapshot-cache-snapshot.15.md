@@ -125,5 +125,5 @@ their own dirty generations, then compose the `FlatDrawStateRecord` from those
 owned components. Do not spend effort on key child micro-optimization first; the
 largest child is the repeated state-set materialization.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.14](snapshot-cache-snapshot.14.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.14](snapshot-cache-snapshot.14.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

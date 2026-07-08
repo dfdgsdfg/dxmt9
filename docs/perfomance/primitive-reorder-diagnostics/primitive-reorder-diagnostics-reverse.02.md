@@ -38,6 +38,6 @@ passes, scissor, tile coverage, hot-row membership). New transient-IB path adds
 CPU/state churn with no GPU payoff. Also fails the 5% shape gate
 ([primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md), top draws `711 -> 753`).
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)
-· next: [primitive-reorder-diagnostics-reverse.03](primitive-reorder-diagnostics-reverse.03.md) · [hidden-backend-storage](../hidden-backend-storage.md) (owner unchanged)
-· [vsout-layout](../vsout-layout.md) (VS bytes/inv still ~4.5x visible 184B VSOut).
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)
+· next: [primitive-reorder-diagnostics-reverse.03](primitive-reorder-diagnostics-reverse.03.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) (owner unchanged)
+· [vsout-layout](../vsout-layout/index.md) (VS bytes/inv still ~4.5x visible 184B VSOut).

@@ -8,7 +8,7 @@ date: 2026-06-13
 type: attribution
 status: accepted
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-frames.csv
-related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.30.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.30.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Current wallclock FPS owner is CPU cadence plus present-completion wait
@@ -137,5 +137,5 @@ future A/B also moves wallclock/pacing counters.
   not as the first tool for current average FPS unless the low-overhead scout
   shows GPU command-buffer time approaching the frame wall time.
 
-**Related.** [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [present-pacing](index.md) · [state-churn-encode](../state-churn-encode/index.md) ·
 [hidden-backend-storage-shape.30](../hidden-backend-storage/hidden-backend-storage-shape.30.md).

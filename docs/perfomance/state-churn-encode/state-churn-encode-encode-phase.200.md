@@ -8,7 +8,7 @@ date: 2026-06-20
 type: implementation-validation
 status: accepted-local-cleanup
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-uniform-component-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-fixed-carry-r1/3dmark05-perf-summary.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.198.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.199.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.198.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.199.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 200 - Uniform fixed payload handle carry
@@ -132,4 +132,4 @@ replay/encode materialization width.
 - 3DMark05 GT1 no-gputrace probe: `app-d3d9-3dmark05-uniform-fixed-carry-r1`
 
 **Related.** [state-churn-encode-encode-phase.198](state-churn-encode-encode-phase.198.md) ·
-[state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) · [present-pacing](../present-pacing/index.md).

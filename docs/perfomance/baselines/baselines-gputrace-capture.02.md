@@ -426,4 +426,4 @@ with a normal no-gputrace visual/perf scout before making average-FPS claims.
 
 **Related.** [baselines-gputrace-capture.01](baselines-gputrace-capture.01.md) ·
 [baselines-gputrace-preflight.02](baselines-gputrace-preflight.02.md) · [hidden-backend-storage-shape.32](../hidden-backend-storage/hidden-backend-storage-shape.32.md) ·
-[baselines](../baselines.md).
+[baselines](index.md).

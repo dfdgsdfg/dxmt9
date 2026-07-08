@@ -45,6 +45,6 @@ none of the queue/map/boundary waits are the blocker — but the GPU limiter liv
 in the per-frame captures, not here. Frames it contextualizes:
 [baselines-frame120.01](baselines-frame120.01.md).
 
-**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [baselines-frame120.01](baselines-frame120.01.md) ·
-[state-churn-encode](../state-churn-encode.md) (stream/IB deltas, draw-run scarcity) ·
-[render-pass-store](../render-pass-store.md) (tile-preservation + split causes) · [const-upload](../const-upload.md) (break classes).
+**Related.** [baselines](index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [baselines-frame120.01](baselines-frame120.01.md) ·
+[state-churn-encode](../state-churn-encode/index.md) (stream/IB deltas, draw-run scarcity) ·
+[render-pass-store](../render-pass-store/index.md) (tile-preservation + split causes) · [const-upload](../const-upload/index.md) (break classes).

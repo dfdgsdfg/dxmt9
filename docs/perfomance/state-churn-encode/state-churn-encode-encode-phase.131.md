@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-negative-primary-lever
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_argbuf_hybrid.cpp, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.130.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.130.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 131 - Current Argbuf Payload Delta Recheck
@@ -105,7 +105,7 @@ effects when cbuf pointers change. It should not be another "ignore non-cbuf
 payload bits" shortcut unless a future workload first shows nonzero
 `changed_nonconst_only`.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
 [state-churn-encode-encode-phase.123](state-churn-encode-encode-phase.123.md) ·
 [state-churn-encode-encode-phase.130](state-churn-encode-encode-phase.130.md).

@@ -41,6 +41,6 @@ index + referenced stream bytes. This motivated the geometry payload dumper
 ([mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md)). The planner later gained `--geometry-dir`
 to validate payload triplets.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
-[index-reuse-measurement](../index-reuse-measurement.md) (probe CSV source) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
+[index-reuse-measurement](../index-reuse-measurement/index.md) (probe CSV source) · [hidden-backend-storage](../hidden-backend-storage/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

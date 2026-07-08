@@ -103,6 +103,6 @@ micro-optimizing wrapper code around the draw call is unlikely to matter.
 For current GT1 average-FPS work, keep priority on larger owners: argbuf setup,
 stream/index/shader binding, snapshot/replay, and present under-pipelining.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.58](state-churn-encode-encode-phase.58.md) ·
-[state-churn-encode-encode-phase.59](state-churn-encode-encode-phase.59.md) · [present-pacing](../present-pacing.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.58](state-churn-encode-encode-phase.58.md) ·
+[state-churn-encode-encode-phase.59](state-churn-encode-encode-phase.59.md) · [present-pacing](../present-pacing/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

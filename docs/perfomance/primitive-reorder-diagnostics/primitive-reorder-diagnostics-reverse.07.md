@@ -35,6 +35,6 @@ a *different submitted frame*, not a legal optimization. Useful only as another
 classifier showing the hidden bucket moves dramatically with row membership +
 geometry. Any real candidate must preserve the hot-row set and geometry first.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
 · next: [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md) · gate source: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) · [index-reuse-measurement](../index-reuse-measurement.md).
+· [hidden-backend-storage](../hidden-backend-storage/index.md) · [index-reuse-measurement](../index-reuse-measurement/index.md).

@@ -154,7 +154,7 @@ first-order waste is upstream value traffic and deep compatibility comparison.
 The next non-mutating implementation should add generation/lane opportunity
 counters before changing batching behavior.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
 [state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md) ·
 [state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md).

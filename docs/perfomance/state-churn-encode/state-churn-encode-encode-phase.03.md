@@ -114,6 +114,6 @@ cbuf-update bucket by about `39.7ms` and total `encode_draw_cpu_ms` by about
 3. avoid Xcode/gputrace spend until a no-gputrace A/B reduces the dirty/write
    counter or its CPU time.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) · [present-pacing](../present-pacing.md) ·
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) · [present-pacing](../present-pacing/index.md) ·
 [baselines-frame50.04](../baselines/baselines-frame50.04.md).

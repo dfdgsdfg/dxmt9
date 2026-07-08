@@ -115,5 +115,5 @@ Further work here is lower priority than D3D9 snapshot/state rebuild
 associativity can still be tested later because misses remain mostly direct-map
 collisions, but it should not displace the larger CPU owners.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.07](state-churn-encode-encode-phase.07.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.07](state-churn-encode-encode-phase.07.md) · [present-pacing](../present-pacing/index.md).

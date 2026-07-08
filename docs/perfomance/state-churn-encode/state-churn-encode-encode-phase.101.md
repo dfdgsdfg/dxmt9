@@ -87,7 +87,7 @@ preflight before another Xcode-counter sample can be trusted.
 - `python3 -m py_compile scripts/tools/compare_3dmark05_perf_counters.py tests/scripts/test_compare_3dmark05_perf_counters.py tests/scripts/test_3dmark05_probe_scripts.py`
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.100](state-churn-encode-encode-phase.100.md) ·
 [state-churn-encode-encode-phase.99](state-churn-encode-encode-phase.99.md) ·
 [state-churn-encode-encode-phase.92](state-churn-encode-encode-phase.92.md).

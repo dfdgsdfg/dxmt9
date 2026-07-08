@@ -7,7 +7,7 @@ title: P2/P3 Serial-Stage Compare Gates
 date: 2026-06-15
 type: instrumentation
 status: accepted-tooling
-source: scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_compare_3dmark05_perf_counters.py, tests/scripts/test_3dmark05_probe_scripts.py, docs/perfomance/present-pacing.md
+source: scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_compare_3dmark05_perf_counters.py, tests/scripts/test_3dmark05_probe_scripts.py, docs/perfomance/present-pacing/index.md
 related: docs/perfomance/present-pacing/present-pacing-compare-gates.37.md, docs/perfomance/present-pacing/present-pacing-stage-delta.08.md, docs/perfomance/present-pacing/present-pacing-lowoverhead-refresh.33.md
 ---
 
@@ -98,7 +98,7 @@ table.
 - `python3 -m pytest tests/scripts/test_3dmark05_probe_scripts.py -q -k 'pacing_compare_gates'`
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py -q`
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
-- `git diff --check -- scripts/tools/compare_3dmark05_perf_counters.py scripts/tools/run_3dmark05_perf_probe.sh scripts/tools/finalize_3dmark05_perf_probe.sh tests/scripts/test_compare_3dmark05_perf_counters.py tests/scripts/test_3dmark05_probe_scripts.py docs/perfomance/present-pacing.md docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md`
+- `git diff --check -- scripts/tools/compare_3dmark05_perf_counters.py scripts/tools/run_3dmark05_perf_probe.sh scripts/tools/finalize_3dmark05_perf_probe.sh tests/scripts/test_compare_3dmark05_perf_counters.py tests/scripts/test_3dmark05_probe_scripts.py docs/perfomance/present-pacing/index.md docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md`
 
 **Related.** [present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) ·
 [present-pacing-stage-delta.08](present-pacing-stage-delta.08.md) · [present-pacing-lowoverhead-refresh.33](present-pacing-lowoverhead-refresh.33.md).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: implementation
 status: accepted-local-storage-cleanup
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_backend_types.hpp, tests/native/backend/dod_replay_observer_spec.cpp, experiments/output/app-d3d9-3dmark05-uniform-stage-compact-storage-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-stage-compact-storage-current-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-stage-compact-storage-current-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.118.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.119.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.118.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.119.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 120 - Compact Stage-Constant Storage
@@ -93,4 +93,4 @@ payload entirely.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-stage-compact-storage-current-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
 **Related.** [state-churn-encode-encode-phase.118](state-churn-encode-encode-phase.118.md) ·
-[state-churn-encode-encode-phase.119](state-churn-encode-encode-phase.119.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.119](state-churn-encode-encode-phase.119.md) · [state-churn-encode](index.md).

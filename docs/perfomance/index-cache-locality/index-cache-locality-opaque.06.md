@@ -34,6 +34,6 @@ still adds ~`309ms`, so keep `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` off in th
 shared `perf` profile until that CPU cost drops or a broader runtime gate proves
 net positive. Completion-wait is a timing proxy, not a sole proof gate.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
 (the speedup) · next: [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (the Xcode proof) ·
-[tvb-mechanism-proof](../tvb-mechanism-proof.md).
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md).

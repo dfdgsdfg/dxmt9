@@ -123,6 +123,6 @@ scout still reports zero adjacent uniform-generation reuse. Do not spend Xcode
 or gputrace budget on this branch unless a future counter proves redundant
 constant records are common after a separate constant-upload coalescing change.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.17](snapshot-cache-snapshot.17.md) ·
-[snapshot-cache-snapshot.20](snapshot-cache-snapshot.20.md) · [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.17](snapshot-cache-snapshot.17.md) ·
+[snapshot-cache-snapshot.20](snapshot-cache-snapshot.20.md) · [state-churn-encode](../state-churn-encode/index.md) ·
 [present-pacing-native-selector-xctrace.31](../present-pacing/present-pacing-native-selector-xctrace.31.md).

@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-current-p2p3-scout-r1/result.json, experiments/output/app-d3d9-3dmark05-current-p2p3-scout-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-p2p3-scout-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-p2p3-scout-r1/3dmark05-trace-artifacts.json, experiments/output/app-d3d9-3dmark05-current-p2p3-scout-r1/actual.png, traces/app-d3d9-3dmark05-current-p2p3-scout-r1/analysis/current-default-vs-direct-cbuf.md, docs/perfomance/present-pacing/present-pacing-direct-cbuf.45.md
-related: docs/perfomance/present-pacing/present-pacing-direct-cbuf.45.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-direct-cbuf.45.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 46 - Current P2/P3 Scout After Capture-Layer Recovery
@@ -139,4 +139,4 @@ Direct-cbuf remains a real local CPU win, but it should not be promoted as the
 default FPS fix by itself.
 
 **Related.** [present-pacing-direct-cbuf.45](present-pacing-direct-cbuf.45.md) -
-[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) - [present-pacing](../present-pacing.md).
+[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) - [present-pacing](index.md).

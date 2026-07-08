@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment+tooling
 status: rejected-current-fps-lever
 source: src/d3d9/d3d9_pe_device.cpp, scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-split-sparse-vs-setter-current-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-split-sparse-vs-setter-current-r1-20260615/3dmark05-perf-vs-const-setter-ranges.csv, experiments/output/app-d3d9-3dmark05-split-sparse-vs-setter-current-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-split-sparse-vs-setter-current-r1-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.140.md, docs/perfomance/const-upload/const-upload-sparse.01.md, docs/perfomance/const-upload/const-upload-sparse.02.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.140.md, docs/perfomance/const-upload/const-upload-sparse.01.md, docs/perfomance/const-upload/const-upload-sparse.02.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 141 - Sparse VS Const Flush Current Gate
@@ -124,6 +124,6 @@ change Stage 2 cbuf binding ABI/storage so cbuf pointer turnover no longer
 forces table reopen, or return to larger P2/P3 replay/snapshot/encode reductions
 paired with P4 overlap/frame gates.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.140](state-churn-encode-encode-phase.140.md) ·
-[const-upload-sparse.01](../const-upload/const-upload-sparse.01.md) · [const-upload-sparse.02](../const-upload/const-upload-sparse.02.md) · [present-pacing](../present-pacing.md).
+[const-upload-sparse.01](../const-upload/const-upload-sparse.01.md) · [const-upload-sparse.02](../const-upload/const-upload-sparse.02.md) · [present-pacing](../present-pacing/index.md).

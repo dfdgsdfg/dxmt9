@@ -44,7 +44,7 @@ live-out `StoreActionDontCare` proof for contents dead before the next same-key
 re-entry. This is the P1 GPU-memory track, secondary to the P0 hidden-backend
 bucket.
 
-**Related.** [render-pass-store](../render-pass-store.md) · next: [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
-(the DontCare design this measurement motivated) · [baselines](../baselines.md) (frame120
+**Related.** [render-pass-store](index.md) · next: [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
+(the DontCare design this measurement motivated) · [baselines](../baselines/index.md) (frame120
 reference where `rt=0x...c,depth=0x...` re-entry costs 24.643 ms / 73.32%) ·
-[hidden-backend-storage](../hidden-backend-storage.md) (the P0 owner this P1 track sits behind).
+[hidden-backend-storage](../hidden-backend-storage/index.md) (the P0 owner this P1 track sits behind).

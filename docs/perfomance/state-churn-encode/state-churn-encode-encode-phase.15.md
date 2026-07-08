@@ -116,5 +116,5 @@ perturbs the default perf profile.
 texture resolve, not sampler lookup or sampler hash. Broader frame-rate claims
 still need vsync-on wallclock or Xcode frame-gated evidence.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) · [present-pacing](../present-pacing/index.md).

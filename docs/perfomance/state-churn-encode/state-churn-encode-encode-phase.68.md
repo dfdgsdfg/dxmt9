@@ -116,6 +116,6 @@ commit/encode cadence.
   completion wait, and whether earlier chunk publish or a producer/consumer
   boundary change can turn the same CPU work into hidden work.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) ·
-[present-pacing](../present-pacing.md) · [present-pacing-pe-chunk-cadence.11](../present-pacing/present-pacing-pe-chunk-cadence.11.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) ·
+[present-pacing](../present-pacing/index.md) · [present-pacing-pe-chunk-cadence.11](../present-pacing/present-pacing-pe-chunk-cadence.11.md) ·
 [present-pacing-pe-chunk-size-ab.12](../present-pacing/present-pacing-pe-chunk-size-ab.12.md).

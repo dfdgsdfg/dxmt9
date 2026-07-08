@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling+experiment
 status: accepted-current-attribution
 source: src/d3d9/d3d9_pe_device.cpp, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_3dmark05_probe_scripts.py, tests/scripts/test_summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-vs-const-setter-range-r3-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-vs-const-setter-range-r3-20260615/3dmark05-perf-vs-const-setter-ranges.csv, experiments/output/app-d3d9-3dmark05-vs-const-setter-range-r3-20260615/result.json, experiments/output/app-d3d9-3dmark05-vs-const-setter-range-r3-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.139.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.139.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 140 - VS Constant Setter Range Attribution
@@ -184,6 +184,6 @@ VS float constants and gate it on:
 4. P4/frame counters, because the current FPS limit still includes
    under-pipelined completion wait (`27.999ms/present`) and CPU replay/encode.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.139](state-churn-encode-encode-phase.139.md) ·
 [state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md).

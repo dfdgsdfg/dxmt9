@@ -115,6 +115,6 @@ crossing, wire import, or handle/resource marking.
 Keep this as a no-gputrace CPU lane until a change affects GPU-side row shape,
 render-pass traffic, or present/completion pacing.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.23](state-churn-encode-encode-phase.23.md) · [snapshot-cache](../snapshot-cache.md) ·
-[present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.23](state-churn-encode-encode-phase.23.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+[present-pacing](../present-pacing/index.md).

@@ -8,7 +8,7 @@ date: 2026-06-20
 type: experiment
 status: mechanism-accepted-runtime-promotion-rejected
 source: experiments/output/app-d3d9-3dmark05-h216-compact-direct-control-r1, experiments/output/app-d3d9-3dmark05-h217-compact-direct-on-r1
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.186.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.186.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 187 - Direct compact uniform runtime gate

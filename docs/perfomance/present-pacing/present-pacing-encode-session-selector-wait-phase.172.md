@@ -8,7 +8,7 @@ date: 2026-06-28
 type: no-gputrace
 status: diagnostic-safe-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-selector-wait-phase-r1-20260628-001947/result.json, experiments/output/app-d3d9-3dmark05-encode-session-selector-wait-phase-r1-20260628-001947/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-selector-wait-phase-r1-20260628-001947/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-selector-wait-phase-r1-20260628-001947/dxmt9.log, experiments/output/app-d3d9-3dmark05-encode-session-selector-wait-phase-r1-20260628-001947/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-encode-session-selector-counters.171.md, docs/perfomance/present-pacing/present-pacing-encode-session-semantic-prefix.170.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-selector-counters.171.md, docs/perfomance/present-pacing/present-pacing-encode-session-semantic-prefix.170.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H172 - EncodeSession Selector Wait-Phase Counters

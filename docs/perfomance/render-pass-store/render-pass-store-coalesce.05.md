@@ -94,6 +94,6 @@ exported DAG snapshot and `framegraph_*` observe counters. Promotion still
 requires a device-gated executor, byte-equal output, and gputrace/Xcode
 counter evidence.
 
-**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-coalesce.04](render-pass-store-coalesce.04.md) ·
-[render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
-[present-pacing](../present-pacing.md).
+**Related.** [render-pass-store](index.md) · [render-pass-store-coalesce.04](render-pass-store-coalesce.04.md) ·
+[render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) ·
+[present-pacing](../present-pacing/index.md).

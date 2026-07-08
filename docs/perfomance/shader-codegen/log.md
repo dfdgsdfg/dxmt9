@@ -1,6 +1,26 @@
+---
+domain: shader-codegen
+workload: 3DMark05 GT1
+title: "Shader Codegen — translated-VS temp/scratch trim and offline Metal compiler inspection - Historical Log"
+type: domain-log
+status: historical
+updated: 2026-07-08
+source: docs/perfomance/shader-codegen/index.md
+related: docs/perfomance/shader-codegen/index.md; docs/perfomance/shader-codegen/overview.md
+---
+
+# Shader Codegen — translated-VS temp/scratch trim and offline Metal compiler inspection - Historical Log
+
+> Full historical detail moved from the former top-level `shader-codegen.md` overview.
+> Keep [overview](overview.md) current and compact; append long-running chronology,
+> rejected paths, and detailed synthesis here only when it is not already captured in
+> one-experiment leaf documents.
+
+---
+
 # Shader Codegen — translated-VS temp/scratch trim and offline Metal compiler inspection
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -18,10 +38,10 @@ AIR-visible shape.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | [shader-codegen-temps.01](shader-codegen/shader-codegen-temps.01.md) |
-| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | [shader-codegen-scratch.01](shader-codegen/shader-codegen-scratch.01.md) |
-| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | [shader-codegen-offline.01](shader-codegen/shader-codegen-offline.01.md) |
-| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | [shader-codegen-offline.02](shader-codegen/shader-codegen-offline.02.md) |
+| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | [shader-codegen-temps.01](shader-codegen-temps.01.md) |
+| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | [shader-codegen-scratch.01](shader-codegen-scratch.01.md) |
+| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | [shader-codegen-offline.01](shader-codegen-offline.01.md) |
+| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | [shader-codegen-offline.02](shader-codegen-offline.02.md) |
 
 ## Verification methods
 
@@ -76,17 +96,17 @@ flowchart TD
 ## Results synthesis
 
 Every codegen-side lever was tried and rejected. The runtime trims
-([shader-codegen-temps.01](shader-codegen/shader-codegen-temps.01.md), [shader-codegen-scratch.01](shader-codegen/shader-codegen-scratch.01.md)) demonstrably changed
+([shader-codegen-temps.01](shader-codegen-temps.01.md), [shader-codegen-scratch.01](shader-codegen-scratch.01.md)) demonstrably changed
 the generated MSL (`r[32]→r[1]`, `outTexcoord[8]→outTexcoord[1]`) yet left
 `top_vs_buffer_write_mib` flat at ~`1627.3 MiB` with
 `top_unexplained_buffer_write_ratio = 1.000`; the only movement was uncorrelated
 GPU-time noise (`-3.38%` then `+1.12%`). Offline compilation
-([shader-codegen-offline.01](shader-codegen/shader-codegen-offline.01.md)) then explained *why*: the Apple compiler already
+([shader-codegen-offline.01](shader-codegen-offline.01.md)) then explained *why*: the Apple compiler already
 DCEs the large `r[32]` array, leaving a single `128B` scratch and a `184B` IR
 return — and the AIR objdump shows zero stores/allocas in the top VS functions.
 The measured Xcode VS write is `6.3x`–`8.7x` larger than that IR return
 (`1151–1603 B/invocation` vs `184 B`), so the visible/AIR shape simply cannot
-account for the bucket. The variant study ([shader-codegen-offline.02](shader-codegen/shader-codegen-offline.02.md))
+account for the bucket. The variant study ([shader-codegen-offline.02](shader-codegen-offline.02.md))
 confirmed the compiler *does* honour structural VSOut reductions
 (`184B → 36/52B → 16B`), which closes the last "maybe the compiler can't see it"
 escape: the bucket is below source-visible VSOut return width.
@@ -127,10 +147,20 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 
 ## Cross-references
 
-- [hidden-backend-storage](hidden-backend-storage.md) — the surviving owner: hidden Apple GPU
+- [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving owner: hidden Apple GPU
   vertex-stage / tiler / parameter (TVB) backend storage that the IR return is
   `6–9x` too small to explain.
-- [vsout-layout](vsout-layout.md) — the runtime VSOut-width trim probes (`DXMT9_TRIM_UNUSED_VARYINGS`,
+- [vsout-layout](../vsout-layout/index.md) — the runtime VSOut-width trim probes (`DXMT9_TRIM_UNUSED_VARYINGS`,
   point-size, position-only, half-VSOut) that this domain's offline variants
   correspond to; both reject visible varying width as the owner.
-- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root priority DAG and central finding.
+- [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root priority DAG and central finding.
+
+## Root 3DMark05 Map Detail Migration - 2026-07-08
+
+Detail migrated from the former long-form root [3DMark05 overview](../overview-3dmark05-gt1.md) so that `shader-codegen` owns its detailed synthesis while the root overview stays cross-domain only.
+
+### From Central finding (read this first)
+
+- dxmt CPU-side writers (argbuf/transient/cbuf ≈ 0.4 MiB), nor
+- visible MSL `VSOut` width (184 B), nor
+- AIR-visible shader scratch (128 B).

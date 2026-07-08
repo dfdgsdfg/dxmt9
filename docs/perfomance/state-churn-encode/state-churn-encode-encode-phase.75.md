@@ -118,4 +118,4 @@ texture/attachment handle exactness, stream offset/stride layout shape, sampler
   P2/P3 wall, completion wait, or sampled FPS, not just a child CPU counter.
 
 **Related.** [state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) ·
-[state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) · [state-churn-encode](index.md).

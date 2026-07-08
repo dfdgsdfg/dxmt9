@@ -43,5 +43,5 @@ pixels rasterized ~9.8x lower, vertex-stage time `26.11%→64.37%`. But
 real gap: the missing owner is wider-pass vertex/tiler amplification, not fragment
 overdraw. Suspicion shifts to depth attachment content.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) ·
-[mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) ·
+[mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

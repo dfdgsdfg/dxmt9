@@ -8,7 +8,7 @@ date: 2026-06-15
 type: runtime-smoke
 status: accepted-smoke-rejected-as-fps-owner
 source: experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/result.json, experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.107.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.107.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 108 - FFP PS Direct Build Current Scout
@@ -115,4 +115,4 @@ this artifact as the current-head scout; future argbuf candidates should gate
 baseline.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
-[state-churn-encode-encode-phase.107](state-churn-encode-encode-phase.107.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.107](state-churn-encode-encode-phase.107.md) · [state-churn-encode](index.md).

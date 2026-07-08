@@ -38,8 +38,8 @@ order-independence of screen blend made a production predicate plausible. BUT a
 later current-HEAD rerun ([primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)) found the
 same 4-draw mutation no longer moves VS write (`+0.00%`). Reclassified as a
 shape-sensitive anomaly, not a stable owner. The screen-blend safety predicate
-nonetheless seeded [index-cache-locality](../index-cache-locality.md).
+nonetheless seeded [index-cache-locality](../index-cache-locality/index.md).
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · from: [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · from: [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)
 · current rerun: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md) · safe-subset attempt: [primitive-reorder-diagnostics-reverse.14](primitive-reorder-diagnostics-reverse.14.md)
-· [index-cache-locality](../index-cache-locality.md) (screen-blend optimization candidate) · [hidden-backend-storage](../hidden-backend-storage.md).
+· [index-cache-locality](../index-cache-locality/index.md) (screen-blend optimization candidate) · [hidden-backend-storage](../hidden-backend-storage/index.md).

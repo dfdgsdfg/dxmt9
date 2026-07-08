@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling
 status: accepted-summary-tooling
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py
-related: docs/perfomance/present-pacing/present-pacing-summary-triage.40.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/present-pacing/present-pacing-summary-triage.40.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 103 - Encode CPU Summary Ranking
@@ -73,4 +73,4 @@ claim when the same low-overhead run also moves completion wait, producer
 overlap, no-enqueue stage deltas, or frame sampling.
 
 **Related.** [present-pacing-summary-triage.40](../present-pacing/present-pacing-summary-triage.40.md) ·
-[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](index.md).

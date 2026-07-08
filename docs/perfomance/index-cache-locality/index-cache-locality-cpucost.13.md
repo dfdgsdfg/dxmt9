@@ -82,5 +82,5 @@ active frontier.
 Do not promote `DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT` beyond diagnostic
 use.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

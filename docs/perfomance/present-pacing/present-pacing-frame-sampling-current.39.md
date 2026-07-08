@@ -147,4 +147,4 @@ Accepted as the current low-overhead P4 baseline.
 
 **Related.** [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
 [present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) ·
-[state-churn-encode-encode-phase.102](../state-churn-encode/state-churn-encode-encode-phase.102.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.102](../state-churn-encode/state-churn-encode-encode-phase.102.md) · [present-pacing](index.md).

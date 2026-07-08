@@ -8,7 +8,7 @@ date: 2026-07-08
 type: xctrace-cpu
 status: accepted-attribution
 source: traces/app-d3d9-3dmark05-cpu-attrib-producer-r4-20260708/analysis/time-profile.xml; traces/app-d3d9-3dmark05-cpu-attrib-producer-r4-20260708/analysis/xctrace-cpu-thread-summary.md; experiments/output/app-d3d9-3dmark05-cpu-attrib-producer-r4-20260708/result.json; docs/perfomance/present-pacing/present-pacing-pe-const-overhead-cut.193.md
-related: docs/perfomance/present-pacing.md; agents/rules/metal_debugging.rules.md
+related: docs/perfomance/present-pacing/index.md; agents/rules/metal_debugging.rules.md
 ---
 
 # Present-Pacing H196 - Producer sampling attribution (post-consolidation)

@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-pe-gap-callfamily-attribution
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-gap-callfamily-r3-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-gap-callfamily-r3-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-pe-gap-callfamily-r1-20260616/result.json
-related: docs/perfomance/present-pacing/present-pacing-pe-hotsetter-split.61.md, docs/perfomance/present-pacing/present-pacing-pe-inter-append-pairs.59.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-pe-hotsetter-split.61.md, docs/perfomance/present-pacing/present-pacing-pe-inter-append-pairs.59.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 62 - Focused Inter-Append Call-Family Attribution Splits Draw Const Flush And Barrier Apply-State

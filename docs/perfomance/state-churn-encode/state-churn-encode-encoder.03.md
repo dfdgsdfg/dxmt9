@@ -37,7 +37,7 @@ proves the distinction: measured CPU/upload bytes (~450KiB) cannot explain the
 render-pass/device-memory write pressure; stream/IB handle churn is the *coupled*
 backend batching problem, not the GPU-write owner.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-encoder.02](state-churn-encode-encoder.02.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md) (the unexplained ~1.63GiB VS-write bucket) ·
+**Related.** [state-churn-encode](index.md) · prev: [state-churn-encode-encoder.02](state-churn-encode-encoder.02.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md) (the unexplained ~1.63GiB VS-write bucket) ·
 [state-churn-encode-expand.02](state-churn-encode-expand.02.md) (same-frame no-auto-expand validation) ·
 [state-churn-encode-batch.01](state-churn-encode-batch.01.md) (later recheck on the same frame).

@@ -39,4 +39,4 @@ a useful correctness result. But the paired Xcode liveness capture
 (`-0.01%`), so visible VSOut width is still **rejected** as the owner. Safe to do,
 not worth doing for perf.
 
-**Related.** [vsout-layout](../vsout-layout.md) · paired with the Xcode-rejection [vsout-layout-varying.02](vsout-layout-varying.02.md) · [mini-replay-bisection](../mini-replay-bisection.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [vsout-layout](index.md) · paired with the Xcode-rejection [vsout-layout-varying.02](vsout-layout-varying.02.md) · [mini-replay-bisection](../mini-replay-bisection/index.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

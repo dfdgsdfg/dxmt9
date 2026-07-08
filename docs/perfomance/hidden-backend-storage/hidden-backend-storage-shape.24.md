@@ -84,6 +84,6 @@ The next Tile-FFP-class backend work is therefore a programmable/textured tile
 or mesh-style route, not another GT1 Xcode capture of current Tile-FFP and not
 a minor selector threshold tweak.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) ·
 [hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

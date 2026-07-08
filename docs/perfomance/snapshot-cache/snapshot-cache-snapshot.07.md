@@ -125,5 +125,5 @@ aliasing. A safe follow-up should first introduce a distinct narrow hash policy
 or range/usage-based hash and measure both `payload_hash` time and uniform
 lookup collision/hit behavior.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
-[snapshot-cache-snapshot.06](snapshot-cache-snapshot.06.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[snapshot-cache-snapshot.06](snapshot-cache-snapshot.06.md) · [state-churn-encode](../state-churn-encode/index.md).

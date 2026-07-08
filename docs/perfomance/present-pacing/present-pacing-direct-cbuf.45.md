@@ -97,4 +97,4 @@ validated with the compare gates from [present-pacing-compare-gates.37](present-
 counters alone.
 
 **Related.** [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) ·
-[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) · [present-pacing](../present-pacing.md).
+[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) · [present-pacing](index.md).

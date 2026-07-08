@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 43 - Post Cbuf Observer Low-Overhead Baseline
@@ -89,4 +89,4 @@ buffer enqueue. The next useful work should therefore stay on:
   evidence, not for another default-profile cbuf-content attribution.
 
 **Related.** [state-churn-encode-encode-phase.129](../state-churn-encode/state-churn-encode-encode-phase.129.md) -
-[present-pacing](../present-pacing.md).
+[present-pacing](index.md).

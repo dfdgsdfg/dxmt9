@@ -109,6 +109,6 @@ unnecessary value traffic. Do not expect it to move FPS by itself. Continue with
 either persistent replay scratch as an isolated F2 follow-up or the broader F1
 copy-elision/state-width work.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) ·
 [state-churn-encode-encode-phase.34](state-churn-encode-encode-phase.34.md).

@@ -38,6 +38,6 @@ order, and the current diagnostic reorder, every scissor angle leaves the
 `~1.47GiB` bucket unchanged. Scissor is a row/material-shape classifier, not the
 root cause.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · from: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)
-· next: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [backend-shape-classifiers](../backend-shape-classifiers.md) (disable-scissor)
-· [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [primitive-reorder-diagnostics](index.md) · from: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)
+· next: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [backend-shape-classifiers](../backend-shape-classifiers/index.md) (disable-scissor)
+· [hidden-backend-storage](../hidden-backend-storage/index.md).

@@ -44,4 +44,4 @@ The remaining average-FPS model is now:
   prefetch.
 
 **Related.** [present-pacing-publish-pso-prefetch.26](present-pacing-publish-pso-prefetch.26.md) ·
-[state-churn-encode-encode-phase.70](../state-churn-encode/state-churn-encode-encode-phase.70.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.70](../state-churn-encode/state-churn-encode-encode-phase.70.md) · [present-pacing](index.md).

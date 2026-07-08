@@ -38,6 +38,6 @@ time effect). The older `60/1` aggregate win was weaker evidence (failed shape
 gates); this strict run is the better causal comparison. Next direction: backend
 state-shape experiments, not order reversal.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · reruns: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
-· prev: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [hidden-backend-storage](../hidden-backend-storage.md)
-· [backend-shape-classifiers](../backend-shape-classifiers.md) · [mini-replay-bisection](../mini-replay-bisection.md) (state-shape replay is the next lever).
+**Related.** [primitive-reorder-diagnostics](index.md) · reruns: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
+· prev: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [hidden-backend-storage](../hidden-backend-storage/index.md)
+· [backend-shape-classifiers](../backend-shape-classifiers/index.md) · [mini-replay-bisection](../mini-replay-bisection/index.md) (state-shape replay is the next lever).

@@ -131,4 +131,4 @@ equivalent guard.
   this remains P2/P3 CPU cleanup until pacing changes.
 
 **Related.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) ·
-[state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) · [state-churn-encode](index.md).

@@ -114,7 +114,7 @@ does not include `.gputrace` or Xcode encoder-counter proof.
 - `python3 -m pytest tests/scripts/test_compare_3dmark05_perf_counters.py -q`
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.101](state-churn-encode-encode-phase.101.md) ·
 [state-churn-encode-encode-phase.100](state-churn-encode-encode-phase.100.md) ·
 [state-churn-encode-encode-phase.99](state-churn-encode-encode-phase.99.md).

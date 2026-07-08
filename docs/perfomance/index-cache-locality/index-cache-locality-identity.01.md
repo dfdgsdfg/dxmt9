@@ -34,7 +34,7 @@ row ownership — the no-gputrace shape is not yet a valid substitute for the Xc
 frame. Next pass must be a gputrace-backed no-mutate scout on the same frame as the
 Xcode counters.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · next: [index-cache-locality-identity.02](index-cache-locality-identity.02.md)
-· [index-reuse-measurement](../index-reuse-measurement.md) (the `DXMT9_MEASURE_INDEX_REUSE` family) ·
-[mini-replay-bisection](../mini-replay-bisection.md) (consumes the identity rows) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md)
+**Related.** [index-cache-locality](index.md) · next: [index-cache-locality-identity.02](index-cache-locality-identity.02.md)
+· [index-reuse-measurement](../index-reuse-measurement/index.md) (the `DXMT9_MEASURE_INDEX_REUSE` family) ·
+[mini-replay-bisection](../mini-replay-bisection/index.md) (consumes the identity rows) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md)
 (the reorder that perturbed shape).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: rejected-current
 source: experiments/output/app-d3d9-3dmark05-argbuf-dirty-vs-identity-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-dirty-vs-identity-current-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-dirty-vs-identity-current-r1/actual.png, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.111.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.110.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.110.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 123 - Current Dirty VS Argbuf Identity Probe
@@ -96,4 +96,4 @@ target a different mechanism:
   overlap with present completion wait.
 
 **Related.** [state-churn-encode-encode-phase.110](state-churn-encode-encode-phase.110.md) ·
-[state-churn-encode-encode-phase.111](state-churn-encode-encode-phase.111.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.111](state-churn-encode-encode-phase.111.md) · [state-churn-encode](index.md).

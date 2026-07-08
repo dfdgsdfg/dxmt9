@@ -27,4 +27,4 @@ VSOut, and explicit dxmt writer bytes all unchanged.
 **Verdict.** Rejected. Scissor state is not the first-order owner of the hidden
 VS buffer-write traffic — only GPU time moves.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · detailed in [backend-shape-classifiers-scissor.02](backend-shape-classifiers-scissor.02.md) · paired with [backend-shape-classifiers-cull.01](backend-shape-classifiers-cull.01.md) in the same summary · confirms [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [backend-shape-classifiers](index.md) · detailed in [backend-shape-classifiers-scissor.02](backend-shape-classifiers-scissor.02.md) · paired with [backend-shape-classifiers-cull.01](backend-shape-classifiers-cull.01.md) in the same summary · confirms [hidden-backend-storage](../hidden-backend-storage/index.md).

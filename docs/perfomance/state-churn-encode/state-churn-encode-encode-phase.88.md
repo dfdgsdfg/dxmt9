@@ -76,4 +76,4 @@ removing this timer layer blindly. If the candidate is revisited, require:
 
 **Related.** [state-churn-encode-encode-phase.87](state-churn-encode-encode-phase.87.md) ·
 [state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) · [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md)
-· [state-churn-encode](../state-churn-encode.md).
+· [state-churn-encode](index.md).

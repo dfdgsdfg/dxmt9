@@ -84,5 +84,5 @@ updates.
 - Fix/test local cache duplicate behavior separately, because this measurement
   preserved current first-match semantics.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md) · [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md).

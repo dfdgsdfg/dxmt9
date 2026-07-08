@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-gate
 status: rejected-reverted
 source: experiments/output/app-d3d9-3dmark05-h174-carrier-counter-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h175-uniform-carrier-ref-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h176-uniform-carrier-raw-ref-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h177-inline-carrier-restored-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h178-inline-carrier-restored-focused-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h179-keepfront-current-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-h176-uniform-carrier-raw-ref-r1/analysis/frame60-perf-counter-comparison.md, traces/app-d3d9-3dmark05-h178-inline-carrier-restored-focused-r1/analysis/frame60-perf-counter-comparison.md, traces/app-d3d9-3dmark05-h179-keepfront-current-r1/analysis/frame60-perf-counter-comparison.md, include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.162.md, docs/perfomance/snapshot-cache.md, docs/perfomance/overview-3dmark05-gt1.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.162.md, docs/perfomance/snapshot-cache/index.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 163 - Full uniform sidecar carrier rejection

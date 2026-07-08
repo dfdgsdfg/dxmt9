@@ -79,5 +79,5 @@ largest but hardest row. The next implementation-oriented step should try a
 reduced `60/0` depth-only route/equality gate before attempting a full textured
 tile/mesh backend.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

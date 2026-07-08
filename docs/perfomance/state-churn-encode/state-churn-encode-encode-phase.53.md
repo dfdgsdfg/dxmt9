@@ -88,6 +88,6 @@ Potential next proofs: component-interned uniform payload storage, lifetime-safe
 payload references keyed by uniform generation, or compact storage for the
 subsets of `DrawUniformPayload` the active shader/FFP path can actually read.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) ·
-[state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) · [snapshot-cache](../snapshot-cache.md).
+[state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) · [snapshot-cache](../snapshot-cache/index.md).

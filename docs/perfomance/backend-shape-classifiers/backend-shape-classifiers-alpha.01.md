@@ -36,4 +36,4 @@ unchanged. Must not be used as a baseline or promoted as an optimization. The
 scoped class-filtered probe ([backend-shape-classifiers-alpha.03](backend-shape-classifiers-alpha.03.md)) later showed
 alpha blend *is* a significant factor when isolated to the large4096+alpha class.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · first in the alpha sequence, followed by [backend-shape-classifiers-alpha.02](backend-shape-classifiers-alpha.02.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) owner survives · refutes broad alpha state · related [backend-shape-classifiers-alphatest.01](backend-shape-classifiers-alphatest.01.md).
+**Related.** [backend-shape-classifiers](index.md) · first in the alpha sequence, followed by [backend-shape-classifiers-alpha.02](backend-shape-classifiers-alpha.02.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md) owner survives · refutes broad alpha state · related [backend-shape-classifiers-alphatest.01](backend-shape-classifiers-alphatest.01.md).

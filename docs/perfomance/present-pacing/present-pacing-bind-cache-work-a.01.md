@@ -142,7 +142,7 @@ beyond the bind path:
   current build to localise the unattributed 73%;
 - Investigate draw-run break taxonomy as the encode-cost driver
   (`commit_chunk_draw_run_break_state_delta_mixed_*` already
-  exposes it — owned by [state-churn-encode](../state-churn-encode.md));
+  exposes it — owned by [state-churn-encode](../state-churn-encode/index.md));
 - Defer rasterizer / index_buffer wiring until a path with real
   expected savings is demonstrated.
 

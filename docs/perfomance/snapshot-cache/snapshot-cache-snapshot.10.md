@@ -104,5 +104,5 @@ noisy at the run level.
 | Queue append state/uniform path | [state-churn-encode-encode-phase.29](../state-churn-encode/state-churn-encode-encode-phase.29.md) rejects raw payload copy as owner; state append and uniform lookup/append dominate the batch append child |
 | Backend encode buckets | `encode_draw_argbuf_setup_cpu_ms=3357.980ms`, `encode_draw_binding_packet_cpu_ms=2705.893ms`, and stream/index bind remain larger than this residual snapshot win |
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [snapshot-cache](index.md) · [state-churn-encode](../state-churn-encode/index.md) ·
 [state-churn-encode-encode-phase.28](../state-churn-encode/state-churn-encode-encode-phase.28.md).

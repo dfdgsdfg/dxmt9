@@ -8,7 +8,7 @@ date: 2026-06-15
 type: analysis
 status: accepted-design-gate
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_argbuf_hybrid.cpp, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.55.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.56.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.55.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.56.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 132 - Argbuf Table Lifetime Code Review
@@ -107,7 +107,7 @@ before writing code. A valid A/B needs:
 - frame sampling plus P4 counters, because a local argbuf CPU win is not an FPS
   win unless completion wait or producer overlap moves.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
 [state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md) ·
 [state-churn-encode-encode-phase.123](state-churn-encode-encode-phase.123.md) ·

@@ -1,6 +1,26 @@
+---
+domain: attachment-pixelformat
+workload: 3DMark05 GT1
+title: "Attachment / Pixel-Format — RT PixelFormatView suppression and lossless-compression hints - Historical Log"
+type: domain-log
+status: historical
+updated: 2026-07-08
+source: docs/perfomance/attachment-pixelformat/index.md
+related: docs/perfomance/attachment-pixelformat/index.md; docs/perfomance/attachment-pixelformat/overview.md
+---
+
+# Attachment / Pixel-Format — RT PixelFormatView suppression and lossless-compression hints - Historical Log
+
+> Full historical detail moved from the former top-level `attachment-pixelformat.md` overview.
+> Keep [overview](overview.md) current and compact; append long-running chronology,
+> rejected paths, and detailed synthesis here only when it is not already captured in
+> one-experiment leaf documents.
+
+---
+
 # Attachment / Pixel-Format — RT PixelFormatView suppression and lossless-compression hints
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -20,11 +40,11 @@ texture-write bucket, not the VS-write owner.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | R32F RT `PixelFormatView`/shader-read view owns GT1 GPU cost | rejected (texture-write `-49.66%`, VS write unchanged) | [attachment-pixelformat-r32f.01](attachment-pixelformat/attachment-pixelformat-r32f.01.md) |
-| H2 | Per-encoder attachment metadata can map Xcode's `fmt2` compression hint to hot RT shapes | tooling (maps to X8R8G8B8 RT0 in enc0/2; `usage=0x2` is not an unsampled proof) | [attachment-pixelformat-metadata.01](attachment-pixelformat/attachment-pixelformat-metadata.01.md) |
-| H3 | Allocation-wide X8 RT view suppression removes the `fmt2` hint and moves cost | rejected (too coarse; run incomplete; X8 rows mostly textured) | [attachment-pixelformat-x8.01](attachment-pixelformat/attachment-pixelformat-x8.01.md) |
-| H4 | The hot GT1 encoder actually samples X8 RT aliases (so suppression matters there) | tooling/refuted (hot enc `60/2` samples 0 X8 RT; sampling only in post passes) | [attachment-pixelformat-x8.02](attachment-pixelformat/attachment-pixelformat-x8.02.md) |
-| H5 | Shader X8 alpha-fill + view suppression moves the texture/store or VS-write bucket | rejected (hot passes 0 alpha-fill; top-3 VS write unchanged `~1627.25MiB`) | [attachment-pixelformat-x8.03](attachment-pixelformat/attachment-pixelformat-x8.03.md) |
+| H1 | R32F RT `PixelFormatView`/shader-read view owns GT1 GPU cost | rejected (texture-write `-49.66%`, VS write unchanged) | [attachment-pixelformat-r32f.01](attachment-pixelformat-r32f.01.md) |
+| H2 | Per-encoder attachment metadata can map Xcode's `fmt2` compression hint to hot RT shapes | tooling (maps to X8R8G8B8 RT0 in enc0/2; `usage=0x2` is not an unsampled proof) | [attachment-pixelformat-metadata.01](attachment-pixelformat-metadata.01.md) |
+| H3 | Allocation-wide X8 RT view suppression removes the `fmt2` hint and moves cost | rejected (too coarse; run incomplete; X8 rows mostly textured) | [attachment-pixelformat-x8.01](attachment-pixelformat-x8.01.md) |
+| H4 | The hot GT1 encoder actually samples X8 RT aliases (so suppression matters there) | tooling/refuted (hot enc `60/2` samples 0 X8 RT; sampling only in post passes) | [attachment-pixelformat-x8.02](attachment-pixelformat-x8.02.md) |
+| H5 | Shader X8 alpha-fill + view suppression moves the texture/store or VS-write bucket | rejected (hot passes 0 alpha-fill; top-3 VS write unchanged `~1627.25MiB`) | [attachment-pixelformat-x8.03](attachment-pixelformat-x8.03.md) |
 
 ## Verification methods
 
@@ -123,7 +143,36 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/metal_debugging.rules.md` for the full capture/finalize workflow.
 
 ## Cross-references
-- [hidden-backend-storage](hidden-backend-storage.md) — the surviving first-order owner every probe in this domain points back to; the VS-write density / TVB model these texture-write deltas fail to touch.
-- [render-pass-store](render-pass-store.md) — sibling secondary class: RT/depth re-entry and store traffic, the other pass/attachment lever that does not move the VS-write bucket.
-- [backend-shape-classifiers](backend-shape-classifiers.md) — companion correctness-invalid/opt-in state classifiers (alpha/depth/cull/etc.) that, like these flags, reject their own state as the VS-write owner.
-- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root map and priority DAG; this domain sits in the secondary (texture-write / lossless-compression) tier, below the hidden vertex backend.
+- [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving first-order owner every probe in this domain points back to; the VS-write density / TVB model these texture-write deltas fail to touch.
+- [render-pass-store](../render-pass-store/index.md) — sibling secondary class: RT/depth re-entry and store traffic, the other pass/attachment lever that does not move the VS-write bucket.
+- [backend-shape-classifiers](../backend-shape-classifiers/index.md) — companion correctness-invalid/opt-in state classifiers (alpha/depth/cull/etc.) that, like these flags, reject their own state as the VS-write owner.
+- [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root map and priority DAG; this domain sits in the secondary (texture-write / lossless-compression) tier, below the hidden vertex backend.
+
+## Root 3DMark05 Map Detail Migration - 2026-07-08
+
+Detail migrated from the former long-form root [3DMark05 overview](../overview-3dmark05-gt1.md) so that `attachment-pixelformat` owns its detailed synthesis while the root overview stays cross-domain only.
+
+### From Central finding (read this first)
+
+A direct force-white replay of the top row
+(`app-d3d9-3dmark05-rifle-oracle-positive-tex80-local-r01-frame1094-component1-tex80-s1094-e2-d1-ci319`)
+did not promote that candidate into proof. The run timeout-finalized and
+captured frames, but its perf summary shows `probe_force_texture_white_draws=0`
+and `encode_draw_pso_prefetch_bypass_probe=0`; the indexed-probe CSV has only
+the header, and `seq=1094/enc=2` reports only `20` draw calls with
+`alpha_blend_textured_draws=0`. Its `frame001094` capture also drifted from the
+wide infantry scene into the close-up machine-gun scene. So the
+`1094/2/cmd319` command queue remains a same-run geometry target, not an
+independent A/B image proof.
+
+- `app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1`
+- artifacts:
+  `traces/app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1/analysis/color-history-summary.md`,
+  `traces/app-d3d9-3dmark05-rifle-oracle-tex80-afterdraw-color-noenc-r1/analysis/tex80-afterdraw-crops.png`
+
+- first `0x80` draw: `seq=1094/enc=2/draw=297/cmd=319`, but
+  `round_bloom_candidate` has `bright=0`, `white=0`, `warm=0`
+
+- second `0x80` draw: forced split moves it to
+  `seq=1094/enc=3/draw=0/cmd=320`; `round_bloom_candidate` records
+  max `[255,254,252]`, `bright=706`, `white=196`, `warm=909`

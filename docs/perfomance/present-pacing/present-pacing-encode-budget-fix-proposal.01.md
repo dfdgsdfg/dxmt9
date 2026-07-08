@@ -203,7 +203,7 @@ process_elapsed_sec       ≤ 167  (= 251 / 1.5 conservative)
 
 Current `submit_draw_run_batch_records / submit_draw_run_batch_groups =
 697,634 / 370,226 = 1.88 records / group`. The cap is 32. The
-[state-churn-encode](../state-churn-encode.md) taxonomy already identifies the break classes
+[state-churn-encode](../state-churn-encode/index.md) taxonomy already identifies the break classes
 (`commit_chunk_draw_run_break_state_delta_mixed_*`). The largest
 sub-bucket today is the `mixed_pair_stream_texture` and
 `mixed_pair_stream_ib` family — same-stream sequences interrupted by
@@ -223,10 +223,10 @@ CB). Low-impact alone but cheap to land alongside A.
 
 - `d3d9_snapshot_draw_submission_cpu_ms = 19.8 s` (PE-thread D3D9 state
   snapshot) runs in parallel with encode; owned by
-  [snapshot-cache](../snapshot-cache.md).
+  [snapshot-cache](../snapshot-cache/index.md).
 - Index-cache locality (the existing −13.86% GPU win) is GPU-side and
   orthogonal; the index-locality work and the encode work compose
-  additively. Owned by [index-cache-locality](../index-cache-locality.md).
+  additively. Owned by [index-cache-locality](../index-cache-locality/index.md).
 - `DXMT9_LAYER_DISPLAY_SYNC=0` as a fallback opt-in flag — possible but
   unrecommended; produces tearing.
 
@@ -248,7 +248,7 @@ asymptote on the cached binds (less likely but possible), the upside
 extends toward the DSync=0 ceiling (+199%).
 
 **Verdict.** Proposed. Two pieces of work tracked in the
-[state-churn-encode](../state-churn-encode.md) topic should land **bind-skipped cache for
+[state-churn-encode](../state-churn-encode/index.md) topic should land **bind-skipped cache for
 vertex_buffer / index_buffer / pipeline / rasterizer / viewport /
 scissor / depth_state** (Work A) and a follow-up **draw-run break
 reduction targeting the `mixed_pair_stream_*` taxonomy** (Work B).
@@ -260,4 +260,4 @@ Acceptance criterion is `encode_chunk_cpu_p50_ms ≤ 16.67 ms` on
 the actual C++ implementation of the bind-cache extension, the
 state-churn-encode break-class reduction, and the meson tests that
 gate the new `bind_*_skipped` counters. Those land in
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](../state-churn-encode/index.md).

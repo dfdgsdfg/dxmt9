@@ -37,6 +37,6 @@ frequency (~`883k` records), so the payload is genuinely dirty from the
 encoder's view. The real target is UPSTREAM record coalescing, not downstream
 reuse.
 
-**Related.** [const-upload](../const-upload.md) · related downstream-vs-upstream framing:
-[const-upload-sparse.01](const-upload-sparse.01.md) · [state-churn-encode](../state-churn-encode.md) (const-upload records as
-draw-run barriers) · [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [const-upload](index.md) · related downstream-vs-upstream framing:
+[const-upload-sparse.01](const-upload-sparse.01.md) · [state-churn-encode](../state-churn-encode/index.md) (const-upload records as
+draw-run barriers) · [hidden-backend-storage](../hidden-backend-storage/index.md).

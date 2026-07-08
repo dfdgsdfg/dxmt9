@@ -124,5 +124,5 @@ Continue with cbuf upload/build/repoint decision work, texture/stream binding
 cost, or command issue cost. Slot-30 bind shadowing remains a poor target while
 `encode_draw_argbuf_table_bind_skipped=0`.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) · [present-pacing](../present-pacing/index.md).

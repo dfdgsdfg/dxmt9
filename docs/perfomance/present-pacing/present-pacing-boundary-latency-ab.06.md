@@ -8,7 +8,7 @@ date: 2026-06-13
 type: attribution
 status: rejected
 source: experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/result.json, experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/3dmark05-perf-frames.csv
-related: docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present-Pacing 06 — Boundary/Latency A/B

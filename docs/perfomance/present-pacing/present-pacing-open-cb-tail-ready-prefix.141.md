@@ -8,7 +8,7 @@ date: 2026-06-20
 type: implementation-and-runtime-gate
 status: rejected-p4-carrier
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/render/tail_present_batch.hpp, src/dxmt9/render/tail_present_batch.cpp, tests/native/backend/render_backend_batch_contract_spec.cpp, experiments/output/app-d3d9-3dmark05-h141-open-cb-tail-ready-prefix-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h141-open-cb-tail-ready-prefix-r1/result.json, experiments/output/app-d3d9-3dmark05-h141-open-cb-tail-ready-prefix-r1/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md
 ---
 
 # Present-Pacing H141 — Open-CB Tail-Ready Prefix Probe

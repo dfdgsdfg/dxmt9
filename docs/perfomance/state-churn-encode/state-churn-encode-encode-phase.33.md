@@ -147,6 +147,6 @@ generation/lane compat fast path next, then remeasure. Treat F2
 parallel low-risk CPU cleanup because the generation fast path alone cannot
 explain the full queued-submission cost.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md) ·
 [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md).

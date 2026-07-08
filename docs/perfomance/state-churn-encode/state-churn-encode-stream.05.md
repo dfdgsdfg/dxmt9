@@ -107,6 +107,6 @@ stateDiagram-v2
   XcodeCandidate --> [*]
 ```
 
-**Related.** [state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](../state-churn-encode.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-shape.11](../hidden-backend-storage/hidden-backend-storage-shape.11.md) ·
-[index-cache-locality](../index-cache-locality.md).
+**Related.** [state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](index.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [hidden-backend-storage-shape.11](../hidden-backend-storage/hidden-backend-storage-shape.11.md) ·
+[index-cache-locality](../index-cache-locality/index.md).

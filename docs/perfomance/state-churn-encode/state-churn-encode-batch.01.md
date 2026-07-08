@@ -40,7 +40,7 @@ records/group) but does not move the GT1 frame60 GPU limiter — VS buffer write
 stays at ~`1627.3 MiB`, almost entirely unexplained by dxmt CPU writers and far
 above the visible `184B` VSOut width. Submission batching is a CPU-side project.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-binding.01](state-churn-encode-binding.01.md) (the
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-binding.01](state-churn-encode-binding.01.md) (the
 override CPU win) · [state-churn-encode-encoder.03](state-churn-encode-encoder.03.md) (same-frame join) ·
-[hidden-backend-storage](../hidden-backend-storage.md) (the unmoved GPU owner) ·
-[index-cache-locality](../index-cache-locality.md) (the accepted GPU-side win path).
+[hidden-backend-storage](../hidden-backend-storage/index.md) (the unmoved GPU owner) ·
+[index-cache-locality](../index-cache-locality/index.md) (the accepted GPU-side win path).

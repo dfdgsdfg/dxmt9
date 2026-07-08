@@ -56,7 +56,7 @@ and should not replace the non-diagnostic fast-measure default-policy gate
 ([index-cache-locality-opaque.06](index-cache-locality-opaque.06.md)). Use it to confirm the wrapper prefix fix,
 active cache behavior, and source-attribution boundary.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.04](index-cache-locality-cpucost.04.md)
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-cpucost.04](index-cache-locality-cpucost.04.md)
 · [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md) (non-diagnostic CPU gate) ·
 [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (Xcode proof) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

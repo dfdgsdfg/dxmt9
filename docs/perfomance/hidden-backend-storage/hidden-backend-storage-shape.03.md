@@ -84,6 +84,6 @@ not another generic candidate-selector experiment. It is either:
 Everything else should stay in no-gputrace counter runs until it changes CPU
 wall time, quality counters, or a row-local semantic oracle.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · prev:
-[hidden-backend-storage-shape.02](hidden-backend-storage-shape.02.md) · [index-cache-locality](../index-cache-locality.md) ·
+**Related.** [hidden-backend-storage](index.md) · prev:
+[hidden-backend-storage-shape.02](hidden-backend-storage-shape.02.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [index-cache-locality-screenblend.04](../index-cache-locality/index-cache-locality-screenblend.04.md) · [mini-replay-bisection-semantic.01](../mini-replay-bisection/mini-replay-bisection-semantic.01.md).

@@ -36,5 +36,5 @@ baseline (`status=fail`, `1080` presents) was a counter-output smoke only, confi
 the remaining CPU owner; the owner is candidate/lookup + draw-path/bind work. Do not
 rewrite the per-source reordered-IB vector cache (already beaten `unordered_map`/last-hit).
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
-· [index-cache-locality-cpucost.01](index-cache-locality-cpucost.01.md) (the original split) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
+· [index-cache-locality-cpucost.01](index-cache-locality-cpucost.01.md) (the original split) · [state-churn-encode](../state-churn-encode/index.md).

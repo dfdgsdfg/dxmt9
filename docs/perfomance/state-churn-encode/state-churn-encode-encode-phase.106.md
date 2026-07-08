@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling
 status: accepted-probe-tooling
 source: scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_3dmark05_probe_scripts.py
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.105.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.105.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 106 - Argbuf Gate Probe Pass-Through
@@ -72,4 +72,4 @@ P4/frame shape, instead of treating `argbuf_setup` movement as an informal
 manual comparison.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
-[state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) · [state-churn-encode](index.md).

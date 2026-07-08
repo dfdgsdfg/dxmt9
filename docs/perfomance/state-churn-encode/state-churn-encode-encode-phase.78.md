@@ -87,4 +87,4 @@ normal visual smoke, and stable P4/completion counters before any FPS claim.
   muzzle/bloom/fog visual output.
 
 **Related.** [state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) ·
-[state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) · [state-churn-encode](index.md).

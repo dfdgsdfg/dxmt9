@@ -94,4 +94,4 @@ stateDiagram-v2
 
 **Related.** [state-churn-encode-stream.06](state-churn-encode-stream.06.md) ·
 [state-churn-encode-stream.05](state-churn-encode-stream.05.md) · [state-churn-encode-stream.04](state-churn-encode-stream.04.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md).

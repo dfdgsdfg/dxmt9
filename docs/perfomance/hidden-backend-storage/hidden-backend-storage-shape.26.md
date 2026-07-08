@@ -223,5 +223,5 @@ of one legal below-visible backend shape. The current answer for this route is
 explain or fix the larger `60/2` textured row, and it should not be promoted
 into `perf` until equality and Xcode counter movement both pass.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

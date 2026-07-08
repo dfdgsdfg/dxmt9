@@ -129,6 +129,6 @@ Current validation:
   outside `CommandQueue` submit and should be split at the `Device` submission
   snapshot/cache layer.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) ·
 [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md).

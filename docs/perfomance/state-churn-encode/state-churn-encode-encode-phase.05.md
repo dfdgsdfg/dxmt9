@@ -186,6 +186,6 @@ not justify an Xcode capture by itself.
 3. After this cbuf path, the remaining encode CPU candidates are
    binding-packet cache construction and D3D9 snapshot/state rebuild.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) ·
-[state-churn-encode-encode-phase.04](state-churn-encode-encode-phase.04.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.04](state-churn-encode-encode-phase.04.md) · [present-pacing](../present-pacing/index.md).

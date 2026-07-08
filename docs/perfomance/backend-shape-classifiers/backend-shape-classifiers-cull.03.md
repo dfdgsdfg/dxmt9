@@ -40,4 +40,4 @@ hidden VS-write bucket. Together with [backend-shape-classifiers-cull.01](backen
 GPU probe should be primitive-pressure / backend-storage oriented, not another
 cull toggle.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · follows [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md), precedes the scoped [backend-shape-classifiers-cull.04](backend-shape-classifiers-cull.04.md) · directly motivated [backend-shape-classifiers-expand.01](backend-shape-classifiers-expand.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [backend-shape-classifiers](index.md) · follows [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md), precedes the scoped [backend-shape-classifiers-cull.04](backend-shape-classifiers-cull.04.md) · directly motivated [backend-shape-classifiers-expand.01](backend-shape-classifiers-expand.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md).

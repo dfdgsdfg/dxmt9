@@ -37,6 +37,6 @@ average shader uses only ~`31` float regs. A usage-only trim is the wrong fix;
 the dirty (stale) range dominates the upload width. Motivates resetting/scoping
 dirty ranges; keep the `13.8%` full-struct/indexed path as a separate fallback.
 
-**Related.** [const-upload](../const-upload.md) · prev: [const-upload-slice.01](const-upload-slice.01.md) · next:
+**Related.** [const-upload](index.md) · prev: [const-upload-slice.01](const-upload-slice.01.md) · next:
 [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) (the dirty-range reset this motivates) ·
-[hidden-backend-storage](../hidden-backend-storage.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md).

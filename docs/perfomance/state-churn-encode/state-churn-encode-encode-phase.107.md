@@ -8,7 +8,7 @@ date: 2026-06-15
 type: implementation
 status: accepted-cpu-cleanup-runtime-proof-pending
 source: src/dxmt9/dxmt9_argbuf_hybrid.cpp, src/dxmt9/dxmt9_draw_state.cpp, src/dxmt9/dxmt9_draw_state.hpp, tests/native/backend/backend_key_descriptor_spec.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.105.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.106.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.105.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.106.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 107 - FFP PS Argbuf Cbuf Direct Build
@@ -91,4 +91,4 @@ submission cadence, and completion/no-enqueue overlap remain open.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
 [state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) ·
-[state-churn-encode-encode-phase.106](state-churn-encode-encode-phase.106.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.106](state-churn-encode-encode-phase.106.md) · [state-churn-encode](index.md).

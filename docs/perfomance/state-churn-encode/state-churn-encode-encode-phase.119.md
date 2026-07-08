@@ -8,7 +8,7 @@ date: 2026-06-15
 type: instrumentation
 status: accepted-residual-attribution
 source: scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2/3dmark05-perf-summary.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.118.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.118.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 119 - Uniform Stage Append Amplification Attribution
@@ -83,4 +83,4 @@ growing again; phase118/119 make it a residual, not the owner.
 - `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2 --require-uniform-compact-saved-bytes-present`
 
 **Related.** [state-churn-encode-encode-phase.118](state-churn-encode-encode-phase.118.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

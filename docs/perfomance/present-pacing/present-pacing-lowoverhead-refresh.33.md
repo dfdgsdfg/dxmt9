@@ -105,4 +105,4 @@ a GPU-facing change.
 **Related.** [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md) ·
 [present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
 [state-churn-encode-encode-phase.87](../state-churn-encode/state-churn-encode-encode-phase.87.md) ·
-[state-churn-encode-encode-phase.88](../state-churn-encode/state-churn-encode-encode-phase.88.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.88](../state-churn-encode/state-churn-encode-encode-phase.88.md) · [state-churn-encode](../state-churn-encode/index.md).

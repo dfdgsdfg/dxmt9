@@ -114,4 +114,4 @@ useful work remains:
 
 **Related.** [present-pacing-summary-triage.40](present-pacing-summary-triage.40.md) ·
 [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) ·
-[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) · [present-pacing](../present-pacing.md).
+[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) · [present-pacing](index.md).

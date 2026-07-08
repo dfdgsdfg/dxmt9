@@ -8,7 +8,7 @@ date: 2026-06-16
 type: design-review
 status: accepted-design-gate
 source: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.146.md; docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md; docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md; docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md; docs/perfomance/present-pacing/present-pacing-pe-const-apply-split.60.md; docs/perfomance/present-pacing/present-pacing-pe-desc-cache.67.md; src/dxmt9/dxmt9_queue.hpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_draw_encoder.mm
-related: docs/perfomance/present-pacing.md, docs/perfomance/state-churn-encode.md, docs/perfomance/snapshot-cache.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Present Pacing 68 - Run-Ahead Must Decouple Logical Readiness From Metal Command Buffers

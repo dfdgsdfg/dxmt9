@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: rejected-sync-prefetch-placement
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-unpublished-pso-prefetch-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-unpublished-pso-prefetch-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-unpublished-pso-prefetch-r1-20260616/actual.png, traces/app-d3d9-3dmark05-unpublished-pso-prefetch-r1-20260616/analysis/unpublished-pso-prefetch-vs-current-lowoverhead.md
-related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, docs/perfomance/present-pacing.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, docs/perfomance/present-pacing/index.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Present Pacing 53 - Unpublished Slot PSO Prefetch Does Not Recover P4 Overlap

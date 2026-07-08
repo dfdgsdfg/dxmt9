@@ -8,7 +8,7 @@ date: 2026-06-21
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-ready-preempt-smoke-r1-20260621/result.json, experiments/output/app-d3d9-3dmark05-encode-session-ready-preempt-smoke-r1-20260621/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-ready-preempt-smoke-r1-20260621/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-ready-preempt-smoke-r1-20260621/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-encode-session-completion-wait-wakeup.153.md, docs/perfomance/present-pacing/present-pacing-encode-session-deterministic-semantic-release.154.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-completion-wait-wakeup.153.md, docs/perfomance/present-pacing/present-pacing-encode-session-deterministic-semantic-release.154.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H155 - EncodeSession Ready-Source Preemptive Semantic Release

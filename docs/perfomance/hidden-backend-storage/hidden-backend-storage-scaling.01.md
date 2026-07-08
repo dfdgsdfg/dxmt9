@@ -55,7 +55,7 @@ writers (`0.41`) or FS invocations (`0.26`). No single D3D9 state bit owns it.
 The only strong VS-write movers are destructive or shape-drifting locality
 classifiers — motivating row-key-preserving locality / backend-shape probes.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md) ·
+**Related.** [hidden-backend-storage](index.md) · [hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md) ·
 [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md) · [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md) ·
-[primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · [index-cache-locality](../index-cache-locality.md) ·
-[backend-shape-classifiers](../backend-shape-classifiers.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+[primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) · [index-cache-locality](../index-cache-locality/index.md) ·
+[backend-shape-classifiers](../backend-shape-classifiers/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

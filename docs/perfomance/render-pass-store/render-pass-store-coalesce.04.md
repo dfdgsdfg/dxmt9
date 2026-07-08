@@ -38,7 +38,7 @@ the producer's Store + the re-entry's Load). No executor needed — this is the
 So H6 coalesce eliminates a **large share of the P1 tile-preservation budget
 (38%)** — confirming it *is* the real P1 lever the domain claimed — but that
 budget is itself **~3% of the P0 VS-write traffic** that owns GT1
-([hidden-backend-storage](../hidden-backend-storage.md)).
+([hidden-backend-storage](../hidden-backend-storage/index.md)).
 
 **Two independent reasons the FPS payoff is likely small (and unsettled):**
 
@@ -69,8 +69,8 @@ wall-clock given pacing (P4) dominance — consistent with render-pass-store bei
 **P1/secondary** to the P0 VS-write bucket. Building the device-gated executor is
 therefore justified only to *settle* the bandwidth-bound question (a potential
 single-digit GPU-time win on base-M1), not as a likely large FPS lever. The FPS
-mover remains **P0 = VS-invocation reduction** ([index-cache-locality](../index-cache-locality.md),
-[tvb-mechanism-proof](../tvb-mechanism-proof.md)), not pass coalescing.
+mover remains **P0 = VS-invocation reduction** ([index-cache-locality](../index-cache-locality/index.md),
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md)), not pass coalescing.
 
 **2026-06-12 current confirmation.** A fresh normal-visual no-gputrace run
 (`app-d3d9-3dmark05-dag-current-20260612-203736`, `status: pass`, 1,680
@@ -98,5 +98,5 @@ post-opt verifies that the analysis-only optimizer removes them.
 
 **Related.** [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) (100% coalesceable) ·
 [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (WAW edge) ·
-[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) · [hidden-backend-storage](../hidden-backend-storage.md) (P0) ·
-[present-pacing](../present-pacing.md) (P4 wall-clock) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).
+[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) · [hidden-backend-storage](../hidden-backend-storage/index.md) (P0) ·
+[present-pacing](../present-pacing/index.md) (P4 wall-clock) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

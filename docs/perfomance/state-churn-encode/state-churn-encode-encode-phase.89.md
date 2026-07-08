@@ -94,4 +94,4 @@ binding work and then pass the P4 gate from
 **Related.** [present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md) ·
 [state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md) ·
 [state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) ·
-[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [state-churn-encode](index.md).

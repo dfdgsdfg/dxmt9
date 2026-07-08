@@ -120,4 +120,4 @@ can also move completion wait or same-cycle serial stage deltas.
 
 **Related.** [state-churn-encode-encode-phase.84](state-churn-encode-encode-phase.84.md) ·
 [state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md) · [state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md)
-· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](../state-churn-encode.md).
+· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](index.md).

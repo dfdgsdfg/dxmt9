@@ -94,5 +94,5 @@ emitted upstream, make the VS/PS build/upload path cheaper, or move to a more
 structural constants layout. Backend encode work outside cbuf still has larger
 named buckets (`binding_packet`, `stream_bind`, texture/sampler bind, issue).
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) · [present-pacing](../present-pacing/index.md).

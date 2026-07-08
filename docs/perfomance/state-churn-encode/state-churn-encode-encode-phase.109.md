@@ -8,7 +8,7 @@ date: 2026-06-15
 type: summary-tooling
 status: accepted-tooling
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.108.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.108.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 109 - Argbuf Reopen Probe Ranking Coverage
@@ -67,4 +67,4 @@ path and read this ranking before choosing whether to target table open/reopen,
 cached repoint, content probe, or dirty VS cbuf update.
 
 **Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
-[state-churn-encode-encode-phase.108](state-churn-encode-encode-phase.108.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.108](state-churn-encode-encode-phase.108.md) · [state-churn-encode](index.md).

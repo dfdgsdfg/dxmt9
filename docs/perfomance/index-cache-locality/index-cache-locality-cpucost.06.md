@@ -63,6 +63,6 @@ but the opt-in still adds candidate/lookup CPU. No-gputrace GPU proxies are mixe
 not change the production status: opaque-depth index-cache remains a proven
 opt-in, not a shared perf default.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md)
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md)
 · [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md) (earlier non-diagnostic smoke) ·
 [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (Xcode proof) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

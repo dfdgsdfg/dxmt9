@@ -96,5 +96,5 @@ consumed by the automated perf gate as
 
 **Related.** [hidden-backend-storage-shape.17](../hidden-backend-storage/hidden-backend-storage-shape.17.md) ·
 [mini-replay-bisection-texture.09](mini-replay-bisection-texture.09.md) ·
-[mini-replay-bisection-texture.10](mini-replay-bisection-texture.10.md) · [index-cache-locality](../index-cache-locality.md) ·
+[mini-replay-bisection-texture.10](mini-replay-bisection-texture.10.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

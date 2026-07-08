@@ -36,6 +36,6 @@ accepted opt-in; `50/2` is split across screen-blend tolerance, depth-read
 structural hazards, and standard-alpha order dependence (semantic risk).
 Confirms post-transform misses are the strongest reducible GPU-write axis.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · next: [index-cache-locality-opaque.02](index-cache-locality-opaque.02.md)
-· [index-reuse-measurement](../index-reuse-measurement.md) (LRU32/cache-miss model) ·
-[hidden-backend-storage](../hidden-backend-storage.md) (the bucket this reduces) · [snapshot-cache](../snapshot-cache.md) (layout-stride baseline).
+**Related.** [index-cache-locality](index.md) · next: [index-cache-locality-opaque.02](index-cache-locality-opaque.02.md)
+· [index-reuse-measurement](../index-reuse-measurement/index.md) (LRU32/cache-miss model) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md) (the bucket this reduces) · [snapshot-cache](../snapshot-cache/index.md) (layout-stride baseline).

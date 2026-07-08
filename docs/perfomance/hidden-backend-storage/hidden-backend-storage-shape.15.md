@@ -95,5 +95,5 @@ new run shows material hot-row eligible primitive share.
 2. a real Apple position/binning or mesh/object A/B on a reduced workload; or
 3. a deliberately isolated PSO/spill A/B.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.14](hidden-backend-storage-shape.14.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

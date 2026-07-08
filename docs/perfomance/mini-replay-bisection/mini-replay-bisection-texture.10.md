@@ -75,5 +75,5 @@ inside sample-visible rows, so production work still needs:
   vertex/tiler storage denominator.
 
 **Related.** [mini-replay-bisection-texture.09](mini-replay-bisection-texture.09.md) ·
-[overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
-[index-cache-locality](../index-cache-locality.md).
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [hidden-backend-storage](../hidden-backend-storage/index.md) ·
+[index-cache-locality](../index-cache-locality/index.md).

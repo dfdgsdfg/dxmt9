@@ -8,7 +8,7 @@ date: 2026-06-15
 type: runtime-scout
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-uniform-compact-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-compact-current-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-uniform-compact-current-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-compact-current-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.102.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.111.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.102.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.111.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 112 - Fresh Uniform Compact-Carrier Baseline
@@ -137,4 +137,4 @@ should require:
 
 **Related.** [state-churn-encode-encode-phase.102](state-churn-encode-encode-phase.102.md) ·
 [state-churn-encode-encode-phase.111](state-churn-encode-encode-phase.111.md) ·
-[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](index.md).

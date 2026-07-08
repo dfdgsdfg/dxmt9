@@ -98,6 +98,6 @@ already knows stable-state identity.
 `completedSequenceId_ <= submittedSequenceId_` in `completeUpTo()`, so it is not
 used as evidence for this patch.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) ·
 [state-churn-encode-encode-phase.37](state-churn-encode-encode-phase.37.md).

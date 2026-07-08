@@ -108,5 +108,5 @@ resolve path, and shader-stream binding diversity. Do not treat this run as a
 performance regression or improvement; the added timers intentionally perturb
 the parent path and the run processed more presents.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) ·
-[state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) ·
+[state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md) · [present-pacing](../present-pacing/index.md).

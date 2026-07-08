@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: rejected-average-fps-lever
 source: src/d3d9/d3d9_pe_device_child_buffer.cpp, src/d3d9/d3d9_pe_device_child_surface.cpp, experiments/output/app-d3d9-3dmark05-noenqueue-pe-desc-cache-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-desc-cache-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-name-child-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-name-child-r1-20260616/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 67 - PE Child Desc Cache Is A Cleanup, Not The Current FPS Lever

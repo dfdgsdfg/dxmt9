@@ -8,7 +8,7 @@ date: 2026-06-15
 type: instrumentation
 status: accepted-current-attribution
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/check/assert_perf_counters.py, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-fixed-reuse-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-fixed-reuse-current-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-fixed-reuse-current-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.114.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.114.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 115 - Uniform Fixed-Payload Reuse Gate
@@ -131,4 +131,4 @@ Future interpretation still holds for other workloads:
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
 **Related.** [state-churn-encode-encode-phase.114](state-churn-encode-encode-phase.114.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

@@ -8,7 +8,7 @@ date: 2026-06-19
 type: review
 status: accepted-current-frontier
 source: experiments/output/app-d3d9-3dmark05-h88-sameday-baseline-r4/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r4-sameday/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r4-sameday/h88-r4-sameday-compare.md, traces/app-d3d9-3dmark05-capture-layer-current-r2-20260619/analysis/frame60-xcode-dxmt-bottleneck-report.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md
-related: docs/perfomance/present-pacing/present-pacing-tail-present-batch-current.88.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md, docs/perfomance/present-pacing/present-pacing-completion-wait-overlap-current.84.md, docs/perfomance/baselines/baselines-gputrace-capture.02.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/present-pacing/present-pacing-tail-present-batch-current.88.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md, docs/perfomance/present-pacing/present-pacing-completion-wait-overlap-current.84.md, docs/perfomance/baselines/baselines-gputrace-capture.02.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Present-Pacing 89 - Current Average-FPS Frontier After Tail-Present Rejection

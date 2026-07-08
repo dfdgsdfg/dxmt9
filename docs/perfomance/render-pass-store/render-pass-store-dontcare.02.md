@@ -45,6 +45,6 @@ preservation-before-clear — contents are later Loaded, not discarded by a clea
 The next render-pass fix must attack pass ordering/coalescing under explicit
 dependency checks, not expect simple `StoreActionDontCare` to fire.
 
-**Related.** [render-pass-store](../render-pass-store.md) · prior: [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
+**Related.** [render-pass-store](index.md) · prior: [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
 (the design) · next: [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (split that confirms most
 switches change both attachments) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) (baseline).

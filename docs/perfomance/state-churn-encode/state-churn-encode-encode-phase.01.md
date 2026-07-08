@@ -120,5 +120,5 @@ narrows the parent buckets further:
 Only after those sub-buckets name a concrete mechanism should we try a
 mutating A/B.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md) ·
+**Related.** [state-churn-encode](index.md) · [present-pacing](../present-pacing/index.md) ·
 [present-pacing-bind-cache-work-a.01](../present-pacing/present-pacing-bind-cache-work-a.01.md) · [baselines-frame50.04](../baselines/baselines-frame50.04.md).

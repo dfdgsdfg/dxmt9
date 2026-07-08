@@ -8,7 +8,7 @@ date: 2026-06-20
 type: analysis
 status: accepted-refresh
 source: scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/analyze_shader_dumps.py; experiments/output/app-d3d9-3dmark05-h226-shaderdump-frame60-current-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-h226-shaderdump-frame60-current-r1/result.json; traces/app-d3d9-3dmark05-h226-shaderdump-frame60-current-r1/analysis/frame60-current-post-compact-xcode-shader-dump-report.md; traces/app-d3d9-3dmark05-h226-shaderdump-frame60-current-r1/analysis/frame60-current-post-compact-xcode-shader-dump-summary.csv; traces/app-d3d9-3dmark05-capture-layer-current-post-compact-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
-related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.33.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.34.md; docs/perfomance/vsout-layout.md
+related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.33.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.34.md; docs/perfomance/vsout-layout/index.md
 ---
 
 # Current Shader Dump Join Keeps the Hidden Owner Below Visible VSOut
@@ -118,5 +118,5 @@ the first-order performance lever. Hidden backend storage remains below the
 source-visible `VSOut` contract.
 
 **Related.** [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) ·
-[hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) · [vsout-layout](../vsout-layout.md) ·
+[hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) · [vsout-layout](../vsout-layout/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

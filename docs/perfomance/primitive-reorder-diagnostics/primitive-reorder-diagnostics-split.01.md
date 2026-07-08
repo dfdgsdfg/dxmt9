@@ -45,8 +45,8 @@ preserves order and only changes draw granularity does not touch the hidden
 vertex/backend write bucket — the real reverse-probe signal needs order/locality
 change, not partition.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior reverse signal:
+**Related.** [primitive-reorder-diagnostics](index.md) · prior reverse signal:
 [primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md) · next: [primitive-reorder-diagnostics-split.02](primitive-reorder-diagnostics-split.02.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) (split does not move the TVB bucket) ·
-[index-cache-locality](../index-cache-locality.md) (the semantic-safe order/locality successor) ·
-[index-reuse-measurement](../index-reuse-measurement.md) (cache/reuse model) · [baselines](../baselines.md) (measure-index-cache).
+· [hidden-backend-storage](../hidden-backend-storage/index.md) (split does not move the TVB bucket) ·
+[index-cache-locality](../index-cache-locality/index.md) (the semantic-safe order/locality successor) ·
+[index-reuse-measurement](../index-reuse-measurement/index.md) (cache/reuse model) · [baselines](../baselines/index.md) (measure-index-cache).

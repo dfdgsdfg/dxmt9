@@ -132,5 +132,5 @@ stateDiagram-v2
 - `meson compile -C build-win32-x86-builtin`
 - 3DMark05 GT1 120s no-gputrace scout above.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.42](state-churn-encode-encode-phase.42.md).

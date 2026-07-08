@@ -8,7 +8,7 @@ date: 2026-06-20
 type: implementation-guard
 status: accepted-safety-guard-runtime
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h140-open-cb-carry-guard-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h140-open-cb-carry-guard-r1/result.json, experiments/output/app-d3d9-3dmark05-h140-open-cb-carry-guard-r1/actual.png, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-session-carry.134.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-state.135.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-session-carry.134.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-state.135.md
 ---
 
 # Present Pacing / Open-CB Carry Safety Guard 140

@@ -48,6 +48,6 @@ per-draw `DrawBindingOverride` data (matching the draw-run binding-override
 direction), while still rebuilding for shader/FVF/RT-DS/viewport/scissor/
 render-state changes.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · prev [snapshot-cache-snapshot.02](snapshot-cache-snapshot.02.md) · next
-[snapshot-cache-binding.01](snapshot-cache-binding.01.md) · churn axis [state-churn-encode](../state-churn-encode.md) · indexed path
-[index-cache-locality](../index-cache-locality.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [snapshot-cache](index.md) · prev [snapshot-cache-snapshot.02](snapshot-cache-snapshot.02.md) · next
+[snapshot-cache-binding.01](snapshot-cache-binding.01.md) · churn axis [state-churn-encode](../state-churn-encode/index.md) · indexed path
+[index-cache-locality](../index-cache-locality/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

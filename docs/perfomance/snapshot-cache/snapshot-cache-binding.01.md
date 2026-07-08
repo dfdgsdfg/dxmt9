@@ -40,6 +40,6 @@ caused the texture regression). That raised `encode_draw_pipeline_lookup_cpu_ms`
 from `863.918ms` to `6680.072ms`. Next fix: a second prefetch identity keyed by the
 override-applied stream layout.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · prev [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) · next
-[snapshot-cache-prefetch.01](snapshot-cache-prefetch.01.md) · binding-override mechanism [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [snapshot-cache](index.md) · prev [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) · next
+[snapshot-cache-prefetch.01](snapshot-cache-prefetch.01.md) · binding-override mechanism [state-churn-encode](../state-churn-encode/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

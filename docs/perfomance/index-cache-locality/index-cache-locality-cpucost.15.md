@@ -113,5 +113,5 @@ remaining CPU work is either:
 Until that changes, opaque-depth index-cache locality remains a proven opt-in
 GPU mechanism, not a default `perf` profile behavior.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

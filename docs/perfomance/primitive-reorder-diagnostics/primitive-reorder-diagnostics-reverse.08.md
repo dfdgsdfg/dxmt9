@@ -37,6 +37,6 @@ investigation toward narrower per-material/state-class axes
 ([primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md) tooling) that keep row and geometry
 gates fixed.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.07](primitive-reorder-diagnostics-reverse.07.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.07](primitive-reorder-diagnostics-reverse.07.md)
 · next (class tooling): [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md) · contrasts: [primitive-reorder-diagnostics-reverse.05](primitive-reorder-diagnostics-reverse.05.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) · [index-reuse-measurement](../index-reuse-measurement.md).
+· [hidden-backend-storage](../hidden-backend-storage/index.md) · [index-reuse-measurement](../index-reuse-measurement/index.md).

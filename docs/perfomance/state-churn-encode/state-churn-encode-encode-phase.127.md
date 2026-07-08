@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-local-cleanup-rejected-fps-owner
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_queue.cpp, tests/native/core/state_draw_transform_spec.cpp, tests/native/backend/dod_replay_observer_spec.cpp, experiments/output/app-d3d9-3dmark05-uniform-queue-observation-hot-mask-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-queue-observation-hot-mask-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-queue-observation-hot-mask-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.126.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.126.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 127 - Queue Observation Uniform Materialization Elision
@@ -116,4 +116,4 @@ average-FPS investigation should stay on P4 producer run-ahead / present
 completion overlap and the larger replay/encode stage shape.
 
 **Related.** [state-churn-encode-encode-phase.126](state-churn-encode-encode-phase.126.md) -
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

@@ -8,7 +8,7 @@ date: 2026-06-20
 type: implementation
 status: implementation-prerequisite
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_command_queue.cpp, tests/native/backend/queue_completion_sources_spec.cpp
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-extraction.143.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-extraction.143.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md
 ---
 
 # Present-Pacing H144 - Open-CB Encode Session Finalizer API

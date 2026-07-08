@@ -121,6 +121,6 @@ image gate, or a tightly scoped frame capture. The likely next visual bisection
 axis is not "all VS/PS cbuf prefixes"; it is exact draw/row isolation for the
 visible artifact.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
 [state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

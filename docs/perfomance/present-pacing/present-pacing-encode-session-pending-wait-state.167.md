@@ -8,7 +8,7 @@ date: 2026-06-27
 type: no-gputrace
 status: diagnostic-observed-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-pending-wait-state-r1-20260627/result.json, experiments/output/app-d3d9-3dmark05-encode-session-pending-wait-state-r1-20260627/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-pending-wait-state-r1-20260627/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-pending-wait-state-r1-20260627/dxmt9.log, experiments/output/app-d3d9-3dmark05-encode-session-pending-wait-state-r1-20260627/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-encode-session-combined-cpuready-append.166.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-combined-cpuready-append.166.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H167 - EncodeSession Pending Wait State

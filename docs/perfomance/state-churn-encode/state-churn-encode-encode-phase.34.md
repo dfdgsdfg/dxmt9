@@ -125,6 +125,6 @@ the compat-scan sub-bucket and validates the generation/lane stamp as a useful
 upstream identity. Do not treat it as the final answer to the queue path; the
 dominant remaining work is submission construction and state width.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) ·
 [state-churn-encode-encode-phase.33](state-churn-encode-encode-phase.33.md).

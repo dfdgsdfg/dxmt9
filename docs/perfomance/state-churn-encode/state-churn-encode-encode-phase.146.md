@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-local-cpu-win-rejected-fps-owner-visual-open
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-direct-cbuf-current-continuation-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-direct-cbuf-current-continuation-r1-20260616/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-direct-cbuf-current-continuation-r1-20260616/analysis/frame60-perf-counter-comparison.md, experiments/output/app-d3d9-3dmark05-direct-cbuf-current-continuation-r1-20260616/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 146 - Current Direct-Cbuf Repeat Against State-Elision Baseline

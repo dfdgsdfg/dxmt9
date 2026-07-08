@@ -113,4 +113,4 @@ this probe as an investigation tool rather than a production optimization.
 
 **Related.** [state-churn-encode-stream.07](state-churn-encode-stream.07.md) ·
 [state-churn-encode-stream.09](state-churn-encode-stream.09.md) · [state-churn-encode-stream.06](state-churn-encode-stream.06.md) ·
-[state-churn-encode-stream.05](state-churn-encode-stream.05.md) · [hidden-backend-storage](../hidden-backend-storage.md).
+[state-churn-encode-stream.05](state-churn-encode-stream.05.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

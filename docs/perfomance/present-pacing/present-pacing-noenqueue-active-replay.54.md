@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: rejected-active-present-replay-owner
 source: experiments/output/app-d3d9-3dmark05-noenqueue-active-replay-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-active-replay-r1-20260616/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-noenqueue-beforepublish.47.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-noenqueue-beforepublish.47.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.52.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 54 - Active Present-Chunk Replay Does Not Explain First-Publish Residual

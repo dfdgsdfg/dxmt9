@@ -37,7 +37,7 @@ contributor but not the sole bottleneck. The screenshot frame/time differs and
 image metrics change materially, so visual correctness must be proven before
 making it default. Treat as an experiment.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · next: [state-churn-encode-expand.02](state-churn-encode-expand.02.md) ·
+**Related.** [state-churn-encode](index.md) · next: [state-churn-encode-expand.02](state-churn-encode-expand.02.md) ·
 [state-churn-encode-stream.03](state-churn-encode-stream.03.md) (flagged auto-expand as a separate amplifier) ·
-[index-cache-locality](../index-cache-locality.md) (the accepted indexed-path GPU win is locality, not
+[index-cache-locality](../index-cache-locality/index.md) (the accepted indexed-path GPU win is locality, not
 expansion).

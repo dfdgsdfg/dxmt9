@@ -130,4 +130,4 @@ that can skip resolved-key/source-context construction on resource-shape hits.
   wait / producer overlap until P4 counters move too.
 
 **Related.** [state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) ·
-[state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) · [state-churn-encode](index.md).

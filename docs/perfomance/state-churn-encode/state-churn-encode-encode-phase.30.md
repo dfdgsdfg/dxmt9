@@ -112,6 +112,6 @@ correctly identified state append as an actionable child.
 | Uniform append path | `append_uniform` is now the largest child (`837.360ms`), while payloads are still mostly unique (`875,739` appends) |
 | Batch coalescing | Larger records/group would amortize one state append and one uniform loop over more draws |
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
 [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md).

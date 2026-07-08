@@ -108,4 +108,4 @@ or lookup frequency rather than micro-splitting the semantic memo again.
 
 **Related.** [state-churn-encode-encode-phase.86](state-churn-encode-encode-phase.86.md) ·
 [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) · [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md)
-· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](../state-churn-encode.md).
+· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](index.md).

@@ -41,6 +41,6 @@ Texture/depth/FS-tile drops show visibility/overdraw also changed. Confirms
 primitive order can move hidden Apple vertex/tiler/backend traffic, motivating
 the scoped subset probes that follow.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · next: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) (confirms order moves the TVB bucket) ·
-[index-reuse-measurement](../index-reuse-measurement.md) (cache64/reuse model) · [baselines](../baselines.md) (measure-index-cache).
+**Related.** [primitive-reorder-diagnostics](index.md) · next: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
+· [hidden-backend-storage](../hidden-backend-storage/index.md) (confirms order moves the TVB bucket) ·
+[index-reuse-measurement](../index-reuse-measurement/index.md) (cache64/reuse model) · [baselines](../baselines/index.md) (measure-index-cache).

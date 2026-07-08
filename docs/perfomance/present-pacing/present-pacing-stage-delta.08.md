@@ -8,7 +8,7 @@ date: 2026-06-14
 type: attribution
 status: accepted
 source: src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-pacing-stage-delta-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-pacing-stage-delta-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pacing-stage-delta-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-pacing-stage-delta-r1-20260614/actual.png
-related: docs/perfomance/present-pacing/present-pacing-prepublish-stage.07.md, docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/state-churn-encode.md, docs/perfomance/snapshot-cache.md
+related: docs/perfomance/present-pacing/present-pacing-prepublish-stage.07.md, docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Present-Pacing 08 — Same-Sample Stage Deltas

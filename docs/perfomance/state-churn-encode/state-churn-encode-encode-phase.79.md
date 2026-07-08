@@ -100,4 +100,4 @@ the broader GT1 performance goal.
   muzzle/bloom/fog visual output on repeated runs.
 
 **Related.** [state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) ·
-[state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) · [state-churn-encode](index.md).

@@ -42,6 +42,6 @@ variance since the dominant memory-write counter and top encoder shape are
 identical. A valid CPU payload-volume reduction only. Primary GT1 limiter remains
 GPU-side vertex-stage/internal buffer-write pressure.
 
-**Related.** [const-upload](../const-upload.md) · prev: [const-upload-sparse.01](const-upload-sparse.01.md) · the surviving
-GPU owner → [hidden-backend-storage](../hidden-backend-storage.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) (the VS-write
-bucket it leaves intact) · [state-churn-encode](../state-churn-encode.md) (coupled stream/IB churn).
+**Related.** [const-upload](index.md) · prev: [const-upload-sparse.01](const-upload-sparse.01.md) · the surviving
+GPU owner → [hidden-backend-storage](../hidden-backend-storage/index.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) (the VS-write
+bucket it leaves intact) · [state-churn-encode](../state-churn-encode/index.md) (coupled stream/IB churn).

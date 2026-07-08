@@ -7,8 +7,8 @@ title: Post Mixed Carrier Owner Review
 date: 2026-06-20
 type: owner-review
 status: accepted-next-owner-review
-source: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.183.md, docs/perfomance/present-pacing.md, experiments/output/app-d3d9-3dmark05-h213-mixed-carrier-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h215-mixed-carrier-timerfix-r1/result-perf-counter-comparison.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.183.md, docs/perfomance/present-pacing.md, docs/perfomance/overview-3dmark05-gt1.md
+source: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.183.md, docs/perfomance/present-pacing/index.md, experiments/output/app-d3d9-3dmark05-h213-mixed-carrier-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h215-mixed-carrier-timerfix-r1/result-perf-counter-comparison.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.183.md, docs/perfomance/present-pacing/index.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 184 - Post mixed carrier owner review

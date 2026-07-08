@@ -35,6 +35,6 @@ regresses GPU time. The full-reverse win cannot be explained as a simple per-row
 order improvement for `60/3` — it must be a broader visibility / tile-coverage /
 hot-row-membership / multi-row effect.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev (tooling): [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · prev (tooling): [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
 · next: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md) · contrasts: [primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)
-· [hidden-backend-storage](../hidden-backend-storage.md).
+· [hidden-backend-storage](../hidden-backend-storage/index.md).

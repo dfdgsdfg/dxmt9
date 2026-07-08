@@ -98,7 +98,7 @@ read directly from the dump. Executing the coalesce in the Metal stream and
 proving byte-equal output + measuring the preservation-byte saving remain the
 device-gated next step ([render-pass-store-coalesce.02](render-pass-store-coalesce.02.md)).
 
-**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H6) ·
+**Related.** [render-pass-store](index.md) · [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H6) ·
 [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) ·
 [render-pass-store-memoryless.01](render-pass-store-memoryless.01.md) (H7, coupled to H6) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

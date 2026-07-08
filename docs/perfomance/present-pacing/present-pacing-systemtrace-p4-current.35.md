@@ -176,4 +176,4 @@ producer wait-stack sample or direct movement in `completion_wait_with_enqueue_m
 on a low-overhead visual-normal run.
 
 **Related.** [present-pacing-systemtrace-p4-smoke.34](present-pacing-systemtrace-p4-smoke.34.md) ·
-[state-churn-encode-encode-phase.91](../state-churn-encode/state-churn-encode-encode-phase.91.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.91](../state-churn-encode/state-churn-encode-encode-phase.91.md) · [present-pacing](index.md).

@@ -1,4 +1,17 @@
+---
+domain: root
+workload: dxmt9 performance
+title: "DXMT9 Performance Bottleneck Model"
+type: root-overview
+status: current
+updated: 2026-07-08
+source: docs/perfomance/index.md
+related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md
+---
+
 # DXMT9 Performance Bottleneck Model
+
+> Root navigation: [index](index.md). Shared log: [log](log.md).
 
 Date: 2026-06-05
 
@@ -298,60 +311,14 @@ flowchart TD
 ## Current 3DMark05 GT1 Calibration
 
 The 3DMark05 GT1 investigation is the current high-signal calibration case for
-this general model. The root map is [overview-3dmark05-gt1](overview-3dmark05-gt1.md). Its latest gate
-state separates GPU frame-time, CPU encode cost, and wallclock present pacing:
+this general model, but the live calibration state belongs in the dedicated
+[3DMark05 GT1 investigation map](overview-3dmark05-gt1.md). Use that map for
+the current GPU frame-time owner, wallclock/present-pacing owner, accepted
+index-locality proof, readonly managed-buffer cache result, visual gate, and
+SKU-dependent bandwidth-ceiling notes.
 
-| General class | 3DMark05 GT1 status | Decision |
-|---|---|---|
-| GPU hidden backend storage | Dominant GPU frame limiter. Xcode VS-buffer write tracks VS invocations, not dxmt CPU writers, visible `VSOut`, or fragment volume. Current `xctrace` Metal System Trace sidecar can join dxmt encoder labels and confirms vertex-heavy timing (`91.32%` vertex share in the phase43 sidecar), but it does not expose `VS Buffer Device Memory Bytes Written`. | Reduce VS invocations when semantics allow; do not chase visible varying width as the first-order owner. Use xctrace as timing/label sidecar only; keep Xcode `.gputrace` replay counters as the proof gate for hidden-storage byte movement. [hidden-backend-storage](hidden-backend-storage.md) |
-| Opaque-depth index locality | Accepted production-shaped GPU win: historical target `50/0+50/1` GPU `-18.39%`, VS invocations `-14.12%`, VS write `-16.79%`; refreshed frame60 target `60/0+60/1` GPU `-10.64%`, VS invocations `-14.12%`, VS write `-16.77%`. The current gate-shape scout shows frame60 candidate work is valid (`102/102` pass, `0` fail), so the CPU tax is candidate construction/cache lookup, not failed-gate churn. | Keep as opt-in locality path. The current opaque proof reattaches the movement to refreshed rows, but this is still not a shared `perf` default until valid candidate construction / lookup setup is cheaper or a broader runtime gate proves net positive. [index-cache-locality-cpucost.18](index-cache-locality/index-cache-locality-cpucost.18.md), [index-cache-locality-opaque.08](index-cache-locality/index-cache-locality-opaque.08.md), [index-cache-locality-proofinput.01](index-cache-locality/index-cache-locality-proofinput.01.md), [index-cache-locality](index-cache-locality.md) |
-| Screen-blend index locality | Strong measured movement, but destination-dependent; current gate is missing movement/semantic image inputs. | Keep as historical exact/`lsb1` proof artifact until the proof is reattached or regenerated; do not generalize to broad depth-read reorder. [index-cache-locality-screenblend.05](index-cache-locality/index-cache-locality-screenblend.05.md), [index-cache-locality-proofinput.01](index-cache-locality/index-cache-locality-proofinput.01.md), [index-cache-locality-screenblend.04](index-cache-locality/index-cache-locality-screenblend.04.md) |
-| Broad depth-read reorder | Blocked by final-color correctness. | Needs a real final-color/final-writer oracle before another Xcode budget; the current D3D9 occlusion path is primitive-count only. [mini-replay-bisection-semantic.01](mini-replay-bisection/mini-replay-bisection-semantic.01.md), [mini-replay-bisection-texture.08](mini-replay-bisection/mini-replay-bisection-texture.08.md) |
-| Non-reorder backend-shape | Current candidates rejected or unproven. | Half-VSOut and scoped `live-vsout` stayed flat in Xcode; the refreshed gate closes stale shader-output smokes. Future candidates need a new below-visible backend mechanism or bytes/inv preflight. [hidden-backend-storage-shape.13](hidden-backend-storage/hidden-backend-storage-shape.13.md) |
-| Present pacing | Wallclock limiter, separate from GPU frame limiter. Current no-enqueue attribution shows the producer/unix path is not simply idle: first publish after no-enqueue wait is preceded by many draw/const-heavy chunks, and the residual is inter-replay producer gap. PE all-chunk stats show enough `chunkFillGapMs` to explain that gap; the fill splits roughly half first-record gap / half active chunk fill, active fill is mostly same-chunk inter-append producer wall time, and the dominant pairs are `draw_indexed -> set_vs_const_f` plus `draw_indexed -> apply_state`. The latest leaf/family/phase/tail/name splits show those pair gaps are not mostly immediate PE setter/build/helper CPU or previous draw-call tail: H68 puts the focused gaps mostly in pre-call time, H69 shows that pre-call is almost entirely between D3D9 calls, H71 names VS const setters plus IB/surface desc getters, and H72 rejects PE child desc getter bodies as the current average-FPS lever after caching descs leaves P2/P3/P4 flat. | Historical `DXMT9_DISABLE_VSYNC=1` remains an opt-in for sync-paced workloads, but current GT1 direct is already immediate. Treat average-FPS work as first-publish formation plus backend encode-to-commit latency. Draw-count publish proves overlap is reachable, but rejects that carrier because it worsens CB/pass/tile cost; future P4 work must prove overlap while preserving command-buffer, render-pass, and tile-preservation shape. The next CPU-side target is constant traffic compression, broader producer/materialization cadence, or locality-preserving run-ahead; raw append-copy, broad setter-body, const setter-body, APPLY_STATE packet-build, previous-draw tail, and child desc getter body microfixes are too small unless P2/P3/P4 gates move. [present-pacing](present-pacing.md), [present-pacing-noenqueue-beforepublish.47](present-pacing/present-pacing-noenqueue-beforepublish.47.md), [present-pacing-noenqueue-inter-replay-gap.55](present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md), [present-pacing-pe-chunk-cadence-all.56](present-pacing/present-pacing-pe-chunk-cadence-all.56.md), [present-pacing-pe-chunk-fill-split.57](present-pacing/present-pacing-pe-chunk-fill-split.57.md), [present-pacing-pe-active-fill-split.58](present-pacing/present-pacing-pe-active-fill-split.58.md), [present-pacing-pe-inter-append-pairs.59](present-pacing/present-pacing-pe-inter-append-pairs.59.md), [present-pacing-pe-const-apply-split.60](present-pacing/present-pacing-pe-const-apply-split.60.md), [present-pacing-pe-hotsetter-split.61](present-pacing/present-pacing-pe-hotsetter-split.61.md), [present-pacing-pe-gap-callfamily.62](present-pacing/present-pacing-pe-gap-callfamily.62.md), [present-pacing-pe-gap-phase-split.63](present-pacing/present-pacing-pe-gap-phase-split.63.md), [present-pacing-pe-gap-tail-split.64](present-pacing/present-pacing-pe-gap-tail-split.64.md), [present-pacing-pe-between-call-name.66](present-pacing/present-pacing-pe-between-call-name.66.md), [present-pacing-pe-desc-cache.67](present-pacing/present-pacing-pe-desc-cache.67.md), [present-pacing-overlap-locality-gates.51](present-pacing/present-pacing-overlap-locality-gates.51.md) |
-| Per-draw CPU encode | Orthogonal to GPU limiter, still important for wallclock. Commit_chunk stage counters now show large historical bridge latency can be replay-owned rather than ABI-owned. | Focus on draw-run break reduction, commit_chunk replay internals, snapshot rebuild, and measured bind/state churn rather than assuming bind-cache hit rates or raw bridge overhead. [state-churn-encode](state-churn-encode.md) |
-
-```mermaid
-flowchart TD
-  Workload["3DMark05 GT1"] --> GPU["GPU frame time"]
-  Workload --> Wall["process wallclock / fps"]
-  Workload --> CPU["CPU encode"]
-
-  GPU --> Hidden["hidden vertex/tiler/backend storage\nACCEPTED owner"]
-  Hidden --> Locality["post-transform locality\naccepted lever"]
-  Locality --> Opaque["opaque-depth opt-in\nnot default yet"]
-  Locality --> Screen["screen-blend historical exact/lsb1\ncurrent proof reattach needed"]
-  Locality --> Broad["broad depth-read rejected\nfinal-color blocker"]
-  Hidden --> Backend["non-reorder backend-shape\nneeds new mechanism"]
-
-  Wall --> Present["present completion pacing\ncurrent GT1 already immediate"]
-  CPU --> Encode["draw-run/commit_chunk replay/snapshot/state churn\northogonal but open"]
-
-  classDef good fill:#e8f5e8,stroke:#4d8b4d,color:#102a10
-  classDef warn fill:#fff3d6,stroke:#b98222,color:#2a1b00
-  classDef bad fill:#ffe8e8,stroke:#b64242,color:#2b0d0d
-  class Hidden,Locality,Opaque,Present good
-  class Workload,GPU,Wall,CPU,Screen,Backend,Encode warn
-  class Broad bad
-```
-
-### Bandwidth Ceiling (SKU-dependent)
-
-The GPU vertex/tiler backend-storage class is a *memory-write* limiter, so whether
-it actually caps fps depends on the memory system, not just the byte count. At the
-3DMark05 GT1 calibration shape, frame60's `~1.6 GiB` VS write at `~22 fps` is
-already `~37 GB/s` of vertex-stage write traffic alone — before texture reads,
-depth/color attachment traffic, tile store/load, and CPU/GPU coherence. On a base
-M1-class `~68 GB/s` memory system that single counter is `~55%` of peak bandwidth,
-so the scene can be a true bandwidth limiter once the rest of the traffic is added.
-On M1 Pro/Max/Ultra-class systems (`~200-400 GB/s`) the same byte rate is a much
-smaller fraction of peak, so the *same* scene can be backend-storage/bandwidth-bound
-on a base SKU yet CPU-encode- or pacing-bound on a high-bandwidth SKU. Decide which
-regime a given machine is in with the named/proxy TVB counters
-(`dxmt_tvb_pressure_proxy_mib`, `dxmt_vs_buffer_write_to_tvb_proxy_ratio`,
-`dxmt_unexplained_buffer_write_ratio`), not with wallclock fps alone. See
-[hidden-backend-storage](hidden-backend-storage.md) and the `VS Buffer Device Memory Bytes Written` / TVB
-notes in `agents/rules/metal_debugging.rules.md` §5.
+Keep this document as the workload-agnostic model. Do not duplicate GT1 verdict
+tables or experiment graphs here.
 
 ## Ideal Design
 

@@ -64,7 +64,7 @@ another trace on threshold-only opaque retests. The remaining unresolved proof
 input is screen-blend movement plus same-input exact/`lsb1` semantic image
 evidence.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
 [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

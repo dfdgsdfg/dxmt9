@@ -45,8 +45,8 @@ Named tiled counters stay tiny (≤2.375 MiB) vs the VS write bucket — the mea
 cost is hidden Apple vertex/tiler/backend storage below visible VSOut and below
 named tiled counters. An actual-read VSOut trim A/B moved VS write only -0.01%,
 rejecting pair-liveness as root cause. This per-draw class is what
-[tvb-mechanism-proof](../tvb-mechanism-proof.md) then proved is `VS invocations × per-vertex VSOut bytes`.
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md) then proved is `VS invocations × per-vertex VSOut bytes`.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [vsout-layout](../vsout-layout.md) ·
-[index-cache-locality](../index-cache-locality.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) ·
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [vsout-layout](../vsout-layout/index.md) ·
+[index-cache-locality](../index-cache-locality/index.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

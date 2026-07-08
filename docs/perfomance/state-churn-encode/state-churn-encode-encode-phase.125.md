@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-local-cleanup-rejected-fps-owner
 source: src/dxmt9/dxmt9_command_queue.cpp, tests/native/backend/backend_key_descriptor_spec.cpp, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-reuse-base-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-reuse-base-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-pso-prefetch-no-materialize-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-pso-prefetch-no-materialize-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-pso-prefetch-no-materialize-r1/result-perf-counter-comparison.md, experiments/output/app-d3d9-3dmark05-uniform-pso-prefetch-no-materialize-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.124.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.124.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 125 - PSO Prefetch Uniform Materialization Elision
@@ -108,4 +108,4 @@ children. Do not spend `.gputrace` on this cleanup alone.
 
 **Related.** [state-churn-encode-encode-phase.121](state-churn-encode-encode-phase.121.md) -
 [state-churn-encode-encode-phase.122](state-churn-encode-encode-phase.122.md) -
-[state-churn-encode-encode-phase.124](state-churn-encode-encode-phase.124.md) - [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.124](state-churn-encode-encode-phase.124.md) - [state-churn-encode](index.md).

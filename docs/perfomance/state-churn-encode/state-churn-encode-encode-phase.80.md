@@ -118,5 +118,5 @@ completion-pacing lane.
   `completion_wait_ms`, or whether producer/run-ahead work is needed.
 
 **Related.** [state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) ·
-[state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) · [present-pacing](../present-pacing.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) · [present-pacing](../present-pacing/index.md) ·
+[state-churn-encode](index.md).

@@ -131,4 +131,4 @@ real, but it remains blocked by final-color/final-writer proof or a new
 non-reorder backend route.
 
 **Related.** [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) ·
-[index-cache-locality](../index-cache-locality.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).
+[index-cache-locality](../index-cache-locality/index.md) · [present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md).

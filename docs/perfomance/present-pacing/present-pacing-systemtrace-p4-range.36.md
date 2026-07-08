@@ -167,4 +167,4 @@ direct movement in `completion_wait_with_enqueue_ms` on a visual-normal
 low-overhead run.
 
 **Related.** [present-pacing-systemtrace-p4-current.35](present-pacing-systemtrace-p4-current.35.md) ·
-[state-churn-encode-encode-phase.91](../state-churn-encode/state-churn-encode-encode-phase.91.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.91](../state-churn-encode/state-churn-encode-encode-phase.91.md) · [present-pacing](index.md).

@@ -40,8 +40,8 @@ some texture handles), so a high duplicate ratio means "same backend shape
 re-rendered", not "deletable redundant draw". Enables
 [index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md).
 
-**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · feeds dedup result
+**Related.** [index-reuse-measurement](index.md) · feeds dedup result
 [index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md) and size histogram
 [index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · owner still
-[hidden-backend-storage](../hidden-backend-storage.md) · CPU side stays [state-churn-encode](../state-churn-encode.md) /
-[const-upload](../const-upload.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md) · CPU side stays [state-churn-encode](../state-churn-encode/index.md) /
+[const-upload](../const-upload/index.md).

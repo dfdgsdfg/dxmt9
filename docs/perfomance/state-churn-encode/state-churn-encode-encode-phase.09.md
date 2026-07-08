@@ -108,6 +108,6 @@ or a more structural constants-only path that reduces how often fresh tables
 are needed. Any such change needs a visual smoke at minimum because the current
 fresh table exists to avoid last-write-wins descriptor corruption.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.08](state-churn-encode-encode-phase.08.md) · [snapshot-cache-snapshot.09](../snapshot-cache/snapshot-cache-snapshot.09.md) ·
-[present-pacing](../present-pacing.md).
+[present-pacing](../present-pacing/index.md).

@@ -8,7 +8,7 @@ date: 2026-06-15
 type: instrumentation
 status: accepted-attribution
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-counter-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-counter-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-counter-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.120.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.120.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 121 - Backend Uniform Payload Materialization Counter
@@ -85,4 +85,4 @@ served from `DrawUniformPayloadRecord`, fixed records, and stage spans.
 - `meson compile -C build-win32-x86-builtin`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-backend-materialize-counter-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
-**Related.** [state-churn-encode-encode-phase.120](state-churn-encode-encode-phase.120.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [state-churn-encode-encode-phase.120](state-churn-encode-encode-phase.120.md) · [state-churn-encode](index.md).

@@ -108,5 +108,5 @@ should keep following the measured batch-miss shape:
   opportunity than this gate;
 - keep FPS claims tied to P4 overlap or a larger end-to-end P2/P3 reduction.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) ·
 [snapshot-cache-snapshot.24](snapshot-cache-snapshot.24.md) · [present-pacing-current-p2p3.46](../present-pacing/present-pacing-current-p2p3.46.md).

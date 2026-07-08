@@ -30,7 +30,7 @@ nothing batches. Two distinct break families emerge — constant-upload boundari
 (largest) and state-delta breaks (second) — motivating both the const-upload
 boundary semantics and the binding-override draw-run redesign.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · next: [state-churn-encode-drawrun.02](state-churn-encode-drawrun.02.md) ·
+**Related.** [state-churn-encode](index.md) · next: [state-churn-encode-drawrun.02](state-churn-encode-drawrun.02.md) ·
 [state-churn-encode-statedelta.01](state-churn-encode-statedelta.01.md) (state-delta bucket split) ·
 [state-churn-encode-churn.01](state-churn-encode-churn.01.md) (stream/IB churn redesign) ·
-[const-upload](../const-upload.md) (const-upload is the larger break class).
+[const-upload](../const-upload/index.md) (const-upload is the larger break class).

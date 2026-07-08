@@ -96,7 +96,7 @@ next runtime gate is the same 120s no-gputrace scout after unlock.
 - `meson compile -C build-win32-x86-builtin`
 - `git diff --check`
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.97](state-churn-encode-encode-phase.97.md) ·
-[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md) · [snapshot-cache](../snapshot-cache.md) ·
-[present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+[present-pacing](../present-pacing/index.md).

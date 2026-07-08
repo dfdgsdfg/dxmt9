@@ -88,7 +88,7 @@ What this tells us:
   pipeline depth*.
 - The actual ceiling sits in `encode_draw_cpu_ms` (~11 ms/CB at this
   workload, well above the budget headroom). Owned by
-  [state-churn-encode](../state-churn-encode.md).
+  [state-churn-encode](../state-churn-encode/index.md).
 - p95 / max getting worse with this knob suggests the deeper queue
   occasionally introduces tail latency without a throughput win.
 

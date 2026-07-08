@@ -83,7 +83,7 @@ while the only large bucket is not yet semantic-safe. The next locality Xcode
 capture should therefore wait for a real final-color/final-writer oracle, not
 just another rank-window mini-replay or visibility-positive scout.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) ·
+**Related.** [index-cache-locality](index.md) ·
 [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md) ·
 [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md) ·
 [hidden-backend-storage-shape.19](../hidden-backend-storage/hidden-backend-storage-shape.19.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

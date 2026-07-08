@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-pe-chunk-fill-attribution
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r3-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r3-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r2-20260616/result.json
-related: docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 56 - PE All-Chunk Cadence Explains Inter-Replay Gap

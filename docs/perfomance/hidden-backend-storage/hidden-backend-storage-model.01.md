@@ -53,6 +53,6 @@ by dxmt writers (`0.444 MiB`), visible `VSOut` (`184 B`), or AIR scratch
 `primitive-backend-pressure-or-state-shape-ab` — move primitive/backend
 pressure, not CPU upload bytes. Which sub-component dominates is still OPEN.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-model.02](hidden-backend-storage-model.02.md) ·
+**Related.** [hidden-backend-storage](index.md) · [hidden-backend-storage-model.02](hidden-backend-storage-model.02.md) ·
 [hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md) · [hidden-backend-storage-density.01](hidden-backend-storage-density.01.md) ·
-[tvb-mechanism-proof](../tvb-mechanism-proof.md) · [vsout-layout](../vsout-layout.md) · [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+[tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [vsout-layout](../vsout-layout/index.md) · [baselines](../baselines/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

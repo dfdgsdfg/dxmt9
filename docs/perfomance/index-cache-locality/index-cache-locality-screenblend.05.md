@@ -66,8 +66,8 @@ be treated as a production/default candidate or as a current Xcode-spend target
 until the exact/`lsb1` image CSV is reattached or regenerated in the same gate
 run.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · next:
 [index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
-[hidden-backend-storage](../hidden-backend-storage.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md).

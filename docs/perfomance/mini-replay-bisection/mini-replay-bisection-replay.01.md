@@ -42,6 +42,6 @@ while the standalone slice is fragment/overdraw dominated (22.1M FS inv, 738
 frags/prim, 26.11% vertex). Payloads alone are insufficient — the next replay must
 preserve more original pass context, not add more of the same draws.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) ·
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) ·
 [mini-replay-bisection-replay.02](mini-replay-bisection-replay.02.md) (scissor pollution found next) ·
-[hidden-backend-storage](../hidden-backend-storage.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

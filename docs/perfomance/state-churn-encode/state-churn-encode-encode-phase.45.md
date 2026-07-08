@@ -7,7 +7,7 @@ title: Measure Queued Submission Carrier Emplace Cost
 date: 2026-06-14
 type: instrumentation
 status: accepted-bounded-attribution
-source: src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, docs/perfomance/state-churn-encode.md, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/actual.png
+source: src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, docs/perfomance/state-churn-encode/index.md, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-drawrun-emplace-counter-r1-20260614/actual.png
 ---
 
 # Measure Queued Submission Carrier Emplace Cost

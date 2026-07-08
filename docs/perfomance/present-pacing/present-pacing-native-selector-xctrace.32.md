@@ -170,4 +170,4 @@ P4 validation gate when a CPU change claims to recover overlap.
   primary question.
 
 **Related.** [present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) ·
-[state-churn-encode-encode-phase.81](../state-churn-encode/state-churn-encode-encode-phase.81.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.81](../state-churn-encode/state-churn-encode-encode-phase.81.md) · [present-pacing](index.md).

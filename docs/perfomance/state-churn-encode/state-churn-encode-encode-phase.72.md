@@ -103,4 +103,4 @@ machine-gun muzzle/bloom frame, not the black-screen or missing-bloom failure
 class.
 
 **Related.** [state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) ·
-[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [state-churn-encode](index.md).

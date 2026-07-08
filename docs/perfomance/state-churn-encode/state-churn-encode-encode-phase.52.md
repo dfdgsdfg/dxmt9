@@ -109,7 +109,7 @@ generation when lifetime is proven, or move toward a slab/direct-build shape
 that avoids copying the full `DrawUniformPayload` on every miss. Any such change
 must preserve owned replay storage across the queue boundary.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) ·
 [state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md) ·
-[state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) · [snapshot-cache](../snapshot-cache.md).
+[state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) · [snapshot-cache](../snapshot-cache/index.md).

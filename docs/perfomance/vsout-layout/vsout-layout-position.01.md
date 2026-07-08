@@ -45,4 +45,4 @@ bytes yielded only `-4.86%` VS-write — wildly non-proportional. The
 the constant-fragment/raster/backend interaction, not from visible width. Hidden
 backend storage remains the owner.
 
-**Related.** [vsout-layout](../vsout-layout.md) · companion control [vsout-layout-position.02](vsout-layout-position.02.md) · escalated from [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · [backend-shape-classifiers](../backend-shape-classifiers.md).
+**Related.** [vsout-layout](index.md) · companion control [vsout-layout-position.02](vsout-layout-position.02.md) · escalated from [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md) · [backend-shape-classifiers](../backend-shape-classifiers/index.md).

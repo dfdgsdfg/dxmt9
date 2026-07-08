@@ -41,6 +41,6 @@ join (9/9 top rows matched, `184B` source VSOut vs `594-1165B` Xcode) again
 confirms the owner is hidden Apple vertex/tiler/backend storage below
 source-visible VSOut.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · from: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · from: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md)
 · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md) · split sibling: [primitive-reorder-diagnostics-split.04](primitive-reorder-diagnostics-split.04.md)
-· [hidden-backend-storage](../hidden-backend-storage.md) · [vsout-layout](../vsout-layout.md) · [index-cache-locality](../index-cache-locality.md).
+· [hidden-backend-storage](../hidden-backend-storage/index.md) · [vsout-layout](../vsout-layout/index.md) · [index-cache-locality](../index-cache-locality/index.md).

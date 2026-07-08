@@ -45,6 +45,6 @@ already removes `r[32]`; visible scratch is only `128B`; the surviving Xcode
 bucket is `6.3x`–`8.7x` larger than the IR stage return. Owner is hidden Apple
 vertex/tiler/parameter/primitive backend storage below the MSL/AIR-visible shape.
 
-**Related.** [shader-codegen](../shader-codegen.md) · [shader-codegen-temps.01](shader-codegen-temps.01.md) · [shader-codegen-scratch.01](shader-codegen-scratch.01.md) ·
+**Related.** [shader-codegen](index.md) · [shader-codegen-temps.01](shader-codegen-temps.01.md) · [shader-codegen-scratch.01](shader-codegen-scratch.01.md) ·
 [shader-codegen-offline.02](shader-codegen-offline.02.md) (next: structural VSOut variants) ·
-[hidden-backend-storage](../hidden-backend-storage.md) · [vsout-layout](../vsout-layout.md)
+[hidden-backend-storage](../hidden-backend-storage/index.md) · [vsout-layout](../vsout-layout/index.md)

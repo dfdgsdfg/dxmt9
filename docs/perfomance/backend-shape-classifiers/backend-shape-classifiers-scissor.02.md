@@ -41,4 +41,4 @@ frame-to-frame/backend variation. The earlier `60/2` force-fragment movement is
 not explained by scissor alone. Scissor is not the owner of the hidden
 vertex/tiler/parameter storage.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · expands [backend-shape-classifiers-scissor.01](backend-shape-classifiers-scissor.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · related [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md) (same capture campaign).
+**Related.** [backend-shape-classifiers](index.md) · expands [backend-shape-classifiers-scissor.01](backend-shape-classifiers-scissor.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage/index.md) · related [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md) (same capture campaign).

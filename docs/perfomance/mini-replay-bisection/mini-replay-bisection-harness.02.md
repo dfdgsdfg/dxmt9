@@ -43,5 +43,5 @@ coverage. The remaining gap is **performance evidence**: capture the slice with
 Xcode counters and compare against the original hot encoder — done in
 [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md).
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
 [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

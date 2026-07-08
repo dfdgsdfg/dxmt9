@@ -67,7 +67,7 @@ created for this phase.
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py -q`
 - `git diff --check -- scripts/tools/compare_3dmark05_perf_counters.py tests/scripts/test_compare_3dmark05_perf_counters.py`
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.99](state-churn-encode-encode-phase.99.md) ·
 [state-churn-encode-encode-phase.98](state-churn-encode-encode-phase.98.md) ·
 [state-churn-encode-encode-phase.92](state-churn-encode-encode-phase.92.md).

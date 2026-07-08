@@ -110,5 +110,5 @@ scratch cost is the semantic/probe-key table initialization and the resolved-key
 children. Otherwise, return to the larger P2/P3/P4 serial-cadence lane.
 
 **Related.** [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) ·
-[state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) · [state-churn-encode](../state-churn-encode.md) ·
-[present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) · [state-churn-encode](index.md) ·
+[present-pacing](../present-pacing/index.md).

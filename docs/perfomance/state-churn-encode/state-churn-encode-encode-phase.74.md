@@ -130,4 +130,4 @@ cases; a future relaxation needs explicit same-format proof.
   muzzle/bloom/fog/particle frames stay normal.
 
 **Related.** [state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) ·
-[state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) · [state-churn-encode](index.md).

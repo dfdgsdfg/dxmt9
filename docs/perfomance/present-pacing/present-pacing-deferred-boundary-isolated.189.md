@@ -8,7 +8,7 @@ date: 2026-07-04
 type: no-gputrace
 status: rejected-isolated-p4-noop
 source: experiments/output/app-d3d9-3dmark05-p4-deferred-iso-baseline-r0-20260704/result.json; experiments/output/app-d3d9-3dmark05-p4-deferred-iso-baseline-r0-20260704/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-p4-deferred-iso-candidate-r1-20260704-retry1/result.json; experiments/output/app-d3d9-3dmark05-p4-deferred-iso-candidate-r1-20260704-retry1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-p4-deferred-iso-candidate-r1-20260704/result.json; traces/app-d3d9-3dmark05-p4-deferred-iso-baseline-r0-20260704/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-p4-deferred-iso-candidate-r1-20260704-retry1/analysis/captures/frame000920.bmp; scripts/tools/compare_3dmark05_p4_pair.py; docs/superpowers/specs/2026-07-04-gt1-p4-deferred-boundary-design.md
-related: docs/perfomance/present-pacing.md; docs/perfomance/present-pacing/present-pacing-encode-session-deferred-boundary.188.md; docs/perfomance/present-pacing/present-pacing-encode-session-stable-rerun.187.md
+related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-encode-session-deferred-boundary.188.md; docs/perfomance/present-pacing/present-pacing-encode-session-stable-rerun.187.md
 ---
 
 # Present-Pacing H189 - Isolated deferred present boundary on the baseline shape

@@ -95,7 +95,7 @@ handle identity is closed as a first-order GPU owner; the active frontier moves
 back to VS-invocation reduction with semantic proof, real position/binning
 backend experiments, mesh/object escape experiments, or isolated PSO/spill A/B.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) · [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md) ·
 [state-churn-encode-stream.08](../state-churn-encode/state-churn-encode-stream.08.md) · [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) ·
-[mini-replay-bisection](../mini-replay-bisection.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection](../mini-replay-bisection/index.md) · [index-cache-locality](../index-cache-locality/index.md).

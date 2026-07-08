@@ -36,6 +36,6 @@ KiB per encoder. Confirms cbuf upload is a CPU amplifier, not the GPU limiter.
 Hands the bottleneck to render-pass coalescing/store proof and stream/IB
 bind coalescing.
 
-**Related.** [const-upload](../const-upload.md) · prev: [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) · the GPU
-owner it exposes → [hidden-backend-storage](../hidden-backend-storage.md) · [render-pass-store](../render-pass-store.md) (RT/depth
-re-entry, store) · [state-churn-encode](../state-churn-encode.md) (stream/IB churn in top passes).
+**Related.** [const-upload](index.md) · prev: [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) · the GPU
+owner it exposes → [hidden-backend-storage](../hidden-backend-storage/index.md) · [render-pass-store](../render-pass-store/index.md) (RT/depth
+re-entry, store) · [state-churn-encode](../state-churn-encode/index.md) (stream/IB churn in top passes).

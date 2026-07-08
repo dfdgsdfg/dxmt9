@@ -94,6 +94,6 @@ hashing mostly real snapshot/uniform payloads.
 | Snapshot miss hot-build path | `d3d9_snapshot_cache_miss_hot_build_cpu_ms=1568.266ms` remains a separate named owner |
 | Queue append copy path | [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) now names batch append as the largest submit child |
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
 [state-churn-encode-encode-phase.27](state-churn-encode-encode-phase.27.md).

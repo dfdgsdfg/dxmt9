@@ -97,6 +97,6 @@ either:
 queue is intentionally narrower: no more visible `VSOut`/`live-vsout` or
 stream/IB handle-identity Xcode spends without a new mechanism.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) · [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) ·
 [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) · [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md).

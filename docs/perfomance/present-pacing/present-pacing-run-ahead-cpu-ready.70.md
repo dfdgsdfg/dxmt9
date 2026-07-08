@@ -8,7 +8,7 @@ date: 2026-06-17
 type: experiment-run
 status: accepted-locality-refinement-rejected-correctness-and-promotion
 source: experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/result.json; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/3dmark05-perf-frames.csv; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/actual.png; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison.md; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison-vs-singlecb.md; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison-vs-on-r2.md
-related: docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing/index.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present Pacing 70 - CPU-Ready Run-Ahead Restores Some CB Locality but Misses FPS and Correctness Gates

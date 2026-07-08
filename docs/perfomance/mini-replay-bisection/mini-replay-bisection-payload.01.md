@@ -39,5 +39,5 @@ VS bind stream1 at Metal `buffer(6)` colliding with the replay cbuf slots; (2) t
 16-draw window spans 6 VS/PS pairs, so a single-PSO runner cannot replay it. Both
 fed [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md).
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md) ·
-[mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) · [index-reuse-measurement](../index-reuse-measurement.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md) ·
+[mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) · [index-reuse-measurement](../index-reuse-measurement/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

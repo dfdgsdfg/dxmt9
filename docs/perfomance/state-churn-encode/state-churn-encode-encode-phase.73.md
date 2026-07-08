@@ -107,4 +107,4 @@ builder so the encode worker can memo before constructing the full
   normal visual smoke before promoting any earlier memo point.
 
 **Related.** [state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) ·
-[state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) · [state-churn-encode](index.md).

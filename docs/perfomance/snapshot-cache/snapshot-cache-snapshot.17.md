@@ -106,5 +106,5 @@ This result reinforces the current priority: after [snapshot-cache-snapshot.16](
 snapshot work should target the VS indexed-float constant fallback or a deeper
 direct-construct/interned-state design, not adjacent uniform snapshot reuse.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.16](snapshot-cache-snapshot.16.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.16](snapshot-cache-snapshot.16.md) ·
 [state-churn-encode-encode-phase.44](../state-churn-encode/state-churn-encode-encode-phase.44.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

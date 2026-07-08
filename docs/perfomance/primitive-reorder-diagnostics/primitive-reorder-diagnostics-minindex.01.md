@@ -41,8 +41,8 @@ cache behavior; the original 3DMark05 order is already more vertex-cache
 friendly. Do not spend gputrace time here. The next primitive-order experiment
 must be cache-aware if it changes order.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior reverse-class results:
+**Related.** [primitive-reorder-diagnostics](index.md) · prior reverse-class results:
 [primitive-reorder-diagnostics-split.03](primitive-reorder-diagnostics-split.03.md) · next:
 [primitive-reorder-diagnostics-minindex.02](primitive-reorder-diagnostics-minindex.02.md) (cache-aware successor) ·
-[index-reuse-measurement](../index-reuse-measurement.md) (LRU16/32/64 miss model) ·
-[index-cache-locality](../index-cache-locality.md) (the semantic-safe cache-aware path this motivates).
+[index-reuse-measurement](../index-reuse-measurement/index.md) (LRU16/32/64 miss model) ·
+[index-cache-locality](../index-cache-locality/index.md) (the semantic-safe cache-aware path this motivates).

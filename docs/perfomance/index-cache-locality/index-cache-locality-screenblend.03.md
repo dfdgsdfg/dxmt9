@@ -37,6 +37,6 @@ is destination-dependent; promotion needs an explicit semantic image proof or ac
 tolerance policy for the affected rows. That policy is recorded in
 [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) as explicit exact/`lsb1` only.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md)
-· next: [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) (same scaling law) · [index-cache-locality-triage.01](index-cache-locality-triage.01.md)
-(50/2 owner triage) · [hidden-backend-storage](../hidden-backend-storage.md) (residual).
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md)
+· next: [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) (same scaling law) · [index-cache-locality-triage.01](index-cache-locality-triage.01.md)
+(50/2 owner triage) · [hidden-backend-storage](../hidden-backend-storage/index.md) (residual).

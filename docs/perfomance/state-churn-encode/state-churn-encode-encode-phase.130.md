@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.127.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.128.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.127.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.128.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 130 - Current Materialization And Argbuf Owner Refresh
@@ -103,6 +103,6 @@ these larger gates:
 - P4 overlap, proven by increasing `completion_wait_with_enqueue` or lowering
   `completion_wait_without_enqueue`.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.127](state-churn-encode-encode-phase.127.md) ·
-[state-churn-encode-encode-phase.128](state-churn-encode-encode-phase.128.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.128](state-churn-encode-encode-phase.128.md) · [present-pacing](../present-pacing/index.md).

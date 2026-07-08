@@ -77,7 +77,7 @@ a different final-color/final-writer oracle with enough safe LRU32 movement, or
 the next GPU experiment should switch to a non-reorder backend denominator
 mechanism.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md) ·
 [mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md) ·
 [mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md) ·

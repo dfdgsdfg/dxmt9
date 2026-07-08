@@ -8,7 +8,7 @@ date: 2026-06-18
 type: opportunity-probe
 status: rejected-next-lever
 source: include/dxmt9/core_snapshots.hpp; src/d3d9/core_draw.cpp; src/dxmt9/dxmt9_perf_counters.cpp; experiments/output/app-d3d9-3dmark05-batch-miss-semantic-reuse-probe-r1-20260617/3dmark05-perf-summary.md
-related: docs/perfomance/snapshot-cache/snapshot-cache-snapshot.28.md, docs/perfomance/snapshot-cache.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md
+related: docs/perfomance/snapshot-cache/snapshot-cache-snapshot.28.md, docs/perfomance/snapshot-cache/index.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md
 ---
 
 # Snapshot Cache 29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache

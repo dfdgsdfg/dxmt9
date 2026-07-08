@@ -82,7 +82,7 @@ stateDiagram-v2
   IsolatedABRequired --> [*]: no isolated A/B yet
 ```
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) ·
-[mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) · [state-churn-encode](../state-churn-encode.md) ·
-[index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) · [state-churn-encode](../state-churn-encode/index.md) ·
+[index-cache-locality](../index-cache-locality/index.md).

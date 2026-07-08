@@ -78,5 +78,5 @@ builds on the submit path. Keep `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1` until a
 broader workload suite proves the new placement has no cold-stutter downside.
 
 **Related.** [state-churn-encode-encode-phase.69](state-churn-encode-encode-phase.69.md) ·
-[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](../state-churn-encode.md) ·
-[present-pacing](../present-pacing.md).
+[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](index.md) ·
+[present-pacing](../present-pacing/index.md).

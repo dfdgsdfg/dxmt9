@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling+experiment
 status: accepted-current-attribution
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-prefix-span-r4-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-prefix-span-r4-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-prefix-span-r4-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.137.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.136.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.137.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 138 - Argbuf VS Float Prefix and Span Shape
@@ -135,6 +135,6 @@ Next gates:
 3. Only prototype a new cbuf/table ABI if it can reduce reopen count or
    per-draw table mutation cost, not just upload bytes.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.136](state-churn-encode-encode-phase.136.md) ·
 [state-churn-encode-encode-phase.137](state-churn-encode-encode-phase.137.md).

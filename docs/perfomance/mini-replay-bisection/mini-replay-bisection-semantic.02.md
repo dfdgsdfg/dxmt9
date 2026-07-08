@@ -172,7 +172,7 @@ promotion still requires at least one of:
 - or a non-reorder backend mechanism that lowers hidden vertex-stage writes
   without primitive reorder.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-semantic.01](mini-replay-bisection-semantic.01.md) ·
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
-[hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md) · [index-cache-locality](../index-cache-locality.md).
+[hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md) · [index-cache-locality](../index-cache-locality/index.md).

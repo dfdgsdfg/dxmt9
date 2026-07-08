@@ -107,5 +107,5 @@ record lookup, `textureForShaderRead`, sampler cache lookup, shadow hash/match,
 and actual Metal set calls, then test whether sampler shadow identity can avoid
 most cache lookups before materializing a `MTLSamplerState`.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [present-pacing](../present-pacing/index.md).

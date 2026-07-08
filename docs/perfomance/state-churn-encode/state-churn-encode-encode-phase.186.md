@@ -8,7 +8,7 @@ date: 2026-06-20
 type: implementation
 status: accepted-implementation-no-runtime-claim
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, tests/native/core/core_device_com_spec.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.185.md, docs/perfomance/snapshot-cache.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.185.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Encode Phase 186 - Direct compact uniform cache source

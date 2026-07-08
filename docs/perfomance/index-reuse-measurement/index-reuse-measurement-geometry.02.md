@@ -37,7 +37,7 @@ classified as real submitted geometry/primitive pressure interacting with Apple
 GPU hidden vertex/tiler/parameter storage. Deleting duplicate draws is at most a
 minor CPU/GPU improvement, not the first-order GPU bottleneck.
 
-**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+**Related.** [index-reuse-measurement](index.md) · follows
 [index-reuse-measurement-geometry.01](index-reuse-measurement-geometry.01.md) · next is size histogram
 [index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · confirms width owner
-[hidden-backend-storage](../hidden-backend-storage.md) · rejects visible-width ownership [vsout-layout](../vsout-layout.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md) · rejects visible-width ownership [vsout-layout](../vsout-layout/index.md).

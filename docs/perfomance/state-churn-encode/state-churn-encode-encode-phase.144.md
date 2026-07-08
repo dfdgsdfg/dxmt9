@@ -8,7 +8,7 @@ date: 2026-06-16
 type: implementation+experiment
 status: accepted-local-cpu-win-fps-open
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_pipeline_cache.cpp, src/dxmt9/dxmt9_pipeline_cache.hpp, tests/native/backend/backend_pipeline_key_spec.cpp, tests/native/backend/encode_draw_recorder_spec.cpp, agents/rules/environment_variables_encoder.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/actual.png, traces/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/analysis/direct-cbuf-vs-current-lowoverhead.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.142.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.142.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 144 - Stage 2b Direct-Cbuf Runtime Scout
@@ -185,6 +185,6 @@ The focused native tests passed (`4` OK) and the x86_64 provider build linked.
 The x86_64 compile still reports the pre-existing
 `dxmt9_shader_decoder.cpp:161` unused-function warning.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.142](state-churn-encode-encode-phase.142.md) ·
-[state-churn-encode-encode-phase.143](state-churn-encode-encode-phase.143.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.143](state-churn-encode-encode-phase.143.md) · [present-pacing](../present-pacing/index.md).

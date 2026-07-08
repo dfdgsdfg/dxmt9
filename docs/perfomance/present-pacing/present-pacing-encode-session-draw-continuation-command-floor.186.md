@@ -8,7 +8,7 @@ date: 2026-06-28
 type: no-gputrace
 status: diagnostic-safe-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-continuation-limit16-20260628/result.json, experiments/output/app-d3d9-3dmark05-encode-session-continuation-limit16-20260628/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-continuation-limit16-20260628/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-continuation-limit16-20260628/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-encode-session-draw-continuation-source.178.md, docs/perfomance/present-pacing/present-pacing-encode-session-selected-prefix-retain.185.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-draw-continuation-source.178.md, docs/perfomance/present-pacing/present-pacing-encode-session-selected-prefix-retain.185.md
 ---
 
 # Present-Pacing H186 - EncodeSession Draw-Continuation Command Floor

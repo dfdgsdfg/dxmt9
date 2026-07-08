@@ -8,7 +8,7 @@ date: 2026-06-15
 type: runtime-scout
 status: accepted-current-attribution
 source: src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/check/assert_perf_counters.py, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-compact-breakdown-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-compact-breakdown-current-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-compact-breakdown-current-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.113.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.112.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.113.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.112.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 114 - Uniform Compact-Carrier Byte Breakdown
@@ -136,4 +136,4 @@ Interpretation:
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
 **Related.** [state-churn-encode-encode-phase.113](state-churn-encode-encode-phase.113.md) ·
-[state-churn-encode-encode-phase.112](state-churn-encode-encode-phase.112.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.112](state-churn-encode-encode-phase.112.md) · [state-churn-encode](index.md).

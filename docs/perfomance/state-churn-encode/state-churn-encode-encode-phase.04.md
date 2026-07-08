@@ -152,6 +152,6 @@ separated from the common cbuf update path. Do not schedule an Xcode/gputrace
 capture for this CPU path until the no-gputrace counters show fewer dirty cbuf
 uploads or less upload CPU time.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) ·
-[state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) · [present-pacing](../present-pacing/index.md).

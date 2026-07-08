@@ -8,7 +8,7 @@ date: 2026-06-15
 type: implementation
 status: accepted-storage-width-rejected-fps-owner
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/native/backend/dod_replay_observer_spec.cpp, tests/native/core/state_draw_transform_spec.cpp, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2/result.json, experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.117.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.117.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 118 - Uniform Stage Constants Record Split
@@ -129,4 +129,4 @@ one of:
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-stage-constants-split-current-r2 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
 **Related.** [state-churn-encode-encode-phase.117](state-churn-encode-encode-phase.117.md) ·
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

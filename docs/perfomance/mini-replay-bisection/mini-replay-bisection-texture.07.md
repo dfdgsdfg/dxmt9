@@ -82,8 +82,8 @@ oracle. Without that oracle, the performance plan should spend the next serious
 budget on non-reorder hidden-backend mechanisms rather than another broad
 depth-read primitive reorder.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
 [mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
 [mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md) ·
-[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) · [index-cache-locality](../index-cache-locality/index.md).

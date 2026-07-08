@@ -114,7 +114,7 @@ lever unless a future patch can reuse the fragment plan without adding a
 per-entry check that recreates the texture pre-resolve regression from
 [state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md).
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) ·
 [state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) ·
 [state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md).

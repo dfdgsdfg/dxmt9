@@ -105,9 +105,9 @@ excludes rank 1, a final-color/occlusion oracle that proves owner movement is
 masked, or a non-reorder backend-shape mechanism. The immediate selector scout
 is recorded in [mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md).
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
 [mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) ·
 [mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
 [mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md) ·
-[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality/index.md).

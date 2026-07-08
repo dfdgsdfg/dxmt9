@@ -102,6 +102,6 @@ Any packed/segmented constant ABI change needs same-input image proof, because
 [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) already showed that zeroing bytes inside
 the old visible prefix can produce dark or black geometry.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
 [state-churn-encode-encode-phase.62](state-churn-encode-encode-phase.62.md) ·
 [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) · [snapshot-cache-snapshot.08](../snapshot-cache/snapshot-cache-snapshot.08.md).

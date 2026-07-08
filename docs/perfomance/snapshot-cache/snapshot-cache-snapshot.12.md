@@ -112,5 +112,5 @@ with another split if needed before changing semantics.
 | VS indexed-float proof | `120,393` calls still force full VS constant hashing and scan `614.457MB`; correctness proof remains required before narrowing. |
 | CPU/pipeline overlap | FPS remains governed by `completion_wait_ms=25.330ms/present` plus CPU cadence. This split identifies CPU work but is not itself an FPS fix. |
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.11](snapshot-cache-snapshot.11.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.11](snapshot-cache-snapshot.11.md) ·
 [state-churn-encode-encode-phase.46](../state-churn-encode/state-churn-encode-encode-phase.46.md).

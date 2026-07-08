@@ -8,7 +8,7 @@ date: 2026-06-15
 type: runtime-scout
 status: accepted-local-cleanup-not-fps-proof
 source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-cbuf-probe-split-rerun/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/actual.png, src/dxmt9/dxmt9_draw_encoder.mm
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.110.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.110.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 111 - Argbuf Source-Changed Fast Miss
@@ -96,4 +96,4 @@ dirty VS cbuf update. This patch only trims the probe leaf under
 `reopen_post`.
 
 **Related.** [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
-[state-churn-encode-encode-phase.110](state-churn-encode-encode-phase.110.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.110](state-churn-encode-encode-phase.110.md) · [state-churn-encode](index.md).

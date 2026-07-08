@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-smoke
 status: accepted-target-window-miss
 source: experiments/output/app-d3d9-3dmark05-visual-redcorridor-regression-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-visual-redcorridor-regression-r1/result.json; experiments/output/app-d3d9-3dmark05-visual-redcorridor-regression-r1/actual.png; traces/app-d3d9-3dmark05-visual-redcorridor-regression-r1/analysis/captures/frame000001.bmp; traces/app-d3d9-3dmark05-visual-redcorridor-regression-r1/analysis/captures/frame000101.bmp; traces/app-d3d9-3dmark05-visual-redcorridor-regression-r1/analysis/captures/frame000171.bmp; traces/app-d3d9-3dmark05-visual-redcorridor-regression-r1/analysis/visual-redcorridor-contact.png
-related: docs/perfomance/snapshot-cache.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.04.md, docs/perfomance/present-pacing.md, docs/perfomance/overview-3dmark05-gt1.md
+related: docs/perfomance/snapshot-cache/index.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.04.md, docs/perfomance/present-pacing/index.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Snapshot Cache Visual 05 - Red Corridor Close-Up Regression Scout

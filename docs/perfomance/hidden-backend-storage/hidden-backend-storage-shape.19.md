@@ -74,6 +74,6 @@ future PSO experiment must first construct a stable A/B where geometry,
 stream/IB/extra-stream bindings, render-pass shape, visible shader layout, and
 VS invocation count stay fixed while PSO/backend state changes.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md) · [hidden-backend-storage-shape.17](hidden-backend-storage-shape.17.md) ·
 [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

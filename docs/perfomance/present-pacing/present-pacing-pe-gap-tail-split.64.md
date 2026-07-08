@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-pe-gap-tail-split
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-gap-tail-split-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-gap-tail-split-r1-20260616/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-pe-gap-phase-split.63.md, docs/perfomance/present-pacing/present-pacing-pe-gap-callfamily.62.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-pe-gap-phase-split.63.md, docs/perfomance/present-pacing/present-pacing-pe-gap-callfamily.62.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 64 - Focused Pre-Call Tail Split Proves Gap Is Between D3D9 Calls

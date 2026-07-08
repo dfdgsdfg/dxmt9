@@ -84,6 +84,6 @@ stateDiagram-v2
   DiagnosticOnly --> [*]: no blend-off replay by itself
 ```
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) ·
-[backend-shape-classifiers-alpha.03](../backend-shape-classifiers/backend-shape-classifiers-alpha.03.md) · [index-cache-locality](../index-cache-locality.md).
+[backend-shape-classifiers-alpha.03](../backend-shape-classifiers/backend-shape-classifiers-alpha.03.md) · [index-cache-locality](../index-cache-locality/index.md).

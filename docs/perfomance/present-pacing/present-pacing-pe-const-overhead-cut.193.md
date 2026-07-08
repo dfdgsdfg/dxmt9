@@ -8,7 +8,7 @@ date: 2026-07-07
 type: no-gputrace
 status: accepted-null-fps-result
 source: experiments/output/app-d3d9-3dmark05-pe-constA-r10-20260707/result.json; experiments/output/app-d3d9-3dmark05-pe-constA-r11-20260707/result.json; experiments/output/app-d3d9-3dmark05-pe-cost-nostats-r8-20260707/result.json; docs/perfomance/present-pacing/present-pacing-pe-cost-verification.192.md
-related: docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/index.md
 ---
 
 # Present-Pacing H193 - PE const-chain overhead cuts (Plan A)

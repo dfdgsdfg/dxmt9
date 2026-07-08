@@ -139,10 +139,10 @@ The follow-up selector scout is recorded in
 [mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md); it rejects simple non-color thresholds as
 a way to split the visible rank-1 failure from rank2-4 exact passes.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
 [mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
 [mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md) ·
 [mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) ·
-[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality.md) ·
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

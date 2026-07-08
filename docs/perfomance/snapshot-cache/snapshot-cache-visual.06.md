@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-ab
 status: rejected-state-elision-as-direct-owner
 source: experiments/output/app-d3d9-3dmark05-visual-state-elision-off-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-visual-state-elision-off-r1/result.json; experiments/output/app-d3d9-3dmark05-visual-state-elision-off-r1/actual.png; experiments/output/app-d3d9-3dmark05-visual-state-elision-on-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-visual-state-elision-on-r1/result.json; experiments/output/app-d3d9-3dmark05-visual-state-elision-on-r1/actual.png
-related: docs/perfomance/snapshot-cache.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.05.md, docs/perfomance/overview-3dmark05-gt1.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/snapshot-cache/index.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.05.md, docs/perfomance/overview-3dmark05-gt1.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Snapshot Cache Visual 06 - Draw Submission State-Elision Visual A/B

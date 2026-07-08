@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling
 status: accepted-summary-tooling
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-encode-summary-current/3dmark05-perf-summary.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.103.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.103.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 104 - Argbuf CPU Summary Ranking
@@ -91,4 +91,4 @@ next code candidate should reduce one of those named rows, then a low-overhead
 average-FPS fix.
 
 **Related.** [state-churn-encode-encode-phase.103](state-churn-encode-encode-phase.103.md) ·
-[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](index.md).

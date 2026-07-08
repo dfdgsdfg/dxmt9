@@ -85,5 +85,5 @@ snapshot/commit replay cadence. A future PSO attempt should first split
 `pipeline_lookup` into handle resolve, depth-state resolve, variant label/hash,
 and actual Metal bind/shadow work.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) · [snapshot-cache](../snapshot-cache.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) · [snapshot-cache](../snapshot-cache/index.md).

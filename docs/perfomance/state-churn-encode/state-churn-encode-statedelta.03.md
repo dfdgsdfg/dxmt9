@@ -37,6 +37,6 @@ and IB bindings cover the large majority (`96.29%`) of state-delta breaks. But
 const-upload boundaries remain `2.88x` larger — a separate problem — so stream+IB
 payload is a CPU/run-coalescing fix, not the whole perf fix.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-statedelta.02](state-churn-encode-statedelta.02.md) ·
+**Related.** [state-churn-encode](index.md) · prev: [state-churn-encode-statedelta.02](state-churn-encode-statedelta.02.md) ·
 [state-churn-encode-binding.01](state-churn-encode-binding.01.md) (the accepted override CPU win) ·
-[const-upload](../const-upload.md) (the larger, separate const-upload break class).
+[const-upload](../const-upload/index.md) (the larger, separate const-upload break class).

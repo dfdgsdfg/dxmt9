@@ -42,5 +42,5 @@ Candidate run `app-d3d9-3dmark05-trim-varyings-vertex-temps-frame60-r1`.
 bucket is hidden backend storage below the visible MSL, not a translated temp
 array.
 
-**Related.** [shader-codegen](../shader-codegen.md) · [shader-codegen-scratch.01](shader-codegen-scratch.01.md) (the immediate
-follow-up scratch probe) · [hidden-backend-storage](../hidden-backend-storage.md) · [vsout-layout](../vsout-layout.md)
+**Related.** [shader-codegen](index.md) · [shader-codegen-scratch.01](shader-codegen-scratch.01.md) (the immediate
+follow-up scratch probe) · [hidden-backend-storage](../hidden-backend-storage/index.md) · [vsout-layout](../vsout-layout/index.md)

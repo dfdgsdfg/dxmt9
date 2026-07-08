@@ -124,6 +124,6 @@ flowchart TD
 Do not spend Xcode/gputrace budget on these CPU-only candidates until a
 no-gputrace A/B reduces the relevant sub-counter. The GPU shape is unchanged.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.01](state-churn-encode-encode-phase.01.md) · [present-pacing](../present-pacing.md) ·
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.01](state-churn-encode-encode-phase.01.md) · [present-pacing](../present-pacing/index.md) ·
 [baselines-frame50.04](../baselines/baselines-frame50.04.md).

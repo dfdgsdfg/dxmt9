@@ -46,9 +46,9 @@ rather than removing it and identifies the primary row/material classes for
 bounded probes: the `60/3`/`60/1` opaque depth-write class and the `60/4`
 depth-read/alpha/textured class, handled separately.
 
-**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+**Related.** [index-reuse-measurement](index.md) · follows
 [index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · refined by
 [index-reuse-measurement-classattr.02](index-reuse-measurement-classattr.02.md) · confirms
-[hidden-backend-storage](../hidden-backend-storage.md) · classes feed
-[primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) and [index-cache-locality](../index-cache-locality.md) ·
-backend-state axes overlap [backend-shape-classifiers](../backend-shape-classifiers.md).
+[hidden-backend-storage](../hidden-backend-storage/index.md) · classes feed
+[primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) and [index-cache-locality](../index-cache-locality/index.md) ·
+backend-state axes overlap [backend-shape-classifiers](../backend-shape-classifiers/index.md).

@@ -116,5 +116,5 @@ residual shader-layout/hot-state work, or another explicitly measured CPU
 bucket. Another broad "skip unchanged state" bet should first prove non-zero
 hits with cheap instrumentation.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
-[present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md).

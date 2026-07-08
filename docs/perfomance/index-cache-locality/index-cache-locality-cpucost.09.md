@@ -77,6 +77,6 @@ work itself, not only make each score cheaper.
 - Replace full candidate-vector rescans with a bounded active frontier.
 - Add candidate-set size / score-scan counters before larger algorithm changes.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md) · next:
 [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) · [index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md).

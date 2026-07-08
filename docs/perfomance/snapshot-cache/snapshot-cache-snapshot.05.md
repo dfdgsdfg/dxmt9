@@ -128,5 +128,5 @@ refresh/miss) plus residual shader-layout/hot-state work. A future fps claim
 needs a fixed-workload or complete-GT1 wallclock gate, not another raw total
 counter comparison from a watchdog-limited run.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.04](snapshot-cache-snapshot.04.md) ·
-[present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.04](snapshot-cache-snapshot.04.md) ·
+[present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md).

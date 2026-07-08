@@ -167,6 +167,6 @@ flowchart TD
   Visual -- "Yes" --> Mechanism
 ```
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) · [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) ·
-[vsout-layout](../vsout-layout.md) · [shader-codegen](../shader-codegen.md).
+[vsout-layout](../vsout-layout/index.md) · [shader-codegen](../shader-codegen/index.md).

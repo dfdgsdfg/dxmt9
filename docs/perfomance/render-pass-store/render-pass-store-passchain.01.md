@@ -49,7 +49,7 @@ intervening passes are independent enough to batch same-key work, or prove a
 broader live-out discard with concrete read/use evidence — not a single-attachment
 store policy.
 
-**Related.** [render-pass-store](../render-pass-store.md) · prior: [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md)
+**Related.** [render-pass-store](index.md) · prior: [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md)
 (zero-hit color next-clear) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) (the ~62 GB budget
-this splits) · [hidden-backend-storage](../hidden-backend-storage.md) (the P0 owner this P1 track sits
+this splits) · [hidden-backend-storage](../hidden-backend-storage/index.md) (the P0 owner this P1 track sits
 behind).

@@ -64,4 +64,4 @@ dependent on ad hoc `jq` or Python snippets.
 
 **Related.** [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) ·
 [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
-[present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) · [present-pacing](../present-pacing.md).
+[present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) · [present-pacing](index.md).

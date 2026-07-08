@@ -89,5 +89,5 @@ full rescans, not just the worst-case candidate vector width.
   lazy frontier and rejected it, so any remaining frontier work must be cheaper
   and more domain-specific than a standard priority queue.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) · [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md).

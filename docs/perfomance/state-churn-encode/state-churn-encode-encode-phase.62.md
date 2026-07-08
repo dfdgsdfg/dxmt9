@@ -97,5 +97,5 @@ constant churn costs less, or reduce upstream VS constant dirty frequency. A
 local cached identity check inside the dirty mirror is now closed for the
 current GT1 workload.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md) ·
 [state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

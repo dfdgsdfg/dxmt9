@@ -32,7 +32,7 @@ Pinned by a native regression test plus the scanner-boundary test.
 not a perf win. The next batching step requires either per-draw uniform-payload
 draw-runs or upstream const-coalescing proof.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-drawrun.01](state-churn-encode-drawrun.01.md) ·
-[const-upload](../const-upload.md) (const-upload coalescing is the dependency for crossing this
+**Related.** [state-churn-encode](index.md) · prev: [state-churn-encode-drawrun.01](state-churn-encode-drawrun.01.md) ·
+[const-upload](../const-upload/index.md) (const-upload coalescing is the dependency for crossing this
 boundary) · [state-churn-encode-statedelta.03](state-churn-encode-statedelta.03.md) (stream+IB payload solves a
 different, separate break class).

@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-smoke
 status: accepted-nonrepro-window
 source: experiments/output/app-d3d9-3dmark05-visual-object-current-f880-960-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-visual-object-current-f880-960-r1/actual.png; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000880.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000890.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000900.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000910.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000930.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000940.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000950.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/captures/frame000960.bmp; traces/app-d3d9-3dmark05-visual-object-current-f880-960-r1/analysis/visual-object-current-f880-960-contact.png
-related: docs/perfomance/snapshot-cache.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.02.md, docs/perfomance/overview-3dmark05-gt1.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/snapshot-cache/index.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.02.md, docs/perfomance/overview-3dmark05-gt1.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Snapshot Cache Visual 03 - Current f880-960 Object-Window Visual Smoke

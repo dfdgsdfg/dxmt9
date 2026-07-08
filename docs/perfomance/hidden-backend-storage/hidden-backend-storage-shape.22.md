@@ -70,6 +70,6 @@ current coverage. The next backend experiment must first be a reduced
 mesh/object equality/counter A/B, a real position/binning route, or expanded
 Tile-FFP hot-row coverage.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) ·
 [hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

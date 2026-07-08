@@ -102,5 +102,5 @@ a draw-shape prefilter that avoids reading index data, or a production cache
 policy that records rejected keys earlier and amortizes the gate across repeated
 draws.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+**Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

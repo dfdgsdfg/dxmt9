@@ -141,5 +141,5 @@ the upload path must preserve the current full-array fallback for correctness.
   reopen/cbuf upload, or on a segmented storage model that patches small dirty
   subranges without relying on sparse per-shader packing.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) ·
 [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) · [snapshot-cache-snapshot.18](../snapshot-cache/snapshot-cache-snapshot.18.md).

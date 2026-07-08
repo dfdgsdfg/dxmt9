@@ -8,7 +8,7 @@ date: 2026-07-08
 type: no-gputrace
 status: accepted-mechanism-confirm-not-fps-promotion
 source: experiments/output/app-d3d9-3dmark05-h196-readonly-cache-r1-20260708/result.json; experiments/output/app-d3d9-3dmark05-h196-readonly-cache-r1-20260708/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-h196-readonly-cache-r1-20260708/3dmark05-perf-frames.csv; docs/perfomance/present-pacing/present-pacing-producer-sampling-attribution.196.md
-related: docs/perfomance/present-pacing.md; src/d3d9/d3d9_pe_buffer_readonly_cache.hpp; src/d3d9/d3d9_pe_device_child_buffer.cpp
+related: docs/perfomance/present-pacing/index.md; src/d3d9/d3d9_pe_buffer_readonly_cache.hpp; src/d3d9/d3d9_pe_device_child_buffer.cpp
 ---
 
 # Present-Pacing H197 - Readonly managed buffer cache runtime confirm

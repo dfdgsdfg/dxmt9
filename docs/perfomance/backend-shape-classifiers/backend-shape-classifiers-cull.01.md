@@ -26,4 +26,4 @@ count, stream/IB churn, PSO samples, and expected VSOut all unchanged.
 **Verdict.** Rejected. The cull-state bit is not the first-order owner of the
 hidden VS buffer-write traffic — only GPU time moves, within backend variation.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · first in the cull sequence, detailed in [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md) · paired with [backend-shape-classifiers-scissor.01](backend-shape-classifiers-scissor.01.md) in the same summary · confirms [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [backend-shape-classifiers](index.md) · first in the cull sequence, detailed in [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md) · paired with [backend-shape-classifiers-scissor.01](backend-shape-classifiers-scissor.01.md) in the same summary · confirms [hidden-backend-storage](../hidden-backend-storage/index.md).

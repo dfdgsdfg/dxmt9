@@ -8,7 +8,7 @@ date: 2026-06-21
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-current-r1-20260621/result.json, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-current-r1-20260621/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-current-r1-20260621/dxmt9.log, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-initboundary-r1-20260621/result.json, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-initboundary-r1-20260621/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-initboundary-r1-20260621/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-prepresent128-initboundary-r1-20260621/actual.png
-related: docs/perfomance/present-pacing.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-limit128.145.md, docs/perfomance/present-pacing/present-pacing-open-cb-bounded-tail-wait.146.md, docs/perfomance/present-pacing/present-pacing-encode-session-ready-preempt-release.155.md, specs/backend/design.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-limit128.145.md, docs/perfomance/present-pacing/present-pacing-open-cb-bounded-tail-wait.146.md, docs/perfomance/present-pacing/present-pacing-encode-session-ready-preempt-release.155.md, specs/backend/design.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H156 - EncodeSession Pre-Present Initializer-Wait Boundary

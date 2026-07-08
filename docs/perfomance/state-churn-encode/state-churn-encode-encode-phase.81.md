@@ -98,5 +98,5 @@ cadence proof.
   `completion_present_wait_ms` or producer-overlap movement before claiming FPS.
 
 **Related.** [state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) ·
-[state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) · [state-churn-encode](../state-churn-encode.md) ·
-[present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) · [state-churn-encode](index.md) ·
+[present-pacing](../present-pacing/index.md).

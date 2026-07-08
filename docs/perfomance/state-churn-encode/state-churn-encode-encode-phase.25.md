@@ -100,5 +100,5 @@ submission.
   and `commit_chunk_const_upload_cpu_ms` as low-priority unless a later change
   moves their totals.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) · [snapshot-cache](../snapshot-cache.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) · [snapshot-cache](../snapshot-cache/index.md).

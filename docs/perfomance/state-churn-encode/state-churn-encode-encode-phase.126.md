@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: accepted-attribution-not-fps-proof
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/framegraph/fg_linearizer.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-uniform-materialize-site-attribution-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-materialize-site-attribution-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-materialize-site-attribution-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.125.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.125.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 126 - Uniform Materialization Site Attribution
@@ -108,4 +108,4 @@ candidate is queue-observation projected-texture compat input, followed by draw
 encoder command-state direct compact reads.
 
 **Related.** [state-churn-encode-encode-phase.125](state-churn-encode-encode-phase.125.md) -
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

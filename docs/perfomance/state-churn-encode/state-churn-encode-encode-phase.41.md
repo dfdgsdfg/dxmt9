@@ -140,5 +140,5 @@ do not treat this sample as a new CPU win.
 - `git diff --check`
 - 3DMark05 GT1 120s no-gputrace scout above.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.40](state-churn-encode-encode-phase.40.md).

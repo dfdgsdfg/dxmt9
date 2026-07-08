@@ -8,7 +8,7 @@ date: 2026-07-06
 type: no-gputrace
 status: accepted-offload-fps-win
 source: experiments/output/app-d3d9-3dmark05-replay-offload-baseline-r0c-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-candidate-r5b-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-candidate-r4-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-fullcbuf-diag-20260706/result.json; experiments/output/app-d3d9-3dmark05-replay-offload-timephase-diag-20260706/result.json; traces/app-d3d9-3dmark05-replay-offload-baseline-r0c-20260706/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-replay-offload-candidate-r5b-20260706/analysis/captures/frame000920.bmp; traces/app-d3d9-3dmark05-replay-offload-timephase-diag-20260706/analysis/captures/frame001040.bmp; docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md
-related: docs/perfomance/present-pacing.md; docs/perfomance/present-pacing/present-pacing-deferred-boundary-isolated.189.md; specs/backend/design.md
+related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/present-pacing-deferred-boundary-isolated.189.md; specs/backend/design.md
 ---
 
 # Present-Pacing H190 - Commit-replay offload first runtime proof

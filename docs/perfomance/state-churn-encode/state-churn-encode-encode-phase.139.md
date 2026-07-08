@@ -8,7 +8,7 @@ date: 2026-06-15
 type: tooling+experiment
 status: accepted-current-attribution
 source: src/dxmt9/dxmt9_draw_encoder.mm, scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-source-r5-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-source-r5-20260615/3dmark05-perf-argbuf-payload-delta-sources.csv, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-source-r5-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-source-r5-20260615/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.66.md, docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.08.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.138.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.66.md, docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.08.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 139 - Argbuf VS Float Source Attribution
@@ -154,7 +154,7 @@ either:
    (`0xcf219872fdbbb398 / 0x6f39a816200d9efe`) before attempting any new packed
    storage policy.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md) ·
 [state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) ·
 [hidden-backend-storage-shape.08](../hidden-backend-storage/hidden-backend-storage-shape.08.md).

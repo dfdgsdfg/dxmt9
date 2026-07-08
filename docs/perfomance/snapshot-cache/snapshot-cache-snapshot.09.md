@@ -190,5 +190,5 @@ non-constant payload hash reduction, a correctness proof for VS indexed
 constant ranges, or a different named CPU bucket. No new Xcode capture is
 justified from this CPU-only result.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) ·
-[snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) ·
+[snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md) · [present-pacing](../present-pacing/index.md) · [state-churn-encode](../state-churn-encode/index.md).

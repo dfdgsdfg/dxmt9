@@ -41,8 +41,8 @@ large4096, [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnost
 [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md) large4096+alpha+scissor,
 [primitive-reorder-diagnostics-reverse.14](primitive-reorder-diagnostics-reverse.14.md) opaque-large). The screen-blend
 safety observation directly seeded the semantic-safe optimization path in
-[index-cache-locality](../index-cache-locality.md).
+[index-cache-locality](../index-cache-locality/index.md).
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md)
-· sibling tooling: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [index-cache-locality](../index-cache-locality.md)
-· [index-reuse-measurement](../index-reuse-measurement.md) (shared class buckets).
+**Related.** [primitive-reorder-diagnostics](index.md) · prev: [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md)
+· sibling tooling: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [index-cache-locality](../index-cache-locality/index.md)
+· [index-reuse-measurement](../index-reuse-measurement/index.md) (shared class buckets).

@@ -122,5 +122,5 @@ separate lookup hash/key construction from hit/miss rebuild work inside
 dirty-token check. A 16-stream active-list cleanup is lower priority until the
 lookup bucket moves.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) ·
-[state-churn-encode-encode-phase.08](../state-churn-encode/state-churn-encode-encode-phase.08.md) · [present-pacing](../present-pacing.md).
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) ·
+[state-churn-encode-encode-phase.08](../state-churn-encode/state-churn-encode-encode-phase.08.md) · [present-pacing](../present-pacing/index.md).

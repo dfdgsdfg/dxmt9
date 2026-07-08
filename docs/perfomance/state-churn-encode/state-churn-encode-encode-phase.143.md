@@ -93,6 +93,6 @@ when resource-array table mutation is not required, then verify:
 - if local CPU movement is meaningful, a paired `.gputrace`/Xcode capture only
   for GPU-side invariance, not as the primary CPU proof.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.133](state-churn-encode-encode-phase.133.md) ·
 [state-churn-encode-encode-phase.142](state-churn-encode-encode-phase.142.md).

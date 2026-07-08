@@ -37,7 +37,7 @@ draws and surrounding small alpha work. Still depth-read/textured/alpha = not
 production-safe by reorder alone. Later current-HEAD rerun
 ([primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md)) fails to reproduce it.
 
-**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
+**Related.** [primitive-reorder-diagnostics](index.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
 · from: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md) · contrasts: [primitive-reorder-diagnostics-reverse.10](primitive-reorder-diagnostics-reverse.10.md)
 · narrows to: [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md) · current rerun: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md)
-· [hidden-backend-storage](../hidden-backend-storage.md).
+· [hidden-backend-storage](../hidden-backend-storage/index.md).

@@ -151,5 +151,5 @@ should use a same-input mini-replay or stricter image gate before claiming exact
 visual correctness, and should avoid cache identity decisions that mix a
 per-draw payload with a base batched hot state.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.22](state-churn-encode-encode-phase.22.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

@@ -169,6 +169,6 @@ production reorder until one of these exists:
 - or a non-reorder backend mechanism that lowers the hidden vertex-stage write
   denominator without changing primitive order.
 
-**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+**Related.** [mini-replay-bisection](index.md) ·
 [mini-replay-bisection-texture.01](mini-replay-bisection-texture.01.md) · [mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) ·
-[mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) · [index-cache-locality](../index-cache-locality.md).
+[mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) · [index-cache-locality](../index-cache-locality/index.md).

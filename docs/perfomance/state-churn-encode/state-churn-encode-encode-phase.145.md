@@ -8,7 +8,7 @@ date: 2026-06-16
 type: implementation+experiment
 status: accepted-local-cpu-cleanup-fps-open
 source: src/dxmt9/dxmt9_draw_encoder.mm, experiments/output/app-d3d9-3dmark05-snapshot-state-elision-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-scratch-nozerofill-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-scratch-nozerofill-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 145 - Uniform Scratch Zero-Fill Cleanup
@@ -117,4 +117,4 @@ to move P4/P2/P3 cadence, producer overlap, or a larger encode child.
 
 **Related.** [state-churn-encode-encode-phase.121](state-churn-encode-encode-phase.121.md) ·
 [state-churn-encode-encode-phase.122](state-churn-encode-encode-phase.122.md) ·
-[state-churn-encode-encode-phase.144](state-churn-encode-encode-phase.144.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.144](state-churn-encode-encode-phase.144.md) · [present-pacing](../present-pacing/index.md).

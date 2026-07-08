@@ -128,6 +128,6 @@ is amortized across more draws.
 | Uniform append path | `append_uniform=845.857ms` remains comparable to state SoA and should be split/reduced independently |
 | Coalescing / records per group | This run still has only `848,093 / 451,475 = 1.878` records/group, so one state append is poorly amortized |
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
 [state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md).

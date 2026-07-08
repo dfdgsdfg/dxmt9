@@ -8,7 +8,7 @@ date: 2026-06-15
 type: experiment
 status: rejected-local-cleanup
 source: src/dxmt9/dxmt9_draw_encoder.mm, experiments/output/app-d3d9-3dmark05-lazy-command-uniform-materialize-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-lazy-command-uniform-materialize-r1/result.json, experiments/output/app-d3d9-3dmark05-lazy-command-uniform-materialize-r1/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.127.md, docs/perfomance/state-churn-encode.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.127.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 128 - Lazy Command Uniform Materialization Rejected
@@ -102,4 +102,4 @@ replay/encode stage shape. The no-enqueue completion wait remains about
 `25.5ms/present`, while GPU command-buffer execution is about `3.1ms/present`.
 
 **Related.** [state-churn-encode-encode-phase.127](state-churn-encode-encode-phase.127.md) -
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

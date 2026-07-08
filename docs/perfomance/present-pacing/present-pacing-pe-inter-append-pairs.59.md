@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: accepted-pe-inter-append-pair-owner
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-inter-append-pair-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-inter-append-pair-r1-20260616/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-pe-active-fill-split.58.md, docs/perfomance/present-pacing/present-pacing-pe-chunk-fill-split.57.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-pe-active-fill-split.58.md, docs/perfomance/present-pacing/present-pacing-pe-chunk-fill-split.57.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 59 - Inter-Append Producer Gap Is Dominated By Draw To Const/State Materialization

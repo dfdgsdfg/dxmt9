@@ -81,6 +81,6 @@ primitive-order-preserving backend work must therefore define a reduced
 synthetic/replay A/B for mesh/object or implement a real position/binning route
 before any Xcode capture.
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+**Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.14](hidden-backend-storage-shape.14.md) · [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) ·
 [hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

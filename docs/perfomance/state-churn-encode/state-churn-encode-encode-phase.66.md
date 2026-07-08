@@ -94,5 +94,5 @@ full indexed access semantics.
 - Prefer lower-risk cbuf work first: persistent/segmented storage, fewer table
   reopens, or upstream VS constant churn reduction.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
 [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) · [snapshot-cache-snapshot.18](../snapshot-cache/snapshot-cache-snapshot.18.md).

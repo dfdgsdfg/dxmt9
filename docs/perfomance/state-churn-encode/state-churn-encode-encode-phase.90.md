@@ -130,4 +130,4 @@ repeated low-overhead run with normal visual smoke.
 **Related.** [present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md) ·
 [present-pacing-systemtrace-p4-smoke.34](../present-pacing/present-pacing-systemtrace-p4-smoke.34.md) ·
 [state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) ·
-[state-churn-encode-encode-phase.37](state-churn-encode-encode-phase.37.md) · [state-churn-encode](../state-churn-encode.md).
+[state-churn-encode-encode-phase.37](state-churn-encode-encode-phase.37.md) · [state-churn-encode](index.md).

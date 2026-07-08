@@ -91,6 +91,6 @@ cross-batch handle-carry design would have no measured opportunity here. The
 remaining `submit_draw_run_batch_append_uniform_cpu_ms` belongs to payload
 interning/storage and lookup width, not to missing adjacent snapshot elision.
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.17](snapshot-cache-snapshot.17.md) ·
-[snapshot-cache-snapshot.19](snapshot-cache-snapshot.19.md) · [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.17](snapshot-cache-snapshot.17.md) ·
+[snapshot-cache-snapshot.19](snapshot-cache-snapshot.19.md) · [state-churn-encode](../state-churn-encode/index.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

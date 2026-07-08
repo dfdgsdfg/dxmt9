@@ -87,7 +87,7 @@ strategy, not chase more cbuf width micro-trims.
 - Keep the existing last-write-wins correctness constraint: reusing one mutable
   slot-30 table across changed constants is invalid.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
+**Related.** [state-churn-encode](index.md) · [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
 [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) ·
 [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
-[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [present-pacing](../present-pacing/index.md).

@@ -8,7 +8,7 @@ date: 2026-06-18
 type: experiment-refresh
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-v003-vs-const-setter-range-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-vs-const-setter-range-r1-20260618/3dmark05-perf-vs-const-setter-ranges.csv, experiments/output/app-d3d9-3dmark05-v003-vs-const-setter-range-r1-20260618/result.json, traces/app-d3d9-3dmark05-v003-vs-const-setter-range-r1-20260618/analysis/frame60-perf-counter-comparison.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.140.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.141.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.140.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.141.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.140.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.141.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 150 - V003 VS Setter-Range Refresh
@@ -147,8 +147,8 @@ another const-width-only candidate. The next implementation needs a P4 proof:
 must fall, or frame sampling must move while command buffers, render passes,
 and tile-preservation traffic do not regress.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.140](state-churn-encode-encode-phase.140.md) ·
 [state-churn-encode-encode-phase.141](state-churn-encode-encode-phase.141.md) ·
 [state-churn-encode-encode-phase.148](state-churn-encode-encode-phase.148.md) ·
-[state-churn-encode-encode-phase.149](state-churn-encode-encode-phase.149.md) · [present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.149](state-churn-encode-encode-phase.149.md) · [present-pacing](../present-pacing/index.md).

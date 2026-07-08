@@ -104,7 +104,7 @@ extended bind-skip coverage and got no wallclock gain.
 | `submit_draw` | 1,050,346 | total submitted draws |
 
 Draw-run batching is *already active* (the binding-override fix from
-[state-churn-encode](../state-churn-encode.md) is in effect — `commit_chunk_draw_run_binding_override_records = 258,290`),
+[state-churn-encode](../state-churn-encode/index.md) is in effect — `commit_chunk_draw_run_binding_override_records = 258,290`),
 but the average run length is small:
 `697,634 batched records / 370,226 groups = 1.88 draws per group`,
 i.e. most "batches" are 1-2 draws. **There is room.**
@@ -155,12 +155,12 @@ Concrete target levers:
 - **FVF decode caching**: `encode_draw_fvf_decode_cpu_ms = 788 ms` is
   small (5%) but the count is high. Cache decoded FVF per VS handle.
 
-Out of scope for this topic (lives in [state-churn-encode](../state-churn-encode.md) /
-[snapshot-cache](../snapshot-cache.md)):
+Out of scope for this topic (lives in [state-churn-encode](../state-churn-encode/index.md) /
+[snapshot-cache](../snapshot-cache/index.md)):
 
 - `d3d9_snapshot_draw_submission_cpu_ms = 19.8 s` on the PE thread.
   Runs in parallel with the encode thread, not on the wallclock-critical
-  path. Owned by [snapshot-cache](../snapshot-cache.md).
+  path. Owned by [snapshot-cache](../snapshot-cache/index.md).
 
 **Next.** [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md) supersedes the bind-cache
 portion of this note. Future work should add narrower encode attribution or

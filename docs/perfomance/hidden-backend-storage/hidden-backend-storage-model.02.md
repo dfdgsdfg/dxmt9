@@ -46,5 +46,5 @@ UVS (varying) / PPP (primitive) split of the hidden bucket and keep
 render-pass store/load as a documented secondary target. Layering caution from
 MoltenVK: prefer the smallest dump-first probe before broad runtime changes.
 
-**Related.** [hidden-backend-storage-model.01](hidden-backend-storage-model.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
-[render-pass-store](../render-pass-store.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
+**Related.** [hidden-backend-storage-model.01](hidden-backend-storage-model.01.md) · [hidden-backend-storage](index.md) ·
+[render-pass-store](../render-pass-store/index.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

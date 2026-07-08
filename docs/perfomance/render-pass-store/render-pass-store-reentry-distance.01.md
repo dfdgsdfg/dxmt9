@@ -288,6 +288,6 @@ target reuse is the blocker; the touch-distance run says that reuse is usually
 immediate; the encoder-role join says the useful selector is role-pair class,
 not exact handle identity. Exact handle counts are not the useful selector.
 
-**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) ·
+**Related.** [render-pass-store](index.md) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) ·
 [render-pass-store-passchain.01](render-pass-store-passchain.01.md) · [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md) ·
 [baselines-frame60.03](../baselines/baselines-frame60.03.md)

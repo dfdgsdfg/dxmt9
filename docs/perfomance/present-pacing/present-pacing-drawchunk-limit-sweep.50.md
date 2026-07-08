@@ -8,7 +8,7 @@ date: 2026-06-16
 type: experiment
 status: rejected-threshold-sweep
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-drawchunk-limit256-lowoverhead-r1/result.json, experiments/output/app-d3d9-3dmark05-drawchunk-limit256-lowoverhead-r1/3dmark05-perf-summary.md, /tmp/drawchunk-limit256-compare.md
-related: docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing.md
+related: docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 50 - Draw-Chunk Limit 256 Sweep

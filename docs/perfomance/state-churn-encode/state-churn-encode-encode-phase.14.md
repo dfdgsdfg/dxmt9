@@ -111,5 +111,5 @@ remaining texture/sampler work is fragment texture handle lookup/direct bind
 and the now-larger direct-phase shadow bookkeeping, not sampler cache lookup.
 Broader FPS/GPU claims still need a vsync-on wallclock or Xcode frame gate.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.13](state-churn-encode-encode-phase.13.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.13](state-churn-encode-encode-phase.13.md) · [present-pacing](../present-pacing/index.md).

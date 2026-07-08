@@ -184,5 +184,5 @@ has to move `d3d9_snapshot_cache_lookup_cpu_ms_per_present`, the queued
 replay/submission stage, and the P4 completion wait or overlap gate from
 [present-pacing-compare-gates.37](../present-pacing/present-pacing-compare-gates.37.md).
 
-**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) ·
+**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) ·
 [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

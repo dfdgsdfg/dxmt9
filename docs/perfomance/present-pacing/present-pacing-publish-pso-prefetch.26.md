@@ -61,6 +61,6 @@ The result also refines the pacing model:
 - The next design should seek async/lazy PSO handle resolution, not simply
   "disable all prefetch" as a universal policy.
 
-**Related.** [present-pacing](../present-pacing.md) · [state-churn-encode-encode-phase.69](../state-churn-encode/state-churn-encode-encode-phase.69.md) ·
+**Related.** [present-pacing](index.md) · [state-churn-encode-encode-phase.69](../state-churn-encode/state-churn-encode-encode-phase.69.md) ·
 [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md) ·
 [present-pacing-subcb-cap.25](present-pacing-subcb-cap.25.md).

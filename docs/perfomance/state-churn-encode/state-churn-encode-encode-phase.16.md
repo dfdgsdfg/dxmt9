@@ -144,5 +144,5 @@ and negligible hot-loop branch cost. Remaining encode work should move to larger
 named buckets: argbuf/cbuf build or upload, index setup/source resolve,
 shader-stream diversity, or issue cost.
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
-[state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) · [present-pacing](../present-pacing.md).
+**Related.** [state-churn-encode](index.md) ·
+[state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) · [present-pacing](../present-pacing/index.md).

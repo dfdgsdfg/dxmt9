@@ -7,8 +7,8 @@ title: Cbuf Content Breakdown Default-Off
 date: 2026-06-15
 type: implementation
 status: accepted-runtime-verified
-source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf.rules.md, docs/perfomance/state-churn-encode.md, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/result.json, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/actual.png
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.128.md, docs/perfomance/state-churn-encode.md
+source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf.rules.md, docs/perfomance/state-churn-encode/index.md, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/result.json, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-encoder-breakdown-cbuf-content-defaultoff-r3/actual.png
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.128.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 129 - Cbuf Content Breakdown Default-Off
@@ -147,4 +147,4 @@ or PSO prefetch. The cbuf content observer is no longer a valid default-profile
 owner.
 
 **Related.** [state-churn-encode-encode-phase.128](state-churn-encode-encode-phase.128.md) -
-[state-churn-encode](../state-churn-encode.md).
+[state-churn-encode](index.md).

@@ -140,6 +140,6 @@ sequenceDiagram
   X-->>D: update hidden denominator verdict
 ```
 
-**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
-[hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) · [vsout-layout](../vsout-layout.md) · [shader-codegen](../shader-codegen.md) ·
-[backend-shape-classifiers](../backend-shape-classifiers.md).
+**Related.** [hidden-backend-storage](index.md) ·
+[hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) · [vsout-layout](../vsout-layout/index.md) · [shader-codegen](../shader-codegen/index.md) ·
+[backend-shape-classifiers](../backend-shape-classifiers/index.md).

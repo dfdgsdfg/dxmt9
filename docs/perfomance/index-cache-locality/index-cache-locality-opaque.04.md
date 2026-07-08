@@ -33,5 +33,5 @@ Run-level vs baseline: `draw_calls +0.06%`, `render_pass_begin +0.03%`,
 Xcode proof; CPU stream-bind delta is diagnostic-run overhead, not profile-default
 evidence. Do not flip the shared `perf` profile from this scout alone.
 
-**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md)
-· next: [index-cache-locality-opaque.05](index-cache-locality-opaque.05.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md).
+**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md)
+· next: [index-cache-locality-opaque.05](index-cache-locality-opaque.05.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md).

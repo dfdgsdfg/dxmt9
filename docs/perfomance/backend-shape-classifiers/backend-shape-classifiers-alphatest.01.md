@@ -45,4 +45,4 @@ does not reproduce the force-fragment `seq=60 enc=2` movement. Alpha-test discar
 is not the owner of either the force-fragment delta or the ~1.63 GiB bucket; the
 force-fragment movement is tied to broader fragment/raster backend shape.
 
-**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · separates from [backend-shape-classifiers-alpha.01](backend-shape-classifiers-alpha.01.md) (blend vs test) · refers forward to [backend-shape-classifiers-fog.01](backend-shape-classifiers-fog.01.md) / [backend-shape-classifiers-texture.01](backend-shape-classifiers-texture.01.md) as the broader-FS classifiers · confirms [hidden-backend-storage](../hidden-backend-storage.md).
+**Related.** [backend-shape-classifiers](index.md) · separates from [backend-shape-classifiers-alpha.01](backend-shape-classifiers-alpha.01.md) (blend vs test) · refers forward to [backend-shape-classifiers-fog.01](backend-shape-classifiers-fog.01.md) / [backend-shape-classifiers-texture.01](backend-shape-classifiers-texture.01.md) as the broader-FS classifiers · confirms [hidden-backend-storage](../hidden-backend-storage/index.md).

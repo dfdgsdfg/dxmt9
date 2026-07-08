@@ -121,8 +121,8 @@ remaining FPS lever. The next proof still needs one of:
 - `meson compile -C build-x86_64-builtin`
 - wrapper run listed in **Method**
 
-**Related.** [state-churn-encode](../state-churn-encode.md) ·
+**Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.96](state-churn-encode-encode-phase.96.md) ·
 [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
-[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [snapshot-cache](../snapshot-cache.md) ·
-[present-pacing](../present-pacing.md).
+[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+[present-pacing](../present-pacing/index.md).
