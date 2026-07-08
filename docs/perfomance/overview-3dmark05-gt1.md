@@ -74,6 +74,22 @@ smoke still adds about `+216ms` of total encode-draw CPU / `+301ms` of
 index-setup CPU over a 1440-present run, and the narrow source-resolve counter
 shows the owner is cache/candidate/draw-path work rather than base
 index-buffer lookup.
+
+The newest CPU-producer closure is the H196/H197 readonly managed-buffer lock
+path. H196 found that 3DMark05 issued about `1,467` READONLY managed-pool
+buffer locks per present, almost all crossing PE->wow64->unix and re-shadowing
+`14.78MB/present`. H197 confirms the PE readonly managed-buffer cache removes
+that bridge storm in the real GT1 run: bridge-visible locks drop to
+`54.0/present`, readonly locks to `42.1/present`, shadow traffic to
+`2.03MB/present`, and map-mutex wait to `0.017ms/present`. This closes unix
+`map_buffer` lock/mutex cost as the dominant current dxmt9-owned producer-side
+lever, but it is not an FPS promotion: the sampled `20.456` mean FPS /
+`20.034` median FPS does not prove a throughput gain. Remaining attribution
+needs PE cache-hit counters or another producer sample to split the now-exposed
+Rosetta guest / PE / Wine time. See
+[[present-pacing-producer-sampling-attribution.196]] and
+[[present-pacing-readonly-managed-buffer-cache.197]].
+
 The strongest historical measured path combines that production-shaped subset
 with screen-blend locality (top GPU -11.89%), but screen-blend is only an
 explicit exact/`lsb1` policy artifact, not a broad depth-read rule. The current

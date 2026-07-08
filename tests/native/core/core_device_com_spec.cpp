@@ -1,5 +1,6 @@
 #include "core_spec_fixtures.hpp"
 #include "device_c_common.hpp"
+#include "d3d9_pe_buffer_readonly_cache.hpp"
 
 #include <array>
 #include <cmath>
@@ -1552,6 +1553,32 @@ void testZeroSizeBufferLockUsesTailRange() {
   checkEq(d3d->Release(), 0u, "zero-size lock factory release");
 }
 
+void testPeBufferReadonlyCacheRangeAndGeneration() {
+  D3D9PeBufferReadonlyCache cache;
+  const std::array<uint8_t, 8> initial{0, 1, 2, 3, 4, 5, 6, 7};
+
+  check(!cache.canServe(0, 8, 8), "empty readonly cache misses");
+  check(cache.refresh(0, 8, 8, initial.data()),
+        "readonly cache refreshes full range");
+  check(cache.canServe(0, 8, 8), "readonly cache serves exact full range");
+  check(cache.canServe(2, 4, 8), "readonly cache serves contained range");
+  auto* subrange = static_cast<const uint8_t*>(cache.dataFor(2));
+  checkEq(subrange[0], initial[2], "readonly cache subrange byte 0");
+  checkEq(subrange[3], initial[5], "readonly cache subrange byte 3");
+  check(cache.canServe(4, 0, 8), "readonly cache treats size zero as tail");
+  check(!cache.canServe(8, 0, 8), "readonly cache does not serve empty tail");
+
+  cache.invalidate();
+  check(!cache.canServe(0, 8, 8), "readonly cache invalidate bumps generation");
+
+  const std::array<uint8_t, 4> tail{8, 9, 10, 11};
+  check(cache.refresh(4, 0, 8, tail.data()),
+        "readonly cache refreshes zero-size tail range");
+  check(cache.canServe(4, 4, 8), "readonly cache serves refreshed tail");
+  check(!cache.canServe(0, 8, 8),
+        "readonly cache partial range does not serve full resource");
+}
+
 }  // namespace
 
 int main() {
@@ -1564,6 +1591,7 @@ int main() {
     testSnapshotDrawSubmissionCompactUniformScratch();
     testDrawRunSubmissionCarrierFootprintCounters();
     testZeroSizeBufferLockUsesTailRange();
+    testPeBufferReadonlyCacheRangeAndGeneration();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

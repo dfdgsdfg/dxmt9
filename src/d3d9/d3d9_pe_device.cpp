@@ -13501,6 +13501,7 @@ public:
             }
             return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
         }
+        D3D9PeInvalidateVertexBufferReadonlyCache(dstBuffer);
 
         const auto& vp = peState_.viewportShadow;
         const float scaleX = static_cast<float>(vp.width) * 0.5f;

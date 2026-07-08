@@ -3,6 +3,7 @@
 
 #include "d3d9_pe_device_child.hpp"
 
+#include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "util/com/com_private_data.hpp"
 #include "util/log/log.hpp"
 
@@ -95,6 +96,12 @@ static bool bufferPriorityWriteable(const D9CBufferDesc &desc, bool valid) {
   return valid && desc.pool == D3DPOOL_MANAGED;
 }
 
+static bool bufferReadonlyCacheEligible(const D9CBufferDesc &desc, bool valid,
+                                        DWORD flags) {
+  return valid && desc.pool == D3DPOOL_MANAGED &&
+         (flags & D3DLOCK_READONLY) != 0;
+}
+
 static HRESULT cachedBufferDescOrFetch(D9CBuffer *buffer,
                                         const D9CBufferDesc &cached,
                                         bool cachedValid, D9CBufferDesc &desc) {
@@ -140,6 +147,109 @@ static void untrackDefaultPoolResource(D3D9PeRecorderFlush *recorder,
   recorder->ReleaseDefaultPoolResourceRefForChild();
 }
 
+struct D3D9PeBufferLockState {
+  bool locked = false;
+  bool servedFromReadonlyCache = false;
+  DWORD flags = 0;
+  D3D9PeBufferReadonlyCache readonlyCache{};
+};
+
+[[nodiscard]] static HRESULT
+validateBufferLockArgs(D9CBuffer *buffer, const D9CBufferDesc &cachedDesc,
+                       bool cachedDescValid, bool locked, UINT off, UINT size,
+                       void **pp, D9CBufferDesc &desc,
+                       bool &descValid) noexcept {
+  if (!pp)
+    return D3DERR_INVALIDCALL;
+  if (locked)
+    return D3DERR_INVALIDCALL;
+  descValid = false;
+  if (SUCCEEDED(cachedBufferDescOrFetch(buffer, cachedDesc, cachedDescValid,
+                                       desc))) {
+    descValid = true;
+    const UINT bufSize = desc.size;
+    // Wine treats size==0 as "lock from off to end of buffer"; any non-zero
+    // size must fit within [off, bufSize].
+    if (off > bufSize)
+      return D3DERR_INVALIDCALL;
+    if (size != 0 && size > bufSize - off)
+      return D3DERR_INVALIDCALL;
+  }
+  return S_OK;
+}
+
+[[nodiscard]] static HRESULT
+lockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
+             const D9CBufferDesc &cachedDesc, bool cachedDescValid,
+             D3D9PeBufferLockState &state, UINT off, UINT size, void **pp,
+             DWORD flags) noexcept {
+  D9CBufferDesc desc{};
+  bool descValid = false;
+  const HRESULT validationHr = validateBufferLockArgs(
+      buffer, cachedDesc, cachedDescValid, state.locked, off, size, pp, desc,
+      descValid);
+  if (FAILED(validationHr))
+    return validationHr;
+
+  const bool cacheEligible = bufferReadonlyCacheEligible(desc, descValid, flags);
+  if (cacheEligible &&
+      state.readonlyCache.canServe(off, size, desc.size)) {
+    *pp = state.readonlyCache.dataFor(off);
+    state.locked = true;
+    state.servedFromReadonlyCache = true;
+    state.flags = flags;
+    return S_OK;
+  }
+
+  const HRESULT flushHr = flushChildRecorderForBufferLock(recorder, buffer, flags);
+  if (FAILED(flushHr))
+    return flushHr;
+
+  const HRESULT lockHr = hr32(dxmt9c_buffer_lock(buffer, off, size, pp, flags));
+  if (SUCCEEDED(lockHr)) {
+    state.locked = true;
+    state.servedFromReadonlyCache = false;
+    state.flags = flags;
+    if ((flags & D3DLOCK_READONLY) == 0)
+      state.readonlyCache.invalidate();
+    if (cacheEligible && *pp &&
+        state.readonlyCache.refresh(off, size, desc.size, *pp)) {
+      const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
+      if (SUCCEEDED(unlockHr)) {
+        *pp = state.readonlyCache.dataFor(off);
+        state.servedFromReadonlyCache = true;
+      } else {
+        state.readonlyCache.invalidate();
+      }
+    }
+  }
+  return lockHr;
+}
+
+[[nodiscard]] static HRESULT
+unlockPeBuffer(D9CBuffer *buffer, D3D9PeRecorderFlush *recorder,
+               D3D9PeBufferLockState &state) noexcept {
+  if (!state.locked)
+    return D3DERR_INVALIDCALL;
+  if (state.servedFromReadonlyCache) {
+    state.locked = false;
+    state.servedFromReadonlyCache = false;
+    state.flags = 0;
+    return S_OK;
+  }
+  const HRESULT flushHr =
+      flushChildRecorderForBufferLock(recorder, buffer, state.flags);
+  if (FAILED(flushHr))
+    return flushHr;
+  const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(buffer));
+  if (SUCCEEDED(unlockHr)) {
+    state.locked = false;
+    state.servedFromReadonlyCache = false;
+    state.flags = 0;
+  }
+  return unlockHr;
+}
+
 /* ── VertexBuffer ───────────────────────────────────────────────────────────
  */
 
@@ -151,8 +261,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   D9CBufferDesc desc_{};
   bool descValid_ = false;
   bool defaultPoolTracked_ = false;
-  bool locked_ = false;
-  DWORD lockFlags_ = 0;
+  D3D9PeBufferLockState lockState_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -174,6 +283,9 @@ public:
   }
 
   D9CBuffer *raw() const { return b_; }
+  void invalidateReadonlyCache() noexcept {
+    lockState_.readonlyCache.invalidate();
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -239,50 +351,11 @@ public:
     if (recorder_)
       recorder_->NotifyPeFirstCallAfterPresentForChild(
           "VertexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    // Wine d3d9 conformance: validate the argument shape before the
-    // recorder flush so a bogus Lock never causes pending work to
-    // commit. The four invariants below mirror dlls/d3d9/buffer.c
-    // (test_vb_lock_flags / wined3d_resource_check_box_dimensions).
-    if (!pp)
-      return D3DERR_INVALIDCALL;
-    if (locked_)
-      return D3DERR_INVALIDCALL;
-    {
-      D9CBufferDesc desc{};
-      if (SUCCEEDED(cachedBufferDescOrFetch(b_, desc_, descValid_, desc))) {
-        const UINT bufSize = desc.size;
-        // Wine treats size==0 as "lock from off to end of buffer";
-        // any non-zero size must fit within [off, bufSize].
-        if (off > bufSize)
-          return D3DERR_INVALIDCALL;
-        if (size != 0 && size > bufSize - off)
-          return D3DERR_INVALIDCALL;
-      }
-    }
-    const HRESULT flushHr =
-        flushChildRecorderForBufferLock(recorder_, b_, flags);
-    if (FAILED(flushHr))
-      return flushHr;
-    const HRESULT lockHr = hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
-    if (SUCCEEDED(lockHr)) {
-      locked_ = true;
-      lockFlags_ = flags;
-    }
-    return lockHr;
+    return lockPeBuffer(b_, recorder_, desc_, descValid_, lockState_, off, size,
+                        pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    if (!locked_)
-      return D3DERR_INVALIDCALL;
-    const HRESULT flushHr =
-        flushChildRecorderForBufferLock(recorder_, b_, lockFlags_);
-    if (FAILED(flushHr))
-      return flushHr;
-    const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(b_));
-    if (SUCCEEDED(unlockHr)) {
-      locked_ = false;
-      lockFlags_ = 0;
-    }
-    return unlockHr;
+    return unlockPeBuffer(b_, recorder_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DVERTEXBUFFER_DESC *pDesc) noexcept override {
@@ -324,8 +397,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
   D9CBufferDesc desc_{};
   bool descValid_ = false;
   bool defaultPoolTracked_ = false;
-  bool locked_ = false;
-  DWORD lockFlags_ = 0;
+  D3D9PeBufferLockState lockState_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -347,6 +419,9 @@ public:
   }
 
   D9CBuffer *raw() const { return b_; }
+  void invalidateReadonlyCache() noexcept {
+    lockState_.readonlyCache.invalidate();
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -412,29 +487,11 @@ public:
     if (recorder_)
       recorder_->NotifyPeFirstCallAfterPresentForChild(
           "IndexBuffer::Lock", DXMT9_PE_CALLSITE_PC());
-    const HRESULT flushHr =
-        flushChildRecorderForBufferLock(recorder_, b_, flags);
-    if (FAILED(flushHr))
-      return flushHr;
-    const HRESULT lockHr = hr32(dxmt9c_buffer_lock(b_, off, size, pp, flags));
-    if (SUCCEEDED(lockHr)) {
-      locked_ = true;
-      lockFlags_ = flags;
-    }
-    return lockHr;
+    return lockPeBuffer(b_, recorder_, desc_, descValid_, lockState_, off, size,
+                        pp, flags);
   }
   HRESULT STDMETHODCALLTYPE Unlock() noexcept override {
-    const HRESULT flushHr =
-        locked_ ? flushChildRecorderForBufferLock(recorder_, b_, lockFlags_)
-                : S_OK;
-    if (FAILED(flushHr))
-      return flushHr;
-    const HRESULT unlockHr = hr32(dxmt9c_buffer_unlock(b_));
-    if (SUCCEEDED(unlockHr)) {
-      locked_ = false;
-      lockFlags_ = 0;
-    }
-    return unlockHr;
+    return unlockPeBuffer(b_, recorder_, lockState_);
   }
   HRESULT STDMETHODCALLTYPE
   GetDesc(D3DINDEXBUFFER_DESC *pDesc) noexcept override {
@@ -487,4 +544,9 @@ D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer) {
 
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer) {
   return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->raw() : nullptr;
+}
+
+void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer) {
+  if (buffer)
+    static_cast<D3D9VertexBufferImpl *>(buffer)->invalidateReadonlyCache();
 }

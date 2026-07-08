@@ -143,6 +143,7 @@ bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface);
 D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture);
 D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer);
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer);
+void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer);
 D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader);
 D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader);
 std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader);
