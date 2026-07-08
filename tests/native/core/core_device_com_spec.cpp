@@ -1,6 +1,7 @@
 #include "core_spec_fixtures.hpp"
 #include "device_c_common.hpp"
 #include "d3d9_pe_buffer_readonly_cache.hpp"
+#include "d3d9_pe_stats_decimation.hpp"
 
 #include <array>
 #include <cmath>
@@ -1579,6 +1580,43 @@ void testPeBufferReadonlyCacheRangeAndGeneration() {
         "readonly cache partial range does not serve full resource");
 }
 
+// DXMT9_PE_STATS_DECIMATION building block (d3d9_pe_stats_decimation.hpp):
+// PeDecimatedScopeTimer::shouldSample/recordSample. This header is
+// deliberately clock-free / Windows-free so it can be driven directly here
+// without any PE/D3D9 device machinery.
+void testPeDecimatedScopeStats() {
+  PeDecimatedScopeStats stats;
+  int sampledCount = 0;
+  for (std::uint32_t event = 1; event <= 8; ++event) {
+    if (PeDecimatedScopeTimer::shouldSample(stats, 4)) {
+      PeDecimatedScopeTimer::recordSample(stats, 100);
+      ++sampledCount;
+    }
+  }
+  checkEq(stats.events, std::uint64_t{8},
+          "decimated stats events increments every shouldSample call");
+  checkEq(sampledCount, 2, "decimated stats n=4 samples exactly events 4 and 8");
+  checkEq(stats.sampled, std::uint64_t{2},
+          "decimated stats sampled counter matches sampled events");
+  checkEq(stats.sampledNs, std::uint64_t{200},
+          "decimated stats accumulates recorded ns across samples");
+
+  // n==0 disables sampling entirely (shouldSample always returns false), but
+  // per the helper's own contract the events counter still increments on
+  // every call — call sites are expected to skip calling shouldSample
+  // altogether when the feature is globally off, rather than relying on the
+  // helper to suppress the increment.
+  PeDecimatedScopeStats offStats;
+  for (int i = 0; i < 5; ++i) {
+    check(!PeDecimatedScopeTimer::shouldSample(offStats, 0),
+          "decimated stats n=0 never selects a sample");
+  }
+  checkEq(offStats.events, std::uint64_t{5},
+          "decimated stats n=0 still increments events per helper contract");
+  checkEq(offStats.sampled, std::uint64_t{0},
+          "decimated stats n=0 never increments sampled");
+}
+
 }  // namespace
 
 int main() {
@@ -1592,6 +1630,7 @@ int main() {
     testDrawRunSubmissionCarrierFootprintCounters();
     testZeroSizeBufferLockUsesTailRange();
     testPeBufferReadonlyCacheRangeAndGeneration();
+    testPeDecimatedScopeStats();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

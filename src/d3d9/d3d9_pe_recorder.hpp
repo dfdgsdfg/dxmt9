@@ -1,9 +1,12 @@
 #pragma once
 
 #include "d3d9_pe.hpp"
+#include "d3d9_pe_stats_decimation.hpp"
+#include "util/config/config.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -576,6 +579,13 @@ public:
         return chunk_.payloadArena.size();
     }
 
+    // DXMT9_PE_STATS_DECIMATION diagnostic (append scope). See
+    // d3d9_pe_stats_decimation.hpp; read from the device's periodic
+    // [dxmt9-pe-decimated] dump.
+    const PeDecimatedScopeStats& appendDecimatedStats() const noexcept {
+        return appendDecimatedStats_;
+    }
+
     D3D9PePendingCommandRetainer& retainer() noexcept {
         return chunk_.retainer;
     }
@@ -909,6 +919,28 @@ public:
                                WriteFn&& write,
                                AppendExtraFn&& appendExtraHandles,
                                FlushFn&& flushForCapacity) {
+        // Decimated timing: sample only every Nth call so the CPU cost of
+        // measuring is itself negligible (see d3d9_pe_stats_decimation.hpp).
+        // Independent of DXMT9_PE_RECORDER_STATS. Guard covers every exit
+        // path (including the early returns below) via RAII.
+        struct DecimatedScopeGuard {
+            PeDecimatedScopeStats* stats = nullptr;
+            std::chrono::steady_clock::time_point t0{};
+            ~DecimatedScopeGuard() {
+                if (stats) {
+                    const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - t0).count();
+                    PeDecimatedScopeTimer::recordSample(
+                        *stats, static_cast<std::uint64_t>(elapsedNs));
+                }
+            }
+        } decimatedScope;
+        const std::uint32_t decimationN = appendDecimationN();
+        if (decimationN != 0 &&
+            PeDecimatedScopeTimer::shouldSample(appendDecimatedStats_, decimationN)) {
+            decimatedScope.stats = &appendDecimatedStats_;
+            decimatedScope.t0 = std::chrono::steady_clock::now();
+        }
         if (bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
@@ -1351,5 +1383,15 @@ private:
         }
     }
 
+    static std::uint32_t appendDecimationN() {
+        static const std::uint32_t n = []() -> std::uint32_t {
+            const auto envValue =
+                dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
+            return envValue.value_or(0);
+        }();
+        return n;
+    }
+
+    PeDecimatedScopeStats appendDecimatedStats_{};
     PendingCommandChunk chunk_{};
 };

@@ -26,6 +26,7 @@
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
+#include "d3d9_pe_stats_decimation.hpp"
 #include "dxmt9/d3d9_raster_status.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -116,6 +117,39 @@ static std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) 
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         t.time_since_epoch()).count();
 }
+
+// DXMT9_PE_STATS_DECIMATION: numeric N for the decimated (every-Nth-event)
+// PE-recorder scope timers (see d3d9_pe_stats_decimation.hpp). Fully
+// independent of DXMT9_PE_RECORDER_STATS / dxmt9PeRecorderStatsEnabled() —
+// this works whether or not that flag is set. Unset/"0"/unparseable = off.
+static std::uint32_t dxmt9PeStatsDecimationN() {
+    static const std::uint32_t n = []() -> std::uint32_t {
+        const auto envValue =
+            dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
+        return envValue.value_or(0);
+    }();
+    return n;
+}
+
+namespace {
+// Shared RAII guard for the two decimated-timing sites owned directly by
+// D3D9DeviceImpl (const_flush, draw_packet). Covers every exit path of the
+// guarded function, including early returns, by recording the elapsed time
+// in its destructor. `stats` stays null (no-op destructor) unless
+// PeDecimatedScopeTimer::shouldSample() selected this call for timing.
+struct DxmtPeDecimatedScopeGuard {
+    PeDecimatedScopeStats* stats = nullptr;
+    std::chrono::steady_clock::time_point t0{};
+    ~DxmtPeDecimatedScopeGuard() {
+        if (stats) {
+            const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            PeDecimatedScopeTimer::recordSample(
+                *stats, static_cast<std::uint64_t>(elapsedNs));
+        }
+    }
+};
+}  // namespace
 
 static std::uint32_t dxmt9PeCurrentThreadId() noexcept {
 #if defined(_WIN32)
@@ -3328,6 +3362,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool dsSurfaceExplicit_ = false;
     PeCommandChunkBuilder commandChunk_{};
     PeRecorderStats peRecorderStats_{};
+    // DXMT9_PE_STATS_DECIMATION diagnostic accumulators (const_flush,
+    // draw_packet scopes). append/const_setter accumulators live next to
+    // their respective owners (PeCommandChunkBuilder::appendDecimatedStats_,
+    // touchConstShadow's function-local static) — see
+    // d3d9_pe_stats_decimation.hpp and logPeStatsDecimation() below.
+    // draw_packet's stats are mutable because buildDrawPrimitivePacket()
+    // is a const method.
+    PeDecimatedScopeStats peConstFlushDecimatedStats_{};
+    mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
+    std::uint64_t peStatsDecimationPresents_ = 0;
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
     std::int64_t peRecorderLastChunkReturnNs_ = 0;
     std::int64_t peRecorderCurrentChunkFirstAppendNs_ = 0;
@@ -3760,6 +3804,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                   UINT count,
                                   D9CDrawPrimitivePacket& packet,
                                   bool forceFullSnapshot = false) const {
+        // Decimated timing (draw_packet scope): sample only every Nth call
+        // so the CPU cost of measuring is itself negligible. Independent of
+        // DXMT9_PE_RECORDER_STATS. Guard covers every exit path (including
+        // the early returns below) via RAII.
+        DxmtPeDecimatedScopeGuard decimatedScope;
+        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+        if (decimationN != 0 &&
+            PeDecimatedScopeTimer::shouldSample(peDrawPacketDecimatedStats_, decimationN)) {
+            decimatedScope.stats = &peDrawPacketDecimatedStats_;
+            decimatedScope.t0 = std::chrono::steady_clock::now();
+        }
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
             return false;
         }
@@ -8956,6 +9011,54 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                          gapPsConstBetweenCallSites);
     }
 
+    // DXMT9_PE_STATS_DECIMATION: emit ONE cumulative [dxmt9-pe-decimated]
+    // line covering all four decimated hot-scope accumulators (append,
+    // const_setter, const_flush, draw_packet). Counters are cumulative
+    // (never reset) — estimation (sampled_ms * N / presents) is done
+    // offline, not here. No-op when the knob is unset/0/unparseable.
+    void logPeStatsDecimation() {
+        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+        if (decimationN == 0) {
+            return;
+        }
+        const auto& appendStats = commandChunk_.appendDecimatedStats();
+        const auto& constSetterStats = peConstSetterDecimatedStats();
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-decimated] presents=%llu decimation=%u "
+            "append_events=%llu append_sampled=%llu append_sampled_ms=%.3f "
+            "const_setter_events=%llu const_setter_sampled=%llu const_setter_sampled_ms=%.3f "
+            "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
+            "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f",
+            static_cast<unsigned long long>(peStatsDecimationPresents_),
+            decimationN,
+            static_cast<unsigned long long>(appendStats.events),
+            static_cast<unsigned long long>(appendStats.sampled),
+            static_cast<double>(appendStats.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(constSetterStats.events),
+            static_cast<unsigned long long>(constSetterStats.sampled),
+            static_cast<double>(constSetterStats.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peConstFlushDecimatedStats_.events),
+            static_cast<unsigned long long>(peConstFlushDecimatedStats_.sampled),
+            static_cast<double>(peConstFlushDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peDrawPacketDecimatedStats_.events),
+            static_cast<unsigned long long>(peDrawPacketDecimatedStats_.sampled),
+            static_cast<double>(peDrawPacketDecimatedStats_.sampledNs) / 1.0e6);
+    }
+
+    // Present-cadence tick for the decimated dump: increments a cumulative
+    // present counter and emits the cumulative line every 60 presents. A
+    // final line is also emitted unconditionally from the destructor so the
+    // last partial interval is never lost. No-op when decimation is off.
+    void notePeStatsDecimationPresent() {
+        if (dxmt9PeStatsDecimationN() == 0) {
+            return;
+        }
+        ++peStatsDecimationPresents_;
+        if (peStatsDecimationPresents_ % 60 == 0) {
+            logPeStatsDecimation();
+        }
+    }
+
     void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes) {
         ++peRecorderStats_.drawPrimitiveUPCalls;
         peRecorderStats_.upVertexBytes += vertexBytes;
@@ -9525,6 +9628,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // behavior keeps the historical merged range. DXMT9_SPLIT_SPARSE_CONST_RECORDS
     // is an opt-in perf experiment for sparse constant updates.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
+        // Decimated timing (const_flush scope): sample only every Nth call
+        // so the CPU cost of measuring is itself negligible. Independent of
+        // DXMT9_PE_RECORDER_STATS. Guard covers every exit path (including
+        // the early "not dirty" return below) via RAII.
+        DxmtPeDecimatedScopeGuard decimatedScope;
+        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+        if (decimationN != 0 &&
+            PeDecimatedScopeTimer::shouldSample(peConstFlushDecimatedStats_, decimationN)) {
+            decimatedScope.stats = &peConstFlushDecimatedStats_;
+            decimatedScope.t0 = std::chrono::steady_clock::now();
+        }
         if (!shadow.dirty()) return S_OK;
         const std::int64_t flushEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
@@ -9961,6 +10075,7 @@ public:
         (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
         logVsConstSetterRangePerf("destructor");
         logPeRecorderStats("destructor", true);
+        logPeStatsDecimation();
         clearPendingCommandChunk();
         releaseAllBound();
         dxmt9c_device_release(dev_);
@@ -10389,6 +10504,7 @@ public:
             logVsConstSetterRangePerf("present");
             logPeRecorderStats("present");
             markPePresentReturnedForCadence();
+            notePeStatsDecimationPresent();
         }
         return flushHr;
     }

@@ -1,6 +1,10 @@
 #pragma once
 
+#include "d3d9_pe_stats_decimation.hpp"
+#include "util/config/config.hpp"
+
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -44,11 +48,54 @@ struct PeConstShadowBlock {
     }
 };
 
+// DXMT9_PE_STATS_DECIMATION diagnostic (const_setter scope): touchConstShadow
+// is a free function shared by all six VS/PS const-shadow call sites in
+// d3d9_pe_device.cpp, so the accumulator and its cached env value live as
+// function-local statics here (a single instance per process, guaranteed by
+// the ODR for this inline function) rather than as a device-class member.
+// D3D9DeviceImpl::logPeStatsDecimation() reaches it via
+// peConstSetterDecimatedStats().
+inline PeDecimatedScopeStats& peConstSetterDecimatedStats() {
+    static PeDecimatedScopeStats stats{};
+    return stats;
+}
+
+inline std::uint32_t peConstSetterDecimationN() {
+    static const std::uint32_t n = []() -> std::uint32_t {
+        const auto envValue =
+            dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
+        return envValue.value_or(0);
+    }();
+    return n;
+}
+
 inline void touchConstShadow(ConstShadow& shadow,
                              std::uint32_t start,
                              std::uint32_t count,
                              const void* data,
                              std::size_t elemSize) {
+    // Decimated timing: sample only every Nth call so the CPU cost of
+    // measuring is itself negligible (see d3d9_pe_stats_decimation.hpp).
+    // Independent of DXMT9_PE_RECORDER_STATS. Guard covers every exit path
+    // (including the early returns below) via RAII.
+    struct DecimatedScopeGuard {
+        PeDecimatedScopeStats* stats = nullptr;
+        std::chrono::steady_clock::time_point t0{};
+        ~DecimatedScopeGuard() {
+            if (stats) {
+                const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+                PeDecimatedScopeTimer::recordSample(
+                    *stats, static_cast<std::uint64_t>(elapsedNs));
+            }
+        }
+    } decimatedScope;
+    const std::uint32_t decimationN = peConstSetterDecimationN();
+    if (decimationN != 0 &&
+        PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), decimationN)) {
+        decimatedScope.stats = &peConstSetterDecimatedStats();
+        decimatedScope.t0 = std::chrono::steady_clock::now();
+    }
     const std::uint64_t needed64 =
         (static_cast<std::uint64_t>(start) + count) * elemSize;
     if (needed64 > 0xffffffffull) {
