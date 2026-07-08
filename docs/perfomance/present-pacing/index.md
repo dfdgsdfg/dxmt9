@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H213` - Decimated PE stats size the recorder core at `~8.5ms/present` (`16-18%` of the producer wall; H212 resolved to the Plan-B side — the `~5.1-5.6ms/present` const chain gives an inline-const-delta wire change a `~+10%` FPS ceiling).
+Latest tracked row:  - Inline const delta (R-BACK-2.52) proves mechanism, FPS +1.6% below gate; kept opt-in. GT1 producer CPU frontier judged exhausted: Rosetta-measured PE CPU over-credits wall value ~3x.
 
 ## Start Here
 
