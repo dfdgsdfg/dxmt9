@@ -122,7 +122,7 @@ Before another `.gputrace`, the next no-gputrace candidate should show:
 | `command_buffers_per_present`, `passes_per_present`, `tile_preservation_mib` | non-increasing or explicitly explained |
 | visual gate | matches `v0.0.3` |
 
-**Related.** [[present-pacing-completion-wait-overlap-counters.83]] ·
-[[present-pacing-batch-carrier-current.82]] ·
-[[present-pacing-run-ahead-coalesce.69]] ·
-[[present-pacing-run-ahead-cpu-ready.70]].
+**Related.** [present-pacing-completion-wait-overlap-counters.83](present-pacing-completion-wait-overlap-counters.83.md) ·
+[present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md) ·
+[present-pacing-run-ahead-coalesce.69](present-pacing-run-ahead-coalesce.69.md) ·
+[present-pacing-run-ahead-cpu-ready.70](present-pacing-run-ahead-cpu-ready.70.md).

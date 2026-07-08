@@ -19,7 +19,7 @@ Does dxmt9's explicit present-boundary policy or max-frame-latency cap prevent
 the producer from building the next command buffer while the completion watcher
 is blocked in `MTLCommandBuffer.waitUntilCompleted()`?
 
-This tests the open branch left by [[present-pacing-pipeline-overlap.05]]:
+This tests the open branch left by [present-pacing-pipeline-overlap.05](present-pacing-pipeline-overlap.05.md):
 `present_boundary_wait_ms=0` already proved `CommandQueue::presentBoundary()`
 was not sleeping, but `BoundaryPolicy::PresentCompletion` is still the default
 selected policy and therefore needed a direct A/B.

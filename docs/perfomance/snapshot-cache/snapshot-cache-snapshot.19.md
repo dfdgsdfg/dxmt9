@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-shader-layout-compat-counter-r1-202
 
 # Batch-Miss Shader Layout Reuse
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.12]] left batch-miss
+**Question / hypothesis.** [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) left batch-miss
 shader-layout rebuild as a named but smaller child after uniform and hot-state
 work. The risky version of this idea is to reuse a layout whenever the rebuilt
 layout is compatible, but texture changes can alter FFP `TSS_TEXTURE_TYPE` and
@@ -109,6 +109,6 @@ can alter FFP shader keys. Chasing that larger subset would require a stronger
 semantic key or post-build verification path, and the measured safe subset is
 too small to move P4/completion wait.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.12]] ·
-[[snapshot-cache-snapshot.18]] · [[state-churn-encode]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
+[snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) · [state-churn-encode](../state-churn-encode.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

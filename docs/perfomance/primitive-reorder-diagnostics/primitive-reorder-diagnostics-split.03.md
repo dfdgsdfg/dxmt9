@@ -42,8 +42,8 @@ cannot be explained as "large-draw split"; it moved cost through bytes/invocatio
 The working hypothesis is order-dependent Apple vertex/tiler backend storage
 shape, not primitive count per draw.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-split.02]] · next: [[primitive-reorder-diagnostics-split.04]]
-· [[hidden-backend-storage]] (order-dependent TVB storage) ·
-[[vsout-layout]] (rejects visible-VSOut trim: 184B source vs 594-1165B/inv) ·
-[[index-cache-locality]] (semantic-safe locality successor) · [[baselines]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-split.02](primitive-reorder-diagnostics-split.02.md) · next: [primitive-reorder-diagnostics-split.04](primitive-reorder-diagnostics-split.04.md)
+· [hidden-backend-storage](../hidden-backend-storage.md) (order-dependent TVB storage) ·
+[vsout-layout](../vsout-layout.md) (rejects visible-VSOut trim: 184B source vs 594-1165B/inv) ·
+[index-cache-locality](../index-cache-locality.md) (semantic-safe locality successor) · [baselines](../baselines.md).

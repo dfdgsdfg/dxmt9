@@ -12,10 +12,10 @@ source: traces/app-d3d9-3dmark05-dagcheck-coalesce/analysis/dag/ (dag-frame40..6
 
 # passcoalesce Removes 100% of Distance-1 Re-entries on Real GT1 Frames (observe-time)
 
-**Question / hypothesis.** [[render-pass-store-coalesce.01]] showed the DAG makes
+**Question / hypothesis.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) showed the DAG makes
 the H6 re-entry coalesce *machine-decidable* on one frame. Run on a **real
 GT1 capture**: when `passcoalesce` is actually applied to these frames' DAGs, how
-many of the H6 distance-1 `A→B→A` re-entries ([[render-pass-store-reentry-distance.01]])
+many of the H6 distance-1 `A→B→A` re-entries ([render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md))
 does it coalesce, and how much pass/round-trip reduction does that represent?
 
 **Method.** Device-gated run: 3DMark05 GT1 on the **default `traditional`
@@ -57,8 +57,8 @@ H14 `Clear+Store ↔ Load+Store` round-trip on both attachments.
 re-entries in the 21-frame sample (~1.05/frame) are the same distance-1 class the
 counter measures run-wide (~3,438), and `passcoalesce` coalesces **100%** of
 them — so the structural lever targets exactly the re-entry tile-preservation
-budget that [[render-pass-store-reentry-distance.01]] (H8/H14) and
-[[render-pass-store-passchain.01]] (H5/H6) identified.
+budget that [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) and
+[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) identified.
 
 **Limits (honest — this is observe-time, not a delivered win).**
 1. **No GPU saving yet.** The encode is byte-identical (`encodeChunk`); the
@@ -84,7 +84,7 @@ executor: drive the Metal encode from the coalesced linearization and prove
 byte-equal output + measure the preservation-byte reduction against the
 211.9 GB budget.
 
-**Related.** [[render-pass-store-coalesce.01]] (DAG/WAW makes it decidable) ·
-[[render-pass-store-passchain.01]] (H5/H6) ·
-[[render-pass-store-reentry-distance.01]] (H8/H14) · [[render-pass-store]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (DAG/WAW makes it decidable) ·
+[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) ·
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) · [render-pass-store](../render-pass-store.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

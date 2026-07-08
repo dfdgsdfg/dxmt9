@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md,
 
 ## Question
 
-After [[state-churn-encode-encode-phase.200]] reduces the local fixed-uniform
+After [state-churn-encode-encode-phase.200](../state-churn-encode/state-churn-encode-encode-phase.200.md) reduces the local fixed-uniform
 find row, does the average-FPS wall move, or does the current P4 owner still
 look like PE producer cadence and draw-heavy Present-tail publication?
 
@@ -143,7 +143,7 @@ by the existing P4 gates:
 - 3DMark05 GT1 no-gputrace PE-stats probe:
   `app-d3d9-3dmark05-current-pe-cadence-fixed-carry-r1`
 
-**Related.** [[present-pacing-current-visual-p4.136]] ·
-[[present-pacing-current-pe-cadence.113]] ·
-[[present-pacing-current-pe-cadence-wrapper.117]] ·
-[[state-churn-encode-encode-phase.200]].
+**Related.** [present-pacing-current-visual-p4.136](present-pacing-current-visual-p4.136.md) ·
+[present-pacing-current-pe-cadence.113](present-pacing-current-pe-cadence.113.md) ·
+[present-pacing-current-pe-cadence-wrapper.117](present-pacing-current-pe-cadence-wrapper.117.md) ·
+[state-churn-encode-encode-phase.200](../state-churn-encode/state-churn-encode-encode-phase.200.md).

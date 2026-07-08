@@ -122,5 +122,5 @@ they were correct global counters, but not a clean ownership proof for
 | Batch hot-build compaction | `miss_hot_build_cpu_ms=2,337.342ms` remains large and likely batch-heavy, but needs caller split before editing. |
 | CPU/pipeline overlap | FPS remains governed by `completion_wait_ms=25.059ms/present` plus CPU cadence; this counter split alone is not an FPS fix. |
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.10]] ·
-[[state-churn-encode-encode-phase.46]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.10](snapshot-cache-snapshot.10.md) ·
+[state-churn-encode-encode-phase.46](../state-churn-encode/state-churn-encode-encode-phase.46.md).

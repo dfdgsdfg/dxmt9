@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-defa
 
 # Encode Phase 81 - Encode-Slot PSO Resource-Shape Memo Default Promotion
 
-**Question.** [[state-churn-encode-encode-phase.80]] repeated the
+**Question.** [state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) repeated the
 resource-shape memo CPU win twice, but still left it default-off. If the memo
 is promoted to the normal encode-slot PSO prefetch path, does a no-gputrace
 3DMark05 GT1 smoke keep the expected counters and visual output?
@@ -97,6 +97,6 @@ cadence proof.
   serial replay/snapshot/encode or present-pacing work and require
   `completion_present_wait_ms` or producer-overlap movement before claiming FPS.
 
-**Related.** [[state-churn-encode-encode-phase.80]] ·
-[[state-churn-encode-encode-phase.79]] · [[state-churn-encode]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) ·
+[state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) · [state-churn-encode](../state-churn-encode.md) ·
+[present-pacing](../present-pacing.md).

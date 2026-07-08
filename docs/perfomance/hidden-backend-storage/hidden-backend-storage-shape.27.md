@@ -20,7 +20,7 @@ indexed vertex-stage work?
 **Method.**
 
 1. Use `xctrace Metal System Trace` instead of `.gputrace` replay counters,
-   because [[baselines-gputrace-capture.01]] shows capture-layer-inserted
+   because [baselines-gputrace-capture.01](../baselines/baselines-gputrace-capture.01.md) shows capture-layer-inserted
    3DMark05 startup is an invalid evidence path.
 2. Export `metal-gpu-intervals`.
 3. Join Instruments encoder labels back to dxmt attribution rows with

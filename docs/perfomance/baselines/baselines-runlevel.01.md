@@ -43,8 +43,8 @@ these are the aggregate counters emitted across the captured run window.
 expensive (per-draw encode, scarce draw-run batching, stream/IB churn) and that
 none of the queue/map/boundary waits are the blocker — but the GPU limiter lives
 in the per-frame captures, not here. Frames it contextualizes:
-[[baselines-frame120.01]].
+[baselines-frame120.01](baselines-frame120.01.md).
 
-**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame120.01]] ·
-[[state-churn-encode]] (stream/IB deltas, draw-run scarcity) ·
-[[render-pass-store]] (tile-preservation + split causes) · [[const-upload]] (break classes).
+**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [baselines-frame120.01](baselines-frame120.01.md) ·
+[state-churn-encode](../state-churn-encode.md) (stream/IB deltas, draw-run scarcity) ·
+[render-pass-store](../render-pass-store.md) (tile-preservation + split causes) · [const-upload](../const-upload.md) (break classes).

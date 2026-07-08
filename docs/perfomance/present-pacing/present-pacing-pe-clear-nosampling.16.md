@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-clear-gate.15.md
 
 ## Question
 
-[[present-pacing-pe-clear-gate.15]] found the exposed front gap between
+[present-pacing-pe-clear-gate.15](present-pacing-pe-clear-gate.15.md) found the exposed front gap between
 `SetRenderTarget` return and `Clear` entry. In that run, many
 `dxmt9-perf-frame` lines appeared textually between the two events. This A/B
 asks whether `DXMT9_PERF_FRAME_SAMPLING` created or amplified the gap, or only

@@ -175,7 +175,7 @@ Recommended next gate:
 3. Do not use phase 135 width numbers; phase 136's owned-payload copy is the
    authoritative width distribution.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.134]] ·
-[[state-churn-encode-encode-phase.135]] ·
-[[state-churn-encode-encode-phase.137]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.134](state-churn-encode-encode-phase.134.md) ·
+[state-churn-encode-encode-phase.135](state-churn-encode-encode-phase.135.md) ·
+[state-churn-encode-encode-phase.137](state-churn-encode-encode-phase.137.md).

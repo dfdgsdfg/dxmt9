@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-dirty-identity-r1/3dmark05-p
 
 # Dirty Cbuf Identity Repoint Probe
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.10]], the
+**Question / hypothesis.** After [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md), the
 remaining cbuf update bucket is mostly real dirty uploads:
 `encode_draw_argbuf_cbuf_update_cpu_ms=1779.695`, with VS as the largest child
 (`1037.303ms / 401,319 calls`). Test whether the small
@@ -94,5 +94,5 @@ emitted upstream, make the VS/PS build/upload path cheaper, or move to a more
 structural constants layout. Backend encode work outside cbuf still has larger
 named buckets (`binding_packet`, `stream_bind`, texture/sampler bind, issue).
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.10]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) · [present-pacing](../present-pacing.md).

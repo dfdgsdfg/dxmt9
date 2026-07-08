@@ -40,9 +40,9 @@ together; the small bytes/invocation density drop is outweighed by invocation
 growth. The earlier full-frame min-index r2 drop is therefore only a backend
 address/locality classifier with drift caveats, not a production optimization.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-minindex.03]] · next:
-[[primitive-reorder-diagnostics-minindex.05]] (the full-frame r2 it reclassifies)
-· [[mini-replay-bisection]] (geometry-locked depth-input replay harness) ·
-[[index-cache-locality]] (semantic-safe cache-aware successor) ·
-[[index-reuse-measurement]] (LRU miss model) · [[hidden-backend-storage]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-minindex.03](primitive-reorder-diagnostics-minindex.03.md) · next:
+[primitive-reorder-diagnostics-minindex.05](primitive-reorder-diagnostics-minindex.05.md) (the full-frame r2 it reclassifies)
+· [mini-replay-bisection](../mini-replay-bisection.md) (geometry-locked depth-input replay harness) ·
+[index-cache-locality](../index-cache-locality.md) (semantic-safe cache-aware successor) ·
+[index-reuse-measurement](../index-reuse-measurement.md) (LRU miss model) · [hidden-backend-storage](../hidden-backend-storage.md).

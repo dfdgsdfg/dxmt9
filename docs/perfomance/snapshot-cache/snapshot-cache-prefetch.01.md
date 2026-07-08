@@ -52,6 +52,6 @@ vertices, `34.379ms` total GPU; frame visually normal.
 the GPU owner remains hidden vertex/backend traffic. Snapshot CPU and pacing
 (`completion_wait`) waits remain open CPU tracks distinct from the GPU bottleneck.
 
-**Related.** [[snapshot-cache]] · prev [[snapshot-cache-binding.01]] · GPU owner
-[[hidden-backend-storage]] · churn axis [[state-churn-encode]] · [[overview-3dmark05-gt1]] ·
-CPU counters [[overview]]
+**Related.** [snapshot-cache](../snapshot-cache.md) · prev [snapshot-cache-binding.01](snapshot-cache-binding.01.md) · GPU owner
+[hidden-backend-storage](../hidden-backend-storage.md) · churn axis [state-churn-encode](../state-churn-encode.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
+CPU counters [overview](../overview.md)

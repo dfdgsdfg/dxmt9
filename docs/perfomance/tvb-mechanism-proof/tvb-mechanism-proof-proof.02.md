@@ -19,7 +19,7 @@ fidelity defect?
 
 **Method.** Synthesis of public Apple/PowerVR/Asahi documentation cross-checked
 against MoltenVK source. No dxmt9 code change — this is the model the
-mechanism proof ([[tvb-mechanism-proof-proof.01]]) is measured against. Full
+mechanism proof ([tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md)) is measured against. Full
 design rationale and citations: `docs/superpowers/specs/2026-06-03-tvb-mechanism-proof-design.md`.
 
 **Result (the model).** Apple Silicon's vertex-stage writes go through a
@@ -54,9 +54,9 @@ estimate to move.
 - MoltenVK source — confirms no `MTLBuffer`/texture flag affects the TVB.
 
 **Verdict.** MODEL (accepted as the explanatory framework). It supplies the
-linear-scaling law that [[tvb-mechanism-proof-proof.01]] verifies empirically and
+linear-scaling law that [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) verifies empirically and
 underpins the central finding that the GT1 cost is hidden GPU-side
 vertex/tiler/parameter storage.
 
-**Related.** [[tvb-mechanism-proof]] · [[tvb-mechanism-proof-proof.01]] ·
-[[hidden-backend-storage]] · [[index-cache-locality]] · [[vsout-layout]] · [[overview-3dmark05-gt1]]
+**Related.** [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [index-cache-locality](../index-cache-locality.md) · [vsout-layout](../vsout-layout.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

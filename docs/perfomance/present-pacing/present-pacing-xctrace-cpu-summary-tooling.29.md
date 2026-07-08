@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-winemac-onmainthread.28.m
 
 ## Question
 
-[[present-pacing-winemac-onmainthread.28]] leaves two open proof points:
+[present-pacing-winemac-onmainthread.28](present-pacing-winemac-onmainthread.28.md) leaves two open proof points:
 which winemac call, if any, carries the `SetRenderTarget` return -> `Clear`
 entry delay, and whether the Cocoa main thread is actually held by
 present/CoreAnimation work. Before spending disk on another System Trace, make
@@ -101,7 +101,7 @@ creating a new trace:
 This is not a new owner decision because the old trace was not aligned to the
 PE `SetRenderTarget` return -> `Clear` milestone rows. It does show the summary
 can separate the main D3D/Wine producer from encode and callback threads, and
-it reinforces the old [[present-pacing-xctrace-threadstate.18]] result: the
+it reinforces the old [present-pacing-xctrace-threadstate.18](present-pacing-xctrace-threadstate.18.md) result: the
 representative producer thread is sampled as running, not obviously parked in
 `OnMainThread` / `kevent` / `dispatch_semaphore_wait`.
 
@@ -124,7 +124,7 @@ when log extraction is requested but no native or PE id exists, the verdict is
 `producer-thread-selector-missing`; when an extracted/explicit selector matches
 no xctrace thread or `tid`, the verdict is `producer-thread-not-found`.
 Neither case falls back to the highest-weight thread.
-The first current-head same-run scout, [[present-pacing-xctrace-cpu-summary-current.30]],
+The first current-head same-run scout, [present-pacing-xctrace-cpu-summary-current.30](present-pacing-xctrace-cpu-summary-current.30.md),
 hit the second case: PE `thread_id=0xd0` was present in `45,053` rows, but it
 did not match xctrace's native thread labels or `thread-info` `tid` values.
 Treat PE `thread_id` as a Win32-thread-id namespace; the next run should use

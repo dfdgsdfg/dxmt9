@@ -14,7 +14,7 @@ source: experiments/output/app-d3d9-3dmark05-frame-latency-3-r1
 
 **Question / hypothesis.** Display sync (`DXMT9_LAYER_DISPLAY_SYNC=0`)
 disabled gave +199% scene throughput in
-[[present-pacing-display-sync.01]], but tearing it isn't a production
+[present-pacing-display-sync.01](present-pacing-display-sync.01.md), but tearing it isn't a production
 option. The hypothesis: if the runtime allows more frames in-flight,
 short per-frame slowdowns are amortised across multiple vsync windows
 instead of forcing the current frame to slip a slot. Tested by raising
@@ -88,11 +88,11 @@ What this tells us:
   pipeline depth*.
 - The actual ceiling sits in `encode_draw_cpu_ms` (~11 ms/CB at this
   workload, well above the budget headroom). Owned by
-  [[state-churn-encode]].
+  [state-churn-encode](../state-churn-encode.md).
 - p95 / max getting worse with this knob suggests the deeper queue
   occasionally introduces tail latency without a throughput win.
 
-**Next.** [[present-pacing-async-acquire.01]] —
+**Next.** [present-pacing-async-acquire.01](present-pacing-async-acquire.01.md) —
 `DXMT9_PRESENT_ASYNC_ACQUIRE=1` tests whether async drawable acquire
 helps independently. After that, attention shifts to per-CB encode cost
 reduction since that's the budget axis the data points to.

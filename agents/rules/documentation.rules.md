@@ -68,6 +68,8 @@ bash scripts/check/verify_tla.sh
 ## Markdown Optimization
 
 - Link to existing docs instead of repeating them.
+- In `docs/perfomance/`, use standard Markdown links with explicit relative
+  `.md` targets; do not add Obsidian/wiki-style `[[...]]` cross-references.
 - Use inline code for requirement IDs, commands, files, and env vars.
 - Keep Mermaid diagrams for ordering, ownership, and state machines where prose
   would hide the important dependency.

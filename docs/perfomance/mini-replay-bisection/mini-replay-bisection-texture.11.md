@@ -94,7 +94,7 @@ final-writer oracle or non-reorder hidden-backend work. The result is now also
 consumed by the automated perf gate as
 `visibility-positive-oracle=reject-positive-oracle`.
 
-**Related.** [[hidden-backend-storage-shape.17]] ·
-[[mini-replay-bisection-texture.09]] ·
-[[mini-replay-bisection-texture.10]] · [[index-cache-locality]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage-shape.17](../hidden-backend-storage/hidden-backend-storage-shape.17.md) ·
+[mini-replay-bisection-texture.09](mini-replay-bisection-texture.09.md) ·
+[mini-replay-bisection-texture.10](mini-replay-bisection-texture.10.md) · [index-cache-locality](../index-cache-locality.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

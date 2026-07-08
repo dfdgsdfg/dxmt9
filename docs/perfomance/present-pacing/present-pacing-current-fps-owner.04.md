@@ -13,7 +13,7 @@ related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.30.
 
 # Current wallclock FPS owner is CPU cadence plus present-completion wait
 
-**Question / hypothesis.** After [[hidden-backend-storage-shape.30]] split the
+**Question / hypothesis.** After [hidden-backend-storage-shape.30](../hidden-backend-storage/hidden-backend-storage-shape.30.md) split the
 GPU-efficiency question from the average wallclock-FPS question, the next gate
 was whether current GT1 should return to the P2/P3 CPU encode/submit lane plus
 the P4 completion/present pacing lane, or whether hot-frame GPU locality should
@@ -117,8 +117,8 @@ acquire is tiny, and the completion watcher is not backlogged. The practical
 next lever is therefore reducing the CPU work that feeds present-bearing
 command buffers and checking whether the P4 wait collapses with it.
 
-This does **not** downgrade the GPU-locality work. [[mini-replay-bisection-replay.03]]
-and [[hidden-backend-storage-shape.30]] still prove the hot GPU path is not at a
+This does **not** downgrade the GPU-locality work. [mini-replay-bisection-replay.03](../mini-replay-bisection/mini-replay-bisection-replay.03.md)
+and [hidden-backend-storage-shape.30](../hidden-backend-storage/hidden-backend-storage-shape.30.md) still prove the hot GPU path is not at a
 hardware floor: primitive order alone changes hidden VS/PB write density by
 `3.86x` at nearly identical invocation count. That lane is a hot-frame GPU
 efficiency and ceiling problem, not the immediate average-FPS owner unless a
@@ -137,5 +137,5 @@ future A/B also moves wallclock/pacing counters.
   not as the first tool for current average FPS unless the low-overhead scout
   shows GPU command-buffer time approaching the frame wall time.
 
-**Related.** [[present-pacing]] · [[state-churn-encode]] ·
-[[hidden-backend-storage-shape.30]].
+**Related.** [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md) ·
+[hidden-backend-storage-shape.30](../hidden-backend-storage/hidden-backend-storage-shape.30.md).

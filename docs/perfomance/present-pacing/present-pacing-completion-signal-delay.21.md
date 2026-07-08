@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-caller-stack.20.md
 
 ## Question
 
-[[present-pacing-pe-caller-stack.20]] shows that PE `BeginScene` is immediate,
+[present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) shows that PE `BeginScene` is immediate,
 but the record-producing `Clear` command object arrives later. The remaining
 ambiguity was whether this front gate, or the later no-enqueue Metal gap, is
 waiting on dxmt9's completed-seq/waterline publication after Metal completion.

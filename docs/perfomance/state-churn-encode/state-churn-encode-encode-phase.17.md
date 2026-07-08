@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-category-split-r1/3dmark05-per
 
 # Cbuf Category Operation Split
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.16]] removed
+**Question / hypothesis.** After [state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) removed
 the rejected texture pre-resolve branch, the remaining named backend CPU bucket
 was still `encode_draw_argbuf_cbuf_update_cpu_ms ~= 1.85s` per GT1 run. Existing
 counters split the bucket two different ways:
@@ -158,5 +158,5 @@ before mutating behavior.
 3. If build remains hot after residual split, target `buildVsConsts()` /
    `buildPsConsts()` copy/hash locality rather than Metal buffer calls.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.16]] · [[const-upload]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) · [const-upload](../const-upload.md).

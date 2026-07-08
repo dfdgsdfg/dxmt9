@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-lazy
 
 # Lazy Priority Frontier Rejection
 
-**Question / hypothesis.** [[index-cache-locality-cpucost.11]] rejected a hard
+**Question / hypothesis.** [index-cache-locality-cpucost.11](index-cache-locality-cpucost.11.md) rejected a hard
 frontier cap because it reduced active width without reducing select CPU. Can a
 heap-backed lazy priority frontier reduce the full-vector rescan cost while
 keeping candidate quality acceptable?
@@ -82,5 +82,5 @@ domain-specific frontier, not a general heap:
 
 Do not promote `DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER` beyond diagnostic use.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.11]] · [[index-cache-locality-cpucost.10]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.11](index-cache-locality-cpucost.11.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

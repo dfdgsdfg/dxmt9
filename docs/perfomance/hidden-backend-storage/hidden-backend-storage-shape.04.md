@@ -114,8 +114,8 @@ flowchart TD
 ```
 
 **Verdict.** Accepted as attribution. The proxy strengthens
-[[hidden-backend-storage-shape.03]]: another broad `60/2` reorder is not a
-production path. The first follow-up, [[mini-replay-bisection-semantic.02]],
+[hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md): another broad `60/2` reorder is not a
+production path. The first follow-up, [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md),
 selected the `60/2 depth-read + no-alpha-blend` rank-1 two-draw window and
 proved `cache-opt-lru32` exact under the standalone same-input replay
 (`0` changed pixels, replay LRU32 `-14,593`). That is useful, but scoped: it
@@ -135,7 +135,7 @@ the same baseline reports top-3 `VS buffer write=1627.332 MiB`, named tiled
 buffer total `29.375 MiB`, weighted primitive-block tile intersections
 `0.25%`, and hidden estimate `1597.755 MiB`.
 
-**Related.** [[hidden-backend-storage]] · prev:
-[[hidden-backend-storage-shape.03]] · [[index-cache-locality]] ·
-[[index-cache-locality-cpucost.15]] · [[baselines-frame60.02]] ·
-[[mini-replay-bisection-semantic.02]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · prev:
+[hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) · [index-cache-locality](../index-cache-locality.md) ·
+[index-cache-locality-cpucost.15](../index-cache-locality/index-cache-locality-cpucost.15.md) · [baselines-frame60.02](../baselines/baselines-frame60.02.md) ·
+[mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md).

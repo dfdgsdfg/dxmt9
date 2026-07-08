@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-hot-build-split-r1-2
 
 # Batch Miss Hot-Build Split
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.14]] closed the
+**Question / hypothesis.** [snapshot-cache-snapshot.14](snapshot-cache-snapshot.14.md) closed the
 non-constant uniform-hash child but left batch miss hot-build open. The open
 question is whether `makeFlatDrawStateRecordFromState()` is owned by key/hash
 construction, zero-init/copy width, or the `FlatStateSet` materialization for
@@ -125,5 +125,5 @@ their own dirty generations, then compose the `FlatDrawStateRecord` from those
 owned components. Do not spend effort on key child micro-optimization first; the
 largest child is the repeated state-set materialization.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.14]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.14](snapshot-cache-snapshot.14.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

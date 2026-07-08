@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-prefetch-split-lowo
 
 # Encode Phase 71 - Encode-Slot PSO Prefetch Split
 
-**Question.** [[state-churn-encode-encode-phase.70]] moved PSO prefetch from
+**Question.** [state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) moved PSO prefetch from
 the serialized Present publish path to the encode worker, but left
 `encode_slot_pso_prefetch_cpu_ms` at about `2.6ms/present`. Which child owns
 that remaining work?
@@ -81,5 +81,5 @@ adjacent or slot-local candidates resolve to the same final PSO handle/key, and
 how much of `encode_slot_pso_prefetch_draw_lookup_cpu_ms` that could elide.
 Only after that proof should a handle/key reuse cache be promoted.
 
-**Related.** [[state-churn-encode-encode-phase.70]] ·
-[[present-pacing-publish-pso-prefetch.27]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) ·
+[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](../state-churn-encode.md).

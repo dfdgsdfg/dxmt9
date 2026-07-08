@@ -82,9 +82,9 @@ stateDiagram-v2
 
 **Interpretation.** This refresh closes an important stale loop in the
 automation. The old shader-variant preflight was useful before the scoped
-Xcode run; after [[hidden-backend-storage-shape.08]], re-queuing it would spend
+Xcode run; after [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md), re-queuing it would spend
 time on a family already proven flat. With stream/IB handle identity also
-closed in [[state-churn-encode-stream.09]], the current objective is no longer
+closed in [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md), the current objective is no longer
 "try another visible-output or bind-identity variant." The next useful work must
 either:
 
@@ -97,6 +97,6 @@ either:
 queue is intentionally narrower: no more visible `VSOut`/`live-vsout` or
 stream/IB handle-identity Xcode spends without a new mechanism.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.08]] · [[hidden-backend-storage-shape.12]] ·
-[[state-churn-encode-stream.09]] · [[mini-replay-bisection-texture.10]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) · [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) ·
+[state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) · [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md).

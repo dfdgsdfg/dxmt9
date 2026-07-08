@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, d
 
 ## Question
 
-After [[present-pacing-boundary-latency-ab.06]] rejected dxmt9's explicit
+After [present-pacing-boundary-latency-ab.06](present-pacing-boundary-latency-ab.06.md) rejected dxmt9's explicit
 present-boundary wait as the producer-overlap owner, the remaining question was
 where the post-completion no-enqueue gap lives:
 

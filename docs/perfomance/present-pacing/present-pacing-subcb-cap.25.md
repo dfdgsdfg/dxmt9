@@ -107,5 +107,5 @@ together.
 - Continue on replay/snapshot/submit and backend encode storage shape; cap
   tuning does not replace those P2/P3 reductions.
 
-**Related.** [[present-pacing]] · [[present-pacing-lowoverhead-serial.24]] ·
-[[state-churn-encode-encode-phase.68]] · [[overview]].
+**Related.** [present-pacing](../present-pacing.md) · [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md) ·
+[state-churn-encode-encode-phase.68](../state-churn-encode/state-churn-encode-encode-phase.68.md) · [overview](../overview.md).

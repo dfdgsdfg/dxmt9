@@ -45,13 +45,13 @@ with a sortable reduced version
 buffer/device write traffic, concentrated in three render encoders, two of which
 re-enter the same RT/depth pair. This is the first evidence pointing at hidden
 backend write pressure rather than shader ALU or sampling — the seed of the
-[[hidden-backend-storage]] thesis.
+[hidden-backend-storage](../hidden-backend-storage.md) thesis.
 
 > Note: the task brief paired this leaf with `35.456ms / 98.25%`; those are the
 > later frame60 normal-source refresh numbers (specs L2143). The faithful
 > frame120 snapshot values are `33.611ms` / top-3 `98.40%`, matching the
 > `24.643ms (73.3%)` re-entry detail at source L2068.
 
-**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[hidden-backend-storage]] ·
-[[render-pass-store]] (same RT/depth pair re-entry, `73.32%`) ·
-[[baselines-runlevel.01]] (run-level context).
+**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[render-pass-store](../render-pass-store.md) (same RT/depth pair re-entry, `73.32%`) ·
+[baselines-runlevel.01](baselines-runlevel.01.md) (run-level context).

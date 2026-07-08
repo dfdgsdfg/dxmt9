@@ -85,4 +85,4 @@ served from `DrawUniformPayloadRecord`, fixed records, and stage spans.
 - `meson compile -C build-win32-x86-builtin`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-backend-materialize-counter-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
-**Related.** [[state-churn-encode-encode-phase.120]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.120](state-churn-encode-encode-phase.120.md) · [state-churn-encode](../state-churn-encode.md).

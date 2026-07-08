@@ -67,7 +67,7 @@ yes`. No sample artifacts were produced.
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py -q`
 - `git diff --check -- scripts/tools/summarize_3dmark05_perf.py tests/scripts/test_summarize_3dmark05_perf.py`
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.98]] ·
-[[state-churn-encode-encode-phase.97]] ·
-[[state-churn-encode-encode-phase.88]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.98](state-churn-encode-encode-phase.98.md) ·
+[state-churn-encode-encode-phase.97](state-churn-encode-encode-phase.97.md) ·
+[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md).

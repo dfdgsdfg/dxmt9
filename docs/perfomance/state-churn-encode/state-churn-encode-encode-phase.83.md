@@ -7,7 +7,7 @@ source: src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-
 
 # Encode Phase 83 - Encode-Slot PSO Memo Scratch Epochs
 
-**Question.** [[state-churn-encode-encode-phase.82]] removed the new
+**Question.** [state-churn-encode-encode-phase.82](state-churn-encode-encode-phase.82.md) removed the new
 resource-shape memo heap allocation after default promotion. Can the remaining
 slot-local memo tables in `prefetchSlotPipelines()` also avoid per-call
 zero-initialization and stack pressure?
@@ -118,6 +118,6 @@ of the GT1 wall-clock bottleneck.
 The larger remaining lanes are still P2/P3/P4 serial cadence and the argbuf /
 constant-storage model.
 
-**Related.** [[state-churn-encode-encode-phase.82]] ·
-[[state-churn-encode-encode-phase.81]] · [[state-churn-encode]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.82](state-churn-encode-encode-phase.82.md) ·
+[state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) · [state-churn-encode](../state-churn-encode.md) ·
+[present-pacing](../present-pacing.md).

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-child-split-r1/3dmar
 
 # Batch Miss Child Split
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.11]] showed that the
+**Question / hypothesis.** [snapshot-cache-snapshot.11](snapshot-cache-snapshot.11.md) showed that the
 current snapshot lookup residual belongs to the queued draw-submission batch
 lane. The remaining aggregate child counters still mixed direct and batch miss
 work, so they could not identify whether the batch lane is dominated by shader
@@ -112,5 +112,5 @@ with another split if needed before changing semantics.
 | VS indexed-float proof | `120,393` calls still force full VS constant hashing and scan `614.457MB`; correctness proof remains required before narrowing. |
 | CPU/pipeline overlap | FPS remains governed by `completion_wait_ms=25.330ms/present` plus CPU cadence. This split identifies CPU work but is not itself an FPS fix. |
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.11]] ·
-[[state-churn-encode-encode-phase.46]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.11](snapshot-cache-snapshot.11.md) ·
+[state-churn-encode-encode-phase.46](../state-churn-encode/state-churn-encode-encode-phase.46.md).

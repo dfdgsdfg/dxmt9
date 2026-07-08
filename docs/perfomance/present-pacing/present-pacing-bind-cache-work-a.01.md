@@ -13,7 +13,7 @@ source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experi
 # Work A First Landing — bind-skip cache extended to five new classes (no measurable wallclock win)
 
 **Question / hypothesis.** The
-[[present-pacing-encode-budget-fix-proposal.01]] synthesis identified
+[present-pacing-encode-budget-fix-proposal.01](present-pacing-encode-budget-fix-proposal.01.md) synthesis identified
 extending the `_skipped` bind-cache pattern from texture/sampler to
 seven additional classes as the most direct path to recovering the
 DSync=0 fps win under vsync, on the model that the per-CB encode CPU
@@ -107,7 +107,7 @@ return.
 / pipeline / depth_state / viewport / scissor compiles cleanly, the
 tests pass, but on 3DMark05 GT1 it does not move wallclock and
 slightly increases encode CPU. The mechanism the
-[[present-pacing-encode-budget-fix-proposal.01]] synthesis proposed —
+[present-pacing-encode-budget-fix-proposal.01](present-pacing-encode-budget-fix-proposal.01.md) synthesis proposed —
 "bind-call suppression via wider cache coverage" — is not the right
 lever for this workload because the per-draw binding diversity is
 high.
@@ -125,7 +125,7 @@ allowlist is updated; that's a separate small fix.
   of `encode_draw_cpu_ms` on GT1.
 - Adding equality comparisons on the per-draw rebind path can
   *increase* encode CPU when hit rate is low.
-- The headline measurement in [[present-pacing-encode-budget.01]]
+- The headline measurement in [present-pacing-encode-budget.01](present-pacing-encode-budget.01.md)
   (73% of `encode_draw_cpu_ms` unattributed) needs a different
   attribution model — possibly draw-record decode, payload-arena
   copy, or D3D9-state shadow synthesis rather than the Metal bind
@@ -133,7 +133,7 @@ allowlist is updated; that's a separate small fix.
 
 **Next.**
 
-The proven and shippable fps win remains [[present-pacing-display-sync.01]]
+The proven and shippable fps win remains [present-pacing-display-sync.01](present-pacing-display-sync.01.md)
 via the new `DXMT9_DISABLE_VSYNC` option (commit `901c145`). For
 restoring fps under vsync, the next attribution work should look
 beyond the bind path:
@@ -142,12 +142,12 @@ beyond the bind path:
   current build to localise the unattributed 73%;
 - Investigate draw-run break taxonomy as the encode-cost driver
   (`commit_chunk_draw_run_break_state_delta_mixed_*` already
-  exposes it — owned by [[state-churn-encode]]);
+  exposes it — owned by [state-churn-encode](../state-churn-encode.md));
 - Defer rasterizer / index_buffer wiring until a path with real
   expected savings is demonstrated.
 
 The
-[[present-pacing-encode-budget-fix-proposal.01]] "Work A: extend bind
+[present-pacing-encode-budget-fix-proposal.01](present-pacing-encode-budget-fix-proposal.01.md) "Work A: extend bind
 cache" recommendation is hereby downgraded — keep the infrastructure
 for future use, but do not expect fps improvement from extending it
 to additional classes on this kind of workload.

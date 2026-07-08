@@ -47,12 +47,12 @@ non-target row `50/2` geometry- and counter-stable (GPU +0.13%). Of the
 **Verdict.** ACCEPTED. The chain *VS invocations ↓ ⇒ TVB write bytes ↓ ⇒ GPU
 time ↓* is confirmed end-to-end by two independent row-local replays and
 reproduced full-frame. TVB write scales linearly with `VS invocations ×
-per-vertex VSOut bytes` (Imagination/Asahi model, [[tvb-mechanism-proof-proof.02]]).
+per-vertex VSOut bytes` (Imagination/Asahi model, [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md)).
 This is the mechanism that turns the opaque-depth index-cache reorder into the
-one accepted production win — confirming [[hidden-backend-storage]] (the cost is
+one accepted production win — confirming [hidden-backend-storage](../hidden-backend-storage.md) (the cost is
 hidden vertex-stage/tiler/parameter storage, not CPU writers or visible VSOut
-width) and [[index-cache-locality]] (the production path that exploits it).
+width) and [index-cache-locality](../index-cache-locality.md) (the production path that exploits it).
 
-**Related.** [[tvb-mechanism-proof]] · [[tvb-mechanism-proof-proof.02]] ·
-[[hidden-backend-storage]] · [[index-cache-locality]] · [[mini-replay-bisection]] ·
-[[vsout-layout]] (visible width held constant, so not the owner) · [[overview-3dmark05-gt1]]
+**Related.** [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [index-cache-locality](../index-cache-locality.md) · [mini-replay-bisection](../mini-replay-bisection.md) ·
+[vsout-layout](../vsout-layout.md) (visible width held constant, so not the owner) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

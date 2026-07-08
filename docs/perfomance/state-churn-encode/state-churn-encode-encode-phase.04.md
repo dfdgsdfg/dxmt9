@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-dirty-split-r1/3dmark05
 
 # Dirty Cbuf Reopen Mask Attribution
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.03]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) proved that
 clean/no-op cbuf updates are not the load-bearing path. The next hypothesis was
 that the dirty path still contains reusable VS/PS/FFPPS categories: when a fresh
 argbuf table is reopened, repoint clean categories from the cached table and
@@ -152,6 +152,6 @@ separated from the common cbuf update path. Do not schedule an Xcode/gputrace
 capture for this CPU path until the no-gputrace counters show fewer dirty cbuf
 uploads or less upload CPU time.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.02]] ·
-[[state-churn-encode-encode-phase.03]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) ·
+[state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) · [present-pacing](../present-pacing.md).

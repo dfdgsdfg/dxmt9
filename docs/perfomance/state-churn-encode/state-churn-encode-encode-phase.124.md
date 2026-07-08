@@ -87,5 +87,5 @@ argbuf candidate should not spend another iteration on completed-seq snapshot
 plumbing. It must either reduce actual fresh table frequency, reduce true cbuf
 dirty upload frequency, or move to a broader serial-stage/P4 overlap design.
 
-**Related.** [[state-churn-encode-encode-phase.122]] ·
-[[state-churn-encode-encode-phase.123]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.122](state-churn-encode-encode-phase.122.md) ·
+[state-churn-encode-encode-phase.123](state-churn-encode-encode-phase.123.md) · [state-churn-encode](../state-churn-encode.md).

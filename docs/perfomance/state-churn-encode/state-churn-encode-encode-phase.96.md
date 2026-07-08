@@ -128,7 +128,7 @@ small component-hash reuse to move GT1 average FPS. Better candidates are:
 - `git diff --check`
 - wrapper run listed in **Method**
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.95]] ·
-[[state-churn-encode-encode-phase.94]] · [[snapshot-cache]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.95](state-churn-encode-encode-phase.95.md) ·
+[state-churn-encode-encode-phase.94](state-churn-encode-encode-phase.94.md) · [snapshot-cache](../snapshot-cache.md) ·
+[present-pacing](../present-pacing.md).

@@ -12,9 +12,9 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/result.json; 
 
 # Direct-Cbuf Residual Snapshot Owner Recheck
 
-**Question.** [[state-churn-encode-encode-phase.144]] removes the Stage 2
+**Question.** [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) removes the Stage 2
 argbuf table/open/cbuf-update path with `DXMT9_ARGBUF_DIRECT_CBUF=1`, but
-[[present-pacing-direct-cbuf.45]] shows average FPS remains
+[present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md) shows average FPS remains
 `under-pipelined-no-enqueue`. After that local encode win, which current CPU
 bucket is the next measured owner on the serialized `commit entry -> publish`
 side?
@@ -119,7 +119,7 @@ The strongest current owner is no longer one of the old closed branches
 or stream/IB generation). It is normal batch-miss construction: true shader
 constant volatility plus hot-state/key rebuild. The VS hash child remains
 visible because the run still has `166,164` full indexed-float VS hash calls,
-but [[snapshot-cache-snapshot.18]] already sized the safe tail as too small for a
+but [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) already sized the safe tail as too small for a
 standalone FPS lever.
 
 ## Batch-Miss Shape
@@ -150,8 +150,8 @@ snapshot cache lookup, especially batch-miss uniform build/hash and hot-build
 key/state construction. This does not make snapshot work a standalone FPS fix:
 the run still has `28.565ms/present` of no-enqueue completion wait, so any
 candidate must be paired with the present-pacing gates from
-[[present-pacing-compare-gates.37]] and
-[[present-pacing-serial-stage-compare-gates.38]].
+[present-pacing-compare-gates.37](../present-pacing/present-pacing-compare-gates.37.md) and
+[present-pacing-serial-stage-compare-gates.38](../present-pacing/present-pacing-serial-stage-compare-gates.38.md).
 
 **Next proof gate.** For a snapshot candidate, require all of:
 
@@ -166,6 +166,6 @@ candidate must be paired with the present-pacing gates from
 
 Without the last P4 movement, classify the candidate as a local CPU cleanup only.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.18]] ·
-[[snapshot-cache-snapshot.21]] · [[snapshot-cache-snapshot.22]] ·
-[[state-churn-encode-encode-phase.144]] · [[present-pacing-direct-cbuf.45]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) ·
+[snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) · [snapshot-cache-snapshot.22](snapshot-cache-snapshot.22.md) ·
+[state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

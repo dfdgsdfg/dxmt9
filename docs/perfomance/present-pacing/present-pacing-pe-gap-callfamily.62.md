@@ -15,11 +15,11 @@ related: docs/perfomance/present-pacing/present-pacing-pe-hotsetter-split.61.md,
 
 ## Question
 
-[[present-pacing-pe-hotsetter-split.61]] rejected immediate hot-state setter CPU
+[present-pacing-pe-hotsetter-split.61](present-pacing-pe-hotsetter-split.61.md) rejected immediate hot-state setter CPU
 as the owner of the `draw_indexed -> apply_state` inter-append wall gap. The
 next attribution question is which PE D3D9 call family is active when the next
 appendable record is emitted for the focused pairs from
-[[present-pacing-pe-inter-append-pairs.59]]:
+[present-pacing-pe-inter-append-pairs.59](present-pacing-pe-inter-append-pairs.59.md):
 
 - `draw_indexed -> set_vs_const_f`
 - `draw_indexed -> apply_state`

@@ -13,7 +13,7 @@ related: docs/perfomance/present-pacing/present-pacing-current-fps-owner.04.md, 
 
 # Completion wait is not overlapped by next command-buffer enqueue
 
-**Question / hypothesis.** [[present-pacing-current-fps-owner.04]] showed
+**Question / hypothesis.** [present-pacing-current-fps-owner.04](present-pacing-current-fps-owner.04.md) showed
 `completion_present_wait_ms` around `25ms/present` while average GPU command
 buffer time was only about `3ms/present`. The open question was whether that
 wait is merely a display/compositor cost, or whether dxmt9 is under-pipelined:

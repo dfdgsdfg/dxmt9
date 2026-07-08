@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthread-payload-r
 
 # Ranked Real-Texture Semantic Gate Queue
 
-**Question / hypothesis.** [[mini-replay-bisection-texture.02]] rejects the
+**Question / hypothesis.** [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) rejects the
 rank-1 `60/2 depth-read + no-alpha-blend + textured` window as a production
 primitive-reorder proof because real textures expose a tiny final-writer hazard.
 Does that end the reorder line, or are there lower-ranked same-shape windows
@@ -26,9 +26,9 @@ are final-color exact but still change canonical primitive ownership.
 | Rank | Encoder draws | Draw ordinals | Window tris | Window LRU32 delta | Status |
 |---:|---|---|---:|---:|---|
 | 1 | `36..37` | `30572,30573` | `30,808` | `14,597` | rejected by real-texture final-writer gate |
-| 2 | `4..5` | `30540,30541` in source probe; `30538,30539` in captured run | `9,538` | `5,937` | completed: color-exact, owner-masked [[mini-replay-bisection-texture.04]] |
-| 3 | `40..41` | `30576,30577` in source probe; `30747,30748` in captured run | `5,771` | `2,452` | completed: color-exact, owner-masked [[mini-replay-bisection-texture.05]] |
-| 4 | `34..35` | `30570,30571` | `2,273` | `724` | completed: color-exact, owner-masked [[mini-replay-bisection-texture.06]] |
+| 2 | `4..5` | `30540,30541` in source probe; `30538,30539` in captured run | `9,538` | `5,937` | completed: color-exact, owner-masked [mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) |
+| 3 | `40..41` | `30576,30577` in source probe; `30747,30748` in captured run | `5,771` | `2,452` | completed: color-exact, owner-masked [mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md) |
+| 4 | `34..35` | `30570,30571` | `2,273` | `724` | completed: color-exact, owner-masked [mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) |
 
 Rank 2 is still important even though its best two-draw window has a smaller
 delta than rank 1: the full shader-state group has `33` draws and a larger
@@ -131,18 +131,18 @@ performance plan toward semantics-safe mechanisms: backend-shape reduction,
 render-pass/store traffic, stream/IB churn, and argbuf/cbuf encode traffic.
 
 **Status update.** Rank 2 is recorded in
-[[mini-replay-bisection-texture.04]] and rank 3 is recorded in
-[[mini-replay-bisection-texture.05]]. Rank 4 is recorded in
-[[mini-replay-bisection-texture.06]]. Ranks 2-4 all pass exact final-color
+[mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) and rank 3 is recorded in
+[mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md). Rank 4 is recorded in
+[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md). Ranks 2-4 all pass exact final-color
 comparison with real textures but still change canonical primitive ownership.
 The follow-up selector scout is recorded in
-[[mini-replay-bisection-texture.07]]; it rejects simple non-color thresholds as
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md); it rejects simple non-color thresholds as
 a way to split the visible rank-1 failure from rank2-4 exact passes.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-texture.02]] ·
-[[mini-replay-bisection-texture.04]] ·
-[[mini-replay-bisection-texture.05]] ·
-[[mini-replay-bisection-texture.06]] ·
-[[mini-replay-bisection-texture.07]] · [[index-cache-locality]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
+[mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
+[mini-replay-bisection-texture.05](mini-replay-bisection-texture.05.md) ·
+[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) ·
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -109,5 +109,5 @@ to refill the exposed wait window.
   `commit_chunk_replay_cpu_ms`, queued draw submission/snapshot cache miss,
   draw-batch submit append/uniform storage, and backend encode storage shape.
 
-**Related.** [[present-pacing]] · [[present-pacing-pe-clear-flush.23]] ·
-[[state-churn-encode-encode-phase.68]] · [[snapshot-cache]].
+**Related.** [present-pacing](../present-pacing.md) · [present-pacing-pe-clear-flush.23](present-pacing-pe-clear-flush.23.md) ·
+[state-churn-encode-encode-phase.68](../state-churn-encode/state-churn-encode-encode-phase.68.md) · [snapshot-cache](../snapshot-cache.md).

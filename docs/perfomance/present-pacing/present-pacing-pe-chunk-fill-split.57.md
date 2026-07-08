@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-chunk-cadence-all.56.m
 
 ## Question
 
-[[present-pacing-pe-chunk-cadence-all.56]] showed that PE-local
+[present-pacing-pe-chunk-cadence-all.56](present-pacing-pe-chunk-cadence-all.56.md) showed that PE-local
 `chunkFillGapMs` is large enough to explain the no-enqueue inter-replay gap.
 The next question was whether that fill gap is mostly:
 

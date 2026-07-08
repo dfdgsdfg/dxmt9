@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.
 
 ## Question
 
-[[state-churn-encode-encode-phase.105]] added run-level argbuf compare gates to
+[state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) added run-level argbuf compare gates to
 `compare_3dmark05_perf_counters.py`. Can the normal 3DMark05 probe wrappers use
 those gates directly, so the next argbuf A/B is reproducible without hand-running
 the compare script?
@@ -71,5 +71,5 @@ single wrapper invocation that gates the intended local owner and the existing
 P4/frame shape, instead of treating `argbuf_setup` movement as an informal
 manual comparison.
 
-**Related.** [[state-churn-encode-encode-phase.104]] ·
-[[state-churn-encode-encode-phase.105]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+[state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) · [state-churn-encode](../state-churn-encode.md).

@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-exclusive-
 
 # Encode Phase 76 - Encode-Slot PSO Semantic Miss Classifier
 
-**Question.** [[state-churn-encode-encode-phase.75]] proved that semantic
+**Question.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) proved that semantic
 key/probe/store overhead is not the next encode-slot PSO-prefetch owner. The
 remaining cost is the miss side that still enters `resolveDrawPipelineState()`.
 Which conservative semantic fields differ when a semantic-memo miss later
@@ -130,5 +130,5 @@ equivalent guard.
 - Read FPS only after the CPU parent and P4/completion counters move together;
   this remains P2/P3 CPU cleanup until pacing changes.
 
-**Related.** [[state-churn-encode-encode-phase.75]] ·
-[[state-churn-encode-encode-phase.74]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) ·
+[state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) · [state-churn-encode](../state-churn-encode.md).

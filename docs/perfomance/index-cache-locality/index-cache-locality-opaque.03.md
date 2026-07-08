@@ -34,9 +34,9 @@ now dominates at `21.111ms` / `60.90%`, still `981.178MiB` VS write
 
 **Verdict.** Accepted as a real per-row win; rejected as a frame-level fix. Lower
 post-transform misses reduce Xcode `VS Invocations`, VS write, and GPU time on
-the intended opaque rows — confirming the [[tvb-mechanism-proof]] scaling law.
+the intended opaque rows — confirming the [tvb-mechanism-proof](../tvb-mechanism-proof.md) scaling law.
 The remaining owner is `50/2` depth-read/blended geometry.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-opaque.02]]
-· next: [[index-cache-locality-screenblend.02]] (50/2 attack) ·
-[[tvb-mechanism-proof]] · [[hidden-backend-storage]] (50/2 residual).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.02](index-cache-locality-opaque.02.md)
+· next: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md) (50/2 attack) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md) · [hidden-backend-storage](../hidden-backend-storage.md) (50/2 residual).

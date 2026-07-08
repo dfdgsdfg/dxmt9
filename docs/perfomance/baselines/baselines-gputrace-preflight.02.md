@@ -150,4 +150,4 @@ on the capture target:
 For H88 specifically, no Xcode replay was needed because the same-day
 no-gputrace P4 gates already reject the candidate as an average-FPS fix.
 
-**Related.** [[baselines-gputrace-capture.01]] - [[baselines]].
+**Related.** [baselines-gputrace-capture.01](baselines-gputrace-capture.01.md) - [baselines](../baselines.md).

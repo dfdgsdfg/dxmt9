@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-gap-phase-split.63.md,
 
 ## Question
 
-[[present-pacing-pe-gap-phase-split.63]] showed that the focused
+[present-pacing-pe-gap-phase-split.63](present-pacing-pe-gap-phase-split.63.md) showed that the focused
 inter-append gaps are mostly `pre-call`: time after the previous append returns
 and before the next PE D3D9 call enters. That still mixed two different
 domains:

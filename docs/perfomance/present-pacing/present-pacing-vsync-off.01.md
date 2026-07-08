@@ -16,13 +16,13 @@ source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experi
 investigation foreclosed the present-side knob space under the
 existing default vsync. Step 1 confirmed that disabling display sync
 (via the diagnostic `DXMT9_LAYER_DISPLAY_SYNC=0` env in
-[[present-pacing-display-sync.01]]) recovered substantial fps but
+[present-pacing-display-sync.01](present-pacing-display-sync.01.md)) recovered substantial fps but
 that knob did not disable both pacing paths and the original
 measurement showed only 839 CBs processed in 83 s — suggesting the
 scene partially short-circuited rather than ran fast.
 
 The new `DXMT9_DISABLE_VSYNC=1` env (commit `901c145`,
-[[present-pacing-display-sync.01]] follow-up) forces both
+[present-pacing-display-sync.01](present-pacing-display-sync.01.md) follow-up) forces both
 `CAMetalLayer.displaySyncEnabled = NO` and software
 `minimumPresentDuration = 0` regardless of the D3D9
 PresentationInterval. This test runs the option end-to-end on the
@@ -71,7 +71,7 @@ finished early. The new `DISABLE_VSYNC=1` measurement runs the same
 wallclock figure is a **legitimate full-workload fps gain**.
 
 The −46.9% is the honest number to ship against. The earlier "+199%"
-figure in [[present-pacing-display-sync.01]] was inflated by an
+figure in [present-pacing-display-sync.01](present-pacing-display-sync.01.md) was inflated by an
 unintended workload-shortening side effect of the diagnostic env.
 
 **Mechanism.** With both pacing paths disabled:
@@ -91,7 +91,7 @@ serial vsync misses across the scene drop, even though individual
 slot-aligned completion times are similar.
 
 `encode_chunk_cpu_ms` rises +13.4% in this run, mirroring the same
-effect [[present-pacing-bind-cache-work-a.01]] (Work A) saw —
+effect [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md) (Work A) saw —
 indicating measurement-time encode variance unrelated to the vsync
 toggle. The wallclock signal is decisive enough that this minor
 encode-side noise does not change the verdict.
@@ -111,7 +111,7 @@ This is the production deliverable from the goal "분석된 내용을
   leave it off. Default behaviour is the existing
   D3D9-PresentationInterval-driven path.
 - This option does *not* recover fps under vsync. That remains an
-  open attribution problem after [[present-pacing-bind-cache-work-a.01]]
+  open attribution problem after [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md)
   ruled out bind-call suppression as the right lever for GT1.
 - This option does *not* help GPU-bound workloads. GT1 is
   display-pacing-bound; a GPU-bound title would not benefit.
@@ -125,5 +125,5 @@ This is the production deliverable from the goal "분석된 내용을
 - Env-var documentation:
   `agents/rules/environment_variables.rules.md` row added at the
   same commit (`901c145`).
-- Bind-cache follow-up: [[present-pacing-bind-cache-work-a.01]]
+- Bind-cache follow-up: [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md)
   (rejected — bind suppression alone does not move fps on GT1).

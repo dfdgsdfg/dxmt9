@@ -69,6 +69,6 @@ and queue-owned/interned state storage. Do not add another stream/IB generation
 or second vertex-declaration hash experiment without a new counter that proves a
 pure binding-only stable-generation miss.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.03]] ·
-[[snapshot-cache-snapshot.20]] · [[state-churn-encode]] ·
-[[present-pacing-lowoverhead-serial.24]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) ·
+[snapshot-cache-snapshot.20](snapshot-cache-snapshot.20.md) · [state-churn-encode](../state-churn-encode.md) ·
+[present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md).

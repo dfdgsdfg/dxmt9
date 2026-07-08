@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L11985-L12071
 # Current Row 60/1 Opaque Reverse Rerun
 
 **Question / hypothesis.** Re-run the older `60/1` row reverse
-([[primitive-reorder-diagnostics-reverse.06]], which had failed shape gates via
+([primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md), which had failed shape gates via
 hot-row substitution) on current HEAD under strict same-hot-row gates, reversing
 all `60/1` opaque-depth-write draws. Is the older `60/1` aggregate win real once
 the comparison is clean?
@@ -38,6 +38,6 @@ time effect). The older `60/1` aggregate win was weaker evidence (failed shape
 gates); this strict run is the better causal comparison. Next direction: backend
 state-shape experiments, not order reversal.
 
-**Related.** [[primitive-reorder-diagnostics]] · reruns: [[primitive-reorder-diagnostics-reverse.06]]
-· prev: [[primitive-reorder-diagnostics-reverse.17]] · [[hidden-backend-storage]]
-· [[backend-shape-classifiers]] · [[mini-replay-bisection]] (state-shape replay is the next lever).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · reruns: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
+· prev: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [hidden-backend-storage](../hidden-backend-storage.md)
+· [backend-shape-classifiers](../backend-shape-classifiers.md) · [mini-replay-bisection](../mini-replay-bisection.md) (state-shape replay is the next lever).

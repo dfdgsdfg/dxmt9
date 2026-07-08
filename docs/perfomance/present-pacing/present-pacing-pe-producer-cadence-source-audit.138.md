@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing.md, docs/perfomance/overview-3dmark05-gt
 
 ## Question
 
-After [[present-pacing-current-pe-cadence-fixed-carry.137]] confirms that the
+After [present-pacing-current-pe-cadence-fixed-carry.137](present-pacing-current-pe-cadence-fixed-carry.137.md) confirms that the
 fixed-uniform cleanup does not move the no-enqueue owner, is there still a
 nearby PE recorder leaf change that should be tried before returning to
 P4/run-ahead or serial replay/encode work?
@@ -136,8 +136,8 @@ meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit --print-errorlogs
 git diff --check
 ```
 
-**Related.** [[present-pacing-current-pe-cadence-fixed-carry.137]] ·
-[[present-pacing-current-visual-p4.136]] ·
-[[present-pacing-pe-between-call-body-coverage.121]] ·
-[[present-pacing-pe-const-flush-source-audit.120]] ·
-[[present-pacing-pe-draw-flush.114]].
+**Related.** [present-pacing-current-pe-cadence-fixed-carry.137](present-pacing-current-pe-cadence-fixed-carry.137.md) ·
+[present-pacing-current-visual-p4.136](present-pacing-current-visual-p4.136.md) ·
+[present-pacing-pe-between-call-body-coverage.121](present-pacing-pe-between-call-body-coverage.121.md) ·
+[present-pacing-pe-const-flush-source-audit.120](present-pacing-pe-const-flush-source-audit.120.md) ·
+[present-pacing-pe-draw-flush.114](present-pacing-pe-draw-flush.114.md).

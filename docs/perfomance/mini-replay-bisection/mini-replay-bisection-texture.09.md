@@ -144,7 +144,7 @@ Then join `frame60-visibility-scout.csv` with the encoder breakdown and Xcode
 counter CSV by `seq,encoder,command,draw_ordinal` to check whether the suspected
 high-VS-write window is no-sample, sample-visible, or mixed.
 
-**Related.** [[mini-replay-bisection-texture.08]] ·
-[[mini-replay-bisection-texture.10]] ·
-[[mini-replay-bisection]] · [[index-cache-locality]] ·
-[[hidden-backend-storage]].
+**Related.** [mini-replay-bisection-texture.08](mini-replay-bisection-texture.08.md) ·
+[mini-replay-bisection-texture.10](mini-replay-bisection-texture.10.md) ·
+[mini-replay-bisection](../mini-replay-bisection.md) · [index-cache-locality](../index-cache-locality.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md).

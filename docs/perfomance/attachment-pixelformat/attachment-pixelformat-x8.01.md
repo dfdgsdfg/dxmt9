@@ -47,4 +47,4 @@ resource-lifetime proof, a per-texture sampled-channel proof, or a shader
 variant that preserves the D3D X8 alpha-fill contract without a Metal
 `PixelFormatView`.
 
-**Related.** [[attachment-pixelformat]] · follows the metadata probe [[attachment-pixelformat-metadata.01]], narrowed by the sampler-binding attribution [[attachment-pixelformat-x8.02]] · does not move the [[hidden-backend-storage]] owner.
+**Related.** [attachment-pixelformat](../attachment-pixelformat.md) · follows the metadata probe [attachment-pixelformat-metadata.01](attachment-pixelformat-metadata.01.md), narrowed by the sampler-binding attribution [attachment-pixelformat-x8.02](attachment-pixelformat-x8.02.md) · does not move the [hidden-backend-storage](../hidden-backend-storage.md) owner.

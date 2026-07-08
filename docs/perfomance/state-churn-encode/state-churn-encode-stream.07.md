@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-stream-extra-bindings-r1/3dmark05-p
 
 # Stream/IB Stable Staging Cost Preflight
 
-**Question / hypothesis.** [[state-churn-encode-stream.06]] says the next valid
+**Question / hypothesis.** [state-churn-encode-stream.06](state-churn-encode-stream.06.md) says the next valid
 stream/IB A/B is row-stable staging or allocation-time coalescing. Is
 row-stable staging cheap enough to try as a no-gputrace diagnostic, and what
 new confounder would it introduce?
@@ -92,6 +92,6 @@ stateDiagram-v2
   XcodeCandidate --> [*]
 ```
 
-**Related.** [[state-churn-encode-stream.06]] ·
-[[state-churn-encode-stream.05]] · [[state-churn-encode-stream.04]] ·
-[[hidden-backend-storage]].
+**Related.** [state-churn-encode-stream.06](state-churn-encode-stream.06.md) ·
+[state-churn-encode-stream.05](state-churn-encode-stream.05.md) · [state-churn-encode-stream.04](state-churn-encode-stream.04.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md).

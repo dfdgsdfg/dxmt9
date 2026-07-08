@@ -131,7 +131,7 @@ not an Xcode `VS Buffer Device Memory Bytes Written` proof.
 - `meson test -C build-arm64-nowine dxmt9-core-device-com-spec dxmt9-dod-replay-observer-spec dxmt9-imported-apply-state-value-spec`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix current-copyelision-r1-20260615 --frame 60 --no-gputrace --no-encoder-breakdown --timeout 120 --frame-sampling`
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.91]] ·
-[[state-churn-encode-encode-phase.48]] · [[snapshot-cache]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.91](state-churn-encode-encode-phase.91.md) ·
+[state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) · [snapshot-cache](../snapshot-cache.md) ·
+[present-pacing](../present-pacing.md).

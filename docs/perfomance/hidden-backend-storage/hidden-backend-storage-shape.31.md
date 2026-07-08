@@ -134,6 +134,6 @@ negative. Continue using System Trace sidecars for route-attributed timing while
 Xcode-level proof still requires a real `.gputrace` replay/export or a new
 capture-layer route that preserves normal 3DMark05 rendering.
 
-**Related.** [[hidden-backend-storage-shape.28]] ·
-[[hidden-backend-storage-shape.29]] · [[hidden-backend-storage-shape.30]] ·
-[[baselines-gputrace-capture.01]] · [[hidden-backend-storage]].
+**Related.** [hidden-backend-storage-shape.28](hidden-backend-storage-shape.28.md) ·
+[hidden-backend-storage-shape.29](hidden-backend-storage-shape.29.md) · [hidden-backend-storage-shape.30](hidden-backend-storage-shape.30.md) ·
+[baselines-gputrace-capture.01](../baselines/baselines-gputrace-capture.01.md) · [hidden-backend-storage](../hidden-backend-storage.md).

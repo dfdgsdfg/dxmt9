@@ -34,7 +34,7 @@ here. The remaining locality lever is therefore primitive order (semantically
 constrained for depth-read/color-write draws) or a backend-shape variant that
 changes AGX storage without changing submitted primitive order.
 
-**Related.** [[index-reuse-measurement]] · follows
-[[index-reuse-measurement-reuse.01]] · pushes work back to
-[[primitive-reorder-diagnostics]] and [[index-cache-locality]] · width owner
-remains [[hidden-backend-storage]].
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+[index-reuse-measurement-reuse.01](index-reuse-measurement-reuse.01.md) · pushes work back to
+[primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) and [index-cache-locality](../index-cache-locality.md) · width owner
+remains [hidden-backend-storage](../hidden-backend-storage.md).

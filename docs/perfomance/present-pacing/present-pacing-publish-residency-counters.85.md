@@ -125,5 +125,5 @@ publish reason contributes to the current default GT1 run. The current owner is
 therefore still present-gated publication/ready-slot visibility, not absent
 producer work.
 
-**Related.** [[present-pacing-completion-wait-overlap-current.84]] ·
-[[present-pacing-batch-carrier-current.82]].
+**Related.** [present-pacing-completion-wait-overlap-current.84](present-pacing-completion-wait-overlap-current.84.md) ·
+[present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md).

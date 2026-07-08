@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-caller-stack.20.md, do
 
 ## Question
 
-[[present-pacing-pe-caller-stack.20]] identifies the first record-producing
+[present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) identifies the first record-producing
 front gate as the 3DMark05 command dispatcher issuing `Clear`. The normal first
 unix-visible chunk after `Present` is a `capacity_post` flush of `64` records
 around 20ms after `Present` return.

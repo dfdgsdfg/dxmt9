@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-wide-call-coverage.17.
 
 ## Question
 
-After [[present-pacing-pe-wide-call-coverage.17]], the exposed front gap is no
+After [present-pacing-pe-wide-call-coverage.17](present-pacing-pe-wide-call-coverage.17.md), the exposed front gap is no
 longer inside a meaningful PE D3D9 entry point: the final logged child getter
 returns at p50 `0.674ms`, then `Clear` enters at p50 `18.421ms`.
 

@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-current-post-uniform-120-result-2
 
 # Draw-Run Batch Append Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.26]] named
+**Question / hypothesis.** [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) named
 `submit_draw_run_batch_append_cpu_ms` as the largest `CommandQueue` submit child.
 The old counter did not say whether that time was payload byte copy, vector
 reservation/growth, full `CanonicalDrawState` append, uniform-payload
@@ -127,13 +127,13 @@ target is not raw payload byte copying. The first-order children are:
 
 | Candidate | Reason |
 |---|---|
-| Remove obvious state value hops | [[state-churn-encode-encode-phase.30]] accepts this as the first CPU win |
+| Remove obvious state value hops | [state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md) accepts this as the first CPU win |
 | Compact or interned draw-run state | After the value-hop fix, avoid storing a full state for every small batch when a compact run-state key/subview is enough |
 | Uniform lookup fast path | `draw_uniform_payload_lookup_last_hits=16,211`, bucket misses `872,379`, appends `874,058`; many submissions still perform the full lookup/append path |
 | Consecutive uniform handle reuse inside a batch | If adjacent submissions share payload/hash, pass the known handle instead of probing the lookup table again |
 | More effective batch coalescing | Larger records/group would amortize one state append and one record publication over more draws |
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.26]] ·
-[[state-churn-encode-encode-phase.28]] ·
-[[snapshot-cache-snapshot.10]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
+[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md) ·
+[snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md).

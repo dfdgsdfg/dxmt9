@@ -14,7 +14,7 @@ source: experiments/output/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-2026
 
 **Question / hypothesis.** After the latest CPU copy-policy and indexed-path
 cleanup work, does the framegraph sidecar still see the same local
-`A -> B -> A` same-attachment re-entry that [[render-pass-store-coalesce.04]]
+`A -> B -> A` same-attachment re-entry that [render-pass-store-coalesce.04](render-pass-store-coalesce.04.md)
 classified as the real P1 pass-store lever?
 
 **Method.**
@@ -94,6 +94,6 @@ exported DAG snapshot and `framegraph_*` observe counters. Promotion still
 requires a device-gated executor, byte-equal output, and gputrace/Xcode
 counter evidence.
 
-**Related.** [[render-pass-store]] · [[render-pass-store-coalesce.04]] ·
-[[render-pass-store-coalesce.02]] · [[hidden-backend-storage]] ·
-[[present-pacing]].
+**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-coalesce.04](render-pass-store-coalesce.04.md) ·
+[render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[present-pacing](../present-pacing.md).

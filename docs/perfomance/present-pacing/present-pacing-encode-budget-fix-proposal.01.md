@@ -24,13 +24,13 @@ source: present-pacing-display-sync.01, present-pacing-frame-latency.01, present
 >    GT1, per-draw bind diversity is high enough that the shadow cache
 >    rarely hits; the equality comparisons added +12.7%
 >    `encode_chunk_cpu_ms` while leaving wallclock at baseline. See
->    [[present-pacing-bind-cache-work-a.01]]. The bind-call attribution
+>    [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md). The bind-call attribution
 >    model in the synthesis below was wrong about which sub-component
 >    of `encode_draw_cpu_ms` is bound by cache hits.
 > 2. **"Only production path" was false.** A second production option
 >    landed in the same round — `DXMT9_DISABLE_VSYNC=1` (commit
 >    `901c145`) — and measured **+88% fps** on the full GT1 workload
->    with `status: pass`. See [[present-pacing-vsync-off.01]]. The
+>    with `status: pass`. See [present-pacing-vsync-off.01](present-pacing-vsync-off.01.md). The
 >    original synthesis assumed vsync stays on; that's not the only
 >    deployable shape.
 > 3. **Work B (draw-run break reduction) remains untested.** The
@@ -51,8 +51,8 @@ The two production-shippable mechanisms after this round:
 
 | Mechanism | fps Δ on GT1 | Trade-off | Status |
 |---|---:|---|---|
-| `DXMT9_DISABLE_VSYNC=1` | **+88%** (full workload) | tearing, no display sync, opt-in | **ACCEPTED**, shipping ([[present-pacing-vsync-off.01]]) |
-| Work A: bind-skip cache extension | 0% | +12.7% encode CPU (reverted, viewport/scissor) | REJECTED ([[present-pacing-bind-cache-work-a.01]]) |
+| `DXMT9_DISABLE_VSYNC=1` | **+88%** (full workload) | tearing, no display sync, opt-in | **ACCEPTED**, shipping ([present-pacing-vsync-off.01](present-pacing-vsync-off.01.md)) |
+| Work A: bind-skip cache extension | 0% | +12.7% encode CPU (reverted, viewport/scissor) | REJECTED ([present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md)) |
 | Work B: draw-run break reduction | unknown | unknown | OPEN (never tested) |
 
 The honest answer to the original question — "what is the production
@@ -203,7 +203,7 @@ process_elapsed_sec       ≤ 167  (= 251 / 1.5 conservative)
 
 Current `submit_draw_run_batch_records / submit_draw_run_batch_groups =
 697,634 / 370,226 = 1.88 records / group`. The cap is 32. The
-[[state-churn-encode]] taxonomy already identifies the break classes
+[state-churn-encode](../state-churn-encode.md) taxonomy already identifies the break classes
 (`commit_chunk_draw_run_break_state_delta_mixed_*`). The largest
 sub-bucket today is the `mixed_pair_stream_texture` and
 `mixed_pair_stream_ib` family — same-stream sequences interrupted by
@@ -223,10 +223,10 @@ CB). Low-impact alone but cheap to land alongside A.
 
 - `d3d9_snapshot_draw_submission_cpu_ms = 19.8 s` (PE-thread D3D9 state
   snapshot) runs in parallel with encode; owned by
-  [[snapshot-cache]].
+  [snapshot-cache](../snapshot-cache.md).
 - Index-cache locality (the existing −13.86% GPU win) is GPU-side and
   orthogonal; the index-locality work and the encode work compose
-  additively. Owned by [[index-cache-locality]].
+  additively. Owned by [index-cache-locality](../index-cache-locality.md).
 - `DXMT9_LAYER_DISPLAY_SYNC=0` as a fallback opt-in flag — possible but
   unrecommended; produces tearing.
 
@@ -248,7 +248,7 @@ asymptote on the cached binds (less likely but possible), the upside
 extends toward the DSync=0 ceiling (+199%).
 
 **Verdict.** Proposed. Two pieces of work tracked in the
-[[state-churn-encode]] topic should land **bind-skipped cache for
+[state-churn-encode](../state-churn-encode.md) topic should land **bind-skipped cache for
 vertex_buffer / index_buffer / pipeline / rasterizer / viewport /
 scissor / depth_state** (Work A) and a follow-up **draw-run break
 reduction targeting the `mixed_pair_stream_*` taxonomy** (Work B).
@@ -260,4 +260,4 @@ Acceptance criterion is `encode_chunk_cpu_p50_ms ≤ 16.67 ms` on
 the actual C++ implementation of the bind-cache extension, the
 state-churn-encode break-class reduction, and the meson tests that
 gate the new `bind_*_skipped` counters. Those land in
-[[state-churn-encode]].
+[state-churn-encode](../state-churn-encode.md).

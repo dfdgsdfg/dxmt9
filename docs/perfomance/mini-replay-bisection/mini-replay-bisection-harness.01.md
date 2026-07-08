@@ -38,9 +38,9 @@ Top replay target groups: `60/2` (71 draws, 87,499 tris, alpha/depth-read/textur
 **Verdict.** TOOLING. The planner confirmed row/state/shader/index identity were
 ready and isolated the **geometry-bytes gap**: no reduced artifact carried raw
 index + referenced stream bytes. This motivated the geometry payload dumper
-([[mini-replay-bisection-payload.01]]). The planner later gained `--geometry-dir`
+([mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md)). The planner later gained `--geometry-dir`
 to validate payload triplets.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-payload.01]] ·
-[[index-reuse-measurement]] (probe CSV source) · [[hidden-backend-storage]] ·
-[[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
+[index-reuse-measurement](../index-reuse-measurement.md) (probe CSV source) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

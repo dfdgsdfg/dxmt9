@@ -138,7 +138,7 @@ run.
 - `git diff --check`
 - wrapper run listed in **Method**
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.93]] ·
-[[state-churn-encode-encode-phase.92]] · [[snapshot-cache]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.93](state-churn-encode-encode-phase.93.md) ·
+[state-churn-encode-encode-phase.92](state-churn-encode-encode-phase.92.md) · [snapshot-cache](../snapshot-cache.md) ·
+[present-pacing](../present-pacing.md).

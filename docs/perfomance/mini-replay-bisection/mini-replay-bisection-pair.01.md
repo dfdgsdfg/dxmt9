@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L15015-L15110
 # Pair-Local Mini-Replay Captures
 
 **Question / hypothesis.** Inside the hot `window-014-027`
-([[mini-replay-bisection-bisect.01]]), is the VS-write amplification owned by
+([mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md)), is the VS-write amplification owned by
 specific shader-pair / large-indexed-draw classes, and is it per-draw additive
 rather than a cross-draw transition artifact? Is it alpha/scissor-shaped or
 geometry/locality-shaped?
@@ -45,8 +45,8 @@ Named tiled counters stay tiny (≤2.375 MiB) vs the VS write bucket — the mea
 cost is hidden Apple vertex/tiler/backend storage below visible VSOut and below
 named tiled counters. An actual-read VSOut trim A/B moved VS write only -0.01%,
 rejecting pair-liveness as root cause. This per-draw class is what
-[[tvb-mechanism-proof]] then proved is `VS invocations × per-vertex VSOut bytes`.
+[tvb-mechanism-proof](../tvb-mechanism-proof.md) then proved is `VS invocations × per-vertex VSOut bytes`.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-bisect.01]] ·
-[[hidden-backend-storage]] · [[tvb-mechanism-proof]] · [[vsout-layout]] ·
-[[index-cache-locality]] · [[primitive-reorder-diagnostics]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [vsout-layout](../vsout-layout.md) ·
+[index-cache-locality](../index-cache-locality.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

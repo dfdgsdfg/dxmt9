@@ -92,9 +92,9 @@ frame-sampling metrics in the same direction.
 
 **Decision.** Keep `DXMT9_ARGBUF_DIRECT_CBUF` default-off until a repeated
 visual/P4 gate justifies promotion. The next average-FPS candidate should be
-validated with the compare gates from [[present-pacing-compare-gates.37]] and
-[[present-pacing-serial-stage-compare-gates.38]], not with argbuf-local
+validated with the compare gates from [present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) and
+[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md), not with argbuf-local
 counters alone.
 
-**Related.** [[state-churn-encode-encode-phase.144]] ·
-[[present-pacing-current-lowoverhead.43]] · [[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) ·
+[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) · [present-pacing](../present-pacing.md).

@@ -12,7 +12,7 @@ source: scripts/tools/analyze_tile_ffp_expansion.py; tests/scripts/test_analyze_
 
 # Tile-FFP Expansion Still Requires a Programmable Route
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.23]] says Tile-FFP is
+**Question / hypothesis.** [hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) says Tile-FFP is
 blocked by hot-row coverage. Is that merely a matter of widening the existing
 FFP tile selector, or do GT1 hot rows require a fundamentally different
 programmable/textured backend route?
@@ -84,6 +84,6 @@ The next Tile-FFP-class backend work is therefore a programmable/textured tile
 or mesh-style route, not another GT1 Xcode capture of current Tile-FFP and not
 a minor selector threshold tweak.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.15]] ·
-[[hidden-backend-storage-shape.23]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) ·
+[hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

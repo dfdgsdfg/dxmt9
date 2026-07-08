@@ -47,7 +47,7 @@ signal and the production-safe candidate. The earlier single-row `60/3` reverse
 was negative, so opaque-large alone may not carry the same signal — the safe set
 must be tested explicitly with Xcode before any production claim.
 
-**Related.** [[index-reuse-measurement]] · follows
-[[index-reuse-measurement-classattr.01]] · hands the safe opaque-large set to
-[[index-cache-locality]] · diagnostic reorder signal owned by
-[[primitive-reorder-diagnostics]] · width owner [[hidden-backend-storage]].
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+[index-reuse-measurement-classattr.01](index-reuse-measurement-classattr.01.md) · hands the safe opaque-large set to
+[index-cache-locality](../index-cache-locality.md) · diagnostic reorder signal owned by
+[primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · width owner [hidden-backend-storage](../hidden-backend-storage.md).

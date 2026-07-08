@@ -43,4 +43,4 @@ but removing it only cuts top-3 GPU `2.79%` and leaves `1574.470MiB` VS write at
 write owner. The remaining primary owner is still hidden vertex/tiler/parameter
 backend storage.
 
-**Related.** [[backend-shape-classifiers]] · companion to [[backend-shape-classifiers-fog.01]] · refutes texture sampling as the [[hidden-backend-storage]] owner · refutes [[vsout-layout]] visible-width-alone.
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · companion to [backend-shape-classifiers-fog.01](backend-shape-classifiers-fog.01.md) · refutes texture sampling as the [hidden-backend-storage](../hidden-backend-storage.md) owner · refutes [vsout-layout](../vsout-layout.md) visible-width-alone.

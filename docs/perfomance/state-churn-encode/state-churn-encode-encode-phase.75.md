@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-split-r1-2
 
 # Encode Phase 75 - Encode-Slot PSO Semantic Memo Split
 
-**Question.** [[state-churn-encode-encode-phase.74]] accepted the default
+**Question.** [state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) accepted the default
 encode-slot semantic PSO memo, but did not split the memo's own cost. Is the
 new semantic key/probe/store work large enough to become the next bottleneck?
 
@@ -117,5 +117,5 @@ texture/attachment handle exactness, stream offset/stride layout shape, sampler
 - Do not spend Xcode on this class unless a no-gputrace run first moves
   P2/P3 wall, completion wait, or sampled FPS, not just a child CPU counter.
 
-**Related.** [[state-churn-encode-encode-phase.74]] ·
-[[state-churn-encode-encode-phase.73]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) ·
+[state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) · [state-churn-encode](../state-churn-encode.md).

@@ -123,6 +123,6 @@ A valid candidate should show:
 | `command_buffers_per_present`, `passes_per_present`, tile preservation | non-increasing or explicitly explained |
 | visual gate | matches `v0.0.3` |
 
-**Related.** [[present-pacing-publish-residency-counters.85]] ·
-[[present-pacing-completion-wait-overlap-current.84]] ·
-[[present-pacing-batch-carrier-current.82]].
+**Related.** [present-pacing-publish-residency-counters.85](present-pacing-publish-residency-counters.85.md) ·
+[present-pacing-completion-wait-overlap-current.84](present-pacing-completion-wait-overlap-current.84.md) ·
+[present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md).

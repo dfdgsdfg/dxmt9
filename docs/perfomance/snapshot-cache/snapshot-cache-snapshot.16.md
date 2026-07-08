@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-flat-state-reuse-r1-
 
 # Batch Miss Flat-State Reuse
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.15]] showed batch miss
+**Question / hypothesis.** [snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) showed batch miss
 hot-build was dominated by rebuilding flat render/TSS/sampler state sets even
 when the miss itself was caused by unrelated stream/IB/texture/shader churn.
 If we track exact dirty generations for render-state, texture-stage-state, and
@@ -76,7 +76,7 @@ expected supervised GT1 timeout shape. `actual.png` shows a normal GT1 frame
 with machine-gun bloom, blue projectile, and no black-screen, yellow-screen,
 texture collapse, or geometry collapse.
 
-**Result.** Compared with the [[snapshot-cache-snapshot.15]] attribution run.
+**Result.** Compared with the [snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) attribution run.
 Because the run lengths differ (`1740` vs `1800` presents), CPU counters are read
 per present.
 
@@ -111,7 +111,7 @@ The uniform non-constant hash reuse remains stable:
 | `d3d9_snapshot_cache_batch_miss_uniform_build_nonconst_hash_cpu_ms` | `74.413ms` |
 
 **Decision.** Accept as a targeted CPU win. This directly validates the
-[[snapshot-cache-snapshot.15]] attribution: the dominant hot-build state-set
+[snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) attribution: the dominant hot-build state-set
 materialization was avoidable, and generation-gated flat-state reuse cuts the
 hot-build parent by roughly half per present while keeping the frame visually
 normal.
@@ -123,5 +123,5 @@ indexed-float constant fallback or a deeper direct-construct/interned-state
 design. Average FPS still needs pacing/overlap movement or a larger end-to-end
 CPU reduction.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.15]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.15](snapshot-cache-snapshot.15.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

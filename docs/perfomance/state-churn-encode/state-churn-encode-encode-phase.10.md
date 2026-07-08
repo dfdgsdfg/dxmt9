@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-reserve-fastappend-r1/3dmark
 
 # Transient Arena Fast Append
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.09]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) showed that
 `encode_draw_argbuf_open_cpu_ms` is not dominated by
 `MTLArgumentEncoder.setArgumentBuffer`; the larger local owner is transient table
 reservation plus the fresh-table open path. The transient arena is a bump-ring
@@ -124,5 +124,5 @@ Continue with cbuf upload/build/repoint decision work, texture/stream binding
 cost, or command issue cost. Slot-30 bind shadowing remains a poor target while
 `encode_draw_argbuf_table_bind_skipped=0`.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.09]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) · [present-pacing](../present-pacing.md).

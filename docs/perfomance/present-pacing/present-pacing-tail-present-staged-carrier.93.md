@@ -79,7 +79,7 @@ Encoding → GPU → Free path.
 
 ## Runtime Follow-up
 
-[[present-pacing-tail-present-staged-runtime.94]] ran the supervised
+[present-pacing-tail-present-staged-runtime.94](present-pacing-tail-present-staged-runtime.94.md) ran the supervised
 no-gputrace GT1 scout with:
 
 ```sh

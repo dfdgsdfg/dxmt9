@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L4635-L4704
 # Dirty Range Reset Xcode Frame Capture
 
 **Question / hypothesis.** After the dirty-range reset removed the multi-GB cbuf
-amplification ([[const-upload-dirtyrange.01]]), does the GPU frame bottleneck
+amplification ([const-upload-dirtyrange.01](const-upload-dirtyrange.01.md)), does the GPU frame bottleneck
 move? Take a programmatic Metal capture of GT1 frame60 with the perf profile +
 encoder breakdown and read Xcode encoder counters.
 
@@ -36,6 +36,6 @@ KiB per encoder. Confirms cbuf upload is a CPU amplifier, not the GPU limiter.
 Hands the bottleneck to render-pass coalescing/store proof and stream/IB
 bind coalescing.
 
-**Related.** [[const-upload]] · prev: [[const-upload-dirtyrange.01]] · the GPU
-owner it exposes → [[hidden-backend-storage]] · [[render-pass-store]] (RT/depth
-re-entry, store) · [[state-churn-encode]] (stream/IB churn in top passes).
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) · the GPU
+owner it exposes → [hidden-backend-storage](../hidden-backend-storage.md) · [render-pass-store](../render-pass-store.md) (RT/depth
+re-entry, store) · [state-churn-encode](../state-churn-encode.md) (stream/IB churn in top passes).

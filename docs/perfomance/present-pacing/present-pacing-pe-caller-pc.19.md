@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-wide-call-coverage.17.
 
 ## Question
 
-[[present-pacing-pe-wide-call-coverage.17]] left a steady gap after the last
+[present-pacing-pe-wide-call-coverage.17](present-pacing-pe-wide-call-coverage.17.md) left a steady gap after the last
 logged RT setup / child getter returns and before `Clear` enters. The remaining
 question is whether that gap is hidden inside dxmt9's D3D9 wrapper, a
 Wine/macdrv sleep, or a stable application callsite that simply does not call
@@ -165,7 +165,7 @@ no longer plausibly an unobserved dxmt9 D3D9 wrapper call with a long duration.
 The broad Wine/macdrv sleep branch is also weak because the producer
 thread-state sample was mostly Running, not asleep.
 
-The caller-stack follow-up [[present-pacing-pe-caller-stack.20]] supersedes the
+The caller-stack follow-up [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) supersedes the
 "between RVAs `0x2AF4F` and `0x2B061`" wording: those are D3D wrapper stubs, not
 the higher render-loop site. Descriptor/resource getter probing is no longer
 the right axis.

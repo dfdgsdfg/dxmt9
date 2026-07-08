@@ -130,5 +130,5 @@ Future interpretation still holds for other workloads:
 - `meson test -C build-arm64-nowine dxmt9-draw-uniforms-layout-spec dxmt9-state-draw-transform-spec dxmt9-dod-replay-observer-spec`
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
-**Related.** [[state-churn-encode-encode-phase.114]] ·
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.114](state-churn-encode-encode-phase.114.md) ·
+[state-churn-encode](../state-churn-encode.md).

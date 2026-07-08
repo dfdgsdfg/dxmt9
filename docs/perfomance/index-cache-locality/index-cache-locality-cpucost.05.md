@@ -53,10 +53,10 @@ The opt-in-only owners are lookup `102.249ms` and candidate `430.685ms`
 bucket is not the CPU owner. This run is scoped by
 `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ=50`, so its candidate CPU is diagnostic-heavy
 and should not replace the non-diagnostic fast-measure default-policy gate
-([[index-cache-locality-opaque.06]]). Use it to confirm the wrapper prefix fix,
+([index-cache-locality-opaque.06](index-cache-locality-opaque.06.md)). Use it to confirm the wrapper prefix fix,
 active cache behavior, and source-attribution boundary.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.04]]
-· [[index-cache-locality-opaque.06]] (non-diagnostic CPU gate) ·
-[[index-cache-locality-opaque.07]] (Xcode proof) ·
-[[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.04](index-cache-locality-cpucost.04.md)
+· [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md) (non-diagnostic CPU gate) ·
+[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (Xcode proof) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

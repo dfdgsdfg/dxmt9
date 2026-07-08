@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L491-L575
 # Fast-Measure Opt-in vs Baseline Gate
 
 **Question / hypothesis.** After the dense-adjacency / LRU32-only candidate CPU
-cleanup ([[index-cache-locality-cpucost.03]]), is the opt-in's CPU side-effect now
+cleanup ([index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)), is the opt-in's CPU side-effect now
 small enough, while the GPU-side win holds, on a paired non-diagnostic smoke?
 
 **Method.** Paired `run_experiment.py run app-d3d9-3dmark05` under
@@ -34,6 +34,6 @@ still adds ~`309ms`, so keep `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` off in th
 shared `perf` profile until that CPU cost drops or a broader runtime gate proves
 net positive. Completion-wait is a timing proxy, not a sole proof gate.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.03]]
-(the speedup) · next: [[index-cache-locality-opaque.07]] (the Xcode proof) ·
-[[tvb-mechanism-proof]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
+(the speedup) · next: [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (the Xcode proof) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md).

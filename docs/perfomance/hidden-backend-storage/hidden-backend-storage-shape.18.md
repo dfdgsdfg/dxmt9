@@ -85,6 +85,6 @@ budget stays on final-color/final-writer proof for semantic locality, or a new
 primitive-order-preserving backend mechanism that changes the Apple
 position/binning/parameter-storage denominator.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.11]] · [[hidden-backend-storage-shape.12]] ·
-[[state-churn-encode-stream.09]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md) · [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) ·
+[state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

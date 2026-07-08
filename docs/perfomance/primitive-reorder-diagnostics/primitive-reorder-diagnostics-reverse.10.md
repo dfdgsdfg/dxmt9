@@ -15,7 +15,7 @@ source: specs/perfomance.plan.md#L11010-L11082
 **Question / hypothesis.** First class-scoped Xcode candidate. Is the `60/4`
 alpha-blended subset the owner of the primitive-order signal? `60/4` is the
 depth-read/textured/mostly-alpha row where whole-row reverse regressed
-([[primitive-reorder-diagnostics-reverse.08]]).
+([primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md)).
 
 **Method.** `run_3dmark05_perf_probe.sh --suffix reverse-row-60-4-alpha-gputrace-r1
 --probe-reverse-indexed-triangles --probe-reverse-indexed-triangles-row 60/4
@@ -34,6 +34,6 @@ first-order counter (hot VS write, VS bytes/inv, hidden backend estimate) is
 flat. The broad `60/4` alpha-blended subset is NOT the owner of the hidden
 VS-write bucket; the time win is likely secondary ordering/cache noise.
 
-**Related.** [[primitive-reorder-diagnostics]] · tooling: [[primitive-reorder-diagnostics-reverse.09]]
-· next: [[primitive-reorder-diagnostics-reverse.11]] · [[hidden-backend-storage]]
-· [[vsout-layout]] (bytes/inv unchanged vs visible width).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md)
+· next: [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md) · [hidden-backend-storage](../hidden-backend-storage.md)
+· [vsout-layout](../vsout-layout.md) (bytes/inv unchanged vs visible width).

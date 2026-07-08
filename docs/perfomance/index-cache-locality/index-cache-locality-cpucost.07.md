@@ -61,6 +61,6 @@ stale-prune + key-scan double pass. The remaining default-policy CPU owner is
 still candidate build/measure plus repeated lookup/counter/accounting overhead,
 not this specific vector scan shape.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.06]]
-· [[index-cache-locality-cpucost.02]] (earlier lookup fast-path rejection) ·
-[[index-cache-locality-opaque.07]] (accepted Xcode proof).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.06](index-cache-locality-cpucost.06.md)
+· [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md) (earlier lookup fast-path rejection) ·
+[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (accepted Xcode proof).

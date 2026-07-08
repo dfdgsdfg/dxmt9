@@ -90,15 +90,15 @@ stateDiagram-v2
 visible final-color failure and at least two color-exact owner-masked windows.
 That argues against a broad state-only selector, but it also means the rank-1
 failure is not universal. Rank 4 later repeated this color-exact owner-masked
-shape with an even smaller owner movement ([[mini-replay-bisection-texture.06]]).
+shape with an even smaller owner movement ([mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md)).
 The next useful reorder work is not another broad promotion; it is either:
 
 - derive a runtime-visible selector that excludes rank 1 while keeping rank 2/3;
 - or design a final-color/occlusion oracle that proves owner movement is masked
   over a wider replay/pass.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-texture.02]] ·
-[[mini-replay-bisection-texture.03]] ·
-[[mini-replay-bisection-texture.04]] ·
-[[mini-replay-bisection-texture.06]] · [[index-cache-locality]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
+[mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) ·
+[mini-replay-bisection-texture.04](mini-replay-bisection-texture.04.md) ·
+[mini-replay-bisection-texture.06](mini-replay-bisection-texture.06.md) · [index-cache-locality](../index-cache-locality.md).

@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-
 
 # Uniform Payload Record In-Place Construction
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.52]] showed
+**Question / hypothesis.** [state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) showed
 `draw_uniform_payload_append_copy_cpu_ms=813.196ms`, making the append miss path
 copy/materialization-dominated. The current code constructs an aggregate
 `DrawUniformPayloadRecord{.handle=..., .payload=...}` and then pushes it into
@@ -45,7 +45,7 @@ Status: pass. The run produced `present_encoded=1800`,
 `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and a normal
 machine-gun muzzle-bloom frame.
 
-**Result versus [[state-churn-encode-encode-phase.52]].** Both runs keep the
+**Result versus [state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md).** Both runs keep the
 same attribution timers, so the copy child is the intended local gate.
 
 | Counter | phase52 | emplace | Delta |
@@ -88,6 +88,6 @@ Potential next proofs: component-interned uniform payload storage, lifetime-safe
 payload references keyed by uniform generation, or compact storage for the
 subsets of `DrawUniformPayload` the active shader/FFP path can actually read.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.51]] ·
-[[state-churn-encode-encode-phase.52]] · [[snapshot-cache]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) ·
+[state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) · [snapshot-cache](../snapshot-cache.md).

@@ -13,9 +13,9 @@ source: specs/perfomance.plan.md#L9519-L9663
 # Nonopaque Reverse Subset
 
 **Question / hypothesis.** Is the full-reverse win
-([[primitive-reorder-diagnostics-reverse.01]]) owned by nonopaque visibility
+([primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)) owned by nonopaque visibility
 work? The probe is the complement of the opaque subset
-([[primitive-reorder-diagnostics-reverse.02]]): it reverses triangle order only
+([primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)): it reverses triangle order only
 for blended / depth-write-off / scissored / visibility-sensitive draws and
 leaves opaque depth-writing draws in normal order.
 
@@ -38,9 +38,9 @@ indirectly while targeted `60/4` worsens `370.276 -> 448.060MiB VS write
 **Verdict.** Rejected. Broad nonopaque reversal regresses GPU and VS write; the
 full-reverse win is not "nonopaque rows only" either. The probe trades small
 wins in some rows for larger losses in others and drifts frame shape (fails the
-5% gate, [[primitive-reorder-diagnostics-reverse.04]]). Useful only as a
+5% gate, [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)). Useful only as a
 classifier: order moves the hidden bucket, but no broad subset is clean.
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.02]]
-· next: [[primitive-reorder-diagnostics-reverse.04]] · [[hidden-backend-storage]]
-· [[index-reuse-measurement]] (state-class attribution motivated by these row trades).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
+· next: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [hidden-backend-storage](../hidden-backend-storage.md)
+· [index-reuse-measurement](../index-reuse-measurement.md) (state-class attribution motivated by these row trades).

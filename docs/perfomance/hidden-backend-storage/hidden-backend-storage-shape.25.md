@@ -12,7 +12,7 @@ source: scripts/tools/analyze_programmable_route_feasibility.py; tests/scripts/t
 
 # Programmable Route Feasibility Splits Depth-Only from Textured Hot Rows
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.24]] shows the current
+**Question / hypothesis.** [hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) shows the current
 Tile-FFP route cannot cover GT1 hot rows without a programmable/textured route.
 Are all hot rows equally hard, or is there a smaller reduced A/B route that can
 be tried first?
@@ -79,5 +79,5 @@ largest but hardest row. The next implementation-oriented step should try a
 reduced `60/0` depth-only route/equality gate before attempting a full textured
 tile/mesh backend.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.24]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

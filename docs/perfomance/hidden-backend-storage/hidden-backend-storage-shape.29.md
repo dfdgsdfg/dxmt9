@@ -13,7 +13,7 @@ source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_perf_counters.hpp; src/
 # Encoder-Summary Route Counters Remove Indexed Per-Draw Requirement From Sidecars
 
 **Question / hypothesis.** The accepted seq-range System Trace sidecar
-([[hidden-backend-storage-shape.28]]) proved route-attributed timing, but it
+([hidden-backend-storage-shape.28](hidden-backend-storage-shape.28.md)) proved route-attributed timing, but it
 needed indexed per-draw telemetry. That can make a sidecar log large enough to
 distort runtime FPS tails. Can route verdicts be produced from one encoder
 summary row instead?
@@ -91,7 +91,7 @@ optimization by itself and does not change the hidden backend-storage owner.
 It reduces the measurement cost of the next System Trace route sidecar: route
 selection no longer needs indexed per-draw logging unless exact draw selectors
 or index-cache metrics are required. This directly addresses the FPS-tail
-caveat captured in [[baselines-frame60.04]]. The no-indexed sidecar gate is now
+caveat captured in [baselines-frame60.04](../baselines/baselines-frame60.04.md). The no-indexed sidecar gate is now
 verified: route verdict coverage comes from `route_source=encoder-summary`, not
 from indexed probe telemetry.
 

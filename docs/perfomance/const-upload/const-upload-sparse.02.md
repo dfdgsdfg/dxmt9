@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L6166-L6252
 # Sparse Const Split Xcode Validation
 
 **Question / hypothesis.** Re-run the sparse-const candidate
-([[const-upload-sparse.01]]) with a same-frame `.gputrace` + exported Xcode
+([const-upload-sparse.01](const-upload-sparse.01.md)) with a same-frame `.gputrace` + exported Xcode
 encoder counters: does the ~`31%` const-upload byte reduction move the primary
 GPU bottleneck (`VS Buffer Device Memory Bytes Written`)?
 
@@ -42,6 +42,6 @@ variance since the dominant memory-write counter and top encoder shape are
 identical. A valid CPU payload-volume reduction only. Primary GT1 limiter remains
 GPU-side vertex-stage/internal buffer-write pressure.
 
-**Related.** [[const-upload]] · prev: [[const-upload-sparse.01]] · the surviving
-GPU owner → [[hidden-backend-storage]] · [[tvb-mechanism-proof]] (the VS-write
-bucket it leaves intact) · [[state-churn-encode]] (coupled stream/IB churn).
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-sparse.01](const-upload-sparse.01.md) · the surviving
+GPU owner → [hidden-backend-storage](../hidden-backend-storage.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) (the VS-write
+bucket it leaves intact) · [state-churn-encode](../state-churn-encode.md) (coupled stream/IB churn).

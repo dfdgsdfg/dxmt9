@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-present-timing.09.md, 
 
 ## Question
 
-[[present-pacing-pe-present-timing.09]] rejected the idea that PE
+[present-pacing-pe-present-timing.09](present-pacing-pe-present-timing.09.md) rejected the idea that PE
 `IDirect3DDevice9::Present()` itself blocks for the whole
 `completion_wait_ms` bucket. The remaining ambiguity was whether the app/Wine
 loop waits outside dxmt9 and only calls D3D9 after completion, or whether the

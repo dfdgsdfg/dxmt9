@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.
 
 ## Question
 
-[[state-churn-encode-encode-phase.104]] ranks dirty argbuf cbuf update as a
+[state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ranks dirty argbuf cbuf update as a
 current encode owner. VS and programmable PS dirty updates already build their
 upload bytes directly into the queue transient slab. Can the FFP PS dirty-update
 lane use the same storage policy instead of building a stack `FfpPsConsts` and
@@ -89,6 +89,6 @@ covered by a native test. It does not address the larger owners by itself:
 fresh argbuf table open/reopen, VS dirty cbuf update frequency, PE/unix
 submission cadence, and completion/no-enqueue overlap remain open.
 
-**Related.** [[state-churn-encode-encode-phase.104]] ·
-[[state-churn-encode-encode-phase.105]] ·
-[[state-churn-encode-encode-phase.106]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+[state-churn-encode-encode-phase.105](state-churn-encode-encode-phase.105.md) ·
+[state-churn-encode-encode-phase.106](state-churn-encode-encode-phase.106.md) · [state-churn-encode](../state-churn-encode.md).

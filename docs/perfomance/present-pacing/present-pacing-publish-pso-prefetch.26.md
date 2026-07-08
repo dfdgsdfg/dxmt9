@@ -45,7 +45,7 @@ flowchart TD
 ```
 
 **Decision.** Accepted as a placement signal; superseded by the default
-promotion in [[present-pacing-publish-pso-prefetch.27]].
+promotion in [present-pacing-publish-pso-prefetch.27](present-pacing-publish-pso-prefetch.27.md).
 The A/B proves one current P4/P2 coupling: CPU moved from pre-publish replay to
 encode can improve sampled FPS even when the same logical PSO lookup work still
 happens. That means average FPS is sensitive to where the work sits in the
@@ -61,6 +61,6 @@ The result also refines the pacing model:
 - The next design should seek async/lazy PSO handle resolution, not simply
   "disable all prefetch" as a universal policy.
 
-**Related.** [[present-pacing]] · [[state-churn-encode-encode-phase.69]] ·
-[[present-pacing-lowoverhead-serial.24]] ·
-[[present-pacing-subcb-cap.25]].
+**Related.** [present-pacing](../present-pacing.md) · [state-churn-encode-encode-phase.69](../state-churn-encode/state-churn-encode-encode-phase.69.md) ·
+[present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md) ·
+[present-pacing-subcb-cap.25](present-pacing-subcb-cap.25.md).

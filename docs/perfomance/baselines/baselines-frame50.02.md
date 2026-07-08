@@ -50,8 +50,8 @@ Run-level: `queue_sequence_wait_ms=0`, `map_buffer_wait_ms=0`,
 is still slow; rows match prior samples, so this run does not change the primary
 diagnosis (GPU = hidden vertex/tiler/parameter storage + render-pass
 preservation; CPU = const-upload + stream/IB/texture churn). Superseded for GPU
-proof by [[baselines-frame50.01]].
+proof by [baselines-frame50.01](baselines-frame50.01.md).
 
-**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame50.01]]
-(canonical gputrace baseline) · [[baselines-frame50.03]] (later no-gputrace scout) ·
-[[hidden-backend-storage]] · [[render-pass-store]] (tile preservation).
+**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [baselines-frame50.01](baselines-frame50.01.md)
+(canonical gputrace baseline) · [baselines-frame50.03](baselines-frame50.03.md) (later no-gputrace scout) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [render-pass-store](../render-pass-store.md) (tile preservation).

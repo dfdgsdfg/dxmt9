@@ -88,11 +88,11 @@ flowchart TD
   Counter --> Store["pass/store traffic\n180.7GB preservation\n125.5MB/present"]
   Counter --> GPU["GPU command-buffer time\n4.21s total\n2.92ms/present"]
 
-  Present --> PP["[[present-pacing]]"]
-  Encode --> SCE["[[state-churn-encode]]"]
-  Snapshot --> SNAP["[[snapshot-cache]]"]
-  Store --> RPS["[[render-pass-store]]"]
-  GPU --> HBS["[[hidden-backend-storage]]"]
+  Present --> PP"[present-pacing"]
+  Encode --> SCE"[state-churn-encode"]
+  Snapshot --> SNAP"[snapshot-cache"]
+  Store --> RPS"[render-pass-store"]
+  GPU --> HBS"[hidden-backend-storage"]
 
   classDef accepted fill:#d6f5d6,stroke:#2b7a2b,color:#063
   classDef open fill:#fff3cd,stroke:#a80,color:#640
@@ -106,22 +106,22 @@ flowchart TD
 the timeout-cleanup fix. The supervised watchdog path does not create a
 new performance shape: presents, draws, render passes, GPU command-buffer
 time, completion wait, draw batching, and upload bytes all stay within
-ordinary run noise of [[baselines-frame50.03]] /
+ordinary run noise of [baselines-frame50.03](baselines-frame50.03.md) /
 `defaultgate-noenc-baseline-r1`.
 
 This run also clarifies the current residual budget:
 
 - Wallclock/pacing: `completion_wait_ms` is still ~31 s, all previous
-  evidence says it is present/display-sync paced ([[present-pacing]]).
+  evidence says it is present/display-sync paced ([present-pacing](../present-pacing.md)).
 - CPU encode: `encode_draw_cpu_ms` is still ~16 s; current bind-skip work
   did not move wallclock, so the next CPU attribution needs sampling or
   finer internal timers, not more broad bind-cache guesses.
 - PE-side state rebuild: `d3d9_snapshot_draw_submission_cpu_ms` is ~19.7 s
-  and remains a major parallel CPU budget ([[snapshot-cache]]).
+  and remains a major parallel CPU budget ([snapshot-cache](../snapshot-cache.md)).
 - GPU/pass traffic: `gpu_command_buffer_time_ms` and tile preservation are
   stable; no new Xcode budget is justified unless a candidate preflight moves
   VS invocations, hidden-backend proxy bytes, or a semantic-safe locality gate.
 
-**Related.** [[baselines]] · [[overview-3dmark05-gt1]] ·
-[[baselines-frame50.03]] · [[present-pacing]] · [[state-churn-encode]] ·
-[[snapshot-cache]] · [[render-pass-store]] · [[hidden-backend-storage]].
+**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
+[baselines-frame50.03](baselines-frame50.03.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md) ·
+[snapshot-cache](../snapshot-cache.md) · [render-pass-store](../render-pass-store.md) · [hidden-backend-storage](../hidden-backend-storage.md).

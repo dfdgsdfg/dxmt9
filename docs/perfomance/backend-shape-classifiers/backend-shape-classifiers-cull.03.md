@@ -35,9 +35,9 @@ Hot set `60/3, 60/4, 60/1, 60/0` (98.29% GPU); all `716` hot draws became back-c
 Per-row VS write stayed within ±0.03% on `60/3/4/1/0`.
 
 **Verdict.** Rejected. Forcing all hot draws to back-cull does not move the
-hidden VS-write bucket. Together with [[backend-shape-classifiers-cull.01]] and
+hidden VS-write bucket. Together with [backend-shape-classifiers-cull.01](backend-shape-classifiers-cull.01.md) and
 `.02`, broad cull state and cull orientation are rejected together — the next
 GPU probe should be primitive-pressure / backend-storage oriented, not another
 cull toggle.
 
-**Related.** [[backend-shape-classifiers]] · follows [[backend-shape-classifiers-cull.02]], precedes the scoped [[backend-shape-classifiers-cull.04]] · directly motivated [[backend-shape-classifiers-expand.01]] · confirms [[hidden-backend-storage]].
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · follows [backend-shape-classifiers-cull.02](backend-shape-classifiers-cull.02.md), precedes the scoped [backend-shape-classifiers-cull.04](backend-shape-classifiers-cull.04.md) · directly motivated [backend-shape-classifiers-expand.01](backend-shape-classifiers-expand.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md).

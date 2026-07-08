@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-uniform-elision-r1-2
 
 # Uniform Payload N-1 Elision Probe
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.44]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.44](../state-churn-encode/state-churn-encode-encode-phase.44.md) proved that
 same `{stateGeneration,stateLane}` non-front draw submissions can avoid copying
 the canonical state/layout payload under `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1`.
 The next possible copy class was `DrawUniformPayload`: if the same adjacent
@@ -71,7 +71,7 @@ Status: pass. `result.json` reports `timed_out=true` / return code `143`, the
 expected supervised timeout. `actual.png` is visually normal for the sampled
 frame, with machine-gun bloom and no black/yellow screen or texture collapse.
 
-**Result.** Compared with [[snapshot-cache-snapshot.16]], both runs have
+**Result.** Compared with [snapshot-cache-snapshot.16](snapshot-cache-snapshot.16.md), both runs have
 `present_encoded=1,800`, so total counters are directly comparable.
 
 | Counter | Flat-state reuse | Uniform-elision probe | Delta |
@@ -102,9 +102,9 @@ implementation and counters as an opt-in proof harness, but do not promote it to
 default and do not spend more time on `DrawUniformPayload` carrier elision unless
 a new workload shows non-zero `d3d9_snapshot_uniform_elided`.
 
-This result reinforces the current priority: after [[snapshot-cache-snapshot.16]],
+This result reinforces the current priority: after [snapshot-cache-snapshot.16](snapshot-cache-snapshot.16.md),
 snapshot work should target the VS indexed-float constant fallback or a deeper
 direct-construct/interned-state design, not adjacent uniform snapshot reuse.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.16]] ·
-[[state-churn-encode-encode-phase.44]] · [[overview-3dmark05-gt1]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.16](snapshot-cache-snapshot.16.md) ·
+[state-churn-encode-encode-phase.44](../state-churn-encode/state-churn-encode-encode-phase.44.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

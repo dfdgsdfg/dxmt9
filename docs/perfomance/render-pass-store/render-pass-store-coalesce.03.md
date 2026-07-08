@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-dagcheck-draws/analysis/dag/dag-frame50-chunk50
 
 # Per-draw D3D9 Detail Confirms the Re-entry Role Pair from the DAG Dump
 
-**Question / hypothesis.** [[render-pass-store-reentry-distance.01]] established
+**Question / hypothesis.** [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) established
 H13/H14 — the same-key re-entry is a stable role pair (opaque-depth-write ↔
 textured/screen-blend depth-read; `Clear+Store` ↔ `Load+Store`) — by joining
 encoder attribution to load/store actions. Can the modern-renderer DAG dump
@@ -50,12 +50,12 @@ therefore the semantically-correct elimination of that round-trip, and the
 draws_detail makes the correctness argument checkable at D3D9 level (the merged
 pass must preserve P2's depth-read of P0's depth and P2's blend over P0's color,
 which holds because no pass writes `0x..09`/`0x..01` between them —
-[[render-pass-store-coalesce.01]] `P0→P2` WAW is the only edge on those handles).
+[render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) `P0→P2` WAW is the only edge on those handles).
 
 **Limits.** Debug-only (`DXMT9_RENDERER_DUMP_DAG_DRAWS`), resolved from ChunkSlot;
 no GPU measurement (cost/bytes are gputrace/counter territory). Confirms the
 re-entry **roles/semantics**, not the saving — which remains the device-gated
-executor proof ([[render-pass-store-coalesce.02]]).
+executor proof ([render-pass-store-coalesce.02](render-pass-store-coalesce.02.md)).
 
 **Verdict.** Accepted as counter-sample. The DAG dump's per-draw D3D9 detail
 independently reproduces the H13/H14 re-entry role pair (opaque depth-write ↔
@@ -63,7 +63,7 @@ blended depth-read) and exposes the depth-read + blend dependency that makes the
 H6 coalesce semantically correct — all from one CPU-side, deterministic,
 GPU-capture-free artifact.
 
-**Related.** [[render-pass-store-coalesce.01]] (WAW edge) ·
-[[render-pass-store-coalesce.02]] (passcoalesce removes 100%) ·
-[[render-pass-store-reentry-distance.01]] (H13/H14) · [[render-pass-store]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (WAW edge) ·
+[render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) (passcoalesce removes 100%) ·
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H13/H14) · [render-pass-store](../render-pass-store.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

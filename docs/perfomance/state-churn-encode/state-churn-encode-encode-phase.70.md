@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-present-publish-split-lowoverhead-r
 
 # Encode Phase 70 - Encode-Slot PSO Prefetch Default
 
-**Question.** [[state-churn-encode-encode-phase.69]] proved that publish-time
+**Question.** [state-churn-encode-encode-phase.69](state-churn-encode-encode-phase.69.md) proved that publish-time
 PSO prefetch owns the Present replay bucket, but the first A/B either moved
 that work to per-draw pipeline lookup or kept it diagnostic-only. Can the
 runtime keep prefetched PSO handles while removing the serialized
@@ -77,6 +77,6 @@ stage, where it is less harmful to the observed GT1 wall-clock cadence.
 builds on the submit path. Keep `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1` until a
 broader workload suite proves the new placement has no cold-stutter downside.
 
-**Related.** [[state-churn-encode-encode-phase.69]] ·
-[[present-pacing-publish-pso-prefetch.27]] · [[state-churn-encode]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.69](state-churn-encode-encode-phase.69.md) ·
+[present-pacing-publish-pso-prefetch.27](../present-pacing/present-pacing-publish-pso-prefetch.27.md) · [state-churn-encode](../state-churn-encode.md) ·
+[present-pacing](../present-pacing.md).

@@ -43,4 +43,4 @@ movement again proves backend shape changed but is far below the ~437 MiB
 target-row hidden estimate. Together with broad cull and force-cull-back, cull
 state/orientation is rejected as a first-order fix at every scope.
 
-**Related.** [[backend-shape-classifiers]] · last in the cull sequence after [[backend-shape-classifiers-cull.03]] · confirms [[hidden-backend-storage]] · motivates [[primitive-reorder-diagnostics]] locality/order probes.
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · last in the cull sequence after [backend-shape-classifiers-cull.03](backend-shape-classifiers-cull.03.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · motivates [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) locality/order probes.

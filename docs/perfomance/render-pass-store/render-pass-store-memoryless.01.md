@@ -17,7 +17,7 @@ buffer, post-process intermediates) that are produced and consumed entirely
 within one frame, with no CPU readback, never need to touch device RAM. Can
 classifying those RTs and allocating their Metal textures with
 `MTLStorageModeMemoryless` remove that bandwidth from the GT1 budget without
-violating D3D9 semantics? This sits alongside [[render-pass-store-dontcare.01]]:
+violating D3D9 semantics? This sits alongside [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md):
 DontCare attacks the store action, memoryless attacks the storage residency
 itself.
 
@@ -51,7 +51,7 @@ visible candidates:
 | Shadow map (depth → sampled in main pass) | no | producer and consumer are different passes |
 | Glow / bloom intermediate | sometimes | only if chain merged |
 | FSAA resolve target | yes | already pass-local |
-| Multi-stage post-process chain | no without coalesce | needs [[overview-3dmark05-gt1]] P1 pass coalescing |
+| Multi-stage post-process chain | no without coalesce | needs [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) P1 pass coalescing |
 
 Most D3D9 intermediates do **not** share a Metal render pass with their
 consumer today, so memoryless lands only after the P1 coalesce track makes
@@ -87,7 +87,7 @@ post-process intermediates).
 **Result / status.** Currently a proposal — no implementation, no GT1
 measurement. Implementation cost estimate is modest for the classifier plus
 storage-mode parameter, but the **landing surface is narrow without P1
-pass-coalescing** (see `H6` in [[render-pass-store]]). The honest framing is
+pass-coalescing** (see `H6` in [render-pass-store](../render-pass-store.md)). The honest framing is
 that memoryless promotion is a multiplier on whatever coalesce work makes
 producer+consumer passes mergeable; it is not a standalone GT1 lever.
 
@@ -97,8 +97,8 @@ track. Safe path: implement the classifier and counters first (no behavior
 change), confirm transient share from real D3D9 traces, then promote only
 after coalesce shows producer+consumer same-pass cases.
 
-**Related.** [[render-pass-store]] · [[render-pass-store-dontcare.01]]
-(orthogonal store-action proof) · [[render-pass-store-passchain.01]] (the
+**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
+(orthogonal store-action proof) · [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (the
 pass-chain analysis that constrains where memoryless would even apply) ·
-[[hidden-backend-storage]] (P0 owner; memoryless is bandwidth-only and does
+[hidden-backend-storage](../hidden-backend-storage.md) (P0 owner; memoryless is bandwidth-only and does
 not move the hidden VS-write bucket).

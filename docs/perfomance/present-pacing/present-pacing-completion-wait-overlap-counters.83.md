@@ -79,6 +79,6 @@ counter spend:
 - `meson test -C build-arm64-nowine dxmt9-queue-completion-sources-spec dxmt9-verify-tla`
 - `git diff --check`
 
-**Related.** [[present-pacing-noenqueue-compare-closure.80]] ·
-[[present-pacing-ready-depth-compare.81]] ·
-[[present-pacing-batch-carrier-current.82]].
+**Related.** [present-pacing-noenqueue-compare-closure.80](present-pacing-noenqueue-compare-closure.80.md) ·
+[present-pacing-ready-depth-compare.81](present-pacing-ready-depth-compare.81.md) ·
+[present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md).

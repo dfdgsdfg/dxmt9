@@ -12,7 +12,7 @@ source: scripts/tools/summarize_3dmark05_perf_gates.py; tests/scripts/test_summa
 
 # Backend Escape Surface Is Now a Full Perf Gate
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.21]] audits
+**Question / hypothesis.** [hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) audits
 mesh/object, position/binning, and Tile-FFP surfaces outside Xcode. Can that
 result be carried into the current full perf gate so high proxy rows do not
 schedule a direct GT1 capture when the backend escape itself still needs a
@@ -70,6 +70,6 @@ current coverage. The next backend experiment must first be a reduced
 mesh/object equality/counter A/B, a real position/binning route, or expanded
 Tile-FFP hot-row coverage.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.21]] ·
-[[hidden-backend-storage-shape.20]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) ·
+[hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

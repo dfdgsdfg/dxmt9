@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-sampler-prehandle-skip-r1/3dmark05-
 
 # Sampler Pre-Handle Skip
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.13]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.13](state-churn-encode-encode-phase.13.md) showed that
 GT1 skips ~92% of fragment sampler binds, but the old path still materialized
 the `MTLSamplerState` handle via `samplerStateFor()` before discovering the bind
 would be skipped. Test whether the shadow cache can compare sampler identity
@@ -111,5 +111,5 @@ remaining texture/sampler work is fragment texture handle lookup/direct bind
 and the now-larger direct-phase shadow bookkeeping, not sampler cache lookup.
 Broader FPS/GPU claims still need a vsync-on wallclock or Xcode frame gate.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.13]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.13](state-churn-encode-encode-phase.13.md) · [present-pacing](../present-pacing.md).

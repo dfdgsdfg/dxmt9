@@ -51,7 +51,7 @@ the finalizer produced `frame50-xcode-dxmt-joined-summary.csv` and
   `queue_sequence_wait_ms=0`, `map_buffer_wait_ms=0`.
 
 (Task brief's "encode 17.3s" matches the older run-level
-[[baselines-runlevel.01]] `encode_draw_cpu_ms=17342.358`; this partial-log
+[baselines-runlevel.01](baselines-runlevel.01.md) `encode_draw_cpu_ms=17342.358`; this partial-log
 capture's own encode figure is `20886.483ms`.)
 
 **Verdict.** Accepted as **THE frame50 A/B baseline**. Same top-3-encoder /
@@ -60,8 +60,8 @@ dxmt CPU writers explain essentially none of it, hidden backend estimate is
 `98.2%` of the VS write. No matching shaders dumped (`0` matched VS/PS) so it is
 a GPU/counter baseline, not a shader-liveness proof.
 
-**Related.** [[baselines]] · [[overview-3dmark05-gt1]] · [[baselines-frame120.01]] ·
-[[baselines-runlevel.01]] · [[baselines-frame50.02]] (sanity refresh) ·
-[[hidden-backend-storage]] (hidden estimate `1597.6MiB`) ·
-[[index-cache-locality]] (opaque/screen-blend frame50 proofs use this baseline) ·
-[[vsout-layout]] (rejects `184B` visible width as owner).
+**Related.** [baselines](../baselines.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [baselines-frame120.01](baselines-frame120.01.md) ·
+[baselines-runlevel.01](baselines-runlevel.01.md) · [baselines-frame50.02](baselines-frame50.02.md) (sanity refresh) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (hidden estimate `1597.6MiB`) ·
+[index-cache-locality](../index-cache-locality.md) (opaque/screen-blend frame50 proofs use this baseline) ·
+[vsout-layout](../vsout-layout.md) (rejects `184B` visible width as owner).

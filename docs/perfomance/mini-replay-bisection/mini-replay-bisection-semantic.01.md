@@ -66,6 +66,6 @@ final-color/final-writer or occlusion oracle. Do not implement a
 uniform-payload-identity selector, and do not spend another Xcode capture on
 this broad reorder family until the selector proof changes.
 
-**Related.** [[mini-replay-bisection]] · [[index-cache-locality-screenblend.04]]
-· [[primitive-reorder-diagnostics]] · [[index-cache-locality]] ·
-[[tvb-mechanism-proof]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [index-cache-locality-screenblend.04](../index-cache-locality/index-cache-locality-screenblend.04.md)
+· [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · [index-cache-locality](../index-cache-locality.md) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md).

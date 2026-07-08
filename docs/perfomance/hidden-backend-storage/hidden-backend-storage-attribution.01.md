@@ -56,6 +56,6 @@ authoritative A/B baseline. The companion `DXMT9_PROBE_DISABLE_ALPHA_BLEND=1`
 run was correctness-invalid (solid yellow) and left VS write at
 `1627.268MiB` (`+0.00%`) while GPU regressed `+1.72%` — not a baseline.
 
-**Related.** [[hidden-backend-storage]] · [[hidden-backend-storage-model.01]] ·
-[[hidden-backend-storage-density.01]] · [[baselines]] · [[vsout-layout]] ·
-[[backend-shape-classifiers]] · [[overview-3dmark05-gt1]]
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-model.01](hidden-backend-storage-model.01.md) ·
+[hidden-backend-storage-density.01](hidden-backend-storage-density.01.md) · [baselines](../baselines.md) · [vsout-layout](../vsout-layout.md) ·
+[backend-shape-classifiers](../backend-shape-classifiers.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

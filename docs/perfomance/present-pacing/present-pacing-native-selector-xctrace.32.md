@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-native-selector-xctrace.3
 
 ## Question
 
-After [[state-churn-encode-encode-phase.81]] promotes the encode-slot
+After [state-churn-encode-encode-phase.81](../state-churn-encode/state-churn-encode-encode-phase.81.md) promotes the encode-slot
 resource-shape PSO memo to default-on, does the same native-selector System
 Trace path find producer-thread `OnMainThread` / wait evidence, or does the
 average-FPS lane still point back at serialized replay/snapshot/encode work?
@@ -169,5 +169,5 @@ P4 validation gate when a CPU change claims to recover overlap.
   lower-overhead seq-range encoder breakdown when route attribution is not the
   primary question.
 
-**Related.** [[present-pacing-native-selector-xctrace.31]] ·
-[[state-churn-encode-encode-phase.81]] · [[present-pacing]].
+**Related.** [present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) ·
+[state-churn-encode-encode-phase.81](../state-churn-encode/state-churn-encode-encode-phase.81.md) · [present-pacing](../present-pacing.md).

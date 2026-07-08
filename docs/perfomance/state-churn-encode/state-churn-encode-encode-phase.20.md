@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-upload-prefix-preserve-r1/3dma
 
 # Prefix-Preserving Cbuf Upload Builder
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.19]] removed the
+**Question / hypothesis.** [state-churn-encode-encode-phase.19](state-churn-encode-encode-phase.19.md) removed the
 default cbuf content hash and left cbuf build as the next obvious child:
 `560.810ms` total (`VS=265.526ms`, `PS=249.090ms`). The dirty upload path was
 already computing `ShaderConstantUploadPlan` and uploading only a byte prefix,
@@ -128,5 +128,5 @@ cached repoint (`~0.204ms/present`), upload/setBuffer (`~0.162ms` /
 residual. Any further cbuf change needs the same visual smoke gate because this
 phase proved apparently unused constants can still affect GT1.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.19]] · [[baselines-visual-capture.01]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.19](state-churn-encode-encode-phase.19.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

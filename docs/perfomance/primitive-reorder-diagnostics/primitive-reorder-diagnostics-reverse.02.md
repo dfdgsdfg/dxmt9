@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L9384-L9518
 # Opaque Depth-Writing Reverse Subset
 
 **Question / hypothesis.** Does the correctness-preserving subset of the full
-reverse classifier ([[primitive-reorder-diagnostics-reverse.01]]) reproduce the
+reverse classifier ([primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)) reproduce the
 win? The probe reverses triangle order only for solid, depth-enabled,
 depth-writing, non-blended, non-alpha-tested, non-stencil, non-clip-plane
 triangle-list draws with `Less`/`LessEqual` depth. Blended / depth-write-off
@@ -36,8 +36,8 @@ full-reverse win: VS write is flat and frame time regresses. The full-reverse
 benefit therefore depended on a broader frame-shape change (blended/depth-off
 passes, scissor, tile coverage, hot-row membership). New transient-IB path adds
 CPU/state churn with no GPU payoff. Also fails the 5% shape gate
-([[primitive-reorder-diagnostics-reverse.04]], top draws `711 -> 753`).
+([primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md), top draws `711 -> 753`).
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.01]]
-· next: [[primitive-reorder-diagnostics-reverse.03]] · [[hidden-backend-storage]] (owner unchanged)
-· [[vsout-layout]] (VS bytes/inv still ~4.5x visible 184B VSOut).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)
+· next: [primitive-reorder-diagnostics-reverse.03](primitive-reorder-diagnostics-reverse.03.md) · [hidden-backend-storage](../hidden-backend-storage.md) (owner unchanged)
+· [vsout-layout](../vsout-layout.md) (VS bytes/inv still ~4.5x visible 184B VSOut).

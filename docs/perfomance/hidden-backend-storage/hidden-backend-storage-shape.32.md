@@ -17,7 +17,7 @@ again, does frame60 still show the hidden vertex/tiler backend-storage
 fingerprint, or did the recent visual/capture work move the dominant GPU owner?
 
 **Method.** Use the recovered `frame60.gputrace` from
-[[baselines-gputrace-capture.02]], export Xcode performance data, wait for draw
+[baselines-gputrace-capture.02](../baselines/baselines-gputrace-capture.02.md), export Xcode performance data, wait for draw
 counters to finish, export encoder counters, then reduce the wide Xcode CSV to
 `frame60-counters-summary.csv`.
 
@@ -87,6 +87,6 @@ probe. It should either reduce VS invocations with a correctness oracle, or
 produce a reduced same-input backend-route A/B that moves bytes per invocation.
 Average-FPS work remains a separate pacing/CPU lane.
 
-**Related.** [[hidden-backend-storage-shape.31]] ·
-[[baselines-gputrace-capture.02]] · [[hidden-backend-storage]] ·
-[[present-pacing]].
+**Related.** [hidden-backend-storage-shape.31](hidden-backend-storage-shape.31.md) ·
+[baselines-gputrace-capture.02](../baselines/baselines-gputrace-capture.02.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[present-pacing](../present-pacing.md).

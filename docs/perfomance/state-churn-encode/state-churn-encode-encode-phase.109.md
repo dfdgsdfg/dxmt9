@@ -66,5 +66,5 @@ the next argbuf probe from hiding important reopen/post work under the aggregate
 path and read this ranking before choosing whether to target table open/reopen,
 cached repoint, content probe, or dirty VS cbuf update.
 
-**Related.** [[state-churn-encode-encode-phase.104]] ·
-[[state-churn-encode-encode-phase.108]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+[state-churn-encode-encode-phase.108](state-churn-encode-encode-phase.108.md) · [state-churn-encode](../state-churn-encode.md).

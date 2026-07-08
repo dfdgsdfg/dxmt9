@@ -4,7 +4,7 @@ date: 2026-06-14
 status: accepted-micro-win
 source: src/dxmt9/dxmt9_backend_types.hpp, agents/rules/environment_variables_perf.rules.md, tests/native/core/state_draw_transform_spec.cpp, experiments/output/app-d3d9-3dmark05-snapshot-uniform-adjacent-same-gen-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-uniform-payload-dedup-off-r1-20260614/result.json
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.20]] rejects adjacent
+**Question / hypothesis.** [snapshot-cache-snapshot.20](../snapshot-cache/snapshot-cache-snapshot.20.md) rejects adjacent
 uniform snapshot elision: there are no adjacent same-`uniformGeneration`
 submissions in current GT1. The remaining `submit_draw_run_batch_append_uniform`
 cost therefore belongs to backend payload storage and dedup lookup. This phase
@@ -113,7 +113,7 @@ skipping it saves about `242ms` over `1680` presents. This does **not** explain
 the current FPS ceiling: queue submission, replay, encode, and
 completion/present pacing remain essentially unchanged.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.51]] ·
-[[state-churn-encode-encode-phase.52]] ·
-[[state-churn-encode-encode-phase.53]] · [[snapshot-cache-snapshot.20]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) ·
+[state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) ·
+[state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) · [snapshot-cache-snapshot.20](../snapshot-cache/snapshot-cache-snapshot.20.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

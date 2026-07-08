@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-draw-packet-actual-change-2026061
 
 # Uniform Refresh Shader-Constant Fast Path
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.28]]
+**Question / hypothesis.** After [state-churn-encode-encode-phase.28](../state-churn-encode/state-churn-encode-encode-phase.28.md)
 rejected broad redundant draw-packet invalidation, the remaining uniform-refresh
 cost looked like real payload work. The cache-hit refresh path is narrower than
 a full state miss: `mutableShaderConstantsState()` changes VS/PS constants
@@ -101,8 +101,8 @@ noisy at the run level.
 |---|---|
 | Snapshot miss hot-build | `d3d9_snapshot_cache_miss_hot_build_cpu_ms=1573.980ms` remains unchanged |
 | VS indexed-float fallback | `d3d9_snapshot_uniform_build_vs_const_hash_full_indexed_float=115,933` still forces full VS constant hashing |
-| Queue append state/uniform path | [[state-churn-encode-encode-phase.29]] rejects raw payload copy as owner; state append and uniform lookup/append dominate the batch append child |
+| Queue append state/uniform path | [state-churn-encode-encode-phase.29](../state-churn-encode/state-churn-encode-encode-phase.29.md) rejects raw payload copy as owner; state append and uniform lookup/append dominate the batch append child |
 | Backend encode buckets | `encode_draw_argbuf_setup_cpu_ms=3357.980ms`, `encode_draw_binding_packet_cpu_ms=2705.893ms`, and stream/index bind remain larger than this residual snapshot win |
 
-**Related.** [[snapshot-cache]] · [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.28]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.28](../state-churn-encode/state-churn-encode-encode-phase.28.md).

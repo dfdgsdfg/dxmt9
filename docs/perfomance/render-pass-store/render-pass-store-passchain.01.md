@@ -26,7 +26,7 @@ bytes and classified adjacent render-pass transitions with new counters:
 `experiments/output/app-d3d9-3dmark05-pass-chain-split/`.
 
 **Result.** Comparable run shape to color next-clear
-([[render-pass-store-dontcare.02]]): `present_encoded=1260`,
+([render-pass-store-dontcare.02](render-pass-store-dontcare.02.md)): `present_encoded=1260`,
 `draw_calls=916159`, `render_pass_begin=14691`,
 `render_pass_same_key_reentry=2787`,
 `render_pass_same_key_reentry_preservation_bytes=62222499840` (~62.22 GB, 37.1% of
@@ -49,7 +49,7 @@ intervening passes are independent enough to batch same-key work, or prove a
 broader live-out discard with concrete read/use evidence — not a single-attachment
 store policy.
 
-**Related.** [[render-pass-store]] · prior: [[render-pass-store-dontcare.02]]
-(zero-hit color next-clear) · [[render-pass-store-reentry.01]] (the ~62 GB budget
-this splits) · [[hidden-backend-storage]] (the P0 owner this P1 track sits
+**Related.** [render-pass-store](../render-pass-store.md) · prior: [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md)
+(zero-hit color next-clear) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) (the ~62 GB budget
+this splits) · [hidden-backend-storage](../hidden-backend-storage.md) (the P0 owner this P1 track sits
 behind).

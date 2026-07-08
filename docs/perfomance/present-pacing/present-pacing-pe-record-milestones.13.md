@@ -15,8 +15,8 @@ related: docs/perfomance/present-pacing/present-pacing-pe-call-cadence.10.md, do
 
 ## Question
 
-[[present-pacing-pe-chunk-cadence.11]] showed that the first PE call after
-`Present` is fast but the first unix-visible chunk is late. [[present-pacing-pe-chunk-size-ab.12]]
+[present-pacing-pe-chunk-cadence.11](present-pacing-pe-chunk-cadence.11.md) showed that the first PE call after
+`Present` is fast but the first unix-visible chunk is late. [present-pacing-pe-chunk-size-ab.12](present-pacing-pe-chunk-size-ab.12.md)
 then showed that lowering chunk capacity from `64` to `32` does not recover
 overlap. The remaining ambiguity was whether the delay is caused by filling the
 chunk, or by the app/PE path not producing recordable commands until late in

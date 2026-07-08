@@ -46,7 +46,7 @@ flowchart TD
 | Gate | Verdict | Evidence | Next action |
 |---|---|---|---|
 | Non-reorder backend-shape | `missing` | no non-reorder backend-shape candidates in the current VS scaling CSV | add a cheap no-gputrace preflight before Xcode |
-| Shader variant preflight | `runtime-smoke-candidate` | `60/0` `live-vsout` changes VSOut `184 -> 52 B` and visible scratch `128 -> 0 B`; `60/2`/`60/1` remain visible-width-only | run a primitive-order-preserving runtime smoke for `60/0` before Xcode; see [[hidden-backend-storage-shape.06]] |
+| Shader variant preflight | `runtime-smoke-candidate` | `60/0` `live-vsout` changes VSOut `184 -> 52 B` and visible scratch `128 -> 0 B`; `60/2`/`60/1` remain visible-width-only | run a primitive-order-preserving runtime smoke for `60/0` before Xcode; see [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) |
 | Broad depth-read reorder | `reject` | visible-fail LRU32 `-14,593`; exact visible `-2,452`; sparse/no-final-color `-6,661` | require final-color/final-writer proof before promotion; current D3D9 occlusion query is primitive-count only |
 | Primitive-conflict selector | `final-color-oracle-required` | only color/final-output metrics separate exact pass/fail rows | do not use owner-count/depth/UV thresholds |
 | Visibility no-sample hotpath | `reject-hotpath` | zero rows are `25 / 187`, `1.89%` of primitives, and `1.10%` of absolute LRU32 gain | do not schedule Xcode for no-sample locality on this row |
@@ -101,12 +101,12 @@ The next GPU work should therefore be one of two proof families:
   the current Metal visibility no-sample rows are not the hotpath;
 - or run a primitive-order-preserving backend-shape smoke that has a credible
   bytes-per-invocation mechanism before another `.gputrace`/Xcode export. The
-  shader-side preflight in [[hidden-backend-storage-shape.06]] narrows that to
+  shader-side preflight in [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) narrows that to
   `60/0 live-vsout` first; `60/2`/`60/1` visible-width-only retries are low
   priority.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.03]] ·
-[[hidden-backend-storage-shape.04]] · [[hidden-backend-storage-shape.06]] ·
-[[mini-replay-bisection-texture.07]] · [[mini-replay-bisection-texture.08]] ·
-[[index-cache-locality]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) ·
+[hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md) · [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) ·
+[mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) · [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md) ·
+[index-cache-locality](../index-cache-locality.md).

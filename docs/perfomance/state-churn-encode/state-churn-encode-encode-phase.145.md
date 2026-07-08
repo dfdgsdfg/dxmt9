@@ -115,6 +115,6 @@ to move P4/P2/P3 cadence, producer overlap, or a larger encode child.
 - `meson test -C build-arm64-nowine dxmt9-state-draw-transform-spec`
 - `git diff --check -- src/dxmt9/dxmt9_draw_encoder.mm`
 
-**Related.** [[state-churn-encode-encode-phase.121]] ·
-[[state-churn-encode-encode-phase.122]] ·
-[[state-churn-encode-encode-phase.144]] · [[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.121](state-churn-encode-encode-phase.121.md) ·
+[state-churn-encode-encode-phase.122](state-churn-encode-encode-phase.122.md) ·
+[state-churn-encode-encode-phase.144](state-churn-encode-encode-phase.144.md) · [present-pacing](../present-pacing.md).

@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_perf_counters.cpp, sc
 
 # Uniform Payload Append Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.51]] rejected the
+**Question / hypothesis.** [state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) rejected the
 simple inner-lookup-reserve cleanup, but left the `submit_draw_run_batch_append_uniform_cpu_ms`
 child unattributed. The next proof should split lookup traversal, lookup-bucket
 work, append reserve, payload copy/materialization, and lookup linking.
@@ -109,7 +109,7 @@ generation when lifetime is proven, or move toward a slab/direct-build shape
 that avoids copying the full `DrawUniformPayload` on every miss. Any such change
 must preserve owned replay storage across the queue boundary.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.48]] ·
-[[state-churn-encode-encode-phase.50]] ·
-[[state-churn-encode-encode-phase.51]] · [[snapshot-cache]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) ·
+[state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md) ·
+[state-churn-encode-encode-phase.51](state-churn-encode-encode-phase.51.md) · [snapshot-cache](../snapshot-cache.md).

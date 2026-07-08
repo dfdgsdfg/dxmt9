@@ -124,6 +124,6 @@ change Stage 2 cbuf binding ABI/storage so cbuf pointer turnover no longer
 forces table reopen, or return to larger P2/P3 replay/snapshot/encode reductions
 paired with P4 overlap/frame gates.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.140]] ·
-[[const-upload-sparse.01]] · [[const-upload-sparse.02]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.140](state-churn-encode-encode-phase.140.md) ·
+[const-upload-sparse.01](../const-upload/const-upload-sparse.01.md) · [const-upload-sparse.02](../const-upload/const-upload-sparse.02.md) · [present-pacing](../present-pacing.md).

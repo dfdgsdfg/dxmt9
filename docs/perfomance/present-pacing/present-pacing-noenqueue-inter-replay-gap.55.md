@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-noenqueue-active-replay.5
 
 ## Question
 
-After [[present-pacing-noenqueue-active-replay.54]], the remaining
+After [present-pacing-noenqueue-active-replay.54](present-pacing-noenqueue-active-replay.54.md), the remaining
 `commit entry -> publish` residual was not active present-chunk replay and not
 queue publish wait. The next candidate was the wall time between completed unix
 `commit_chunk` replays and the next `commit_chunk` entry from the PE producer.

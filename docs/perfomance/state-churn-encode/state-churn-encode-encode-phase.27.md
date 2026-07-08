@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-commit-chunk-replay-split-20260612-
 
 # Snapshot Cache Miss and Uniform Payload Candidate
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.25]] named queued
+**Question / hypothesis.** [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md) named queued
 draw submission and nested `snapshotDrawSubmissionFromCurrentState()` as the
 largest synchronous replay owner. Is the next optimization target queue append
 bookkeeping, or the D3D9 snapshot cache/uniform payload path?
@@ -88,7 +88,7 @@ whether those deltas are value-changing.
 
 **Next proof.** Run the narrowly scoped draw-packet actual-change diagnostic
 before changing default invalidation policy. This was executed in
-[[state-churn-encode-encode-phase.28]] and rejected the broad redundant
+[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md) and rejected the broad redundant
 non-binding hypothesis.
 
 ```mermaid
@@ -139,7 +139,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
   constants without bytecode evidence because indexed addressing requires
   conservative full snapshots.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.25]] ·
-[[state-churn-encode-encode-phase.26]] ·
-[[state-churn-encode-encode-phase.28]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md) ·
+[state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
+[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md).

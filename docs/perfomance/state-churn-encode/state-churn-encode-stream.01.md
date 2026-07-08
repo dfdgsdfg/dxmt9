@@ -41,7 +41,7 @@ Confirms a draw-run model must handle per-draw *resource handle* changes, not
 just offsets. Top cbuf and top stream/IB handle-churn encoders coincide
 (ordinal 4, seq 342..351).
 
-**Related.** [[state-churn-encode]] · next: [[state-churn-encode-stream.02]] ·
-[[state-churn-encode-encoder.01]] (first breakdown run) ·
-[[state-churn-encode-churn.01]] (the handle-churn hypothesis) ·
-[[const-upload]] (4.63GB cbuf coincides in the same encoders).
+**Related.** [state-churn-encode](../state-churn-encode.md) · next: [state-churn-encode-stream.02](state-churn-encode-stream.02.md) ·
+[state-churn-encode-encoder.01](state-churn-encode-encoder.01.md) (first breakdown run) ·
+[state-churn-encode-churn.01](state-churn-encode-churn.01.md) (the handle-churn hypothesis) ·
+[const-upload](../const-upload.md) (4.63GB cbuf coincides in the same encoders).

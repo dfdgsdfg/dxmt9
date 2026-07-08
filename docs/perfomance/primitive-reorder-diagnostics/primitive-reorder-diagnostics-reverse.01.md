@@ -34,13 +34,13 @@ VS buffer write `1472.747 -> 1036.222MiB` (`-29.64%`); hot/top unexplained write
 
 **Verdict.** Inconclusive / strong classifier, NOT a clean optimization. The
 hot-row set *changed* from `60/0,60/1,60/3,60/4` to `60/0,60/1,60/2,60/9`;
-draws `-14.49%`, vertices/triangles `-18.80%` (see [[primitive-reorder-diagnostics-reverse.04]]
+draws `-14.49%`, vertices/triangles `-18.80%` (see [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
 shape-gate reclassification, which rejects this as a same-frame proof). The big
 aggregate drop comes from a different, lighter frame shape, not a per-row win.
 Texture/depth/FS-tile drops show visibility/overdraw also changed. Confirms
 primitive order can move hidden Apple vertex/tiler/backend traffic, motivating
 the scoped subset probes that follow.
 
-**Related.** [[primitive-reorder-diagnostics]] · next: [[primitive-reorder-diagnostics-reverse.02]]
-· [[hidden-backend-storage]] (confirms order moves the TVB bucket) ·
-[[index-reuse-measurement]] (cache64/reuse model) · [[baselines]] (measure-index-cache).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · next: [primitive-reorder-diagnostics-reverse.02](primitive-reorder-diagnostics-reverse.02.md)
+· [hidden-backend-storage](../hidden-backend-storage.md) (confirms order moves the TVB bucket) ·
+[index-reuse-measurement](../index-reuse-measurement.md) (cache64/reuse model) · [baselines](../baselines.md) (measure-index-cache).

@@ -38,10 +38,10 @@ it is already absent in the hot path. The signature is a geometry/backend-shape
 diagnostic, not a final-pixel correctness proof (excludes full cbuf payload and
 some texture handles), so a high duplicate ratio means "same backend shape
 re-rendered", not "deletable redundant draw". Enables
-[[index-reuse-measurement-geometry.02]].
+[index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md).
 
-**Related.** [[index-reuse-measurement]] · feeds dedup result
-[[index-reuse-measurement-geometry.02]] and size histogram
-[[index-reuse-measurement-geometry.03]] · owner still
-[[hidden-backend-storage]] · CPU side stays [[state-churn-encode]] /
-[[const-upload]].
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · feeds dedup result
+[index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md) and size histogram
+[index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · owner still
+[hidden-backend-storage](../hidden-backend-storage.md) · CPU side stays [state-churn-encode](../state-churn-encode.md) /
+[const-upload](../const-upload.md).

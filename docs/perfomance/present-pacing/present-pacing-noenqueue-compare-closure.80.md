@@ -85,6 +85,6 @@ opening two summaries side by side.
 - `python3 -m pytest tests/scripts/test_3dmark05_probe_scripts.py -k pacing_compare`
 - `git diff --check`
 
-**Related.** [[present-pacing-serial-stage-compare-gates.38]] ·
-[[present-pacing-noenqueue-inter-replay-gap.55]] ·
-[[state-churn-encode-encode-phase.150]].
+**Related.** [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
+[present-pacing-noenqueue-inter-replay-gap.55](present-pacing-noenqueue-inter-replay-gap.55.md) ·
+[state-churn-encode-encode-phase.150](../state-churn-encode/state-churn-encode-encode-phase.150.md).

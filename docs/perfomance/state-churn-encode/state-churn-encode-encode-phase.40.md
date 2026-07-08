@@ -113,5 +113,5 @@ Two broader tests were not used as evidence: `dxmt9-imported-apply-state-value-s
 hit the known `completeUpTo()` assert, and `dxmt9-core-ffp-state-key-spec`
 failed its visual sanity readback outside the TSS key path.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.39]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.39](state-churn-encode-encode-phase.39.md).

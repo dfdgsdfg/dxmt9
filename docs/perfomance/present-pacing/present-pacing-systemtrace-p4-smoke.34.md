@@ -197,5 +197,5 @@ needs a targeted positive wait sample or must move
 - Keep the sidecar time window short on low disk space; this 2-second run still
   produced about `601MiB` of trace plus probe artifacts.
 
-**Related.** [[present-pacing-native-selector-xctrace.32]] ·
-[[present-pacing-lowoverhead-refresh.33]] · [[present-pacing]].
+**Related.** [present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
+[present-pacing-lowoverhead-refresh.33](present-pacing-lowoverhead-refresh.33.md) · [present-pacing](../present-pacing.md).

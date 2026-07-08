@@ -424,6 +424,6 @@ is deliberately enabled and the fragment function lifetime fix is present.
 Future Xcode spends can use this route, but every result must still be paired
 with a normal no-gputrace visual/perf scout before making average-FPS claims.
 
-**Related.** [[baselines-gputrace-capture.01]] ·
-[[baselines-gputrace-preflight.02]] · [[hidden-backend-storage-shape.32]] ·
-[[baselines]].
+**Related.** [baselines-gputrace-capture.01](baselines-gputrace-capture.01.md) ·
+[baselines-gputrace-preflight.02](baselines-gputrace-preflight.02.md) · [hidden-backend-storage-shape.32](../hidden-backend-storage/hidden-backend-storage-shape.32.md) ·
+[baselines](../baselines.md).

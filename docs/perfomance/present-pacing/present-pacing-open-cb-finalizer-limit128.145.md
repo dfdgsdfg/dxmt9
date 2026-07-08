@@ -116,7 +116,7 @@ The next open-CB design needs an explicit release policy for a pending head:
 
 Do not spend `.gputrace` on H145. It fails no-gputrace promotion.
 
-Update: [[present-pacing-open-cb-bounded-tail-wait.146]] tested the first
+Update: [present-pacing-open-cb-bounded-tail-wait.146](present-pacing-open-cb-bounded-tail-wait.146.md) tested the first
 bounded-wait option and rejected it visually. The branch can start a pending
 head, but the run black-screens before any coherent tail submission, so this
 specific open-CB carrier should not be treated as the default P4 path.

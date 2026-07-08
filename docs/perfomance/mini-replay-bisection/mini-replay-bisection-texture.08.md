@@ -119,12 +119,12 @@ from rank2-4 owner-masked exact passes. Existing D3D9 occlusion query state
 cannot be repurposed for that signal. The remaining production choices are:
 
 - use the diagnostic Metal visibility scout added in
-  [[mini-replay-bisection-texture.09]] only for no-sample triage, then add
+  [mini-replay-bisection-texture.09](mini-replay-bisection-texture.09.md) only for no-sample triage, then add
   final-color/final-writer proof for count-positive rows;
 - find a stricter runtime-visible selector that does not depend on final color;
 - stop spending reorder/Xcode budget here and return to non-reorder backend
   mechanisms.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-texture.07]] · [[index-cache-locality]] ·
-[[hidden-backend-storage]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md).

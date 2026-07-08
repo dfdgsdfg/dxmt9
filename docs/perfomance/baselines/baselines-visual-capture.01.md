@@ -59,7 +59,7 @@ post-process / motion-blur / alpha-composition sections. `v0.0.3` is the last
 known visual-safe code point and current visual correctness / alignment anchor
 for GT1 regression triage; the older `v0.0.1` capture remains an early
 screenshot-diff reference
-([[baselines-visual-capture.02]], [[snapshot-cache-visual.01]]),
+([baselines-visual-capture.02](baselines-visual-capture.02.md), [snapshot-cache-visual.01](../snapshot-cache/snapshot-cache-visual.01.md)),
 but a future pixel-level visual regression claim still needs either a
 same-frame Metal capture, a same-input mini replay, or a native/WineD3D
 reference for the same animation point.

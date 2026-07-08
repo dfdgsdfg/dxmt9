@@ -40,4 +40,4 @@ VS-write movement (and the per-byte ratio actually worsened to `8.0x`).
 Reinforces that the hidden vertex-stage / TVB backend storage, not visible VSOut
 width, owns the bucket.
 
-**Related.** [[vsout-layout]] · narrower follow-up to [[vsout-layout-varying.01]] · motivated [[vsout-layout-position.01]] · [[hidden-backend-storage]] · [[shader-codegen]].
+**Related.** [vsout-layout](../vsout-layout.md) · narrower follow-up to [vsout-layout-varying.01](vsout-layout-varying.01.md) · motivated [vsout-layout-position.01](vsout-layout-position.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [shader-codegen](../shader-codegen.md).

@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-memo
 
 # Encode Phase 78 - Encode-Slot PSO Resource-Shape Memo Behavior
 
-**Question.** [[state-churn-encode-encode-phase.77]] proves that a
+**Question.** [state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) proves that a
 texture-handle-blind resource-shape memo can validate to the same final
 canonical draw PSO key on `167,983` semantic misses. If promoted behind a
 default-off behavior knob, does it actually bypass repeated
@@ -75,7 +75,7 @@ normal visual smoke, and stable P4/completion counters before any FPS claim.
 
 **Next gate.**
 
-- [[state-churn-encode-encode-phase.79]] runs the paired current-code default
+- [state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) runs the paired current-code default
   baseline and `DXMT9_ENABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1` with the
   same low-overhead profile. The local CPU win repeats, but average FPS remains
   noisy/flat.
@@ -86,5 +86,5 @@ normal visual smoke, and stable P4/completion counters before any FPS claim.
   `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and normal
   muzzle/bloom/fog visual output.
 
-**Related.** [[state-churn-encode-encode-phase.77]] ·
-[[state-churn-encode-encode-phase.76]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) ·
+[state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) · [state-churn-encode](../state-churn-encode.md).

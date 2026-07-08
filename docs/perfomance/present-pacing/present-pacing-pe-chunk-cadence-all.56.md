@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-ga
 
 ## Question
 
-[[present-pacing-noenqueue-inter-replay-gap.55]] proved that the residual
+[present-pacing-noenqueue-inter-replay-gap.55](present-pacing-noenqueue-inter-replay-gap.55.md) proved that the residual
 before first `CommitPublish` is wall time between completed unix
 `commit_chunk` replays and later `commit_chunk` entries. The remaining
 question was whether that gap is:

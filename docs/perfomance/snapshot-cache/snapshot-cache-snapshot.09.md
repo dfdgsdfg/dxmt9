@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-reason2-r1/3dma
 
 # Snapshot FFP Known-Zero Constant Usage
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.08]] accepted
+**Question / hypothesis.** [snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md) accepted
 shader-usage/range-aware uniform payload hashing, but still left full constant
 hash fallback work: VS full fallback around 13-14% of builds and PS full
 fallback around 9% of builds. Split the fallback reason first. If non-bytecode
@@ -180,7 +180,7 @@ flowchart TD
 
 **Verdict.** Accepted CPU win. Treating non-bytecode/FFP programmable constant
 usage as known-zero removes the PS full fallback entirely and cuts the
-remaining hot hash pass by another `19.62%` over [[snapshot-cache-snapshot.08]].
+remaining hot hash pass by another `19.62%` over [snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md).
 The residual local hash cost is now mostly non-constant payload hashing
 (`743.344ms`) plus real VS indexed-float fallback (`119,430` calls).
 
@@ -190,5 +190,5 @@ non-constant payload hash reduction, a correctness proof for VS indexed
 constant ranges, or a different named CPU bucket. No new Xcode capture is
 justified from this CPU-only result.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.07]] ·
-[[snapshot-cache-snapshot.08]] · [[present-pacing]] · [[state-churn-encode]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) ·
+[snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).

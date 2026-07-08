@@ -33,7 +33,7 @@ applies only `69`; the extra candidates were too small to move VS write.
 **Verdict.** Accepted (mechanism active and correctly scoped). Run-level GPU
 counters (`gpu_command_buffer_time_ms` `4575 vs 4308`) are timeout-finalized
 whole-run samples and cannot be used as the GPU proof; the boundary check is the
-value here. Tracks the candidate ceiling from [[index-cache-locality-opaque.01]].
+value here. Tracks the candidate ceiling from [index-cache-locality-opaque.01](index-cache-locality-opaque.01.md).
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-opaque.01]]
-· next: [[index-cache-locality-opaque.03]] · [[tvb-mechanism-proof]] (mechanism that makes it real).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.01](index-cache-locality-opaque.01.md)
+· next: [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) (mechanism that makes it real).

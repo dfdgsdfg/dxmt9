@@ -37,5 +37,5 @@ Candidate work is useful (LRU32 `-21.17%` on evaluated keys). GPU proof already 
 this turn only reclassified CPU accounting. Next CPU target: lookup/rejected fast path
 or candidate prewarm.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-opaque.05]]
-· next: [[index-cache-locality-cpucost.02]] · [[state-churn-encode]] (stream-bind context).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.05](index-cache-locality-opaque.05.md)
+· next: [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md) · [state-churn-encode](../state-churn-encode.md) (stream-bind context).

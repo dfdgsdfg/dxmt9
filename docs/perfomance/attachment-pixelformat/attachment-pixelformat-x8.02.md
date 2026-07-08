@@ -45,4 +45,4 @@ read/write aliasing (`0` self-samples), allocation-wide X8 view suppression is
 unjustified; a correctness-preserving fix should target the actual sampling sites
 (sampler/PSO variant for D3D X8 alpha-fill) or prove per-alias lifetime.
 
-**Related.** [[attachment-pixelformat]] · narrows the broad attempt [[attachment-pixelformat-x8.01]], motivates the shader alpha-fill companion [[attachment-pixelformat-x8.03]] · shares the encoder-breakdown surface with [[state-churn-encode]].
+**Related.** [attachment-pixelformat](../attachment-pixelformat.md) · narrows the broad attempt [attachment-pixelformat-x8.01](attachment-pixelformat-x8.01.md), motivates the shader alpha-fill companion [attachment-pixelformat-x8.03](attachment-pixelformat-x8.03.md) · shares the encoder-breakdown surface with [state-churn-encode](../state-churn-encode.md).

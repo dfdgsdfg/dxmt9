@@ -14,7 +14,7 @@ source: specs/perfomance.plan.md#L11652-L11809
 
 **Question / hypothesis.** Re-run the historical 4-draw
 `large4096 && alpha-blend && scissor` diagnostic
-([[primitive-reorder-diagnostics-reverse.13]]) on current HEAD, using the
+([primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md)) on current HEAD, using the
 diagnostic path (not the env-gated optimization), to test whether the `-7.46%`
 VS-write win is a stable property of reversing those 4 screen-blend draws.
 
@@ -37,8 +37,8 @@ rectangles drift** (`0,0,190,553` -> `0,0,196,551`), i.e. tile-coverage shape.
 shape-sensitive anomaly, not a stable owner. The real variable is the surrounding
 `60/4` row shape: the historical capture happened to be a lower-churn,
 lower-vertex `60/4` instance (1,068,372 vs ~1.1M vertices; 477B/inv vs ~590B/inv).
-Motivated the scissor-rectangle probe ([[primitive-reorder-diagnostics-reverse.16]]).
+Motivated the scissor-rectangle probe ([primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md)).
 
-**Related.** [[primitive-reorder-diagnostics]] · reruns: [[primitive-reorder-diagnostics-reverse.13]]
-· next: [[primitive-reorder-diagnostics-reverse.16]] · [[hidden-backend-storage]]
-· [[index-cache-locality]] (screen-blend opt also only moves GPU time, not VS write).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · reruns: [primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md)
+· next: [primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md) · [hidden-backend-storage](../hidden-backend-storage.md)
+· [index-cache-locality](../index-cache-locality.md) (screen-blend opt also only moves GPU time, not VS write).

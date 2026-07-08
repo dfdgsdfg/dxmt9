@@ -108,6 +108,6 @@ semantic-safe VS-invocation reduction. The run is a valid counter/gputrace
 sample, not a wallclock FPS sample, because it was finalized from the supervised
 timeout/final-frame hang path.
 
-**Related.** [[baselines]] · [[baselines-frame60.01]] ·
-[[baselines-visual-capture.02]] · [[hidden-backend-storage]] ·
-[[vsout-layout]] · [[state-churn-encode]] · [[present-pacing]].
+**Related.** [baselines](../baselines.md) · [baselines-frame60.01](baselines-frame60.01.md) ·
+[baselines-visual-capture.02](baselines-visual-capture.02.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[vsout-layout](../vsout-layout.md) · [state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md).

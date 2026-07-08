@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-draw-packet-actual-change-20260612/
 
 # Draw Packet Actual Change Probe
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.27]] left one
+**Question / hypothesis.** [state-churn-encode-encode-phase.27](state-churn-encode-encode-phase.27.md) left one
 important assumption open: `applyDrawPacketStateDirect()` invalidates snapshot
 caches from the declared packet delta mask. If many non-binding deltas repeat
 the current `DeviceState` value, invalidating from actual changed reason could
@@ -92,8 +92,8 @@ hashing mostly real snapshot/uniform payloads.
 | Component generation for uniform payloads | Avoid rebuilding/hashing unchanged non-constant FFP fields when only a small component changes |
 | VS constant full-hash path | `d3d9_snapshot_uniform_build_vs_const_hash_bytes=590,255,888` and `*_full_indexed_float=115,710` remain large |
 | Snapshot miss hot-build path | `d3d9_snapshot_cache_miss_hot_build_cpu_ms=1568.266ms` remains a separate named owner |
-| Queue append copy path | [[state-churn-encode-encode-phase.26]] now names batch append as the largest submit child |
+| Queue append copy path | [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) now names batch append as the largest submit child |
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.26]] ·
-[[state-churn-encode-encode-phase.27]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
+[state-churn-encode-encode-phase.27](state-churn-encode-encode-phase.27.md).

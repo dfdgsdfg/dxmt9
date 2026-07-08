@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/resul
 
 # Persistent Pending Submission Scratch
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.35]] removed the
+**Question / hypothesis.** [state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) removed the
 per-draw temporary `DrawRunSubmission` move. The remaining F2 allocation
 hypothesis was that `dxmt9c_device_commit_chunk()` creates and reserves a local
 `pendingDrawSubmissions` vector for every imported chunk, causing allocation
@@ -92,6 +92,6 @@ default path. The next work should move away from F2 allocation churn and back
 to the proven larger owners: snapshot/cache lookup, state/layout copy width,
 and stronger same-generation state/layout copy elision.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.34]] ·
-[[state-churn-encode-encode-phase.35]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.34](state-churn-encode-encode-phase.34.md) ·
+[state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md).

@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.m
 
 ## Question
 
-[[present-pacing-pe-between-call-name.66]] identified repeated child desc
+[present-pacing-pe-between-call-name.66](present-pacing-pe-between-call-name.66.md) identified repeated child desc
 getters inside the focused between-calls windows:
 
 - `IndexBuffer::GetDesc` appears at `902.976` entries/present in

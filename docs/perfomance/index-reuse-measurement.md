@@ -1,6 +1,6 @@
 # Index-Reuse Measurement — instrumentation that established VS-inv = post-transform cache-miss
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -19,15 +19,15 @@ estimate, not raw references.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | VS invocations follow raw indexed references (`0.549x`) | rejected | [[index-reuse-measurement-reuse.01]] |
-| H2 | VS invocations follow draw-local unique vertices exactly | rejected (`1.18x` gap = finite cache) | [[index-reuse-measurement-reuse.01]] |
-| H3 | VS invocations ≈ finite 64-entry post-transform cache misses (`0.976x`) | **accepted** | [[index-reuse-measurement-reuse.01]] |
-| H4 | Order-preserving payload canonicalization can cut VS invocations | rejected (0 duplicate payloads, LRU32 delta 0) | [[index-reuse-measurement-reuse.02]] |
-| H5 | dxmt indexed-expansion is inflating GT1 geometry | rejected (`draw_expanded_indexed=0`) | [[index-reuse-measurement-geometry.01]] |
-| H6 | Redundant replay of the same geometry shape owns the bucket | rejected (dup ratio `0.143x`) | [[index-reuse-measurement-geometry.02]] |
-| H7 | Bucket is driven by many tiny repeated draws | rejected; real large indexed pressure (`22,622` prim/draw) | [[index-reuse-measurement-geometry.03]] |
-| H8 | Hot frame is one homogeneous material class | rejected; splits opaque-dw / depth-read-textured / mixed | [[index-reuse-measurement-classattr.01]] |
-| H9 | The positive `60/4` large-draw signal is production-safe | rejected; `60/4` large4096 is 0 opaque / all depth-read | [[index-reuse-measurement-classattr.02]] |
+| H1 | VS invocations follow raw indexed references (`0.549x`) | rejected | [index-reuse-measurement-reuse.01](index-reuse-measurement/index-reuse-measurement-reuse.01.md) |
+| H2 | VS invocations follow draw-local unique vertices exactly | rejected (`1.18x` gap = finite cache) | [index-reuse-measurement-reuse.01](index-reuse-measurement/index-reuse-measurement-reuse.01.md) |
+| H3 | VS invocations ≈ finite 64-entry post-transform cache misses (`0.976x`) | **accepted** | [index-reuse-measurement-reuse.01](index-reuse-measurement/index-reuse-measurement-reuse.01.md) |
+| H4 | Order-preserving payload canonicalization can cut VS invocations | rejected (0 duplicate payloads, LRU32 delta 0) | [index-reuse-measurement-reuse.02](index-reuse-measurement/index-reuse-measurement-reuse.02.md) |
+| H5 | dxmt indexed-expansion is inflating GT1 geometry | rejected (`draw_expanded_indexed=0`) | [index-reuse-measurement-geometry.01](index-reuse-measurement/index-reuse-measurement-geometry.01.md) |
+| H6 | Redundant replay of the same geometry shape owns the bucket | rejected (dup ratio `0.143x`) | [index-reuse-measurement-geometry.02](index-reuse-measurement/index-reuse-measurement-geometry.02.md) |
+| H7 | Bucket is driven by many tiny repeated draws | rejected; real large indexed pressure (`22,622` prim/draw) | [index-reuse-measurement-geometry.03](index-reuse-measurement/index-reuse-measurement-geometry.03.md) |
+| H8 | Hot frame is one homogeneous material class | rejected; splits opaque-dw / depth-read-textured / mixed | [index-reuse-measurement-classattr.01](index-reuse-measurement/index-reuse-measurement-classattr.01.md) |
+| H9 | The positive `60/4` large-draw signal is production-safe | rejected; `60/4` large4096 is 0 opaque / all depth-read | [index-reuse-measurement-classattr.02](index-reuse-measurement/index-reuse-measurement-classattr.02.md) |
 
 ## Verification methods
 
@@ -60,7 +60,7 @@ flowchart TD
   geo03["draw-size histogram\nmax 22,622 prim/draw"]
   class01["state-class attribution\nopaque 874.78 / depth-read 370.35 MiB"]
   class02["large4096 cross-bucket\n60/4=0 opaque, 18+5 opaque safe"]
-  feeds["feeds [[primitive-reorder-diagnostics]]\nand [[index-cache-locality]]"]
+  feeds"feeds [primitive-reorder-diagnostics\nand index-cache-locality"]
 
   reuse01 -->|"rejected non-reorder locality"| reuse02
   reuse01 -->|"motivates"| feeds
@@ -86,7 +86,7 @@ flowchart TD
 post-transform finite vertex-cache-miss estimate** (`VS-inv/cache64 ≈ 0.976x`),
 not raw indexed references (`0.549x`) and not raw draw-local unique vertices
 (`~1.18x` gap, which is itself finite-cache locality). This is *why* index-cache
-locality became the promising lever in [[index-cache-locality]]: reducing
+locality became the promising lever in [index-cache-locality](index-cache-locality.md): reducing
 post-transform cache misses is the only measured way to reduce VS invocations
 without changing geometry semantics. The domain also conclusively *ruled out*
 the cheap explanations — dxmt geometry expansion (`draw_expanded_indexed=0`),
@@ -102,9 +102,9 @@ target.
 **Still open within this domain.** Nothing about the **write width** is resolved
 here: even after normalizing by unique vertices or cache misses, the bucket stays
 `~836–879B`/invocation versus the visible `184B` `VSOut`. That residual is owned
-by [[hidden-backend-storage]], not by this measurement domain. Whether the safe
+by [hidden-backend-storage](hidden-backend-storage.md), not by this measurement domain. Whether the safe
 opaque-large set actually moves the hidden write under a correctness-preserving
-reorder is handed to [[index-cache-locality]] / [[primitive-reorder-diagnostics]]
+reorder is handed to [index-cache-locality](index-cache-locality.md) / [primitive-reorder-diagnostics](primitive-reorder-diagnostics.md)
 for Xcode proof.
 
 ## How to run
@@ -129,12 +129,12 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 
 ## Cross-references
 
-- [[primitive-reorder-diagnostics]] — consumes the state classes and large4096
+- [primitive-reorder-diagnostics](primitive-reorder-diagnostics.md) — consumes the state classes and large4096
   splits; reverse-triangle probes that produced the first positive signal.
-- [[index-cache-locality]] — the accepted production lever motivated by the
+- [index-cache-locality](index-cache-locality.md) — the accepted production lever motivated by the
   VS-inv ≈ cache-miss correlation and the safe opaque-large candidate set.
-- [[hidden-backend-storage]] — owns the unexplained per-invocation write width
+- [hidden-backend-storage](hidden-backend-storage.md) — owns the unexplained per-invocation write width
   that this domain measured but did not explain.
-- [[vsout-layout]] — refuted as the width owner here: the bucket is far wider
+- [vsout-layout](vsout-layout.md) — refuted as the width owner here: the bucket is far wider
   than the visible `184B` `VSOut`.
-- [[overview-3dmark05-gt1]] — root priority DAG and synthesis.
+- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root priority DAG and synthesis.

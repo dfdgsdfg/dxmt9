@@ -13,7 +13,7 @@ source: scripts/tools/audit_backend_escape_surface.py; tests/scripts/test_audit_
 # Backend Escape Surface Audit
 
 **Question / hypothesis.** After current sample-visible locality is blocked by
-the final-writer replay gate ([[hidden-backend-storage-shape.20]]), is any
+the final-writer replay gate ([hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md)), is any
 remaining primitive-order-preserving backend escape ready for a GT1 Xcode
 capture?
 
@@ -81,6 +81,6 @@ primitive-order-preserving backend work must therefore define a reduced
 synthetic/replay A/B for mesh/object or implement a real position/binning route
 before any Xcode capture.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.14]] · [[hidden-backend-storage-shape.15]] ·
-[[hidden-backend-storage-shape.20]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.14](hidden-backend-storage-shape.14.md) · [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) ·
+[hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

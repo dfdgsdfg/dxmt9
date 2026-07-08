@@ -35,8 +35,8 @@ same-input exact image compare (`...-exact-compare.md`).
 
 **Verdict.** The trim is **semantically SAFE** (0 changed pixels, SSIM 1.000) —
 a useful correctness result. But the paired Xcode liveness capture
-([[vsout-layout-varying.02]]) showed the VS-write bucket barely moved
+([vsout-layout-varying.02](vsout-layout-varying.02.md)) showed the VS-write bucket barely moved
 (`-0.01%`), so visible VSOut width is still **rejected** as the owner. Safe to do,
 not worth doing for perf.
 
-**Related.** [[vsout-layout]] · paired with the Xcode-rejection [[vsout-layout-varying.02]] · [[mini-replay-bisection]] · [[hidden-backend-storage]].
+**Related.** [vsout-layout](../vsout-layout.md) · paired with the Xcode-rejection [vsout-layout-varying.02](vsout-layout-varying.02.md) · [mini-replay-bisection](../mini-replay-bisection.md) · [hidden-backend-storage](../hidden-backend-storage.md).

@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-probe-key-memo-r1-2
 
 # Encode Phase 73 - Encode-Slot PSO Probe-Key Memo
 
-**Question.** [[state-churn-encode-encode-phase.72]] proved that most
+**Question.** [state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) proved that most
 encode-slot draw PSO lookups resolve to a final handle already seen in the same
 slot. Does a slot-local memo remove that repeated lookup work without breaking
 prefetched handles or visual output?
@@ -106,5 +106,5 @@ builder so the encode worker can memo before constructing the full
 - Require no prefetched-handle misses, `pipeline_build_draw` not rising, and
   normal visual smoke before promoting any earlier memo point.
 
-**Related.** [[state-churn-encode-encode-phase.72]] ·
-[[state-churn-encode-encode-phase.71]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) ·
+[state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) · [state-churn-encode](../state-churn-encode.md).

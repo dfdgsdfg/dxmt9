@@ -42,7 +42,7 @@ and not raw unique (`1.18x` gap is finite-cache locality). This is the result
 that makes index-cache locality the promising lever. It does NOT explain the
 hidden write width: `~836-879B`/invocation vs `184B` VSOut stays unexplained.
 
-**Related.** [[index-reuse-measurement]] · baseline geometry from
-[[index-reuse-measurement-geometry.03]] · width owner [[hidden-backend-storage]] ·
-motivates [[index-cache-locality]] and [[primitive-reorder-diagnostics]] ·
-refutes visible-width ownership [[vsout-layout]].
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · baseline geometry from
+[index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · width owner [hidden-backend-storage](../hidden-backend-storage.md) ·
+motivates [index-cache-locality](../index-cache-locality.md) and [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) ·
+refutes visible-width ownership [vsout-layout](../vsout-layout.md).

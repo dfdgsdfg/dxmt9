@@ -100,6 +100,6 @@ uniform/hash work, `d3d9_snapshot_state_copy`, state append/storage width, and
 same-generation non-front state/layout copy elision. Do not spend another
 optimization turn on generic vector-capacity scratch without a named hot bucket.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.35]] ·
-[[state-churn-encode-encode-phase.36]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) ·
+[state-churn-encode-encode-phase.36](state-churn-encode-encode-phase.36.md).

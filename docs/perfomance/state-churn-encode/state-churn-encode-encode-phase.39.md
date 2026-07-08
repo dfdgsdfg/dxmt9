@@ -108,5 +108,5 @@ During the x86_64 rebuild, one stale test object still referenced the old
 `FlatStateSet<64>` helper signature. Removing that build artifact and rebuilding
 the target fixed the build; the source dependency itself is now consistent.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.38]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.38](state-churn-encode-encode-phase.38.md).

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-stream-ib-stage-60-2-r1/3dmark05-pe
 
 # Row-Scoped Stream/IB Staging A/B
 
-**Question / hypothesis.** [[state-churn-encode-stream.07]] named `60/2` as a
+**Question / hypothesis.** [state-churn-encode-stream.07](state-churn-encode-stream.07.md) named `60/2` as a
 valid no-gputrace A/B target: if the same indexed draw sequence is routed
 through stable Metal buffer handles, does the stream/IB handle churn actually
 drop while geometry, PSO, argbuf, and draw counts stay stable?
@@ -107,10 +107,10 @@ stateDiagram-v2
 **Verdict.** Accepted as a diagnostic A/B. This closes the no-gputrace
 isolation question: handle churn can be removed while the row shape stays
 stable enough for a counter replay. The Xcode follow-up
-([[state-churn-encode-stream.09]]) answers the GPU question negatively: the
+([state-churn-encode-stream.09](state-churn-encode-stream.09.md)) answers the GPU question negatively: the
 handle-stable row does not materially reduce GPU time or VS buffer writes. Keep
 this probe as an investigation tool rather than a production optimization.
 
-**Related.** [[state-churn-encode-stream.07]] ·
-[[state-churn-encode-stream.09]] · [[state-churn-encode-stream.06]] ·
-[[state-churn-encode-stream.05]] · [[hidden-backend-storage]].
+**Related.** [state-churn-encode-stream.07](state-churn-encode-stream.07.md) ·
+[state-churn-encode-stream.09](state-churn-encode-stream.09.md) · [state-churn-encode-stream.06](state-churn-encode-stream.06.md) ·
+[state-churn-encode-stream.05](state-churn-encode-stream.05.md) · [hidden-backend-storage](../hidden-backend-storage.md).

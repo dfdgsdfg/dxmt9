@@ -16,7 +16,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.173.
 ## Supersession
 
 This h204 run is superseded by
-[[state-churn-encode-encode-phase.175]]. The initial instrumentation wired the
+[state-churn-encode-encode-phase.175](state-churn-encode-encode-phase.175.md). The initial instrumentation wired the
 direct/indexed draw-run preflush call sites to the wrong reason bucket, so the
 large `draw_fallback` share below is a label error. The h205 rerun with corrected
 labels shows the same broad pending-flush owner, but the split is `draw_run`

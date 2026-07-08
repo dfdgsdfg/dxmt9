@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-r1/3dmark05-per
 
 # Snapshot Usage-Aware Uniform Payload Hash
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.07]] proved that the
+**Question / hypothesis.** [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) proved that the
 remaining payload-build owner was the first full `hashDrawUniformPayload()` pass:
 `9752.759ms`, or `11.322us` per build call. Replace that full hot-path hash with
 a narrower lookup hash based on shader constant usage/ranges while keeping full
@@ -149,7 +149,7 @@ flowchart TD
 ```
 
 **Verdict.** Accepted CPU win. Usage-aware uniform payload hashing removes the
-dominant full-hash cost found in [[snapshot-cache-snapshot.07]] and cuts the
+dominant full-hash cost found in [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) and cuts the
 combined parent payload-build cost from `13.204us` to `4.372us` per build.
 Correctness is still guarded by full payload equality, and the added native
 tests cover both unused-constant hash stability and forced collision behavior.
@@ -163,5 +163,5 @@ the next proof still needs a fixed-workload wallclock gate.
 fallback counts, and any remaining named encode/snapshot bucket. There is no
 Xcode reason to spend `.gputrace` budget from this CPU-only result alone.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.05]] ·
-[[snapshot-cache-snapshot.07]] · [[present-pacing]] · [[state-churn-encode]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).

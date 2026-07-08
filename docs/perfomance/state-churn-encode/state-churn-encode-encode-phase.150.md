@@ -147,8 +147,8 @@ another const-width-only candidate. The next implementation needs a P4 proof:
 must fall, or frame sampling must move while command buffers, render passes,
 and tile-preservation traffic do not regress.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.140]] ·
-[[state-churn-encode-encode-phase.141]] ·
-[[state-churn-encode-encode-phase.148]] ·
-[[state-churn-encode-encode-phase.149]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.140](state-churn-encode-encode-phase.140.md) ·
+[state-churn-encode-encode-phase.141](state-churn-encode-encode-phase.141.md) ·
+[state-churn-encode-encode-phase.148](state-churn-encode-encode-phase.148.md) ·
+[state-churn-encode-encode-phase.149](state-churn-encode-encode-phase.149.md) · [present-pacing](../present-pacing.md).

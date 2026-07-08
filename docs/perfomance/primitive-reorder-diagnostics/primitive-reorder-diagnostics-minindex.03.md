@@ -39,9 +39,9 @@ backend write into Xcode's named VS-buffer bucket. The next locality proof needs
 a larger same-row/material window or a full-frame scoped probe, not another
 3-draw mini replay.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-minindex.02]] · next:
-[[primitive-reorder-diagnostics-minindex.04]] (16-draw geometry-locked rerun) ·
-[[mini-replay-bisection]] (harness, payload capture, manifest builder) ·
-[[hidden-backend-storage]] (TVB counter stays 0B at small replay scale) ·
-[[index-cache-locality]] (semantic-safe successor).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-minindex.02](primitive-reorder-diagnostics-minindex.02.md) · next:
+[primitive-reorder-diagnostics-minindex.04](primitive-reorder-diagnostics-minindex.04.md) (16-draw geometry-locked rerun) ·
+[mini-replay-bisection](../mini-replay-bisection.md) (harness, payload capture, manifest builder) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (TVB counter stays 0B at small replay scale) ·
+[index-cache-locality](../index-cache-locality.md) (semantic-safe successor).

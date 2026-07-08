@@ -35,8 +35,8 @@ VS-write attribution: `-106.395MiB` total, `-105.507MiB` from invocation count v
 Confirms hidden TVB storage is sensitive to post-transform locality, but screen-blend
 is destination-dependent; promotion needs an explicit semantic image proof or accepted
 tolerance policy for the affected rows. That policy is recorded in
-[[index-cache-locality-screenblend.04]] as explicit exact/`lsb1` only.
+[index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) as explicit exact/`lsb1` only.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-screenblend.02]]
-· next: [[index-cache-locality-screenblend.04]] · [[tvb-mechanism-proof]] (same scaling law) · [[index-cache-locality-triage.01]]
-(50/2 owner triage) · [[hidden-backend-storage]] (residual).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-screenblend.02](index-cache-locality-screenblend.02.md)
+· next: [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) (same scaling law) · [index-cache-locality-triage.01](index-cache-locality-triage.01.md)
+(50/2 owner triage) · [hidden-backend-storage](../hidden-backend-storage.md) (residual).

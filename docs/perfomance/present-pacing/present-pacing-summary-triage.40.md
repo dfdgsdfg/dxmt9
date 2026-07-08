@@ -45,15 +45,15 @@ flowchart TD
 
 ## Why
 
-The current baseline in [[present-pacing-frame-sampling-current.39]] shows the
+The current baseline in [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) shows the
 same shape repeatedly: GPU command-buffer time is not the average frame floor,
 completion wait has almost no overlap, and exposed CPU stages remain large.
 Before a candidate can claim average-FPS movement, the summary should make that
 claim auditable from one report.
 
 This does not replace the A/B gates from
-[[present-pacing-compare-gates.37]] and
-[[present-pacing-serial-stage-compare-gates.38]]. It lowers the cost of reading
+[present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) and
+[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md). It lowers the cost of reading
 standalone current scouts and makes the next candidate selection less
 dependent on ad hoc `jq` or Python snippets.
 
@@ -62,6 +62,6 @@ dependent on ad hoc `jq` or Python snippets.
 - `python3 -m py_compile scripts/tools/summarize_3dmark05_perf.py tests/scripts/test_summarize_3dmark05_perf.py`
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py -q`
 
-**Related.** [[present-pacing-frame-sampling-current.39]] ·
-[[present-pacing-serial-stage-compare-gates.38]] ·
-[[present-pacing-compare-gates.37]] · [[present-pacing]].
+**Related.** [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) ·
+[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
+[present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) · [present-pacing](../present-pacing.md).

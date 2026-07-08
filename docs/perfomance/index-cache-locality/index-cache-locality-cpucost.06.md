@@ -57,12 +57,12 @@ The production cache path is active: `125` candidate draws, `18` skipped,
 `530,289->418,033`.
 
 **Verdict.** Accepted as the current default-policy CPU boundary. Disabling
-diagnostic rows reduces the apparent overhead versus [[index-cache-locality-cpucost.05]],
+diagnostic rows reduces the apparent overhead versus [index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md),
 but the opt-in still adds candidate/lookup CPU. No-gputrace GPU proxies are mixed
 (`gpu_command_buffer_time_ms +0.79%`, `completion_wait_ms -11.35%`), so this does
 not change the production status: opaque-depth index-cache remains a proven
 opt-in, not a shared perf default.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.05]]
-· [[index-cache-locality-opaque.06]] (earlier non-diagnostic smoke) ·
-[[index-cache-locality-opaque.07]] (Xcode proof) · [[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md)
+· [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md) (earlier non-diagnostic smoke) ·
+[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) (Xcode proof) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

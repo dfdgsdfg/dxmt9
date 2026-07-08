@@ -37,6 +37,6 @@ managed-pool write-only buffers. This weakens the lock/rename hypothesis and
 points the fix at run-base/per-draw binding representation. Also flags
 auto-expand (`5837` expansions ≈ 1.056GB transient) as a separate amplifier.
 
-**Related.** [[state-churn-encode]] · prev: [[state-churn-encode-stream.02]] ·
-[[state-churn-encode-expand.01]] (disable auto-expand follow-up) ·
-[[snapshot-cache]] (binding-agnostic snapshot reuse of bounded handle sets).
+**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-stream.02](state-churn-encode-stream.02.md) ·
+[state-churn-encode-expand.01](state-churn-encode-expand.01.md) (disable auto-expand follow-up) ·
+[snapshot-cache](../snapshot-cache.md) (binding-agnostic snapshot reuse of bounded handle sets).

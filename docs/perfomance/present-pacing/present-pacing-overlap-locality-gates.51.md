@@ -15,8 +15,8 @@ related: docs/perfomance/present-pacing/present-pacing-compare-gates.37.md, docs
 
 ## Question
 
-[[present-pacing-drawchunk-limit.48]] and
-[[present-pacing-drawchunk-limit-sweep.50]] proved that earlier publication can
+[present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md) and
+[present-pacing-drawchunk-limit-sweep.50](present-pacing-drawchunk-limit-sweep.50.md) proved that earlier publication can
 recover `completion_wait_with_enqueue_ms`, but the tested draw-count carrier
 also split Metal command buffers and render passes. Make that lesson executable
 so a future P4 candidate cannot pass by creating overlap through worse Metal

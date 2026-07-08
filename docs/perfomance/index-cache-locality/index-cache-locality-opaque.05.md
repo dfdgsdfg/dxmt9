@@ -33,6 +33,6 @@ stream-binding still rises materially: `encode_draw_stream_bind_cpu_ms
 `perf` default until CPU accounting is amortized. `process_elapsed_sec` includes
 the timeout tail — not an FPS sample. This motivated the CPU-cost split that follows.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-opaque.04]]
-· next: [[index-cache-locality-cpucost.01]] (the CPU split) ·
-[[tvb-mechanism-proof]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.04](index-cache-locality-opaque.04.md)
+· next: [index-cache-locality-cpucost.01](index-cache-locality-cpucost.01.md) (the CPU split) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md).

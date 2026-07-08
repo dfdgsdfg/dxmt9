@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-call-sequence.14.md, d
 
 ## Question
 
-[[present-pacing-pe-call-sequence.14]] showed a long gap after early
+[present-pacing-pe-call-sequence.14](present-pacing-pe-call-sequence.14.md) showed a long gap after early
 render-target setup, but that run did not include `Clear` and `EndScene` in the
 call milestone sequence. The follow-up question was whether the gap is really a
 non-D3D9/app-side gap before `SetVertexShaderConstantF`, or an omitted D3D9
@@ -92,7 +92,7 @@ Steady-state rows exclude ordinals `<= 10`.
 ## Interpretation
 
 This supersedes the call-5 interpretation in
-[[present-pacing-pe-call-sequence.14]]. The missing D3D9 call was `Clear`, not
+[present-pacing-pe-call-sequence.14](present-pacing-pe-call-sequence.14.md). The missing D3D9 call was `Clear`, not
 `SetVertexShaderConstantF`.
 
 Current steady sequence:

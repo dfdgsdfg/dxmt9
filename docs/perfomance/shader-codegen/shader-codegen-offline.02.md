@@ -49,6 +49,6 @@ bucket — so the surviving owner is below source-visible VSOut return width:
 hidden vertex/tiler/parameter storage. The fix must change hidden backend
 pressure, not merely shrink MSL-visible return structs.
 
-**Related.** [[shader-codegen]] · [[shader-codegen-offline.01]] (prior step) ·
-[[vsout-layout]] (confirms the runtime trim probes it owns were rejected) ·
-[[hidden-backend-storage]]
+**Related.** [shader-codegen](../shader-codegen.md) · [shader-codegen-offline.01](shader-codegen-offline.01.md) (prior step) ·
+[vsout-layout](../vsout-layout.md) (confirms the runtime trim probes it owns were rejected) ·
+[hidden-backend-storage](../hidden-backend-storage.md)

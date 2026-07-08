@@ -76,4 +76,4 @@ P2/P3/P4 serialization work.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-backend-materialize-reuse-base-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 - `python3 scripts/tools/compare_3dmark05_perf_counters.py experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-counter-r1 experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-reuse-base-r1 --output /tmp/dxmt9-uniform-materialize-ab.md`
 
-**Related.** [[state-churn-encode-encode-phase.121]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.121](state-churn-encode-encode-phase.121.md) · [state-churn-encode](../state-churn-encode.md).

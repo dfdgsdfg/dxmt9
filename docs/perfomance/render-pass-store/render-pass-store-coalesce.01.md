@@ -12,9 +12,9 @@ source: traces/app-d3d9-3dmark05-dagcheck-trad/analysis/dag/dag-frame50-chunk50-
 
 # DAG WAR/WAW Edges Make the H6 Re-entry Coalesce Machine-Decidable (frame50)
 
-**Question / hypothesis.** [[render-pass-store-passchain.01]] left H6
+**Question / hypothesis.** [render-pass-store-passchain.01](render-pass-store-passchain.01.md) left H6
 (*dependency-aware pass reordering/coalescing is the real lever*) **OPEN**, and
-[[render-pass-store-reentry-distance.01]] characterized the dominant re-entry by
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) characterized the dominant re-entry by
 hand (H8 distance-1 RT+depth-both-changed; H14 opaque-depth-write `Clear+Store`
 ↔ depth-read `Load+Store`). The `specs/d3d9-renderer/` modern-renderer Frame
 Graph now builds a per-chunk DAG and (R-BACK-32.9) a complete hazard-edge set
@@ -96,9 +96,9 @@ machine-decidable, structurally-safe coalesce candidate: candidate identity,
 ordering, no-intervening-writer safety, and the eliminable round-trip are all
 read directly from the dump. Executing the coalesce in the Metal stream and
 proving byte-equal output + measuring the preservation-byte saving remain the
-device-gated next step ([[render-pass-store-coalesce.02]]).
+device-gated next step ([render-pass-store-coalesce.02](render-pass-store-coalesce.02.md)).
 
-**Related.** [[render-pass-store]] · [[render-pass-store-passchain.01]] (H6) ·
-[[render-pass-store-reentry-distance.01]] (H8/H14) ·
-[[render-pass-store-memoryless.01]] (H7, coupled to H6) ·
-[[overview-3dmark05-gt1]].
+**Related.** [render-pass-store](../render-pass-store.md) · [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H6) ·
+[render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) (H8/H14) ·
+[render-pass-store-memoryless.01](render-pass-store-memoryless.01.md) (H7, coupled to H6) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

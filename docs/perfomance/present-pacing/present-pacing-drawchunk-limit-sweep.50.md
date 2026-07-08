@@ -13,7 +13,7 @@ related: docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, do
 
 # Present Pacing 50 - Draw-Chunk Limit 256 Sweep
 
-**Question.** [[present-pacing-drawchunk-limit.48]] proved that
+**Question.** [present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md) proved that
 `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=64` can create completion overlap, but it
 fragments command buffers and render passes badly. Is a larger limit such as
 `256` a useful middle point: enough overlap with much lower tile/CB cost?

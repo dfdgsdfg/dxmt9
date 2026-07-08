@@ -132,7 +132,7 @@ flowchart TD
   `fixedPayloadHash` is an opportunity signal, not a correctness proof by
   itself.
 - Stage constants must preserve the existing ABI-prefix rule from
-  [[snapshot-cache-visual.01]]: when int/bool constants are live, the required
+  [snapshot-cache-visual.01](../snapshot-cache/snapshot-cache-visual.01.md): when int/bool constants are live, the required
   float/int prefix must still be present. This is why the current compact byte
   helpers use `makeDrawUniformVertexConstantsSpan()` and
   `makeDrawUniformPixelConstantsSpan()`.

@@ -112,6 +112,6 @@ gputrace unless it either broadens the semantic-safe target set, supplies a
 real final-color/final-writer selector, or changes the hidden backend
 denominator rather than relying on a single target-row win.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-screenblend.07]] · [[index-cache-locality-proofinput.01]]
-· [[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md)
+· [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

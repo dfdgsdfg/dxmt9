@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-fron
 
 # Candidate Frontier Cap Rejection
 
-**Question / hypothesis.** [[index-cache-locality-cpucost.10]] proved that the
+**Question / hypothesis.** [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) proved that the
 candidate select bucket is dominated by rescoring volume. Can a simple hard cap
 on the active candidate frontier cut CPU without damaging LRU32 candidate
 quality?
@@ -25,7 +25,7 @@ cap and count those drops through
 `encode_draw_index_cache_candidate_frontier_dropped`.
 
 **Runs.** Both probes used the same default-policy no-encoder production opt-in
-smoke as [[index-cache-locality-cpucost.10]]:
+smoke as [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md):
 
 ```sh
 bash scripts/tools/run_3dmark05_perf_probe.sh \
@@ -85,9 +85,9 @@ full rescans, not just the worst-case candidate vector width.
   lower-width heuristics.
 - Do not ship `DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP` as a production default;
   it is a diagnostic knob.
-- Follow-up: [[index-cache-locality-cpucost.12]] tested a generic heap-backed
+- Follow-up: [index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) tested a generic heap-backed
   lazy frontier and rejected it, so any remaining frontier work must be cheaper
   and more domain-specific than a standard priority queue.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.10]] · [[index-cache-locality-cpucost.09]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) · [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md).

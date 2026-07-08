@@ -44,7 +44,7 @@ total encode CPU `-10.44%` with no churn increase — but GPU command-buffer tim
 moved only `+0.03%`. This is a CPU-throughput win, orthogonal to the GPU
 bottleneck. It fixes the dominant stream+IB-only state-delta break class.
 
-**Related.** [[state-churn-encode]] · motivated by [[state-churn-encode-statedelta.03]] ·
-[[state-churn-encode-churn.01]] (the override mechanism) ·
-[[state-churn-encode-batch.01]] (later recheck — GPU still flat) ·
-[[hidden-backend-storage]] (GPU bottleneck unmoved).
+**Related.** [state-churn-encode](../state-churn-encode.md) · motivated by [state-churn-encode-statedelta.03](state-churn-encode-statedelta.03.md) ·
+[state-churn-encode-churn.01](state-churn-encode-churn.01.md) (the override mechanism) ·
+[state-churn-encode-batch.01](state-churn-encode-batch.01.md) (later recheck — GPU still flat) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (GPU bottleneck unmoved).

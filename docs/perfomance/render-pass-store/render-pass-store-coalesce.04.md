@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-dagcheck-coalesce/3dmark05-perf-sum
 
 # H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled
 
-**Question / hypothesis.** [[render-pass-store-coalesce.02]] showed `passcoalesce`
+**Question / hypothesis.** [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) showed `passcoalesce`
 removes **100%** of the distance-1 `A→B→A` re-entries on real GT1 frames. Before
 paying the (large, risky) cost of the device-gated executor that would actually
 merge them in the Metal stream, **measure the ceiling**: how much memory traffic
@@ -38,7 +38,7 @@ the producer's Store + the re-entry's Load). No executor needed — this is the
 So H6 coalesce eliminates a **large share of the P1 tile-preservation budget
 (38%)** — confirming it *is* the real P1 lever the domain claimed — but that
 budget is itself **~3% of the P0 VS-write traffic** that owns GT1
-([[hidden-backend-storage]]).
+([hidden-backend-storage](../hidden-backend-storage.md)).
 
 **Two independent reasons the FPS payoff is likely small (and unsettled):**
 
@@ -69,8 +69,8 @@ wall-clock given pacing (P4) dominance — consistent with render-pass-store bei
 **P1/secondary** to the P0 VS-write bucket. Building the device-gated executor is
 therefore justified only to *settle* the bandwidth-bound question (a potential
 single-digit GPU-time win on base-M1), not as a likely large FPS lever. The FPS
-mover remains **P0 = VS-invocation reduction** ([[index-cache-locality]],
-[[tvb-mechanism-proof]]), not pass coalescing.
+mover remains **P0 = VS-invocation reduction** ([index-cache-locality](../index-cache-locality.md),
+[tvb-mechanism-proof](../tvb-mechanism-proof.md)), not pass coalescing.
 
 **2026-06-12 current confirmation.** A fresh normal-visual no-gputrace run
 (`app-d3d9-3dmark05-dag-current-20260612-203736`, `status: pass`, 1,680
@@ -96,7 +96,7 @@ hidden vertex/TVB path remains the likely FPS mover. The new wrapper also makes
 the pre-opt/post-opt distinction explicit: pre-opt discovers candidates,
 post-opt verifies that the analysis-only optimizer removes them.
 
-**Related.** [[render-pass-store-coalesce.02]] (100% coalesceable) ·
-[[render-pass-store-coalesce.01]] (WAW edge) ·
-[[render-pass-store-passchain.01]] (H5/H6) · [[hidden-backend-storage]] (P0) ·
-[[present-pacing]] (P4 wall-clock) · [[overview-3dmark05-gt1]].
+**Related.** [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) (100% coalesceable) ·
+[render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (WAW edge) ·
+[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) · [hidden-backend-storage](../hidden-backend-storage.md) (P0) ·
+[present-pacing](../present-pacing.md) (P4 wall-clock) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-texture-sampler-phase-split-r1/3dma
 
 # Texture Sampler Phase Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.12]] identified
+**Question / hypothesis.** [state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) identified
 texture/sampler binding as the largest child of `stream_bind`
 (`1065.369ms`). Split that phase before trying a broad bind-cache or
 resource-array change.
@@ -107,5 +107,5 @@ record lookup, `textureForShaderRead`, sampler cache lookup, shadow hash/match,
 and actual Metal set calls, then test whether sampler shadow identity can avoid
 most cache lookups before materializing a `MTLSamplerState`.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.12]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [present-pacing](../present-pacing.md).

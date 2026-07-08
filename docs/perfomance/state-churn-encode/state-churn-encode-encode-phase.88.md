@@ -74,6 +74,6 @@ removing this timer layer blindly. If the candidate is revisited, require:
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-payload-split-default-off-r2-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 - `DXMT9_PERF_DRAW_UNIFORM_PAYLOAD_SPLIT=1 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-payload-split-optin-r1-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [[state-churn-encode-encode-phase.87]] ·
-[[state-churn-encode-encode-phase.52]] · [[state-churn-encode-encode-phase.53]]
-· [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.87](state-churn-encode-encode-phase.87.md) ·
+[state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) · [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md)
+· [state-churn-encode](../state-churn-encode.md).

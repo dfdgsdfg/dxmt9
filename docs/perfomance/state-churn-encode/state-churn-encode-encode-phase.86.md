@@ -7,12 +7,12 @@ source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf
 
 # Encode Phase 86 - Argbuf Cbuf Probe Timers Default-Off Cleanup
 
-**Question.** [[state-churn-encode-encode-phase.61]] used
+**Question.** [state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) used
 `DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1` to split cached cbuf repoint and content
 probe costs. That attribution rejected both as primary one-stage targets, but
 the aggregate cached-repoint and content-probe `PerfScope`s still ran in the
 default Stage 2 argbuf reopen path. They should be opt-in like the stage split
-children from [[state-churn-encode-encode-phase.85]].
+children from [state-churn-encode-encode-phase.85](state-churn-encode-encode-phase.85.md).
 
 **Change.** Gate these attribution timers behind
 `DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1`:
@@ -121,6 +121,6 @@ probe is not justified by current counters.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix argbuf-cbuf-probe-timers-default-off-r1-20260615b --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 - `git diff --check`
 
-**Related.** [[state-churn-encode-encode-phase.85]] ·
-[[state-churn-encode-encode-phase.61]] · [[present-pacing-lowoverhead-serial.24]]
-· [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.85](state-churn-encode-encode-phase.85.md) ·
+[state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) · [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md)
+· [state-churn-encode](../state-churn-encode.md).

@@ -113,6 +113,6 @@ same state class. The next useful reorder proof needs either:
 - or a shift away from primitive reorder toward semantics-safe backend-shape
   mechanisms.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-texture.02]] ·
-[[mini-replay-bisection-texture.03]] · [[index-cache-locality]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
+[mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) · [index-cache-locality](../index-cache-locality.md).

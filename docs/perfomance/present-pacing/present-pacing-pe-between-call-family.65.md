@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-gap-tail-split.64.md, 
 
 ## Question
 
-[[present-pacing-pe-gap-tail-split.64]] proved that the focused pre-call gap is
+[present-pacing-pe-gap-tail-split.64](present-pacing-pe-gap-tail-split.64.md) proved that the focused pre-call gap is
 mostly between D3D9 calls:
 
 - previous `DrawIndexedPrimitive` append return -> previous draw-call return is

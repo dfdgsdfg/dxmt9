@@ -34,7 +34,7 @@ breakdown runs). The design makes per-draw stream/IB bindings representable.
 that converting stream/IB state-delta breaks into larger draw-runs is possible
 without moving GPU cost — to be validated downstream.
 
-**Related.** [[state-churn-encode]] · validated by [[state-churn-encode-binding.01]] ·
-[[state-churn-encode-stream.01]] (handle-churn measurement) ·
-[[state-churn-encode-drawrun.01]] (the failure shape it targets) ·
-[[const-upload]] (const-upload remains the larger separate break class).
+**Related.** [state-churn-encode](../state-churn-encode.md) · validated by [state-churn-encode-binding.01](state-churn-encode-binding.01.md) ·
+[state-churn-encode-stream.01](state-churn-encode-stream.01.md) (handle-churn measurement) ·
+[state-churn-encode-drawrun.01](state-churn-encode-drawrun.01.md) (the failure shape it targets) ·
+[const-upload](../const-upload.md) (const-upload remains the larger separate break class).

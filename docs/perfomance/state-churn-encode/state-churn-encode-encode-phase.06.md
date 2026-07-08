@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-identity-current-smoke-
 
 # Category Identity Current Smoke
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.05]] accepted
+**Question / hypothesis.** [state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) accepted
 category identity cbuf repoint as a CPU win, but cbuf reuse can affect rendered
 constants. Before treating the path as current working state, run a fresh
 supervised GT1 smoke and inspect whether the scene still renders normally.
@@ -105,5 +105,5 @@ If a future cbuf change touches identity inputs again, pair the no-gputrace
 counter smoke with either a same-input replay image proof or an explicit user
 visual check of the GT1 scene.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.05]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) · [present-pacing](../present-pacing.md).

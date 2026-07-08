@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-open-split-r1/3dmark05-perf-
 
 # Argbuf Open Subphase Split
 
-**Question / hypothesis.** After [[snapshot-cache-snapshot.09]], backend
+**Question / hypothesis.** After [snapshot-cache-snapshot.09](../snapshot-cache/snapshot-cache-snapshot.09.md), backend
 `encode_draw_cpu_ms` is again the larger CPU bucket. `encode_draw_argbuf_setup`
 is a top child, but it is an umbrella over the per-draw argument-buffer table
 open/repoint path and the dirty cbuf mirror. Split `encode_draw_argbuf_open`
@@ -49,7 +49,7 @@ The run hit the expected watchdog status `124` after writing artifacts.
 visible (`FPS: 15`, `Time: 0:55.84`, `Frame: 1005`).
 
 **Run-shape caveat.** The attribution run reached `1680` presents versus
-`1740` in [[snapshot-cache-snapshot.09]]. Use the new child counters as local
+`1740` in [snapshot-cache-snapshot.09](../snapshot-cache/snapshot-cache-snapshot.09.md). Use the new child counters as local
 shape attribution, not as a performance A/B. Normalized values are included
 only to keep the per-present scale readable.
 
@@ -108,6 +108,6 @@ or a more structural constants-only path that reduces how often fresh tables
 are needed. Any such change needs a visual smoke at minimum because the current
 fresh table exists to avoid last-write-wins descriptor corruption.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.08]] · [[snapshot-cache-snapshot.09]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.08](state-churn-encode-encode-phase.08.md) · [snapshot-cache-snapshot.09](../snapshot-cache/snapshot-cache-snapshot.09.md) ·
+[present-pacing](../present-pacing.md).

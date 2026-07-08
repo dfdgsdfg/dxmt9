@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-gap-callfamily.62.md, 
 
 ## Question
 
-[[present-pacing-pe-gap-callfamily.62]] proved which append helper emits each
+[present-pacing-pe-gap-callfamily.62](present-pacing-pe-gap-callfamily.62.md) proved which append helper emits each
 focused inter-append pair, but it still left one important ambiguity: is the
 wall time inside the next D3D9 call/helper, or before that call is even entered?
 

@@ -105,6 +105,6 @@ and resource-lifetime invariants. That prototype can then consume H86's
 tail-Present opportunity without repeating the H74/H75 one-CB-per-slot failure
 mode.
 
-**Related.** [[present-pacing-pre-present-opportunity.86]] ·
-[[present-pacing-batch-carrier-current.82]] ·
-[[present-pacing-run-ahead-current-code.73]].
+**Related.** [present-pacing-pre-present-opportunity.86](present-pacing-pre-present-opportunity.86.md) ·
+[present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md) ·
+[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md).

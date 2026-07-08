@@ -130,5 +130,5 @@ before more narrow FFP PS cleanup. Dirty VS cbuf update is still the largest
 true cbuf update child, but cached repoint plus content probe is now large
 enough to rank as a separate candidate.
 
-**Related.** [[state-churn-encode-encode-phase.104]] ·
-[[state-churn-encode-encode-phase.109]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+[state-churn-encode-encode-phase.109](state-churn-encode-encode-phase.109.md) · [state-churn-encode](../state-churn-encode.md).

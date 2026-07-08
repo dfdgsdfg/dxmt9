@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-memo-r1-20
 
 # Encode Phase 74 - Encode-Slot PSO Semantic Memo
 
-**Question.** [[state-churn-encode-encode-phase.73]] removed most repeated
+**Question.** [state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) removed most repeated
 global draw PSO cache lookup, but left resolved-key/source-context construction
 as the owner. Can the encode-slot prefetch path memo before
 `resolveDrawPipelineState()` without using an unsafe reduced key?
@@ -129,5 +129,5 @@ cases; a future relaxation needs explicit same-format proof.
   no X8-alpha, format, or vertex-layout visual divergence and the 3DMark05
   muzzle/bloom/fog/particle frames stay normal.
 
-**Related.** [[state-churn-encode-encode-phase.73]] ·
-[[state-churn-encode-encode-phase.72]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) ·
+[state-churn-encode-encode-phase.72](state-churn-encode-encode-phase.72.md) · [state-churn-encode](../state-churn-encode.md).

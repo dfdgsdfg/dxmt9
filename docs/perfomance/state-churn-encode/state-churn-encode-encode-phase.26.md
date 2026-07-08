@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, te
 
 # Submit Draw Run Internal Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.25]] names
+**Question / hypothesis.** [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md) names
 `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`,
 and `commit_chunk_draw_run_submit_cpu_ms` as the remaining synchronous replay
 owners below `commit_chunk`. Which `CommandQueue` submit substage owns that
@@ -71,7 +71,7 @@ not add percentile rings yet; the first use is total attribution under the
 **Probe result.** The first no-gputrace run using these counters was
 `app-d3d9-3dmark05-draw-packet-actual-change-20260612`. It also enabled the
 draw-packet actual-change diagnostic from
-[[state-churn-encode-encode-phase.28]], but these submit counters are
+[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md), but these submit counters are
 observation-only and still useful for the submit split.
 
 | Counter | Value | Reading |
@@ -129,6 +129,6 @@ Current validation:
   outside `CommandQueue` submit and should be split at the `Device` submission
   snapshot/cache layer.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.24]] ·
-[[state-churn-encode-encode-phase.25]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) ·
+[state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md).

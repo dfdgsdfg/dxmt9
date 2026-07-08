@@ -7,10 +7,10 @@ source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf
 
 # Encode Phase 85 - Argbuf Reopen Split Default-Off Cleanup
 
-**Question.** [[state-churn-encode-encode-phase.57]] split the Stage 2 argbuf
+**Question.** [state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md) split the Stage 2 argbuf
 post-open path and showed the residual was distributed bookkeeping rather than
 one hidden child. Those child timers were attribution-only, but they still ran
-in the default hot path. After [[state-churn-encode-encode-phase.84]] rejected
+in the default hot path. After [state-churn-encode-encode-phase.84](state-churn-encode-encode-phase.84.md) rejected
 slot-30 table shadowing as the next lever, the default profile should stop
 paying for the old split unless explicitly requested.
 
@@ -118,6 +118,6 @@ next CPU-facing candidates are dirty VS cbuf update frequency/width, argbuf
 table storage/reopen shape, or earlier PE/unix publication/interning work that
 can also move completion wait or same-cycle serial stage deltas.
 
-**Related.** [[state-churn-encode-encode-phase.84]] ·
-[[state-churn-encode-encode-phase.57]] · [[state-churn-encode-encode-phase.68]]
-· [[present-pacing-lowoverhead-serial.24]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.84](state-churn-encode-encode-phase.84.md) ·
+[state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md) · [state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md)
+· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](../state-churn-encode.md).

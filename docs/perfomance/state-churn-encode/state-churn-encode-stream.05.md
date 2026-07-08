@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-stream-extra-bindings-r1/analysis/frame60-strea
 
 # Stream/IB Binding Tuple Structure
 
-**Question / hypothesis.** [[state-churn-encode-stream.04]] proved that frame60
+**Question / hypothesis.** [state-churn-encode-stream.04](state-churn-encode-stream.04.md) proved that frame60
 hot rows are stream/IB handle-churn-dominant. Is that churn an unbounded
 allocation problem, or a bounded binding tuple alternation that can be isolated
 with a handle-stable A/B?
@@ -107,6 +107,6 @@ stateDiagram-v2
   XcodeCandidate --> [*]
 ```
 
-**Related.** [[state-churn-encode-stream.04]] · [[state-churn-encode]] ·
-[[hidden-backend-storage]] · [[hidden-backend-storage-shape.11]] ·
-[[index-cache-locality]].
+**Related.** [state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](../state-churn-encode.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-shape.11](../hidden-backend-storage/hidden-backend-storage-shape.11.md) ·
+[index-cache-locality](../index-cache-locality.md).

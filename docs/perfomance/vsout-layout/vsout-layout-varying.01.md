@@ -40,4 +40,4 @@ only `-0.016MiB` — visible varying width is not the first-order owner of the
 hidden VS-write bucket. Confirms the central finding that the cost is hidden GPU
 vertex-stage / TVB backend storage, not visible MSL stage-out width.
 
-**Related.** [[vsout-layout]] · [[hidden-backend-storage]] · [[tvb-mechanism-proof]] · followed by [[vsout-layout-varying.02]].
+**Related.** [vsout-layout](../vsout-layout.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) · followed by [vsout-layout-varying.02](vsout-layout-varying.02.md).

@@ -201,7 +201,7 @@ it is either a broader semantic-safe target set or a non-reorder backend
 denominator change. Both proof runs are timeout-finalized partial catalogue
 runs rather than clean `result.json` passes.
 
-**Related.** [[index-cache-locality]] · [[index-cache-locality-opaque.08]] ·
-[[index-cache-locality-screenblend.05]] · [[index-cache-locality-screenblend.06]]
-· [[index-cache-locality-screenblend.07]] · [[index-cache-locality-screenblend.08]]
-· [[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md) ·
+[index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md) · [index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md)
+· [index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md) · [index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md)
+· [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

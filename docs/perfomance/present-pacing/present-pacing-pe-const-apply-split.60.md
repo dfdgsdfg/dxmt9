@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-inter-append-pairs.59.
 
 ## Question
 
-[[present-pacing-pe-inter-append-pairs.59]] showed that active PE chunk fill is
+[present-pacing-pe-inter-append-pairs.59](present-pacing-pe-inter-append-pairs.59.md) showed that active PE chunk fill is
 dominated by `draw_indexed -> set_vs_const_f` and
 `draw_indexed -> apply_state`. This run asks whether those gaps are actually
 inside dxmt9's PE setter/flush/build code, or whether they mostly sit outside

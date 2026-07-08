@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; scr
 
 # Fragmentless Depth-Only Route Smoke Reaches the Full 60/0 Pass
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.25]] identifies
+**Question / hypothesis.** [hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) identifies
 `60/0` as the smallest credible backend-route A/B: color writes are disabled,
 depth writes are enabled, alpha blend/test are off, and the row is fully
 depth-only. Can dxmt9 force a legal Metal render PSO shape that keeps the
@@ -223,5 +223,5 @@ of one legal below-visible backend shape. The current answer for this route is
 explain or fix the larger `60/2` textured row, and it should not be promoted
 into `perf` until equality and Xcode counter movement both pass.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.25]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

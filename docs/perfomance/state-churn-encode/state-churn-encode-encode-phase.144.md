@@ -185,6 +185,6 @@ The focused native tests passed (`4` OK) and the x86_64 provider build linked.
 The x86_64 compile still reports the pre-existing
 `dxmt9_shader_decoder.cpp:161` unused-function warning.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.142]] ·
-[[state-churn-encode-encode-phase.143]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.142](state-churn-encode-encode-phase.142.md) ·
+[state-churn-encode-encode-phase.143](state-churn-encode-encode-phase.143.md) · [present-pacing](../present-pacing.md).

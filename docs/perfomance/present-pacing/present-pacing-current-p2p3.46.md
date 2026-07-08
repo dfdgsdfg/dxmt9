@@ -89,7 +89,7 @@ reviewed under the P4 gates:
 ## Direct-Cbuf Cross-Check
 
 `current-default-vs-direct-cbuf.md` compares this run against
-[[present-pacing-direct-cbuf.45]]. The comparison keeps the important split:
+[present-pacing-direct-cbuf.45](present-pacing-direct-cbuf.45.md). The comparison keeps the important split:
 direct-cbuf removes the local argbuf table/cbuf path, but it does not solve
 the average-FPS owner.
 
@@ -138,5 +138,5 @@ Next candidates should either:
 Direct-cbuf remains a real local CPU win, but it should not be promoted as the
 default FPS fix by itself.
 
-**Related.** [[present-pacing-direct-cbuf.45]] -
-[[present-pacing-current-lowoverhead.43]] - [[present-pacing]].
+**Related.** [present-pacing-direct-cbuf.45](present-pacing-direct-cbuf.45.md) -
+[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) - [present-pacing](../present-pacing.md).

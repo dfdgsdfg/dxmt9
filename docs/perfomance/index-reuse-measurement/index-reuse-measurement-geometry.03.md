@@ -42,7 +42,7 @@ single draw with large-primitive draw share `0.46–0.62`. Confirms the hot fram
 is large indexed primitive pressure plus a hidden Apple GPU
 vertex/tiler/parameter-storage bucket.
 
-**Related.** [[index-reuse-measurement]] · follows
-[[index-reuse-measurement-geometry.02]] · pairs with reuse counts
-[[index-reuse-measurement-reuse.01]] · confirms [[hidden-backend-storage]] ·
-large draws feed [[index-cache-locality]] selection.
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+[index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md) · pairs with reuse counts
+[index-reuse-measurement-reuse.01](index-reuse-measurement-reuse.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) ·
+large draws feed [index-cache-locality](../index-cache-locality.md) selection.

@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L11810-L11900
 # Scissor Rectangle/Tiling Probe
 
 **Question / hypothesis.** The draw-sample diff
-([[primitive-reorder-diagnostics-reverse.15]]) showed the only difference between
+([primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)) showed the only difference between
 the historical positive and current-HEAD reruns was the scissor rectangle shape.
 Keep scissor enabled but override the four `60/4 large4096 && alpha-blend &&
 scissor` rectangles to the reference `0,0,190,553`. Does rectangle/tile-coverage
@@ -38,6 +38,6 @@ order, and the current diagnostic reorder, every scissor angle leaves the
 `~1.47GiB` bucket unchanged. Scissor is a row/material-shape classifier, not the
 root cause.
 
-**Related.** [[primitive-reorder-diagnostics]] · from: [[primitive-reorder-diagnostics-reverse.15]]
-· next: [[primitive-reorder-diagnostics-reverse.17]] · [[backend-shape-classifiers]] (disable-scissor)
-· [[hidden-backend-storage]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · from: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)
+· next: [primitive-reorder-diagnostics-reverse.17](primitive-reorder-diagnostics-reverse.17.md) · [backend-shape-classifiers](../backend-shape-classifiers.md) (disable-scissor)
+· [hidden-backend-storage](../hidden-backend-storage.md).

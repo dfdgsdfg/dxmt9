@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-chunk-fill-split.57.md
 
 ## Question
 
-[[present-pacing-pe-chunk-fill-split.57]] showed that PE all-chunk fill time is
+[present-pacing-pe-chunk-fill-split.57](present-pacing-pe-chunk-fill-split.57.md) showed that PE all-chunk fill time is
 split into first-record gap and active chunk fill. The remaining question was
 whether the active-fill half is mostly the recorder append operation itself or
 wall time between appendable records.

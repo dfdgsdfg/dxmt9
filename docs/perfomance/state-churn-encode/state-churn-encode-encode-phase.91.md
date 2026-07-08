@@ -177,7 +177,7 @@ constant tail hashing as a broad fix.
 - `meson compile -C build-win32-x64-builtin`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix current-next-owner-r1-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.90]] ·
-[[snapshot-cache-snapshot.22]] ·
-[[present-pacing-lowoverhead-refresh.33]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.90](state-churn-encode-encode-phase.90.md) ·
+[snapshot-cache-snapshot.22](../snapshot-cache/snapshot-cache-snapshot.22.md) ·
+[present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md) · [present-pacing](../present-pacing.md).

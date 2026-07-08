@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.195.
 
 ## Question
 
-[[state-churn-encode-encode-phase.197]] showed that uniform append is the largest
+[state-churn-encode-encode-phase.197](state-churn-encode-encode-phase.197.md) showed that uniform append is the largest
 child inside `submit_draw_run_batch_append_cpu_ms`. Is that cost already
 explained by the uniform payload lookup and payload-record append counters, or
 is there still a stage-level owner hidden inside the parent?
@@ -38,8 +38,8 @@ draw_uniform_payload_append_reserve_cpu_ms +
 draw_uniform_payload_append_copy_cpu_ms +
 draw_uniform_payload_append_link_cpu_ms`.
 
-The H225 result from [[state-churn-encode-encode-phase.196]] and
-[[state-churn-encode-encode-phase.197]] was re-summarized with the updated tool.
+The H225 result from [state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) and
+[state-churn-encode-encode-phase.197](state-churn-encode-encode-phase.197.md) was re-summarized with the updated tool.
 No renderer behavior changed.
 
 ## Result
@@ -97,7 +97,7 @@ useful local CPU work is narrower than before: reduce stage-level uniform append
 materialization or implement N-1 state/uniform elision; do not chase queue lock,
 broad outer-submit residuals, or payload-record append copy alone.
 
-**Related.** [[state-churn-encode-encode-phase.195]] ·
-[[state-churn-encode-encode-phase.196]] ·
-[[state-churn-encode-encode-phase.197]] ·
-[[present-pacing-current-visual-p4.136]].
+**Related.** [state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) ·
+[state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) ·
+[state-churn-encode-encode-phase.197](state-churn-encode-encode-phase.197.md) ·
+[present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md).

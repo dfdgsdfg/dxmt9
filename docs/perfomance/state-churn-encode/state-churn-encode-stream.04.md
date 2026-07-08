@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-stream-extra-bindings-r1/3dmark05-p
 
 # Stream/IB Backend Churn Preflight
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.11]] rejects PSO churn
+**Question / hypothesis.** [hidden-backend-storage-shape.11](../hidden-backend-storage/hidden-backend-storage-shape.11.md) rejects PSO churn
 as an isolated Xcode candidate because the hot rows are dominated by stream/IB
 binding motion. Is that stream/IB motion real handle churn in the current
 frame60 shape, or is it mostly offset/stride noise or explicit dxmt writer
@@ -100,6 +100,6 @@ stateDiagram-v2
   XcodeCandidate --> [*]
 ```
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-stream.03]] ·
-[[state-churn-encode-binding.01]] · [[hidden-backend-storage-shape.11]] ·
-[[index-cache-locality]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-stream.03](state-churn-encode-stream.03.md) ·
+[state-churn-encode-binding.01](state-churn-encode-binding.01.md) · [hidden-backend-storage-shape.11](../hidden-backend-storage/hidden-backend-storage-shape.11.md) ·
+[index-cache-locality](../index-cache-locality.md).

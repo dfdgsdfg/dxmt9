@@ -34,9 +34,9 @@ is only `~2.255MiB`, far below the `+93.795MiB` matched-row VS-write regression
 both shape-gate-clean rows: `60/3` was flat/slightly negative, `60/4` is a clear
 regression. The production fix cannot be "reverse this row." This pushed the
 investigation toward narrower per-material/state-class axes
-([[primitive-reorder-diagnostics-reverse.09]] tooling) that keep row and geometry
+([primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md) tooling) that keep row and geometry
 gates fixed.
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.07]]
-· next (class tooling): [[primitive-reorder-diagnostics-reverse.09]] · contrasts: [[primitive-reorder-diagnostics-reverse.05]]
-· [[hidden-backend-storage]] · [[index-reuse-measurement]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.07](primitive-reorder-diagnostics-reverse.07.md)
+· next (class tooling): [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md) · contrasts: [primitive-reorder-diagnostics-reverse.05](primitive-reorder-diagnostics-reverse.05.md)
+· [hidden-backend-storage](../hidden-backend-storage.md) · [index-reuse-measurement](../index-reuse-measurement.md).

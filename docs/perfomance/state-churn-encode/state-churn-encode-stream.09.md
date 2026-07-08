@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-stream-ib-stage-60-2-xcode-r1/analysis/frame60-
 
 # Xcode Stream/IB Handle-Stable Gate
 
-**Question / hypothesis.** [[state-churn-encode-stream.08]] proved that
+**Question / hypothesis.** [state-churn-encode-stream.08](state-churn-encode-stream.08.md) proved that
 `60/2` can be made stream/IB handle-stable without changing draw count,
 PSO churn, argbuf bytes, cbuf bytes, or visible VSOut layout. This gate asks the
 GPU-side question: does removing stream/IB handle identity churn reduce Xcode's
@@ -114,14 +114,14 @@ new mechanism also changes VS invocations, primitive/binning shape, or an Apple
 backend path below visible VSOut.
 
 CPU conclusions are separate. Stream/IB handle churn still explains draw-run
-breaks and stream-bind CPU cost in [[state-churn-encode]], but it is not the
+breaks and stream-bind CPU cost in [state-churn-encode](../state-churn-encode.md), but it is not the
 current GPU-frame limiter.
 
 **Verdict.** Rejected as first-order GPU owner. Accepted as a useful negative
 gate: it prevents spending more Xcode budget on stream/IB handle identity and
-pushes the remaining GPU investigation back to [[hidden-backend-storage]],
-[[tvb-mechanism-proof]], and correctness-safe locality work.
+pushes the remaining GPU investigation back to [hidden-backend-storage](../hidden-backend-storage.md),
+[tvb-mechanism-proof](../tvb-mechanism-proof.md), and correctness-safe locality work.
 
-**Related.** [[state-churn-encode-stream.08]] ·
-[[state-churn-encode-stream.07]] · [[hidden-backend-storage]] ·
-[[index-cache-locality]].
+**Related.** [state-churn-encode-stream.08](state-churn-encode-stream.08.md) ·
+[state-churn-encode-stream.07](state-churn-encode-stream.07.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[index-cache-locality](../index-cache-locality.md).

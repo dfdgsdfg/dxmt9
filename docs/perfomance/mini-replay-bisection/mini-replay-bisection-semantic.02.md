@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-60-2-depthre
 
 # Scoped 60/2 Depth-Read No-Blend Cache-Opt Replay
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.04]] ranked several
+**Question / hypothesis.** [hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md) ranked several
 residual `60/2` depth-read classes with real `candidate_miss32_delta` but mixed
 semantic risk. Is there at least one selected `depth-read + no-alpha-blend +
 textured` window where `cache-opt-lru32` keeps final color exact under the
@@ -124,7 +124,7 @@ The real-depth replay is also exact:
 Important scope limit: this proof binds a 1x1 white texture for all sampled
 texture slots. The depth-clear caveat is resolved for this window by the D24X8
 input replay, but the follow-up real-texture replay
-([[mini-replay-bisection-texture.02]]) changes `2` pixels with max delta `5`,
+([mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md)) changes `2` pixels with max delta `5`,
 and its canonical primitive-id diagnostic shows `7` final-writer pixels
 changed.
 The useful interpretation is therefore narrower: this selected window has a
@@ -162,8 +162,8 @@ flowchart TD
 ```
 
 **Verdict.** Accepted as a scoped semantic proof. This reopens a narrow
-depth-read/no-blend path that [[mini-replay-bisection-semantic.01]] did not
-allow as a broad runtime rule. [[mini-replay-bisection-texture.02]] rejects
+depth-read/no-blend path that [mini-replay-bisection-semantic.01](mini-replay-bisection-semantic.01.md) did not
+allow as a broad runtime rule. [mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) rejects
 promotion for this selected window once real textures are supplied. Future
 promotion still requires at least one of:
 
@@ -172,7 +172,7 @@ promotion still requires at least one of:
 - or a non-reorder backend mechanism that lowers hidden vertex-stage writes
   without primitive reorder.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-semantic.01]] ·
-[[mini-replay-bisection-texture.02]] ·
-[[hidden-backend-storage-shape.04]] · [[index-cache-locality]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-semantic.01](mini-replay-bisection-semantic.01.md) ·
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) ·
+[hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md) · [index-cache-locality](../index-cache-locality.md).

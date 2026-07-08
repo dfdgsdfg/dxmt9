@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/anal
 
 # Below-AIR Next Probe Triage After Live-VSOut Rejection
 
-**Question / hypothesis.** After [[hidden-backend-storage-shape.08]] rejects
+**Question / hypothesis.** After [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) rejects
 source-visible `VSOut` width as the non-reorder denominator lever, which
 below-AIR probe family should receive the next engineering and Xcode budget?
 
@@ -84,6 +84,6 @@ stateDiagram-v2
   3. a real position/binning, mesh/object, or PSO/spill experiment that changes
      `VS B / VS invocation`, not just visible MSL structure.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.08]] · [[backend-shape-classifiers]] ·
-[[index-cache-locality]] · [[mini-replay-bisection]] · [[vsout-layout]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) · [backend-shape-classifiers](../backend-shape-classifiers.md) ·
+[index-cache-locality](../index-cache-locality.md) · [mini-replay-bisection](../mini-replay-bisection.md) · [vsout-layout](../vsout-layout.md).

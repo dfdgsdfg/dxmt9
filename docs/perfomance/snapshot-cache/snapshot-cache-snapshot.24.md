@@ -12,7 +12,7 @@ source: src/d3d9/core_draw.cpp; src/dxmt9/dxmt9_perf_counters.cpp; include/dxmt9
 
 # Batch-Miss Reason Bucket Instrumentation
 
-**Question.** [[snapshot-cache-snapshot.23]] names the current serialized
+**Question.** [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) names the current serialized
 snapshot owner as the queued draw-submission batch miss lane, especially uniform
 build/hash and hot-build key/state construction. Before implementing another
 snapshot rewrite, do we know what kind of state delta is causing those batch
@@ -21,7 +21,7 @@ misses?
 **Initial answer.** Not precisely enough. The existing
 `d3d9_draw_state_cache_miss_after_*` counters are global bit counts across all
 cache callers and are not exclusive. They proved that stream/IB deltas frequently
-co-occur, but [[snapshot-cache-snapshot.21]] already rejected pure binding churn
+co-occur, but [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) already rejected pure binding churn
 as the current stable-generation owner. The next run needs batch-only,
 exclusive grouped miss reasons.
 
@@ -102,7 +102,7 @@ flowchart TD
 
 ## Stage Position
 
-Compared with [[snapshot-cache-snapshot.23]]'s direct-cbuf scout, this run is
+Compared with [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md)'s direct-cbuf scout, this run is
 the same structural profile, not a new performance mutation:
 
 | Counter | Per present |
@@ -182,7 +182,7 @@ the mixed rows are one repeated shape or broad noise:
 This remains a CPU attribution result, not an FPS win. A follow-up patch still
 has to move `d3d9_snapshot_cache_lookup_cpu_ms_per_present`, the queued
 replay/submission stage, and the P4 completion wait or overlap gate from
-[[present-pacing-compare-gates.37]].
+[present-pacing-compare-gates.37](../present-pacing/present-pacing-compare-gates.37.md).
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.21]] ·
-[[snapshot-cache-snapshot.23]] · [[present-pacing-direct-cbuf.45]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) ·
+[snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

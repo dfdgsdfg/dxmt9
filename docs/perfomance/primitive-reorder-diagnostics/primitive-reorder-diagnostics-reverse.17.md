@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L11901-L11984
 # Current Full Large4096 + Alpha Reorder Rerun
 
 **Question / hypothesis.** Re-run the broader 16-draw `60/4 large4096 &&
-alpha-blend` reverse ([[primitive-reorder-diagnostics-reverse.12]]) on current
+alpha-blend` reverse ([primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)) on current
 HEAD — every large alpha draw, not just the 4 scissored ones — to test whether
 the historical positive was a wider alpha/material ordering effect.
 
@@ -35,6 +35,6 @@ promoting the historical `60/4` index-order anomaly into production logic. The
 surviving owner is hidden vertex/tiler/backend storage; next probes move away
 from scissor/alpha membership toward row shape (opaque 2048 `60/1`/`60/3`).
 
-**Related.** [[primitive-reorder-diagnostics]] · reruns: [[primitive-reorder-diagnostics-reverse.12]]
-· prev: [[primitive-reorder-diagnostics-reverse.16]] · next: [[primitive-reorder-diagnostics-reverse.18]]
-· [[hidden-backend-storage]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · reruns: [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)
+· prev: [primitive-reorder-diagnostics-reverse.16](primitive-reorder-diagnostics-reverse.16.md) · next: [primitive-reorder-diagnostics-reverse.18](primitive-reorder-diagnostics-reverse.18.md)
+· [hidden-backend-storage](../hidden-backend-storage.md).

@@ -4,7 +4,7 @@ date: 2026-06-14
 status: accepted-attribution
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_argbuf_hybrid.cpp, src/dxmt9/dxmt9_perf_counters.cpp, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/actual.png
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.53]] left
+**Question / hypothesis.** [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) left
 `encode_draw_argbuf_setup_cpu_ms=3399.571ms`, with
 `encode_draw_argbuf_open_cpu_ms=1432.813ms`. The existing `open` timer name
 suggested Metal argument-buffer retargeting, but the scope actually covered the
@@ -104,6 +104,6 @@ Any pre-open skip must preserve the per-draw argbuf table lifetime rule from
 the dxut-simple overlay fix: a table cannot be reused when any pointed cbuf
 slice changes before older draws have executed.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.53]] ·
-[[state-churn-encode-encode-phase.54]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) ·
+[state-churn-encode-encode-phase.54](state-churn-encode-encode-phase.54.md).

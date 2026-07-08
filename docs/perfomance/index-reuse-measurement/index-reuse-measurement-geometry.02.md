@@ -19,7 +19,7 @@ owner?
 
 **Method.** Run `app-d3d9-3dmark05-geometry-signature-gputrace-r2` with the
 encoder-local geometry signature from
-[[index-reuse-measurement-geometry.01]] enabled and a matched Xcode export. Read
+[index-reuse-measurement-geometry.01](index-reuse-measurement-geometry.01.md) enabled and a matched Xcode export. Read
 top-3 `draw_geometry_signature_unique` / `_duplicates` /
 `_consecutive_duplicates` against the Xcode VS-write counters.
 
@@ -37,7 +37,7 @@ classified as real submitted geometry/primitive pressure interacting with Apple
 GPU hidden vertex/tiler/parameter storage. Deleting duplicate draws is at most a
 minor CPU/GPU improvement, not the first-order GPU bottleneck.
 
-**Related.** [[index-reuse-measurement]] · follows
-[[index-reuse-measurement-geometry.01]] · next is size histogram
-[[index-reuse-measurement-geometry.03]] · confirms width owner
-[[hidden-backend-storage]] · rejects visible-width ownership [[vsout-layout]].
+**Related.** [index-reuse-measurement](../index-reuse-measurement.md) · follows
+[index-reuse-measurement-geometry.01](index-reuse-measurement-geometry.01.md) · next is size histogram
+[index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) · confirms width owner
+[hidden-backend-storage](../hidden-backend-storage.md) · rejects visible-width ownership [vsout-layout](../vsout-layout.md).

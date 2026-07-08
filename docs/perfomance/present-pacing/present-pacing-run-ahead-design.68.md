@@ -34,12 +34,12 @@ This explains the accepted/rejected split:
 
 | Evidence | Result | Design implication |
 |---|---|---|
-| [[present-pacing-current-lowoverhead.52]] | `gpu_command_buffer_time=3.020ms/present`, `completion_wait_without_enqueue=29.336ms/present`, `wait -> next enqueue=30.482ms/present` | The average-FPS owner is serialized CPU/publish/encode cadence, not GPU execution floor. |
-| [[state-churn-encode-encode-phase.146]] | direct-cbuf cuts encode `11.110 -> 8.500ms/present`, but `wait -> next enqueue` stays flat | Local encode cleanup can expose another serialized stage instead of creating overlap. |
-| [[present-pacing-drawchunk-limit.48]] | draw limit 64 raises `completion_wait_with_enqueue` `1.191 -> 21.032ms/present` | Earlier publication can create overlap. |
-| [[present-pacing-drawchunk-limit.48]] / [[present-pacing-overlap-locality-gates.51]] | same knob increases command buffers `+217%`, render passes `+23.76%`, tile preservation `+75.63%`, GPU CB time `+571.85%` | Publication granularity is coupled to Metal locality and cannot be the final carrier. |
-| [[present-pacing-noenqueue-inter-replay-gap.55]] | first-publish residual is inter-replay producer gap plus completed replay CPU | The useful work exists, but arrives through the wrong boundary. |
-| [[present-pacing-pe-desc-cache.67]] | a real local getter cleanup does not move aggregate P2/P3/P4 | Microfixes must be gated by `wait -> next enqueue` or overlap movement. |
+| [present-pacing-current-lowoverhead.52](present-pacing-current-lowoverhead.52.md) | `gpu_command_buffer_time=3.020ms/present`, `completion_wait_without_enqueue=29.336ms/present`, `wait -> next enqueue=30.482ms/present` | The average-FPS owner is serialized CPU/publish/encode cadence, not GPU execution floor. |
+| [state-churn-encode-encode-phase.146](../state-churn-encode/state-churn-encode-encode-phase.146.md) | direct-cbuf cuts encode `11.110 -> 8.500ms/present`, but `wait -> next enqueue` stays flat | Local encode cleanup can expose another serialized stage instead of creating overlap. |
+| [present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md) | draw limit 64 raises `completion_wait_with_enqueue` `1.191 -> 21.032ms/present` | Earlier publication can create overlap. |
+| [present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md) / [present-pacing-overlap-locality-gates.51](present-pacing-overlap-locality-gates.51.md) | same knob increases command buffers `+217%`, render passes `+23.76%`, tile preservation `+75.63%`, GPU CB time `+571.85%` | Publication granularity is coupled to Metal locality and cannot be the final carrier. |
+| [present-pacing-noenqueue-inter-replay-gap.55](present-pacing-noenqueue-inter-replay-gap.55.md) | first-publish residual is inter-replay producer gap plus completed replay CPU | The useful work exists, but arrives through the wrong boundary. |
+| [present-pacing-pe-desc-cache.67](present-pacing-pe-desc-cache.67.md) | a real local getter cleanup does not move aggregate P2/P3/P4 | Microfixes must be gated by `wait -> next enqueue` or overlap movement. |
 
 ## Current Coupling
 

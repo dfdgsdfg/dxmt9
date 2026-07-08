@@ -18,7 +18,7 @@ evidence. The CPU-ready run-ahead implementation and env knobs were later
 reverted, and current HEAD no longer honors `DXMT9_OFFSCREEN_RUN_AHEAD`,
 `DXMT9_ENCODE_COALESCE_READY_SLOTS`, or
 `DXMT9_ENCODE_COALESCE_READY_SLOT_LIMIT`. See
-[[present-pacing-run-ahead-current-code.73]] before scheduling any follow-up
+[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md) before scheduling any follow-up
 run.
 
 ## Question

@@ -75,7 +75,7 @@ flowchart TD
 
 ## Interpretation
 
-This confirms the current baseline after [[state-churn-encode-encode-phase.129]]:
+This confirms the current baseline after [state-churn-encode-encode-phase.129](../state-churn-encode/state-churn-encode-encode-phase.129.md):
 the default encoder breakdown no longer charges the cbuf content observer, but
 the average-FPS owner split is unchanged.
 
@@ -88,5 +88,5 @@ buffer enqueue. The next useful work should therefore stay on:
 - using `.gputrace` or System Trace only when the candidate needs GPU/holder
   evidence, not for another default-profile cbuf-content attribution.
 
-**Related.** [[state-churn-encode-encode-phase.129]] -
-[[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.129](../state-churn-encode/state-churn-encode-encode-phase.129.md) -
+[present-pacing](../present-pacing.md).

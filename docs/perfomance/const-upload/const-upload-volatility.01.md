@@ -38,6 +38,6 @@ only in float constants, and only ~`7.17%` of repeated bytes differ. Motivates
 two candidates: cache/repoint a stable FFP-VS slice, and split VS float
 constants by dirty range.
 
-**Related.** [[const-upload]] · prev: [[const-upload-class.01]] · next:
-[[const-upload-slice.01]] (FFP-VS slice reuse) and [[const-upload-range.01]]
-(VS float range) · [[hidden-backend-storage]].
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-class.01](const-upload-class.01.md) · next:
+[const-upload-slice.01](const-upload-slice.01.md) (FFP-VS slice reuse) and [const-upload-range.01](const-upload-range.01.md)
+(VS float range) · [hidden-backend-storage](../hidden-backend-storage.md).

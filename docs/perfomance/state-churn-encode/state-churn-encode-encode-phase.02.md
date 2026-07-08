@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-phase-breakdown-r1/3dmark05-
 
 # Argbuf and Binding-Packet Sub-Bucket Breakdown
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.01]] showed the
+**Question / hypothesis.** [state-churn-encode-encode-phase.01](state-churn-encode-encode-phase.01.md) showed the
 largest named `encode_draw` CPU buckets are argbuf setup and binding-packet
 construction/bookkeeping. Split those two parent buckets into actionable
 sub-buckets before attempting another mutating optimisation.
@@ -124,6 +124,6 @@ flowchart TD
 Do not spend Xcode/gputrace budget on these CPU-only candidates until a
 no-gputrace A/B reduces the relevant sub-counter. The GPU shape is unchanged.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.01]] · [[present-pacing]] ·
-[[baselines-frame50.04]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.01](state-churn-encode-encode-phase.01.md) · [present-pacing](../present-pacing.md) ·
+[baselines-frame50.04](../baselines/baselines-frame50.04.md).

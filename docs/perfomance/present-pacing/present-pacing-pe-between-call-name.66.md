@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-between-call-family.65
 
 ## Question
 
-[[present-pacing-pe-between-call-family.65]] proved that H69's between-calls
+[present-pacing-pe-between-call-family.65](present-pacing-pe-between-call-family.65.md) proved that H69's between-calls
 gap is populated by D3D9 producer calls, but the second-largest family remained
 `unknown` because child COM calls were only grouped as `other_child`.
 

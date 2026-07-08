@@ -19,7 +19,7 @@ evidence to treat screen-blend index locality as an accepted explicit
 **Method.** Re-read the current post-stream/IB gate report and next-experiment
 queue. The current gate was built from frame60 backend/semantic artifacts and
 does not include `--screen-blend-semantic-csv`. The historical
-[[index-cache-locality-screenblend.04]] result records the `739 / 786,432`
+[index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) result records the `739 / 786,432`
 `lsb1` image tolerance, but the current trace tree does not expose that image
 comparison CSV as a gate input.
 
@@ -66,8 +66,8 @@ be treated as a production/default candidate or as a current Xcode-spend target
 until the exact/`lsb1` image CSV is reattached or regenerated in the same gate
 run.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-screenblend.04]] · next:
-[[index-cache-locality-screenblend.06]] · [[index-cache-locality-proofinput.01]] ·
-[[overview-3dmark05-gt1]] ·
-[[hidden-backend-storage]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · next:
+[index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md).

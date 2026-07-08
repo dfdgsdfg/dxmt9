@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-subphase-split-r1/3dmark05
 
 # Snapshot Submission Subphase Attribution
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.08]] cut the
+**Question / hypothesis.** After [state-churn-encode-encode-phase.08](../state-churn-encode/state-churn-encode-encode-phase.08.md) cut the
 binding-packet cache path, the largest named CPU bucket was still
 `d3d9_snapshot_draw_submission_cpu_ms` at about `19.7s` per 1,440-present run.
 Split `Device::snapshotDrawSubmissionFromCurrentState()` into lookup, copy,
@@ -122,5 +122,5 @@ separate lookup hash/key construction from hit/miss rebuild work inside
 dirty-token check. A 16-stream active-list cleanup is lower priority until the
 lookup bucket moves.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.03]] ·
-[[state-churn-encode-encode-phase.08]] · [[present-pacing]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.03](snapshot-cache-snapshot.03.md) ·
+[state-churn-encode-encode-phase.08](../state-churn-encode/state-churn-encode-encode-phase.08.md) · [present-pacing](../present-pacing.md).

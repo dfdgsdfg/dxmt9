@@ -65,6 +65,6 @@ axis has yet moved hidden bytes materially. A future non-reorder candidate must
 first clear the bytes/invocation preflight before spending Xcode capture time;
 otherwise the practical GPU path remains semantic-safe post-transform locality.
 
-**Related.** [[hidden-backend-storage]] · prev: [[hidden-backend-storage-shape.01]]
-· [[vsout-layout]] · [[index-cache-locality]] ·
-[[index-cache-locality-screenblend.04]] · [[tvb-mechanism-proof]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · prev: [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md)
+· [vsout-layout](../vsout-layout.md) · [index-cache-locality](../index-cache-locality.md) ·
+[index-cache-locality-screenblend.04](../index-cache-locality/index-cache-locality-screenblend.04.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md).

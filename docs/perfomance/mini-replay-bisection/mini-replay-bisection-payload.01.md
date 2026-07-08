@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L13723-L14202
 # Geometry Payload Smoke Scout
 
 **Question / hypothesis.** Close the geometry-bytes gap from
-[[mini-replay-bisection-harness.01]]: can the runtime dump raw index + referenced
+[mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md): can the runtime dump raw index + referenced
 stream bytes (and cbufs) for a selected hot draw window without mutating render
 state, producing a replayable payload?
 
@@ -37,7 +37,7 @@ were added because row-local draw windows are **not** robust cross-run selectors
 **Verdict.** TOOLING. Payload capture works. Two fidelity gaps surfaced: (1) some
 VS bind stream1 at Metal `buffer(6)` colliding with the replay cbuf slots; (2) the
 16-draw window spans 6 VS/PS pairs, so a single-PSO runner cannot replay it. Both
-fed [[mini-replay-bisection-harness.02]].
+fed [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md).
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-harness.01]] ·
-[[mini-replay-bisection-harness.02]] · [[index-reuse-measurement]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md) ·
+[mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) · [index-reuse-measurement](../index-reuse-measurement.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

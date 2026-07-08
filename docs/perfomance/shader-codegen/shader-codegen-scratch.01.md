@@ -44,6 +44,6 @@ Candidate run `app-d3d9-3dmark05-trim-vs-output-scratch-frame60-r1`.
 the per-primitive write shape points squarely at hidden backend (TVB/binning)
 storage below AIR, which is the primary surviving hypothesis.
 
-**Related.** [[shader-codegen]] · [[shader-codegen-temps.01]] (prior step) ·
-[[shader-codegen-offline.01]] (offline IR confirms the scratch is only 128 B) ·
-[[hidden-backend-storage]] · [[vsout-layout]]
+**Related.** [shader-codegen](../shader-codegen.md) · [shader-codegen-temps.01](shader-codegen-temps.01.md) (prior step) ·
+[shader-codegen-offline.01](shader-codegen-offline.01.md) (offline IR confirms the scratch is only 128 B) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [vsout-layout](../vsout-layout.md)

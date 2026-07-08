@@ -15,9 +15,9 @@ related: docs/perfomance/present-pacing/present-pacing-pe-clear-flush.22.md, doc
 
 ## Question
 
-[[present-pacing-pe-clear-flush.22]] rejected `DXMT9_PE_FLUSH_AFTER_CLEAR=1` as
+[present-pacing-pe-clear-flush.22](present-pacing-pe-clear-flush.22.md) rejected `DXMT9_PE_FLUSH_AFTER_CLEAR=1` as
 a simple producer-overlap lever on the earlier instrumented path. After the
-latest encode/copy cleanup and [[state-churn-encode-encode-phase.68]]'s
+latest encode/copy cleanup and [state-churn-encode-encode-phase.68](../state-churn-encode/state-churn-encode-encode-phase.68.md)'s
 low-overhead FPS gate, does the same earlier-PE-publish perturbation now create
 useful overlap or move sampled FPS?
 

@@ -45,6 +45,6 @@ counters — treat as broad vertex-stage/tiler scratch or spill-like device
 traffic. Low VS ALU limiter (`2.39%`) means ALU reduction is not the next
 target unless it also shrinks the vertex-stage memory footprint.
 
-**Related.** [[hidden-backend-storage-attribution.01]] · [[hidden-backend-storage]] ·
-[[hidden-backend-storage-model.01]] · [[vsout-layout]] · [[shader-codegen]] ·
-[[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]
+**Related.** [hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-model.01](hidden-backend-storage-model.01.md) · [vsout-layout](../vsout-layout.md) · [shader-codegen](../shader-codegen.md) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

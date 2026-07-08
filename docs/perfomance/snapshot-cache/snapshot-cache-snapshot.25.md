@@ -12,7 +12,7 @@ source: src/d3d9/core_draw.cpp; docs/perfomance/snapshot-cache/snapshot-cache-sn
 
 # Batch-Miss Uniform Payload Reuse Gate
 
-**Question.** After [[snapshot-cache-snapshot.24]] classified batch misses, can
+**Question.** After [snapshot-cache-snapshot.24](snapshot-cache-snapshot.24.md) classified batch misses, can
 the batch-miss path skip `makeDrawUniformPayloadFromState()` when the shader
 layout is reused or rebuilt but the uniform payload inputs are still identical?
 
@@ -108,5 +108,5 @@ should keep following the measured batch-miss shape:
   opportunity than this gate;
 - keep FPS claims tied to P4 overlap or a larger end-to-end P2/P3 reduction.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.23]] ·
-[[snapshot-cache-snapshot.24]] · [[present-pacing-current-p2p3.46]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) ·
+[snapshot-cache-snapshot.24](snapshot-cache-snapshot.24.md) · [present-pacing-current-p2p3.46](../present-pacing/present-pacing-current-p2p3.46.md).

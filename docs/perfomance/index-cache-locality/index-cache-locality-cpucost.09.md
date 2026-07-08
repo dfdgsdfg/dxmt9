@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-cach
 
 # Candidate Cache-Position Table
 
-**Question / hypothesis.** Since [[index-cache-locality-cpucost.08]] showed
+**Question / hypothesis.** Since [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md) showed
 `encode_draw_index_cache_candidate_select_cpu_ms` owns most of candidate build,
 does replacing repeated linear `cachePosition()` scans with a small position
 table reduce the select bucket without changing candidate choice?
@@ -77,6 +77,6 @@ work itself, not only make each score cheaper.
 - Replace full candidate-vector rescans with a bounded active frontier.
 - Add candidate-set size / score-scan counters before larger algorithm changes.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.08]] · next:
-[[index-cache-locality-cpucost.10]] · [[index-cache-locality-cpucost.07]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md) · next:
+[index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) · [index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md).

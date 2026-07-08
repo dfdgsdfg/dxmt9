@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-blendindices-window-r1-20260614/3dm
 
 # Encode Phase 66 - Blendindices Window
 
-**Question.** [[state-churn-encode-encode-phase.65]] narrowed the remaining
+**Question.** [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) narrowed the remaining
 constant-packing opportunity to indexed VS rows with static offsets `0;1;2` and
 relative sources `a0.x/a0.y`. Are the vertex BLENDINDICES values narrow enough
 to replace the current full `vsFloatConst[256]` fallback with a bounded window?
@@ -94,5 +94,5 @@ full indexed access semantics.
 - Prefer lower-risk cbuf work first: persistent/segmented storage, fewer table
   reopens, or upstream VS constant churn reduction.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.65]] ·
-[[state-churn-encode-encode-phase.64]] · [[snapshot-cache-snapshot.18]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
+[state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) · [snapshot-cache-snapshot.18](../snapshot-cache/snapshot-cache-snapshot.18.md).

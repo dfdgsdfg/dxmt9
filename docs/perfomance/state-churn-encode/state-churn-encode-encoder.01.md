@@ -33,7 +33,7 @@ transient vertex (~1.05GB) are the largest measured CPU-side writers, and
 stream/IB churn is *handle* churn — not offset/stride. Sets the two follow-on
 targets: cbuf mirror split and draw-run redesign around stable stream/IB handles.
 
-**Related.** [[state-churn-encode]] · next: [[state-churn-encode-encoder.02]] ·
-[[state-churn-encode-stream.01]] (stream split re-run) ·
-[[const-upload]] (the 4.64GB cbuf bucket) ·
-[[hidden-backend-storage]] (these CPU writers are not the GPU bucket).
+**Related.** [state-churn-encode](../state-churn-encode.md) · next: [state-churn-encode-encoder.02](state-churn-encode-encoder.02.md) ·
+[state-churn-encode-stream.01](state-churn-encode-stream.01.md) (stream split re-run) ·
+[const-upload](../const-upload.md) (the 4.64GB cbuf bucket) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (these CPU writers are not the GPU bucket).

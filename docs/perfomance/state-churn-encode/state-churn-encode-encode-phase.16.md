@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-sampler-state-hash-default-r2/3dmar
 
 # Texture Pre-Resolve Skip
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.15]] closed the
+**Question / hypothesis.** [state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) closed the
 sampler-side direct-lane hash tax. The next plausible texture-side bet was to
 skip `ctx.pool.findTexture()` and `textureForShaderRead()` before materializing
 the Metal texture handle when the D3D texture handle + sRGB flag already match
@@ -136,7 +136,7 @@ flowchart TD
 
 **Verdict.** Rejected as a default CPU win and removed from the hot path. The
 accepted default texture/sampler state remains
-[[state-churn-encode-encode-phase.15]].
+[state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md).
 
 **Next.** Do not spend another default-path experiment on pre-resolve texture
 source matching unless a narrower micro-benchmark proves both a parent-level win
@@ -144,5 +144,5 @@ and negligible hot-loop branch cost. Remaining encode work should move to larger
 named buckets: argbuf/cbuf build or upload, index setup/source resolve,
 shader-stream diversity, or issue cost.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.15]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) · [present-pacing](../present-pacing.md).

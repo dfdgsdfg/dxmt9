@@ -86,7 +86,7 @@ already entered/replayed many chunks:
 | replay starts | `23,777` | `14.349` | `52` | `11` | `20` |
 | replay ends | `22,444` | `13.545` | `51` | `11` | `19` |
 
-Those chunks are draw/const heavy, matching [[present-pacing-noenqueue-beforepublish.47]]:
+Those chunks are draw/const heavy, matching [present-pacing-noenqueue-beforepublish.47](present-pacing-noenqueue-beforepublish.47.md):
 
 | Chunk metric | total | per publish sample | per scanned chunk |
 |---|---:|---:|---:|
@@ -110,6 +110,6 @@ The next average-FPS candidate must either:
   decreasing `completion_wait_without_enqueue_ms`;
 - and keep normal visual output with skipped/error counters clean.
 
-Simple early-publish by draw-count remains rejected by [[present-pacing-drawchunk-limit.48]]
+Simple early-publish by draw-count remains rejected by [present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md)
 because it creates overlap by fragmenting command buffers/render passes and
 raises GPU/tiler cost.

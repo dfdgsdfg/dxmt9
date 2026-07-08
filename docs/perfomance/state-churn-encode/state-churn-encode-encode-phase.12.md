@@ -12,8 +12,8 @@ source: experiments/output/app-d3d9-3dmark05-stream-bind-phase-split-r1/3dmark05
 
 # Stream Bind Phase Split
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.10]] and
-the rejected dirty-identity probe in [[state-churn-encode-encode-phase.11]],
+**Question / hypothesis.** After [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) and
+the rejected dirty-identity probe in [state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md),
 `encode_draw_stream_bind_cpu_ms` remains one of the larger backend encode
 buckets (`2574.049ms` over the fast-append baseline). Split the parent bucket
 into raster-state, FFP stream, shader stream, texture/sampler, and index phases
@@ -108,5 +108,5 @@ resolve path, and shader-stream binding diversity. Do not treat this run as a
 performance regression or improvement; the added timers intentionally perturb
 the parent path and the run processed more presents.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.10]] ·
-[[state-churn-encode-encode-phase.11]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) ·
+[state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md) · [present-pacing](../present-pacing.md).

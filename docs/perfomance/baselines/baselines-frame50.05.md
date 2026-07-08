@@ -47,7 +47,7 @@ Status: pass. `run_experiment.py` exited before the top-level watchdog,
 `result.json` was written, `timed_out=true`, `returncode=143`, failures are
 empty, and `actual.png` is a normal GT1 machinegun bloom frame.
 
-**Result vs [[snapshot-cache-snapshot.10]] scout.**
+**Result vs [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md) scout.**
 
 Both runs encoded `1,680` presents. The current 120s run preserves the same
 counter shape:
@@ -104,5 +104,5 @@ submission remains `6487.666ms`, and submit batch append remains
 `2369.063ms`. These are CPU/pacing owners and do not justify a new Xcode
 gputrace by themselves.
 
-**Related.** [[baselines]] · [[snapshot-cache-snapshot.10]] ·
-[[state-churn-encode]] · [[present-pacing]].
+**Related.** [baselines](../baselines.md) · [snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md) ·
+[state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md).

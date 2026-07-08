@@ -37,7 +37,7 @@ this rejects order-preserving bounded draw partitioning for *both* opaque
 depth-writing hot rows. Next GPU probes must change backend state shape,
 material grouping, or primitive locality/order — not draw granularity.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-split.01]] · next: [[primitive-reorder-diagnostics-split.03]]
-· [[hidden-backend-storage]] (TVB bucket unmoved) ·
-[[index-cache-locality]] (semantic-safe order/locality successor) · [[baselines]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-split.01](primitive-reorder-diagnostics-split.01.md) · next: [primitive-reorder-diagnostics-split.03](primitive-reorder-diagnostics-split.03.md)
+· [hidden-backend-storage](../hidden-backend-storage.md) (TVB bucket unmoved) ·
+[index-cache-locality](../index-cache-locality.md) (semantic-safe order/locality successor) · [baselines](../baselines.md).

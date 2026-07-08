@@ -41,6 +41,6 @@ encoder ordinals: `1` (`1.07GB`), `4` (`856MB`), `0` (`849MB`).
 constants. "Skip PS constants" is the wrong first fix; the next split must find
 which fields inside `VsConsts`/`FfpVsConsts` are actually volatile per draw.
 
-**Related.** [[const-upload]] · next: [[const-upload-volatility.01]] ·
-[[state-churn-encode]] (stream/IB churn measured in the same run) ·
-[[hidden-backend-storage]] (the GPU bucket this CPU traffic is not).
+**Related.** [const-upload](../const-upload.md) · next: [const-upload-volatility.01](const-upload-volatility.01.md) ·
+[state-churn-encode](../state-churn-encode.md) (stream/IB churn measured in the same run) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (the GPU bucket this CPU traffic is not).

@@ -12,7 +12,7 @@ source: src/d3d9/core_draw.cpp; experiments/output/app-d3d9-3dmark05-snapshot-no
 
 # Batch Miss Refreshes Hot State In Place
 
-**Question / hypothesis.** After [[snapshot-cache-snapshot.27]] reduces
+**Question / hypothesis.** After [snapshot-cache-snapshot.27](snapshot-cache-snapshot.27.md) reduces
 batch-miss uniform build, the next local child is hot-state rebuild. The batch
 miss path already knows when render-state, TSS, and sampler `FlatStateSet`s are
 unchanged, but the old code still built a fresh `FlatDrawStateRecord`, copied
@@ -109,5 +109,5 @@ failure.
 serialized replay/snapshot lane but does not by itself prove that the average
 FPS bottleneck has been removed.
 
-**Related.** [[snapshot-cache-snapshot.27]] ·
-[[snapshot-cache-snapshot.26]] · [[state-churn-encode-encode-phase.146]].
+**Related.** [snapshot-cache-snapshot.27](snapshot-cache-snapshot.27.md) ·
+[snapshot-cache-snapshot.26](snapshot-cache-snapshot.26.md) · [state-churn-encode-encode-phase.146](../state-churn-encode/state-churn-encode-encode-phase.146.md).

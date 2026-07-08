@@ -96,8 +96,8 @@ flowchart TD
 - Another CPU-only `.gputrace`: Xcode is for GPU-hot-frame proof after a
   no-gputrace gate moves, not for re-proving the current P4 attribution.
 
-**Related.** [[present-pacing-tail-present-batch-current.88]] ·
-[[present-pacing-pre-present-opportunity.86]] ·
-[[present-pacing-completion-wait-overlap-current.84]] ·
-[[state-churn-encode-encode-phase.149]] ·
-[[state-churn-encode-encode-phase.150]].
+**Related.** [present-pacing-tail-present-batch-current.88](present-pacing-tail-present-batch-current.88.md) ·
+[present-pacing-pre-present-opportunity.86](present-pacing-pre-present-opportunity.86.md) ·
+[present-pacing-completion-wait-overlap-current.84](present-pacing-completion-wait-overlap-current.84.md) ·
+[state-churn-encode-encode-phase.149](../state-churn-encode/state-churn-encode-encode-phase.149.md) ·
+[state-churn-encode-encode-phase.150](../state-churn-encode/state-churn-encode-encode-phase.150.md).

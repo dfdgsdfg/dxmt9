@@ -145,6 +145,6 @@ Accepted as the current low-overhead P4 baseline.
   but insufficient unless `completion_wait_without_enqueue_ms` or frame sampling
   moves.
 
-**Related.** [[present-pacing-serial-stage-compare-gates.38]] ·
-[[present-pacing-systemtrace-p4-range.36]] ·
-[[state-churn-encode-encode-phase.102]] · [[present-pacing]].
+**Related.** [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
+[present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) ·
+[state-churn-encode-encode-phase.102](../state-churn-encode/state-churn-encode-encode-phase.102.md) · [present-pacing](../present-pacing.md).

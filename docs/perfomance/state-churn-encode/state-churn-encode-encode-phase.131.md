@@ -105,7 +105,7 @@ effects when cbuf pointers change. It should not be another "ignore non-cbuf
 payload bits" shortcut unless a future workload first shows nonzero
 `changed_nonconst_only`.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.63]] ·
-[[state-churn-encode-encode-phase.123]] ·
-[[state-churn-encode-encode-phase.130]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
+[state-churn-encode-encode-phase.123](state-churn-encode-encode-phase.123.md) ·
+[state-churn-encode-encode-phase.130](state-churn-encode-encode-phase.130.md).

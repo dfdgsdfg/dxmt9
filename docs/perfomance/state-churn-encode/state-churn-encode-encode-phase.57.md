@@ -4,10 +4,10 @@ date: 2026-06-14
 status: accepted-attribution
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-post-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-post-split-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-post-split-r1-20260614/actual.png, experiments/output/app-d3d9-3dmark05-argbuf-reopen-post-split-r1-20260614/compare-phase55-phase57.md
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.55]] split the
+**Question / hypothesis.** [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) split the
 legacy argbuf reopen parent and left an inferred `~319ms` post-open residual
 after actual `openArgbuf()`, table bind, cached cbuf repoint, and content probe.
-[[state-churn-encode-encode-phase.56]] then rejected whole-table pre-open reuse
+[state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md) then rejected whole-table pre-open reuse
 for GT1. This phase asks whether the phase55 post-open residual is one large
 hidden child or a set of small per-draw bookkeeping taxes.
 
@@ -112,6 +112,6 @@ Either reduce reopen frequency with a correctness proof that survives the
 per-draw table lifetime rule, or reduce the already-required cbuf repoint/probe
 control work by consolidating dirty classification and component decisions.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.55]] ·
-[[state-churn-encode-encode-phase.56]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
+[state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md).

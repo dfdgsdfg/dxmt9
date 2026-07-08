@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-curre
 
 ## Question
 
-After [[present-pacing-xctrace-cpu-summary-current.30]] proved PE
+After [present-pacing-xctrace-cpu-summary-current.30](present-pacing-xctrace-cpu-summary-current.30.md) proved PE
 `GetCurrentThreadId()` is not an xctrace-native thread id, can unix replay
 boundary telemetry select the real producer thread and validate the winemac
 `OnMainThread` transmission hypothesis?

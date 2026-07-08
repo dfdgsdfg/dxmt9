@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/fra
 
 # Scoped 60/0 Live-VSOut Xcode Counter Gate
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.07]] proved that the
+**Question / hypothesis.** [hidden-backend-storage-shape.07](hidden-backend-storage-shape.07.md) proved that the
 hash-scoped `DXMT9_TRIM_UNUSED_VARYINGS` path can isolate the `60/0` VS/PS pair
 at runtime. Does that visible `VSOut` reduction reduce Xcode's hidden
 `VS Buffer Device Memory Bytes Written / VS invocations` bucket?
@@ -148,6 +148,6 @@ stateDiagram-v2
   BelowAirDenominator --> BackendSpillProbe
 ```
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.06]] · [[hidden-backend-storage-shape.07]] ·
-[[vsout-layout]] · [[shader-codegen]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) · [hidden-backend-storage-shape.07](hidden-backend-storage-shape.07.md) ·
+[vsout-layout](../vsout-layout.md) · [shader-codegen](../shader-codegen.md).

@@ -73,7 +73,7 @@ Qualitative reading:
   effects are coherent; no weapon-attached black triangle or transparent rifle
   tear is visible.
 - `frame000920..960`: the large dark foreground shape is the moving scene
-  occluder class already discussed in [[snapshot-cache-visual.02]], not a
+  occluder class already discussed in [snapshot-cache-visual.02](snapshot-cache-visual.02.md), not a
   newly localized weapon/lighting failure in this window.
 - `actual.png`: multiple rifle muzzle flashes and bloom discs render in the
   wide firefight view.

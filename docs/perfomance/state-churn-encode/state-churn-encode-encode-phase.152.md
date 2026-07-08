@@ -83,7 +83,7 @@ meson compile -C build-arm64-nowine
 
 ## Runtime follow-up
 
-[[state-churn-encode-encode-phase.153]] runs the GT1 no-gputrace follow-up
+[state-churn-encode-encode-phase.153](state-churn-encode-encode-phase.153.md) runs the GT1 no-gputrace follow-up
 against a current run gated by the `v0.0.3` visual anchor. It compares:
 
 - `draw_uniform_payload_materialized`

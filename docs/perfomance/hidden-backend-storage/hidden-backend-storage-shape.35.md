@@ -14,7 +14,7 @@ related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.33.
 # Current Shader Dump Join Keeps the Hidden Owner Below Visible VSOut
 
 **Question / hypothesis.** After the current Xcode/dxmt join in
-[[hidden-backend-storage-shape.33]], can a current shader dump attach MSL source
+[hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md), can a current shader dump attach MSL source
 and PS varying liveness to the top frame60 Xcode rows strongly enough to reopen
 visible `VSOut` trimming as the next GPU lever?
 
@@ -117,6 +117,6 @@ PS liveness data is available, but it does not reopen visible varying width as
 the first-order performance lever. Hidden backend storage remains below the
 source-visible `VSOut` contract.
 
-**Related.** [[hidden-backend-storage-shape.33]] ·
-[[hidden-backend-storage-shape.34]] · [[vsout-layout]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) ·
+[hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) · [vsout-layout](../vsout-layout.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-curr
 
 # Encode Phase 79 - Encode-Slot PSO Resource-Shape Memo Paired A/B
 
-**Question.** [[state-churn-encode-encode-phase.78]] showed that the
+**Question.** [state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) showed that the
 default-off resource-shape memo behavior is wired and visually safe in a
 single smoke. Does the same current-code default-vs-enabled pair confirm that
 the CPU movement is real without the phase 77 validation overhead?
@@ -87,9 +87,9 @@ the broader GT1 performance goal.
 
 **Next gate.**
 
-- [[state-churn-encode-encode-phase.80]] repeats the default-vs-enabled pair.
+- [state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) repeats the default-vs-enabled pair.
   The CPU-local win repeats, but FPS remains noisy/flat.
-- [[state-churn-encode-encode-phase.81]] then promotes the path as default CPU
+- [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) then promotes the path as default CPU
   cleanup with `DXMT9_DISABLE_ENCODE_SLOT_PSO_RESOURCE_SHAPE_MEMO=1` as opt-out.
 - If the resource-shape key changes, rerun
   `DXMT9_PERF_ENCODE_SLOT_PSO_RESOURCE_SHAPE_OPPORTUNITY=1` first and require
@@ -99,5 +99,5 @@ the broader GT1 performance goal.
   `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and normal
   muzzle/bloom/fog visual output on repeated runs.
 
-**Related.** [[state-churn-encode-encode-phase.78]] ·
-[[state-churn-encode-encode-phase.77]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) ·
+[state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) · [state-churn-encode](../state-churn-encode.md).

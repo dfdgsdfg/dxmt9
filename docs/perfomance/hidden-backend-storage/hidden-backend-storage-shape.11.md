@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-visibility-scout-60-2-cachejoin-r1/
 
 # PSO Backend Churn Preflight
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.09]] keeps
+**Question / hypothesis.** [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) keeps
 PSO/state-shape spill or layout coupling as one possible below-AIR denominator
 mechanism. Does the current frame60 `60/x` encoder telemetry isolate PSO churn
 well enough to justify another Xcode `.gputrace` replay, or is the signal still
@@ -82,7 +82,7 @@ stateDiagram-v2
   IsolatedABRequired --> [*]: no isolated A/B yet
 ```
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.09]] ·
-[[mini-replay-bisection-texture.10]] · [[state-churn-encode]] ·
-[[index-cache-locality]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) ·
+[mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) · [state-churn-encode](../state-churn-encode.md) ·
+[index-cache-locality](../index-cache-locality.md).

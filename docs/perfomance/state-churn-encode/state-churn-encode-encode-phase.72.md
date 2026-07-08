@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-handle-reuse-opport
 
 # Encode Phase 72 - Encode-Slot PSO Handle Reuse Opportunity
 
-**Question.** [[state-churn-encode-encode-phase.71]] names the residual
+**Question.** [state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) names the residual
 encode-slot prefetch cost as repeated draw PSO lookup/key work. How much of
 that work resolves to a final PSO handle already seen in the same slot?
 
@@ -102,5 +102,5 @@ encode worker, default-off or guarded by a counter gate first, and require:
 machine-gun muzzle/bloom frame, not the black-screen or missing-bloom failure
 class.
 
-**Related.** [[state-churn-encode-encode-phase.71]] ·
-[[state-churn-encode-encode-phase.70]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) ·
+[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [state-churn-encode](../state-churn-encode.md).

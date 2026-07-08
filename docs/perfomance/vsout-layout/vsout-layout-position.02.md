@@ -47,4 +47,4 @@ movement is produced by the constant-fragment/raster/backend interaction with
 the hidden vertex-stage / TVB owner; constant-fragment still leaves `1548.284MiB`
 of VS writes, so fragment work is not the final owner either.
 
-**Related.** [[vsout-layout]] · control for [[vsout-layout-position.01]] · confirms [[hidden-backend-storage]] · [[backend-shape-classifiers]] · [[tvb-mechanism-proof]].
+**Related.** [vsout-layout](../vsout-layout.md) · control for [vsout-layout-position.01](vsout-layout-position.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · [backend-shape-classifiers](../backend-shape-classifiers.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md).

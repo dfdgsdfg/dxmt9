@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-fragment-direct-split-r1/3dmark05-p
 
 # Sampler State Hash Reuse
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.14]] moved skipped
+**Question / hypothesis.** [state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) moved skipped
 fragment sampler binds before `samplerStateFor()`, but the direct sampler lane
 still rebuilt the full sampler-state hash for every texture/sampler entry. Can
 the binding packet carry that hash once and reuse it in the sampler shadow key?
@@ -73,7 +73,7 @@ flat.
 
 **Default-profile result.** With `DXMT9_PERF_TEXTURE_SAMPLER_DIRECT_SPLIT`
 default off and `PerfScope(nullptr)` fixed to avoid a clock read, the same
-present comparison against [[state-churn-encode-encode-phase.14]] shows a small
+present comparison against [state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) shows a small
 accepted CPU win:
 
 | Counter | Sampler pre-handle skip | Sampler hash default r2 | Delta / reading |
@@ -116,5 +116,5 @@ perturbs the default perf profile.
 texture resolve, not sampler lookup or sampler hash. Broader frame-rate claims
 still need vsync-on wallclock or Xcode frame-gated evidence.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.14]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) · [present-pacing](../present-pacing.md).

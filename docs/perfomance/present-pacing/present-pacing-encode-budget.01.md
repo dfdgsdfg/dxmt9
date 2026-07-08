@@ -15,7 +15,7 @@ source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experi
 > Current status: the **budget sizing** in this note remains useful
 > (`encode_chunk_cpu_p50_ms` exceeded the 16.67 ms slot), but the specific
 > **"73% remainder = per-draw Metal bind calls"** attribution was rejected by
-> [[present-pacing-bind-cache-work-a.01]]. Treat this file as a historical
+> [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md). Treat this file as a historical
 > sizing note, not as an active bind-cache implementation plan.
 
 **Question / hypothesis.** Steps 1-3 foreclosed the present-side knob
@@ -26,7 +26,7 @@ dominant contributor, and quantify the target reduction.
 
 **Method.** Read existing time and count counters from the baseline
 `result.json`; no new instrumentation. Cross-reference with the DSync=0
-run from [[present-pacing-display-sync.01]] to confirm per-CB encode is
+run from [present-pacing-display-sync.01](present-pacing-display-sync.01.md) to confirm per-CB encode is
 stable across runs.
 
 **Result.**
@@ -50,7 +50,7 @@ p50 of per-chunk encode thread time:
 The p50 of **20.45 ms exceeds the 60 Hz vsync budget (16.67 ms)**. This
 is exactly why the frame misses a vsync slot most of the time —
 `completion_present_wait_p50_ms` was 23.978 ms in
-[[present-pacing-display-sync.01]] = one vsync slot + one missed slot.
+[present-pacing-display-sync.01](present-pacing-display-sync.01.md) = one vsync slot + one missed slot.
 
 ### Sub-attribution of `encode_draw_cpu_ms` (16,476.7 ms total)
 
@@ -88,7 +88,7 @@ later rejected it as the main GT1 wallclock lever.
 Per CB: **4,655,454 / 1,439 = 3,235 bind calls per CB on average.**
 At an estimated 3 μs per Metal bind call, that would be **9.7 ms / CB**,
 which appeared to match the 12 ms / CB unattributed remainder. That estimate
-was too weak to stand as attribution: [[present-pacing-bind-cache-work-a.01]]
+was too weak to stand as attribution: [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md)
 extended bind-skip coverage and got no wallclock gain.
 
 ### Draw-run batching state (already partially optimised)
@@ -104,7 +104,7 @@ extended bind-skip coverage and got no wallclock gain.
 | `submit_draw` | 1,050,346 | total submitted draws |
 
 Draw-run batching is *already active* (the binding-override fix from
-[[state-churn-encode]] is in effect — `commit_chunk_draw_run_binding_override_records = 258,290`),
+[state-churn-encode](../state-churn-encode.md) is in effect — `commit_chunk_draw_run_binding_override_records = 258,290`),
 but the average run length is small:
 `697,634 batched records / 370,226 groups = 1.88 draws per group`,
 i.e. most "batches" are 1-2 draws. **There is room.**
@@ -128,7 +128,7 @@ target:
    stops frames from slipping vsync slots.
 2. **73% of `encode_draw_cpu_ms` is unattributed**, but the bind-call
    count × estimated cost was only a plausibility argument. It is now
-   rejected as the main leverage axis by [[present-pacing-bind-cache-work-a.01]].
+   rejected as the main leverage axis by [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md).
 3. **Average draw-run size is 1.88 records** while the runtime allows
    runs up to 32. Even a 2× increase in run size would amortise bind
    overhead proportionally.
@@ -155,13 +155,13 @@ Concrete target levers:
 - **FVF decode caching**: `encode_draw_fvf_decode_cpu_ms = 788 ms` is
   small (5%) but the count is high. Cache decoded FVF per VS handle.
 
-Out of scope for this topic (lives in [[state-churn-encode]] /
-[[snapshot-cache]]):
+Out of scope for this topic (lives in [state-churn-encode](../state-churn-encode.md) /
+[snapshot-cache](../snapshot-cache.md)):
 
 - `d3d9_snapshot_draw_submission_cpu_ms = 19.8 s` on the PE thread.
   Runs in parallel with the encode thread, not on the wallclock-critical
-  path. Owned by [[snapshot-cache]].
+  path. Owned by [snapshot-cache](../snapshot-cache.md).
 
-**Next.** [[present-pacing-bind-cache-work-a.01]] supersedes the bind-cache
+**Next.** [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md) supersedes the bind-cache
 portion of this note. Future work should add narrower encode attribution or
 semantic draw-run experiments before spending implementation time.

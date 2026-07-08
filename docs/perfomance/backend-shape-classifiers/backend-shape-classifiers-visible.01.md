@@ -39,4 +39,4 @@ that is too small to matter against the ~1.63 GiB bucket. Hidden traffic is not
 tied to fragment visibility. The surviving target is Apple vertex-stage/backend
 storage that scales with submitted indexed primitive work, not visibility.
 
-**Related.** [[backend-shape-classifiers]] · used the [[vsout-layout]] drop-point-size baseline · confirms [[hidden-backend-storage]] scales with primitives · directly motivated the [[shader-codegen]] offline-Metal-codegen inspection · related [[backend-shape-classifiers-depthwrite.01]].
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · used the [vsout-layout](../vsout-layout.md) drop-point-size baseline · confirms [hidden-backend-storage](../hidden-backend-storage.md) scales with primitives · directly motivated the [shader-codegen](../shader-codegen.md) offline-Metal-codegen inspection · related [backend-shape-classifiers-depthwrite.01](backend-shape-classifiers-depthwrite.01.md).

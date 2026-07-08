@@ -47,7 +47,7 @@ The run timeout-finalized normally with `status=pass`, `present_encoded=1800`,
 and a normal machine-gun muzzle-flash GT1 frame. This is a no-gputrace CPU A/B,
 not an Xcode GPU proof.
 
-**Result versus [[present-pacing-stage-delta.08]].**
+**Result versus [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).**
 
 | Counter | phase08 | 2-way cache | Delta |
 |---|---:|---:|---:|
@@ -88,9 +88,9 @@ lever. A future binding-packet attempt needs a stronger identity or plan reuse
 that reduces plan/probe bytes instead of just keeping more full packet entries.
 The larger current encode owners remain argbuf setup/cbuf update, stream/index
 bind, pipeline lookup, issue cost, and the still exposed pre-publish
-replay/snapshot path from [[present-pacing-stage-delta.08]].
+replay/snapshot path from [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.08]] ·
-[[state-churn-encode-encode-phase.21]] ·
-[[present-pacing-stage-delta.08]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.08](state-churn-encode-encode-phase.08.md) ·
+[state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) ·
+[present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).

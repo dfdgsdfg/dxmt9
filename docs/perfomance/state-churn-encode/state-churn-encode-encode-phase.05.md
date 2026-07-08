@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-content-hash-r1/3dmark0
 
 # Category Identity Cbuf Repoint
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.04]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.04](state-churn-encode-encode-phase.04.md) showed that
 dirty-bit-only partial repoint has `0` hits because the hot case is a
 no-dirty whole-payload hash mismatch. The next hypothesis was that the payload
 mismatch is over-broad: VS, PS, and FFPPS entries can be compared and repointed
@@ -178,7 +178,7 @@ not justify an Xcode capture by itself.
 
 **Next.**
 
-1. Use [[state-churn-encode-encode-phase.06]] as the current visual smoke:
+1. Use [state-churn-encode-encode-phase.06](state-churn-encode-encode-phase.06.md) as the current visual smoke:
    the path renders a normal GT1 frame and keeps the identity counters stable,
    but this is not same-input exact image proof.
 2. Narrow FFPPS identity to the exact fields consumed by `buildFfpPsConsts()` to
@@ -186,6 +186,6 @@ not justify an Xcode capture by itself.
 3. After this cbuf path, the remaining encode CPU candidates are
    binding-packet cache construction and D3D9 snapshot/state rebuild.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.03]] ·
-[[state-churn-encode-encode-phase.04]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) ·
+[state-churn-encode-encode-phase.04](state-churn-encode-encode-phase.04.md) · [present-pacing](../present-pacing.md).

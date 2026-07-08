@@ -21,8 +21,8 @@ unreproduced visual regression that must gate further performance conclusions?
 **Verdict.** This is not a proof that the optimization work hit a hardware
 wall. For the sampled black-foreground firefight window, the cbuf-prefix owner
 is rejected and the class is not proven to be a post-`v0.0.3` regression:
-[[state-churn-encode-encode-phase.169]] shows full VS/PS cbuf uploads do not
-remove the sampled silhouettes, and [[state-churn-encode-encode-phase.172]]
+[state-churn-encode-encode-phase.169](../state-churn-encode/state-churn-encode-encode-phase.169.md) shows full VS/PS cbuf uploads do not
+remove the sampled silhouettes, and [state-churn-encode-encode-phase.172](../state-churn-encode/state-churn-encode-encode-phase.172.md)
 shows the same broad dark-foreground class also exists in the `v0.0.3` visual
 anchor. A separate weapon/lighting-coupled artifact can still be real, but it
 needs a same-frame or draw-local owner before it should redirect the performance

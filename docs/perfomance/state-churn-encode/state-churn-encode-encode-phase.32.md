@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-append-state-split-20260613/resul
 
 # Submission Generation Fast-Path Opportunity
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.31]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md) proved that
 the remaining state child is mostly `appendDrawState()` SoA storage. The first
 implementation bet tried to intern complete stored states inside `ChunkSlot`:
 if the same `CanonicalDrawState` reached `appendDrawRunBatch()` again, the batch
@@ -154,7 +154,7 @@ first-order waste is upstream value traffic and deep compatibility comparison.
 The next non-mutating implementation should add generation/lane opportunity
 counters before changing batching behavior.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.29]] ·
-[[state-churn-encode-encode-phase.30]] ·
-[[state-churn-encode-encode-phase.31]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
+[state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md) ·
+[state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md).

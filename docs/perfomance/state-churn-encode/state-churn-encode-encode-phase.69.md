@@ -111,7 +111,7 @@ flowchart LR
 ```
 
 **Decision.** Accepted as a diagnostic placement result, superseded by the
-default promotion in [[state-churn-encode-encode-phase.70]]. The `Present` record
+default promotion in [state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md). The `Present` record
 cost is not drawable acquire or present-boundary waiting; it is serialized
 `prepareSlotForPublish()` work, dominated by `prefetchSlotPipelines(slot)`.
 Disabling publish-time prefetch does not remove the total work: it transfers
@@ -130,7 +130,7 @@ candidate directions:
 - use `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH=1` for legacy-placement A/B until
   broader workloads clear cold-pipeline risk.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.68]] ·
-[[state-churn-encode-encode-phase.70]] · [[present-pacing]] ·
-[[present-pacing-publish-pso-prefetch.26]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md) ·
+[state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) · [present-pacing](../present-pacing.md) ·
+[present-pacing-publish-pso-prefetch.26](../present-pacing/present-pacing-publish-pso-prefetch.26.md).

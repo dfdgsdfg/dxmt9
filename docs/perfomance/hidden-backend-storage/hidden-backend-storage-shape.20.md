@@ -12,7 +12,7 @@ source: scripts/tools/summarize_3dmark05_perf_gates.py; tests/scripts/test_summa
 
 # Final-Writer Replay Oracle Is Now an Automated Gate
 
-**Question / hypothesis.** [[index-cache-locality-screenblend.10]] says the
+**Question / hypothesis.** [index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md) says the
 only remaining large locality bucket is sample-visible and needs a
 final-color/final-writer oracle before another Xcode capture. Can the current
 real-texture mini-replay summaries be attached to the full perf gate so that
@@ -77,10 +77,10 @@ a different final-color/final-writer oracle with enough safe LRU32 movement, or
 the next GPU experiment should switch to a non-reorder backend denominator
 mechanism.
 
-**Related.** [[hidden-backend-storage]] ·
-[[index-cache-locality-screenblend.10]] ·
-[[mini-replay-bisection-texture.02]] ·
-[[mini-replay-bisection-texture.04]] ·
-[[mini-replay-bisection-texture.05]] ·
-[[mini-replay-bisection-texture.06]] ·
-[[hidden-backend-storage-shape.19]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md) ·
+[mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md) ·
+[mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md) ·
+[mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md) ·
+[mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md) ·
+[hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -12,7 +12,7 @@ source: scripts/tools/plan_backend_escape_reduced_ab.py; tests/scripts/test_plan
 
 # Backend Escape Reduced A/B Plan
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.22]] blocks direct
+**Question / hypothesis.** [hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md) blocks direct
 GT1 Xcode spend because current backend escape surfaces require a reduced A/B
 or a new route. Can that requirement be made executable enough that future
 work knows exactly which precondition is missing and which equality/counter
@@ -95,6 +95,6 @@ expansion CSV attached, the Tile-FFP branch specifically says current widening
 is not the GT1 route; a programmable/textured tile or mesh route is required
 before reduced A/B.
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.21]] ·
-[[hidden-backend-storage-shape.22]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) ·
+[hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

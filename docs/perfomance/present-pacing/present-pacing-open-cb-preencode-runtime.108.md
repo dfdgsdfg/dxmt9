@@ -103,4 +103,4 @@ its current shape. The carrier reaches the split path and collapses Metal
 command-buffer count, but it fails ready-depth, P4/no-enqueue, render-pass, tile
 preservation, and GPU-time gates. Keep the code default-off as a prototype only;
 do not sweep this design or spend `.gputrace` budget without a new pass-safe
-carrier policy. See [[present-pacing-open-cb-preencode-runtime.109]].
+carrier policy. See [present-pacing-open-cb-preencode-runtime.109](present-pacing-open-cb-preencode-runtime.109.md).

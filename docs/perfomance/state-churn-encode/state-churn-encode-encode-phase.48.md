@@ -12,10 +12,10 @@ source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt
 
 # Default Same-Stamp Draw-State Elision
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.47]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.47](state-churn-encode-encode-phase.47.md) proved that
 the default path still materializes non-front draw-run state and then discards
 it in `appendDrawRunBatch()`. Can we promote the safe part of
-[[state-churn-encode-encode-phase.44]] without adopting stamp-only batching?
+[state-churn-encode-encode-phase.44](state-churn-encode-encode-phase.44.md) without adopting stamp-only batching?
 
 **Implementation.**
 
@@ -119,6 +119,6 @@ and broader encode cadence still need separate proof.
 - `meson compile -C build-win32-x86-builtin`
 - `scripts/tools/run_3dmark05_perf_probe.sh --suffix drawrun-default-state-elide-r1-20260614 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.44]] ·
-[[state-churn-encode-encode-phase.47]] · [[overview-3dmark05-gt1]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.44](state-churn-encode-encode-phase.44.md) ·
+[state-churn-encode-encode-phase.47](state-churn-encode-encode-phase.47.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

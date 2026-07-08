@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_draw_encoder.mm; scripts/tools/run_3dmark05_perf_probe.s
 
 # Draw-Time Texture Sidecar Dump Path
 
-**Question / gap.** [[mini-replay-bisection-semantic.02]] proved the selected
+**Question / gap.** [mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) proved the selected
 `60/2 depth-read + no-alpha-blend` window with clear depth and real D24X8 depth,
 but the mini-replay still binds 1x1 white textures for all sampled slots. Can we
 capture the actual draw-time shader-read texture payloads without using Xcode UI
@@ -59,7 +59,7 @@ sequenceDiagram
 ```
 
 **Target use for the current window.** The selected two-draw window in
-[[mini-replay-bisection-semantic.02]] samples six texture slots and uses these
+[mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) samples six texture slots and uses these
 handles:
 
 ```sh
@@ -105,9 +105,9 @@ resource key and bind it to each draw's manifest stage.
 
 **Current scope.** This is tooling, not the final semantic proof. The next step
 was to use the sidecars in a real-texture semantic replay. That follow-up is
-[[mini-replay-bisection-texture.02]]. The sidecar path itself is accepted as
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md). The sidecar path itself is accepted as
 the reusable capture/input apparatus.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-semantic.02]] ·
-[[mini-replay-bisection-texture.02]] · [[index-cache-locality]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) ·
+[mini-replay-bisection-texture.02](mini-replay-bisection-texture.02.md) · [index-cache-locality](../index-cache-locality.md).

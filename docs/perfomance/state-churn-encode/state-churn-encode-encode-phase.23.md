@@ -13,7 +13,7 @@ source: experiments/output/app-d3d9-3dmark05-current-visual-smoke-r1/3dmark05-pe
 # Draw Submission Batch Cbuf Payload Identity Fix
 
 **Question / hypothesis.** A later GT1 smoke showed black or translucent-looking
-geometry even though [[state-churn-encode-encode-phase.22]] rejected full VS/PS
+geometry even though [state-churn-encode-encode-phase.22](state-churn-encode-encode-phase.22.md) rejected full VS/PS
 cbuf upload as the likely fix. The visual lineage is useful here: this run used
 the `v0.0.1` historical screenshot diff that was available at the time as a
 broad-corruption triage artifact, not as the last safe code point. Current
@@ -151,5 +151,5 @@ should use a same-input mini-replay or stricter image gate before claiming exact
 visual correctness, and should avoid cache identity decisions that mix a
 per-draw payload with a base batched hot state.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.22]] · [[baselines-visual-capture.01]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.22](state-churn-encode-encode-phase.22.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

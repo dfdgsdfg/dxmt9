@@ -45,6 +45,6 @@ not a depth clear/load scalar. The next replay must preserve a wider `60/2`
 draw prefix so the same primitive/binning/backend state exists before the measured
 draws.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-replay.02]] ·
-[[mini-replay-bisection-replay.03]] · [[render-pass-store]] (rules out depth
-re-entry content) · [[hidden-backend-storage]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-replay.02](mini-replay-bisection-replay.02.md) ·
+[mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md) · [render-pass-store](../render-pass-store.md) (rules out depth
+re-entry content) · [hidden-backend-storage](../hidden-backend-storage.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

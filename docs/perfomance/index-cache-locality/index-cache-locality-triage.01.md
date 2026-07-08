@@ -39,8 +39,8 @@ probes, broad force-texture-white. Owner remains OPEN: hidden vertex/tiler/backe
 storage. Next high-signal work = same-row primitive/backend-shape A/B, or a small
 real-input semantic-tolerance replay gate for `50/2`.
 
-**Related.** [[index-cache-locality]] · [[index-cache-locality-screenblend.03]]
-(50/2 mechanism) · [[index-cache-locality-screenblend.04]] (explicit exact/`lsb1`
-policy) · [[backend-shape-classifiers]] (texture/state axes) ·
-[[primitive-reorder-diagnostics]] (sort-min-index reject) · [[hidden-backend-storage]]
-(the OPEN owner) · [[mini-replay-bisection]] (real-input replay path).
+**Related.** [index-cache-locality](../index-cache-locality.md) · [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md)
+(50/2 mechanism) · [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) (explicit exact/`lsb1`
+policy) · [backend-shape-classifiers](../backend-shape-classifiers.md) (texture/state axes) ·
+[primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) (sort-min-index reject) · [hidden-backend-storage](../hidden-backend-storage.md)
+(the OPEN owner) · [mini-replay-bisection](../mini-replay-bisection.md) (real-input replay path).

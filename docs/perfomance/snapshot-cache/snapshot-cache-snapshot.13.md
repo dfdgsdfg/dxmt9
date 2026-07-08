@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-batch-uniform-split-
 
 # Batch Miss Uniform Build Split
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.12]] named batch miss
+**Question / hypothesis.** [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) named batch miss
 `uniform_build` as the largest local child inside the queued
 `cachedBaseDrawStateForSubmissionBatch()` miss path. The previous uniform-build
 sub-counters were global, so direct miss, batch miss, and hit-refresh work were
@@ -106,5 +106,5 @@ uniform build. It is either:
 2. a proof that a subset of VS indexed-float shaders can hash narrower ranges
    without changing `DrawUniformPayload` identity.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.12]] ·
-[[state-churn-encode-encode-phase.46]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) ·
+[state-churn-encode-encode-phase.46](../state-churn-encode/state-churn-encode-encode-phase.46.md).

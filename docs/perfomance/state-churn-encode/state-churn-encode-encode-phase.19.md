@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-content-hash-off-r1/3dmark05-p
 
 # Cbuf Content Hash Removal
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.18]] identified
+**Question / hypothesis.** [state-churn-encode-encode-phase.18](state-churn-encode-encode-phase.18.md) identified
 `hashConstantBufferBytes()` as the largest remaining cbuf child:
 `570.070ms` total, with VS alone at `489.627ms`. Is that hash still part of a
 live correctness decision, or can the runtime rely on the existing full
@@ -131,5 +131,5 @@ cached repoint/content probe, binding writeback, and residual dispatch/timer
 cost. Do not spend more work on `hashConstantBufferBytes()` unless the legacy
 opt-in counter proves a non-zero path.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.18]] · [[baselines-visual-capture.01]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.18](state-churn-encode-encode-phase.18.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

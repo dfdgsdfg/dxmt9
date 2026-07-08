@@ -82,5 +82,5 @@ growing again; phase118/119 make it a residual, not the owner.
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py tests/scripts/test_compare_3dmark05_perf_counters.py -q`
 - `python3 scripts/tools/summarize_3dmark05_perf.py experiments/output/app-d3d9-3dmark05-uniform-stage-constants-split-current-r2 --require-uniform-compact-saved-bytes-present`
 
-**Related.** [[state-churn-encode-encode-phase.118]] ·
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.118](state-churn-encode-encode-phase.118.md) ·
+[state-churn-encode](../state-churn-encode.md).

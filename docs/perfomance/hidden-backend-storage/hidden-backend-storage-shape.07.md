@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/
 
 # Scoped 60/0 Live-VSOut Runtime Smoke
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.06]] found one narrow
+**Question / hypothesis.** [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) found one narrow
 offline shader candidate: hot row `60/0` has a `live-vsout` variant where the
 source-visible `VSOut` falls from `184 B` to `52 B` and the Metal IR scratch
 estimate falls from `128 B` to `0 B`. Can that candidate be isolated at runtime
@@ -101,7 +101,7 @@ The dumped allowlisted `60/0` source confirms the reduced runtime layout:
 
 ```metal
 struct VSOut {
-  float4 position [[position]];
+  float4 position /* MSL position attribute */;
   float4 color;
   float4 secondaryColor;
   float4 texcoord0;
@@ -150,7 +150,7 @@ If the Xcode counter does not move, this line should be closed as another
 visible-shape rejection and the hidden-denominator work should return to
 position/binning/tiler parameter storage or a separate backend mechanism.
 
-**Resolution.** [[hidden-backend-storage-shape.08]] ran this Xcode counter gate
+**Resolution.** [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) ran this Xcode counter gate
 and rejected the mechanism: the scoped `60/0` expected VSOut width fell, but
 `VS Buffer Device Memory Bytes Written / VS invocations` stayed flat.
 
@@ -167,6 +167,6 @@ flowchart TD
   Visual -- "Yes" --> Mechanism
 ```
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.05]] · [[hidden-backend-storage-shape.06]] ·
-[[vsout-layout]] · [[shader-codegen]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) · [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) ·
+[vsout-layout](../vsout-layout.md) · [shader-codegen](../shader-codegen.md).

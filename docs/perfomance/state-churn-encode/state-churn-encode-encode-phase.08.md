@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-binding-packet-plan-direct-r1/3dmar
 
 # Binding Packet Plan-Direct Cache
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.07]] showed the
+**Question / hypothesis.** [state-churn-encode-encode-phase.07](state-churn-encode-encode-phase.07.md) showed the
 binding-packet cache was paying twice: first to build/copy a separate
 `DrawBindingPacketKey`, then to compare that full key on the hot hit path.
 Remove the extra key object from the cache lookup and hash/probe the already
@@ -115,5 +115,5 @@ Further work here is lower priority than D3D9 snapshot/state rebuild
 associativity can still be tested later because misses remain mostly direct-map
 collisions, but it should not displace the larger CPU owners.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.07]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.07](state-churn-encode-encode-phase.07.md) · [present-pacing](../present-pacing.md).

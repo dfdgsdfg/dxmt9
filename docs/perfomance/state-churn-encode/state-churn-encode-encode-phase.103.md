@@ -15,8 +15,8 @@ related: docs/perfomance/present-pacing/present-pacing-summary-triage.40.md, doc
 
 ## Question
 
-[[present-pacing-summary-triage.40]] added a standalone P4/P2/P3 summary and
-the current scout in [[present-pacing-summary-triage-current.41]] named
+[present-pacing-summary-triage.40](../present-pacing/present-pacing-summary-triage.40.md) added a standalone P4/P2/P3 summary and
+the current scout in [present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) named
 `encode dequeue -> command buffer commit` as the largest exposed p50 no-enqueue
 row. Can the same single-run summary immediately show which encode child should
 be inspected next, without re-reading the full run counter table?
@@ -72,5 +72,5 @@ Promotion rule is unchanged: reducing one encode row is only an average-FPS
 claim when the same low-overhead run also moves completion wait, producer
 overlap, no-enqueue stage deltas, or frame sampling.
 
-**Related.** [[present-pacing-summary-triage.40]] ·
-[[present-pacing-summary-triage-current.41]] · [[state-churn-encode]].
+**Related.** [present-pacing-summary-triage.40](../present-pacing/present-pacing-summary-triage.40.md) ·
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).

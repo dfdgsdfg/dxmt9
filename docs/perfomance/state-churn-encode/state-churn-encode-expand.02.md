@@ -37,6 +37,6 @@ buffer writes. A secondary cleanup, not the primary GPU bottleneck. Visual
 correctness still unproven. This capture also motivated the `seq/enc` encoder
 labels for the later label-join.
 
-**Related.** [[state-churn-encode]] · prev: [[state-churn-encode-expand.01]] ·
-[[state-churn-encode-encoder.03]] (label-join follow-up) ·
-[[hidden-backend-storage]] (the unmoved ~1.63GiB write owner).
+**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-expand.01](state-churn-encode-expand.01.md) ·
+[state-churn-encode-encoder.03](state-churn-encode-encoder.03.md) (label-join follow-up) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (the unmoved ~1.63GiB write owner).

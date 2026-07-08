@@ -12,10 +12,10 @@ source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, sr
 
 # Discarded Materialized Draw-Run State Counter
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.44]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.44](state-churn-encode-encode-phase.44.md) proved that
 same-stamp non-front submissions can skip copied canonical state behind
 `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1`, but default remains conservative. After
-[[state-churn-encode-encode-phase.46]], the next producer-side question is how
+[state-churn-encode-encode-phase.46](state-churn-encode-encode-phase.46.md), the next producer-side question is how
 much materialized state is still built in the default path and then discarded
 because `appendDrawRunBatch()` stores only the batch front.
 
@@ -100,7 +100,7 @@ default-construction work.
 - `meson compile -C build-win32-x86-builtin`
 - `scripts/tools/run_3dmark05_perf_probe.sh --suffix drawrun-discarded-state-probe-r1-20260614 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.44]] ·
-[[state-churn-encode-encode-phase.46]] · [[snapshot-cache]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.44](state-churn-encode-encode-phase.44.md) ·
+[state-churn-encode-encode-phase.46](state-churn-encode-encode-phase.46.md) · [snapshot-cache](../snapshot-cache.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

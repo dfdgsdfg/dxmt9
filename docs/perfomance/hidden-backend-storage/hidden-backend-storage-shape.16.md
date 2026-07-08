@@ -78,6 +78,6 @@ is direct: sample-visible depth-read reorder remains blocked, so the next
 meaningful GPU work is either a real final-color/final-writer oracle or a new
 primitive-order-preserving backend mechanism.
 
-**Related.** [[hidden-backend-storage-shape.13]] ·
-[[hidden-backend-storage-shape.15]] · [[mini-replay-bisection-texture.10]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md) ·
+[hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) · [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

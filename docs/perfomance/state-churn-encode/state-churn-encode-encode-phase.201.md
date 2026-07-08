@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode.md, docs/perfomance/present-pacing.m
 
 ## Question
 
-After [[state-churn-encode-encode-phase.200]] removes part of the fixed-payload
+After [state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md) removes part of the fixed-payload
 find cost, is the remaining `submit_draw_run_batch_append_uniform_cpu_ms` row a
 large enough next implementation target, or is it now bounded local cleanup
 below the current P4/no-enqueue wall?
@@ -157,6 +157,6 @@ meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit --print-errorlogs
 git diff --check
 ```
 
-**Related.** [[state-churn-encode-encode-phase.198]] ·
-[[state-churn-encode-encode-phase.199]] ·
-[[state-churn-encode-encode-phase.200]] · [[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.198](state-churn-encode-encode-phase.198.md) ·
+[state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) ·
+[state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md) · [present-pacing](../present-pacing.md).

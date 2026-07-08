@@ -36,13 +36,13 @@ correctness-preserving reorder candidate plausible (precedent:
 `shouldAutoExpandIndexedDraw()` treats the same blend family specially).
 
 **Verdict.** Tooling. Enables the narrowed class experiments
-([[primitive-reorder-diagnostics-reverse.10]] alpha, [[primitive-reorder-diagnostics-reverse.11]]
-large4096, [[primitive-reorder-diagnostics-reverse.12]] large4096+alpha,
-[[primitive-reorder-diagnostics-reverse.13]] large4096+alpha+scissor,
-[[primitive-reorder-diagnostics-reverse.14]] opaque-large). The screen-blend
+([primitive-reorder-diagnostics-reverse.10](primitive-reorder-diagnostics-reverse.10.md) alpha, [primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md)
+large4096, [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md) large4096+alpha,
+[primitive-reorder-diagnostics-reverse.13](primitive-reorder-diagnostics-reverse.13.md) large4096+alpha+scissor,
+[primitive-reorder-diagnostics-reverse.14](primitive-reorder-diagnostics-reverse.14.md) opaque-large). The screen-blend
 safety observation directly seeded the semantic-safe optimization path in
-[[index-cache-locality]].
+[index-cache-locality](../index-cache-locality.md).
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.08]]
-· sibling tooling: [[primitive-reorder-diagnostics-reverse.04]] · [[index-cache-locality]]
-· [[index-reuse-measurement]] (shared class buckets).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md)
+· sibling tooling: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md) · [index-cache-locality](../index-cache-locality.md)
+· [index-reuse-measurement](../index-reuse-measurement.md) (shared class buckets).

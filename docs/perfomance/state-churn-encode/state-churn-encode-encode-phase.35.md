@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20
 
 # In-Place Queued Submission Fill
 
-**Question / hypothesis.** F2 from [[state-churn-encode-encode-phase.32]]
+**Question / hypothesis.** F2 from [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md)
 identified a direct value-traffic waste in `queueDraw*Submission()`:
 construct a large local `DrawRunSubmission`, fill it, then move it into
 `pendingDrawSubmissions`. Replacing that with `emplace_back()` and filling the
@@ -109,6 +109,6 @@ unnecessary value traffic. Do not expect it to move FPS by itself. Continue with
 either persistent replay scratch as an isolated F2 follow-up or the broader F1
 copy-elision/state-width work.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.32]] ·
-[[state-churn-encode-encode-phase.34]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) ·
+[state-churn-encode-encode-phase.34](state-churn-encode-encode-phase.34.md).

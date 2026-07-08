@@ -33,5 +33,5 @@ dominates the small per-source cache; the last-hit micro-cache does not match th
 but lookup itself is cheap; the remaining CPU side-effect is cold candidate build/gate
 cost plus the broader indexed setup path, not lookup structure.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.01]]
-· next: [[index-cache-locality-cpucost.03]] (the build, the actual owner).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.01](index-cache-locality-cpucost.01.md)
+· next: [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md) (the build, the actual owner).

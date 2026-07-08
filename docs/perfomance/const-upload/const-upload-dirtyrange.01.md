@@ -14,7 +14,7 @@ source: specs/perfomance.plan.md#L4559-L4634
 
 **Question / hypothesis.** The VS cbuf upload width is dominated by a stale dirty
 high-water (~`205` regs) far above actual shader use (~`31`)
-([[const-upload-range.01]]). Fix `DirtyState` consumption so clearing VS/PS
+([const-upload-range.01](const-upload-range.01.md)). Fix `DirtyState` consumption so clearing VS/PS
 constant dirty bits also clears the matching range high-water counters, keeping
 `maxChangedVsF` scoped to pending dirty work instead of letting one old
 high-register write inflate every later VS upload.
@@ -39,6 +39,6 @@ transient upload bytes. Because `gpu_command_buffer_time_ms` stays in class,
 VS/FFP-VS cbuf writes are NOT the primary GT1 GPU limiter. Next targets: stream/
 IB churn and render-pass/store, with the `13.8%` indexed/full-struct VS fallback.
 
-**Related.** [[const-upload]] · prev: [[const-upload-range.01]] · next:
-[[const-upload-dirtyrange.02]] (the Xcode capture confirming GPU unmoved) ·
-[[state-churn-encode]] · [[render-pass-store]] · [[hidden-backend-storage]].
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-range.01](const-upload-range.01.md) · next:
+[const-upload-dirtyrange.02](const-upload-dirtyrange.02.md) (the Xcode capture confirming GPU unmoved) ·
+[state-churn-encode](../state-churn-encode.md) · [render-pass-store](../render-pass-store.md) · [hidden-backend-storage](../hidden-backend-storage.md).

@@ -145,8 +145,8 @@ non-cbuf payload hash pruning unless a future counter first becomes non-zero.
 This probe is CPU attribution only; `.gputrace` is still needed for GPU backend
 storage questions, but the argbuf component split does not need Xcode replay.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.131]] ·
-[[state-churn-encode-encode-phase.132]] ·
-[[state-churn-encode-encode-phase.133]] ·
-[[state-churn-encode-encode-phase.135]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·
+[state-churn-encode-encode-phase.132](state-churn-encode-encode-phase.132.md) ·
+[state-churn-encode-encode-phase.133](state-churn-encode-encode-phase.133.md) ·
+[state-churn-encode-encode-phase.135](state-churn-encode-encode-phase.135.md).

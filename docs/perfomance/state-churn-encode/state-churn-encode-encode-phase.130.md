@@ -103,6 +103,6 @@ these larger gates:
 - P4 overlap, proven by increasing `completion_wait_with_enqueue` or lowering
   `completion_wait_without_enqueue`.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.127]] ·
-[[state-churn-encode-encode-phase.128]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.127](state-churn-encode-encode-phase.127.md) ·
+[state-churn-encode-encode-phase.128](state-churn-encode-encode-phase.128.md) · [present-pacing](../present-pacing.md).

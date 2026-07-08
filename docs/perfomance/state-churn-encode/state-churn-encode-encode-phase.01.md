@@ -112,7 +112,7 @@ lever because Work A did not move wallclock; future CPU work should target
 argbuf table lifetime/repoint frequency and binding-packet/texture bookkeeping
 with narrow counters or A/Bs.
 
-**Next.** [[state-churn-encode-encode-phase.02]] adds child counters and
+**Next.** [state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) adds child counters and
 narrows the parent buckets further:
 `argbuf_cbuf_update=3.92s`, `binding_packet_cache=1.87s`,
 `argbuf_open=1.21s`.
@@ -120,5 +120,5 @@ narrows the parent buckets further:
 Only after those sub-buckets name a concrete mechanism should we try a
 mutating A/B.
 
-**Related.** [[state-churn-encode]] · [[present-pacing]] ·
-[[present-pacing-bind-cache-work-a.01]] · [[baselines-frame50.04]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md) ·
+[present-pacing-bind-cache-work-a.01](../present-pacing/present-pacing-bind-cache-work-a.01.md) · [baselines-frame50.04](../baselines/baselines-frame50.04.md).

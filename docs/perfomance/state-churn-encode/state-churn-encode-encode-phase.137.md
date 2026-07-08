@@ -138,7 +138,7 @@ targets should be:
 3. Keep P4/frame gates as promotion criteria; local `0.55ms/present` VS cbuf
    CPU cannot explain the full `8-22fps` wall-clock limit alone.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.134]] ·
-[[state-churn-encode-encode-phase.136]] ·
-[[state-churn-encode-encode-phase.138]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.134](state-churn-encode-encode-phase.134.md) ·
+[state-churn-encode-encode-phase.136](state-churn-encode-encode-phase.136.md) ·
+[state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md).

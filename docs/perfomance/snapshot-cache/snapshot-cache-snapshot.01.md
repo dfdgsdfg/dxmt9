@@ -49,6 +49,6 @@ layout, hot state, and uniforms. The optimization target shifts from "const uplo
 breaks submit" (already safe) to "split stable PSO/binding state from volatile
 uniform state."
 
-**Related.** [[snapshot-cache]] · next [[snapshot-cache-snapshot.02]] · the CPU
-counter design [[overview]] · churn axis [[state-churn-encode]] ·
-indexed path [[index-cache-locality]] · const path [[const-upload]] · [[overview-3dmark05-gt1]]
+**Related.** [snapshot-cache](../snapshot-cache.md) · next [snapshot-cache-snapshot.02](snapshot-cache-snapshot.02.md) · the CPU
+counter design [overview](../overview.md) · churn axis [state-churn-encode](../state-churn-encode.md) ·
+indexed path [index-cache-locality](../index-cache-locality.md) · const path [const-upload](../const-upload.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

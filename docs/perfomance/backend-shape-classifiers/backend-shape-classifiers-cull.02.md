@@ -42,4 +42,4 @@ cleanly separates the small named tiled counters (~30 MiB) from the much larger
 hidden bucket (~1627 MiB) — roughly **55x** apart. Named tiler counters are a
 classifier, not the optimization target.
 
-**Related.** [[backend-shape-classifiers]] · expands [[backend-shape-classifiers-cull.01]], precedes [[backend-shape-classifiers-cull.03]] and [[backend-shape-classifiers-cull.04]] · key evidence for [[hidden-backend-storage]] (named tiled ≠ hidden bucket).
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · expands [backend-shape-classifiers-cull.01](backend-shape-classifiers-cull.01.md), precedes [backend-shape-classifiers-cull.03](backend-shape-classifiers-cull.03.md) and [backend-shape-classifiers-cull.04](backend-shape-classifiers-cull.04.md) · key evidence for [hidden-backend-storage](../hidden-backend-storage.md) (named tiled ≠ hidden bucket).

@@ -25,7 +25,7 @@ Validation: `tests/native/backend/render_pass_actions_spec.cpp` (allow case +
 draw-target/texture-sample/present blocking cases). GT1 run:
 `experiments/output/app-d3d9-3dmark05-color-next-clear-dontcare/`.
 
-**Result.** Compared to the re-entry baseline ([[render-pass-store-reentry.01]]):
+**Result.** Compared to the re-entry baseline ([render-pass-store-reentry.01](render-pass-store-reentry.01.md)):
 
 | Metric | Re-entry baseline | Color next-clear | Delta |
 |---|---:|---:|---:|
@@ -45,6 +45,6 @@ preservation-before-clear — contents are later Loaded, not discarded by a clea
 The next render-pass fix must attack pass ordering/coalescing under explicit
 dependency checks, not expect simple `StoreActionDontCare` to fire.
 
-**Related.** [[render-pass-store]] · prior: [[render-pass-store-dontcare.01]]
-(the design) · next: [[render-pass-store-passchain.01]] (split that confirms most
-switches change both attachments) · [[render-pass-store-reentry.01]] (baseline).
+**Related.** [render-pass-store](../render-pass-store.md) · prior: [render-pass-store-dontcare.01](render-pass-store-dontcare.01.md)
+(the design) · next: [render-pass-store-passchain.01](render-pass-store-passchain.01.md) (split that confirms most
+switches change both attachments) · [render-pass-store-reentry.01](render-pass-store-reentry.01.md) (baseline).

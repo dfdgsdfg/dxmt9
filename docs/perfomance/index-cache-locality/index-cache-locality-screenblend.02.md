@@ -34,10 +34,10 @@ depth write off, no alpha-test/clip/stencil; largest groups `33` draws / `25` hi
 subset can reduce effective LRU32 inside the dominant `50/2` row, but at this stage
 the path was profiling-only: screen-blend output is destination-dependent and prior
 same-input FS probes showed small image differences. Later
-[[index-cache-locality-screenblend.04]] formalizes the only allowed promotion path:
+[index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) formalizes the only allowed promotion path:
 explicit exact/`lsb1` semantic policy.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-screenblend.01]]
-· next: [[index-cache-locality-screenblend.03]] · [[index-cache-locality-screenblend.04]]
-· [[index-cache-locality-opaque.03]]
-(50/2 left untouched there) · [[hidden-backend-storage]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-screenblend.01](index-cache-locality-screenblend.01.md)
+· next: [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md) · [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md)
+· [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md)
+(50/2 left untouched there) · [hidden-backend-storage](../hidden-backend-storage.md).

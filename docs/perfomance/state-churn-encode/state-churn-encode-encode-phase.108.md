@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.
 
 ## Question
 
-After [[state-churn-encode-encode-phase.107]] changes the dirty FFP PS argbuf
+After [state-churn-encode-encode-phase.107](state-churn-encode-encode-phase.107.md) changes the dirty FFP PS argbuf
 cbuf update to build directly into transient storage, does the current 3DMark05
 GT1 run still render normally, and is the changed lane large enough to remain a
 credible FPS owner?
@@ -114,5 +114,5 @@ this artifact as the current-head scout; future argbuf candidates should gate
 `argbuf_cbuf_update`, `argbuf_cbuf_update_vs`, or `argbuf_open` against a fresh
 baseline.
 
-**Related.** [[state-churn-encode-encode-phase.104]] ·
-[[state-churn-encode-encode-phase.107]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+[state-churn-encode-encode-phase.107](state-churn-encode-encode-phase.107.md) · [state-churn-encode](../state-churn-encode.md).

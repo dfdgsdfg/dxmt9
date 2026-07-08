@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-active-fill-split.58.m
 
 ## Question
 
-[[present-pacing-pe-active-fill-split.58]] showed that active PE chunk fill is
+[present-pacing-pe-active-fill-split.58](present-pacing-pe-active-fill-split.58.md) showed that active PE chunk fill is
 mostly wall time between appendable records. This run asks which record
 transitions own that inter-append gap.
 

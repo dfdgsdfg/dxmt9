@@ -101,5 +101,5 @@ For average FPS, this result keeps the priority on larger P2/P3/P4 overlap and
 replay/encode stage shape. The no-enqueue completion wait remains about
 `25.5ms/present`, while GPU command-buffer execution is about `3.1ms/present`.
 
-**Related.** [[state-churn-encode-encode-phase.127]] -
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.127](state-churn-encode-encode-phase.127.md) -
+[state-churn-encode](../state-churn-encode.md).

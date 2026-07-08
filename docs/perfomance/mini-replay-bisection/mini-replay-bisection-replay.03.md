@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L14783-L14878
 # Wider Encoder2 Payload Capture
 
 **Question / hypothesis.** If depth/scissor are not the missing owner
-([[mini-replay-bisection-depth.01]]), does replaying the **whole** `60/2`
+([mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md)), does replaying the **whole** `60/2`
 encoder2 geometry/material sequence reproduce the original hot-row vertex-stage
 write dominance? This tests whether the wider draw sequence and the backend state
 it induces is the missing condition.
@@ -39,8 +39,8 @@ memory-pressure class as the hot row — GPU close to original (18.115 vs 20.327
 and VS write even higher (1090.901 vs 981.171 MiB). The missing condition was the
 wider encoder2 sequence, not depth/scissor. The sorted-row control (similar VS inv
 but only 442.6B/VS inv) proves raw vertex count is insufficient. Next: bisect this
-113-draw replay ([[mini-replay-bisection-bisect.01]]).
+113-draw replay ([mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md)).
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-depth.01]] ·
-[[mini-replay-bisection-bisect.01]] · [[hidden-backend-storage]] ·
-[[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) ·
+[mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[tvb-mechanism-proof](../tvb-mechanism-proof.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

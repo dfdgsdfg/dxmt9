@@ -16,7 +16,7 @@ related: docs/perfomance/present-pacing/present-pacing-current-frontier.89.md, d
 ## Question
 
 After the compact-uniform breakdown timers were gated off again in
-[[state-churn-encode-encode-phase.160]], does the current no-gputrace path still
+[state-churn-encode-encode-phase.160](../state-churn-encode/state-churn-encode-encode-phase.160.md), does the current no-gputrace path still
 attribute the average-FPS P4 owner to PE producer/replay cadence, or did the
 frontier move back to compact uniform, GPU hot-frame work, or queue publish
 wait?

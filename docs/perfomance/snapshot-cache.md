@@ -1,13 +1,13 @@
 # Snapshot Cache — D3D9 frontend draw-state snapshot/rebuild CPU bottleneck
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
 
 ## Scope & question
 
 This domain owns the **D3D9 importer-side draw-state snapshot/rebuild** cost.
 It started as the single largest CPU consumer in GT1 (~21s per no-gputrace run),
 but after the accepted snapshot hash work it is no longer the top current CPU
-bucket: [[snapshot-cache-snapshot.09]] reports
+bucket: [snapshot-cache-snapshot.09](snapshot-cache/snapshot-cache-snapshot.09.md) reports
 `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents, while
 backend `encode_draw_cpu_ms` is `17711.215`.
 It covers the `CachedBaseDrawState` instrumentation, the hot-state/uniform
@@ -15,50 +15,50 @@ invalidation split, the miss-reason classification (which found stream/IB handle
 churn dominates), the binding-agnostic snapshot that tripled hit rate but exposed a
 PSO-prefetch/texture mismatch, and the layout-stride fix that made PSO prefetch
 functional again. It is a **CPU track**, distinct from the GPU "hidden VS buffer
-write" owner ([[hidden-backend-storage]]).
+write" owner ([hidden-backend-storage](hidden-backend-storage.md)).
 
 ## Hypotheses & verdicts
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Snapshot rebuild is a first-class CPU bottleneck; the base cache serves zero hits | confirmed (model) | [[snapshot-cache-snapshot.01]] |
-| H2 | Splitting hot-state vs uniform-only invalidation lifts hits and cuts CPU | partial / inconclusive (hits 0→126k, CPU −3% only) | [[snapshot-cache-snapshot.02]] |
-| H3 | Remaining misses are dominated by stream/IB handle churn | confirmed (model) | [[snapshot-cache-snapshot.03]] |
-| H4 | A binding-agnostic snapshot (stream/IB carried in override) raises hit rate | accepted hit-rate (16.5%→46.3%) but regresses pipeline-lookup CPU | [[snapshot-cache-binding.01]] |
-| H5 | Preserving extra-stream stride in the layout restores usable PSO prefetch | accepted | [[snapshot-cache-prefetch.01]] |
-| H6 | Fixing the snapshot/prefetch path reduces the GPU bottleneck | rejected (GPU owner unchanged; CPU/pacing waits remain) | [[snapshot-cache-prefetch.01]] |
-| H7 | Snapshot submission CPU is owned by copy/override work after cache reuse | rejected; cache lookup itself owns 94.08% | [[snapshot-cache-snapshot.04]] |
-| H8 | Reusing uniform component hashes removes duplicated cache-lookup hashing | accepted CPU win; snapshot CPU/present -39.21%, lookup/present -41.73% | [[snapshot-cache-snapshot.05]] |
-| H9 | Same-value D3D9 state setters are causing avoidable snapshot invalidation | rejected; temporary no-op counters were all `0` | [[snapshot-cache-snapshot.06]] |
-| H10 | Remaining uniform payload build cost is large state copy / FFP construction | rejected; `hashDrawUniformPayload()` owns ~85.75% of combined parent build | [[snapshot-cache-snapshot.07]] |
-| H11 | Shader-usage/range-aware uniform payload hashing can remove the full payload hash cost | accepted CPU win; hash/build `11.322us→2.590us`, parent build `13.204us→4.372us` | [[snapshot-cache-snapshot.08]] |
-| H12 | Non-bytecode/FFP shaders can avoid programmable constant full fallback | accepted CPU win; PS full fallback `84,380→0`, hash/build `2.590us→2.082us` | [[snapshot-cache-snapshot.09]] |
-| H13 | Cache-hit uniform refresh can reuse non-constant payload fields and hashes | accepted CPU win; uniform refresh `2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, FPS flat | [[snapshot-cache-snapshot.10]] |
-| H14 | Current lookup residual belongs to the queued draw-submission batch lane, not direct/no-index ambiguity | accepted attribution; batch hit+miss `5692.001ms` matches lookup parent `5892.464ms`, direct miss `1283.032ms` is separate draw-run caller work | [[snapshot-cache-snapshot.11]] |
-| H15 | Batch miss is dominated by uniform-build and hot-build, not shader-layout rebuild | accepted attribution; batch miss `4756.913ms` splits into uniform build `2083.529ms`, hot build `1774.774ms`, shader layout `607.942ms` | [[snapshot-cache-snapshot.12]] |
-| H16 | Batch miss uniform-build is dominated by hashing, not copy or FFP construction | accepted attribution; batch uniform build `2175.433ms` splits into hash `1413.471ms` (`64.97%`), VS constant hash `490.107ms`, non-constant hash `677.447ms`; VS full fallback remains indexed-float (`73,676` calls) | [[snapshot-cache-snapshot.13]] |
-| H17 | Batch miss non-constant hashes can be reused when non-constant uniform generation is unchanged | accepted CPU win; reuse hits `376,949 / 418,143` (`90.15%`), non-constant hash `677.447ms→73.490ms`, batch uniform build `2175.433ms→1591.208ms`, FPS flat | [[snapshot-cache-snapshot.14]] |
-| H18 | Batch miss hot-build is dominated by repeated flat state-set materialization | accepted attribution; render-state `FlatStateSet` build `1202.861ms` owns the split, ahead of key build `485.840ms`, sampler `213.765ms`, and TSS `204.392ms` | [[snapshot-cache-snapshot.15]] |
-| H19 | Batch miss flat-state sets can be reused by exact dirty generation | accepted CPU win; render/TSS/sampler flat reuse hit rates `90.12%` / `99.36%` / `79.93%`, hot-build `1.444→0.684ms/present`, snapshot submission `4.255→3.469ms/present`, FPS flat/noisy | [[snapshot-cache-snapshot.16]] |
-| H20 | Same-generation/lane draws can also elide adjacent uniform snapshots | rejected for GT1; state elision fires `411,758` times, but uniform elision fires `0` times because `uniformGeneration` changes across those groups | [[snapshot-cache-snapshot.17]] |
-| H21 | VS indexed-float fallback can safely hash full float constants but prefix int/bool tails | rejected as next target; safe tail reduction is real but only `20.720MB` / `5.47%` of batch VS-constant hash bytes | [[snapshot-cache-snapshot.18]] |
-| H22 | Batch-miss shader layout can be reused for reason-mask-safe misses | accepted micro-win; compatible rebuilds are `154,985 / 380,288` (`40.75%`), but the safe default subset is only `7,565 / 390,712` (`1.94%`), cutting shader-layout rebuild `0.3715→0.3386ms/present` | [[snapshot-cache-snapshot.19]] |
-| H23 | Adjacent uniform snapshot elision is blocked only by the same-state/lane safety gate | rejected; same-`uniformGeneration` adjacent submissions are `0`, including the different-state/lane opportunity bucket | [[snapshot-cache-snapshot.20]] |
-| H24 | Current stream/IB miss-reason counts mean binding churn still owns binding-agnostic snapshot misses | rejected-current-owner; pure binding invalidation already avoids stable-generation bumps | [[snapshot-cache-snapshot.21]] |
-| H25 | Redundant shader constant records should not invalidate the uniform cache | accepted cleanup but rejected as current owner; native gate passes, GT1 still has `0` adjacent uniform-generation reuse | [[snapshot-cache-snapshot.22]] |
-| H26 | After Stage 2b direct-cbuf, the remaining P2/P3 snapshot owner is batch-miss uniform/hot construction | accepted current attribution; direct-cbuf run leaves `d3d9_snapshot_cache_lookup_cpu_ms=2.859ms/present`, with batch miss `2.162ms/present`, uniform build `0.883ms/present`, and hot build `0.707ms/present` | [[snapshot-cache-snapshot.23]] |
-| H27 | Batch-miss reason buckets are needed before choosing the next snapshot rewrite | accepted classification; texture is present in `75%` of batch misses and is the largest single bucket, but mixed rows are mostly `shader+FVF/VDecl` (`80.117%`) with `texture+shader+FVF/VDecl` at `42.761%`, so the target is co-churn/interner, not texture-only | [[snapshot-cache-snapshot.24]] |
-| H28 | Batch misses can often reuse the whole cached uniform payload after layout-safe misses | accepted cleanup, rejected next owner; the gate removes only `4,752` batch-miss uniform builds (`-1.13%`) and lookup falls `2.850 -> 2.843ms/present`, so batch-miss count/churn and hot-state storage remain larger targets | [[snapshot-cache-snapshot.25]] |
-| H29 | Current summaries should rank replay, queue-submission, snapshot, and batch-miss owners together | accepted tooling/current attribution; low-overhead and direct-cbuf continuation runs both show replay `~8.3ms/present`, queue submission `~4.1-4.2ms/present`, snapshot `~3.4-3.5ms/present`, lookup `~2.8-2.9ms/present`, and batch miss `~2.1ms/present`, so direct-cbuf does not move the remaining P2/P3 owner | [[snapshot-cache-snapshot.26]] |
-| H30 | Batch misses should reuse non-constant uniform payload fields when only shader constants changed | accepted CPU win, FPS flat; keeping cached FFP/non-constant fields and refreshing only VS/PS constants cuts batch-miss uniform build `0.871 -> 0.596ms/present`, lookup `2.925 -> 2.655ms/present`, and queue submission `4.209 -> 3.975ms/present`, while sampled FPS stays `16.666 -> 16.662` | [[snapshot-cache-snapshot.27]] |
-| H31 | Batch misses should refresh `cache.hot` in place instead of constructing a fresh `FlatDrawStateRecord` | accepted CPU win, FPS noisy; in-place refresh drops hot-build zero-init to `0`, hot build `0.729 -> 0.571ms/present`, lookup `2.655 -> 2.468ms/present`, and queue submission `3.975 -> 3.796ms/present`, while sampled FPS is only noisy/slightly up `16.662 -> 16.807` | [[snapshot-cache-snapshot.28]] |
-| H32 | Compact uniform stage storage may preserve only semantic used counts while the Metal-visible constant ABI needs struct-prefix bytes | accepted correctness bug; `v0.0.3` is the last visual-safe tag, and post-tag compact uniform storage could zero float/int prefix values before int/bool uploads, matching red-light/weapon transparency artifacts. Fix: keep float-only compact, but preserve the required ABI prefix when int or bool constants are stored | [[snapshot-cache-visual.01]] |
-| H33 | Recent semantic-key recurrence on batch misses is high enough to justify a small multi-entry/interner cache | rejected; opt-in probe finds only `8,172 / 419,703` hits (`1.95%`) in the previous-eight miss keys, so a small recent-key cache cannot move the `~2ms/present` batch-miss owner | [[snapshot-cache-snapshot.29]] |
-| H34 | A latest black-geometry / transparent-weapon report proves a new hard performance wall | rejected as a wall; accepted as current visual gate. Prefix-native tests pass, H169 rejects full-cbuf as the owner for the sampled black-foreground window, and H172 shows that same broad dark-foreground class also exists in `v0.0.3`. A separate weapon/lighting artifact still needs same-frame or draw-local proof before it redirects the performance plan | [[snapshot-cache-visual.02]] |
-| H35 | The current `f880..960` object-window sample reproduces the close-up weapon/lighting artifact | rejected for this window; current HEAD renders coherent rifle geometry, sparks, bloom, and muzzle flashes with clean no-skip/no-error counters. The close-up artifact remains a separate target requiring its own capture range before demoting perf evidence | [[snapshot-cache-visual.03]] |
-| H36 | A wider current `100..1000:100` internal capture reproduces the red-light / weapon artifact | rejected for this window; current HEAD renders coherent red corridor, wide firefight, `f900` object, and `f1000` close-up frames with `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.457`. The run remains P4/no-enqueue shaped, so performance work should continue under the `v0.0.3` visual gate | [[snapshot-cache-visual.04]] |
-| H37 | A denser current `1..291:10` red-corridor capture reproduces the reported close-up transparent weapon / black-vertex artifact | target-window miss; the run captures red-corridor and wide-transition frames with coherent dark foreground geometry, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.100`, but it does not match the reported close-up camera window. Treat this as continued need for same-window capture, not a wall or closure | [[snapshot-cache-visual.05]] |
-| H38 | Same-generation draw-submission state-copy elision directly causes the latest transparent-weapon / black-vertex report | rejected for the sampled effects-heavy window; `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` forces `d3d9_snapshot_state_elided=0`, while the default path elides `411,532` states / `4.211GiB`, and both screenshots render coherent bloom, sparks, geometry, and lighting. Keep the knob as an exact-window diagnostic, but do not demote P4 work based on state elision alone | [[snapshot-cache-visual.06]] |
+| H1 | Snapshot rebuild is a first-class CPU bottleneck; the base cache serves zero hits | confirmed (model) | [snapshot-cache-snapshot.01](snapshot-cache/snapshot-cache-snapshot.01.md) |
+| H2 | Splitting hot-state vs uniform-only invalidation lifts hits and cuts CPU | partial / inconclusive (hits 0→126k, CPU −3% only) | [snapshot-cache-snapshot.02](snapshot-cache/snapshot-cache-snapshot.02.md) |
+| H3 | Remaining misses are dominated by stream/IB handle churn | confirmed (model) | [snapshot-cache-snapshot.03](snapshot-cache/snapshot-cache-snapshot.03.md) |
+| H4 | A binding-agnostic snapshot (stream/IB carried in override) raises hit rate | accepted hit-rate (16.5%→46.3%) but regresses pipeline-lookup CPU | [snapshot-cache-binding.01](snapshot-cache/snapshot-cache-binding.01.md) |
+| H5 | Preserving extra-stream stride in the layout restores usable PSO prefetch | accepted | [snapshot-cache-prefetch.01](snapshot-cache/snapshot-cache-prefetch.01.md) |
+| H6 | Fixing the snapshot/prefetch path reduces the GPU bottleneck | rejected (GPU owner unchanged; CPU/pacing waits remain) | [snapshot-cache-prefetch.01](snapshot-cache/snapshot-cache-prefetch.01.md) |
+| H7 | Snapshot submission CPU is owned by copy/override work after cache reuse | rejected; cache lookup itself owns 94.08% | [snapshot-cache-snapshot.04](snapshot-cache/snapshot-cache-snapshot.04.md) |
+| H8 | Reusing uniform component hashes removes duplicated cache-lookup hashing | accepted CPU win; snapshot CPU/present -39.21%, lookup/present -41.73% | [snapshot-cache-snapshot.05](snapshot-cache/snapshot-cache-snapshot.05.md) |
+| H9 | Same-value D3D9 state setters are causing avoidable snapshot invalidation | rejected; temporary no-op counters were all `0` | [snapshot-cache-snapshot.06](snapshot-cache/snapshot-cache-snapshot.06.md) |
+| H10 | Remaining uniform payload build cost is large state copy / FFP construction | rejected; `hashDrawUniformPayload()` owns ~85.75% of combined parent build | [snapshot-cache-snapshot.07](snapshot-cache/snapshot-cache-snapshot.07.md) |
+| H11 | Shader-usage/range-aware uniform payload hashing can remove the full payload hash cost | accepted CPU win; hash/build `11.322us→2.590us`, parent build `13.204us→4.372us` | [snapshot-cache-snapshot.08](snapshot-cache/snapshot-cache-snapshot.08.md) |
+| H12 | Non-bytecode/FFP shaders can avoid programmable constant full fallback | accepted CPU win; PS full fallback `84,380→0`, hash/build `2.590us→2.082us` | [snapshot-cache-snapshot.09](snapshot-cache/snapshot-cache-snapshot.09.md) |
+| H13 | Cache-hit uniform refresh can reuse non-constant payload fields and hashes | accepted CPU win; uniform refresh `2014.263ms→814.507ms`, snapshot submission `7622.807ms→6495.069ms`, FPS flat | [snapshot-cache-snapshot.10](snapshot-cache/snapshot-cache-snapshot.10.md) |
+| H14 | Current lookup residual belongs to the queued draw-submission batch lane, not direct/no-index ambiguity | accepted attribution; batch hit+miss `5692.001ms` matches lookup parent `5892.464ms`, direct miss `1283.032ms` is separate draw-run caller work | [snapshot-cache-snapshot.11](snapshot-cache/snapshot-cache-snapshot.11.md) |
+| H15 | Batch miss is dominated by uniform-build and hot-build, not shader-layout rebuild | accepted attribution; batch miss `4756.913ms` splits into uniform build `2083.529ms`, hot build `1774.774ms`, shader layout `607.942ms` | [snapshot-cache-snapshot.12](snapshot-cache/snapshot-cache-snapshot.12.md) |
+| H16 | Batch miss uniform-build is dominated by hashing, not copy or FFP construction | accepted attribution; batch uniform build `2175.433ms` splits into hash `1413.471ms` (`64.97%`), VS constant hash `490.107ms`, non-constant hash `677.447ms`; VS full fallback remains indexed-float (`73,676` calls) | [snapshot-cache-snapshot.13](snapshot-cache/snapshot-cache-snapshot.13.md) |
+| H17 | Batch miss non-constant hashes can be reused when non-constant uniform generation is unchanged | accepted CPU win; reuse hits `376,949 / 418,143` (`90.15%`), non-constant hash `677.447ms→73.490ms`, batch uniform build `2175.433ms→1591.208ms`, FPS flat | [snapshot-cache-snapshot.14](snapshot-cache/snapshot-cache-snapshot.14.md) |
+| H18 | Batch miss hot-build is dominated by repeated flat state-set materialization | accepted attribution; render-state `FlatStateSet` build `1202.861ms` owns the split, ahead of key build `485.840ms`, sampler `213.765ms`, and TSS `204.392ms` | [snapshot-cache-snapshot.15](snapshot-cache/snapshot-cache-snapshot.15.md) |
+| H19 | Batch miss flat-state sets can be reused by exact dirty generation | accepted CPU win; render/TSS/sampler flat reuse hit rates `90.12%` / `99.36%` / `79.93%`, hot-build `1.444→0.684ms/present`, snapshot submission `4.255→3.469ms/present`, FPS flat/noisy | [snapshot-cache-snapshot.16](snapshot-cache/snapshot-cache-snapshot.16.md) |
+| H20 | Same-generation/lane draws can also elide adjacent uniform snapshots | rejected for GT1; state elision fires `411,758` times, but uniform elision fires `0` times because `uniformGeneration` changes across those groups | [snapshot-cache-snapshot.17](snapshot-cache/snapshot-cache-snapshot.17.md) |
+| H21 | VS indexed-float fallback can safely hash full float constants but prefix int/bool tails | rejected as next target; safe tail reduction is real but only `20.720MB` / `5.47%` of batch VS-constant hash bytes | [snapshot-cache-snapshot.18](snapshot-cache/snapshot-cache-snapshot.18.md) |
+| H22 | Batch-miss shader layout can be reused for reason-mask-safe misses | accepted micro-win; compatible rebuilds are `154,985 / 380,288` (`40.75%`), but the safe default subset is only `7,565 / 390,712` (`1.94%`), cutting shader-layout rebuild `0.3715→0.3386ms/present` | [snapshot-cache-snapshot.19](snapshot-cache/snapshot-cache-snapshot.19.md) |
+| H23 | Adjacent uniform snapshot elision is blocked only by the same-state/lane safety gate | rejected; same-`uniformGeneration` adjacent submissions are `0`, including the different-state/lane opportunity bucket | [snapshot-cache-snapshot.20](snapshot-cache/snapshot-cache-snapshot.20.md) |
+| H24 | Current stream/IB miss-reason counts mean binding churn still owns binding-agnostic snapshot misses | rejected-current-owner; pure binding invalidation already avoids stable-generation bumps | [snapshot-cache-snapshot.21](snapshot-cache/snapshot-cache-snapshot.21.md) |
+| H25 | Redundant shader constant records should not invalidate the uniform cache | accepted cleanup but rejected as current owner; native gate passes, GT1 still has `0` adjacent uniform-generation reuse | [snapshot-cache-snapshot.22](snapshot-cache/snapshot-cache-snapshot.22.md) |
+| H26 | After Stage 2b direct-cbuf, the remaining P2/P3 snapshot owner is batch-miss uniform/hot construction | accepted current attribution; direct-cbuf run leaves `d3d9_snapshot_cache_lookup_cpu_ms=2.859ms/present`, with batch miss `2.162ms/present`, uniform build `0.883ms/present`, and hot build `0.707ms/present` | [snapshot-cache-snapshot.23](snapshot-cache/snapshot-cache-snapshot.23.md) |
+| H27 | Batch-miss reason buckets are needed before choosing the next snapshot rewrite | accepted classification; texture is present in `75%` of batch misses and is the largest single bucket, but mixed rows are mostly `shader+FVF/VDecl` (`80.117%`) with `texture+shader+FVF/VDecl` at `42.761%`, so the target is co-churn/interner, not texture-only | [snapshot-cache-snapshot.24](snapshot-cache/snapshot-cache-snapshot.24.md) |
+| H28 | Batch misses can often reuse the whole cached uniform payload after layout-safe misses | accepted cleanup, rejected next owner; the gate removes only `4,752` batch-miss uniform builds (`-1.13%`) and lookup falls `2.850 -> 2.843ms/present`, so batch-miss count/churn and hot-state storage remain larger targets | [snapshot-cache-snapshot.25](snapshot-cache/snapshot-cache-snapshot.25.md) |
+| H29 | Current summaries should rank replay, queue-submission, snapshot, and batch-miss owners together | accepted tooling/current attribution; low-overhead and direct-cbuf continuation runs both show replay `~8.3ms/present`, queue submission `~4.1-4.2ms/present`, snapshot `~3.4-3.5ms/present`, lookup `~2.8-2.9ms/present`, and batch miss `~2.1ms/present`, so direct-cbuf does not move the remaining P2/P3 owner | [snapshot-cache-snapshot.26](snapshot-cache/snapshot-cache-snapshot.26.md) |
+| H30 | Batch misses should reuse non-constant uniform payload fields when only shader constants changed | accepted CPU win, FPS flat; keeping cached FFP/non-constant fields and refreshing only VS/PS constants cuts batch-miss uniform build `0.871 -> 0.596ms/present`, lookup `2.925 -> 2.655ms/present`, and queue submission `4.209 -> 3.975ms/present`, while sampled FPS stays `16.666 -> 16.662` | [snapshot-cache-snapshot.27](snapshot-cache/snapshot-cache-snapshot.27.md) |
+| H31 | Batch misses should refresh `cache.hot` in place instead of constructing a fresh `FlatDrawStateRecord` | accepted CPU win, FPS noisy; in-place refresh drops hot-build zero-init to `0`, hot build `0.729 -> 0.571ms/present`, lookup `2.655 -> 2.468ms/present`, and queue submission `3.975 -> 3.796ms/present`, while sampled FPS is only noisy/slightly up `16.662 -> 16.807` | [snapshot-cache-snapshot.28](snapshot-cache/snapshot-cache-snapshot.28.md) |
+| H32 | Compact uniform stage storage may preserve only semantic used counts while the Metal-visible constant ABI needs struct-prefix bytes | accepted correctness bug; `v0.0.3` is the last visual-safe tag, and post-tag compact uniform storage could zero float/int prefix values before int/bool uploads, matching red-light/weapon transparency artifacts. Fix: keep float-only compact, but preserve the required ABI prefix when int or bool constants are stored | [snapshot-cache-visual.01](snapshot-cache/snapshot-cache-visual.01.md) |
+| H33 | Recent semantic-key recurrence on batch misses is high enough to justify a small multi-entry/interner cache | rejected; opt-in probe finds only `8,172 / 419,703` hits (`1.95%`) in the previous-eight miss keys, so a small recent-key cache cannot move the `~2ms/present` batch-miss owner | [snapshot-cache-snapshot.29](snapshot-cache/snapshot-cache-snapshot.29.md) |
+| H34 | A latest black-geometry / transparent-weapon report proves a new hard performance wall | rejected as a wall; accepted as current visual gate. Prefix-native tests pass, H169 rejects full-cbuf as the owner for the sampled black-foreground window, and H172 shows that same broad dark-foreground class also exists in `v0.0.3`. A separate weapon/lighting artifact still needs same-frame or draw-local proof before it redirects the performance plan | [snapshot-cache-visual.02](snapshot-cache/snapshot-cache-visual.02.md) |
+| H35 | The current `f880..960` object-window sample reproduces the close-up weapon/lighting artifact | rejected for this window; current HEAD renders coherent rifle geometry, sparks, bloom, and muzzle flashes with clean no-skip/no-error counters. The close-up artifact remains a separate target requiring its own capture range before demoting perf evidence | [snapshot-cache-visual.03](snapshot-cache/snapshot-cache-visual.03.md) |
+| H36 | A wider current `100..1000:100` internal capture reproduces the red-light / weapon artifact | rejected for this window; current HEAD renders coherent red corridor, wide firefight, `f900` object, and `f1000` close-up frames with `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.457`. The run remains P4/no-enqueue shaped, so performance work should continue under the `v0.0.3` visual gate | [snapshot-cache-visual.04](snapshot-cache/snapshot-cache-visual.04.md) |
+| H37 | A denser current `1..291:10` red-corridor capture reproduces the reported close-up transparent weapon / black-vertex artifact | target-window miss; the run captures red-corridor and wide-transition frames with coherent dark foreground geometry, `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and `sampled_avg_fps=16.100`, but it does not match the reported close-up camera window. Treat this as continued need for same-window capture, not a wall or closure | [snapshot-cache-visual.05](snapshot-cache/snapshot-cache-visual.05.md) |
+| H38 | Same-generation draw-submission state-copy elision directly causes the latest transparent-weapon / black-vertex report | rejected for the sampled effects-heavy window; `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` forces `d3d9_snapshot_state_elided=0`, while the default path elides `411,532` states / `4.211GiB`, and both screenshots render coherent bloom, sparks, geometry, and lighting. Keep the knob as an exact-window diagnostic, but do not demote P4 work based on state elision alone | [snapshot-cache-visual.06](snapshot-cache/snapshot-cache-visual.06.md) |
 
 ## Verification methods
 
@@ -140,7 +140,7 @@ write" owner ([[hidden-backend-storage]]).
 - `d3d9_snapshot_cache_batch_miss_uniform_nonconst_hash_reuse_{hits,misses}` —
   proves whether the generation-gated batch miss path reused cached
   non-constant component hashes or had to rehash them. After
-  [[snapshot-cache-snapshot.27]], this also gates the non-constant payload-field
+  [snapshot-cache-snapshot.27](snapshot-cache/snapshot-cache-snapshot.27.md), this also gates the non-constant payload-field
   reuse path: a hit means the cache can keep FFP matrix/material/light,
   texture-transform, and clip-plane payload fields and refresh only shader
   constants.
@@ -148,7 +148,7 @@ write" owner ([[hidden-backend-storage]]).
   `makeFlatDrawStateRecordFromState()` child into zero-init, key build,
   binding/tail copies, and render/TSS/sampler `FlatStateSet` materialization.
   This is an attribution-only nested-timer split; use sibling ranking rather
-  than exact closed-sum percentages. After [[snapshot-cache-snapshot.28]], the
+  than exact closed-sum percentages. After [snapshot-cache-snapshot.28](snapshot-cache/snapshot-cache-snapshot.28.md), the
   batch cache path refreshes `cache.hot` in place and preserves reusable
   render/TSS/sampler flat-state fields, so zero-init and reusable flat-state
   copy should remain low.
@@ -296,7 +296,7 @@ bypass == 0, correct textures.
 
 Open: this is a CPU/correctness recovery, **not** a GPU win. Under the
 layout-stride frame50 replay the GPU owner is unchanged (`34.379ms`, top-3 VS
-buffer write `1627.287MiB`) — that bucket belongs to [[hidden-backend-storage]].
+buffer write `1627.287MiB`) — that bucket belongs to [hidden-backend-storage](hidden-backend-storage.md).
 Snapshot CPU (`19251.620ms`) and the pacing `completion_wait_ms`
 (`28413.664ms`) remain open CPU tracks for future work.
 
@@ -356,7 +356,7 @@ and the reason2 run attributed all PS full fallback (`82,864` calls) plus a
 small VS slice (`13,488` calls) to non-bytecode/FFP usage being treated as
 unknown. Treating non-bytecode shaders as known-zero for programmable
 `VsConsts`/`PsConsts` removes that axis: same-present A/B versus
-[[snapshot-cache-snapshot.08]] drops the hot hash pass
+[snapshot-cache-snapshot.08](snapshot-cache/snapshot-cache-snapshot.08.md) drops the hot hash pass
 `2.590us→2.082us` per build, parent payload build `4.372us→3.863us`, and PS
 full fallback `84,380→0`. The remaining full fallback is VS indexed-float
 (`119,430` calls), which is correctness-bound until a separate indexed-constant
@@ -376,7 +376,7 @@ completion wait stay noisy, so this is another local CPU win rather than a
 run-level fps proof.
 
 The direct-vs-batch split then resolves the current lookup-parent ambiguity.
-In [[snapshot-cache-snapshot.11]], the new batch timers account for almost all
+In [snapshot-cache-snapshot.11](snapshot-cache/snapshot-cache-snapshot.11.md), the new batch timers account for almost all
 of `d3d9_snapshot_cache_lookup_cpu_ms`: `batch_hit + batch_miss =
 5692.001ms` versus lookup `5892.464ms`. The direct path still has real work
 (`direct_miss=1283.032ms`, mostly indexed direct/draw-run callers), but it is
@@ -385,7 +385,7 @@ should therefore target the batch miss lane, not generic no-index direct lookup
 or more carrier-copy cleanup.
 
 The batch-miss child split then names the local implementation target.
-[[snapshot-cache-snapshot.12]] reports batch miss `4756.913ms`: uniform build
+[snapshot-cache-snapshot.12](snapshot-cache/snapshot-cache-snapshot.12.md) reports batch miss `4756.913ms`: uniform build
 `2083.529ms`, hot build `1774.774ms`, and shader layout only `607.942ms`.
 This rejects shader-layout micro-optimization as the first snapshot lever. The
 next snapshot work should split or reduce batch uniform-build and batch hot-build
@@ -393,7 +393,7 @@ work, with the VS indexed-float fallback still requiring a correctness proof
 before narrowing.
 
 The batch-miss uniform-build split then rejects payload copy and FFP
-construction as the local uniform owner. [[snapshot-cache-snapshot.13]] reports
+construction as the local uniform owner. [snapshot-cache-snapshot.13](snapshot-cache/snapshot-cache-snapshot.13.md) reports
 batch uniform build `2175.433ms`, of which hash work is `1413.471ms`
 (`64.97%`). The two largest named hash children are non-constant hash
 (`677.447ms`) and VS constant hash (`490.107ms`); the VS full fallback remains
@@ -402,7 +402,7 @@ work should therefore target component-hash reuse or a correctness proof for a
 narrower indexed-float subset, not another copy/FFP micro-optimization.
 
 The generation-gated non-constant hash reuse then accepts that component-hash
-target as a local CPU win. [[snapshot-cache-snapshot.14]] adds a
+target as a local CPU win. [snapshot-cache-snapshot.14](snapshot-cache/snapshot-cache-snapshot.14.md) adds a
 `drawUniformNonConstantGeneration_` and reuses cached non-constant component
 hashes on batch misses when Transform/Light/Material/Clip/RenderState-class
 state has not changed. The GT1 scout reports reuse on `376,949 / 418,143`
@@ -413,7 +413,7 @@ GPU command-buffer time, and completion wait remain flat/noisy, so this closes
 the non-constant hash child but not the frame-rate owner.
 
 The batch-miss hot-build split then names the remaining local hot-state owner.
-[[snapshot-cache-snapshot.15]] is an attribution run with nested timer overhead,
+[snapshot-cache-snapshot.15](snapshot-cache/snapshot-cache-snapshot.15.md) is an attribution run with nested timer overhead,
 but sibling ranking is clear: render-state `FlatStateSet` materialization
 (`1202.861ms`) dominates hot-build, followed by key construction (`485.840ms`),
 sampler `FlatStateSet` (`213.765ms`), and TSS `FlatStateSet` (`204.392ms`).
@@ -422,7 +422,7 @@ stream/IB/texture/shader/FVF churn, repeatedly rebuilding unchanged render and
 sampler/TSS flat sets is avoidable component work.
 
 Generation-gated flat-state reuse then accepts that hot-build target as a CPU
-win. [[snapshot-cache-snapshot.16]] stores exact dirty generations for render,
+win. [snapshot-cache-snapshot.16](snapshot-cache/snapshot-cache-snapshot.16.md) stores exact dirty generations for render,
 TSS, and sampler flat-state classes, then reuses unchanged sets across batch
 misses. GT1 hit rates are high enough to matter: render `90.12%`, TSS `99.36%`,
 sampler `79.93%`. Hot-build drops `1.444→0.684ms/present`, render-state set
@@ -432,7 +432,7 @@ GPU command-buffer time, and completion wait remain flat/noisy, so this closes
 the flat-state child but not the frame-rate owner.
 
 The adjacent uniform payload copy-elision probe then rejects the obvious next
-N-1 carrier target for GT1. [[snapshot-cache-snapshot.17]] enables
+N-1 carrier target for GT1. [snapshot-cache-snapshot.17](snapshot-cache/snapshot-cache-snapshot.17.md) enables
 `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1` and stamps `uniformGeneration` so a
 non-front submission could reuse the previous `DrawUniformHandle` when both
 state generation/lane and uniform generation match. State elision fires
@@ -444,7 +444,7 @@ uniform generation, and adjacent uniform snapshot reuse is not a live
 optimization target.
 
 The VS indexed-float shape probe then closes the remaining uniform-hash fallback
-as the next large snapshot target. [[snapshot-cache-snapshot.18]] proves the
+as the next large snapshot target. [snapshot-cache-snapshot.18](snapshot-cache/snapshot-cache-snapshot.18.md) proves the
 safe sub-case exists: all batch full fallback is `indexedFloat`, while
 `indexedInt` and `indexedBool` stay `0`, so a future hash could keep the full
 float register file and only hash the used int/bool prefix. The measured tail is
@@ -453,14 +453,14 @@ small, though: `20.720MB` over the batch-miss path, `272B` per call, and
 uniform hash code is being touched anyway, not the next GT1 FPS lever.
 
 The shader-layout reuse follow-up then closes another smaller batch-miss child.
-[[snapshot-cache-snapshot.19]] shows a broad post-build compatibility ceiling
+[snapshot-cache-snapshot.19](snapshot-cache/snapshot-cache-snapshot.19.md) shows a broad post-build compatibility ceiling
 (`154,985 / 380,288`, `40.75%`), but the reason-mask-safe default subset is
 only `7,565 / 390,712` (`1.94%`). The accepted conservative reuse cuts
 shader-layout rebuild from `0.3715` to `0.3386ms/present`, with pass status and
 normal image metrics, but it does not move completion wait.
 
 The adjacent uniform-generation follow-up then closes the remaining safety-gate
-ambiguity in the uniform-elision idea. [[snapshot-cache-snapshot.20]] adds
+ambiguity in the uniform-elision idea. [snapshot-cache-snapshot.20](snapshot-cache/snapshot-cache-snapshot.20.md) adds
 `d3d9_snapshot_uniform_adjacent_same_generation*` counters while keeping the
 existing same-state/lane elision predicate unchanged. The GT1 run reports
 `0` adjacent same-`uniformGeneration` submissions, including `0` in the
@@ -471,7 +471,7 @@ to payload interning/storage and lookup width, not missing adjacent snapshot
 elision.
 
 The current low-overhead run then reopens a tempting but already handled clue:
-stream/IB miss-reason counts are still high. [[snapshot-cache-snapshot.21]]
+stream/IB miss-reason counts are still high. [snapshot-cache-snapshot.21](snapshot-cache/snapshot-cache-snapshot.21.md)
 rejects that as the current owner by code inspection. Pure binding invalidations
 do not bump `drawStableStateGeneration_`; the binding-agnostic cache hits on
 that generation and clears binding-only reason masks. Therefore the high
@@ -489,13 +489,13 @@ no-gputrace scout still reports `d3d9_snapshot_uniform_elided=0` and
 invalidation was not the current adjacent-uniform blocker. The remaining owner
 is true constant volatility or a broader constant-record/run-break design.
 
-Current priority after [[snapshot-cache-snapshot.23]]: direct-cbuf removes the
+Current priority after [snapshot-cache-snapshot.23](snapshot-cache/snapshot-cache-snapshot.23.md): direct-cbuf removes the
 local argbuf table/open path, which makes the remaining serialized P2/P3 shape
 clearer. Snapshot rebuild is again a measured pre-publish owner:
 `d3d9_snapshot_cache_lookup_cpu_ms=2.859ms/present` in
 `argbuf-direct-cbuf-r1`, with batch miss `2.162ms/present`, batch-miss uniform
 build `0.883ms/present`, and batch-miss hot build `0.707ms/present`.
-[[snapshot-cache-snapshot.24]] then closes the first batch-miss reason split:
+[snapshot-cache-snapshot.24](snapshot-cache/snapshot-cache-snapshot.24.md) then closes the first batch-miss reason split:
 texture is present in `316,829 / 75.006%` of batch misses and
 `single_texture` is the largest individual bucket (`160,046 / 37.889%`), but
 mixed buckets are larger together and mostly include shader and FVF/VDecl
@@ -513,7 +513,7 @@ promote stream/IB generation tweaks, VS indexed-float partial hashing, or broad
 shader-layout reuse as standalone optimizations. Average-FPS proof still needs
 movement in the pacing/overlap lane or a larger end-to-end CPU reduction.
 
-[[snapshot-cache-snapshot.25]] then tests the narrowest remaining batch-miss
+[snapshot-cache-snapshot.25](snapshot-cache/snapshot-cache-snapshot.25.md) then tests the narrowest remaining batch-miss
 uniform shortcut: reusing the whole cached `DrawUniformPayload` when non-constant
 generation, shader-constant generations, constant usages, and clip-plane mask all
 match after the shader-layout decision. The gate is valid and trims
@@ -523,7 +523,7 @@ but do not rank whole-payload reuse as the next owner. Current work should move
 batch-miss count/churn, hot-state/key storage, compact/interned state, or the P4
 overlap lane.
 
-[[snapshot-cache-snapshot.27]] closes the larger half of the same uniform-build
+[snapshot-cache-snapshot.27](snapshot-cache/snapshot-cache-snapshot.27.md) closes the larger half of the same uniform-build
 idea: when `drawUniformNonConstantGeneration_` is unchanged but shader constants
 changed, keep the cached FFP/non-constant payload fields and refresh only VS/PS
 constants. The branch is well-covered (`386,261` non-constant reuse hits) and
@@ -535,7 +535,7 @@ work is now shader-constant hashing and the broader compact uniform
 submission/storage design; the non-constant FFP payload rebuild child should not
 be chased again without new counters.
 
-[[snapshot-cache-snapshot.28]] then removes a hot-state storage artifact exposed
+[snapshot-cache-snapshot.28](snapshot-cache/snapshot-cache-snapshot.28.md) then removes a hot-state storage artifact exposed
 by the previous cleanup. Batch misses no longer construct a fresh
 `FlatDrawStateRecord` and copy reusable flat-state sets back into `cache.hot`;
 they refresh `cache.hot` in place and preserve unchanged render/TSS/sampler
@@ -548,7 +548,7 @@ that the end-to-end FPS bottleneck is gone. The remaining local snapshot-cache
 work is now shader-constant hashing, hot-key construction, batch-miss count/
 co-churn, and compact uniform submission/storage.
 
-[[snapshot-cache-visual.01]] then fixes a correctness regression exposed by the
+[snapshot-cache-visual.01](snapshot-cache/snapshot-cache-visual.01.md) then fixes a correctness regression exposed by the
 `v0.0.3` visual-safe baseline. The post-`v0.0.3` compact uniform storage path
 stored VS/PS constants by semantic used counts, but the live Metal ABI uploads
 `VsConsts` / `PsConsts` as struct prefixes. That means an int upload still needs
@@ -573,7 +573,7 @@ remains the frame-rate owner, and uniform constant append bytes move within the
 expected ABI-prefix/storage-noise range rather than exposing a new performance
 lever.
 
-[[snapshot-cache-snapshot.29]] then rejects the small recent-key interner as the
+[snapshot-cache-snapshot.29](snapshot-cache/snapshot-cache-snapshot.29.md) then rejects the small recent-key interner as the
 next batch-miss lever. The opt-in
 `DXMT9_PERF_BATCH_MISS_SEMANTIC_REUSE_PROBE=1` run
 `batch-miss-semantic-reuse-probe-r1-20260617` samples every binding-agnostic
@@ -592,9 +592,9 @@ same frame-rate owner shape: `completion_wait_ms_per_present=27.336`,
 the P4 overlap / producer-to-encode pipeline and larger replay/encode owners,
 not a narrow batch-miss semantic cache.
 
-[[snapshot-cache-visual.02]] then records the current visual gate after a later
+[snapshot-cache-visual.02](snapshot-cache/snapshot-cache-visual.02.md) then records the current visual gate after a later
 black-geometry / transparent-weapon report. The known compact-uniform
-ABI-prefix class is covered by native tests and by [[snapshot-cache-visual.01]].
+ABI-prefix class is covered by native tests and by [snapshot-cache-visual.01](snapshot-cache/snapshot-cache-visual.01.md).
 For the sampled black-foreground firefight window, H169 rejects full-cbuf as the
 first owner and H172 shows the broad dark-foreground class exists in `v0.0.3`.
 That keeps the performance direction open rather than blocked: the sampled
@@ -603,7 +603,7 @@ still demotes perf evidence until a foreground capture-window pair or draw-local
 probe localizes it to uniform/cbuf, stream/vdecl, dynamic backing,
 material/lighting state, or render-pass ordering.
 
-[[snapshot-cache-visual.03]] follows up with a current same-build
+[snapshot-cache-visual.03](snapshot-cache/snapshot-cache-visual.03.md) follows up with a current same-build
 `880..960:10` internal backbuffer window around the previously used `f910`
 class. That window is visually coherent: rifle and character geometry,
 ricochet particles, spark/bloom effects, and wide-scene muzzle flashes are
@@ -614,7 +614,7 @@ reason to halt P4/replay/encode performance work. A future artifact report
 should first capture the exact close-up frame range and compare against the
 `v0.0.3` anchor before spending Xcode/gputrace budget.
 
-[[snapshot-cache-visual.04]] widens that current smoke to internal backbuffers
+[snapshot-cache-visual.04](snapshot-cache/snapshot-cache-visual.04.md) widens that current smoke to internal backbuffers
 `100..1000:100`, covering the red corridor, wide firefight, the `f900` object
 window, and a `f1000` close-up. It is another non-reproduction:
 `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
@@ -624,7 +624,7 @@ P4 shape (`completion_wait_without_enqueue_ms_per_present=28.053`,
 ready-depth max `1`), so the next work remains P4/replay/encode movement rather
 than a visual-wall detour unless a future same-window artifact is reproduced.
 
-[[snapshot-cache-visual.05]] then densifies the early red-corridor search to
+[snapshot-cache-visual.05](snapshot-cache/snapshot-cache-visual.05.md) then densifies the early red-corridor search to
 internal backbuffers `1..291:10` after a close-up transparent-weapon /
 weapon-attached black-vertex report. The run is clean and P4-shaped
 (`draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`,
@@ -635,7 +635,7 @@ composition. Treat this as a target-window miss: it keeps performance work open
 under the `v0.0.3` visual gate, while the exact close-up still needs a
 same-window current capture and, if reproduced, a same-window `v0.0.3` split.
 
-[[snapshot-cache-visual.06]] adds a narrow A/B for one plausible owner of that
+[snapshot-cache-visual.06](snapshot-cache/snapshot-cache-visual.06.md) adds a narrow A/B for one plausible owner of that
 report: same-generation draw-submission state-copy elision. The diagnostic
 `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` path proves the opt-out works
 (`d3d9_snapshot_state_elided=0`, `879,885` states materialized), and the default
@@ -667,7 +667,7 @@ The relevant counters (`d3d9_draw_state_cache_*`,
 `result.json`. The exact per-experiment flags live in each leaf's `**Method.**`
 field. See `agents/rules/environment_variables.rules.md` for env-var meanings and
 `agents/rules/metal_debugging.rules.md` for the full workflow.
-For post-[[snapshot-cache-snapshot.24]] runs, also read the
+For post-[snapshot-cache-snapshot.24](snapshot-cache/snapshot-cache-snapshot.24.md) runs, also read the
 `d3d9_draw_state_cache_batch_miss_reason_*` counters from the generated
 `3dmark05-perf-summary.md`; they are the proof gate for deciding whether the
 next snapshot patch should be a narrow state-family fast path or a broader
@@ -675,13 +675,13 @@ storage/interner redesign.
 
 ## Cross-references
 
-- [[state-churn-encode]] — stream/IB handle churn, draw-run batching, and the
+- [state-churn-encode](state-churn-encode.md) — stream/IB handle churn, draw-run batching, and the
   `DrawBindingOverride` mechanism this domain reuses for snapshot reuse.
-- [[index-cache-locality]] — the indexed draw path that owns nearly all snapshot
+- [index-cache-locality](index-cache-locality.md) — the indexed draw path that owns nearly all snapshot
   misses; the one accepted GPU win lives there.
-- [[const-upload]] — VS/PS const uploads that drove the uniform-only invalidation
+- [const-upload](const-upload.md) — VS/PS const uploads that drove the uniform-only invalidation
   branch and the const passthrough/break counters.
-- [[hidden-backend-storage]] — the GPU bottleneck owner that this CPU work does
+- [hidden-backend-storage](hidden-backend-storage.md) — the GPU bottleneck owner that this CPU work does
   *not* move.
-- [[overview-3dmark05-gt1]] — root priority DAG / synthesis.
-- [[overview]] — CPU-side counter design doc backing these counters.
+- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root priority DAG / synthesis.
+- [overview](overview.md) — CPU-side counter design doc backing these counters.

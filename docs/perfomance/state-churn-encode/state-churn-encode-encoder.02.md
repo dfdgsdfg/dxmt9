@@ -36,7 +36,7 @@ geometry transient vanishes, but the same hot encoders still carry large cbuf
 payloads and per-draw stream/IB handle churn. Confirms transient_vertex is not
 the primary target; the per-draw stream+IB binding payload is.
 
-**Related.** [[state-churn-encode]] · prev: [[state-churn-encode-encoder.01]] ·
-[[state-churn-encode-expand.01]] (auto-expand off removes geometry transient) ·
-[[state-churn-encode-statedelta.03]] (stream+IB pair as the payload target) ·
-[[const-upload]] (cbuf bucket).
+**Related.** [state-churn-encode](../state-churn-encode.md) · prev: [state-churn-encode-encoder.01](state-churn-encode-encoder.01.md) ·
+[state-churn-encode-expand.01](state-churn-encode-expand.01.md) (auto-expand off removes geometry transient) ·
+[state-churn-encode-statedelta.03](state-churn-encode-statedelta.03.md) (stream+IB pair as the payload target) ·
+[const-upload](../const-upload.md) (cbuf bucket).

@@ -130,5 +130,5 @@ index-locality path cheaper on CPU or better gated. The larger `60/2` ceiling is
 real, but it remains blocked by final-color/final-writer proof or a new
 non-reorder backend route.
 
-**Related.** [[hidden-backend-storage-shape.32]] ·
-[[index-cache-locality]] · [[present-pacing]] · [[state-churn-encode]].
+**Related.** [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) ·
+[index-cache-locality](../index-cache-locality.md) · [present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).

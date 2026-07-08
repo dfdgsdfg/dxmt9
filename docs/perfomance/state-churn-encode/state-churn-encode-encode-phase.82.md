@@ -7,7 +7,7 @@ source: src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-
 
 # Encode Phase 82 - Resource-Shape Memo Scratch Reuse
 
-**Question.** [[state-churn-encode-encode-phase.81]] made the resource-shape
+**Question.** [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) made the resource-shape
 PSO memo default-on. Did that path introduce avoidable hot-path allocation or
 table clearing inside `prefetchSlotPipelines()`?
 
@@ -109,6 +109,6 @@ preserving the phase81 mechanism.
 scratch cost is the semantic/probe-key table initialization and the resolved-key
 children. Otherwise, return to the larger P2/P3/P4 serial-cadence lane.
 
-**Related.** [[state-churn-encode-encode-phase.81]] ·
-[[state-churn-encode-encode-phase.80]] · [[state-churn-encode]] ·
-[[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) ·
+[state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) · [state-churn-encode](../state-churn-encode.md) ·
+[present-pacing](../present-pacing.md).

@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-const-apply-split.60.m
 
 ## Question
 
-[[present-pacing-pe-const-apply-split.60]] rejected APPLY_STATE packet build and
+[present-pacing-pe-const-apply-split.60](present-pacing-pe-const-apply-split.60.md) rejected APPLY_STATE packet build and
 `chunkBarrierFlush()` const drain as the direct owner of the
 `draw_indexed -> apply_state` inter-append gap. The remaining narrow hypothesis
 was that ordinary PE hot-state setters before the barrier were expensive enough

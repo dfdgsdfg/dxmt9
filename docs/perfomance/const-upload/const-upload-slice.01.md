@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L4398-L4473
 # FFP VS Stable Slice Reuse Run
 
 **Question / hypothesis.** Because `FfpVsConsts` is ~100% unchanged inside an
-encoder ([[const-upload-volatility.01]]), defer it out of the generic argbuf
+encoder ([const-upload-volatility.01](const-upload-volatility.01.md)), defer it out of the generic argbuf
 dirty mirror, compare against an encoder-local cached host copy, and — when the
 bytes are unchanged — repoint the fresh argbuf table at the existing low-level
 FFP-VS slice instead of uploading another transient copy.
@@ -37,6 +37,6 @@ disappears, but `gpu_command_buffer_time_ms` does not move — FFP-VS cbuf was a
 real CPU/upload amplifier, NOT the GPU limiter. Active target shifts to
 `VsConsts` unchanged float-prefix bytes.
 
-**Related.** [[const-upload]] · prev: [[const-upload-volatility.01]] · next:
-[[const-upload-range.01]] · confirms GPU limiter is elsewhere →
-[[hidden-backend-storage]] · [[state-churn-encode]] (stream/IB churn unchanged class).
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-volatility.01](const-upload-volatility.01.md) · next:
+[const-upload-range.01](const-upload-range.01.md) · confirms GPU limiter is elsewhere →
+[hidden-backend-storage](../hidden-backend-storage.md) · [state-churn-encode](../state-churn-encode.md) (stream/IB churn unchanged class).

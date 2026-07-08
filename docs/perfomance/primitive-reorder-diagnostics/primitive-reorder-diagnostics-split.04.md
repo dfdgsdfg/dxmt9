@@ -38,8 +38,8 @@ the bucket slightly worse while adding draw-count/preservation cost. The next
 GPU candidate must reduce vertex-stage/backend write pressure without increasing
 draw count or render-pass preservation traffic.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-split.03]] (scoped successors of this probe) ·
-[[hidden-backend-storage]] (the ~1.6GiB hidden bucket this fails to move) ·
-[[index-cache-locality]] (semantic-safe successor) ·
-[[state-churn-encode]] (draw-count/preservation side effects).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-split.03](primitive-reorder-diagnostics-split.03.md) (scoped successors of this probe) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (the ~1.6GiB hidden bucket this fails to move) ·
+[index-cache-locality](../index-cache-locality.md) (semantic-safe successor) ·
+[state-churn-encode](../state-churn-encode.md) (draw-count/preservation side effects).

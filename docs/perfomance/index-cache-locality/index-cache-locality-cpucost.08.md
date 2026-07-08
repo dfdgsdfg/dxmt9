@@ -75,7 +75,7 @@ dense-adjacency change.
 - Keep dense adjacency as the default; raw read/write optimizations are below
   the noise floor for this path.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.07]] · next:
-[[index-cache-locality-cpucost.09]] · [[index-cache-locality-cpucost.03]]
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md) · next:
+[index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md) · [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)
 for the accepted dense-adjacency CPU cut.

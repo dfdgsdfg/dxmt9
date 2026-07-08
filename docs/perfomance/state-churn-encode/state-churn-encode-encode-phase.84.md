@@ -7,11 +7,11 @@ source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_draw_encoder.hpp, exper
 
 # Encode Phase 84 - Argbuf Table Shadow Direct Slot Check
 
-**Question.** After [[state-churn-encode-encode-phase.83]] closed the PSO
+**Question.** After [state-churn-encode-encode-phase.83](state-churn-encode-encode-phase.83.md) closed the PSO
 memo scratch lane, the next average-FPS work should return to P2/P3 argbuf /
 constant-storage costs. One small open question was whether the Stage 2
 slot-30 argbuf table bind shadow still carries a useful separate hash path,
-even though [[state-churn-encode-encode-phase.09]] measured
+even though [state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) measured
 `encode_draw_argbuf_table_bind_skipped=0`.
 
 **Change.** Remove the dedicated `argbufTableHash` / `argbufTableValid` shadow
@@ -100,6 +100,6 @@ cbuf update frequency, binding-packet/storage width, and snapshot/queue
 interning. Average-FPS promotion still needs P4 completion-wait or same-cycle
 serial-stage movement.
 
-**Related.** [[state-churn-encode-encode-phase.83]] ·
-[[state-churn-encode-encode-phase.68]] · [[present-pacing-lowoverhead-serial.24]]
-· [[state-churn-encode]] · [[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.83](state-churn-encode-encode-phase.83.md) ·
+[state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md) · [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md)
+· [state-churn-encode](../state-churn-encode.md) · [present-pacing](../present-pacing.md).

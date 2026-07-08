@@ -46,7 +46,7 @@ Status: pass. The run produced `actual.png` with the expected machine-gun
 muzzle bloom frame, `draw_skipped_no_pipeline=0`, and
 `gpu_command_buffer_errors=0`.
 
-**Result versus [[state-churn-encode-encode-phase.50]].** Raw totals are not a
+**Result versus [state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md).** Raw totals are not a
 valid decision gate because this run stopped at `1740` presents while phase50
 had `1800`; the table uses normalized values.
 
@@ -82,6 +82,6 @@ inner lookup-reserve call. If this path is touched again, the next proof must
 split payload equality compare, lookup bucket walk, payload copy, and lookup
 linking rather than assuming reserve/check overhead owns the bucket.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.48]] ·
-[[state-churn-encode-encode-phase.50]] · [[snapshot-cache]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) ·
+[state-churn-encode-encode-phase.50](state-churn-encode-encode-phase.50.md) · [snapshot-cache](../snapshot-cache.md).

@@ -95,5 +95,5 @@ The next argbuf work should still target the larger table open/reopen model or
 dirty VS cbuf update. This patch only trims the probe leaf under
 `reopen_post`.
 
-**Related.** [[state-churn-encode-encode-phase.63]] ·
-[[state-churn-encode-encode-phase.110]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
+[state-churn-encode-encode-phase.110](state-churn-encode-encode-phase.110.md) · [state-churn-encode](../state-churn-encode.md).

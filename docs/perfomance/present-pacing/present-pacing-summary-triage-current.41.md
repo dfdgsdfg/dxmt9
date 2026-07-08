@@ -95,7 +95,7 @@ sequenceDiagram
 
 Accepted as the current summary-triage baseline.
 
-The run confirms [[present-pacing-frame-sampling-current.39]] rather than
+The run confirms [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) rather than
 changing the owner model: current average FPS is still not a GPU floor. The
 useful work remains:
 
@@ -112,6 +112,6 @@ useful work remains:
 - `Pacing / CPU Stage Derived` in
   `experiments/output/app-d3d9-3dmark05-p4-summary-triage-current/3dmark05-perf-summary.md`
 
-**Related.** [[present-pacing-summary-triage.40]] ·
-[[present-pacing-frame-sampling-current.39]] ·
-[[present-pacing-serial-stage-compare-gates.38]] · [[present-pacing]].
+**Related.** [present-pacing-summary-triage.40](present-pacing-summary-triage.40.md) ·
+[present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) ·
+[present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) · [present-pacing](../present-pacing.md).

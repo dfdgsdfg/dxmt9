@@ -107,8 +107,8 @@ before writing code. A valid A/B needs:
 - frame sampling plus P4 counters, because a local argbuf CPU win is not an FPS
   win unless completion wait or producer overlap moves.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.55]] ·
-[[state-churn-encode-encode-phase.56]] ·
-[[state-churn-encode-encode-phase.123]] ·
-[[state-churn-encode-encode-phase.131]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) ·
+[state-churn-encode-encode-phase.56](state-churn-encode-encode-phase.56.md) ·
+[state-churn-encode-encode-phase.123](state-churn-encode-encode-phase.123.md) ·
+[state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md).

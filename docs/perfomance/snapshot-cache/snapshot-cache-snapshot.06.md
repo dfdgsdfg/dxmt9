@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-state-noop-guard-r1/3dmark05-perf-s
 
 # State-Set No-Op Guard Probe
 
-**Question / hypothesis.** After [[snapshot-cache-snapshot.05]], the remaining
+**Question / hypothesis.** After [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md), the remaining
 snapshot path still spends about `12.4us` per uniform refresh or miss building
 payloads. One possible low-risk explanation was redundant D3D9 API state sets:
 if the app or replay path repeatedly calls setters with the same value, the
@@ -64,7 +64,7 @@ and HUD visible (`FPS: 17`, `Time: 0:54.95`, `Frame: 916`).
 | `d3d9_state_set_noop_ffp_state` | `0` |
 | `d3d9_state_set_noop_clip_plane` | `0` |
 
-**Normalized comparison against [[snapshot-cache-snapshot.05]].**
+**Normalized comparison against [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md).**
 
 | Metric | Hash reuse | No-op guard probe | Delta |
 |---|---:|---:|---:|
@@ -110,11 +110,11 @@ already avoids those redundant setters, or this workload simply does not issue
 them at a meaningful rate. Do not keep general D3D9 state-set no-op guards as a
 3DMark05 optimization.
 
-**Next.** Continue from the accepted [[snapshot-cache-snapshot.05]] state:
+**Next.** Continue from the accepted [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) state:
 the remaining snapshot-cache work is actual uniform payload construction,
 residual shader-layout/hot-state work, or another explicitly measured CPU
 bucket. Another broad "skip unchanged state" bet should first prove non-zero
 hits with cheap instrumentation.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.05]] ·
-[[present-pacing]] · [[state-churn-encode]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).

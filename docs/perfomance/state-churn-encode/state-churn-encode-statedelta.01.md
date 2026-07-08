@@ -35,6 +35,6 @@ run breakers; most failures are mixed deltas. A stream-only tweak helps only
 ~14%; the real fix must carry per-draw mixed stream/IB deltas (or pre-scan
 record coalescing of const records).
 
-**Related.** [[state-churn-encode]] · next: [[state-churn-encode-statedelta.02]] ·
-[[state-churn-encode-drawrun.01]] (the parent break families) ·
-[[const-upload]] (const-upload still dominates type breaks).
+**Related.** [state-churn-encode](../state-churn-encode.md) · next: [state-churn-encode-statedelta.02](state-churn-encode-statedelta.02.md) ·
+[state-churn-encode-drawrun.01](state-churn-encode-drawrun.01.md) (the parent break families) ·
+[const-upload](../const-upload.md) (const-upload still dominates type breaks).

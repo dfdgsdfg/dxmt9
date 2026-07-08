@@ -114,7 +114,7 @@ flowchart TD
 ## Decision
 
 Accepted as the current baseline for the uniform carrier lane. The run repeats
-the main conclusion from [[state-churn-encode-encode-phase.102]] on current
+the main conclusion from [state-churn-encode-encode-phase.102](state-churn-encode-encode-phase.102.md) on current
 code: adjacent uniform copy-elision is not a live lever, but full
 `DrawUniformPayload` materialization and backend append width remain large.
 
@@ -132,9 +132,9 @@ should require:
 - `--require-uniform-materialized-bytes-decrease` or a new compact-carrier byte
   gate;
 - `--require-uniform-append-bytes-decrease`;
-- targeted CPU gates from [[state-churn-encode-encode-phase.101]];
-- a P4 gate from [[present-pacing-compare-gates.37]] or frame-sampling movement.
+- targeted CPU gates from [state-churn-encode-encode-phase.101](state-churn-encode-encode-phase.101.md);
+- a P4 gate from [present-pacing-compare-gates.37](../present-pacing/present-pacing-compare-gates.37.md) or frame-sampling movement.
 
-**Related.** [[state-churn-encode-encode-phase.102]] ·
-[[state-churn-encode-encode-phase.111]] ·
-[[present-pacing-summary-triage-current.41]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.102](state-churn-encode-encode-phase.102.md) ·
+[state-churn-encode-encode-phase.111](state-churn-encode-encode-phase.111.md) ·
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).

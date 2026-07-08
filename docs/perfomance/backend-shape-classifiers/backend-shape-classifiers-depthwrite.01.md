@@ -33,4 +33,4 @@ hidden Apple vertex/tiler/parameter storage owner. Row-scoped depth-write and
 depth-func probes later joined the same stable ~1627 MiB bucket — stop spending
 gputrace time on depth-only state as a primary owner.
 
-**Related.** [[backend-shape-classifiers]] · paired with [[backend-shape-classifiers-depthfunc.01]] · confirms [[hidden-backend-storage]] survives · related [[backend-shape-classifiers-visible.01]] (also dropped depth writes without moving the bucket).
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · paired with [backend-shape-classifiers-depthfunc.01](backend-shape-classifiers-depthfunc.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) survives · related [backend-shape-classifiers-visible.01](backend-shape-classifiers-visible.01.md) (also dropped depth writes without moving the bucket).

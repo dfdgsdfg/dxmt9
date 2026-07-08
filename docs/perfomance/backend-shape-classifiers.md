@@ -1,6 +1,6 @@
 # Backend Shape Classifiers — correctness-invalid state toggles that test ownership of the hidden VS-write bucket
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -21,22 +21,22 @@ bucket substantially, and forced **indexed expansion** nearly doubled it
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Broad alpha-blend state owns the VS-write bucket | rejected (GPU +1.72%, VS write +0.00%; yellow frame) | [[backend-shape-classifiers-alpha.01]] |
-| H2 | Scoped screen-blend alpha-off proves blend ownership | rejected as proof (hot-row set drifts) | [[backend-shape-classifiers-alpha.02]] |
-| H3 | Scoped large4096+alpha blend-off moves the bucket | **significant factor** (top VS write −52.86%); not a fix (correctness-invalid) | [[backend-shape-classifiers-alpha.03]] |
-| H4 | Depth-write state owns the bucket | rejected (depth write −68.87%, VS write +0.01%, GPU +8.34%) | [[backend-shape-classifiers-depthwrite.01]] |
-| H5 | Depth-compare (func Always) owns the bucket | rejected (VS write +0.041 MiB, GPU +5.03%) | [[backend-shape-classifiers-depthfunc.01]] |
-| H6 | Cull state bit owns the bucket | rejected (VS write −0.00%, GPU +1.84%) | [[backend-shape-classifiers-cull.01]] |
-| H7 | Cull moves the hidden bucket (full capture) | rejected; named tiled +101.8% but VS write flat → named tiler ≠ hidden bucket | [[backend-shape-classifiers-cull.02]] |
-| H8 | Cull *orientation* (force back) owns the bucket | rejected (VS write +0.01%, GPU +1.50%) | [[backend-shape-classifiers-cull.03]] |
-| H9 | Row/class-scoped cull owns one row's share | rejected (VS write −0.02%, named tiled +33.3%, GPU +1.58%) | [[backend-shape-classifiers-cull.04]] |
-| H10 | Scissor state owns the bucket | rejected (VS write +0.06%, GPU +4.19%) | [[backend-shape-classifiers-scissor.01]] / [[backend-shape-classifiers-scissor.02]] |
-| H11 | Fog source/blend owns the bucket | secondary (GPU −2.68%, FS write −10.3%, VS write +0.00%) | [[backend-shape-classifiers-fog.01]] |
-| H12 | Fragment texture sampling owns the bucket | secondary (GPU −3.72%, top-3 VS write −3.24%, enc2-specific) | [[backend-shape-classifiers-texture.01]] |
-| H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | [[backend-shape-classifiers-visible.01]] |
-| H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | [[backend-shape-classifiers-expand.01]] |
-| H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | [[backend-shape-classifiers-alphatest.01]] |
-| H16 | Rifle muzzle fire correctness changes perf interpretation | visual-positive/perf-coupled. The public `01:05` oracle shows several rifle shots as compact barrel-attached round white/yellow bloom discs. Current split-payload artifacts reproduce that shape; same-run geometry promotes `0x80`, and after-draw color history confirms the two-triangle `0x80` sprite as the local writer (`seq=1094`, post-split `enc=3/draw=0/cmd=320`, `bright=706`, `white=196`, `warm=909` in the candidate ROI). `0x7f/0x75` remain broad/non-local for that target. This resolves the visual writer for the wide infantry scene, but not the main FPS owner: skipped/error/hazard/map-wait counters stay zero, while RT/depth/clear/present pass churn and Xcode GPU-counter proof remain open | [[backend-shape-classifiers-alpha.04]], [[baselines-frame60.03]] |
+| H1 | Broad alpha-blend state owns the VS-write bucket | rejected (GPU +1.72%, VS write +0.00%; yellow frame) | [backend-shape-classifiers-alpha.01](backend-shape-classifiers/backend-shape-classifiers-alpha.01.md) |
+| H2 | Scoped screen-blend alpha-off proves blend ownership | rejected as proof (hot-row set drifts) | [backend-shape-classifiers-alpha.02](backend-shape-classifiers/backend-shape-classifiers-alpha.02.md) |
+| H3 | Scoped large4096+alpha blend-off moves the bucket | **significant factor** (top VS write −52.86%); not a fix (correctness-invalid) | [backend-shape-classifiers-alpha.03](backend-shape-classifiers/backend-shape-classifiers-alpha.03.md) |
+| H4 | Depth-write state owns the bucket | rejected (depth write −68.87%, VS write +0.01%, GPU +8.34%) | [backend-shape-classifiers-depthwrite.01](backend-shape-classifiers/backend-shape-classifiers-depthwrite.01.md) |
+| H5 | Depth-compare (func Always) owns the bucket | rejected (VS write +0.041 MiB, GPU +5.03%) | [backend-shape-classifiers-depthfunc.01](backend-shape-classifiers/backend-shape-classifiers-depthfunc.01.md) |
+| H6 | Cull state bit owns the bucket | rejected (VS write −0.00%, GPU +1.84%) | [backend-shape-classifiers-cull.01](backend-shape-classifiers/backend-shape-classifiers-cull.01.md) |
+| H7 | Cull moves the hidden bucket (full capture) | rejected; named tiled +101.8% but VS write flat → named tiler ≠ hidden bucket | [backend-shape-classifiers-cull.02](backend-shape-classifiers/backend-shape-classifiers-cull.02.md) |
+| H8 | Cull *orientation* (force back) owns the bucket | rejected (VS write +0.01%, GPU +1.50%) | [backend-shape-classifiers-cull.03](backend-shape-classifiers/backend-shape-classifiers-cull.03.md) |
+| H9 | Row/class-scoped cull owns one row's share | rejected (VS write −0.02%, named tiled +33.3%, GPU +1.58%) | [backend-shape-classifiers-cull.04](backend-shape-classifiers/backend-shape-classifiers-cull.04.md) |
+| H10 | Scissor state owns the bucket | rejected (VS write +0.06%, GPU +4.19%) | [backend-shape-classifiers-scissor.01](backend-shape-classifiers/backend-shape-classifiers-scissor.01.md) / [backend-shape-classifiers-scissor.02](backend-shape-classifiers/backend-shape-classifiers-scissor.02.md) |
+| H11 | Fog source/blend owns the bucket | secondary (GPU −2.68%, FS write −10.3%, VS write +0.00%) | [backend-shape-classifiers-fog.01](backend-shape-classifiers/backend-shape-classifiers-fog.01.md) |
+| H12 | Fragment texture sampling owns the bucket | secondary (GPU −3.72%, top-3 VS write −3.24%, enc2-specific) | [backend-shape-classifiers-texture.01](backend-shape-classifiers/backend-shape-classifiers-texture.01.md) |
+| H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | [backend-shape-classifiers-visible.01](backend-shape-classifiers/backend-shape-classifiers-visible.01.md) |
+| H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | [backend-shape-classifiers-expand.01](backend-shape-classifiers/backend-shape-classifiers-expand.01.md) |
+| H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | [backend-shape-classifiers-alphatest.01](backend-shape-classifiers/backend-shape-classifiers-alphatest.01.md) |
+| H16 | Rifle muzzle fire correctness changes perf interpretation | visual-positive/perf-coupled. The public `01:05` oracle shows several rifle shots as compact barrel-attached round white/yellow bloom discs. Current split-payload artifacts reproduce that shape; same-run geometry promotes `0x80`, and after-draw color history confirms the two-triangle `0x80` sprite as the local writer (`seq=1094`, post-split `enc=3/draw=0/cmd=320`, `bright=706`, `white=196`, `warm=909` in the candidate ROI). `0x7f/0x75` remain broad/non-local for that target. This resolves the visual writer for the wide infantry scene, but not the main FPS owner: skipped/error/hazard/map-wait counters stay zero, while RT/depth/clear/present pass churn and Xcode GPU-counter proof remain open | [backend-shape-classifiers-alpha.04](backend-shape-classifiers/backend-shape-classifiers-alpha.04.md), [baselines-frame60.03](baselines/baselines-frame60.03.md) |
 
 ## Verification methods
 
@@ -178,7 +178,7 @@ Current FPS may still be slightly optimistic if a future correctness fix adds
 missing work; it may also be pessimistic if wrong pass/blend/order/load-store
 paths are doing extra overwrite or preservation work. The alpha/effect counters,
 visibility scout, same-run geometry gate, and eventual Xcode final-color/counter
-proof in [[backend-shape-classifiers-alpha.04]] must be used before treating GT1
+proof in [backend-shape-classifiers-alpha.04](backend-shape-classifiers/backend-shape-classifiers-alpha.04.md) must be used before treating GT1
 FPS as a final visual-correct workload. This gate has priority over more Xcode
 performance proof on this branch because previous large white bloom mistakes
 were performance-significant.
@@ -206,8 +206,8 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/metal_debugging.rules.md` for the full workflow.
 
 ## Cross-references
-- [[hidden-backend-storage]] — the surviving owner every rejection in this domain points to (hidden TVB/parameter storage, VS-write density, scaling).
-- [[vsout-layout]] — sibling axis: fog/texture/visibility classifiers also refute visible per-vertex width as the owner.
-- [[index-cache-locality]] — the accepted production win; the expand and scoped-alpha findings here motivate reducing VS invocations within a mandatory indexed path.
-- [[index-reuse-measurement]] — quantifies the indexed reuse / cache-miss shape that the force-expand classifier confirms is load-bearing.
-- [[overview-3dmark05-gt1]] — root map, priority DAG, and synthesis.
+- [hidden-backend-storage](hidden-backend-storage.md) — the surviving owner every rejection in this domain points to (hidden TVB/parameter storage, VS-write density, scaling).
+- [vsout-layout](vsout-layout.md) — sibling axis: fog/texture/visibility classifiers also refute visible per-vertex width as the owner.
+- [index-cache-locality](index-cache-locality.md) — the accepted production win; the expand and scoped-alpha findings here motivate reducing VS invocations within a mandatory indexed path.
+- [index-reuse-measurement](index-reuse-measurement.md) — quantifies the indexed reuse / cache-miss shape that the force-expand classifier confirms is load-bearing.
+- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root map, priority DAG, and synthesis.

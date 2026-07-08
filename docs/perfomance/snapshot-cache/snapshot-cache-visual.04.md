@@ -74,8 +74,8 @@ Qualitative reading:
 - `frame000300..800`: wide scene, soldiers, crates, floor highlights, muzzle
   flashes, and bloom are present.
 - `frame000900`: the known dark foreground/object class appears, but this class
-  was already lowered by [[snapshot-cache-visual.02]] and
-  [[snapshot-cache-visual.03]].
+  was already lowered by [snapshot-cache-visual.02](snapshot-cache-visual.02.md) and
+  [snapshot-cache-visual.03](snapshot-cache-visual.03.md).
 - `frame001000`: close-up armored character and bright muzzle/bloom render
   coherently.
 

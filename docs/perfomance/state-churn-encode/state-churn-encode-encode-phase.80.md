@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-curr
 
 # Encode Phase 80 - Encode-Slot PSO Resource-Shape Memo Repeat A/B
 
-**Question.** [[state-churn-encode-encode-phase.79]] accepted the first
+**Question.** [state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) accepted the first
 current-code default-vs-enabled pair as a local CPU win, but kept the behavior
 default-off until one more low-overhead smoke repeated the direction. Does the
 second pair keep the same CPU movement, correctness counters, and visual smoke?
@@ -106,7 +106,7 @@ completion-pacing lane.
 
 **Next gate.**
 
-- [[state-churn-encode-encode-phase.81]] promotes the behavior as default CPU
+- [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md) promotes the behavior as default CPU
   cleanup without making an FPS claim. Keep an opt-out or validation path:
   changing the resource-shape key must rerun
   `DXMT9_PERF_ENCODE_SLOT_PSO_RESOURCE_SHAPE_OPPORTUNITY=1` and require
@@ -117,6 +117,6 @@ completion-pacing lane.
   prove whether another CPU-local cleanup also reduces
   `completion_wait_ms`, or whether producer/run-ahead work is needed.
 
-**Related.** [[state-churn-encode-encode-phase.79]] ·
-[[state-churn-encode-encode-phase.78]] · [[present-pacing]] ·
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) ·
+[state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) · [present-pacing](../present-pacing.md) ·
+[state-churn-encode](../state-churn-encode.md).

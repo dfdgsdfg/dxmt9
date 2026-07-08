@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-const-sparsity-r1-20260614/3dm
 
 # Encode Phase 65 - Shader Constant Sparsity
 
-**Question.** [[state-churn-encode-encode-phase.64]] showed dirty VS cbuf
+**Question.** [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) showed dirty VS cbuf
 width is dominated by shader-visible usage prefix and indexed-float fallback,
 not the current dirty register range. Is shader-specific packed constant layout
 for non-indexed shaders a large safe target?
@@ -141,5 +141,5 @@ the upload path must preserve the current full-array fallback for correctness.
   reopen/cbuf upload, or on a segmented storage model that patches small dirty
   subranges without relying on sparse per-shader packing.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.64]] ·
-[[state-churn-encode-encode-phase.63]] · [[snapshot-cache-snapshot.18]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) ·
+[state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) · [snapshot-cache-snapshot.18](../snapshot-cache/snapshot-cache-snapshot.18.md).

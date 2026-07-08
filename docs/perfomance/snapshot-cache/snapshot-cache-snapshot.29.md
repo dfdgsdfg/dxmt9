@@ -13,7 +13,7 @@ related: docs/perfomance/snapshot-cache/snapshot-cache-snapshot.28.md, docs/perf
 
 # Snapshot Cache 29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache
 
-**Question / hypothesis.** After [[snapshot-cache-snapshot.28]], batch misses
+**Question / hypothesis.** After [snapshot-cache-snapshot.28](snapshot-cache-snapshot.28.md), batch misses
 still own about `~2ms/present`. Are those misses recurring in a short window
 such that a small multi-entry cache or interner could recover them?
 
@@ -85,5 +85,5 @@ serialization pressure unless a broader semantic interning design proves a much
 larger recurrence window without adding comparable hot-path lookup cost.
 
 Average-FPS work should remain focused on the P2/P3/P4 owner split in
-[[present-pacing-current-lowoverhead.71]]: replay/snapshot/encode reduction
+[present-pacing-current-lowoverhead.71](../present-pacing/present-pacing-current-lowoverhead.71.md): replay/snapshot/encode reduction
 paired with overlap/locality gates.

@@ -12,10 +12,10 @@ source: docs/perfomance/mini-replay-bisection/mini-replay-bisection-texture.01.m
 
 # Real-Texture Replay Rejects Exact 60/2 Cache-Opt Proof
 
-**Question / hypothesis.** [[mini-replay-bisection-semantic.02]] was exact for
+**Question / hypothesis.** [mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) was exact for
 the selected `60/2 depth-read + no-alpha-blend` two-draw window with both clear
 depth and captured D24X8 depth, but it still used `whiteTexture`. If the replay
-binds the captured draw-time texture inputs from [[mini-replay-bisection-texture.01]],
+binds the captured draw-time texture inputs from [mini-replay-bisection-texture.01](mini-replay-bisection-texture.01.md),
 does `cache-opt-lru32` still preserve exact final color?
 
 **Method.**
@@ -169,6 +169,6 @@ production reorder until one of these exists:
 - or a non-reorder backend mechanism that lowers the hidden vertex-stage write
   denominator without changing primitive order.
 
-**Related.** [[mini-replay-bisection]] ·
-[[mini-replay-bisection-texture.01]] · [[mini-replay-bisection-texture.03]] ·
-[[mini-replay-bisection-semantic.02]] · [[index-cache-locality]].
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) ·
+[mini-replay-bisection-texture.01](mini-replay-bisection-texture.01.md) · [mini-replay-bisection-texture.03](mini-replay-bisection-texture.03.md) ·
+[mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) · [index-cache-locality](../index-cache-locality.md).

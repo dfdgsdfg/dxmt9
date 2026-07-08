@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.103.
 
 ## Question
 
-[[state-churn-encode-encode-phase.103]] ranks `encode_draw_argbuf_setup_cpu_ms`
+[state-churn-encode-encode-phase.103](state-churn-encode-encode-phase.103.md) ranks `encode_draw_argbuf_setup_cpu_ms`
 as the current top encode candidate. Can the summary split that parent enough
 to choose the next focused A/B without manually scanning the full run counter
 table?
@@ -90,5 +90,5 @@ next code candidate should reduce one of those named rows, then a low-overhead
 120s scout must show the same P4/frame gates moving before claiming an
 average-FPS fix.
 
-**Related.** [[state-churn-encode-encode-phase.103]] ·
-[[present-pacing-summary-triage-current.41]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.103](state-churn-encode-encode-phase.103.md) ·
+[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](../state-churn-encode.md).

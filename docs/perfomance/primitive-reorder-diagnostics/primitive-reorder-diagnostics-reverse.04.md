@@ -41,7 +41,7 @@ not yet clean (encoder/draw counts still drift on a different time-based GT1
 frame). The shape gates are what made every later single-row / class-scoped
 reverse result interpretable.
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.03]]
-· feeds: [[primitive-reorder-diagnostics-reverse.05]], [[primitive-reorder-diagnostics-reverse.06]],
-[[primitive-reorder-diagnostics-reverse.07]], [[primitive-reorder-diagnostics-reverse.08]]
-· [[mini-replay-bisection]] (gate discipline) · sibling tooling: [[primitive-reorder-diagnostics-reverse.09]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.03](primitive-reorder-diagnostics-reverse.03.md)
+· feeds: [primitive-reorder-diagnostics-reverse.05](primitive-reorder-diagnostics-reverse.05.md), [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md),
+[primitive-reorder-diagnostics-reverse.07](primitive-reorder-diagnostics-reverse.07.md), [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md)
+· [mini-replay-bisection](../mini-replay-bisection.md) (gate discipline) · sibling tooling: [primitive-reorder-diagnostics-reverse.09](primitive-reorder-diagnostics-reverse.09.md).

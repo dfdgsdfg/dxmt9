@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-lookup-split-r1/3dmark05-p
 
 # Snapshot Uniform Component Hash Reuse
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.04]] showed
+**Question / hypothesis.** [snapshot-cache-snapshot.04](snapshot-cache-snapshot.04.md) showed
 `cachedBaseDrawState*()` lookup owned `18.085s` of the snapshot submission
 bucket. The follow-up split showed the lookup was not pure table probe cost:
 the hit path rebuilt and rehashed the uniform payload, and the miss path rebuilt
@@ -128,5 +128,5 @@ refresh/miss) plus residual shader-layout/hot-state work. A future fps claim
 needs a fixed-workload or complete-GT1 wallclock gate, not another raw total
 counter comparison from a watchdog-limited run.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.04]] ·
-[[present-pacing]] · [[state-churn-encode]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.04](snapshot-cache-snapshot.04.md) ·
+[present-pacing](../present-pacing.md) · [state-churn-encode](../state-churn-encode.md).

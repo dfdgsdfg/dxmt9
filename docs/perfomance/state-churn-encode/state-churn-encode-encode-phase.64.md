@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-vs-plan-shape-r1-20260614/3dma
 
 # Encode Phase 64 - VS Cbuf Plan Shape
 
-**Question.** After [[state-churn-encode-encode-phase.63]] proved that
+**Question.** After [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) proved that
 argbuf table reopens are driven by VS/PS constant hashes, is the dirty VS cbuf
 upload width mostly caused by the current dirty range, or by the shader-visible
 constant ABI shape?
@@ -99,9 +99,9 @@ target. The remaining cbuf directions are structural:
   reusing last-write-wins table state incorrectly.
 
 Any packed/segmented constant ABI change needs same-input image proof, because
-[[state-churn-encode-encode-phase.20]] already showed that zeroing bytes inside
+[state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) already showed that zeroing bytes inside
 the old visible prefix can produce dark or black geometry.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.20]] ·
-[[state-churn-encode-encode-phase.62]] ·
-[[state-churn-encode-encode-phase.63]] · [[snapshot-cache-snapshot.08]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
+[state-churn-encode-encode-phase.62](state-churn-encode-encode-phase.62.md) ·
+[state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) · [snapshot-cache-snapshot.08](../snapshot-cache/snapshot-cache-snapshot.08.md).

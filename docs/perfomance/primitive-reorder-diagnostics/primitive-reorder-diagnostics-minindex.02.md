@@ -45,9 +45,9 @@ the cache-locality signal. Not evidence that production reordering reduces the
 hidden VS/backend bucket; at most it shows the per-draw transient-IB diagnostic
 perturbs encoder shape too much.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-minindex.01]] · next:
-[[primitive-reorder-diagnostics-minindex.03]] (geometry-locked min-index reruns)
-· [[index-cache-locality]] (the semantic-safe, geometry-preserving cache path
-this motivates) · [[index-reuse-measurement]] (LRU miss model) ·
-[[hidden-backend-storage]] (invocation-count vs bytes/inv attribution).
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-minindex.01](primitive-reorder-diagnostics-minindex.01.md) · next:
+[primitive-reorder-diagnostics-minindex.03](primitive-reorder-diagnostics-minindex.03.md) (geometry-locked min-index reruns)
+· [index-cache-locality](../index-cache-locality.md) (the semantic-safe, geometry-preserving cache path
+this motivates) · [index-reuse-measurement](../index-reuse-measurement.md) (LRU miss model) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (invocation-count vs bytes/inv attribution).

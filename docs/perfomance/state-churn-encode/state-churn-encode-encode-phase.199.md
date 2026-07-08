@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.197.
 
 ## Question
 
-[[state-churn-encode-encode-phase.198]] leaves
+[state-churn-encode-encode-phase.198](state-churn-encode-encode-phase.198.md) leaves
 `0.411ms/present` inside `submit_draw_run_batch_append_uniform_cpu_ms` after
 subtracting whole-payload lookup and payload-record append storage. Which
 component of `appendDrawUniformPayload()` owns that residual?
@@ -66,7 +66,7 @@ flowchart TD
 ## Next Gate
 
 Run the standard 120s foreground no-gputrace probe on current head and inspect
-the new rows. [[state-churn-encode-encode-phase.200]] performs that gate and
+the new rows. [state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md) performs that gate and
 uses the fixed-find row as a local cleanup target. The useful branch depends on
 the split:
 
@@ -86,6 +86,6 @@ tool for choosing local mutations before a P4/FPS gate.
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py tests/scripts/test_compare_3dmark05_perf_counters.py`
 - `git diff --check`
 
-**Related.** [[state-churn-encode-encode-phase.197]] ·
-[[state-churn-encode-encode-phase.198]] ·
-[[state-churn-encode-encode-phase.200]].
+**Related.** [state-churn-encode-encode-phase.197](state-churn-encode-encode-phase.197.md) ·
+[state-churn-encode-encode-phase.198](state-churn-encode-encode-phase.198.md) ·
+[state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md).

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-uppe
 
 # Candidate Upper-Bound Pre-Gate Rejection
 
-**Question / hypothesis.** [[index-cache-locality-cpucost.13]] closed the
+**Question / hypothesis.** [index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md) closed the
 generic active-frontier/container family: cap, lazy heap, and cached-count
 buckets all cut different forms of selection work but regressed CPU. Can we
 avoid building low-value candidates instead? For any candidate, LRU32 miss count
@@ -102,5 +102,5 @@ a draw-shape prefilter that avoids reading index data, or a production cache
 policy that records rejected keys earlier and amortizes the gate across repeated
 draws.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.13]] · [[index-cache-locality-cpucost.10]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

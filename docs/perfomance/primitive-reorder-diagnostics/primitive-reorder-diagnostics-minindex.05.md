@@ -42,9 +42,9 @@ stayed `0xfff` / `184B`, reinforcing the hidden Apple vertex/tiler/backend
 storage hypothesis. Do not rerun this exact full-frame min-index sort as a proof
 candidate; the geometry-locked direction has stronger evidence.
 
-**Related.** [[primitive-reorder-diagnostics]] · prior:
-[[primitive-reorder-diagnostics-minindex.04]] (geometry-locked rerun that
-reclassifies this) · [[hidden-backend-storage]] (bytes/inv drop at fixed 184B
-VSOut → hidden storage) · [[vsout-layout]] (184B source vs ~1448B/inv) ·
-[[mini-replay-bisection]] (the 113-draw `60/2` prefix/window bisection preferred
-over this) · [[index-cache-locality]] (semantic-safe successor) · [[baselines]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prior:
+[primitive-reorder-diagnostics-minindex.04](primitive-reorder-diagnostics-minindex.04.md) (geometry-locked rerun that
+reclassifies this) · [hidden-backend-storage](../hidden-backend-storage.md) (bytes/inv drop at fixed 184B
+VSOut → hidden storage) · [vsout-layout](../vsout-layout.md) (184B source vs ~1448B/inv) ·
+[mini-replay-bisection](../mini-replay-bisection.md) (the 113-draw `60/2` prefix/window bisection preferred
+over this) · [index-cache-locality](../index-cache-locality.md) (semantic-safe successor) · [baselines](../baselines.md).

@@ -14,7 +14,7 @@ source: experiments/output/app-d3d9-3dmark05-current-visual-smoke-r1/3dmark05-pe
 
 **Question / hypothesis.** A manual GT1 run showed some geometry looking black
 or semi-transparent after the recent encode CPU work. The strongest recent
-semantic candidate is [[state-churn-encode-encode-phase.20]], because it changes
+semantic candidate is [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md), because it changes
 the dirty VS/PS cbuf upload payload from a full host struct to a
 prefix-preserving byte span. Does forcing full VS/PS cbuf uploads make the
 visual artifact obviously disappear?
@@ -113,7 +113,7 @@ sequenceDiagram
 simple full-cbuf fallback as the next default. Full upload massively increases
 cbuf/transient traffic and does not obviously fix the observed black or
 semi-transparent-looking geometry in the time-based smoke. Keep the
-prefix-preserving default from [[state-churn-encode-encode-phase.20]].
+prefix-preserving default from [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md).
 
 **Next.** If the visual issue persists, use a same-input proof path instead of
 time-based `actual.png`: mini-replay with dumped cbufs/geometry, a semantic
@@ -121,6 +121,6 @@ image gate, or a tightly scoped frame capture. The likely next visual bisection
 axis is not "all VS/PS cbuf prefixes"; it is exact draw/row isolation for the
 visible artifact.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.20]] ·
-[[state-churn-encode-encode-phase.21]] · [[baselines-visual-capture.01]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
+[state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

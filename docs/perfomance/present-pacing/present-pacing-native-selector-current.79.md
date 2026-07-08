@@ -168,8 +168,8 @@ for this workload because the failure happened after recording, during
 Instruments trim/save, where the partial bundle had already grown beyond the
 guard.
 
-**Related.** [[present-pacing]] ·
-[[present-pacing-native-selector-xctrace.31]] ·
-[[present-pacing-native-selector-xctrace.32]] ·
-[[present-pacing-current-lowoverhead.71]] ·
-[[present-pacing-run-ahead-current-code.73]].
+**Related.** [present-pacing](../present-pacing.md) ·
+[present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) ·
+[present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
+[present-pacing-current-lowoverhead.71](present-pacing-current-lowoverhead.71.md) ·
+[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md).

@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-append-state-split-20260613/resul
 
 # Submission Generation Compatibility Proof
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.32]] rejected
+**Question / hypothesis.** [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) rejected
 slot-local full-state interning because it acted too late. The useful upstream
 fact is that the frontend already knows when a stable draw-state cache lane is
 unchanged. If two adjacent `DrawRunSubmission` records have the same stable
@@ -147,6 +147,6 @@ generation/lane compat fast path next, then remeasure. Treat F2
 parallel low-risk CPU cleanup because the generation fast path alone cannot
 explain the full queued-submission cost.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.31]] ·
-[[state-churn-encode-encode-phase.32]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md) ·
+[state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md).

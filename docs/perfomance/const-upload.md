@@ -1,6 +1,6 @@
 # Const-Upload — CPU-side constant-buffer (cbuf/argbuf) upload traffic
 
-> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [[overview-3dmark05-gt1]].
+> Part of the 3DMark05 GT1 GPU-bottleneck investigation. Root map: [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
 
 ## Scope & question
 
@@ -16,15 +16,15 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | The cbuf bucket is dominated by pixel constants | rejected (it is `82.6%` vertex-side) | [[const-upload-class.01]] |
-| H2 | Repeated cbuf rewrites are mostly genuinely changed bytes | rejected (VS `92.8%` unchanged; FFP-VS ~`100%` unchanged) | [[const-upload-volatility.01]] |
-| H3 | Caching/repointing the stable FFP-VS slice removes its cbuf bytes | accepted as CPU win (`-30.68%` argbuf, removes ~`1.42GB`); GPU unmoved | [[const-upload-slice.01]] |
-| H4 | The residual VS cbuf width is driven by shader float usage | rejected (dirty high-water ~`205` regs dominates vs ~`31` used) | [[const-upload-range.01]] |
-| H5 | Resetting dirty-range counters with the dirty bit cuts VS cbuf | accepted as CPU win (`-66.48%` argbuf, `4.6GB`→~`1.06GB`); GPU unmoved | [[const-upload-dirtyrange.01]] |
-| H6 | The post-fix top-pass GPU cost is still cbuf upload | rejected (cbuf down to `163KiB`/encoder; cost is memory-write/store) | [[const-upload-dirtyrange.02]] |
-| H7 | Splitting sparse const records cuts payload without inflating count | accepted as CPU mechanism (`-30.92%` bytes, `+0.13%` count) | [[const-upload-sparse.01]] |
-| H8 | Sparse-const split moves the Xcode GPU bottleneck | rejected (VS write `1627.4→1627.3MiB` unchanged) | [[const-upload-sparse.02]] |
-| H9 | Hash-based downstream cbuf slice reuse cuts the bucket | inconclusive (~`0.5%`; target is upstream record coalescing) | [[const-upload-cache.01]] |
+| H1 | The cbuf bucket is dominated by pixel constants | rejected (it is `82.6%` vertex-side) | [const-upload-class.01](const-upload/const-upload-class.01.md) |
+| H2 | Repeated cbuf rewrites are mostly genuinely changed bytes | rejected (VS `92.8%` unchanged; FFP-VS ~`100%` unchanged) | [const-upload-volatility.01](const-upload/const-upload-volatility.01.md) |
+| H3 | Caching/repointing the stable FFP-VS slice removes its cbuf bytes | accepted as CPU win (`-30.68%` argbuf, removes ~`1.42GB`); GPU unmoved | [const-upload-slice.01](const-upload/const-upload-slice.01.md) |
+| H4 | The residual VS cbuf width is driven by shader float usage | rejected (dirty high-water ~`205` regs dominates vs ~`31` used) | [const-upload-range.01](const-upload/const-upload-range.01.md) |
+| H5 | Resetting dirty-range counters with the dirty bit cuts VS cbuf | accepted as CPU win (`-66.48%` argbuf, `4.6GB`→~`1.06GB`); GPU unmoved | [const-upload-dirtyrange.01](const-upload/const-upload-dirtyrange.01.md) |
+| H6 | The post-fix top-pass GPU cost is still cbuf upload | rejected (cbuf down to `163KiB`/encoder; cost is memory-write/store) | [const-upload-dirtyrange.02](const-upload/const-upload-dirtyrange.02.md) |
+| H7 | Splitting sparse const records cuts payload without inflating count | accepted as CPU mechanism (`-30.92%` bytes, `+0.13%` count) | [const-upload-sparse.01](const-upload/const-upload-sparse.01.md) |
+| H8 | Sparse-const split moves the Xcode GPU bottleneck | rejected (VS write `1627.4→1627.3MiB` unchanged) | [const-upload-sparse.02](const-upload/const-upload-sparse.02.md) |
+| H9 | Hash-based downstream cbuf slice reuse cuts the bucket | inconclusive (~`0.5%`; target is upstream record coalescing) | [const-upload-cache.01](const-upload/const-upload-cache.01.md) |
 
 ## Verification methods
 
@@ -135,8 +135,8 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 `agents/rules/metal_debugging.rules.md` for the full workflow.
 
 ## Cross-references
-- [[hidden-backend-storage]] — the surviving GPU owner every cbuf reduction points at (hidden TVB/parameter storage scaling with VS invocations × VSOut bytes).
-- [[state-churn-encode]] — stream/IB handle churn and draw-run barriers measured alongside cbuf; const-upload records are the draw-run scanner barrier the sparse split did not cross.
-- [[snapshot-cache]] — the D3D9 draw-state snapshot cache / argbuf table side of the same upload path.
-- [[render-pass-store]] — the RT/depth re-entry and store traffic the dirty-range Xcode capture handed the bottleneck to.
-- [[overview-3dmark05-gt1]] — root map, priority DAG, ceiling, synthesis.
+- [hidden-backend-storage](hidden-backend-storage.md) — the surviving GPU owner every cbuf reduction points at (hidden TVB/parameter storage scaling with VS invocations × VSOut bytes).
+- [state-churn-encode](state-churn-encode.md) — stream/IB handle churn and draw-run barriers measured alongside cbuf; const-upload records are the draw-run scanner barrier the sparse split did not cross.
+- [snapshot-cache](snapshot-cache.md) — the D3D9 draw-state snapshot cache / argbuf table side of the same upload path.
+- [render-pass-store](render-pass-store.md) — the RT/depth re-entry and store traffic the dirty-range Xcode capture handed the bottleneck to.
+- [overview-3dmark05-gt1](overview-3dmark05-gt1.md) — root map, priority DAG, ceiling, synthesis.

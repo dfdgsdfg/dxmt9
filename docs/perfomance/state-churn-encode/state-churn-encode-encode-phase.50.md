@@ -47,7 +47,7 @@ The run timeout-finalized with `status=pass`, `present_encoded=1800`, no GPU
 command-buffer errors, and a normal machine-gun muzzle-flash GT1 frame. This is
 a no-gputrace CPU A/B, not an Xcode GPU proof.
 
-**Result versus [[present-pacing-stage-delta.08]].**
+**Result versus [present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).**
 
 | Counter | phase08 | indexed fast path | Delta |
 |---|---:|---:|---:|
@@ -84,7 +84,7 @@ that class is now gated. The remaining encode owners are still argbuf setup,
 cbuf update/probe/repoint residual, binding-packet identity width, shader stream
 bind diversity, issue cost, and the broader pre-publish replay/snapshot cadence.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.12]] ·
-[[state-churn-encode-encode-phase.49]] ·
-[[present-pacing-stage-delta.08]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) ·
+[state-churn-encode-encode-phase.49](state-churn-encode-encode-phase.49.md) ·
+[present-pacing-stage-delta.08](../present-pacing/present-pacing-stage-delta.08.md).

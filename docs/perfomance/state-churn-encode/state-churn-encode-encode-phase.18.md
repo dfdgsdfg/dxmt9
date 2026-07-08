@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-cbuf-residual-split-r1/3dmark05-per
 
 # Cbuf Residual Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.17]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) showed that
 the remaining cbuf-update parent was not mainly Metal `setBuffer` or transient
 upload. The inferred residual was larger than those visible leaves
 (`954.163ms` total, `618.150ms` VS residual). Which hidden child owns that
@@ -81,10 +81,10 @@ python3 scripts/tools/compare_3dmark05_perf_counters.py \
 ```
 
 The run finished with `status=pass` and processed more presents than
-[[state-churn-encode-encode-phase.17]] (`1680 -> 1740`). GPU command-buffer
+[state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) (`1680 -> 1740`). GPU command-buffer
 time moved only `+66.747ms` (`+1.29%`), so the shape is suitable for CPU
 attribution. The `actual.png` artifact exists, but this leaf treats it only as
-smoke; [[baselines-visual-capture.01]] rejects time-based GT1 screenshots as a
+smoke; [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md) rejects time-based GT1 screenshots as a
 visual correctness oracle.
 
 **Measured split.**
@@ -166,6 +166,6 @@ newly actionable cbuf target is the `hashConstantBufferBytes()` path.
    into category dispatch, timer overhead, and helper call cost before changing
    constants layout.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.17]] · [[baselines-visual-capture.01]] ·
-[[const-upload]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md) ·
+[const-upload](../const-upload.md).

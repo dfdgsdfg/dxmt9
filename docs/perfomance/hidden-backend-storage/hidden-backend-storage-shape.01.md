@@ -48,7 +48,7 @@ reproducing primitive/backend-locality movement, or isolate it in a row-local
 replay. This agenda directly seeds the classifier, reorder-diagnostic, mini-
 replay, and the accepted opaque-depth index-cache-locality work.
 
-**Related.** [[hidden-backend-storage-scaling.02]] · [[hidden-backend-storage]] ·
-[[backend-shape-classifiers]] · [[primitive-reorder-diagnostics]] ·
-[[index-cache-locality]] · [[mini-replay-bisection]] · [[tvb-mechanism-proof]] ·
-[[vsout-layout]] · [[overview-3dmark05-gt1]]
+**Related.** [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[backend-shape-classifiers](../backend-shape-classifiers.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) ·
+[index-cache-locality](../index-cache-locality.md) · [mini-replay-bisection](../mini-replay-bisection.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) ·
+[vsout-layout](../vsout-layout.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

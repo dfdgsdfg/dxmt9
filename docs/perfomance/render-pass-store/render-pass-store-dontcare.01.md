@@ -38,9 +38,9 @@ shape: `render_split_rt_change=9844`, `render_split_clear=3576`,
 
 **Verdict.** Design is representable, but there is a GT1 measurement gap: the live
 counter proof needs a fresh unlocked GT1 run. (The subsequent runs show the cheap
-proofs do not actually fire on GT1 — see [[render-pass-store-dontcare.02]].)
+proofs do not actually fire on GT1 — see [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md).)
 
-**Related.** [[render-pass-store]] · prior: [[render-pass-store-reentry.01]]
-(the re-entry budget this attacks) · next: [[render-pass-store-dontcare.02]]
-(the color next-clear run that found zero hits) · [[baselines]] (frame120
+**Related.** [render-pass-store](../render-pass-store.md) · prior: [render-pass-store-reentry.01](render-pass-store-reentry.01.md)
+(the re-entry budget this attacks) · next: [render-pass-store-dontcare.02](render-pass-store-dontcare.02.md)
+(the color next-clear run that found zero hits) · [baselines](../baselines.md) (frame120
 24.643 ms re-entry).

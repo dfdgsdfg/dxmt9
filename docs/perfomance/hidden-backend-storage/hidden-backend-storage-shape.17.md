@@ -86,6 +86,6 @@ current visibility evidence now blocks both visibility shortcuts:
 The remaining aligned work is a real final-color/final-writer predicate or a
 new primitive-order-preserving backend-denominator mechanism.
 
-**Related.** [[mini-replay-bisection-texture.11]] ·
-[[hidden-backend-storage-shape.16]] · [[hidden-backend-storage-shape.15]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md) ·
+[hidden-backend-storage-shape.16](hidden-backend-storage-shape.16.md) · [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

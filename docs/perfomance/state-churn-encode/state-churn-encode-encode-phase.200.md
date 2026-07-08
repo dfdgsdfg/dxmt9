@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.198.
 
 ## Question
 
-[[state-churn-encode-encode-phase.199]] showed that the largest measured
+[state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) showed that the largest measured
 component inside uniform append was fixed-payload find:
 `0.229ms/present`. Because GT1 reports `100.00%` adjacent fixed-payload hash
 equality, can the backend carry the previous slot-local fixed payload handle
@@ -131,5 +131,5 @@ replay/encode materialization width.
 - `meson compile -C build-x86_64-builtin`
 - 3DMark05 GT1 no-gputrace probe: `app-d3d9-3dmark05-uniform-fixed-carry-r1`
 
-**Related.** [[state-churn-encode-encode-phase.198]] ·
-[[state-churn-encode-encode-phase.199]] · [[present-pacing]].
+**Related.** [state-churn-encode-encode-phase.198](state-churn-encode-encode-phase.198.md) ·
+[state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) · [present-pacing](../present-pacing.md).

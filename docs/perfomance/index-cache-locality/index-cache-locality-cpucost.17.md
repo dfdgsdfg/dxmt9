@@ -59,7 +59,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 
 The wrapper timeout-finalized the run with status `124` after writing
 postprocess artifacts. The final log still reached `present_encoded=1680`, so
-run-level counters are comparable to [[index-cache-locality-cpucost.15]].
+run-level counters are comparable to [index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md).
 
 **Result.** Strict LRU changes the candidate ordering but does not produce a
 useful win:
@@ -104,5 +104,5 @@ changing the default builder. Future index-cache CPU work should focus on
 cheaper cold-miss candidate construction or narrower eligible-subclass proof,
 not local LRU miss-path normalization.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.16]] · [[baselines-visual-capture.02]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.16](index-cache-locality-cpucost.16.md) · [baselines-visual-capture.02](../baselines/baselines-visual-capture.02.md).

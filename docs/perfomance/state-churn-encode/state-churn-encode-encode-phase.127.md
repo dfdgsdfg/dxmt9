@@ -115,5 +115,5 @@ larger P2/P3 work or prepares a direct compact argbuf/cbuf path. Otherwise the
 average-FPS investigation should stay on P4 producer run-ahead / present
 completion overlap and the larger replay/encode stage shape.
 
-**Related.** [[state-churn-encode-encode-phase.126]] -
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.126](state-churn-encode-encode-phase.126.md) -
+[state-churn-encode](../state-churn-encode.md).

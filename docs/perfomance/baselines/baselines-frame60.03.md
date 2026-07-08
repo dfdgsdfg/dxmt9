@@ -193,9 +193,9 @@ the error/fallback/overflow branch of the visual-correctness hypothesis. After
 the later `0x80` writer proof, the wide-scene rifle muzzle source is no longer
 the open owner question; the open performance branches are RT/depth/clear/
 present pass churn, hidden TVB/PB backend writes, and completion/present pacing.
-This scout does not replace [[baselines-frame60.02]] for Xcode GPU bottleneck
+This scout does not replace [baselines-frame60.02](baselines-frame60.02.md) for Xcode GPU bottleneck
 ownership.
 
-**Related.** [[baselines]] · [[baselines-frame60.02]] ·
-[[backend-shape-classifiers-alpha.04]] · [[present-pacing]] ·
-[[render-pass-store]].
+**Related.** [baselines](../baselines.md) · [baselines-frame60.02](baselines-frame60.02.md) ·
+[backend-shape-classifiers-alpha.04](../backend-shape-classifiers/backend-shape-classifiers-alpha.04.md) · [present-pacing](../present-pacing.md) ·
+[render-pass-store](../render-pass-store.md).

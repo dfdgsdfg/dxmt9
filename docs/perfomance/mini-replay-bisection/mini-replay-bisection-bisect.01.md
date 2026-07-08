@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L14879-L15014
 # Encoder2 Bisection Analysis
 
 **Question / hypothesis.** Within the reproduced 113-draw encoder2 replay
-([[mini-replay-bisection-replay.03]]), is the ~1 GiB VS-write pressure owned by a
+([mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md)), is the ~1 GiB VS-write pressure owned by a
 single late draw/state transition, or is it additive across independent draw
 windows? Binary-search the draw range to localize the hot region.
 
@@ -42,8 +42,8 @@ splits are additive: `0..55`+`56..83` = 884.928 vs 884.870 MiB measured;
 prefix-transition-state explanation — the reproduced class is per-window
 vertex-stage backend write amplification. (Also corrected stale manifest metadata:
 hot pairs genuinely read high texcoords, so a `position,fogFactor,texcoord0` trim
-would corrupt the replay — see [[vsout-layout]].) Drill into `14..27` next.
+would corrupt the replay — see [vsout-layout](../vsout-layout.md).) Drill into `14..27` next.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-replay.03]] ·
-[[mini-replay-bisection-pair.01]] · [[hidden-backend-storage]] ·
-[[index-cache-locality]] · [[vsout-layout]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md) ·
+[mini-replay-bisection-pair.01](mini-replay-bisection-pair.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[index-cache-locality](../index-cache-locality.md) · [vsout-layout](../vsout-layout.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

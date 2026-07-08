@@ -150,5 +150,5 @@ trusting native tests.
   `DrawRunSubmission=20992`
 - 3DMark05 GT1 120s no-gputrace scout above.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.41]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.41](state-churn-encode-encode-phase.41.md).

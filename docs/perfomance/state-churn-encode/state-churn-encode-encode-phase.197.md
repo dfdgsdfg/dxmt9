@@ -15,7 +15,7 @@ related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.195.
 
 ## Question
 
-After [[state-churn-encode-encode-phase.196]] rejected queue mutex acquisition,
+After [state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) rejected queue mutex acquisition,
 is the remaining `commit_chunk_draw_batch_submit_cpu_ms` mostly an unmeasured
 outer-submit gap, or can the existing child counters already localize it?
 
@@ -29,7 +29,7 @@ derives two parent-minus-child residuals from existing counters:
 - `submit_draw_run_batch_append_cpu_ms` minus its known append child scopes
   (`reserve`, `state`, `uniform`, `payload`, `param`, `record`).
 
-The H225 result from [[state-churn-encode-encode-phase.196]] was re-summarized
+The H225 result from [state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) was re-summarized
 with the updated tool. No renderer behavior changed.
 
 ## Result
@@ -86,8 +86,8 @@ flowchart TD
 The next local submit branch is not queue lock or a large unknown outer-submit
 gap. It is append materialization width, especially uniform append and state
 append. That does not automatically make it the average-FPS lever:
-[[state-churn-encode-encode-phase.195]] and
-[[present-pacing-current-visual-p4.136]] still show the frame-level owner is
+[state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) and
+[present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md) still show the frame-level owner is
 P4/no-enqueue cadence plus exposed replay/encode serial work.
 
 This narrows the local CPU path:
@@ -106,5 +106,5 @@ append owns the submit row, and uniform/state append own most of append. The
 next implementation choice is either a real append materialization reduction
 with a P4 proof gate, or a return to the render-pass-safe overlap branch.
 
-**Related.** [[state-churn-encode-encode-phase.195]] ·
-[[state-churn-encode-encode-phase.196]] · [[present-pacing-current-visual-p4.136]].
+**Related.** [state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) ·
+[state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) · [present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md).

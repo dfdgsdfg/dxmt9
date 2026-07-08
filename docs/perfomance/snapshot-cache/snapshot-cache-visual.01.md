@@ -114,4 +114,4 @@ deterministic ABI-prefix unit test, not a full oracle replacement.
 Keep the ABI-prefix widening. Do not use full cbuf uploads as a default visual
 workaround; it is only an oracle/diagnostic mode. This fix is correctness work,
 not an average-FPS improvement. The current low-overhead baseline after the fix
-is [[present-pacing-current-lowoverhead.71]].
+is [present-pacing-current-lowoverhead.71](../present-pacing/present-pacing-current-lowoverhead.71.md).

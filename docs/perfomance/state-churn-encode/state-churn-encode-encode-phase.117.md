@@ -107,5 +107,5 @@ with direct compact consumption in prefetch/encoder paths.
 - `meson compile -C build-win32-x86-builtin`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix uniform-front-copy-elision-current-r1 --frame 60 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120 --wait-unlocked-sec 1 --wait-unlocked-interval-sec 1 --require-current-uniform-compact-saved-bytes-present`
 
-**Related.** [[state-churn-encode-encode-phase.116]] ·
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.116](state-churn-encode-encode-phase.116.md) ·
+[state-churn-encode](../state-churn-encode.md).

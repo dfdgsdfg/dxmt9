@@ -74,6 +74,6 @@ inside sample-visible rows, so production work still needs:
 - a primitive-order-preserving backend mechanism that reduces the hidden
   vertex/tiler storage denominator.
 
-**Related.** [[mini-replay-bisection-texture.09]] ·
-[[overview-3dmark05-gt1]] · [[hidden-backend-storage]] ·
-[[index-cache-locality]].
+**Related.** [mini-replay-bisection-texture.09](mini-replay-bisection-texture.09.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[index-cache-locality](../index-cache-locality.md).

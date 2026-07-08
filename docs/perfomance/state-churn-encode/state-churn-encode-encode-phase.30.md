@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-submit-append-split-20260613/resu
 
 # Draw State Rvalue Append
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.29]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) showed that
 `submit_draw_run_batch_append_state_cpu_ms` is the largest append child. In the
 batch path, the first submission state was copied through two large
 `CanonicalDrawState` value hops before the SoA vectors stored its components:
@@ -100,7 +100,7 @@ flowchart LR
 **Decision.** Accept as a CPU win. This is not a GPU bottleneck fix:
 `gpu_command_buffer_time_ms`, render-pass split counts, and tile-preservation
 bytes remain flat. It does, however, remove a real CPU-side copy tax from the
-draw submission path and validates that [[state-churn-encode-encode-phase.29]]
+draw submission path and validates that [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md)
 correctly identified state append as an actionable child.
 
 **Next target.**
@@ -112,6 +112,6 @@ correctly identified state append as an actionable child.
 | Uniform append path | `append_uniform` is now the largest child (`837.360ms`), while payloads are still mostly unique (`875,739` appends) |
 | Batch coalescing | Larger records/group would amortize one state append and one uniform loop over more draws |
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.29]] ·
-[[snapshot-cache-snapshot.10]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
+[snapshot-cache-snapshot.10](../snapshot-cache/snapshot-cache-snapshot.10.md).

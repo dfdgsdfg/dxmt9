@@ -46,4 +46,4 @@ texture-write reduction, not a VS-write owner. During replay the remaining
 compression insight pointed at `fmt2` BGRA-like RTs, not the R32F/fmt16
 resources, motivating the X8 follow-ups.
 
-**Related.** [[attachment-pixelformat]] · first in this domain, followed by the attachment-metadata instrumentation [[attachment-pixelformat-metadata.01]] · confirms the [[hidden-backend-storage]] owner survives · sibling pass-traffic class [[render-pass-store]] · refutes pixel-format/lossless-compression as the [[overview-3dmark05-gt1]] first-order owner.
+**Related.** [attachment-pixelformat](../attachment-pixelformat.md) · first in this domain, followed by the attachment-metadata instrumentation [attachment-pixelformat-metadata.01](attachment-pixelformat-metadata.01.md) · confirms the [hidden-backend-storage](../hidden-backend-storage.md) owner survives · sibling pass-traffic class [render-pass-store](../render-pass-store.md) · refutes pixel-format/lossless-compression as the [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) first-order owner.

@@ -99,7 +99,7 @@ Next work should move to one of two safer tracks:
   timeout-submit before the app stalls, without keeping an uncommitted render
   command buffer as the main correctness mechanism.
 
-Update: [[present-pacing-encode-session-pass-streaming-runtime.147]] fixes the
+Update: [present-pacing-encode-session-pass-streaming-runtime.147](present-pacing-encode-session-pass-streaming-runtime.147.md) fixes the
 session-lifetime/fail-open failure class and retests bounded wait. The updated
 2ms run no longer black-screens and records `timeout_submitted=2,364`, proving
 the fail-open path. Longer waits reduce timeout fragmentation (`163` at 8ms,

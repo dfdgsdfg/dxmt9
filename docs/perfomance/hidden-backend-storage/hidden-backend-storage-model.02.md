@@ -14,7 +14,7 @@ source: specs/perfomance.plan.md#L3011-L3072
 
 **Question / hypothesis.** Does public Apple / Asahi / Mesa / MoltenVK material
 support the hidden-backend-storage model from
-[[hidden-backend-storage-model.01]], and what can each source actually prove?
+[hidden-backend-storage-model.01](hidden-backend-storage-model.01.md), and what can each source actually prove?
 
 **Method.** Literature survey of external GPU architecture documentation,
 mapped onto the five-component model and the runtime gate
@@ -46,5 +46,5 @@ UVS (varying) / PPP (primitive) split of the hidden bucket and keep
 render-pass store/load as a documented secondary target. Layering caution from
 MoltenVK: prefer the smallest dump-first probe before broad runtime changes.
 
-**Related.** [[hidden-backend-storage-model.01]] · [[hidden-backend-storage]] ·
-[[render-pass-store]] · [[tvb-mechanism-proof]] · [[overview-3dmark05-gt1]]
+**Related.** [hidden-backend-storage-model.01](hidden-backend-storage-model.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) ·
+[render-pass-store](../render-pass-store.md) · [tvb-mechanism-proof](../tvb-mechanism-proof.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

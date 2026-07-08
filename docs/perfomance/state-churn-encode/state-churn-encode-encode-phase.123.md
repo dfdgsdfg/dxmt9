@@ -95,5 +95,5 @@ target a different mechanism:
 - move to a larger P2/P3/P4 serialization design that makes CPU reductions
   overlap with present completion wait.
 
-**Related.** [[state-churn-encode-encode-phase.110]] ·
-[[state-churn-encode-encode-phase.111]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.110](state-churn-encode-encode-phase.110.md) ·
+[state-churn-encode-encode-phase.111](state-churn-encode-encode-phase.111.md) · [state-churn-encode](../state-churn-encode.md).

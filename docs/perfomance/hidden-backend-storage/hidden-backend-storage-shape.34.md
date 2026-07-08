@@ -12,7 +12,7 @@ source: src/dxmt9/dxmt9_pipeline_cache.cpp; src/dxmt9/dxmt9_draw_encoder.mm; src
 
 # Fragmentless Depth-Only Keep-VSOut Route Passes Equality but Fails Xcode Counter Gate
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.26]] proved the
+**Question / hypothesis.** [hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) proved the
 `60/0` fragmentless depth-only route is reachable, but its first form changed
 two variables at once: it removed the fragment function and also forced a
 position-only `VSOut` layout (`0x0`). Was the depth equality failure caused by
@@ -65,7 +65,7 @@ attachment dumps for `seq=60, enc=0`, and compare them with
 | `gpu_command_buffer_errors` | `0` |
 | accept/reject/no-pipeline logs | `2` / `0` / `0` |
 
-The important change from [[hidden-backend-storage-shape.26]] is the layout:
+The important change from [hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) is the layout:
 the fragmentless route is reached while preserving `0xfff`, not by collapsing
 the shader interface to position-only `0x0`.
 
@@ -158,5 +158,5 @@ The capture layer is usable again: it produced `frame60.gputrace`, embedded
 performance data, and encoder counter CSV for this run. The `60/0`
 fragmentless keep-VSOut route does not reduce hidden backend VS writes.
 
-**Related.** [[hidden-backend-storage-shape.26]] ·
-[[hidden-backend-storage-shape.33]] · [[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) ·
+[hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

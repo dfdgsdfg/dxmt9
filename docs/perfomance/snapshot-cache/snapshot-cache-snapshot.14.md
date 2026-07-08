@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-cache-nonconst-hash-reuse-
 
 # Batch Miss Non-Constant Hash Reuse
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.13]] named the batch-miss
+**Question / hypothesis.** [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) named the batch-miss
 uniform-build hash as the local owner, led by non-constant component hashing.
 Most batch misses come from shader/texture/stream/FVF/binding churn; those
 change the stable draw-state key but usually do not change world/view/projection,
@@ -69,7 +69,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 Status: pass. `actual.png` shows a normal GT1 frame with machine-gun bloom and
 no black-screen, yellow-screen, obvious texture collapse, or geometry collapse.
 
-**Result.** Compared with [[snapshot-cache-snapshot.13]]:
+**Result.** Compared with [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md):
 
 | Counter | Before | After | Delta |
 |---|---:|---:|---:|
@@ -105,5 +105,5 @@ remaining local uniform hash target is VS indexed-float fallback; the broader
 frame-rate target remains CPU cadence / present completion overlap and backend
 encode work, not this non-constant hash path.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.13]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

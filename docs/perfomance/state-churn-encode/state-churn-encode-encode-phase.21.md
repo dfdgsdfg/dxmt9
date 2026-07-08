@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-binding-packet-sampler-keyhash-r1/3
 
 # Binding Packet Sampler Key Hash Reuse
 
-**Question / hypothesis.** After [[state-churn-encode-encode-phase.20]], cbuf
+**Question / hypothesis.** After [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md), cbuf
 build is no longer the largest backend encode child. `binding_packet_plan` is
 still `0.666122ms/present`, and inspection shows
 `makeFragmentTextureSamplerBindings()` / `makeVertexTextureSamplerBindings()`
@@ -134,5 +134,5 @@ would need a stronger cache identity or plan reuse keyed by draw-state plus
 volatile fields; broad equality weakening is not justified because full
 sampler-state equality is the safety boundary.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.20]] · [[baselines-visual-capture.01]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).

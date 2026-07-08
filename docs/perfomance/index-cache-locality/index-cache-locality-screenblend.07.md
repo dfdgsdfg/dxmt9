@@ -120,6 +120,6 @@ confirms that `60/2` can reduce hidden backend writes through VS-invocation
 reduction, but the full proof failed and the next useful work is either a
 broader semantic-safe target set or a non-reorder backend denominator change.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-screenblend.06]] · [[index-cache-locality-proofinput.01]]
-· next: [[index-cache-locality-screenblend.08]] · [[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md)
+· next: [index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

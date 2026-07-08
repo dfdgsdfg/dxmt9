@@ -38,6 +38,6 @@ candidates: more applied buffers, weaker average gain, no hardware VS invocation
 movement. Keep the guarded min-gain-10 production threshold; a lower threshold needs
 row/class-specific Xcode VS-invocation proof, not just software LRU counters.
 
-**Related.** [[index-cache-locality]] · [[index-cache-locality-opaque.07]]
-(the accepted min-gain-10 proof) · [[index-cache-locality-screenblend.03]] ·
-[[hidden-backend-storage]] (remaining `hidden_vertex_tiler_parameter_storage:3` owner).
+**Related.** [index-cache-locality](../index-cache-locality.md) · [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md)
+(the accepted min-gain-10 proof) · [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md) ·
+[hidden-backend-storage](../hidden-backend-storage.md) (remaining `hidden_vertex_tiler_parameter_storage:3` owner).

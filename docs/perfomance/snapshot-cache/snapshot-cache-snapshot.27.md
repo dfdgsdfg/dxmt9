@@ -110,5 +110,5 @@ state more accurate: the old "uniform build" owner is now narrowed to shader
 constant hashing plus full submission materialization, while the FPS owner still
 requires larger P2/P3 or P4 movement.
 
-**Related.** [[snapshot-cache-snapshot.26]] ·
-[[snapshot-cache-snapshot.25]] · [[present-pacing-current-lowoverhead.52]].
+**Related.** [snapshot-cache-snapshot.26](snapshot-cache-snapshot.26.md) ·
+[snapshot-cache-snapshot.25](snapshot-cache-snapshot.25.md) · [present-pacing-current-lowoverhead.52](../present-pacing/present-pacing-current-lowoverhead.52.md).

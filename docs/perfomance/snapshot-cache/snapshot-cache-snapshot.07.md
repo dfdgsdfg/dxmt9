@@ -12,8 +12,8 @@ source: experiments/output/app-d3d9-3dmark05-snapshot-payload-split-r1/3dmark05-
 
 # Snapshot Uniform Payload Build Split
 
-**Question / hypothesis.** [[snapshot-cache-snapshot.05]] removed the duplicated
-component hash work, and [[snapshot-cache-snapshot.06]] rejected same-value D3D9
+**Question / hypothesis.** [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) removed the duplicated
+component hash work, and [snapshot-cache-snapshot.06](snapshot-cache-snapshot.06.md) rejected same-value D3D9
 setter skips. The remaining snapshot-cache cost was the actual
 `makeDrawUniformPayloadFromState()` payload construction, measured at roughly
 `12.4us` per refresh/miss in prior runs. Split that function to determine
@@ -113,7 +113,7 @@ flowchart TD
 not large VS/PS constant copy, FFP matrix construction, texture transform
 construction, or clip-plane construction. It is the first full
 `hashDrawUniformPayload()` pass, especially the full payload/constant hashing
-that still remains after [[snapshot-cache-snapshot.05]] removed duplicate
+that still remains after [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) removed duplicate
 component rehashing.
 
 **Next.** The next implementation candidate is to separate "payload lookup
@@ -125,5 +125,5 @@ aliasing. A safe follow-up should first introduce a distinct narrow hash policy
 or range/usage-based hash and measure both `payload_hash` time and uniform
 lookup collision/hit behavior.
 
-**Related.** [[snapshot-cache]] · [[snapshot-cache-snapshot.05]] ·
-[[snapshot-cache-snapshot.06]] · [[state-churn-encode]].
+**Related.** [snapshot-cache](../snapshot-cache.md) · [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md) ·
+[snapshot-cache-snapshot.06](snapshot-cache-snapshot.06.md) · [state-churn-encode](../state-churn-encode.md).

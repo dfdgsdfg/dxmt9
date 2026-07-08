@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-commit-chunk-replay-split-20260612-
 
 # Commit Chunk Replay Child Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.24]] shows that
+**Question / hypothesis.** [state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) shows that
 `bridge_commit_latency_ns` is mostly synchronous `commit_chunk` record replay.
 Which replay child is large enough to optimize first?
 
@@ -100,5 +100,5 @@ submission.
   and `commit_chunk_const_upload_cpu_ms` as low-priority unless a later change
   moves their totals.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.24]] · [[snapshot-cache]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) · [snapshot-cache](../snapshot-cache.md).

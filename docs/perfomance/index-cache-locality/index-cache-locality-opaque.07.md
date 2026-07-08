@@ -38,6 +38,6 @@ real Xcode GPU work, not just dxmt estimates. After the win, top VS write is sti
 `1,518.9MiB` (`~7.8x` the `184B` visible VSOut), so hidden vertex/tiler/backend
 storage remains the residual owner. Keep opt-in until CPU cost is lower.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-opaque.06]]
-· [[tvb-mechanism-proof]] (mechanism proven) · [[hidden-backend-storage]] (residual) ·
-[[vsout-layout]] (visible width ruled out as first-order owner).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md)
+· [tvb-mechanism-proof](../tvb-mechanism-proof.md) (mechanism proven) · [hidden-backend-storage](../hidden-backend-storage.md) (residual) ·
+[vsout-layout](../vsout-layout.md) (visible width ruled out as first-order owner).

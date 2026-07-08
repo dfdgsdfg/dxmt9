@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence.90.md,
 
 ## Question
 
-[[present-pacing-current-pe-cadence.90]] shows large PE-side
+[present-pacing-current-pe-cadence.90](present-pacing-current-pe-cadence.90.md) shows large PE-side
 `recordAppendCpuMs`, `constFlushCpuMs`, and `chunkBridgeMs`. H12 lowered the
 chunk record cap from `64` to `32` and did not create overlap. This run checks
 the opposite direction: can a larger PE chunk (`128` records and `512KiB`) reduce

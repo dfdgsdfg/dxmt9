@@ -7,7 +7,7 @@ source: src/dxmt9/dxmt9_command_queue.cpp, agents/rules/environment_variables_pe
 
 # Encode Phase 87 - Encode-Slot PSO Semantic Split Default-Off Cleanup
 
-**Question.** [[state-churn-encode-encode-phase.75]] split the default
+**Question.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) split the default
 encode-slot PSO semantic memo into key/probe/store child timers and classified
 their subtotal as attribution overhead, not the next primary PSO-prefetch
 target. Those child timers still ran in the default profile. They should follow
@@ -106,6 +106,6 @@ or lookup frequency rather than micro-splitting the semantic memo again.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix pso-semantic-split-default-off-r1-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 - `git diff --check`
 
-**Related.** [[state-churn-encode-encode-phase.86]] ·
-[[state-churn-encode-encode-phase.75]] · [[state-churn-encode-encode-phase.81]]
-· [[present-pacing-lowoverhead-serial.24]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.86](state-churn-encode-encode-phase.86.md) ·
+[state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) · [state-churn-encode-encode-phase.81](state-churn-encode-encode-phase.81.md)
+· [present-pacing-lowoverhead-serial.24](../present-pacing/present-pacing-lowoverhead-serial.24.md) · [state-churn-encode](../state-churn-encode.md).

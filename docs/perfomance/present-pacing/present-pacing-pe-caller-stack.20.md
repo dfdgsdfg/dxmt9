@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-caller-pc.19.md
 
 ## Question
 
-[[present-pacing-pe-caller-pc.19]] proved that the `Clear` front gate is not
+[present-pacing-pe-caller-pc.19](present-pacing-pe-caller-pc.19.md) proved that the `Clear` front gate is not
 inside dxmt9's `SetRenderTarget`, `Clear`, child getter, query, lock, or
 present-boundary paths. It still over-attributed the owner to the direct caller
 PCs `0x0042AF4F` and `0x0042B061`. Disassembly shows those PCs are 3DMark05's

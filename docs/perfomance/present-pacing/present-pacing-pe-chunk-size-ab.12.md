@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-chunk-cadence.11.md, d
 
 ## Question
 
-[[present-pacing-pe-chunk-cadence.11]] proved that the app starts the next
+[present-pacing-pe-chunk-cadence.11](present-pacing-pe-chunk-cadence.11.md) proved that the app starts the next
 frame quickly in PE, but the first non-empty chunk only crosses into unix after
 the recorder fills to the `64`-record `capacity_post` threshold. The direct
 follow-up is whether simply lowering the chunk capacity to `32` records creates

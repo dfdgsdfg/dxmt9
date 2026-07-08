@@ -184,6 +184,6 @@ VS float constants and gate it on:
 4. P4/frame counters, because the current FPS limit still includes
    under-pipelined completion wait (`27.999ms/present`) and CPU replay/encode.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.139]] ·
-[[state-churn-encode-encode-phase.138]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.139](state-churn-encode-encode-phase.139.md) ·
+[state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md).

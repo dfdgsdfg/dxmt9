@@ -12,7 +12,7 @@ source: traces/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1
 
 # Large Alpha Blend Static-Equivalence Gate
 
-**Question / hypothesis.** [[hidden-backend-storage-shape.09]] keeps the
+**Question / hypothesis.** [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) keeps the
 correctness-invalid `large4096 + alpha-blend` blend-off result as the strongest
 remaining non-reorder state-shape clue. Is there any static evidence that the
 same class can legally disable blending, or should blend-off remain diagnostic
@@ -84,6 +84,6 @@ stateDiagram-v2
   DiagnosticOnly --> [*]: no blend-off replay by itself
 ```
 
-**Related.** [[hidden-backend-storage]] ·
-[[hidden-backend-storage-shape.09]] ·
-[[backend-shape-classifiers-alpha.03]] · [[index-cache-locality]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) ·
+[hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) ·
+[backend-shape-classifiers-alpha.03](../backend-shape-classifiers/backend-shape-classifiers-alpha.03.md) · [index-cache-locality](../index-cache-locality.md).

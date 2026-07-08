@@ -4,7 +4,7 @@ date: 2026-06-14
 status: rejected-current
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_pipeline_cache.cpp, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/actual.png
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.53]] left
+**Question / hypothesis.** [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) left
 `encode_draw_pipeline_lookup_cpu_ms=934.420ms` even though PSO prefetch was
 complete: `encode_draw_pso_prefetch_handle_available=446,201`,
 `encode_draw_pso_prefetch_handle_used=446,201`, and missing/bypass counters were
@@ -39,7 +39,7 @@ Status: pass. The run produced `present_encoded=1800`,
 `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and a normal
 machine-gun muzzle-bloom frame.
 
-**Result versus [[state-churn-encode-encode-phase.53]].**
+**Result versus [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md).**
 
 | Counter | phase53 | PSO resolve cache | Delta |
 |---|---:|---:|---:|
@@ -85,5 +85,5 @@ snapshot/commit replay cadence. A future PSO attempt should first split
 `pipeline_lookup` into handle resolve, depth-state resolve, variant label/hash,
 and actual Metal bind/shadow work.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.53]] · [[snapshot-cache]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) · [snapshot-cache](../snapshot-cache.md).

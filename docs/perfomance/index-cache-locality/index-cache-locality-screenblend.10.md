@@ -12,7 +12,7 @@ source: scripts/tools/summarize_3dmark05_perf_gates.py; tests/scripts/test_summa
 
 # Semantic Ceiling Is Now an Automated Gate
 
-**Question / hypothesis.** [[index-cache-locality-screenblend.09]] manually
+**Question / hypothesis.** [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md) manually
 calibrated which semantic locality buckets are large enough to justify another
 Xcode capture. Can the current perf gate consume that CSV so the next experiment
 queue does not keep re-scheduling small color-exact or zero-sample locality
@@ -83,7 +83,7 @@ while the only large bucket is not yet semantic-safe. The next locality Xcode
 capture should therefore wait for a real final-color/final-writer oracle, not
 just another rank-window mini-replay or visibility-positive scout.
 
-**Related.** [[index-cache-locality]] ·
-[[index-cache-locality-screenblend.09]] ·
-[[mini-replay-bisection-texture.11]] ·
-[[hidden-backend-storage-shape.19]] · [[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) ·
+[index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md) ·
+[mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md) ·
+[hidden-backend-storage-shape.19](../hidden-backend-storage/hidden-backend-storage-shape.19.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

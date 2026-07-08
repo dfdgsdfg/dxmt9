@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-clear-gate.15.md, docs
 
 ## Question
 
-[[present-pacing-pe-clear-gate.15]] identified the first record-producing call
+[present-pacing-pe-clear-gate.15](present-pacing-pe-clear-gate.15.md) identified the first record-producing call
 as `Clear`, but its call milestone surface did not cover many D3D9 getters and
 child-resource methods. This could hide a drawable/swapchain/resource query
 between early RT setup and `Clear`.

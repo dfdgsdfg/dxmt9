@@ -51,4 +51,4 @@ cuts the hidden estimate roughly in half. But it is **not a fix**
 write `1054.495MiB` of VS traffic at `3.883x` expected VSOut, so
 primitive/backend pressure remains a secondary cause.
 
-**Related.** [[backend-shape-classifiers]] · escalation of [[backend-shape-classifiers-alpha.01]] and [[backend-shape-classifiers-alpha.02]] · partially attributes [[hidden-backend-storage]] · confirms [[index-cache-locality]] screen-blend class is shape-sensitive.
+**Related.** [backend-shape-classifiers](../backend-shape-classifiers.md) · escalation of [backend-shape-classifiers-alpha.01](backend-shape-classifiers-alpha.01.md) and [backend-shape-classifiers-alpha.02](backend-shape-classifiers-alpha.02.md) · partially attributes [hidden-backend-storage](../hidden-backend-storage.md) · confirms [index-cache-locality](../index-cache-locality.md) screen-blend class is shape-sensitive.

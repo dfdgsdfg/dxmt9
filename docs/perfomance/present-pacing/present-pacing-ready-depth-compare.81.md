@@ -72,6 +72,6 @@ flowchart LR
 - `python3 -m pytest tests/scripts/test_3dmark05_probe_scripts.py -k pacing_compare`
 - `git diff --check`
 
-**Related.** [[present-pacing-noenqueue-compare-closure.80]] ·
-[[present-pacing-run-ahead-current-code.73]] ·
-[[present-pacing-run-ahead-design.68]].
+**Related.** [present-pacing-noenqueue-compare-closure.80](present-pacing-noenqueue-compare-closure.80.md) ·
+[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md) ·
+[present-pacing-run-ahead-design.68](present-pacing-run-ahead-design.68.md).

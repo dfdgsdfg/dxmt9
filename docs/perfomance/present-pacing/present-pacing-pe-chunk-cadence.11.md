@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-call-cadence.10.md, do
 
 ## Question
 
-[[present-pacing-pe-call-cadence.10]] shows that the app calls back into PE D3D9
+[present-pacing-pe-call-cadence.10](present-pacing-pe-call-cadence.10.md) shows that the app calls back into PE D3D9
 almost immediately after `Present` returns, usually through `BeginScene`. The
 next question is where that PE-local next-frame work first crosses into the
 unix provider: immediately after the first API call, or only after the PE

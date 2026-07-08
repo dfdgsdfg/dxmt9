@@ -20,9 +20,9 @@ attached?
 **Method.** Re-read the post-stream/IB gate report and next-experiment queue,
 then regenerate the VS scaling input with the refreshed opaque proof run
 `post-streamib-frame60-opaque-proof-r1` included. The historical
-[[index-cache-locality-opaque.07]] proof remains accepted: the fast-measure
+[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) proof remains accepted: the fast-measure
 frame50 run passed `--require-opaque-depth-index-cache-proof`. The refreshed
-frame60 proof is recorded in [[index-cache-locality-proofinput.01]].
+frame60 proof is recorded in [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md).
 
 ```mermaid
 flowchart TD
@@ -64,7 +64,7 @@ another trace on threshold-only opaque retests. The remaining unresolved proof
 input is screen-blend movement plus same-input exact/`lsb1` semantic image
 evidence.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-opaque.07]] · [[index-cache-locality-proofinput.01]] ·
-[[index-cache-locality-screenblend.05]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
+[index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

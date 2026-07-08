@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-sele
 
 # Candidate Select Volume Counters
 
-**Question / hypothesis.** After [[index-cache-locality-cpucost.09]] reduced
+**Question / hypothesis.** After [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md) reduced
 cache-position lookup cost but left total CPU flat, is the remaining select
 bucket explained by candidate rescoring volume?
 
@@ -64,7 +64,7 @@ quantified:
 | scored candidates per candidate draw | `16,491.944` |
 | select ns per scored candidate | `44.451ns` |
 
-Against [[index-cache-locality-cpucost.09]], the new counter-only build stayed
+Against [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md), the new counter-only build stayed
 close: `select_cpu_ms=92.121 -> 91.635`, `candidate_build_cpu_ms=124.861 ->
 124.083`, candidate miss32 unchanged, and `reordered_index_cache_created=67`.
 
@@ -84,5 +84,5 @@ updates.
 - Fix/test local cache duplicate behavior separately, because this measurement
   preserved current first-match semantics.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.09]] · [[index-cache-locality-cpucost.08]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md) · [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md).

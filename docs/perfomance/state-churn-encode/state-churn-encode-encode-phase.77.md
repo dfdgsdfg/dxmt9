@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-oppo
 
 # Encode Phase 77 - Encode-Slot PSO Resource-Shape Opportunity
 
-**Question.** [[state-churn-encode-encode-phase.76]] shows that most
+**Question.** [state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) shows that most
 semantic-memo misses which later collapse to a canonical probe-key hit differ
 only by exact texture handles. Can a pre-resolve slot-local memo ignore exact
 texture handles while still validating to the same final `ShaderVariantKey`
@@ -129,5 +129,5 @@ that can skip resolved-key/source-context construction on resource-shape hits.
   `encode_slot_pso_prefetch_cpu_ms`; average FPS remains gated by completion
   wait / producer overlap until P4 counters move too.
 
-**Related.** [[state-churn-encode-encode-phase.76]] ·
-[[state-churn-encode-encode-phase.75]] · [[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.76](state-churn-encode-encode-phase.76.md) ·
+[state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) · [state-churn-encode](../state-churn-encode.md).

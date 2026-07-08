@@ -109,5 +109,5 @@ reduction in the queued draw-submission snapshot path, a lower-width snapshot
 representation, or a P4 overlap design that keeps render-pass and
 command-buffer locality intact.
 
-**Related.** [[snapshot-cache-snapshot.25]] · [[present-pacing-current-lowoverhead.52]]
-· [[state-churn-encode-encode-phase.146]].
+**Related.** [snapshot-cache-snapshot.25](snapshot-cache-snapshot.25.md) · [present-pacing-current-lowoverhead.52](../present-pacing/present-pacing-current-lowoverhead.52.md)
+· [state-churn-encode-encode-phase.146](../state-churn-encode/state-churn-encode-encode-phase.146.md).

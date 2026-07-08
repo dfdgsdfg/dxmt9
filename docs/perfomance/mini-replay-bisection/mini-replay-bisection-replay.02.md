@@ -13,7 +13,7 @@ source: specs/perfomance.plan.md#L14460-L14549
 # Per-Draw Scissor Fix
 
 **Question / hypothesis.** The full16 replay's fragment-dominated shape
-([[mini-replay-bisection-replay.01]]) was suspected to be a replay artifact: the
+([mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md)) was suspected to be a replay artifact: the
 original 16-draw `60/2` window has 10 scissored draws (`0,268..97,768`), but the
 runner applied only the first draw's non-scissored state to the whole encoder.
 Does fixing per-draw scissor restore the original shape — and does it move VS
@@ -43,5 +43,5 @@ pixels rasterized ~9.8x lower, vertex-stage time `26.11%→64.37%`. But
 real gap: the missing owner is wider-pass vertex/tiler amplification, not fragment
 overdraw. Suspicion shifts to depth attachment content.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-replay.01]] ·
-[[mini-replay-bisection-depth.01]] · [[hidden-backend-storage]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) ·
+[mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) · [hidden-backend-storage](../hidden-backend-storage.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

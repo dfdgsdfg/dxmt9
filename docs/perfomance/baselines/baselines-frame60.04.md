@@ -51,7 +51,7 @@ and not an Xcode replay-counter sample.
 | `gpu_command_buffer_time_ms` p50 / p95 / max | `1.089` / `13.339` / `21.451` |
 
 Compared with the accepted seq-range System Trace sidecar
-([[hidden-backend-storage-shape.28]]), this low-overhead run preserves the same
+([hidden-backend-storage-shape.28](../hidden-backend-storage/hidden-backend-storage-shape.28.md)), this low-overhead run preserves the same
 normal FPS envelope but removes the sidecar's extreme tail stalls:
 
 | Metric | Low-overhead scout | Seq-range sidecar |
@@ -98,5 +98,5 @@ hidden vertex/backend storage, render-pass preservation, and encode CPU
 remaining open. The next GPU-facing work still needs route/counter evidence for
 programmable color/textured rows rather than only a depth-only shortcut.
 
-**Related.** [[baselines]] · [[baselines-frame60.03]] ·
-[[hidden-backend-storage-shape.28]] · [[present-pacing]].
+**Related.** [baselines](../baselines.md) · [baselines-frame60.03](baselines-frame60.03.md) ·
+[hidden-backend-storage-shape.28](../hidden-backend-storage/hidden-backend-storage-shape.28.md) · [present-pacing](../present-pacing.md).

@@ -112,6 +112,6 @@ should be one of:
 Another visible `VSOut`, stream/IB identity, no-sample visibility, or
 uncontrolled PSO/state Xcode capture would not move the objective.
 
-**Related.** [[hidden-backend-storage]] · [[hidden-backend-storage-shape.13]] ·
-[[state-churn-encode-stream.09]] · [[mini-replay-bisection-texture.10]] ·
-[[overview-3dmark05-gt1]].
+**Related.** [hidden-backend-storage](../hidden-backend-storage.md) · [hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md) ·
+[state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) · [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) ·
+[overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

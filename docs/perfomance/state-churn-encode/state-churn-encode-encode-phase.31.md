@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-append-state-rvalue-20260613/resu
 
 # Draw State Append Inner Split
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.30]] cut the broad
+**Question / hypothesis.** [state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md) cut the broad
 `submit_draw_run_batch_append_state_cpu_ms` child from `958.031ms` to
 `720.274ms`, but the remaining bucket still mixed three different activities:
 building the PSO subview, building the run invariant, and pushing the full
@@ -128,6 +128,6 @@ is amortized across more draws.
 | Uniform append path | `append_uniform=845.857ms` remains comparable to state SoA and should be split/reduced independently |
 | Coalescing / records per group | This run still has only `848,093 / 451,475 = 1.878` records/group, so one state append is poorly amortized |
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.29]] ·
-[[state-churn-encode-encode-phase.30]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) ·
+[state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md).

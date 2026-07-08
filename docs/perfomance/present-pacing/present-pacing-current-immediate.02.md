@@ -14,7 +14,7 @@ source: experiments/output/app-d3d9-3dmark05-present-schedule-default-20260612-2
 
 **Question / hypothesis.** Re-check whether `DXMT9_DISABLE_VSYNC=1`
 is still a load-bearing GT1 perf knob after the visual-coupling and
-present-path changes. The historical [[present-pacing-vsync-off.01]]
+present-path changes. The historical [present-pacing-vsync-off.01](present-pacing-vsync-off.01.md)
 result accepted `DXMT9_DISABLE_VSYNC=1` as a full-workload wallclock
 win, but current no-gputrace A/B was flat by frame sampling.
 
@@ -101,7 +101,7 @@ The next present-pacing question is therefore narrower:
 3. Does reducing encode/GPU work per present still reduce the immediate
    completion wait tail, or is this now a compositor/driver floor?
 
-Follow-up [[present-pacing-completion-watcher-status.03]] answers the
+Follow-up [present-pacing-completion-watcher-status.03](present-pacing-completion-watcher-status.03.md) answers the
 first local runtime split: the completion watcher has no queue backlog
 (`completion_pending_depth_max=0`) and usually pops the command buffer
 while it is still `Committed`, then spends almost all wait time inside

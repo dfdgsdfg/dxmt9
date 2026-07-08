@@ -175,5 +175,5 @@ larger overlap design. A future P4 claim needs either a targeted positive
 producer wait-stack sample or direct movement in `completion_wait_with_enqueue_ms`
 on a low-overhead visual-normal run.
 
-**Related.** [[present-pacing-systemtrace-p4-smoke.34]] ·
-[[state-churn-encode-encode-phase.91]] · [[present-pacing]].
+**Related.** [present-pacing-systemtrace-p4-smoke.34](present-pacing-systemtrace-p4-smoke.34.md) ·
+[state-churn-encode-encode-phase.91](../state-churn-encode/state-churn-encode-encode-phase.91.md) · [present-pacing](../present-pacing.md).

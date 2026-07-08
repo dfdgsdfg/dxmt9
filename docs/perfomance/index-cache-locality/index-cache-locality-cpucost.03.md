@@ -36,6 +36,6 @@ in production fast-measure; use `*_miss32`.
 Production gain-gating needs only LRU32. Remaining candidate owner is the `~132ms`
 builder, not measurement or gate cost. Feeds the fast-measure proof.
 
-**Related.** [[index-cache-locality]] · prev: [[index-cache-locality-cpucost.02]]
-· next: [[index-cache-locality-cpucost.04]] · [[index-cache-locality-opaque.06]]
-(the smoke that used this speedup) · [[index-reuse-measurement]] (LRU model).
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev: [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md)
+· next: [index-cache-locality-cpucost.04](index-cache-locality-cpucost.04.md) · [index-cache-locality-opaque.06](index-cache-locality-opaque.06.md)
+(the smoke that used this speedup) · [index-reuse-measurement](../index-reuse-measurement.md) (LRU model).

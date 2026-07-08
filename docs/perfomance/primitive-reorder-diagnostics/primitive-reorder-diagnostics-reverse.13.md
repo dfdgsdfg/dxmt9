@@ -14,8 +14,8 @@ source: specs/perfomance.plan.md#L10874-L11009
 
 **Question / hypothesis.** Does the narrowest intersection
 `large4096 && alpha-blend && scissor` — only 4 of 253 `60/4` draws — own the
-positive signal seen at 19 ([[primitive-reorder-diagnostics-reverse.11]]) and 16
-draws ([[primitive-reorder-diagnostics-reverse.12]])?
+positive signal seen at 19 ([primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md)) and 16
+draws ([primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md))?
 
 **Method.** `run_3dmark05_perf_probe.sh --suffix reverse-row-60-4-large4096-alpha-scissor-gputrace-r1
 --probe-reverse-indexed-triangles --probe-reverse-indexed-triangles-row 60/4
@@ -35,11 +35,11 @@ whole-frame bucket by the same amount as the 19- and 16-draw probes.
 **Verdict.** Inconclusive / historically minimal owner. This made the 4 large
 scissored screen-blend draws the best historical candidate — and the
 order-independence of screen blend made a production predicate plausible. BUT a
-later current-HEAD rerun ([[primitive-reorder-diagnostics-reverse.15]]) found the
+later current-HEAD rerun ([primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)) found the
 same 4-draw mutation no longer moves VS write (`+0.00%`). Reclassified as a
 shape-sensitive anomaly, not a stable owner. The screen-blend safety predicate
-nonetheless seeded [[index-cache-locality]].
+nonetheless seeded [index-cache-locality](../index-cache-locality.md).
 
-**Related.** [[primitive-reorder-diagnostics]] · from: [[primitive-reorder-diagnostics-reverse.12]]
-· current rerun: [[primitive-reorder-diagnostics-reverse.15]] · safe-subset attempt: [[primitive-reorder-diagnostics-reverse.14]]
-· [[index-cache-locality]] (screen-blend optimization candidate) · [[hidden-backend-storage]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · from: [primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)
+· current rerun: [primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md) · safe-subset attempt: [primitive-reorder-diagnostics-reverse.14](primitive-reorder-diagnostics-reverse.14.md)
+· [index-cache-locality](../index-cache-locality.md) (screen-blend optimization candidate) · [hidden-backend-storage](../hidden-backend-storage.md).

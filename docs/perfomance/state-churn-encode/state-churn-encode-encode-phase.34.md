@@ -13,7 +13,7 @@ baseline: experiments/output/app-d3d9-3dmark05-submission-generation-counters-20
 
 # Submission Generation Compat Fast Path
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.33]] proved that
+**Question / hypothesis.** [state-churn-encode-encode-phase.33](state-churn-encode-encode-phase.33.md) proved that
 GT1 adjacent submissions with the same stable state generation and snapshot
 lane are always compatible by the existing deep comparison. The next step is to
 use that stamp in `submitDrawRunBatch()` and skip the deep
@@ -125,6 +125,6 @@ the compat-scan sub-bucket and validates the generation/lane stamp as a useful
 upstream identity. Do not treat it as the final answer to the queue path; the
 dominant remaining work is submission construction and state width.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.32]] ·
-[[state-churn-encode-encode-phase.33]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) ·
+[state-churn-encode-encode-phase.33](state-churn-encode-encode-phase.33.md).

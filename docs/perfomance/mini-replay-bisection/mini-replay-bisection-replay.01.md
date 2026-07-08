@@ -17,7 +17,7 @@ payloads, replayed standalone, reproduce the original `60/2` hot encoder's
 ~1 GiB `VS Buffer Device Memory Bytes Written` bucket — proving the payloads alone
 are sufficient to drive the hidden vertex-stage write pressure?
 
-**Method.** Multi-PSO runner ([[mini-replay-bisection-harness.02]]) on the
+**Method.** Multi-PSO runner ([mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md)) on the
 16-draw `60/2` screen-blend manifest (draw `71..86`, 6 VS/PS pairs),
 `--primitive-order original --draw-order original`, captured with
 `--capture-path … mini-replay-full16.gputrace`, then Xcode encoder-counter export.
@@ -42,6 +42,6 @@ while the standalone slice is fragment/overdraw dominated (22.1M FS inv, 738
 frags/prim, 26.11% vertex). Payloads alone are insufficient — the next replay must
 preserve more original pass context, not add more of the same draws.
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-harness.02]] ·
-[[mini-replay-bisection-replay.02]] (scissor pollution found next) ·
-[[hidden-backend-storage]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) ·
+[mini-replay-bisection-replay.02](mini-replay-bisection-replay.02.md) (scissor pollution found next) ·
+[hidden-backend-storage](../hidden-backend-storage.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-buck
 
 # Bucketed Candidate Selector Rejection
 
-**Question / hypothesis.** [[index-cache-locality-cpucost.12]] rejected a
+**Question / hypothesis.** [index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) rejected a
 generic heap-backed lazy frontier. Can a more domain-specific selector reduce
 full-vector rescans by keeping active candidates in four cached-vertex-count
 buckets and updating only candidates adjacent to vertices that enter/leave the
@@ -82,5 +82,5 @@ active frontier.
 Do not promote `DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT` beyond diagnostic
 use.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.12]] · [[index-cache-locality-cpucost.10]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

@@ -30,11 +30,11 @@ shape-contaminated. Only `60/0`/`60/1` are shared; mixed: `60/1` bytes/inv
 `-11.12%` but `60/0` GPU `+17.22%`, VS write `+8.29%`.
 
 **Verdict.** Rejected (shape-gate fail). Like full reverse
-([[primitive-reorder-diagnostics-reverse.01]]), the big aggregate drop describes
+([primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)), the big aggregate drop describes
 a *different submitted frame*, not a legal optimization. Useful only as another
 classifier showing the hidden bucket moves dramatically with row membership +
 geometry. Any real candidate must preserve the hot-row set and geometry first.
 
-**Related.** [[primitive-reorder-diagnostics]] · prev: [[primitive-reorder-diagnostics-reverse.06]]
-· next: [[primitive-reorder-diagnostics-reverse.08]] · gate source: [[primitive-reorder-diagnostics-reverse.04]]
-· [[hidden-backend-storage]] · [[index-reuse-measurement]].
+**Related.** [primitive-reorder-diagnostics](../primitive-reorder-diagnostics.md) · prev: [primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md)
+· next: [primitive-reorder-diagnostics-reverse.08](primitive-reorder-diagnostics-reverse.08.md) · gate source: [primitive-reorder-diagnostics-reverse.04](primitive-reorder-diagnostics-reverse.04.md)
+· [hidden-backend-storage](../hidden-backend-storage.md) · [index-reuse-measurement](../index-reuse-measurement.md).

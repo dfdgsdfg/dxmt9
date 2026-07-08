@@ -4,7 +4,7 @@ date: 2026-06-14
 status: rejected-current
 source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/compare-phase55-phase56.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/actual.png
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.55]] showed that
+**Question / hypothesis.** [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) showed that
 the old `encode_draw_argbuf_open_cpu_ms` bucket is a per-draw reopen-block
 parent, and that post-open bookkeeping is larger than the actual
 `openArgbuf()` call. This phase tests the safer pre-open version of the next
@@ -97,5 +97,5 @@ repoint/probe path. A narrower VS-source identity improvement would need a new
 counter proving that the `812k` VS misses are false misses, not real uniform
 payload changes.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.55]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md).

@@ -7,8 +7,8 @@ source: experiments/output/app-d3d9-3dmark05-disable-argbuf-hybrid-r1-20260614/3
 
 # Encode Phase 67 - Disable Argbuf Hybrid Scout
 
-**Question.** [[state-churn-encode-encode-phase.63]] through
-[[state-churn-encode-encode-phase.66]] closed the cheap cbuf-width and
+**Question.** [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) through
+[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) closed the cheap cbuf-width and
 argbuf-reopen shortcut branches. If Stage 2 argument-buffer hybrid remains a
 large CPU owner, is it still a net win over the Stage 1 direct uniform binding
 lane for current GT1?
@@ -23,7 +23,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
   --frame 60 --no-gputrace --timeout 120 --top 5
 ```
 
-Use [[state-churn-encode-encode-phase.65]]'s Stage 2 scout as the adjacent
+Use [state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md)'s Stage 2 scout as the adjacent
 comparison because it has the same 120s no-gputrace shape and the same
 `present_encoded=1740` count. The Stage 1 run passed with
 `draw_skipped_no_pipeline=0`, `gpu_command_buffer_errors=0`, and a non-black GT1
@@ -87,7 +87,7 @@ strategy, not chase more cbuf width micro-trims.
 - Keep the existing last-write-wins correctness constraint: reusing one mutable
   slot-30 table across changed constants is invalid.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.63]] ·
-[[state-churn-encode-encode-phase.64]] ·
-[[state-churn-encode-encode-phase.65]] ·
-[[state-churn-encode-encode-phase.66]] · [[present-pacing]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) ·
+[state-churn-encode-encode-phase.64](state-churn-encode-encode-phase.64.md) ·
+[state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
+[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [present-pacing](../present-pacing.md).

@@ -125,8 +125,8 @@ Existing evidence already identifies two of these as important shapes:
 
 | Shader pair | Prior evidence | Meaning |
 |---|---|---|
-| `0xcf219872fdbbb398 / 0x6f39a816200d9efe` | [[hidden-backend-storage-shape.08]] hot row `60/1`, `156` draws, `228,725` primitives, `686,175` vertices | A large geometry row that also dominates full-prefix argbuf churn |
-| `0x18ffaf75e52f4615 / 0x6f39a816200d9efe` | [[state-churn-encode-encode-phase.66]] BLENDINDICES matrix-palette indexed VS; one sampled draw reaches `a0.x=255`, `a0.y=254` | A true full-range indexed-constant shader; broad packed-window fallback remains unsafe |
+| `0xcf219872fdbbb398 / 0x6f39a816200d9efe` | [hidden-backend-storage-shape.08](../hidden-backend-storage/hidden-backend-storage-shape.08.md) hot row `60/1`, `156` draws, `228,725` primitives, `686,175` vertices | A large geometry row that also dominates full-prefix argbuf churn |
+| `0x18ffaf75e52f4615 / 0x6f39a816200d9efe` | [state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) BLENDINDICES matrix-palette indexed VS; one sampled draw reaches `a0.x=255`, `a0.y=254` | A true full-range indexed-constant shader; broad packed-window fallback remains unsafe |
 
 ## Interpretation
 
@@ -154,7 +154,7 @@ either:
    (`0xcf219872fdbbb398 / 0x6f39a816200d9efe`) before attempting any new packed
    storage policy.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.138]] ·
-[[state-churn-encode-encode-phase.66]] ·
-[[hidden-backend-storage-shape.08]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.138](state-churn-encode-encode-phase.138.md) ·
+[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) ·
+[hidden-backend-storage-shape.08](../hidden-backend-storage/hidden-backend-storage-shape.08.md).

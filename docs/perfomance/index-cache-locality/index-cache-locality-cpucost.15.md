@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-noenc-r
 
 # Persistent Rejected Verdict Refresh
 
-**Question / hypothesis.** [[index-cache-locality-cpucost.14]] ended by
+**Question / hypothesis.** [index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md) ended by
 suggesting a cheaper persistent per-source-IB candidate verdict or earlier
 rejected-key recording. Is that still a missing optimization in the current
 post-visualfix tree?
@@ -113,5 +113,5 @@ remaining CPU work is either:
 Until that changes, opaque-depth index-cache locality remains a proven opt-in
 GPU mechanism, not a default `perf` profile behavior.
 
-**Related.** [[index-cache-locality]] · prev:
-[[index-cache-locality-cpucost.14]] · [[index-cache-locality-cpucost.10]].
+**Related.** [index-cache-locality](../index-cache-locality.md) · prev:
+[index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md) · [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md).

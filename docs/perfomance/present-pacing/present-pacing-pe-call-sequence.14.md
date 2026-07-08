@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-pe-call-cadence.10.md, do
 
 ## Question
 
-[[present-pacing-pe-record-milestones.13]] showed that `BeginScene` arrives
+[present-pacing-pe-record-milestones.13](present-pacing-pe-record-milestones.13.md) showed that `BeginScene` arrives
 quickly after `Present`, but the first record append is delayed until about
 `18ms`. The remaining ambiguity was whether one of the first D3D9 calls
 (`GetRenderTarget`, `SetRenderTarget`, `GetBackBuffer`, `Query::GetData`, or
@@ -105,7 +105,7 @@ Steady-state rows exclude ordinals `<= 10`.
 ## Interpretation
 
 This narrows H18 but is superseded by
-[[present-pacing-pe-clear-gate.15]], because this run did not include `Clear`
+[present-pacing-pe-clear-gate.15](present-pacing-pe-clear-gate.15.md), because this run did not include `Clear`
 and `EndScene` in the call milestone sequence. The front gap is not a
 first-command
 drawable/swapchain/query/lock dependency:
@@ -145,6 +145,6 @@ Wine/macdrv event processing, app-side timer/message cadence, an uninstrumented
 PE helper, or a child/flush/hazard path that should stamp a source-specific
 record append label.
 
-Follow-up [[present-pacing-pe-clear-gate.15]] adds the missing `Clear` coverage
+Follow-up [present-pacing-pe-clear-gate.15](present-pacing-pe-clear-gate.15.md) adds the missing `Clear` coverage
 and shows that the steady gap is actually `SetRenderTarget` return -> `Clear`
 entry, with the first `APPLY_STATE` record appended inside `Clear`.

@@ -40,9 +40,9 @@ unchanged. Secondary counters also moved in enc=2 (`tiled_vertex_buffer_mib`
 
 **Verdict.** Rejected as a proportional fix. An `88.4x` reduction in visible VSOut
 bytes yielded only `-4.86%` VS-write — wildly non-proportional. The
-[[vsout-layout-position.02]] fragment-only companion later reproduced the same
+[vsout-layout-position.02](vsout-layout-position.02.md) fragment-only companion later reproduced the same
 `-79MiB` enc=2 movement **without** any VSOut change, proving the delta came from
 the constant-fragment/raster/backend interaction, not from visible width. Hidden
 backend storage remains the owner.
 
-**Related.** [[vsout-layout]] · companion control [[vsout-layout-position.02]] · escalated from [[vsout-layout-pointsize.01]] · confirms [[hidden-backend-storage]] · [[backend-shape-classifiers]].
+**Related.** [vsout-layout](../vsout-layout.md) · companion control [vsout-layout-position.02](vsout-layout-position.02.md) · escalated from [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) · confirms [hidden-backend-storage](../hidden-backend-storage.md) · [backend-shape-classifiers](../backend-shape-classifiers.md).

@@ -12,7 +12,7 @@ source: specs/perfomance.plan.md#L4474-L4558
 
 # VS Float Range Run
 
-**Question / hypothesis.** Now that FFP-VS is cached ([[const-upload-slice.01]]),
+**Question / hypothesis.** Now that FFP-VS is cached ([const-upload-slice.01](const-upload-slice.01.md)),
 the remaining cbuf bucket is `VsConsts`. Is its size driven by how many float
 registers the shader actually *uses*, or by how wide the *dirty* range is? Add
 VS upload-plan fields to attribute it.
@@ -37,6 +37,6 @@ average shader uses only ~`31` float regs. A usage-only trim is the wrong fix;
 the dirty (stale) range dominates the upload width. Motivates resetting/scoping
 dirty ranges; keep the `13.8%` full-struct/indexed path as a separate fallback.
 
-**Related.** [[const-upload]] · prev: [[const-upload-slice.01]] · next:
-[[const-upload-dirtyrange.01]] (the dirty-range reset this motivates) ·
-[[hidden-backend-storage]].
+**Related.** [const-upload](../const-upload.md) · prev: [const-upload-slice.01](const-upload-slice.01.md) · next:
+[const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) (the dirty-range reset this motivates) ·
+[hidden-backend-storage](../hidden-backend-storage.md).

@@ -107,5 +107,5 @@ which direct compact consumers are worth designing next. The next low-risk
 candidate is queue-observation projected-texture compat input, followed by draw
 encoder command-state direct compact reads.
 
-**Related.** [[state-churn-encode-encode-phase.125]] -
-[[state-churn-encode]].
+**Related.** [state-churn-encode-encode-phase.125](state-churn-encode-encode-phase.125.md) -
+[state-churn-encode](../state-churn-encode.md).

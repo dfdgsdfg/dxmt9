@@ -21,7 +21,7 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 
 The run finalized as `status=pass`. Visual smoke is accepted: scene geometry,
 bright bloom/effects, and HUD are visible; this is not the HUD-only black-screen
-failure from [[state-churn-encode-encode-phase.88]].
+failure from [state-churn-encode-encode-phase.88](../state-churn-encode/state-churn-encode-encode-phase.88.md).
 
 | Metric | Value | Per present |
 |---|---:|---:|
@@ -102,7 +102,7 @@ a GPU-facing change.
 - `meson test -C build-arm64-nowine dxmt9:dxmt9-perf-counter-table-audit dxmt9:dxmt9-perf-counter-callsite-audit --timeout-multiplier 3`
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix current-lowoverhead-after-cleanup-r1-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 
-**Related.** [[present-pacing-lowoverhead-serial.24]] ·
-[[present-pacing-native-selector-xctrace.32]] ·
-[[state-churn-encode-encode-phase.87]] ·
-[[state-churn-encode-encode-phase.88]] · [[state-churn-encode]].
+**Related.** [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md) ·
+[present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
+[state-churn-encode-encode-phase.87](../state-churn-encode/state-churn-encode-encode-phase.87.md) ·
+[state-churn-encode-encode-phase.88](../state-churn-encode/state-churn-encode-encode-phase.88.md) · [state-churn-encode](../state-churn-encode.md).

@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-clean-gate-r1/3dmark05-
 
 # Argbuf Clean Cbuf Update Gate
 
-**Question / hypothesis.** [[state-churn-encode-encode-phase.02]] measured
+**Question / hypothesis.** [state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) measured
 `updateDirtyArgbufRegions()` as the largest argbuf sub-bucket
 (`encode_draw_argbuf_cbuf_update_cpu_ms = 3.92s`). Test the narrowest safe
 mutation first: when the dirty mask has no argbuf-consumed VS/PS/FFPPS bits,
@@ -114,6 +114,6 @@ cbuf-update bucket by about `39.7ms` and total `encode_draw_cpu_ms` by about
 3. avoid Xcode/gputrace spend until a no-gputrace A/B reduces the dirty/write
    counter or its CPU time.
 
-**Related.** [[state-churn-encode]] ·
-[[state-churn-encode-encode-phase.02]] · [[present-pacing]] ·
-[[baselines-frame50.04]].
+**Related.** [state-churn-encode](../state-churn-encode.md) ·
+[state-churn-encode-encode-phase.02](state-churn-encode-encode-phase.02.md) · [present-pacing](../present-pacing.md) ·
+[baselines-frame50.04](../baselines/baselines-frame50.04.md).

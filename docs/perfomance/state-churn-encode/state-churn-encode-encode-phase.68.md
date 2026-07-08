@@ -7,7 +7,7 @@ source: experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-202606
 
 # Encode Phase 68 - Argbuf Hybrid Low-Overhead FPS Gate
 
-**Question.** [[state-churn-encode-encode-phase.67]] proved that disabling the
+**Question.** [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) proved that disabling the
 Stage 2 constants-only argument-buffer hybrid removes a large encode CPU bucket.
 Does that CPU drop translate into average FPS under the low-overhead frame
 sampling profile?
@@ -116,6 +116,6 @@ commit/encode cadence.
   completion wait, and whether earlier chunk publish or a producer/consumer
   boundary change can turn the same CPU work into hidden work.
 
-**Related.** [[state-churn-encode]] · [[state-churn-encode-encode-phase.67]] ·
-[[present-pacing]] · [[present-pacing-pe-chunk-cadence.11]] ·
-[[present-pacing-pe-chunk-size-ab.12]].
+**Related.** [state-churn-encode](../state-churn-encode.md) · [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) ·
+[present-pacing](../present-pacing.md) · [present-pacing-pe-chunk-cadence.11](../present-pacing/present-pacing-pe-chunk-cadence.11.md) ·
+[present-pacing-pe-chunk-size-ab.12](../present-pacing/present-pacing-pe-chunk-size-ab.12.md).

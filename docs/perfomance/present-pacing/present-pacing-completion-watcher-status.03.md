@@ -12,7 +12,7 @@ source: experiments/output/app-d3d9-3dmark05-completion-status-20260612-211546
 
 # Completion watcher pops immediately and waits on Committed command buffers
 
-**Question / hypothesis.** After [[present-pacing-current-immediate.02]]
+**Question / hypothesis.** After [present-pacing-current-immediate.02](present-pacing-current-immediate.02.md)
 proved that current GT1 direct already uses immediate presents, the next
 question was whether `completion_wait_ms` is an artifact of completion
 thread backlog, or whether the completion thread is waiting almost

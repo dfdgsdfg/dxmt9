@@ -14,7 +14,7 @@ source: specs/perfomance.plan.md#L14235-L14360
 
 **Question / hypothesis.** Extend `run_3dmark05_mini_replay.py` so it can replay a
 multi-shader screen-blend slice whose VS binds stream1 at Metal `buffer(6)` — the two
-fidelity blockers found by [[mini-replay-bisection-payload.01]].
+fidelity blockers found by [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md).
 
 **Method.** The runner (`scripts/tools/run_3dmark05_mini_replay.py`) was changed to:
 scan the original dumped MSL buffer bindings and pick free high slots for replay
@@ -41,7 +41,7 @@ the multi-PSO path: `mini replay draws=16 repeat=1`, `shader_variant_count=6`.
 **Verdict.** TOOLING. Replay-quality gap is no longer stream1 or single-PSO
 coverage. The remaining gap is **performance evidence**: capture the slice with
 Xcode counters and compare against the original hot encoder — done in
-[[mini-replay-bisection-replay.01]].
+[mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md).
 
-**Related.** [[mini-replay-bisection]] · [[mini-replay-bisection-payload.01]] ·
-[[mini-replay-bisection-replay.01]] · [[overview-3dmark05-gt1]]
+**Related.** [mini-replay-bisection](../mini-replay-bisection.md) · [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) ·
+[mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)
