@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H211` - Readonly cache stacks with the promoted pair (accepted FPS promotion: `2,271` presents, `+13.0%` vs pair-on population, `+26.2%` cumulative; long confirm + strict visual gate + hardening remain as follow-ups).
+Latest tracked row: `H212` - Post-cache producer re-sample (accepted attribution: guest blob `~36ms/present` is the wall, dxmt9-named producer cost down to `~3ms/present`; next owner is decimated PE stats to split game vs PE `d3d9.dll`).
 
 ## Start Here
 
