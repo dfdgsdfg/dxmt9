@@ -108,6 +108,21 @@ static bool dxmt9PeFlushAfterDrawEnabled() {
     return enabled;
 }
 
+// R-BACK-2.52 (Inline Const Delta, opt-in): read once at first use. Off
+// (default/unset) keeps every Draw* record on the pre-existing standalone
+// D9C_COMMAND_RECORD_SET_*_CONST_* + fixed-size record path verbatim
+// (R-BACK-2.52(a)). On, appendDrawPrimitiveRecord / appendDrawIndexedPrimitiveRecord
+// fold the six pending const shadows' merged dirty ranges into the draw
+// packet's constDeltaSections + trailing payload instead (R-BACK-2.52(b)).
+// Non-draw const consumers (ProcessVertices, chunkBarrierFlush's drain, the
+// UP draw variants — see appendDrawPrimitiveUPRecordWithFvf /
+// appendDrawIndexedPrimitiveUPRecordWithFvf) are untouched by this flag and
+// always use the standalone flush (R-BACK-2.52(e)).
+static bool dxmt9PeInlineConstDeltaEnabled() {
+    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_INLINE_CONST_DELTA");
+    return enabled;
+}
+
 static double dxmt9ElapsedMs(std::chrono::steady_clock::time_point start,
                              std::chrono::steady_clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -3355,6 +3370,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     PeHotStateShadow peState_{};
     PeConstShadowBlock peConsts_{};
+    // R-BACK-2.52 (Inline Const Delta): reusable scratch for
+    // foldPendingConstsIntoDrawPacket()'s trailing const-delta payload
+    // bytes, sized to the sum of every section kind's register-file cap
+    // (VS_F 256*16 + VS_I 16*16 + VS_B 16*4 + PS_F 224*16 + PS_I 16*16 +
+    // PS_B 16*4 = 8320 bytes) so a fully-populated draw never overflows it.
+    // A fixed member array (not a per-draw heap allocation) keeps the fold
+    // path allocation-free on the hot path per the DOD conventions; it only
+    // participates in memory traffic when DXMT9_PE_INLINE_CONST_DELTA=1.
+    static constexpr std::size_t kMaxInlineConstDeltaPayloadBytes =
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_F) * 16u +
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_I) * 16u +
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_B) * 4u +
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_F) * 16u +
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_I) * 16u +
+        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_B) * 4u;
+    std::array<std::uint8_t, kMaxInlineConstDeltaPayloadBytes>
+        constDeltaPayloadScratch_{};
     VsConstSetterRangePerf vsConstSetterRangePerf_{};
     IDirect3DSurface9* rtSlots_[4]{};
     bool rtSlotExplicit_[4]{};
@@ -9221,22 +9253,50 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
-        // Hold the recorder lock across the const-flush + draw-record append
-        // pair: recorderMutex_ is recursive, so the nested per-append
+        // Hold the recorder lock across the const-flush/fold + draw-record
+        // append pair: recorderMutex_ is recursive, so the nested per-append
         // acquisitions below become cheap re-entries instead of repeated
         // cold lock/unlock cycles on this hot path.
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        // Drain any accumulated const dirty ranges into chunk records FIRST,
-        // so the chunk replays "consts → draw" in API order.
-        const HRESULT constHr = flushPendingConsts();
-        if (FAILED(constHr)) return constHr;
+        const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
+        if (!inlineConstDelta) {
+            // Drain any accumulated const dirty ranges into chunk records
+            // FIRST, so the chunk replays "consts → draw" in API order.
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+        }
         D9CCommandRecordDrawPrimitive record{};
         record.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-        record.header.size = sizeof(record);
         if (!buildDrawPrimitivePacket(type, startVertex, count, record.packet)) {
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT hr = appendCommandRecord(&record, sizeof(record));
+        HRESULT hr;
+        if (inlineConstDelta) {
+            // R-BACK-2.52(b): fold the pending const shadows into
+            // record.packet.constDeltaSections + a trailing payload region
+            // instead of standalone records. Must run AFTER
+            // buildDrawPrimitivePacket, which resets `record.packet`
+            // (clobbering constDeltaSections) before filling it in.
+            std::uint32_t payloadBytes = 0;
+            const HRESULT foldHr =
+                foldPendingConstsIntoDrawPacket(record.packet, payloadBytes);
+            if (FAILED(foldHr)) return foldHr;
+            record.header.size =
+                d9c_command_record_draw_primitive_total_size(&record.packet);
+            hr = appendCommandRecordDirect(
+                record.header.type, record.header.size,
+                [this, &record, payloadBytes](std::uint8_t* dst) {
+                    std::memcpy(dst, &record, sizeof(record));
+                    if (payloadBytes != 0) {
+                        std::memcpy(dst + sizeof(record),
+                                    constDeltaPayloadScratch_.data(),
+                                    payloadBytes);
+                    }
+                });
+        } else {
+            record.header.size = sizeof(record);
+            hr = appendCommandRecord(&record, sizeof(record));
+        }
         if (FAILED(hr)) return hr;
         return flushAfterDrawIfRequested();
     }
@@ -9252,11 +9312,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // already-held recorderMutex_ is cheaper than the repeated cold
         // acquisitions the nested const-flush + draw appends would do.
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        const HRESULT constHr = flushPendingConsts();
-        if (FAILED(constHr)) return constHr;
+        const bool inlineConstDelta = dxmt9PeInlineConstDeltaEnabled();
+        if (!inlineConstDelta) {
+            const HRESULT constHr = flushPendingConsts();
+            if (FAILED(constHr)) return constHr;
+        }
         D9CCommandRecordDrawIndexedPrimitive record{};
         record.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-        record.header.size = sizeof(record);
         if (!buildDrawPrimitivePacket(type, 0, count, record.packet.state)) {
             return D3DERR_INVALIDCALL;
         }
@@ -9275,7 +9337,32 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         record.packet.ibValid =
             (peState_.pendingIb || !submittedIndexBufferKnown_ ||
              submittedIndexBufferWireValue_ != ibWireValue) ? 1u : 0u;
-        const HRESULT hr = appendCommandRecord(&record, sizeof(record));
+        HRESULT hr;
+        if (inlineConstDelta) {
+            // R-BACK-2.52(b): see appendDrawPrimitiveRecord. Folds into
+            // record.packet.state.constDeltaSections — the shared
+            // D9CDrawPrimitivePacket embedded in the indexed packet.
+            std::uint32_t payloadBytes = 0;
+            const HRESULT foldHr = foldPendingConstsIntoDrawPacket(
+                record.packet.state, payloadBytes);
+            if (FAILED(foldHr)) return foldHr;
+            record.header.size =
+                d9c_command_record_draw_indexed_primitive_total_size(
+                    &record.packet.state);
+            hr = appendCommandRecordDirect(
+                record.header.type, record.header.size,
+                [this, &record, payloadBytes](std::uint8_t* dst) {
+                    std::memcpy(dst, &record, sizeof(record));
+                    if (payloadBytes != 0) {
+                        std::memcpy(dst + sizeof(record),
+                                    constDeltaPayloadScratch_.data(),
+                                    payloadBytes);
+                    }
+                });
+        } else {
+            record.header.size = sizeof(record);
+            hr = appendCommandRecord(&record, sizeof(record));
+        }
         if (SUCCEEDED(hr)) {
             if (record.packet.ibValid != 0) {
                 submittedIndexBufferWireValue_ = ibWireValue;
@@ -9708,6 +9795,65 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (FAILED(hr)) return hr;
         hr = flushConstShadow(peConsts_.psConstB, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
         if (FAILED(hr)) return hr;
+        return S_OK;
+    }
+
+    // R-BACK-2.52 (Inline Const Delta fold, DXMT9_PE_INLINE_CONST_DELTA=1
+    // only): fold all six const shadows' merged dirty ranges into
+    // `packet.constDeltaSections` plus this call's payload bytes in
+    // constDeltaPayloadScratch_, instead of appending standalone
+    // D9C_COMMAND_RECORD_SET_*_CONST_* records for them. Called by
+    // appendDrawPrimitiveRecord / appendDrawIndexedPrimitiveRecord AFTER
+    // buildDrawPrimitivePacket() has already reset `packet` — folding
+    // earlier would be clobbered by that reset.
+    //
+    // Each shadow's fold uses foldConstShadowIntoDeltaSection
+    // (d3d9_pe_const_shadow.hpp), which is required to reproduce the exact
+    // merged [dirtyStart, dirtyEnd) range and element size that
+    // flushConstShadow's default path would have emitted as a standalone
+    // record — this is what preserves R-BACK-2.52(d) replay equivalence.
+    // If a shadow's fold fails (defensive-only: the range check should be
+    // unreachable because Set* fast paths already bound ranges to the
+    // D3D9 register-file limit before touchConstShadow runs), that single
+    // shadow falls back to flushConstShadow so its bytes still reach the
+    // chunk as a standalone record placed before the draw record — the
+    // draw record is not appended by this function, so chunk order still
+    // ends up "consts → draw" for the fallback case.
+    HRESULT foldPendingConstsIntoDrawPacket(D9CDrawPrimitivePacket& packet,
+                                            std::uint32_t& payloadBytes) {
+        payloadBytes = 0;
+        struct FoldEntry {
+            ConstShadow* shadow;
+            uint32_t kind;
+            uint32_t recordType;
+            std::size_t elemSize;
+        };
+        const std::array<FoldEntry, D9C_DRAW_PACKET_CONST_DELTA_COUNT> entries{{
+            {&peConsts_.vsConstF, D9C_DRAW_PACKET_CONST_DELTA_VS_F,
+             D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4},
+            {&peConsts_.vsConstI, D9C_DRAW_PACKET_CONST_DELTA_VS_I,
+             D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4},
+            {&peConsts_.vsConstB, D9C_DRAW_PACKET_CONST_DELTA_VS_B,
+             D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t)},
+            {&peConsts_.psConstF, D9C_DRAW_PACKET_CONST_DELTA_PS_F,
+             D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4},
+            {&peConsts_.psConstI, D9C_DRAW_PACKET_CONST_DELTA_PS_I,
+             D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4},
+            {&peConsts_.psConstB, D9C_DRAW_PACKET_CONST_DELTA_PS_B,
+             D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t)},
+        }};
+        for (const auto& entry : entries) {
+            auto& section = packet.constDeltaSections[entry.kind];
+            const bool folded = foldConstShadowIntoDeltaSection(
+                *entry.shadow, entry.kind, entry.elemSize, section,
+                constDeltaPayloadScratch_.data(),
+                constDeltaPayloadScratch_.size(), payloadBytes);
+            if (!folded) {
+                const HRESULT hr = flushConstShadow(
+                    *entry.shadow, entry.recordType, entry.elemSize);
+                if (FAILED(hr)) return hr;
+            }
+        }
         return S_OK;
     }
 

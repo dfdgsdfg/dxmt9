@@ -1,6 +1,7 @@
 #pragma once
 
 #include "d3d9_pe_stats_decimation.hpp"
+#include "dxmt9/device_c.h"
 #include "util/config/config.hpp"
 
 #include <algorithm>
@@ -141,4 +142,66 @@ inline void touchConstShadow(ConstShadow& shadow,
         shadow.dirtyStart = std::min<std::uint32_t>(shadow.dirtyStart, changedStart);
         shadow.dirtyEnd = std::max<std::uint32_t>(shadow.dirtyEnd, end);
     }
+}
+
+// R-BACK-2.52(b),(d) (DXMT9_PE_INLINE_CONST_DELTA fold): consume `shadow`'s
+// merged dirty range directly into a draw packet's inline const-delta
+// section header plus the caller-owned trailing payload buffer, instead of
+// emitting a standalone D9C_COMMAND_RECORD_SET_*_CONST_* record. This MUST
+// produce EXACTLY the same [dirtyStart, dirtyEnd) merged range and the same
+// per-register `elemSize` that flushConstShadow's default (non-split, see
+// DXMT9_SPLIT_SPARSE_CONST_RECORDS) path would have emitted as one record —
+// that equivalence is what makes the fold path's server-side effective
+// state match the standalone-record wire (R-BACK-2.52(d)).
+//
+// On success (returns true): if `shadow` was clean, `section` is left fully
+// zeroed (valid=0) and `payloadBytesInOut` is untouched — nothing to fold.
+// If `shadow` was dirty, `section` is populated with the merged range,
+// `count * elemSize` bytes are copied from `shadow.values` into `payload`
+// starting at the current `payloadBytesInOut` offset, `payloadBytesInOut`
+// is advanced by that many bytes, and `shadow` is cleared (dirty range
+// reset) exactly like a successful flushConstShadow.
+//
+// On failure (returns false): `section` is left at valid=0 and `shadow` is
+// left UNTOUCHED (still dirty) so the caller can fall back to the
+// standalone flushConstShadow for this shadow instead of silently dropping
+// the pending bytes. Failure happens when the merged range fails
+// d9c_draw_packet_const_delta_section_range_valid for `kind` (should be
+// unreachable in production — the Set* fast paths already bound ranges to
+// the D3D9 register-file limit before touchConstShadow runs) or when the
+// payload wouldn't fit in the caller-supplied `payloadCapacity` (defensive;
+// callers size their scratch buffer to the sum of every section's
+// register-file cap, so this should also be unreachable).
+inline bool foldConstShadowIntoDeltaSection(
+    ConstShadow& shadow,
+    std::uint32_t kind,
+    std::size_t elemSize,
+    D9CDrawPacketConstDeltaSection& section,
+    std::uint8_t* payload,
+    std::size_t payloadCapacity,
+    std::uint32_t& payloadBytesInOut) {
+    section.valid = 0;
+    section.startRegister = 0;
+    section.registerCount = 0;
+    if (!shadow.dirty()) {
+        return true;
+    }
+    const std::uint32_t start = shadow.dirtyStart;
+    const std::uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
+    if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
+        return false;
+    }
+    const std::uint32_t bytes = static_cast<std::uint32_t>(count * elemSize);
+    if (payload == nullptr ||
+        static_cast<std::size_t>(payloadBytesInOut) + bytes > payloadCapacity) {
+        return false;
+    }
+    section.valid = 1;
+    section.startRegister = start;
+    section.registerCount = count;
+    const auto offset = static_cast<std::size_t>(start) * elemSize;
+    std::memcpy(payload + payloadBytesInOut, shadow.values.data() + offset, bytes);
+    payloadBytesInOut += bytes;
+    shadow.clear();
+    return true;
 }

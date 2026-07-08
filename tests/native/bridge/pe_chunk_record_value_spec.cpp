@@ -629,6 +629,175 @@ void testConstShadowTracksSparseDirtyElements() {
   check(!shadow.dirty(), "identical const write stays clean");
 }
 
+// R-BACK-2.52 (Inline Const Delta, DXMT9_PE_INLINE_CONST_DELTA=1): covers
+// foldConstShadowIntoDeltaSection (d3d9_pe_const_shadow.hpp), the
+// natively-testable unit backing D3D9DeviceImpl::foldPendingConstsIntoDrawPacket
+// (d3d9_pe_device.cpp). D3D9DeviceImpl itself cannot be instantiated from a
+// native bridge test (Windows-only PE build pulling in windows.h/d3d9.h — see
+// the file header comment above), so this is the deepest level this suite can
+// pin the fold mechanics at; it is complementary to
+// tests/native/bridge/chunk_record_spec.cpp's testInlineConstDeltaSections(),
+// which pins the T1 wire schema (section layout, caps, offsets) that this
+// fold path writes into.
+void testInlineConstDeltaFoldRangesAndPayloadBytes() {
+  // (a) A Set*ConstantF-then-Draw sequence: SetVertexShaderConstantF(4, ..., 3)
+  // then SetPixelShaderConstantB(0, ..., 2). The fold must reproduce EXACTLY
+  // the merged [dirtyStart, dirtyEnd) range and element size that
+  // flushConstShadow's default (non-split) path would emit as a standalone
+  // record (R-BACK-2.52(d)) — this is what preserves replay equivalence.
+  const std::array<float, 12> vsFValues{
+      1.0f, -2.0f, 3.25f, -4.5f, 5.5f, -6.75f,
+      7.875f, -8.125f, 9.0f, -9.5f, 10.25f, -10.75f,
+  };
+  ConstShadow vsF;
+  touchConstShadow(vsF, 4u, 3u, vsFValues.data(), sizeof(float) * 4);
+  check(vsF.dirty(), "VS float shadow is dirty after SetVertexShaderConstantF");
+  checkEq(vsF.dirtyStart, 4u, "VS float shadow dirty start");
+  checkEq(vsF.dirtyEnd, 7u, "VS float shadow dirty end");
+
+  // Both values must differ from the shadow's zero-initialized default so
+  // touchConstShadow marks both registers dirty (a value that happens to
+  // match the existing shadow contents is, by design, not re-marked dirty).
+  const std::array<std::uint32_t, 2> psBValues{1u, 1u};
+  ConstShadow psB;
+  touchConstShadow(psB, 0u, 2u, psBValues.data(), sizeof(std::uint32_t));
+  check(psB.dirty(), "PS bool shadow is dirty after SetPixelShaderConstantB");
+
+  ConstShadow vsI, vsB, psF, psI;  // untouched -> stay clean, fold to no-ops
+
+  D9CDrawPrimitivePacket packet{};
+  std::array<std::uint8_t, 512> scratch{};
+  std::uint32_t payloadBytes = 0;
+
+  auto fold = [&](ConstShadow& shadow, std::uint32_t kind, std::size_t elemSize) {
+    return foldConstShadowIntoDeltaSection(
+        shadow, kind, elemSize, packet.constDeltaSections[kind],
+        scratch.data(), scratch.size(), payloadBytes);
+  };
+
+  check(fold(vsF, D9C_DRAW_PACKET_CONST_DELTA_VS_F, sizeof(float) * 4),
+        "VS F fold succeeds (in-cap range)");
+  check(fold(vsI, D9C_DRAW_PACKET_CONST_DELTA_VS_I, sizeof(std::int32_t) * 4),
+        "VS I fold succeeds (no-op, shadow clean)");
+  check(fold(vsB, D9C_DRAW_PACKET_CONST_DELTA_VS_B, sizeof(std::uint32_t)),
+        "VS B fold succeeds (no-op, shadow clean)");
+  check(fold(psF, D9C_DRAW_PACKET_CONST_DELTA_PS_F, sizeof(float) * 4),
+        "PS F fold succeeds (no-op, shadow clean)");
+  check(fold(psI, D9C_DRAW_PACKET_CONST_DELTA_PS_I, sizeof(std::int32_t) * 4),
+        "PS I fold succeeds (no-op, shadow clean)");
+  check(fold(psB, D9C_DRAW_PACKET_CONST_DELTA_PS_B, sizeof(std::uint32_t)),
+        "PS B fold succeeds (in-cap range)");
+
+  check(!vsF.dirty(), "folded VS float shadow is cleared like flushConstShadow");
+  check(!psB.dirty(), "folded PS bool shadow is cleared like flushConstShadow");
+
+  // "No standalone const record" for a touched shadow means a populated
+  // section carries the fold instead. For an untouched shadow it means no
+  // section at all (valid=0) — matching flushPendingConsts() today, which
+  // simply skips a clean shadow rather than emitting an empty record.
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_F].valid, 1u,
+          "VS F section is populated");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_F].startRegister,
+          4u, "VS F section start matches the merged dirty range");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_F].registerCount,
+          3u, "VS F section count matches the merged dirty range");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_I].valid, 0u,
+          "untouched VS I shadow folds to a no-op section");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_VS_B].valid, 0u,
+          "untouched VS B shadow folds to a no-op section");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_F].valid, 0u,
+          "untouched PS F shadow folds to a no-op section");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_I].valid, 0u,
+          "untouched PS I shadow folds to a no-op section");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_B].valid, 1u,
+          "PS B section is populated");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_B].startRegister,
+          0u, "PS B section start matches the merged dirty range");
+  checkEq(packet.constDeltaSections[D9C_DRAW_PACKET_CONST_DELTA_PS_B].registerCount,
+          2u, "PS B section count matches the merged dirty range");
+
+  check(d9c_draw_packet_const_delta_sections_valid(&packet),
+        "folded packet passes the same section-range validator the importer runs");
+  checkEq(payloadBytes, d9c_draw_packet_const_delta_payload_bytes(&packet),
+          "accumulated fold payload bytes match the schema's declared total");
+  checkEq(payloadBytes,
+          static_cast<std::uint32_t>(sizeof(float) * 12u + sizeof(std::uint32_t) * 2u),
+          "payload is exactly VS F(3 regs * 16B) + PS B(2 regs * 4B)");
+
+  // Payload packing: canonical order means VS F's bytes land first and PS
+  // B's bytes pack immediately after (every other section contributes 0
+  // bytes) — exactly what d9c_draw_packet_const_delta_section_local_offset
+  // computes from the schema.
+  const auto vsFLocalOffset = d9c_draw_packet_const_delta_section_local_offset(
+      &packet, D9C_DRAW_PACKET_CONST_DELTA_VS_F);
+  const auto psBLocalOffset = d9c_draw_packet_const_delta_section_local_offset(
+      &packet, D9C_DRAW_PACKET_CONST_DELTA_PS_B);
+  checkEq(vsFLocalOffset, 0u, "VS F is the first populated section");
+  checkEq(psBLocalOffset, static_cast<std::uint32_t>(sizeof(float) * 12u),
+          "PS B packs immediately after VS F's payload");
+  check(std::memcmp(scratch.data() + vsFLocalOffset, vsFValues.data(),
+                    sizeof(float) * vsFValues.size()) == 0,
+        "VS F payload bytes round-trip exactly through the fold");
+  check(std::memcmp(scratch.data() + psBLocalOffset, psBValues.data(),
+                    sizeof(std::uint32_t) * psBValues.size()) == 0,
+        "PS B payload bytes round-trip exactly through the fold");
+
+  // (b) A merged range that fails the register-file cap check (should be
+  // unreachable in production — the Set* fast paths already bound ranges to
+  // the D3D9 register-file limit before touchConstShadow runs) is a safe
+  // no-op: the section stays invalid and the shadow is left dirty so the
+  // caller's fallback to a standalone flushConstShadow does not silently
+  // drop bytes.
+  ConstShadow overCapVsI;
+  const std::array<std::int32_t, 8> overCapValues{0, 1, 2, 3, 4, 5, 6, 7};
+  touchConstShadow(overCapVsI, 15u, 2u, overCapValues.data(), sizeof(std::int32_t) * 4);
+  check(overCapVsI.dirty(), "over-cap shadow is dirty before folding");
+  D9CDrawPacketConstDeltaSection overCapSection{};
+  std::uint32_t overCapPayloadBytes = 0;
+  check(!foldConstShadowIntoDeltaSection(
+            overCapVsI, D9C_DRAW_PACKET_CONST_DELTA_VS_I,
+            sizeof(std::int32_t) * 4, overCapSection, scratch.data(),
+            scratch.size(), overCapPayloadBytes),
+        "fold rejects a range that exceeds the VS I register-file cap");
+  checkEq(overCapSection.valid, 0u, "rejected section stays invalid");
+  checkEq(overCapPayloadBytes, 0u, "rejected fold does not consume payload bytes");
+  check(overCapVsI.dirty(),
+        "rejected fold leaves the shadow dirty for a standalone fallback flush");
+
+  // (c) Capacity guard: a payload buffer too small for the section's bytes
+  // is also rejected rather than overflowing, again leaving the shadow
+  // dirty for a fallback flush.
+  ConstShadow tooBigForBuffer;
+  const std::array<float, 4> smallValues{1.0f, 2.0f, 3.0f, 4.0f};
+  touchConstShadow(tooBigForBuffer, 0u, 1u, smallValues.data(), sizeof(float) * 4);
+  D9CDrawPacketConstDeltaSection tinyBufferSection{};
+  std::uint32_t tinyBufferPayloadBytes = 0;
+  std::array<std::uint8_t, 4> tooSmallScratch{};
+  check(!foldConstShadowIntoDeltaSection(
+            tooBigForBuffer, D9C_DRAW_PACKET_CONST_DELTA_VS_F,
+            sizeof(float) * 4, tinyBufferSection, tooSmallScratch.data(),
+            tooSmallScratch.size(), tinyBufferPayloadBytes),
+        "fold rejects a section that would overflow the payload buffer");
+  checkEq(tinyBufferPayloadBytes, 0u,
+          "capacity-rejected fold does not consume payload bytes");
+  check(tooBigForBuffer.dirty(),
+        "capacity-rejected fold leaves the shadow dirty for a standalone fallback flush");
+
+  // (d) A clean shadow folds to a true no-op: valid stays 0, no payload
+  // bytes consumed, shadow stays clean.
+  ConstShadow clean;
+  D9CDrawPacketConstDeltaSection cleanSection{};
+  std::uint32_t cleanPayloadBytes = 5u;  // sentinel proving it's untouched
+  check(foldConstShadowIntoDeltaSection(
+            clean, D9C_DRAW_PACKET_CONST_DELTA_PS_F, sizeof(float) * 4,
+            cleanSection, scratch.data(), scratch.size(), cleanPayloadBytes),
+        "folding a clean shadow succeeds trivially");
+  checkEq(cleanSection.valid, 0u, "clean shadow's section stays invalid");
+  checkEq(cleanPayloadBytes, 5u,
+          "clean shadow's fold does not touch payloadBytesInOut");
+  check(!clean.dirty(), "clean shadow stays clean");
+}
+
 }  // namespace
 
 int main() {
@@ -639,6 +808,7 @@ int main() {
     testMaxTextureStageAndSamplerDeltaPacketBoundaries();
     testSetConstTailBytesRecordOrderAndWireHandleRange();
     testConstShadowTracksSparseDirtyElements();
+    testInlineConstDeltaFoldRangesAndPayloadBytes();
   } catch (const TestFailure& e) {
     std::cerr << "pe_chunk_record_value_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;
