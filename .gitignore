@@ -36,6 +36,5 @@ experiments/apps/**/*.trace.txt
 **/__pycache__
 specs/**/plan.md
 *.plan.md
-.codex
-.claude
-.gemini
+.claude/scheduled_tasks.lock
+.claude/worktrees
