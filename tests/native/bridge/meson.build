@@ -82,6 +82,22 @@ test('dxmt9-pe-full-snapshot-equivalence-spec',
      pe_full_snapshot_equivalence_spec,
      env: dxmt9_native_test_env)
 
+# R-BACK-2.52 T3: on/off replay-equivalence spec for the opt-in inline
+# const-delta wire mode (DXMT9_PE_INLINE_CONST_DELTA). Follows the
+# pe_full_snapshot_equivalence_spec pattern -- hand-constructed wire records,
+# no PE recorder, no live D9CDevice/Metal backend.
+pe_inline_const_delta_equivalence_spec = executable(
+  'dxmt9-pe-inline-const-delta-equivalence-spec',
+  'pe_inline_const_delta_equivalence_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-inline-const-delta-equivalence-spec',
+     pe_inline_const_delta_equivalence_spec,
+     env: dxmt9_native_test_env)
+
 bridge_ops_spec = executable(
   'dxmt9-bridge-ops-spec',
   'bridge_ops_spec.cpp',

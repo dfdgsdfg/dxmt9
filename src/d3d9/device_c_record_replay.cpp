@@ -16,6 +16,18 @@ bool importedRecordIsDrawRunCandidate(const ImportedRecordView& record) noexcept
          record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
 }
 
+// R-BACK-2.52(f): true iff any of the packet's six inline const-delta
+// sections is folded in (DXMT9_PE_INLINE_CONST_DELTA). Off-path packets
+// (every section left valid=0) always return false here.
+bool packetHasAnyConstDeltaSection(const D9CDrawPrimitivePacket& p) noexcept {
+  for (std::uint32_t kind = 0; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT; ++kind) {
+    if (p.constDeltaSections[kind].valid) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool drawPacketStateDeltaEquals(const D9CDrawPrimitivePacket& a,
                                 const D9CDrawPrimitivePacket& b) noexcept {
   if (a.renderStateCount != b.renderStateCount ||
@@ -87,6 +99,20 @@ bool drawPacketStateDeltaEqualsExceptStream(
 bool drawPacketStateDeltaCompatibleWithRunBase(
     const D9CDrawPrimitivePacket& base,
     const D9CDrawPrimitivePacket& candidate) noexcept {
+  // R-BACK-2.52(f): a candidate carrying any valid inline const-delta
+  // section folds the equivalent of a standalone
+  // D9C_COMMAND_RECORD_SET_*_CONST_* record into this draw. That standalone
+  // record always breaks a run before reaching this draw in the unfolded
+  // wire form (scanStopForNonDrawRecord below stops the scan at any
+  // constant-upload record), so the folded candidate must break here too --
+  // unconditionally, regardless of whether its other state fields happen to
+  // equal the run base's. Section headers carry no content hash, so two
+  // sections with identical {valid,startRegister,registerCount} can still
+  // carry different underlying register values on the wire; only an
+  // unconditional "candidate with any section always breaks" rule is sound.
+  if (packetHasAnyConstDeltaSection(candidate)) {
+    return false;
+  }
   if (packetHasNoStateDelta(candidate)) {
     return true;
   }
@@ -388,7 +414,14 @@ ImportedRecordReplayInfo replayInfoForImportedRecord(const ImportedRecordView& r
 }
 
 bool packetHasNoStateDelta(const D9CDrawPrimitivePacket& p) noexcept {
-  return p.renderStateCount == 0 && p.textureMask == 0 &&
+  // R-BACK-2.52(f): a folded inline const-delta section is state that must
+  // be applied for this draw, exactly like a standalone
+  // D9C_COMMAND_RECORD_SET_*_CONST_* record would have been -- it must
+  // count as state-delta-bearing so the run coalescer (and any other
+  // "nothing to apply" fast path) never silently treats this packet as a
+  // no-op continuation.
+  return !packetHasAnyConstDeltaSection(p) &&
+         p.renderStateCount == 0 && p.textureMask == 0 &&
          p.streamSourceMask == 0 && p.fvfValid == 0 &&
          p.vsValid == 0 && p.psValid == 0 &&
          p.vdeclValid == 0 && p.rtMask == 0 && p.dsValid == 0 &&

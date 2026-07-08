@@ -14,6 +14,23 @@ enum class RecordSizeMode : std::uint8_t {
   Minimum,
   ClearRects,
   SetConst,
+  // R-BACK-2.52(c): DRAW_PRIMITIVE / DRAW_INDEXED_PRIMITIVE carry a fixed
+  // record plus an optional trailing inline const-delta payload area (six
+  // {valid,startRegister,registerCount} headers are always present; the
+  // payload bytes only exist when a section is valid). Off-path (every
+  // section invalid) this computes the exact same expectedSize the prior
+  // Exact mode did.
+  DrawPrimitiveConstDelta,
+  DrawIndexedPrimitiveConstDelta,
+  // DRAW_PRIMITIVE_UP / DRAW_INDEXED_PRIMITIVE_UP already carry a trailing
+  // vertex(/index) data region whose own bounds are validated later against
+  // the actual record bytes (recordRangeValid in device_c_chunk_replay.cpp),
+  // not here -- so the off-path behavior (no valid section) must keep the
+  // prior Minimum-mode contract of accepting any header.size >= minimumSize.
+  // Only when a section is folded in does this additionally pin header.size
+  // to vertex-data-end + const-delta-payload.
+  DrawPrimitiveUPConstDelta,
+  DrawIndexedPrimitiveUPConstDelta,
 };
 
 struct RecordLayout {
@@ -65,13 +82,17 @@ bool sectionAligned(
 
 constexpr std::array<RecordLayout, 20> kRecordLayouts{{
     {D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-     byteSize(sizeof(D9CCommandRecordDrawPrimitive)), RecordSizeMode::Exact},
+     byteSize(sizeof(D9CCommandRecordDrawPrimitive)),
+     RecordSizeMode::DrawPrimitiveConstDelta},
     {D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-     byteSize(sizeof(D9CCommandRecordDrawIndexedPrimitive)), RecordSizeMode::Exact},
+     byteSize(sizeof(D9CCommandRecordDrawIndexedPrimitive)),
+     RecordSizeMode::DrawIndexedPrimitiveConstDelta},
     {D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-     byteSize(sizeof(D9CCommandRecordDrawPrimitiveUP)), RecordSizeMode::Minimum},
+     byteSize(sizeof(D9CCommandRecordDrawPrimitiveUP)),
+     RecordSizeMode::DrawPrimitiveUPConstDelta},
     {D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-     byteSize(sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)), RecordSizeMode::Minimum},
+     byteSize(sizeof(D9CCommandRecordDrawIndexedPrimitiveUP)),
+     RecordSizeMode::DrawIndexedPrimitiveUPConstDelta},
     {D9C_COMMAND_RECORD_SET_VS_CONST_F,
      byteSize(sizeof(D9CCommandRecordSetConst)), RecordSizeMode::SetConst,
      byteSize(sizeof(float) * 4u)},
@@ -243,6 +264,62 @@ D9CCommandRecordValidation validateCommandRecord(
     std::memcpy(&decoded, record, sizeof(decoded));
     expectedSize = static_cast<std::uint64_t>(sizeof(D9CCommandRecordSetConst)) +
                    static_cast<std::uint64_t>(decoded.count) * layout->elementSize;
+    break;
+  }
+  case RecordSizeMode::DrawPrimitiveConstDelta: {
+    D9CCommandRecordDrawPrimitive decoded{};
+    std::memcpy(&decoded, record, sizeof(decoded));
+    // R-BACK-2.52(c): register range must be validated before any
+    // registerCount is ever trusted for a byte-count computation (an
+    // unchecked registerCount could overflow the u32 payload-byte math).
+    if (!d9c_draw_packet_const_delta_sections_valid(&decoded.packet)) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    expectedSize = d9c_command_record_draw_primitive_total_size(&decoded.packet);
+    break;
+  }
+  case RecordSizeMode::DrawIndexedPrimitiveConstDelta: {
+    D9CCommandRecordDrawIndexedPrimitive decoded{};
+    std::memcpy(&decoded, record, sizeof(decoded));
+    if (!d9c_draw_packet_const_delta_sections_valid(&decoded.packet.state)) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    expectedSize =
+        d9c_command_record_draw_indexed_primitive_total_size(&decoded.packet.state);
+    break;
+  }
+  case RecordSizeMode::DrawPrimitiveUPConstDelta: {
+    D9CCommandRecordDrawPrimitiveUP decoded{};
+    std::memcpy(&decoded, record, sizeof(decoded));
+    if (!d9c_draw_packet_const_delta_sections_valid(&decoded.packet.state)) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    if (d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state) != 0u) {
+      expectedSize =
+          d9c_command_record_draw_primitive_up_total_size(&decoded.packet);
+    } else {
+      // R-BACK-2.52(a): off path keeps the pre-change Minimum-mode
+      // contract exactly -- any header.size >= minimumSize is accepted.
+      expectedSize = header.size;
+    }
+    break;
+  }
+  case RecordSizeMode::DrawIndexedPrimitiveUPConstDelta: {
+    D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
+    std::memcpy(&decoded, record, sizeof(decoded));
+    if (!d9c_draw_packet_const_delta_sections_valid(&decoded.packet.state)) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    if (d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state) != 0u) {
+      expectedSize =
+          d9c_command_record_draw_indexed_primitive_up_total_size(&decoded.packet);
+    } else {
+      expectedSize = header.size;
+    }
     break;
   }
   }

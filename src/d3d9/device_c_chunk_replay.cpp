@@ -1701,6 +1701,82 @@ bool recordRangeValid(std::uint32_t recordSize, std::uint32_t offset, std::uint3
   return offset <= recordSize && bytes <= recordSize - offset;
 }
 
+// R-BACK-2.52(d): apply a Draw* record's folded inline const-delta sections
+// (DXMT9_PE_INLINE_CONST_DELTA) through the SAME per-register setters the
+// standalone D9C_COMMAND_RECORD_SET_VS_CONST_F.._PS_CONST_B case below
+// dispatches to, in canonical section order (VS_F, VS_I, VS_B, PS_F, PS_I,
+// PS_B), so the resulting server-side constant-register state is
+// observably identical to replaying the equivalent standalone records
+// immediately before this draw. `constDeltaBaseOffset` is the record-
+// relative offset of the trailing const-delta payload area for this
+// record's kind (see the d9c_command_record_draw_*_const_delta_offset
+// helpers in device_c.h). Every section's register range and the record's
+// total wire size were already gated by validateCommandRecord
+// (device_c_record_validate.cpp) before this chunk ever reached replay, so
+// this function trusts `packet.constDeltaSections` and only resolves +
+// forwards each section's trailing payload bytes; it does not re-validate
+// ranges.
+int32_t applyDrawPacketConstDeltaSections(D9CDevice* d,
+                                          const D9CDrawPrimitivePacket& packet,
+                                          const dxmt9::core::u8* record,
+                                          std::uint32_t constDeltaBaseOffset) {
+  auto* q = findDirtyQueue(d);
+  for (uint32_t kind = 0; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT; ++kind) {
+    const auto& section = packet.constDeltaSections[kind];
+    if (!section.valid) {
+      continue;
+    }
+    const auto slice = d9c_draw_packet_const_delta_section_slice(
+        &packet, constDeltaBaseOffset, kind);
+    const auto* payload = record + slice.payloadOffset;
+    int32_t hr = dxmt9::core::D3D_OK;
+    switch (kind) {
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_F:
+      hr = dxmt9c_device_set_vs_const_f(d, section.startRegister,
+                                        reinterpret_cast<const float*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetVsF(section.startRegister, section.registerCount);
+      break;
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_I:
+      hr = dxmt9c_device_set_vs_const_i(d, section.startRegister,
+                                        reinterpret_cast<const int32_t*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetVsI(section.startRegister, section.registerCount);
+      break;
+    case D9C_DRAW_PACKET_CONST_DELTA_VS_B:
+      hr = dxmt9c_device_set_vs_const_b(d, section.startRegister,
+                                        reinterpret_cast<const uint32_t*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetVsB(section.startRegister, section.registerCount);
+      break;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_F:
+      hr = dxmt9c_device_set_ps_const_f(d, section.startRegister,
+                                        reinterpret_cast<const float*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetPsF(section.startRegister, section.registerCount);
+      break;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_I:
+      hr = dxmt9c_device_set_ps_const_i(d, section.startRegister,
+                                        reinterpret_cast<const int32_t*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetPsI(section.startRegister, section.registerCount);
+      break;
+    case D9C_DRAW_PACKET_CONST_DELTA_PS_B:
+      hr = dxmt9c_device_set_ps_const_b(d, section.startRegister,
+                                        reinterpret_cast<const uint32_t*>(payload),
+                                        section.registerCount);
+      if (q) q->applyDirtyConstantSetPsB(section.startRegister, section.registerCount);
+      break;
+    default:
+      break;
+    }
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  return dxmt9::core::D3D_OK;
+}
+
 // Direct core::Device dispatch — bypasses the COM iface (Direct3DDevice9Impl)
 // hop. The COM Draw* methods are 1-line forwarders to core::Device, so
 // dispatching one record at a time through them costs an extra virtual call
@@ -2275,6 +2351,17 @@ int32_t replayImportedChunk(D9CDevice* d,
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
       D9CCommandRecordDrawPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // R-BACK-2.52(d): apply any folded inline const-delta sections
+      // BEFORE this draw's own state-delta application below, so the
+      // effective server-side constant state matches replaying the
+      // equivalent standalone SET_*_CONST_* records immediately before
+      // this draw.
+      hr = applyDrawPacketConstDeltaSections(
+          d, decoded.packet, record,
+          d9c_command_record_draw_primitive_const_delta_offset());
+      if (failed(hr)) {
+        break;
+      }
       // C1: every DRAW_* packet folds a state delta in front of its
       // draw via applyDrawPacketState; mark the matching dirty bits so
       // C2 sees the same categories the canonical state changed.
@@ -2432,6 +2519,13 @@ int32_t replayImportedChunk(D9CDevice* d,
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
       D9CCommandRecordDrawIndexedPrimitive decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // R-BACK-2.52(d): see the DRAW_PRIMITIVE case above.
+      hr = applyDrawPacketConstDeltaSections(
+          d, decoded.packet.state, record,
+          d9c_command_record_draw_indexed_primitive_const_delta_offset());
+      if (failed(hr)) {
+        break;
+      }
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       // Same coalescing as DRAW_PRIMITIVE. Direct and indexed records may
       // share a run; DrawParam carries the per-draw indexed flag used by
@@ -2588,6 +2682,13 @@ int32_t replayImportedChunk(D9CDevice* d,
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
       D9CCommandRecordDrawPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // R-BACK-2.52(d): see the DRAW_PRIMITIVE case above.
+      hr = applyDrawPacketConstDeltaSections(
+          d, decoded.packet.state, record,
+          d9c_command_record_draw_primitive_up_const_delta_offset(&decoded.packet));
+      if (failed(hr)) {
+        break;
+      }
       blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       chunkSawQueueBoundary = true;
@@ -2597,6 +2698,13 @@ int32_t replayImportedChunk(D9CDevice* d,
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
       D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
       std::memcpy(&decoded, record, sizeof(decoded));
+      // R-BACK-2.52(d): see the DRAW_PRIMITIVE case above.
+      hr = applyDrawPacketConstDeltaSections(
+          d, decoded.packet.state, record,
+          d9c_command_record_draw_indexed_primitive_up_const_delta_offset(&decoded.packet));
+      if (failed(hr)) {
+        break;
+      }
       blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       chunkSawQueueBoundary = true;
