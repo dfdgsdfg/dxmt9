@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H197` - Readonly managed buffer cache collapses the lock bridge storm (accepted mechanism confirm; not FPS promotion).
+Latest tracked row: `H211` - Readonly cache stacks with the promoted pair (accepted stacking confirm: `2,271` presents, `+13.0%` vs pair-on population, `+26.2%` cumulative; visual gate + long confirm remain before promotion).
 
 ## Start Here
 
