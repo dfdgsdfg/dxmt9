@@ -418,8 +418,10 @@ increases or `completion_wait_without_enqueue_ms` decreases). Runtime FPS or
 Xcode-counter evidence must not be promoted until the visual gate and the
 R-BACK-2.48 locality gates pass.
 
-**R-BACK-2.51** *(Commit-replay offload contract.)* The opt-in commit-replay
-offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`) must (a) keep wire header/range
+**R-BACK-2.51** *(Commit-replay offload contract.)* The commit-replay
+offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON since
+2026-07-10** — explicit `0` opts out; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`
+unset follows the offload state because the pair is coupled) must (a) keep wire header/range
 validation, import, and handle-marking synchronous on the app thread before
 any record is handed off; (b) preserve record order
 by draining the raw-chunk queue through a single FIFO replay worker, never

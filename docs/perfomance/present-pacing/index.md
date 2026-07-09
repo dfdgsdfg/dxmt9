@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H215` - Archive prewarm hardening (R-BACK-3.9..3.11) closes the startup-flake class; the 125MB regression fixture now passes with async load (1.67s off-thread) and timeout-killed runs persist the archive.
+Latest tracked row: `H216` - The promoted trio becomes the engine default (`d45af067`): pure no-env proof at `2,220` presents with trio counters live and per-present boundary suppression exact.
 
 ## Start Here
 
