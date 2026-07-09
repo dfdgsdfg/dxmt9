@@ -547,11 +547,30 @@ The observable contract is `R-BACK-2.51`. The mechanics:
 - Present pacing re-anchors on the app thread: present-bearing commits wait a
   present-ordinal frame-latency boundary
   (`CommandQueue::waitPresentOrdinalBoundary`, pure mapping
-  `planPresentOrdinalWait`) that honors the resolved `BoundaryPolicy` and is
+  `planPresentOrdinalWait`) that honors the resolved `BoundaryPolicy`, is
   order-isomorphic to the inline present boundary (TLA
-  `PresentFrameLatency` ordinal variant, `PresentOrdinalWaitIsomorphism`).
-  `submitPresent` suppresses its inline boundary in offload mode; the worker
-  is never parked on pacing.
+  `PresentFrameLatency` ordinal variant, `PresentOrdinalWaitIsomorphism`),
+  and caps its effective latency against the committing chunk's swapchain
+  `backBufferCount` via `dxmt9::cappedFrameLatency` whenever
+  `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` is set — the same cap
+  `presentBoundaryLatency()` applies to the inline boundary. The worker
+  itself is never parked on pacing.
+- `submitPresent` suppresses its inline seqId-based boundary only for the
+  specific present that the app thread just paced through
+  `waitPresentOrdinalBoundary`: `dxmt9c_device_commit_chunk`'s offload branch
+  calls `replayImportedChunk(..., pacedByPresentOrdinal=true)` for the raw
+  chunk the worker later replays, and only that Present record's
+  `dxmt9c_device_present` call marks the next `core::Device::presentEx()`
+  call's `SwapDesc::pacedByPresentOrdinal`
+  (`core::Device::setNextPresentPacedByOrdinal`). The synchronous
+  (non-offload) replay tail passes `pacedByPresentOrdinal=false` explicitly.
+  Any present whose `SwapDesc` was not stamped this way — a direct
+  (non-chunk) COM present in the same process, or a present replayed by the
+  synchronous tail — keeps the inline boundary
+  (`dxmt9::resolvePresentBoundaryAction`), even while
+  `DXMT9_OFFLOAD_COMMIT_REPLAY` is globally enabled for other presents. This
+  flag rides `core::SwapDesc` only; it is unix/core-side and does not cross
+  the PE/unix wire (the wire's `D9CCommandRecordPresent` is unchanged).
 - Direct (non-chunk) device calls drain the raw queue first (fence prologue in
   the `device_c_bridge_*` wrapper layer), so server-state reads and releases
   observe fully replayed state.
@@ -560,6 +579,18 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   ordinal waits). The historical per-record synchronous HRESULT
   short-circuit of `commit_chunk` does not hold in offload mode.
 - With the flag unset the entire path is byte-identical to the inline replay.
+
+The two boundary-pacing gaps above (global-only inline-boundary suppression;
+ordinal wait ignoring `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS`) are fixed and
+no longer block promoting this flag to an engine default. A separate,
+still-open blocker does: forcing this flag on (even on an otherwise-unmodified
+checkout) reproducibly crashes `dxmt9-imported-apply-state-value-spec` and
+`dxmt9-resource-hazard-spec` with heap corruption inside
+`applyDrawPacketStateDirect`'s render-target/surface handling
+(`device_c_chunk_replay.cpp`) — a resource-retention/use-after-free issue in
+the replay worker's draw-packet path, unrelated to boundary pacing. See
+`specs/backend/gap.md` "Commit-replay offload" row; do not flip the engine
+default until that is root-caused and fixed.
 
 ```mermaid
 sequenceDiagram

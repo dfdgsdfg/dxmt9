@@ -2647,47 +2647,15 @@ bool splitStretchChunk() {
 // the priority ordering. AfterAcquire is observationally a no-op on
 // the wait branch here; its effect lives in dxmt9_draw_encoder.mm,
 // which also reads through resolveBoundaryPolicyFromEnv().
-
-bool capFrameLatencyToBackBuffers() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-std::uint32_t backBufferLatencyCap(std::uint32_t backBufferCount) {
-  const std::uint32_t normalized = std::max(1u, backBufferCount);
-  if (normalized >= core::kMaxFrameLatency) {
-    return core::kMaxFrameLatency;
-  }
-  return normalized + 1u;
-}
-
-std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
-  if (capFrameLatencyToBackBuffers()) {
-    return std::min(desc.maxFrameLatency, backBufferLatencyCap(desc.backBufferCount));
-  }
-  return desc.maxFrameLatency;
-}
-
-bool shouldApplyPresentBoundary(const core::SwapDesc&) {
-  return resolveBoundaryPolicyFromEnv() != BoundaryPolicy::Disabled;
-}
-
-// DXMT9_OFFLOAD_COMMIT_REPLAY — the commit-replay offload path paces
-// present frame-latency itself via CommandQueue::waitPresentOrdinalBoundary
-// from the PE side, keyed on a present ordinal instead of a queue seqId.
-// When enabled, submitPresent() must not also drain/apply the inline
-// seqId-based boundary below, or the two mechanisms would double-wait on
-// the same present token.
-bool offloadCommitReplayEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
+//
+// capFrameLatencyToBackBuffers() / backBufferLatencyCap() /
+// presentBoundaryLatency() / PresentBoundaryAction /
+// resolvePresentBoundaryAction() / offloadCommitReplayEnabled() now live in
+// dxmt9_command_queue.hpp (R-BACK-2.51) so the commit-replay offload's
+// present-ordinal boundary (CommandQueue::waitPresentOrdinalBoundary) shares
+// the exact same cap math and per-present decision truth table instead of
+// duplicating them, and so both are unit-testable from
+// present_ordinal_boundary_spec.cpp without a live queue.
 
 std::uint64_t presentBoundaryTargetSeqId(std::uint64_t presentSeqId,
                                          std::uint32_t maxFrameLatency) {
@@ -3938,7 +3906,14 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // a background thread).
   shaderArchive_.notePresent();
   const BoundaryPolicy boundaryPolicy = resolveBoundaryPolicyFromEnv();
-  if (!offloadCommitReplayEnabled() && boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+  // R-BACK-2.51(g) — drainDeferredPresentBoundary() is a no-op when nothing
+  // is deferred (deferredPresentBoundaryTargetSeqId_ == 0), so it is safe to
+  // evaluate unconditionally here. It must NOT be gated on the global
+  // offloadCommitReplayEnabled() flag: an earlier *unpaced* present in this
+  // process (a direct COM caller, or one replayed by the synchronous
+  // non-offload chunk path) may have deferred a target even while offload
+  // is globally enabled for other (paced) presents.
+  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     drainDeferredPresentBoundary();
   }
@@ -4053,21 +4028,37 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     }
   }
 
-  if (offloadCommitReplayEnabled()) {
-    // The commit-replay offload path paces itself through
-    // dxmt9::Device::waitPresentOrdinalBoundary from the PE side; skip the
-    // inline seqId-based boundary here so the two mechanisms don't
-    // double-wait on the same present token.
-    perf::countPresentBoundarySkipped();
-  } else if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
-    perf::countPresentBoundaryApplied();
-    deferPresentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
-  } else if (shouldApplyPresentBoundary(queuedDesc)) {
-    PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
-    perf::countPresentBoundaryApplied();
-    presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
-  } else {
-    perf::countPresentBoundarySkipped();
+  // R-BACK-2.51(g) — per-present decision, not a global offload-enabled
+  // gate: only the specific present whose SwapDesc was marked
+  // pacedByPresentOrdinal (set exclusively by the D3D9 chunk-replay path,
+  // and only when dxmt9::d3d9::offloadCommitReplayEnabled() was on) skips
+  // the inline boundary below. Any other present — a direct COM caller, or
+  // one replayed by the synchronous non-offload chunk path — keeps
+  // participating in the inline boundary even while
+  // DXMT9_OFFLOAD_COMMIT_REPLAY is globally enabled for other presents in
+  // this process.
+  DXMT_ASSERT(!queuedDesc.pacedByPresentOrdinal || offloadCommitReplayEnabled());
+  switch (resolvePresentBoundaryAction(queuedDesc.pacedByPresentOrdinal, boundaryPolicy)) {
+    case PresentBoundaryAction::SkipPacedByOffloadOrdinal:
+      // dxmt9::Device::waitPresentOrdinalBoundary already paced this
+      // present before submitPresent was called; applying the inline
+      // seqId-based boundary here too would double-wait on the same
+      // present token.
+      perf::countPresentBoundarySkipped();
+      break;
+    case PresentBoundaryAction::Defer:
+      perf::countPresentBoundaryApplied();
+      deferPresentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+      break;
+    case PresentBoundaryAction::ApplyInline: {
+      PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+      perf::countPresentBoundaryApplied();
+      presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+      break;
+    }
+    case PresentBoundaryAction::SkipDisabled:
+      perf::countPresentBoundarySkipped();
+      break;
   }
   return presentSeqId;
 }
@@ -4082,9 +4073,10 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   std::unique_lock lock(mutex_);
   // R-BACK / PresentFrameLatency — branch on the unified
   // BoundaryPolicy resolved once at process init. Disabled is
-  // filtered earlier by shouldApplyPresentBoundary and never reaches
-  // here; AfterAcquire shares the Default wait branch (the position
-  // of notePresentDequeued is the only observable difference).
+  // filtered earlier by resolvePresentBoundaryAction (only
+  // ApplyInline/Defer reach presentBoundary/deferPresentBoundary) and
+  // never reaches here; AfterAcquire shares the Default wait branch (the
+  // position of notePresentDequeued is the only observable difference).
   const BoundaryPolicy policy =
       presentBoundaryWaitPolicy(resolveBoundaryPolicyFromEnv());
   const auto reachedBoundary = [&] {
@@ -4183,12 +4175,22 @@ void CommandQueue::drainDeferredPresentBoundary() {
 // (also dxmt9_command_queue.hpp, unit-tested by
 // present_ordinal_boundary_spec.cpp); this method only owns the mutex +
 // condition-variable mechanics around them.
+//
+// R-BACK-2.51(h) cap-honoring clause: `backBufferCount` is folded into the
+// effective latency via the same cappedFrameLatency() /
+// capFrameLatencyToBackBuffers() helpers presentBoundaryLatency() uses for
+// the inline seqId-based boundary, so DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS
+// applies identically regardless of which boundary mechanism paces a given
+// present.
 void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
-                                              std::uint32_t maxFrameLatency) {
+                                              std::uint32_t maxFrameLatency,
+                                              std::uint32_t backBufferCount) {
   const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
+  const std::uint32_t effectiveLatency = cappedFrameLatency(
+      maxFrameLatency, backBufferCount, capFrameLatencyToBackBuffers());
   std::unique_lock lock(mutex_);
   const PresentOrdinalWaitPlan plan = planPresentOrdinalWait(
-      policy, presentOrdinal, maxFrameLatency, presentOrdinalGate_.deferredTarget);
+      policy, presentOrdinal, effectiveLatency, presentOrdinalGate_.deferredTarget);
   // Ordinals are produced by the single app-thread commit path (strictly
   // increasing), so the stored deferred target only ever needs to move
   // forward — no reset-to-0 case exists here, unlike a completion

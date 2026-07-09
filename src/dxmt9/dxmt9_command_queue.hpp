@@ -36,6 +36,8 @@
 #include <cstddef>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -71,6 +73,107 @@ namespace render { class IRenderBackend; }
 // frame-latency through queue-owned present tokens.
 inline constexpr size_t kCommandChunkCount = 32;
 inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
+
+// R-BACK-2.51 — shared present-latency helpers. Both the inline seqId-based
+// present boundary (CommandQueue::presentBoundary /
+// CommandQueue::deferPresentBoundary, via presentBoundaryLatency() below)
+// and the commit-replay offload's present-ordinal boundary
+// (CommandQueue::waitPresentOrdinalBoundary) must honor
+// DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS identically, so the cap math lives
+// here once instead of being duplicated per boundary mechanism.
+inline std::uint32_t backBufferLatencyCap(std::uint32_t backBufferCount) {
+  const std::uint32_t normalized = std::max(1u, backBufferCount);
+  if (normalized >= core::kMaxFrameLatency) {
+    return core::kMaxFrameLatency;
+  }
+  return normalized + 1u;
+}
+
+// Read-once resolver for DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS.
+inline bool capFrameLatencyToBackBuffers() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+// Pure combinator taking the cap-enabled bit as an explicit parameter
+// (rather than re-resolving the env var) so it is unit-testable without a
+// process-env fixture; both boundary mechanisms below call it with
+// capFrameLatencyToBackBuffers() as the live value.
+inline std::uint32_t cappedFrameLatency(std::uint32_t maxFrameLatency,
+                                        std::uint32_t backBufferCount,
+                                        bool capEnabled) {
+  if (!capEnabled) {
+    return maxFrameLatency;
+  }
+  return std::min(maxFrameLatency, backBufferLatencyCap(backBufferCount));
+}
+
+inline std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
+  return cappedFrameLatency(desc.maxFrameLatency, desc.backBufferCount,
+                            capFrameLatencyToBackBuffers());
+}
+
+// R-BACK-2.51(g) — per-present decision for which present-boundary branch
+// CommandQueue::submitPresent takes. Extracted as a pure truth table (input:
+// the specific present's core::SwapDesc::pacedByPresentOrdinal flag plus the
+// resolved BoundaryPolicy) so it is unit-testable without a live queue. A
+// present paced by the commit-replay offload's present-ordinal boundary
+// (dxmt9::Device::waitPresentOrdinalBoundary already ran for it before
+// submitPresent was called) always skips the inline boundary, regardless of
+// BoundaryPolicy — that ordinal wait already applied the policy itself. Any
+// other present (direct COM presents, or presents replayed by the
+// synchronous non-offload chunk path) falls through to the same
+// policy-driven branches submitPresent used before offload existed.
+enum class PresentBoundaryAction {
+  SkipPacedByOffloadOrdinal,
+  Defer,
+  ApplyInline,
+  SkipDisabled,
+};
+
+inline PresentBoundaryAction resolvePresentBoundaryAction(bool pacedByPresentOrdinal,
+                                                           BoundaryPolicy policy) {
+  if (pacedByPresentOrdinal) {
+    return PresentBoundaryAction::SkipPacedByOffloadOrdinal;
+  }
+  if (policy == BoundaryPolicy::DeferredPresentCompletion) {
+    return PresentBoundaryAction::Defer;
+  }
+  if (policy != BoundaryPolicy::Disabled) {
+    return PresentBoundaryAction::ApplyInline;
+  }
+  return PresentBoundaryAction::SkipDisabled;
+}
+
+// DXMT9_OFFLOAD_COMMIT_REPLAY — the commit-replay offload path paces
+// present frame-latency itself via CommandQueue::waitPresentOrdinalBoundary,
+// keyed on a present ordinal instead of a queue seqId. R-BACK-2.51(g):
+// submitPresent() must not drain/apply the inline seqId-based boundary for a
+// present that ordinal wait already paced (core::SwapDesc::pacedByPresentOrdinal,
+// set only by the D3D9 chunk-replay path), or the two mechanisms would
+// double-wait on the same present token; any other present still
+// participates in the inline boundary even while this flag is on elsewhere
+// in the process. Opt-in (default off): unset/empty/"0" all resolve to
+// false. NOTE (2026-07-10 default-flip investigation): flipping this to a
+// default-on read-once resolver was scoped for this change but reverted
+// after discovering the offload replay path has a separate, pre-existing
+// resource-lifetime bug (reproduces on unmodified master with this flag
+// forced to "1" — see specs/backend/gap.md "Commit-replay offload" row and
+// the session report) that crashes `dxmt9-imported-apply-state-value-spec`
+// / `dxmt9-resource-hazard-spec` with heap corruption in
+// applyDrawPacketStateDirect's render-target/surface handling. That bug is
+// out of this change's scope (drain-fence/resource-retention territory) and
+// must be fixed before this resolver's default can safely change.
+inline bool offloadCommitReplayEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+  }();
+  return enabled;
+}
 
 // App-side present-ordinal frame-latency target for the commit-replay
 // offload path (TLA+: PresentFrameLatency ordinal variant). Ordinals count
@@ -289,9 +392,15 @@ class CommandQueue {
   // Commit-replay offload present-ordinal boundary — mirrors presentBoundary
   // / deferPresentBoundary but paces on presentOrdinalGate_.completedOrdinal
   // (a count of retired presents) instead of a chunk seqId. Used by the
-  // PE-side offload path via dxmt9::Device::waitPresentOrdinalBoundary once
-  // submitPresent's own boundary is suppressed (DXMT9_OFFLOAD_COMMIT_REPLAY).
-  void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency);
+  // PE-side offload path via dxmt9::Device::waitPresentOrdinalBoundary,
+  // once per present-bearing commit; the specific present this wait paces
+  // skips submitPresent's own inline boundary via
+  // core::SwapDesc::pacedByPresentOrdinal (R-BACK-2.51(g)), set only by that
+  // same chunk-replay path. `backBufferCount` is capped against
+  // `maxFrameLatency` the same way presentBoundaryLatency() caps the inline
+  // boundary (R-BACK-2.51(h) cap-honoring clause; see cappedFrameLatency()).
+  void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency,
+                                  std::uint32_t backBufferCount);
   // Sticky abort for waitPresentOrdinalBoundary waiters. Set once by
   // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) when
   // a deferred commit-replay failure means presentOrdinalGate_.completedOrdinal

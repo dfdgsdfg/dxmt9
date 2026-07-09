@@ -5,6 +5,17 @@
 // dxmt9::PresentOrdinalGate — the extracted cv/flag mechanics consulted by
 // CommandQueue::waitPresentOrdinalBoundary / abortPresentOrdinalWaits (gap.md
 // offload row: no direct test previously existed for the abort mechanics).
+//
+// R-BACK-2.51: also covers dxmt9::backBufferLatencyCap /
+// dxmt9::cappedFrameLatency (the DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS math
+// CommandQueue::waitPresentOrdinalBoundary now applies before planning the
+// wait, mirroring presentBoundaryLatency()'s cap on the inline boundary) and
+// dxmt9::resolvePresentBoundaryAction (the per-present truth table
+// CommandQueue::submitPresent uses to decide whether a given present's
+// core::SwapDesc::pacedByPresentOrdinal flag means it should skip the inline
+// boundary, replacing the old process-global offloadCommitReplayEnabled()
+// check that incorrectly suppressed the boundary for every present in the
+// process).
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 
 #include <atomic>
@@ -125,6 +136,102 @@ void testPlannerDeferredUint64MaxSaturates() {
         "u64-max ordinal does not overflow into presentOrdinalBoundaryTarget(0, latency)");
   check(plan.storedDeferredTarget != 0,
         "sanity: target(kMax, latency=1) is a large nonzero value, not the overflow-wrapped 0 case");
+}
+
+// --- Capped present-ordinal frame latency (R-BACK-2.51(h) cap-honoring) -----
+//
+// CommandQueue::waitPresentOrdinalBoundary now folds backBufferCount into
+// its effective latency via these same two pure helpers before calling
+// planPresentOrdinalWait, instead of using the raw maxFrameLatency
+// unconditionally. This is the identical cap math presentBoundaryLatency()
+// applies to the inline seqId-based boundary, so both boundary mechanisms
+// stay latency-isomorphic for the same inputs.
+
+void testBackBufferLatencyCapMath() {
+  using dxmt9::backBufferLatencyCap;
+  using dxmt9::core::kMaxFrameLatency;
+  check(backBufferLatencyCap(0) == 2, "backBufferCount=0 normalizes to 1, cap = 1+1 = 2");
+  check(backBufferLatencyCap(1) == 2, "backBufferCount=1 -> cap = 1+1 = 2");
+  check(backBufferLatencyCap(2) == 3, "backBufferCount=2 -> cap = 2+1 = 3");
+  check(backBufferLatencyCap(static_cast<std::uint32_t>(kMaxFrameLatency)) ==
+            static_cast<std::uint32_t>(kMaxFrameLatency),
+        "backBufferCount >= kMaxFrameLatency clamps to kMaxFrameLatency");
+  check(backBufferLatencyCap(static_cast<std::uint32_t>(kMaxFrameLatency) + 10) ==
+            static_cast<std::uint32_t>(kMaxFrameLatency),
+        "backBufferCount far past kMaxFrameLatency still clamps to kMaxFrameLatency");
+}
+
+void testCappedFrameLatencyHonorsEnabledBit() {
+  using dxmt9::cappedFrameLatency;
+  check(cappedFrameLatency(30, 1, /*capEnabled=*/false) == 30,
+        "cap disabled returns maxFrameLatency unchanged regardless of backBufferCount");
+  check(cappedFrameLatency(30, 1, /*capEnabled=*/true) == 2,
+        "cap enabled clamps a larger maxFrameLatency down to backBufferLatencyCap(1) == 2");
+  check(cappedFrameLatency(1, 8, /*capEnabled=*/true) == 1,
+        "cap enabled never raises a smaller maxFrameLatency up to the cap");
+  check(cappedFrameLatency(0, 0, /*capEnabled=*/true) == 0,
+        "cap enabled with maxFrameLatency=0 stays 0 (min() floor, not the cap)");
+}
+
+// --- Per-present boundary action (R-BACK-2.51(g) truth table) --------
+//
+// CommandQueue::submitPresent's inline-vs-skip-vs-defer decision is now this
+// pure function of (this present's pacedByPresentOrdinal flag, the resolved
+// BoundaryPolicy) instead of a process-global offloadCommitReplayEnabled()
+// check. A present paced by the commit-replay offload's present-ordinal
+// boundary always skips the inline boundary; every other present -- direct
+// COM callers, or presents replayed by the synchronous non-offload
+// chunk-replay path -- keeps participating in the inline/deferred boundary
+// exactly as it did before the offload path existed, regardless of whether
+// DXMT9_OFFLOAD_COMMIT_REPLAY happens to be globally enabled for other,
+// paced presents in the same process (this truth table takes no global-flag
+// input at all, by construction).
+
+void testResolvePresentBoundaryActionPacedAlwaysSkipsRegardlessOfPolicy() {
+  using dxmt9::BoundaryPolicy;
+  using dxmt9::PresentBoundaryAction;
+  using dxmt9::resolvePresentBoundaryAction;
+  for (BoundaryPolicy policy : {BoundaryPolicy::Disabled, BoundaryPolicy::DeferredPresentCompletion,
+                                BoundaryPolicy::PresentCompletion, BoundaryPolicy::Completion,
+                                BoundaryPolicy::Default, BoundaryPolicy::AfterAcquire}) {
+    check(resolvePresentBoundaryAction(/*pacedByPresentOrdinal=*/true, policy) ==
+              PresentBoundaryAction::SkipPacedByOffloadOrdinal,
+          "a present paced by the offload ordinal boundary always skips the inline boundary");
+  }
+}
+
+void testResolvePresentBoundaryActionUnpacedFollowsPolicy() {
+  using dxmt9::BoundaryPolicy;
+  using dxmt9::PresentBoundaryAction;
+  using dxmt9::resolvePresentBoundaryAction;
+  check(resolvePresentBoundaryAction(false, BoundaryPolicy::Disabled) ==
+            PresentBoundaryAction::SkipDisabled,
+        "unpaced + Disabled -> SkipDisabled");
+  check(resolvePresentBoundaryAction(false, BoundaryPolicy::DeferredPresentCompletion) ==
+            PresentBoundaryAction::Defer,
+        "unpaced + DeferredPresentCompletion -> Defer");
+  for (BoundaryPolicy policy : {BoundaryPolicy::PresentCompletion, BoundaryPolicy::Completion,
+                                BoundaryPolicy::Default, BoundaryPolicy::AfterAcquire}) {
+    check(resolvePresentBoundaryAction(false, policy) == PresentBoundaryAction::ApplyInline,
+          "unpaced + any non-Disabled non-Deferred policy -> ApplyInline");
+  }
+}
+
+void testResolvePresentBoundaryActionUnpacedIndependentOfGlobalOffloadState() {
+  // R-BACK-2.51(g) regression guard: this is the exact bug the per-present
+  // fix closes. Before the fix, submitPresent branched on a process-global
+  // offloadCommitReplayEnabled() check, so ANY present -- including a direct
+  // COM caller that never went through the chunk-replay ordinal wait --
+  // would silently lose the inline boundary whenever the flag was globally
+  // on. resolvePresentBoundaryAction takes no global-flag parameter at all,
+  // so an unpaced present's action cannot depend on it.
+  using dxmt9::BoundaryPolicy;
+  using dxmt9::PresentBoundaryAction;
+  using dxmt9::resolvePresentBoundaryAction;
+  check(resolvePresentBoundaryAction(/*pacedByPresentOrdinal=*/false,
+                                     BoundaryPolicy::PresentCompletion) ==
+            PresentBoundaryAction::ApplyInline,
+        "an unpaced present applies the inline boundary regardless of any global offload state");
 }
 
 // --- PresentOrdinalGate: needsWait/waitDone truth tables ------------------
@@ -266,6 +373,11 @@ int main() {
     testPlannerDeferredWaitsOnPreviouslyStoredTarget();
     testPlannerDeferredMonotonicMaxRetention();
     testPlannerDeferredUint64MaxSaturates();
+    testBackBufferLatencyCapMath();
+    testCappedFrameLatencyHonorsEnabledBit();
+    testResolvePresentBoundaryActionPacedAlwaysSkipsRegardlessOfPolicy();
+    testResolvePresentBoundaryActionUnpacedFollowsPolicy();
+    testResolvePresentBoundaryActionUnpacedIndependentOfGlobalOffloadState();
     testGateNeedsWaitTruthTable();
     testGateWaitDoneTruthTable();
     testGateCvReleasedByAbort();

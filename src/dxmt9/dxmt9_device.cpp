@@ -305,8 +305,9 @@ class DeviceImpl final : public Device {
     };
     queue_.submitPresent(augmented);
   }
-  void waitPresentOrdinalBoundary(std::uint64_t ordinal) override {
-    queue_.waitPresentOrdinalBoundary(ordinal, maxFrameLatency_);
+  void waitPresentOrdinalBoundary(std::uint64_t ordinal,
+                                  std::uint32_t backBufferCount) override {
+    queue_.waitPresentOrdinalBoundary(ordinal, maxFrameLatency_, backBufferCount);
   }
   void abortPresentOrdinalWaits() override { queue_.abortPresentOrdinalWaits(); }
   void flush() override { queue_.submitFlush(); }

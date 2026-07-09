@@ -2111,7 +2111,8 @@ int32_t replayImportedChunk(D9CDevice* d,
                             const ImportedWireChunkView& importedChunk,
                             bool skipDrawResourceMarking,
                             std::chrono::steady_clock::time_point bridgeCommitStart,
-                            std::chrono::steady_clock::time_point replayStageStart) {
+                            std::chrono::steady_clock::time_point replayStageStart,
+                            bool pacedByPresentOrdinal) {
   auto commitChunkStageStart = replayStageStart;
 
   // Phase 14: bulk markChunkResources has already pinned every resource
@@ -2735,6 +2736,16 @@ int32_t replayImportedChunk(D9CDevice* d,
         q->noteCommitChunkActiveReplayCpuBeforePublish(activeReplayNs);
       }
       chunkSawQueueBoundary = true;
+      // R-BACK-2.51(g) — dxmt9c_device_present()'s wire-ABI signature
+      // (include/dxmt9/device_c.h) cannot carry this bit directly, so it
+      // rides the D9CDevice-reachable core::Device instead: set here, read
+      // + reset one presentEx() call later (see setNextPresentPacedByOrdinal
+      // doc). Only this chunk-replay call site ever sets it true, and only
+      // when this replay itself is running because
+      // dxmt9::d3d9::offloadCommitReplayEnabled() was on when the owning
+      // chunk was committed (see the two replayImportedChunk call sites
+      // below).
+      d->dev().setNextPresentPacedByOrdinal(pacedByPresentOrdinal);
       // dirty-region payload was dropped at chunk-record time (PE
       // doesn't ship it); pass nullptr.
       hr = dxmt9c_device_present(d, srcRect, dstRect, pr.hwnd,
@@ -3213,8 +3224,14 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     wow64Scope.emplace();
   }
   const auto replayCpuStart = std::chrono::steady_clock::now();
+  // R-BACK-2.51(g) — this worker thread only ever replays chunks that took
+  // the offload branch in dxmt9c_device_commit_chunk, so any Present record
+  // in this chunk was already paced by that branch's
+  // waitPresentOrdinalBoundary() call; pass true so the eventual
+  // submitPresent() skips its own inline boundary for it.
   const int32_t hr = replayImportedChunk(d, wireBlob.chunk, chunk.skipDrawResourceMarking,
-                                        chunk.bridgeCommitStart, replayStart);
+                                        chunk.bridgeCommitStart, replayStart,
+                                        /*pacedByPresentOrdinal=*/true);
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   releaseRetainedWrappers(chunk);
   return hr;
@@ -3455,7 +3472,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (hasPresent) {
       ++d->presentOrdinal;
       if (auto upper = d->dev().upperDevice()) {
-        upper->waitPresentOrdinalBoundary(d->presentOrdinal);
+        // R-BACK-2.51: honor DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS the same
+        // way the inline seqId-based boundary's presentBoundaryLatency()
+        // does. The current swapchain's backBufferCount is available here
+        // via presentParameters() -- the same value snapshotSwapDesc() will
+        // embed into the SwapDesc this chunk's Present record eventually
+        // replays through.
+        upper->waitPresentOrdinalBoundary(
+            d->presentOrdinal, d->dev().presentParameters().backBufferCount);
       }
     }
     // App-thread commit wall for the offload branch (validation/import +
@@ -3468,8 +3492,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     return dxmt9::core::D3D_OK;
   }
 
+  // R-BACK-2.51(g) — this synchronous tail is only reached when
+  // dxmt9::d3d9::offloadCommitReplayEnabled() was off above (the offload
+  // branch returns early), so no present-ordinal wait ran for this chunk;
+  // any Present record in it must keep the inline seqId-based boundary.
   return replayImportedChunk(d, importedChunk, didBulkMarkResources,
-                             bridgeCommitStart, commitChunkStageStart);
+                             bridgeCommitStart, commitChunkStageStart,
+                             /*pacedByPresentOrdinal=*/false);
 }
 
 extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* d,

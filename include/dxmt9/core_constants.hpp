@@ -1045,6 +1045,20 @@ struct SwapDesc {
   // latency is the app-facing pacing limit, not the Metal drawable count.
   u32 maxFrameLatency = kDefaultFrameLatency;
   std::function<void(bool)> notifyPresentationStatus{};
+  // R-BACK-2.51(g) — set exactly once, only by the D3D9 chunk-replay path
+  // that just paced this present through
+  // dxmt9::Device::waitPresentOrdinalBoundary (i.e. the commit-replay
+  // offload's ReplayOffloadWorker thread replaying a Present record; see
+  // core::Device::presentEx() / setNextPresentPacedByOrdinal()). When true,
+  // CommandQueue::submitPresent must skip the inline seqId-based present
+  // boundary so the two pacing mechanisms don't double-wait on the same
+  // present token. Every other submitPresent caller (direct COM presents,
+  // and presents replayed by the synchronous non-offload chunk path) leaves
+  // this false and keeps the inline boundary, even while
+  // DXMT9_OFFLOAD_COMMIT_REPLAY is globally enabled for other presents in
+  // the same process. Unix/core-side only — does not cross the PE/unix wire
+  // (the D9C wire's D9CCommandRecordPresent carries no such field).
+  bool pacedByPresentOrdinal = false;
 };
 
 struct PresentParameters {

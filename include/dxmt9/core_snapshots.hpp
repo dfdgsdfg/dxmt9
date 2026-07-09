@@ -2013,6 +2013,17 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult presentEx(const Rect* sourceRect = nullptr, const Rect* destRect = nullptr,
                     Handle destinationWindowOverride = {}, const void* dirtyRegion = nullptr,
                     u32 flags = 0);
+  // R-BACK-2.51(g) — consumed (read + reset to false) by the very next
+  // presentEx() call, which stamps it onto that call's snapshotted
+  // SwapDesc::pacedByPresentOrdinal. The D3D9 chunk-replay path
+  // (device_c_chunk_replay.cpp's D9C_COMMAND_RECORD_PRESENT case) calls
+  // this immediately before dispatching a Present record whose ordinal
+  // pacing already ran via dxmt9::Device::waitPresentOrdinalBoundary, so
+  // CommandQueue::submitPresent knows to skip its own inline boundary for
+  // that specific present. Not reentrant across multiple pending presents —
+  // the caller sets it and dispatches the paced present synchronously, with
+  // no other presentEx() call able to interleave.
+  void setNextPresentPacedByOrdinal(bool paced) noexcept { nextPresentPacedByOrdinal_ = paced; }
   HResult setMaximumFrameLatency(u32 latency);
   u32 maximumFrameLatency() const noexcept { return maximumFrameLatency_; }
   HResult waitForVBlank(size_t swapChainIndex = 0);
@@ -2258,6 +2269,8 @@ class Device : public std::enable_shared_from_this<Device> {
   PresentParameters presentParameters_{};
   [[maybe_unused]] u32 behaviorFlags_ = 0;
   bool extendedDevice_ = false;
+  // R-BACK-2.51(g) — see setNextPresentPacedByOrdinal() doc above.
+  bool nextPresentPacedByOrdinal_ = false;
   DeviceState state_{};
   u64 drawStateGeneration_ = 1;
   u64 drawStableStateGeneration_ = 1;

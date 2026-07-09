@@ -232,6 +232,13 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
     return D3DERR_DEVICELOST;
   }
   auto desc = snapshotSwapDesc();
+  // R-BACK-2.51(g) — consume the per-present pacing flag set by the
+  // chunk-replay path (see setNextPresentPacedByOrdinal() doc). Any caller
+  // that did not just set it (direct COM presents, synchronous non-offload
+  // chunk replay) leaves the flag false here, so this present keeps the
+  // inline seqId-based boundary in CommandQueue::submitPresent.
+  desc.pacedByPresentOrdinal = nextPresentPacedByOrdinal_;
+  nextPresentPacedByOrdinal_ = false;
   const bool synchronizePresent = desc.displaySyncEnabled;
   submitPresentInternal(desc);
   // Immediate presents must not synchronously wait for the Metal presenter:

@@ -421,10 +421,10 @@ R-BACK-2.48 locality gates pass.
 **R-BACK-2.51** *(Commit-replay offload contract.)* The opt-in commit-replay
 offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`) must (a) keep wire header/range
 validation, import, and handle-marking synchronous on the app thread before
-any record is handed off; (b) preserve record order by draining the
-raw-chunk queue through a single FIFO replay worker, never reordering or
-parallelizing replay across chunks; (c) pace present-bearing commits with a
-present-ordinal frame-latency boundary
+any record is handed off; (b) preserve record order
+by draining the raw-chunk queue through a single FIFO replay worker, never
+reordering or parallelizing replay across chunks; (c) pace present-bearing
+commits with a present-ordinal frame-latency boundary
 (`CommandQueue::waitPresentOrdinalBoundary`) that honors the resolved
 `BoundaryPolicy` and stays order-isomorphic to the inline present boundary;
 (d) drain all deferred replay work before any direct (non-chunk) device call
@@ -433,12 +433,34 @@ failure — poisoning later commits and aborting pending present-ordinal
 waits — without synthesizing a per-record HRESULT for a chunk that failed
 after its synchronous validation phase already returned success; and (f)
 remain byte-identical to the inline (non-offload) replay path when the flag
-is unset. See `specs/backend/spec.md` §Commit-Replay Offload for the
-architecture. Verified by `dxmt9-replay-offload-queue-spec` (raw-queue
-FIFO/bound/drain-fence rules), `dxmt9-present-ordinal-boundary-spec`
-(ordinal target math, planner policy mapping, and the `PresentOrdinalGate`
-wait/abort mechanics), and the `PresentFrameLatency.tla` ordinal-variant
-invariants (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`.
+is unset. (g) *(Per-present-context boundary suppression.)* Enabling the
+offload flag must not globally suppress `CommandQueue::submitPresent`'s
+inline seqId-based present boundary for every present in the process — only
+the specific present whose `core::SwapDesc::pacedByPresentOrdinal` was
+stamped by the D3D9 chunk-replay path that already paced that present through
+`waitPresentOrdinalBoundary` may skip the inline boundary
+(`dxmt9::resolvePresentBoundaryAction`). A present that does not flow through
+that path — a direct (non-chunk) COM caller in the same process, or a present
+replayed by the synchronous non-offload chunk-replay path — must keep the
+inline boundary and its own frame-latency pacing even while
+`DXMT9_OFFLOAD_COMMIT_REPLAY` is globally enabled for other, paced presents.
+(h) *(Cap honoring.)* The present-ordinal boundary's effective frame latency
+must honor `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` the same way the inline
+boundary's `presentBoundaryLatency()` does, using the committing chunk's
+swapchain `backBufferCount` (`dxmt9::cappedFrameLatency`). See
+`specs/backend/spec.md` §Commit-Replay Offload for the architecture. Verified
+by `dxmt9-replay-offload-queue-spec` (raw-queue FIFO/bound/drain-fence
+rules), `dxmt9-present-ordinal-boundary-spec` (ordinal target math, planner
+policy mapping, capped-latency math, and the `PresentOrdinalGate` wait/abort
+mechanics), `dxmt9-present-boundary-policy-spec`
+(`resolvePresentBoundaryAction` per-present truth table), and the
+`PresentFrameLatency.tla` ordinal-variant invariants
+(`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. Clauses (g)
+and (h) close the two boundary-pacing gaps that previously blocked promoting
+this flag to an engine default; a separate, still-open resource-retention
+defect in the replay worker's draw-packet path (unrelated to boundary
+pacing) remains and must be fixed before the default can safely change — see
+`specs/backend/gap.md` "Commit-replay offload" row.
 
 **R-BACK-2.52** *(Inline const delta contract.)* The opt-in inline-const-delta
 wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first use) must
