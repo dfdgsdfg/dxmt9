@@ -1135,6 +1135,19 @@ void countPrewarmFailureLockBusy();
 void countPrewarmFailureMissing();
 void countColdCompileAfterWarm();
 void countArchiveBytes(std::uint64_t bytes);
+// R-BACK-3.9 — Full prewarm demoted to lazy-equivalent behavior because
+// the on-disk archive exceeded DXMT9_ARCHIVE_MAX_PREWARM_MB.
+void countPrewarmDemotedBySize();
+// R-BACK-3.9 — wall time (ns) of the whole async Full-load background
+// thread, from spawn to archive attach + backfill drain. Broader than
+// countPrewarmLoadCpuTime (which only covers the time inside run()'s
+// locked classification/load span) — this is the end-to-end async op.
+void countPrewarmAsyncCompletionCpuTime(std::uint64_t nanoseconds);
+// R-BACK-3.10 — a bounded mid-session archive save actually ran.
+void countPrewarmMilestoneSave();
+// R-BACK-3.11 — an archive save (mid-session or shutdown) was skipped
+// because this session's shader debug-env key was non-default.
+void countPrewarmSaveSkippedDebugEnv();
 // Render-pass load/store action histograms (R-BACK-15.10/15.11).
 // `action` is the raw WMTLoadAction / WMTStoreAction enum value. Callers
 // cast `static_cast<std::uint32_t>(load_action)`; we keep the API decoupled

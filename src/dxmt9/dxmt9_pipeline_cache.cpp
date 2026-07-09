@@ -1,5 +1,6 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_draw_state.hpp"
@@ -26,6 +27,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -445,6 +447,28 @@ submitPipelineBuild(Fn&& fn) {
     }
     return promise.get_future().share();
   }
+  // R-BACK-3.9 / R-BACK-3.10 — every submission here is a pipeline-cache
+  // compile-miss (the Cache::getOrBuild* callers only reach this after a
+  // cache-map miss), so it is exactly the R-BACK-3.10 "new archive entry"
+  // activity signal regardless of whether this particular job's archive
+  // pointer ends up empty (pending load) or attached.
+  archive_prewarm::noteArchiveEntryCompiled();
+  if (archive_prewarm::archiveLoadInFlight()) {
+    // `fn` may read an empty (not-yet-attached) archive handle inside its
+    // body and silently skip the addRenderPipelineFunctionsWithDescriptor:
+    // side effect (see the `if (archive && *archive)` guards throughout
+    // this file). Queue a copy to replay once the archive attaches so
+    // that compiled PSO is still preserved into it (R-BACK-3.9). The
+    // replay recompiles (discarding the resulting PSO) purely for the
+    // archive-add side effect — no cache map is touched by `fn` itself,
+    // only by the caller after this function returns, so re-running `fn`
+    // standalone cannot double-insert anything.
+    if constexpr (std::is_copy_constructible_v<std::decay_t<Fn>>) {
+      auto replay = fn;
+      archive_prewarm::queueArchiveBackfill(
+          [replay]() mutable { replay(); });
+    }
+  }
   return pipelineCompileQueue().submit(std::forward<Fn>(fn));
 }
 
@@ -613,6 +637,21 @@ u64 currentShaderSourceDebugEnvKey(
 
 u64 currentShaderSourceDebugEnvKey() noexcept {
   return currentShaderSourceDebugEnvKey(std::nullopt);
+}
+
+bool shaderSourceDebugEnvIsDefault() noexcept {
+  static const u64 kDefaultKey = makeShaderSourceDebugEnvKey(
+      /*trimUnusedVaryings=*/false, /*trimVertexTemps=*/false,
+      /*trimVsOutputScratch=*/false, /*fsHalfPrecision=*/false,
+      /*forceFullscreenVertex=*/false, /*flipTranslatedVertexY=*/false,
+      /*forceFragmentShaderColor=*/false, /*disableAlphaTest=*/false,
+      /*disableFog=*/false, /*forceTextureWhite=*/false,
+      /*fragmentMode=*/std::string_view{}, /*forcePixelVFlip=*/false,
+      /*debugFfpUv=*/false, /*debugFfpTexture=*/false,
+      /*debugFfpAlpha=*/false, /*probeDropVSOutPointSize=*/false,
+      /*probePositionOnlyVSOut=*/false, /*probeHalfVSOut=*/false,
+      /*probeFragmentlessKeepVSOut=*/false);
+  return currentShaderSourceDebugEnvKey() == kDefaultKey;
 }
 
 ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {

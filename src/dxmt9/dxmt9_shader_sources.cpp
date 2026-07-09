@@ -1,6 +1,7 @@
 #include "dxmt9_shader_sources.hpp"
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_archive_prewarm.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -231,8 +232,23 @@ void persistShaderArchive(WMT::BinaryArchive& archive, const std::string& path) 
   if (!archive || path.empty()) {
     return;
   }
+  // R-BACK-3.10 / specs/backend/spec.md §6.1 — writers acquire LOCK_EX
+  // before serializeToURL: so a concurrent dxmt9 process's LOCK_SH
+  // reader (dxmt9_archive_prewarm.cpp's acquireSharedLock) never
+  // observes a torn write. serializeToURL:'s own temp-file-plus-rename
+  // behavior stays the atomicity mechanism for the file content itself;
+  // this lock only adds the missing cross-process mutual exclusion
+  // around when that rename may happen. Best-effort: if the lock can't
+  // be acquired within the bounded retry window, skip this save attempt
+  // rather than block indefinitely — a later save (mid-session or the
+  // next process's shutdown) will retry.
+  const int lockFd = archive_prewarm::acquireArchiveWriteLock(path);
+  if (lockFd < 0) {
+    return;
+  }
   WMT::Error err{};
   archive.serialize(path.c_str(), err);
+  archive_prewarm::releaseArchiveWriteLock(lockFd);
 }
 
 std::string makeShaderPrelude(const ShaderPreludeOptions& options) {

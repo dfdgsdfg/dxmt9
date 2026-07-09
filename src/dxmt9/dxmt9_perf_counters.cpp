@@ -1525,6 +1525,11 @@ struct Counters {
   std::atomic<std::uint64_t> prewarmFailureMissing{0};
   std::atomic<std::uint64_t> coldCompileCountAfterWarm{0};
   std::atomic<std::uint64_t> archiveBytes{0};
+  // R-BACK-3.9 / 3.10 / 3.11 — async prewarm hardening counters.
+  std::atomic<std::uint64_t> prewarmDemotedBySize{0};
+  std::atomic<std::uint64_t> prewarmAsyncCompletionCpuNs{0};
+  std::atomic<std::uint64_t> prewarmMilestoneSaveCount{0};
+  std::atomic<std::uint64_t> prewarmSaveSkippedDebugEnvCount{0};
   // D3DBC shader-decoder safe-rejection buckets (declarations in
   // dxmt9_perf_counters.hpp). Each counter MUST be a healthy 0 on a
   // passing probe — non-zero indicates a translator input regressed
@@ -3803,6 +3808,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"prewarm_failure_missing", CounterEntry::Kind::UnsignedCount, &Counters::prewarmFailureMissing, nullptr, nullptr, 0.0},
     {"cold_compile_count_after_warm", CounterEntry::Kind::UnsignedCount, &Counters::coldCompileCountAfterWarm, nullptr, nullptr, 0.0},
     {"archive_bytes", CounterEntry::Kind::UnsignedCount, &Counters::archiveBytes, nullptr, nullptr, 0.0},
+    {"prewarm_demoted_by_size", CounterEntry::Kind::UnsignedCount, &Counters::prewarmDemotedBySize, nullptr, nullptr, 0.0},
+    {"prewarm_async_completion_cpu_ns", CounterEntry::Kind::UnsignedCount, &Counters::prewarmAsyncCompletionCpuNs, nullptr, nullptr, 0.0},
+    {"prewarm_milestone_save_count", CounterEntry::Kind::UnsignedCount, &Counters::prewarmMilestoneSaveCount, nullptr, nullptr, 0.0},
+    {"prewarm_save_skipped_debug_env_count", CounterEntry::Kind::UnsignedCount, &Counters::prewarmSaveSkippedDebugEnvCount, nullptr, nullptr, 0.0},
     {"shader_decoder_reject_truncated", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectTruncated, nullptr, nullptr, 0.0},
     {"shader_decoder_reject_unsupported_version", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectUnsupportedVersion, nullptr, nullptr, 0.0},
     {"shader_decoder_reject_oob_register", CounterEntry::Kind::UnsignedCount, &Counters::shaderDecoderRejectOobRegister, nullptr, nullptr, 0.0},
@@ -9151,6 +9160,18 @@ void countColdCompileAfterWarm() {
 }
 void countArchiveBytes(std::uint64_t bytes) {
   counters().archiveBytes.store(bytes, std::memory_order_relaxed);
+}
+void countPrewarmDemotedBySize() {
+  add(counters().prewarmDemotedBySize);
+}
+void countPrewarmAsyncCompletionCpuTime(std::uint64_t nanoseconds) {
+  add(counters().prewarmAsyncCompletionCpuNs, nanoseconds);
+}
+void countPrewarmMilestoneSave() {
+  add(counters().prewarmMilestoneSaveCount);
+}
+void countPrewarmSaveSkippedDebugEnv() {
+  add(counters().prewarmSaveSkippedDebugEnvCount);
 }
 
 // D3DBC bytecode safe-rejection — see dxmt9_perf_counters.hpp for the

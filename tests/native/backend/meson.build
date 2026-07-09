@@ -89,6 +89,22 @@ present_disable_vsync_spec = executable(
 test('dxmt9-present-disable-vsync-spec', present_disable_vsync_spec,
      env: dxmt9_native_test_env)
 
+# R-BACK-3.9 / R-BACK-3.10 archive-prewarm-hardening value transforms —
+# DXMT9_ARCHIVE_MAX_PREWARM_MB size-guard parsing/decision and the
+# bounded mid-session shouldMilestoneSave() decision (including the
+# R-BACK-3.11 savePoisoned short-circuit). Pure CPU spec; no Metal
+# device or filesystem access.
+archive_prewarm_spec = executable(
+  'dxmt9-archive-prewarm-spec',
+  'archive_prewarm_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-archive-prewarm-spec', archive_prewarm_spec,
+     env: dxmt9_native_test_env)
+
 backend_pipeline_key_spec = executable(
   'dxmt9-backend-pipeline-key-spec',
   'backend_pipeline_key_spec.cpp',

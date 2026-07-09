@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <mutex>
 
 namespace {
 
@@ -19,6 +20,21 @@ void execute_on_main(dispatch_block_t block) {
   } else {
     dispatch_sync(dispatch_get_main_queue(), block);
   }
+}
+
+// R-BACK-3.9 — MTLBinaryArchive is not documented thread-safe. dxmt9's PSO
+// compile-queue workers (dxmt9_pipeline_cache.cpp, 1-8 concurrent threads)
+// and, since R-BACK-3.9, the async prewarm load thread and the R-BACK-3.10
+// milestone-save thread can all reach MTLDevice_newRenderPipelineState /
+// MTLDevice_newComputePipelineState (which call
+// add{Render,Compute}PipelineFunctionsWithDescriptor:) and
+// MTLBinaryArchive_serialize (serializeToURL:) concurrently on the same
+// archive object. Serialize the three mutating entry points with one
+// process-wide mutex; a single archive add/serialize call is not on any
+// per-draw hot path, so the extra contention is negligible.
+std::mutex &binary_archive_mutex() {
+  static std::mutex m;
+  return m;
 }
 
 typedef struct macdrv_opaque_metal_device *macdrv_metal_device;
@@ -1114,6 +1130,7 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
   }
   if (!err && info->binary_archive_for_serialization) {
     NSError *archErr = nil;
+    std::lock_guard<std::mutex> archive_lock(binary_archive_mutex());
     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization
         addRenderPipelineFunctionsWithDescriptor:desc error:&archErr];
   }
@@ -1144,6 +1161,7 @@ extern "C" obj_handle_t MTLDevice_newComputePipelineState(obj_handle_t device,
       newComputePipelineStateWithDescriptor:desc options:opts reflection:nil error:&err];
   if (!err && info->binary_archive_for_serialization) {
     NSError *archErr = nil;
+    std::lock_guard<std::mutex> archive_lock(binary_archive_mutex());
     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization
         addComputePipelineFunctionsWithDescriptor:desc error:&archErr];
   }
@@ -2021,7 +2039,10 @@ extern "C" void MTLBinaryArchive_serialize(obj_handle_t archive, const char *url
     NSString *path = [NSString stringWithUTF8String:url];
     NSURL *nsurl = [NSURL fileURLWithPath:path];
     NSError *err = nil;
-    [(id<MTLBinaryArchive>)archive serializeToURL:nsurl error:&err];
+    {
+      std::lock_guard<std::mutex> archive_lock(binary_archive_mutex());
+      [(id<MTLBinaryArchive>)archive serializeToURL:nsurl error:&err];
+    }
     if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
   }
 }

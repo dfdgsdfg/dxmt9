@@ -4,14 +4,17 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -353,9 +356,11 @@ FailureClass classifyArchiveError(int64_t errCode) {
 
 }  // namespace
 
-void run(WMT::Device device, const std::string& archivePath, Mode mode) {
+WMT::Reference<WMT::BinaryArchive> run(WMT::Device device,
+                                       const std::string& archivePath,
+                                       Mode mode) {
   if (mode == Mode::Disabled || archivePath.empty()) {
-    return;
+    return {};
   }
   // Make sure the parent directory exists so the compile path can
   // serialize on shutdown. Cheap, idempotent.
@@ -364,20 +369,20 @@ void run(WMT::Device device, const std::string& archivePath, Mode mode) {
   if (mode == Mode::Lazy) {
     // Lazy: do not actively load. The compile path still writes the
     // archive on subsequent runs via shaders::Archive::~Archive.
-    return;
+    return {};
   }
 
   // Mode::Full from here on.
 
   if (!fileExists(archivePath)) {
     perf::countPrewarmFailureMissing();
-    return;
+    return {};
   }
 
   const int lockFd = acquireSharedLock(archivePath, kReaderLockTimeout);
   if (lockFd < 0) {
     perf::countPrewarmFailureLockBusy();
-    return;
+    return {};
   }
 
   const auto loadStart = std::chrono::steady_clock::now();
@@ -395,16 +400,21 @@ void run(WMT::Device device, const std::string& archivePath, Mode mode) {
   //                                             fall through to the
   //                                             cheap fallbacks below.
   //
-  // The probe load is independent of the shaders::Archive instance the
-  // caller already constructed — Metal allows multiple archives over
-  // the same URL, and the probe ref drops at end of scope. The cost is
-  // dominated by the I/O the caller already paid; we keep it inside
-  // the same shared-lock scope for cross-process consistency.
+  // R-BACK-3.9: `archiveProbe` IS the real, functional load — it is no
+  // longer discarded. The caller (dxmt9::shaders::Archive, directly for
+  // Lazy/Disabled or via beginAsyncFullLoad() for Full) uses this same
+  // object as the session's live archive, so the (previously doubled)
+  // `newBinaryArchive(path)` deserialize now happens exactly once. On a
+  // classified corrupt/schema failure, `archiveProbe` is already the
+  // bridge's empty-archive fallback (see MTLDevice_newBinaryArchive in
+  // winemetal_private_api.mm), which is exactly the "start empty" result
+  // the failure table calls for — no separate reset needed. We keep the
+  // probe inside the same shared-lock scope for cross-process
+  // consistency.
+  WMT::Error probeError{};
+  auto archiveProbe = device.newBinaryArchive(archivePath.c_str(), probeError);
   bool classifiedFailure = false;
   {
-    WMT::Error probeError{};
-    auto archiveProbe = device.newBinaryArchive(archivePath.c_str(), probeError);
-    (void)archiveProbe;
     const auto failure = classifyArchiveError(probeError.code());
     if (failure == FailureClass::Corrupt) {
       perf::countPrewarmFailureCorrupt();
@@ -493,6 +503,217 @@ void run(WMT::Device device, const std::string& archivePath, Mode mode) {
                     archivePath.c_str(), modeName(mode),
                     static_cast<unsigned long long>(sizeBytes),
                     classifiedFailure ? " (renamed-aside)" : "");
+
+  return archiveProbe;
+}
+
+// ---------------------------------------------------------------------
+// R-BACK-3.9 — size guard.
+// ---------------------------------------------------------------------
+
+std::optional<std::uint64_t> parseMaxPrewarmMb(const char* env) noexcept {
+  if (!env || env[0] == '\0') {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const auto parsed = std::strtoull(env, &end, 10);
+  if (end == env || errno == ERANGE || parsed == 0) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(parsed);
+}
+
+std::uint64_t resolveMaxPrewarmBytes() {
+  const auto mb = parseMaxPrewarmMb(std::getenv("DXMT9_ARCHIVE_MAX_PREWARM_MB"))
+                       .value_or(kDefaultMaxPrewarmMb);
+  return mb * (1ull << 20);
+}
+
+bool shouldDemoteForSize(std::uint64_t archiveBytes,
+                         std::uint64_t maxPrewarmBytes) noexcept {
+  return archiveBytes > maxPrewarmBytes;
+}
+
+// ---------------------------------------------------------------------
+// R-BACK-3.9 — async load orchestration + backfill queue. Process-scoped
+// (see the header comment on archiveLoadInFlight()).
+// ---------------------------------------------------------------------
+
+namespace {
+std::atomic<bool> g_archiveLoadPending{false};
+std::mutex g_backfillMutex;
+std::vector<std::function<void()>> g_backfillQueue;
+std::atomic<std::uint64_t> g_entriesCompiledTotal{0};
+
+void drainArchiveBackfillLocked() {
+  std::vector<std::function<void()>> jobs;
+  {
+    std::lock_guard<std::mutex> lock(g_backfillMutex);
+    jobs.swap(g_backfillQueue);
+  }
+  for (auto& job : jobs) {
+    if (job) {
+      job();
+    }
+  }
+}
+}  // namespace
+
+bool archiveLoadInFlight() noexcept {
+  return g_archiveLoadPending.load(std::memory_order_acquire);
+}
+
+void queueArchiveBackfill(std::function<void()> job) {
+  if (!job) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_backfillMutex);
+  if (g_backfillQueue.size() >= kMaxArchiveBackfillQueue) {
+    // Bounded: a pathological compile burst during the pending window
+    // just means the excess PSOs aren't preserved into the archive this
+    // session (they'll compile-and-add normally next session, or the
+    // next time this exact key misses). Not counted separately — the
+    // queue depth itself is small, transient, diagnostic state, not a
+    // correctness signal worth a dedicated counter for this hardening
+    // pass.
+    return;
+  }
+  g_backfillQueue.push_back(std::move(job));
+}
+
+void noteArchiveEntryCompiled() noexcept {
+  g_entriesCompiledTotal.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::uint64_t archiveEntriesCompiledTotal() noexcept {
+  return g_entriesCompiledTotal.load(std::memory_order_relaxed);
+}
+
+std::thread beginAsyncFullLoad(
+    WMT::Device device, std::string archivePath,
+    std::function<void(WMT::Reference<WMT::BinaryArchive>)> onAttach) {
+  if (archivePath.empty()) {
+    if (onAttach) {
+      onAttach({});
+    }
+    return {};
+  }
+  ensureParentDir(archivePath);
+  g_archiveLoadPending.store(true, std::memory_order_release);
+
+  const auto maxPrewarmBytes = resolveMaxPrewarmBytes();
+  const auto sizeBytes = fileSize(archivePath);
+  if (shouldDemoteForSize(sizeBytes, maxPrewarmBytes)) {
+    // Demotion is cheap (a stat() the caller already paid for) — no
+    // thread needed. Skip the deserialize entirely; the same path stays
+    // wired for the eventual save, so a future serialize naturally
+    // shrinks the oversized file back down to this session's content
+    // (self-healing the bloat the size guard exists to prevent).
+    perf::countPrewarmDemotedBySize();
+    dxmt9::util::logf(dxmt9::util::LogLevel::Warn, "dxmt9-archive",
+                      "prewarm demoted: path=\"%s\" bytes=%llu max_bytes=%llu "
+                      "(DXMT9_ARCHIVE_MAX_PREWARM_MB) — skipping Full load, "
+                      "falling back to lazy-equivalent compile-and-write",
+                      archivePath.c_str(),
+                      static_cast<unsigned long long>(sizeBytes),
+                      static_cast<unsigned long long>(maxPrewarmBytes));
+    if (onAttach) {
+      onAttach({});
+    }
+    drainArchiveBackfillLocked();
+    g_archiveLoadPending.store(false, std::memory_order_release);
+    return {};
+  }
+
+  return std::thread([device, archivePath = std::move(archivePath),
+                      onAttach = std::move(onAttach)]() mutable {
+    const auto start = std::chrono::steady_clock::now();
+    auto loaded = run(device, archivePath, Mode::Full);
+    if (onAttach) {
+      onAttach(std::move(loaded));
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    perf::countPrewarmAsyncCompletionCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+    drainArchiveBackfillLocked();
+    g_archiveLoadPending.store(false, std::memory_order_release);
+  });
+}
+
+// ---------------------------------------------------------------------
+// R-BACK-3.10 — milestone save.
+// ---------------------------------------------------------------------
+
+bool shouldMilestoneSave(const MilestoneState& state,
+                         std::uint64_t presentMilestone,
+                         std::uint64_t quiescencePresents,
+                         std::uint64_t reArmBatchEntries) noexcept {
+  if (state.savePoisoned) {
+    return false;
+  }
+  if (state.entriesAddedThisSession == state.entriesAddedAtLastSave) {
+    // Nothing new to persist since the last save (or ever, if
+    // savesPerformed == 0 and no entries arrived yet).
+    return false;
+  }
+  if (state.presentCount < presentMilestone) {
+    return false;
+  }
+  if ((state.presentCount - state.lastNewEntryPresent) < quiescencePresents) {
+    // Still actively adding entries — wait for the compile set to
+    // stabilize before paying for a serialize.
+    return false;
+  }
+  if (state.savesPerformed == 0) {
+    return true;
+  }
+  if (state.savesPerformed == 1) {
+    const auto newSinceLastSave =
+        state.entriesAddedThisSession - state.entriesAddedAtLastSave;
+    return newSinceLastSave >= reArmBatchEntries;
+  }
+  return false;  // Bounded to at most two saves per process.
+}
+
+// ---------------------------------------------------------------------
+// R-BACK-3.10 — write-side POSIX flock (LOCK_EX).
+// ---------------------------------------------------------------------
+
+int acquireArchiveWriteLock(const std::string& path) {
+  if (path.empty()) {
+    return -1;
+  }
+  // O_RDONLY is enough — flock() doesn't require the fd to be opened for
+  // writing, and we write through MTLBinaryArchive_serialize's own
+  // NSURL-based I/O, not through this fd.
+  int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_CREAT, 0600);
+  if (fd < 0) {
+    return -1;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + kReaderLockTimeout;
+  while (true) {
+    if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+      return fd;
+    }
+    if (errno != EWOULDBLOCK) {
+      ::close(fd);
+      return -1;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      ::close(fd);
+      return -1;
+    }
+    std::this_thread::sleep_for(kReaderLockPoll);
+  }
+}
+
+void releaseArchiveWriteLock(int fd) {
+  if (fd < 0) {
+    return;
+  }
+  ::flock(fd, LOCK_UN);
+  ::close(fd);
 }
 
 }  // namespace dxmt9::archive_prewarm

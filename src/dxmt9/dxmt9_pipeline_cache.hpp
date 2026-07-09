@@ -208,6 +208,14 @@ u64 currentShaderSourceDebugEnvKey() noexcept;
 u64 currentShaderSourceDebugEnvKey(
     std::optional<bool> forceTextureWhiteOverride) noexcept;
 
+// R-BACK-3.11 — true when the process's current shader debug-env key
+// equals the default (no DXMT_DISABLE_*/DXMT_FORCE_*/DXMT9_PROBE_*
+// classifier env active). Exposed so archive persistence
+// (dxmt9_command_queue.cpp, at CommandQueue construction) can gate the
+// R-BACK-3.11 pollution guard without duplicating the 19-parameter
+// makeShaderSourceDebugEnvKey() default-argument shape.
+bool shaderSourceDebugEnvIsDefault() noexcept;
+
 namespace detail {
 
 struct DrawShaderSources {

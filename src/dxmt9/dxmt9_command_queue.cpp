@@ -507,18 +507,49 @@ class PerfScope {
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
     : device_(device),
       limits_(limits),
-      shaderArchive_(device, resolveShaderCachePath(device)) {
+      // R-BACK-3.9 — Mode::Full defers the archive load: shaderArchive_
+      // starts default-constructed (empty, zero I/O) here and the real
+      // load is kicked off asynchronously in the ctor body below. Lazy
+      // and Disabled keep the original synchronous ctor call verbatim
+      // ("device init behavior with DXMT9_PREWARM=disabled|lazy
+      // unchanged"). The ternary only evaluates the selected branch, so
+      // resolveShaderCachePath() (which itself calls resolveMode()) is
+      // not invoked at all for Full mode.
+      shaderArchive_(archive_prewarm::resolveMode() == archive_prewarm::Mode::Full
+                         ? shaders::Archive()
+                         : shaders::Archive(device, resolveShaderCachePath(device))) {
   if (!device_) {
     return;
   }
-  // R-BACK-3.7 / R-BACK-3.8 — drive the prewarm step now that the
-  // archive instance is constructed. Runs the §6.1 failure-mode table
-  // and bumps the relevant perf counters (missing / lock_busy /
-  // entries / bytes / load_ns). Non-fatal under all conditions; never
-  // blocks queue init beyond a single bounded flock retry budget.
+  // R-BACK-3.7 / R-BACK-3.8 / R-BACK-3.9 — drive the prewarm step now that
+  // the archive instance is constructed. Lazy/Disabled run the original
+  // synchronous §6.1 failure-mode table (missing / lock_busy / entries /
+  // bytes / load_ns counters), unchanged. Full mode instead begins the
+  // async load: shaderArchive_ stays empty — pipeline-cache builders
+  // already treat an empty archive as "compile fresh, no archive attach"
+  // — until the background thread attaches it; archive-add side effects
+  // that race the load are queued and replayed on attach
+  // (dxmt9_pipeline_cache.cpp's submitPipelineBuild /
+  // dxmt9_archive_prewarm.cpp's queueArchiveBackfill). Neither path
+  // blocks queue init beyond a single bounded flock retry budget /
+  // a stat() call.
   {
     const auto prewarmMode = archive_prewarm::resolveMode();
-    archive_prewarm::run(device, shaderArchive_.path(), prewarmMode);
+    if (prewarmMode == archive_prewarm::Mode::Full) {
+      shaderArchive_.beginAsyncFullLoad(
+          device, archive_prewarm::resolveArchivePath(device, prewarmMode));
+    } else {
+      archive_prewarm::run(device, shaderArchive_.path(), prewarmMode);
+    }
+    // R-BACK-3.11 — a non-default shader debug-env key (the
+    // DXMT_DISABLE_*/DXMT_FORCE_*/DXMT9_PROBE_* classifier family) means
+    // this session's compiled shader variants must not land in the
+    // shared production archive. Gate save only; load above still
+    // proceeds normally so a probe session still benefits from a warm
+    // cache built by prior, non-diagnostic sessions.
+    if (!pipeline::shaderSourceDebugEnvIsDefault()) {
+      shaderArchive_.poisonSave();
+    }
   }
   queue_ = device_.newCommandQueue(0);
   if (!queue_) {
@@ -3900,6 +3931,12 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
   PerfScope scope(perf::countSubmitPresentCpuTime);
+  // R-BACK-3.10 — milestone-save decision only runs at present
+  // boundaries (never per-draw). Cheap in the common case: a handful of
+  // integer compares under a mutex; the actual serialize only fires at
+  // most twice per process, off this thread (Archive::triggerSave spawns
+  // a background thread).
+  shaderArchive_.notePresent();
   const BoundaryPolicy boundaryPolicy = resolveBoundaryPolicyFromEnv();
   if (!offloadCommitReplayEnabled() && boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
