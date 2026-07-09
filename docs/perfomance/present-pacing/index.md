@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H214` - Inline const delta (R-BACK-2.52) proves mechanism, FPS `+1.6%` below gate; kept opt-in. GT1 producer CPU frontier judged exhausted: Rosetta-measured PE CPU over-credits wall value `~3x`.
+Latest tracked row: `H215` - Archive prewarm hardening (R-BACK-3.9..3.11) closes the startup-flake class; the 125MB regression fixture now passes with async load (1.67s off-thread) and timeout-killed runs persist the archive.
 
 ## Start Here
 
