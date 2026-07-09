@@ -510,6 +510,34 @@ init (default for shipping builds), lazy on first draw (default for dev), or
 disabled (debug). The selected mode must be observable via a counter and the
 chosen archive path/identity must be visible in present diagnostics.
 
+**R-BACK-3.9** *(Non-blocking prewarm.)* A successful `Full` prewarm must not
+block device creation on archive I/O or deserialization: the load must run
+off the device-init critical path (asynchronously), with PSO lookups falling
+back to fresh compilation until the load completes, and pipeline-cache
+archive writes that race the load must be preserved (queued or merged), not
+dropped. Additionally, an archive whose on-disk size exceeds a configurable
+guard (`DXMT9_ARCHIVE_MAX_PREWARM_MB`, default generous) must demote to the
+lazy path with a diagnostic instead of loading. Evidence class: 3DMark05
+self-aborted deterministically when a `125MB` archive was full-prewarmed
+synchronously inside `CreateDevice`
+(`docs/perfomance/present-pacing/present-pacing-inline-const-delta.201.md`).
+
+**R-BACK-3.10** *(Persistence without clean shutdown.)* Archive persistence
+must not depend solely on clean device destruction: after the compile set
+stabilizes (a bounded new-entry-quiescence or present-count milestone), the
+runtime must serialize the archive once mid-session under the existing
+`LOCK_EX` + atomic-rename contract, so a process later terminated without
+clean teardown still leaves a warm archive. Repeated mid-session saves must
+be bounded (no per-present serialization).
+
+**R-BACK-3.11** *(Diagnostic-variant pollution guard.)* Shader variants whose
+identity includes a non-default shader debug-env key (the
+`DXMT_DISABLE_*` / `DXMT_FORCE_*` classifier family) must not be persisted
+into the shared production archive: a session with a non-default shader
+debug-env key must skip archive save (load may proceed). Rationale: probe
+campaigns grew the shared archive `68KB -> 125MB`, which is what armed the
+R-BACK-3.9 failure.
+
 ---
 
 ## 4. Shader Translation
