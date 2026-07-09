@@ -185,6 +185,15 @@ resource_hazard_spec = executable(
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
 
+# Offload-forced regression pin (R-BACK-2.51): reuses the same binary with
+# DXMT9_OFFLOAD_COMMIT_REPLAY=1 forced on, pinning the fix for the
+# D9CDevice-teardown-vs-ReplayOffloadWorker heap corruption (see
+# commitWireChunk()'s comment in imported_apply_state_value_spec.cpp and the
+# per-call comments in this file). Before that fix this binary reliably
+# SIGABRT'd/SIGTRAP'd with heap corruption instead of failing an assertion.
+test('dxmt9-resource-hazard-spec-offload', resource_hazard_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
+
 imported_apply_state_value_spec = executable(
   'dxmt9-imported-apply-state-value-spec',
   'imported_apply_state_value_spec.cpp',
@@ -195,6 +204,12 @@ imported_apply_state_value_spec = executable(
 
 test('dxmt9-imported-apply-state-value-spec',
      imported_apply_state_value_spec)
+
+# Offload-forced regression pin (R-BACK-2.51): see the comment on
+# dxmt9-resource-hazard-spec-offload above.
+test('dxmt9-imported-apply-state-value-spec-offload',
+     imported_apply_state_value_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
 
 render_pass_actions_spec = executable(
   'dxmt9-render-pass-actions-spec',

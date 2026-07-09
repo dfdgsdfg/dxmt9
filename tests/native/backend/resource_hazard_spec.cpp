@@ -461,6 +461,40 @@ void checkEventKind(const std::vector<RecordedEvent>& events,
   check(events[index].kind == expected, message);
 }
 
+// device_c_chunk_replay.cpp's offload branch always replays with
+// skipDrawResourceMarking=false ("Deliberately NOT didBulkMarkResources" --
+// the worker's per-draw markDrawResources must re-pin resources at the real
+// append-time seqId instead of trusting the app-thread bulk mark's
+// nextSeqId_ snapshot, R-BACK-2.51 hardening). That means the
+// SetSkipDrawResourceMarking(true)/(false) bracket events the sync-path
+// assertions below expect never fire under DXMT9_OFFLOAD_COMMIT_REPLAY=1.
+// Mirror production's own env parsing
+// (dxmt9::d3d9::offloadCommitReplayEnabled(), device_c_replay_offload.cpp)
+// so event-shape assertions can adapt instead of hard-coding a shape that
+// only holds for the synchronous replay path.
+bool offloadReplayActive() {
+  static const bool active = [] {
+    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+  }();
+  return active;
+}
+
+// Sync-shaped event count, adjusted for the offload path's missing pair of
+// SetSkipDrawResourceMarking bracket events (present in the sync shape,
+// absent entirely when offload is active).
+std::size_t expectedEventCount(std::size_t syncCount) {
+  return offloadReplayActive() ? syncCount - 2u : syncCount;
+}
+
+// Sync-shaped event index for an event that sits strictly between the two
+// SetSkipDrawResourceMarking brackets (i.e. not the leading
+// MarkChunkResources at index 0, and not either bracket itself), adjusted
+// for the offload path's missing leading bracket.
+std::size_t midEventIndex(std::size_t syncIndex) {
+  return offloadReplayActive() ? syncIndex - 1u : syncIndex;
+}
+
 void testImportedChunkBulkRetentionAndBarrierOrdering() {
   auto upper = std::make_unique<RecordingDxmt9Device>();
   auto* recorder = upper.get();
@@ -548,31 +582,41 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment:
+    // this harness's D9C* wire objects are stack-scoped locals, so under
+    // DXMT9_OFFLOAD_COMMIT_REPLAY=1 the caller must fence against the
+    // offload worker before those locals (or the enclosing D9CDevice) start
+    // unwinding. No-op when offload is disabled.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(9),
+    checkEq(recorder->events.size(), expectedEventCount(9u),
             "imported chunk event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "bulk retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "per-draw retention skip is enabled before replay");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "per-draw retention skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "per-draw retention skip is enabled before replay");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "per-draw retention skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "first draw is replayed after retention");
-    checkEventKind(recorder->events, 3u, EventKind::SubmitClear,
+    checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitClear,
                    "clear barrier remains ordered after first draw");
-    checkEventKind(recorder->events, 4u, EventKind::SubmitDraw,
+    checkEventKind(recorder->events, midEventIndex(4u), EventKind::SubmitDraw,
                    "second draw remains ordered after clear");
-    checkEventKind(recorder->events, 5u, EventKind::SubmitReadback,
+    checkEventKind(recorder->events, midEventIndex(5u), EventKind::SubmitReadback,
                    "readback boundary is submitted after second draw");
-    checkEventKind(recorder->events, 6u, EventKind::Flush,
+    checkEventKind(recorder->events, midEventIndex(6u), EventKind::Flush,
                    "readback boundary flushes synchronously");
-    checkEventKind(recorder->events, 7u, EventKind::SubmitSurfaceCopy,
+    checkEventKind(recorder->events, midEventIndex(7u), EventKind::SubmitSurfaceCopy,
                    "readback fallback copy remains after synchronous flush");
-    checkEventKind(recorder->events, 8u, EventKind::SetSkipDrawResourceMarking,
-                   "per-draw retention skip resets after replay");
-    check(!recorder->events[8].skipDrawResourceMarking,
-          "per-draw retention skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 8u, EventKind::SetSkipDrawResourceMarking,
+                     "per-draw retention skip resets after replay");
+      check(!recorder->events[8].skipDrawResourceMarking,
+            "per-draw retention skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -587,7 +631,7 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
                               readbackTarget->handle()),
           "bulk retention includes readback target handle");
 
-    const auto& firstDrawRun = recorder->events[2].drawRun;
+    const auto& firstDrawRun = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(firstDrawRun.draws.size(), static_cast<std::size_t>(1),
             "first draw run contains one imported draw param");
     check(firstDrawRun.hot == firstDrawRun.state.hot,
@@ -621,7 +665,7 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
     check(firstDrawRun.draws[0].userIndexRange.empty(),
           "first draw has no user index payload");
 
-    const auto& secondDrawRun = recorder->events[4].drawRun;
+    const auto& secondDrawRun = recorder->events[midEventIndex(4u)].drawRun;
     checkEq(secondDrawRun.draws.size(), static_cast<std::size_t>(1),
             "second draw run contains one imported draw param");
     check(secondDrawRun.hot == secondDrawRun.state.hot,
@@ -642,9 +686,9 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
             "second draw binding stream offset");
     checkEq(secondBinding.streams[0].stride, 16u,
             "second draw binding stream stride");
-    checkEq(recorder->events[5].readback.source.value, renderTarget->handle().value,
+    checkEq(recorder->events[midEventIndex(5u)].readback.source.value, renderTarget->handle().value,
             "readback source handle");
-    checkEq(recorder->events[5].readback.destination.value,
+    checkEq(recorder->events[midEventIndex(5u)].readback.destination.value,
             readbackTarget->handle().value, "readback destination handle");
   }
 
@@ -748,29 +792,35 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit readback-split imported draw-run chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(8),
+    checkEq(recorder->events.size(), expectedEventCount(8u),
             "readback-split event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "readback-split bulk retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "readback-split enables bulk-retention skip");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "readback-split bulk-retention skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "readback-split enables bulk-retention skip");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "readback-split bulk-retention skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "draws before readback submit as one run");
-    checkEventKind(recorder->events, 3u, EventKind::SubmitReadback,
+    checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitReadback,
                    "readback follows the coalesced draw run");
-    checkEventKind(recorder->events, 4u, EventKind::Flush,
+    checkEventKind(recorder->events, midEventIndex(4u), EventKind::Flush,
                    "readback forces a synchronous flush before fallback copy");
-    checkEventKind(recorder->events, 5u, EventKind::SubmitSurfaceCopy,
+    checkEventKind(recorder->events, midEventIndex(5u), EventKind::SubmitSurfaceCopy,
                    "readback fallback copy stays before later draws");
-    checkEventKind(recorder->events, 6u, EventKind::SubmitDraw,
+    checkEventKind(recorder->events, midEventIndex(6u), EventKind::SubmitDraw,
                    "draw after readback starts a new run");
-    checkEventKind(recorder->events, 7u, EventKind::SetSkipDrawResourceMarking,
-                   "readback-split resets bulk-retention skip");
-    check(!recorder->events[7].skipDrawResourceMarking,
-          "readback-split bulk-retention skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 7u, EventKind::SetSkipDrawResourceMarking,
+                     "readback-split resets bulk-retention skip");
+      check(!recorder->events[7].skipDrawResourceMarking,
+            "readback-split bulk-retention skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -785,7 +835,7 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
                               readbackTarget->handle()),
           "readback-split retention includes readback target");
 
-    const auto& beforeReadback = recorder->events[2].drawRun;
+    const auto& beforeReadback = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(beforeReadback.draws.size(), static_cast<std::size_t>(2),
             "pre-readback draw run keeps both param-only draws");
     checkEq(beforeReadback.hot.colorAttachments[0].handle.value,
@@ -809,13 +859,13 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
     check(beforeReadback.payloadArena.empty(),
           "pre-readback run has no UP payload arena");
 
-    checkEq(recorder->events[3].readback.source.value,
+    checkEq(recorder->events[midEventIndex(3u)].readback.source.value,
             renderTarget->handle().value, "readback-split source handle");
-    checkEq(recorder->events[3].readback.destination.value,
+    checkEq(recorder->events[midEventIndex(3u)].readback.destination.value,
             readbackTarget->handle().value,
             "readback-split destination handle");
 
-    const auto& afterReadback = recorder->events[6].drawRun;
+    const auto& afterReadback = recorder->events[midEventIndex(6u)].drawRun;
     checkEq(afterReadback.draws.size(), static_cast<std::size_t>(1),
             "post-readback draw run is not merged across readback");
     checkEq(afterReadback.hot.colorAttachments[0].handle.value,
@@ -928,21 +978,27 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported indexed draw chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+    checkEq(recorder->events.size(), expectedEventCount(4u),
             "imported indexed draw event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "indexed bulk retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "indexed replay enables bulk-retention skip");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "indexed replay bulk-retention skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "indexed replay enables bulk-retention skip");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "indexed replay bulk-retention skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "indexed draw is submitted after retention");
-    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                   "indexed replay resets bulk-retention skip");
-    check(!recorder->events[3].skipDrawResourceMarking,
-          "indexed replay bulk-retention skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                     "indexed replay resets bulk-retention skip");
+      check(!recorder->events[3].skipDrawResourceMarking,
+            "indexed replay bulk-retention skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -957,7 +1013,7 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
                               indexBuffer->handle()),
           "indexed retention includes index buffer handle");
 
-    const auto& drawRun = recorder->events[2].drawRun;
+    const auto& drawRun = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(drawRun.draws.size(), static_cast<std::size_t>(1),
             "indexed imported draw run contains one draw param");
     check(drawRun.hot == drawRun.state.hot,
@@ -1095,23 +1151,29 @@ void testImportedSurfaceOpsPreserveBoundaryPayloads() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported surface-op chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(5),
+    checkEq(recorder->events.size(), expectedEventCount(5u),
             "surface-op import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "surface-op retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "surface-op replay enables bulk-retention skip");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "surface-op bulk-retention skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitStretchRect,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "surface-op replay enables bulk-retention skip");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "surface-op bulk-retention skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitStretchRect,
                    "stretch rect submits after retention");
-    checkEventKind(recorder->events, 3u, EventKind::SubmitColorFill,
+    checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitColorFill,
                    "color fill remains ordered after stretch");
-    checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
-                   "surface-op replay resets bulk-retention skip");
-    check(!recorder->events[4].skipDrawResourceMarking,
-          "surface-op bulk-retention skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
+                     "surface-op replay resets bulk-retention skip");
+      check(!recorder->events[4].skipDrawResourceMarking,
+            "surface-op bulk-retention skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1126,7 +1188,7 @@ void testImportedSurfaceOpsPreserveBoundaryPayloads() {
                               fillTarget->handle()),
           "surface-op retention includes color-fill target");
 
-    const auto& stretchDesc = recorder->events[2].stretchRect;
+    const auto& stretchDesc = recorder->events[midEventIndex(2u)].stretchRect;
     checkEq(stretchDesc.source.value, source->handle().value,
             "stretch boundary source handle");
     checkEq(stretchDesc.destination.value, destination->handle().value,
@@ -1142,7 +1204,7 @@ void testImportedSurfaceOpsPreserveBoundaryPayloads() {
     checkEq(stretchDesc.destinationSampleCount, 1u,
             "stretch boundary destination sample count default");
 
-    const auto& colorDesc = recorder->events[3].colorFill;
+    const auto& colorDesc = recorder->events[midEventIndex(3u)].colorFill;
     checkEq(colorDesc.destination.value, fillTarget->handle().value,
             "color-fill boundary destination handle");
     check(colorDesc.hasRect, "color-fill boundary preserves rect flag");
@@ -1308,17 +1370,23 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported indexed draw-run chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+    checkEq(recorder->events.size(), expectedEventCount(4u),
             "indexed draw-run import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "indexed draw-run bulk retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "indexed draw-run replay enables bulk-retention skip");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "indexed draw-run replay enables bulk-retention skip");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "stateful and param-only indexed records coalesce");
-    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                   "indexed draw-run replay resets bulk-retention skip");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                     "indexed draw-run replay resets bulk-retention skip");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1333,7 +1401,7 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
                               indexBuffer->handle()),
           "indexed draw-run retention includes index buffer");
 
-    const auto& run = recorder->events[2].drawRun;
+    const auto& run = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(run.draws.size(), static_cast<std::size_t>(3),
             "stateful and param-only imported indexed records submit as one draw run");
     check(run.hot == run.state.hot,
@@ -1467,21 +1535,27 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit scoped-handle imported draw chunk");
+    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment.
+    dxmt9::d3d9::drainDeferredReplay(&cDevice);
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+    checkEq(recorder->events.size(), expectedEventCount(4u),
             "scoped-handle import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "scoped-handle bulk retention happens first");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "scoped-handle replay enables bulk-retention skip");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "scoped-handle bulk-retention skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "scoped-handle replay enables bulk-retention skip");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "scoped-handle bulk-retention skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "scoped-handle draw submits after retention");
-    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                   "scoped-handle replay resets bulk-retention skip");
-    check(!recorder->events[3].skipDrawResourceMarking,
-          "scoped-handle bulk-retention skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                     "scoped-handle replay resets bulk-retention skip");
+      check(!recorder->events[3].skipDrawResourceMarking,
+            "scoped-handle bulk-retention skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(2),
@@ -1499,7 +1573,7 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
                                unusedBuffer->handle()),
           "scoped retention excludes out-of-range buffer handle");
 
-    const auto& drawRun = recorder->events[2].drawRun;
+    const auto& drawRun = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(drawRun.draws.size(), static_cast<std::size_t>(1),
             "scoped-handle draw run contains one draw");
     checkEq(drawRun.hot.colorAttachments[0].handle.value,

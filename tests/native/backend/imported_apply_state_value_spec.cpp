@@ -349,7 +349,27 @@ int32_t commitWireChunk(D9CDevice& cDevice,
   chunk.records = wireHandleFromPtr(wireBlob.data());
   chunk.handleCount = handleCount;
   chunk.handles = {};
-  return dxmt9c_device_commit_chunk(&cDevice, &chunk);
+  const int32_t hr = dxmt9c_device_commit_chunk(&cDevice, &chunk);
+  // This harness passes raw stack-object addresses as wire handles
+  // (wireHandleFromPtr below the caller's D9C* locals), unlike production PE
+  // callers whose D9C* wrappers are heap-allocated and stay alive across the
+  // DXMT9_OFFLOAD_COMMIT_REPLAY=1 boundary purely because
+  // retainWrappersForOffload()'s addref (device_c_chunk_replay.cpp) governs
+  // an actual `delete`-on-zero lifetime. A refcount bump cannot extend a
+  // stack object's lifetime -- it is destroyed at scope exit regardless of
+  // the counter -- so callers who talk to D9CDevice directly (bypassing the
+  // generated dxmt9c_device_* bridge, whose every other entry point opens
+  // with a drainDeferredReplay() fence, see device_c_bridge_*.cpp) must ask
+  // for that fence explicitly before any wire-referenced local goes out of
+  // scope. Without it, the offload worker can still be resolving this
+  // chunk's rtHandles/dsHandle/etc. (applyDrawPacketStateDirect,
+  // device_c_chunk_replay.cpp:~1614) after the caller's stack locals -- and
+  // eventually the enclosing D9CDevice itself, whose destructor drains too
+  // late relative to its own scope siblings -- have already been destroyed,
+  // corrupting the heap. Cheap no-op when offload is disabled or the queue
+  // is already empty (drainDeferredReplay(), device_c_replay_offload.hpp).
+  dxmt9::d3d9::drainDeferredReplay(&cDevice);
+  return hr;
 }
 
 bool containsChunkHandle(const std::vector<ChunkHandleEntry>& entries,
@@ -374,6 +394,40 @@ void checkEventKind(const std::vector<RecordedEvent>& events,
                     std::string_view message) {
   check(index < events.size(), message);
   check(events[index].kind == expected, message);
+}
+
+// device_c_chunk_replay.cpp's offload branch always replays with
+// skipDrawResourceMarking=false ("Deliberately NOT didBulkMarkResources" --
+// the worker's per-draw markDrawResources must re-pin resources at the real
+// append-time seqId instead of trusting the app-thread bulk mark's
+// nextSeqId_ snapshot, R-BACK-2.51 hardening). That means the
+// SetSkipDrawResourceMarking(true)/(false) bracket events the sync-path
+// assertions below expect never fire under DXMT9_OFFLOAD_COMMIT_REPLAY=1.
+// Mirror production's own env parsing
+// (dxmt9::d3d9::offloadCommitReplayEnabled(), device_c_replay_offload.cpp)
+// so event-shape assertions can adapt instead of hard-coding a shape that
+// only holds for the synchronous replay path.
+bool offloadReplayActive() {
+  static const bool active = [] {
+    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
+    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+  }();
+  return active;
+}
+
+// Sync-shaped event count, adjusted for the offload path's missing pair of
+// SetSkipDrawResourceMarking bracket events (present in the sync shape,
+// absent entirely when offload is active).
+std::size_t expectedEventCount(std::size_t syncCount) {
+  return offloadReplayActive() ? syncCount - 2u : syncCount;
+}
+
+// Sync-shaped event index for an event that sits strictly between the two
+// SetSkipDrawResourceMarking brackets (i.e. not the leading
+// MarkChunkResources at index 0, and not either bracket itself), adjusted
+// for the offload path's missing leading bracket.
+std::size_t midEventIndex(std::size_t syncIndex) {
+  return offloadReplayActive() ? syncIndex - 1u : syncIndex;
 }
 
 Matrix4x4 identityMatrix() {
@@ -981,22 +1035,26 @@ void testImportedApplyStateAndSetConstValuePropagation() {
                             static_cast<std::uint32_t>(handles.size())),
             D3D_OK, "commit imported value chunk");
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(5),
+    checkEq(recorder->events.size(), expectedEventCount(5u),
             "imported value event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "imported value bulk retention event");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "imported value skip enabled event");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "imported value skip enabled");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "imported value skip enabled event");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "imported value skip enabled");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "FVF clearing draw event");
-    checkEventKind(recorder->events, 3u, EventKind::SubmitDraw,
+    checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitDraw,
                    "rich indexed draw event");
-    checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
-                   "imported value skip disabled event");
-    check(!recorder->events[4].skipDrawResourceMarking,
-          "imported value skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
+                     "imported value skip disabled event");
+      check(!recorder->events[4].skipDrawResourceMarking,
+            "imported value skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(5),
@@ -1017,7 +1075,7 @@ void testImportedApplyStateAndSetConstValuePropagation() {
                               indexBuffer->handle()),
           "retention includes index buffer");
 
-    const auto& fvfClearedRun = recorder->events[2].drawRun;
+    const auto& fvfClearedRun = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(fvfClearedRun.draws.size(), static_cast<std::size_t>(1),
             "FVF clear draw count");
     check(!fvfClearedRun.draws[0].indexed, "FVF clear draw is non-indexed");
@@ -1030,7 +1088,7 @@ void testImportedApplyStateAndSetConstValuePropagation() {
     checkEq(fvfClearedRun.hot.key.fvf, 0x142u,
             "FVF clear flat key keeps FVF");
 
-    assertRichDrawRunValues(recorder->events[3].drawRun, texture, vertexBuffer,
+    assertRichDrawRunValues(recorder->events[midEventIndex(3u)].drawRun, texture, vertexBuffer,
                             indexBuffer, renderTarget, depthStencil, vertexDecl,
                             vertexShader, pixelShader, textureTransform,
                             clipPlane);
@@ -1300,20 +1358,24 @@ void testImportedSparseRtAndDepthStencilBindingBoundary() {
                             static_cast<std::uint32_t>(handles.size())),
             D3D_OK, "commit sparse RT/DS imported chunk");
 
-    checkEq(recorder->events.size(), static_cast<std::size_t>(4),
+    checkEq(recorder->events.size(), expectedEventCount(4u),
             "sparse RT/DS import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "sparse RT/DS retention event");
-    checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                   "sparse RT/DS skip enabled event");
-    checkEventKind(recorder->events, 2u, EventKind::SubmitDraw,
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
+                     "sparse RT/DS skip enabled event");
+    }
+    checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "sparse RT/DS draw event");
-    checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                   "sparse RT/DS skip disabled event");
-    check(recorder->events[1].skipDrawResourceMarking,
-          "sparse RT/DS skip enabled");
-    check(!recorder->events[3].skipDrawResourceMarking,
-          "sparse RT/DS skip disabled");
+    if (!offloadReplayActive()) {
+      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
+                     "sparse RT/DS skip disabled event");
+      check(recorder->events[1].skipDrawResourceMarking,
+            "sparse RT/DS skip enabled");
+      check(!recorder->events[3].skipDrawResourceMarking,
+            "sparse RT/DS skip disabled");
+    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1342,7 +1404,7 @@ void testImportedSparseRtAndDepthStencilBindingBoundary() {
     checkEq(state.depthStencil.sampleCount, 2u,
             "sparse import state DS sample count");
 
-    const auto& run = recorder->events[2].drawRun;
+    const auto& run = recorder->events[midEventIndex(2u)].drawRun;
     checkEq(run.draws.size(), static_cast<std::size_t>(1),
             "sparse RT/DS draw run count");
     checkEq(run.draws[0].startVertex, 7u,
