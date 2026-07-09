@@ -468,16 +468,13 @@ void checkEventKind(const std::vector<RecordedEvent>& events,
 // nextSeqId_ snapshot, R-BACK-2.51 hardening). That means the
 // SetSkipDrawResourceMarking(true)/(false) bracket events the sync-path
 // assertions below expect never fire under DXMT9_OFFLOAD_COMMIT_REPLAY=1.
-// Mirror production's own env parsing
+// Delegate to the production resolver
 // (dxmt9::d3d9::offloadCommitReplayEnabled(), device_c_replay_offload.cpp)
 // so event-shape assertions can adapt instead of hard-coding a shape that
-// only holds for the synchronous replay path.
+// only holds for the synchronous replay path. A local copy of the parse
+// drifted once when the engine default flipped on — do not reintroduce it.
 bool offloadReplayActive() {
-  static const bool active = [] {
-    const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return active;
+  return dxmt9::d3d9::offloadCommitReplayEnabled();
 }
 
 // Sync-shaped event count, adjusted for the offload path's missing pair of

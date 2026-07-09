@@ -1094,8 +1094,24 @@ bool probeOptimizeIndexedTrianglesVertexCache() {
 }
 
 bool optimizeOpaqueDepthIndexCache() {
-  static const bool v =
-      util::getenvFlag("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE");
+  // Default couples to the commit-replay offload (R-BACK-2.51 pair): the
+  // reorder candidate/lookup CPU tax is only absorbed when the offload
+  // worker exists, so unset follows DXMT9_OFFLOAD_COMMIT_REPLAY (itself
+  // default-on; explicit "0" opts out — parse mirrors the canonical
+  // resolver in device_c_replay_offload.cpp, duplicated here because the
+  // dxmt9 layer must not link upward into the d3d9 layer). An explicit
+  // DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE value forces on/off.
+  static const bool v = [] {
+    const char* own = std::getenv("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE");
+    if (own && own[0] != '\0') {
+      return !(own[0] == '0' && own[1] == '\0');
+    }
+    const char* offload = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
+    if (!offload || offload[0] == '\0') {
+      return true;
+    }
+    return !(offload[0] == '0' && offload[1] == '\0');
+  }();
   return v;
 }
 

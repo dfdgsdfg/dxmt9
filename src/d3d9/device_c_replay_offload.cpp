@@ -50,9 +50,16 @@ class PerfScope {
 }  // namespace
 
 bool offloadCommitReplayEnabled() {
+  // Engine default flipped to ON (R-BACK-2.51 promotion, 2026-07-10) after
+  // the per-present boundary suppression + ordinal latency cap landed and
+  // the offload-forced native spec variants went green. Explicit "0" is the
+  // opt-out; any other value (or unset) enables the offload.
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+    if (!value || value[0] == '\0') {
+      return true;
+    }
+    return !(value[0] == '0' && value[1] == '\0');
   }();
   return enabled;
 }
