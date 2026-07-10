@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H216` - The promoted trio becomes the engine default (`d45af067`): pure no-env proof at `2,220` presents with trio counters live and per-present boundary suppression exact.
+Latest tracked row: `H217` - Rejected open-CB/tail-present/fs-half experiment lanes removed (`6379d5c8`, -6,428 lines); default path byte-identical, TLA green, engine-default smoke at 2,220 presents.
 
 ## Start Here
 
