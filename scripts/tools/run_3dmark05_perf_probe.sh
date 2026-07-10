@@ -47,19 +47,6 @@ pe_chunk_max_records=${DXMT9_PE_CHUNK_MAX_RECORDS:-}
 pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
 dxmt_log_level=${DXMT_LOG_LEVEL:-}
 present_boundary_deferred=${DXMT9_PRESENT_BOUNDARY_DEFERRED:-0}
-open_cb_preencode_tail_present=${DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT:-0}
-open_cb_carry_render_session=${DXMT9_OPEN_CB_CARRY_RENDER_SESSION:-0}
-open_cb_semantic_boundary_publish=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH:-0}
-open_cb_cpu_ready_command_limit=${DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT:-}
-open_cb_writer_active_cpu_ready_publish=${DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH:-0}
-open_cb_active_wait_cpu_ready_append=${DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND:-0}
-open_cb_wait_start_cpu_ready_publish=${DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH:-0}
-open_cb_draw_attachment_boundary_publish=${DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH:-0}
-open_cb_draw_continuation_boundary_publish=${DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH:-0}
-open_cb_draw_continuation_command_limit=${DXMT9_OPEN_CB_DRAW_CONTINUATION_COMMAND_LIMIT:-}
-open_cb_semantic_boundary_release_mode=${DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE:-}
-open_cb_pending_tail_wait_us=${DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US:-}
-stage_pre_present_command_limit=${DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT:-}
 draw_chunk_command_limit=${DXMT9_DRAW_CHUNK_COMMAND_LIMIT:-}
 enable_chunk_end_carry=${DXMT9_ENABLE_CHUNK_END_CARRY:-0}
 recommended_gputrace_min_free_mb=2048
@@ -716,62 +703,6 @@ Options:
                       present-completion frame-latency wait moves to the next
                       Present tail, allowing producer run-ahead before the
                       final present submission is gated.
-  --open-cb-preencode-tail-present
-                      Set DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1 for the
-                      open-command-buffer P4 carrier.
-  --open-cb-carry-render-session
-                      Set DXMT9_OPEN_CB_CARRY_RENDER_SESSION=1 so the open-CB
-                      carrier keeps EncodeChunkSession state alive until the
-                      Present tail finalizes the shared command buffer.
-  --open-cb-semantic-boundary-publish
-                      Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=1 so
-                      semantic non-draw commands publish the preceding
-                      non-present source for the open-CB carrier.
-  --open-cb-cpu-ready-command-limit N
-                      Set DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT=N so draw
-                      submit publishes non-present SemanticBoundary sources
-                      deterministically when the writing slot reaches N commands.
-  --open-cb-writer-active-cpu-ready-publish
-                      Set DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH=1 so
-                      H161 writer-active non-present writing-slot misses are
-                      cut as CPU-ready semantic sources for the open-CB carrier.
-  --open-cb-active-wait-cpu-ready-append
-                      Set DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=1 so an
-                      active completion wait may cut current writer work as a
-                      semantic CPU-ready source and append compatible ready
-                      sources to the pending EncodeSession before release.
-  --open-cb-wait-start-cpu-ready-publish
-                      Set DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH=1 so an
-                      active completion wait may cut current writer work as a
-                      semantic CPU-ready source before a pending EncodeSession
-                      exists, including producer-side draw appends that happen
-                      after the wait-start wakeup.
-  --open-cb-draw-attachment-boundary-publish
-                      Set DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH=1 so
-                      producer-side draw appends publish the current non-present
-                      writing slot before a draw attachment-key change.
-  --open-cb-draw-continuation-boundary-publish
-                      Set DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH=1 so
-                      producer-side draw appends publish the current non-present
-                      draw-tail slot before a same-attachment draw. This creates
-                      a metadata-only draw-to-draw source boundary for
-                      EncodeSession pass-streaming probes.
-  --open-cb-draw-continuation-command-limit N
-                      Set DXMT9_OPEN_CB_DRAW_CONTINUATION_COMMAND_LIMIT=N so
-                      draw-continuation source publication only fires after the
-                      current non-present slot reaches N commands.
-  --open-cb-semantic-boundary-release-mode MODE
-                      Set DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=MODE.
-                      Accepted values follow the runtime: completion_wait or
-                      deterministic.
-  --open-cb-pending-tail-wait-us N
-                      Set DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US=N. When paired
-                      with open-CB carry, a tail-less pending head waits up to
-                      N microseconds for a Present tail before finalizing and
-                      submitting the head alone.
-  --stage-pre-present-command-limit N
-                      Set DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=N. Required
-                      for pre-Present head staging/open-CB split candidates.
   --draw-chunk-command-limit N
                       Set DXMT9_DRAW_CHUNK_COMMAND_LIMIT=N for ordinary
                       draw-limit source-boundary probes.
@@ -1806,58 +1737,6 @@ while (($#)); do
     --present-boundary-deferred)
       present_boundary_deferred=1
       shift
-      ;;
-    --open-cb-preencode-tail-present)
-      open_cb_preencode_tail_present=1
-      shift
-      ;;
-    --open-cb-carry-render-session)
-      open_cb_carry_render_session=1
-      shift
-      ;;
-    --open-cb-semantic-boundary-publish)
-      open_cb_semantic_boundary_publish=1
-      shift
-      ;;
-    --open-cb-cpu-ready-command-limit)
-      open_cb_cpu_ready_command_limit=${2:?missing value for --open-cb-cpu-ready-command-limit}
-      shift 2
-      ;;
-    --open-cb-writer-active-cpu-ready-publish)
-      open_cb_writer_active_cpu_ready_publish=1
-      shift
-      ;;
-    --open-cb-active-wait-cpu-ready-append)
-      open_cb_active_wait_cpu_ready_append=1
-      shift
-      ;;
-    --open-cb-wait-start-cpu-ready-publish)
-      open_cb_wait_start_cpu_ready_publish=1
-      shift
-      ;;
-    --open-cb-draw-attachment-boundary-publish)
-      open_cb_draw_attachment_boundary_publish=1
-      shift
-      ;;
-    --open-cb-draw-continuation-boundary-publish)
-      open_cb_draw_continuation_boundary_publish=1
-      shift
-      ;;
-    --open-cb-draw-continuation-command-limit)
-      open_cb_draw_continuation_command_limit=${2:?missing value for --open-cb-draw-continuation-command-limit}
-      shift 2
-      ;;
-    --open-cb-semantic-boundary-release-mode)
-      open_cb_semantic_boundary_release_mode=${2:?missing value for --open-cb-semantic-boundary-release-mode}
-      shift 2
-      ;;
-    --open-cb-pending-tail-wait-us)
-      open_cb_pending_tail_wait_us=${2:?missing value for --open-cb-pending-tail-wait-us}
-      shift 2
-      ;;
-    --stage-pre-present-command-limit)
-      stage_pre_present_command_limit=${2:?missing value for --stage-pre-present-command-limit}
-      shift 2
       ;;
     --draw-chunk-command-limit)
       draw_chunk_command_limit=${2:?missing value for --draw-chunk-command-limit}
@@ -3269,13 +3148,6 @@ if (( require_xcode_attach_preflight )) &&
   exit 2
 fi
 
-if [[ -n "$open_cb_semantic_boundary_release_mode" &&
-      "$open_cb_semantic_boundary_release_mode" != "completion_wait" &&
-      "$open_cb_semantic_boundary_release_mode" != "deterministic" ]]; then
-  echo "--open-cb-semantic-boundary-release-mode must be completion_wait or deterministic" >&2
-  exit 2
-fi
-
 if (( with_wine_capture_layer )) && (( ! capture_gputrace )); then
   echo "--with-wine-capture-layer requires a file .gputrace capture; remove --no-gputrace" >&2
   exit 2
@@ -4384,58 +4256,6 @@ fi
 
 if [[ "$present_boundary_deferred" != "0" && -n "$present_boundary_deferred" ]]; then
   env_args+=("DXMT9_PRESENT_BOUNDARY_DEFERRED=$present_boundary_deferred")
-fi
-
-if [[ "$open_cb_preencode_tail_present" != "0" && -n "$open_cb_preencode_tail_present" ]]; then
-  env_args+=("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=$open_cb_preencode_tail_present")
-fi
-
-if [[ "$open_cb_carry_render_session" != "0" && -n "$open_cb_carry_render_session" ]]; then
-  env_args+=("DXMT9_OPEN_CB_CARRY_RENDER_SESSION=$open_cb_carry_render_session")
-fi
-
-if [[ "$open_cb_semantic_boundary_publish" != "0" && -n "$open_cb_semantic_boundary_publish" ]]; then
-  env_args+=("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=$open_cb_semantic_boundary_publish")
-fi
-
-if [[ -n "$open_cb_cpu_ready_command_limit" ]]; then
-  env_args+=("DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT=$open_cb_cpu_ready_command_limit")
-fi
-
-if [[ "$open_cb_writer_active_cpu_ready_publish" != "0" && -n "$open_cb_writer_active_cpu_ready_publish" ]]; then
-  env_args+=("DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH=$open_cb_writer_active_cpu_ready_publish")
-fi
-
-if [[ "$open_cb_active_wait_cpu_ready_append" != "0" && -n "$open_cb_active_wait_cpu_ready_append" ]]; then
-  env_args+=("DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND=$open_cb_active_wait_cpu_ready_append")
-fi
-
-if [[ "$open_cb_wait_start_cpu_ready_publish" != "0" && -n "$open_cb_wait_start_cpu_ready_publish" ]]; then
-  env_args+=("DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH=$open_cb_wait_start_cpu_ready_publish")
-fi
-
-if [[ "$open_cb_draw_attachment_boundary_publish" != "0" && -n "$open_cb_draw_attachment_boundary_publish" ]]; then
-  env_args+=("DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH=$open_cb_draw_attachment_boundary_publish")
-fi
-
-if [[ "$open_cb_draw_continuation_boundary_publish" != "0" && -n "$open_cb_draw_continuation_boundary_publish" ]]; then
-  env_args+=("DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH=$open_cb_draw_continuation_boundary_publish")
-fi
-
-if [[ -n "$open_cb_draw_continuation_command_limit" ]]; then
-  env_args+=("DXMT9_OPEN_CB_DRAW_CONTINUATION_COMMAND_LIMIT=$open_cb_draw_continuation_command_limit")
-fi
-
-if [[ -n "$open_cb_semantic_boundary_release_mode" ]]; then
-  env_args+=("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=$open_cb_semantic_boundary_release_mode")
-fi
-
-if [[ -n "$open_cb_pending_tail_wait_us" ]]; then
-  env_args+=("DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US=$open_cb_pending_tail_wait_us")
-fi
-
-if [[ -n "$stage_pre_present_command_limit" ]]; then
-  env_args+=("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=$stage_pre_present_command_limit")
 fi
 
 if [[ -n "$draw_chunk_command_limit" ]]; then

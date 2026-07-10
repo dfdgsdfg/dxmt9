@@ -4883,14 +4883,6 @@ constexpr u64 kFragmentSamplerShadowTag = 0x667261675f73616dull;
 constexpr u64 kVertexTextureShadowTag = 0x766572745f746578ull;
 constexpr u64 kVertexSamplerShadowTag = 0x766572745f73616dull;
 
-bool splitPresentBeforeAcquireEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_SPLIT_PRESENT_ACQUIRE");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
-  return enabled;
-}
-
 bool presentBoundaryAfterAcquireEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PRESENT_BOUNDARY_AFTER_ACQUIRE");
@@ -15543,30 +15535,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     commandBufferHasWork = true;
   }
 
-  auto splitBeforeBlockingPresent = [&] {
-    if (injectedCommandBuffer ||
-        options.disablePresentAcquireSplit ||
-        !splitPresentBeforeAcquireEnabled() ||
-        !commandBufferHasWork) {
-      return;
-    }
-    auto presentCommandBuffer = ctx.queue.newCommandBuffer();
-    if (!presentCommandBuffer) {
-      return;
-    }
-    const auto commitStarted = std::chrono::steady_clock::now();
-    commandBuffer.commit();
-    perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - commitStarted).count()));
-    commandBuffer = std::move(presentCommandBuffer);
-    commandBufferHasWork = false;
-  };
-
-  // R-BACK-2.29..2.32 — mid-chunk MTLCommandBuffer split. Mirrors
-  // splitBeforeBlockingPresent exactly: open the next sub-CB on the same
-  // queue, commit the current one (timing the commit), swap, and reset the
-  // hasWork bit. CRITICAL invariants:
+  // R-BACK-2.29..2.32 — mid-chunk MTLCommandBuffer split: open the next
+  // sub-CB on the same queue, commit the current one (timing the commit),
+  // swap, and reset the hasWork bit. CRITICAL invariants:
   //   * Must NEVER be called while an encoder is active. The natural call
   //     site after flushRender(non-Final) already satisfies this — flushRender
   //     ends the active render encoder. Helper-encoder paths
@@ -15575,8 +15546,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   //     also safe. Callers must ensure flushBlit() has run if a blit encoder
   //     could be open.
   //   * Must NEVER be called between the present record's encoder open and
-  //     the chain tail. The Present arm flushes + calls
-  //     splitBeforeBlockingPresent already; do NOT add another split there.
+  //     the chain tail; the Present arm flushes before the tail commit and
+  //     does not split there.
   // Sub-CB completion order is guaranteed by Metal's same-queue in-order
   // submission (R-BACK-2.32). Per-chunk commits (mid + final) are folded
   // into chunkSubCBCountMax via updateMax at chunk exit so the table
@@ -16199,7 +16170,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // promote the present-bearing CB out of the chain tail position and
     // violate the "present metadata on the last sub-CB only" rule.
     // Suppress the per-N-records split immediately after a Present
-    // record; splitBeforeBlockingPresent owns the present-tail boundary.
+    // record; the present-tail boundary is not split further here.
     ++recordsSinceLastSplit;
     if (commitPolicy == MidChunkCommitPolicy::PerNRecords &&
         recordsSinceLastSplit >= splitNRecords &&
@@ -16384,7 +16355,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushPendingClear();
         flushRender(perf::EncoderSplitReason::Present);
         flushBlit();
-        splitBeforeBlockingPresent();
         // Resolve the queue-local Presenter binding once per Present
         // packet and reclaim any acquire-before-present token stashed by
         // submitPresent. A stale PresentId (swapchain destroyed since

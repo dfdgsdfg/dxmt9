@@ -625,51 +625,11 @@ class QueueLifecycleController {
   size_t dequeueReadySlotBatch(std::unique_lock<std::mutex>& lock,
                                std::span<ReadySlotSnapshot> out,
                                const ReadySlotBatchAppendPredicate& canAppend = {});
-  // TLA+: EncodeDequeue for a caller-selected ready-slot prefix. The selector
-  // must only return a FIFO prefix length. Returning zero falls back to the
-  // legacy single-source dequeue so incomplete multi-source patterns cannot
-  // be consumed accidentally.
-  size_t dequeueReadySlotBatchPrefix(std::unique_lock<std::mutex>& lock,
-                                     std::span<ReadySlotSnapshot> out,
-                                     const ReadySlotBatchPrefixSelector& selectPrefix);
-  // Visibility-only staging for tail-Present overlap experiments. The slot
-  // remains Pending/in-flight, but is removed from encode-visible readySlots
-  // until a later Present-only tail releases it back before the tail source.
-  bool stageLastReadySlot(std::unique_lock<std::mutex>& lock,
-                          std::deque<size_t>& stagedSlots,
-                          size_t expectedSlotIndex);
-  size_t releaseStagedSlotsBeforeReadyTail(std::unique_lock<std::mutex>& lock,
-                                           std::deque<size_t>& stagedSlots,
-                                           size_t tailSlotIndex);
-  // Encoded-head carrier for open-CB / pending-tail experiments. Sources must
-  // already be dequeued into Encoding state; this records their completion
-  // identity without making them ready-visible or GPU-complete.
-  size_t retainEncodedSourcesForPendingTail(std::unique_lock<std::mutex>& lock,
-                                            std::span<const ReadySlotSnapshot> sources,
-                                            std::span<QueueCompletionSource> out);
-  // Fail-open path for a multi-source batch whose backend submitted only a
-  // strict encoded prefix. The suffix was dequeued to Encoding but is not
-  // represented by the returned Metal tail, so restore it to the front of
-  // readySlots in FIFO order instead of completing it inline.
-  size_t requeueUnsubmittedBatchSources(std::unique_lock<std::mutex>& lock,
-                                        std::span<const ReadySlotSnapshot> sources);
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,
       const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
-  // TLA+: EncodeDequeue for a caller-provided batch, followed by
-  // EncodeSubmitToGpu for every source slot carried by the returned tail
-  // submission, or EncodeCompleteInline for every dequeued source slot.
-  // The caller owns `scratch`; no heap allocation is performed by dequeue.
-  bool runEncodeBatchIteration(
-      std::unique_lock<std::mutex>& lock,
-      std::span<ReadySlotSnapshot> scratch,
-      const std::function<std::optional<QueueSubmissionRecord>(
-          std::span<ReadySlotSnapshot>)>& encodeFn,
-      const std::function<void(u64)>& onInlineComplete = {},
-      const ReadySlotBatchAppendPredicate& canAppend = {},
-      const ReadySlotBatchPrefixSelector& selectPrefix = {});
   // TLA+: present-bearing metadata append before CommitPublish.
   void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
   // TLA+: EncodeSubmitToGpu.

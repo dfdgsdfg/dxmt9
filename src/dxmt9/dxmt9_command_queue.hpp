@@ -580,17 +580,8 @@ class CommandQueue {
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
           std::size_t slotIndex, core::ChunkSlot& slot)>;
-  using EncodeBatchFn =
-      std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
-          std::span<core::metalqueue::ReadySlotSnapshot> sources)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
-  void runEncodeBatchLoop(std::span<core::metalqueue::ReadySlotSnapshot> scratch,
-                          EncodeBatchFn encodeBatch,
-                          OnSubmittedFn onSubmitted,
-                          core::metalqueue::ReadySlotBatchAppendPredicate canAppend = {},
-                          core::metalqueue::ReadySlotBatchPrefixSelector selectPrefix = {});
-  void runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted);
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
@@ -655,7 +646,6 @@ class CommandQueue {
   size_t writeIndex_ = 0;
   size_t inflightCount_ = 0;
   std::deque<size_t> readySlots_{};
-  std::deque<size_t> stagedTailPresentSlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
   std::deque<std::uint64_t> completedPresentSeqQueue_{};
   std::condition_variable presentDequeuedCv_{};

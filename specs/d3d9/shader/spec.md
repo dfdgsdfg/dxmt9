@@ -258,10 +258,11 @@ state to disable the clamp.
 
 ## 4. Precision Inference Pass
 
-This pass is the architectural successor to the current text-rewrite
-`DXMT9_FS_HALF_PRECISION` path. It does not exist in the codebase today; a
-`gap.md` row tracks its implementation work. The design below specifies the
-shape it must have when implemented.
+This pass is the architectural successor to the removed text-rewrite
+`DXMT9_FS_HALF_PRECISION` carrier (retired as **EXPERIMENTAL — NOT
+FUNCTIONAL**; it compiled only ~33% of SFIV's fragment shaders). It does not
+exist in the codebase today; a `gap.md` row tracks its implementation work.
+The design below specifies the shape it must have when implemented.
 
 ### 4.1 Inputs and Outputs
 
@@ -382,7 +383,7 @@ These passes are the minimum set required for a correct default emit
 | VSOut liveness | `DXMT9_TRIM_UNUSED_VARYINGS` | implemented, opt-in | tracked |
 | Vertex temp-array trim | `DXMT9_TRIM_VERTEX_TEMPS` | implemented, opt-in | tracked |
 | VS output scratch trim | `DXMT9_TRIM_VS_OUTPUT_SCRATCH` | implemented, opt-in | tracked |
-| Precision inference (§4) | (target: extend `DXMT9_FS_HALF_PRECISION`) | not implemented | new row |
+| Precision inference (§4) | (target: new IR-level opt-in; supersedes the removed `DXMT9_FS_HALF_PRECISION` text-rewrite) | not implemented | new row |
 
 Each optional pass produces a value-type plan and participates in the cache
 key only when enabled (R-CORE-SHADER-4.7). When disabled, the emit must match
@@ -522,7 +523,7 @@ cacheKey = hash64(
     irHash,                              // §2 hash
     shaderSourceContextKey,              // FFP variant, prelude options, alpha-test
     enabledPassPlanHashes...,            // precision, VSOut layout, trim plans
-    halfPrecisionOptInBits,              // DXMT9_FS_HALF_PRECISION etc.
+    halfPrecisionOptInBits,              // future precision-inference opt-in
     debugToggleBits                      // V-flip, force-fragment-color, etc.
 )
 ```
@@ -836,8 +837,9 @@ refactoring; pinning it as a property forecloses that drift.
 
 Open gaps (live in `specs/d3d9/gap.md`):
 
-- **Precision inference pass** — not implemented; `DXMT9_FS_HALF_PRECISION`
-  text-rewrite covers ~33% of SFIV's FS. Successor design above (§4).
+- **Precision inference pass** — not implemented; the removed
+  `DXMT9_FS_HALF_PRECISION` text-rewrite covered only ~33% of SFIV's FS.
+  Successor design above (§4).
 - **VS-first half-precision diagnostic flag** — coarse
   `DXMT9_PROBE_HALF_VSOUT` / `enableHalfVSOut` is wired for mechanism
   probes; the production precision-inference pass and per-output plan are

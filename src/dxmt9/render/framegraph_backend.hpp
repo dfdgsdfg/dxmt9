@@ -56,10 +56,6 @@ class FrameGraphBackend final : public IRenderBackend {
       const core::ChunkSlot& slot,
       encoders::EncodeChunkOptions options = {}) override;
 
-  std::optional<core::metalqueue::QueueSubmissionRecord> onChunkBatchReady(
-      encoders::EncodeContext& ctx,
-      std::span<core::metalqueue::ReadySlotSnapshot> sources) override;
-
   BackendMode mode() const override { return BackendMode::FrameGraph; }
 
   // Resolved optimizer options for this backend (from the L0 feature set). At

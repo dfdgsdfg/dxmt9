@@ -87,14 +87,6 @@ bool vsoutEmitFogFactor(const VSOutLayout& layout) { return layout.fogFactor; }
 
 bool vsoutEmitPointSize(const VSOutLayout& layout) { return layout.pointSize; }
 
-bool fsHalfPrecisionEnabled() {
-  static const bool value = [] {
-    const char* env = std::getenv("DXMT9_FS_HALF_PRECISION");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return value;
-}
-
 std::string centroidAttribute(bool enabled) {
   return enabled ? " [[centroid_perspective]]" : "";
 }
@@ -403,19 +395,6 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "                  (mask & 4u) != 0u ? next.z : current.z,\n";
   out << "                  (mask & 8u) != 0u ? next.w : current.w);\n";
   out << "}\n";
-  if (fsHalfPrecisionEnabled()) {
-    // R-CODEGEN — half overloads of the two helpers actually called from
-    // FS bodies (dxmt9_merge: 71 SFIV calls, dxmt9_select_texcoord: 37).
-    // VS still uses the float-typed originals; FS-half rewrite (in
-    // dxmt9_shader_metal_ir.cpp::applyFsHalfPrecisionRewrite) renames
-    // these call sites to the _h variants.
-    out << "inline half4 dxmt9_merge_h(half4 current, half4 next, uint mask) {\n";
-    out << "  return half4((mask & 1u) != 0u ? next.x : current.x,\n";
-    out << "                 (mask & 2u) != 0u ? next.y : current.y,\n";
-    out << "                 (mask & 4u) != 0u ? next.z : current.z,\n";
-    out << "                 (mask & 8u) != 0u ? next.w : current.w);\n";
-    out << "}\n";
-  }
   out << "inline float dxmt9_load_f32(const device uchar* base, uint offset) {\n";
   out << "  return as_type<float>(*reinterpret_cast<const device uint*>(base + offset));\n";
   out << "}\n";
@@ -528,11 +507,6 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   }
   out << "  }\n";
   out << "}\n";
-  if (fsHalfPrecisionEnabled()) {
-    out << "inline half4 dxmt9_select_texcoord_h(VSOut in, uint index) {\n";
-    out << "  return half4(dxmt9_select_texcoord(in, index));\n";
-    out << "}\n";
-  }
   out << "inline float4 dxmt9_apply_texture_op(uint op, float4 arg1, float4 arg2, float4 current) {\n";
   out << "  switch (op) {\n";
   out << "    case 1u: return current;\n";

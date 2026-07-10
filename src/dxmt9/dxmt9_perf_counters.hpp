@@ -152,8 +152,6 @@ void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount);
-void countChunkPublishPresentSplitBeforeTail(ChunkPublishTailCommandKind kind,
-                                             bool drawOnly);
 void countChunkPublishPresentPrePresentOpportunityTail(
     ChunkPublishTailCommandKind kind, bool drawOnly);
 void countChunkPublishSlotResidency(ChunkPublishReason reason,
@@ -301,66 +299,6 @@ void countEncodeSessionCarryActiveEntryFirstDrawSplitHazard();
 void countEncodeSessionCarryActiveEntryFirstDrawSplitOther();
 void countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
     EncoderSplitReason reason);
-void countOpenCbTailPresentPendingStarted(bool completionWaitActive);
-void countOpenCbTailPresentPendingStartedTailReady(bool completionWaitActive);
-void countOpenCbTailPresentPendingStartedSemantic(bool completionWaitActive);
-void countOpenCbTailPresentPendingStartedOrdinary(bool completionWaitActive);
-void countOpenCbTailPresentPendingSuppressedNoTail();
-void countOpenCbTailPresentHeadAppended();
-void countOpenCbTailPresentHeadAppendedSemantic();
-void countOpenCbTailPresentHeadAppendedOrdinary();
-void countOpenCbTailPresentTailAppended();
-void countOpenCbTailPresentTailSubmitted();
-void countOpenCbTailPresentPendingTailWaitTimeout();
-void countOpenCbTailPresentPendingTimeoutSubmitted();
-void countOpenCbTailPresentPendingAbandonedNoReady();
-void countOpenCbTailPresentPendingAbandonedNonAppendable();
-void countOpenCbTailPresentPendingAbandonedRetainFailed();
-void countOpenCbTailPresentPendingAbandonedEncodeNull();
-void countOpenCbTailPresentPendingMergeFailed();
-void countOpenCbTailPresentSelectorTailPrefix(std::uint64_t sourceCount,
-                                              bool completionWaitActive);
-void countOpenCbTailPresentSelectorSemanticPrefix(std::uint64_t sourceCount,
-                                                  bool completionWaitActive);
-void countOpenCbTailPresentSelectorOrdinaryPrefix(std::uint64_t sourceCount,
-                                                  bool completionWaitActive);
-void countOpenCbTailPresentSemanticReleaseCandidate();
-void countOpenCbTailPresentSemanticReleaseSubmitted();
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty();
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent();
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent();
-void countOpenCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShape(
-    std::uint64_t commandCount,
-    std::uint64_t drawRunCommands,
-    std::uint64_t drawItems,
-    std::uint64_t nonDrawCommands,
-    std::uint64_t payloadBytes);
-void countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive();
-void countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
-void countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
-void countOpenCbTailPresentSemanticReleaseFailed();
-void countOpenCbTailPresentCompletionWaitPendingState(
-    bool canReleaseAtSemanticBoundary,
-    bool semanticReleaseAlreadyUsedDuringWait,
-    bool hasActiveRender,
-    bool readySlotsEmpty);
-void countOpenCbTailPresentWaitStartPublishCandidate();
-void countOpenCbTailPresentWaitStartPublishSlotEmpty();
-void countOpenCbTailPresentWaitStartPublishSlotPresent();
-void countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
-void countOpenCbTailPresentWaitStartPublished();
-void countOpenCbTailPresentWaitStartProducerPublishCandidate();
-void countOpenCbTailPresentWaitStartProducerPublished();
-void countOpenCbTailPresentDrawAttachmentBoundaryCandidate(
-    bool completionWaitActive);
-void countOpenCbTailPresentDrawAttachmentBoundaryNoDrawTail();
-void countOpenCbTailPresentDrawAttachmentBoundarySame();
-void countOpenCbTailPresentDrawAttachmentBoundaryChanged();
-void countOpenCbTailPresentDrawAttachmentBoundaryBlockedHeadroom();
-void countOpenCbTailPresentDrawAttachmentBoundaryPublished(
-    bool completionWaitActive);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -1399,76 +1337,6 @@ struct CounterSnapshot {
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent = 0;
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire = 0;
   std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible = 0;
-  std::uint64_t openCbTailPresentPendingStarted = 0;
-  std::uint64_t openCbTailPresentPendingStartedWaitActive = 0;
-  std::uint64_t openCbTailPresentPendingStartedWaitInactive = 0;
-  std::uint64_t openCbTailPresentPendingStartedTailReady = 0;
-  std::uint64_t openCbTailPresentPendingStartedTailReadyWaitActive = 0;
-  std::uint64_t openCbTailPresentPendingStartedTailReadyWaitInactive = 0;
-  std::uint64_t openCbTailPresentPendingStartedSemantic = 0;
-  std::uint64_t openCbTailPresentPendingStartedSemanticWaitActive = 0;
-  std::uint64_t openCbTailPresentPendingStartedSemanticWaitInactive = 0;
-  std::uint64_t openCbTailPresentPendingStartedOrdinary = 0;
-  std::uint64_t openCbTailPresentPendingStartedOrdinaryWaitActive = 0;
-  std::uint64_t openCbTailPresentPendingStartedOrdinaryWaitInactive = 0;
-  std::uint64_t openCbTailPresentPendingSuppressedNoTail = 0;
-  std::uint64_t openCbTailPresentHeadAppended = 0;
-  std::uint64_t openCbTailPresentHeadAppendedSemantic = 0;
-  std::uint64_t openCbTailPresentHeadAppendedOrdinary = 0;
-  std::uint64_t openCbTailPresentTailAppended = 0;
-  std::uint64_t openCbTailPresentTailSubmitted = 0;
-  std::uint64_t openCbTailPresentPendingTailWaitTimeout = 0;
-  std::uint64_t openCbTailPresentPendingTimeoutSubmitted = 0;
-  std::uint64_t openCbTailPresentPendingAbandonedNoReady = 0;
-  std::uint64_t openCbTailPresentPendingAbandonedNonAppendable = 0;
-  std::uint64_t openCbTailPresentPendingAbandonedRetainFailed = 0;
-  std::uint64_t openCbTailPresentPendingAbandonedEncodeNull = 0;
-  std::uint64_t openCbTailPresentPendingMergeFailed = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefix = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefixSources = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefixWaitActive = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefixWaitActiveSources = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefixWaitInactive = 0;
-  std::uint64_t openCbTailPresentSelectorTailPrefixWaitInactiveSources = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefix = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefixSources = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitActive = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitActiveSources = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactive = 0;
-  std::uint64_t openCbTailPresentSelectorSemanticPrefixWaitInactiveSources = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefix = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixSources = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitActive = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitActiveSources = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitInactive = 0;
-  std::uint64_t openCbTailPresentSelectorOrdinaryPrefixWaitInactiveSources = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseCandidates = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseSubmitted = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWait = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShapeSamples = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommands = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotCommandsMax = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawRuns = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItems = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotDrawItemsMax = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotNonDrawCommands = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytes = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseWriterActiveNonPresentSlotPayloadBytesMax = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseBlockedAlreadyUsed = 0;
-  std::uint64_t openCbTailPresentSemanticReleaseFailed = 0;
-  std::uint64_t openCbTailPresentWaitStartPublishCandidates = 0;
-  std::uint64_t openCbTailPresentWaitStartPublishSlotEmpty = 0;
-  std::uint64_t openCbTailPresentWaitStartPublishSlotPresent = 0;
-  std::uint64_t openCbTailPresentWaitStartPublishBlockedHeadroom = 0;
-  std::uint64_t openCbTailPresentWaitStartPublished = 0;
-  std::uint64_t openCbTailPresentWaitStartProducerPublishCandidates = 0;
-  std::uint64_t openCbTailPresentWaitStartProducerPublished = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;

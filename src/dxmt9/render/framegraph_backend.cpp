@@ -1,7 +1,5 @@
 #include "framegraph_backend.hpp"
 
-#include "tail_present_batch.hpp"
-
 #include "../dxmt9_draw_encoder.hpp"
 #include "util/log/log.hpp"
 
@@ -78,18 +76,6 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
   // on-device parity is validated; until then encode stays on encodeChunk and
   // the DAG is observation-only.
   return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
-}
-
-std::optional<core::metalqueue::QueueSubmissionRecord>
-FrameGraphBackend::onChunkBatchReady(
-    encoders::EncodeContext& ctx,
-    std::span<core::metalqueue::ReadySlotSnapshot> sources) {
-  if (sources.size() == 1u) {
-    const auto& source = sources.front();
-    DXMT_ASSERT(source.slot != nullptr);
-    return onChunkReady(ctx, source.slotIndex, *source.slot, {});
-  }
-  return encodeTailPresentBatch(ctx, sources, observer_);
 }
 
 }  // namespace dxmt9::render

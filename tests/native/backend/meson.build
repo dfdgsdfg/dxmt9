@@ -151,17 +151,6 @@ queue_completion_sources_spec = executable(
 test('dxmt9-queue-completion-sources-spec',
      queue_completion_sources_spec)
 
-render_backend_batch_contract_spec = executable(
-  'dxmt9-render-backend-batch-contract-spec',
-  'render_backend_batch_contract_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-render-backend-batch-contract-spec',
-     render_backend_batch_contract_spec)
-
 draw_seq_filter_spec = executable(
   'dxmt9-draw-seq-filter-spec',
   [

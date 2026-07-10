@@ -59,7 +59,6 @@ dxmt9_runtime_srcs = files(
   'render/dag_observer.cpp',
   'render/decision_recorder.cpp',
   'render/framegraph_backend.cpp',
-  'render/tail_present_batch.cpp',
   'render/traditional_backend.cpp',
 ) + dxmt9_shader_pipeline_srcs
 

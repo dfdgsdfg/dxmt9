@@ -251,12 +251,13 @@ load-bearing invariant for correctness).
 ### 3.4 Opt-In Policy
 
 **R-CORE-SHADER-3.9** Half-precision emission must remain opt-in until the
-audit gates in §8 are green. The currently shipping opt-in is
-`DXMT9_FS_HALF_PRECISION`, which targets the fragment shader body. The
-present implementation is a text-rewrite pass marked **EXPERIMENTAL** in
-`dxmt9_shader_sources.hpp`; only ~33% of SFIV's fragment shaders compile
-under it. The IR-level precision pass described in §4.4 is the supersession
-path.
+audit gates in §8 are green. The prior shipping opt-in, `DXMT9_FS_HALF_PRECISION`,
+was a text-rewrite pass targeting the fragment shader body that compiled only
+~33% of SFIV's fragment shaders; it was documented **EXPERIMENTAL — NOT
+FUNCTIONAL** and has been removed (see `agents/rules/environment_variables_encoder.rules.md`
+history). This requirement remains open for a future design: the IR-level
+precision pass described in §4.4 is the intended supersession path and must
+land before any half-precision opt-in ships again.
 
 **R-CORE-SHADER-3.10** Promotion of half precision (or of any layout-changing
 opt-in pass) to default-on MUST require all of the following:
@@ -321,8 +322,8 @@ correctness oracle (§8) is green:
 - Vertex temp-array trim (current opt-in: `DXMT9_TRIM_VERTEX_TEMPS`).
 - VS output scratch trim (current opt-in:
   `DXMT9_TRIM_VS_OUTPUT_SCRATCH`).
-- Precision inference (target opt-in: extends
-  `DXMT9_FS_HALF_PRECISION`).
+- Precision inference (target opt-in: a new IR-level flag; the prior
+  text-rewrite carrier `DXMT9_FS_HALF_PRECISION` was removed as non-functional).
 
 **R-CORE-SHADER-4.7** An optional pass must contribute to the cache key only
 when it is enabled. When it is disabled, its absence must not change the
@@ -419,8 +420,9 @@ function of:
   layout id);
 - every enabled optional pass's plan-output (§4.7);
 - the alpha-test variant key (§2.9);
-- the half-precision opt-in state (`DXMT9_FS_HALF_PRECISION` and any
-  future VSOut precision opt-in flag);
+- the half-precision opt-in state (a future precision-inference opt-in
+  flag, once implemented; the removed `DXMT9_FS_HALF_PRECISION` text-rewrite
+  carrier no longer participates);
 - any other env-derived debug toggle that changes emitted MSL bytes.
 
 **R-CORE-SHADER-6.2** Two cache keys that compare equal must correspond to

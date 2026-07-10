@@ -23,10 +23,10 @@
 // string.
 //
 // Test-environment invariants:
-//   - DXMT9_TRIM_UNUSED_VARYINGS and DXMT9_FS_HALF_PRECISION are observed
-//     at first call inside the generator and then cached process-wide.
-//     They are left unset; their effect on the emitted text is
-//     workload-specific and out of scope here.
+//   - DXMT9_TRIM_UNUSED_VARYINGS is observed at first call inside the
+//     generator and then cached process-wide. It is left unset; its
+//     effect on the emitted text is workload-specific and out of scope
+//     here.
 //   - No Metal device is created.
 //
 // See: `src/dxmt9/dxmt9_shader_sources.hpp`,

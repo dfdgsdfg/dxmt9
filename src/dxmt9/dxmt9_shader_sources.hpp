@@ -108,42 +108,6 @@ bool vsoutEmitSecondaryColor(const VSOutLayout& layout);
 bool vsoutEmitFogFactor(const VSOutLayout& layout);
 bool vsoutEmitPointSize(const VSOutLayout& layout);
 
-// DXMT9_FS_HALF_PRECISION — **EXPERIMENTAL — NOT FUNCTIONAL** opt-in
-// half (fp16) emission for the DXBC translator's fragment shader path.
-//
-// Rationale: Apple Silicon GPUs (M1+) have ~2× FP16 ALU throughput vs
-// FP32; SFIV is 98% fragment-bound (verified via
-// DXMT_DEBUG_FORCE_FRAGMENT_COLOR A/B in task 115), so half-precision
-// is the only dxmt9-side lever that meaningfully moves per-frame GPU
-// time without violating D3D9 transparency (D3D9 PS1.x/2.x permit
-// `_pp` partial-precision hints, making internal half use contract-
-// compatible).
-//
-// Current status (2026-05-12): the text post-pass rewrite at
-// `applyFsHalfPrecisionRewrite` (in dxmt9_shader_metal_ir.cpp) only
-// compiles ~33% of SFIV's translated FS sources because MSL's type
-// system catches a cascade of float/half boundary mismatches that
-// regex substitution cannot resolve:
-//   * `texture2d<half>::sample(sampler, float2 coord)` — texcoord must
-//     stay float at the sample site even when the body is half-typed.
-//   * `dxmt9_merge` / `dxmt9_select_texcoord` helpers in the shared
-//     prelude are float-typed; this header emits half overloads but
-//     the rewrite doesn't always know whether to dispatch the half
-//     variant (depends on argument expression types).
-//   * MSL constructor matching for `half4(float3, half)` rejects
-//     mixed-precision args. Constructor / literal coercion at boundary
-//     sites requires IR-level type tracking, not text substitution.
-//
-// Path forward: proper implementation requires threading a precision
-// flag through the SPIR-V → MSL emit pipeline (~50 emit sites) plus
-// an explicit cast-insertion pass at every float↔half boundary. See
-// task 119 investigation notes for the full enumeration.
-//
-// Until then: keep the env-var path off in production. Setting it
-// makes ~33% of SFIV's shaders compile and the remainder fail at
-// PSO build (silent fallback to a default pipeline → wrong pixels).
-bool fsHalfPrecisionEnabled();
-
 // R-BACK-12.22..12.26 — Stage 2 argument-buffer hybrid prelude. Emits
 // the same per-category uniform struct definitions as makeShaderPrelude,
 // then declares an `ArgbufLayout` MSL struct that wraps the four

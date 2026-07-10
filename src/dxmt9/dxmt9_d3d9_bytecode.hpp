@@ -196,9 +196,7 @@ inline constexpr u32 kD3DSPR_LOOP = 15;
 // unused in any released SM2/SM3 compiler). dxmt9 has no fp16 lowering
 // path so the decoder safe-rejects this kind via
 // `DecoderRejectReason::TempFloat16Unsupported` rather than misbinding
-// it as a fp32 temp. See `DXMT9_FS_HALF_PRECISION` in
-// `agents/rules/environment_variables.rules.md` for the experimental
-// fp16 status.
+// it as a fp32 temp.
 inline constexpr u32 kD3DSPR_TEMPFLOAT16 = 16;
 inline constexpr u32 kD3DSPR_MISCTYPE = 17;
 // SM3 subroutine label register. The decoder already inlines

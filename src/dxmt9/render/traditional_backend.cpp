@@ -1,7 +1,5 @@
 #include "traditional_backend.hpp"
 
-#include "tail_present_batch.hpp"
-
 #include <utility>
 
 namespace dxmt9::render {
@@ -18,18 +16,6 @@ TraditionalBackend::onChunkReady(encoders::EncodeContext& ctx,
 
   // Byte-identical traditional path: forward straight to the free function.
   return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
-}
-
-std::optional<core::metalqueue::QueueSubmissionRecord>
-TraditionalBackend::onChunkBatchReady(
-    encoders::EncodeContext& ctx,
-    std::span<core::metalqueue::ReadySlotSnapshot> sources) {
-  if (sources.size() == 1u) {
-    const auto& source = sources.front();
-    DXMT_ASSERT(source.slot != nullptr);
-    return onChunkReady(ctx, source.slotIndex, *source.slot, {});
-  }
-  return encodeTailPresentBatch(ctx, sources, observer_);
 }
 
 bool TraditionalBackend::emitDraw(encoders::EncodeContext& ctx,

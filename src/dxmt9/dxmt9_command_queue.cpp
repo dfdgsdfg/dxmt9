@@ -17,7 +17,6 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
-#include "render/tail_present_batch.hpp"
 
 #include <algorithm>
 #include <array>
@@ -57,14 +56,6 @@ WMT::String makeLabelStringFmt(const char* fmt, ...) {
 
 std::atomic_uint64_t gCommandBufferLabelCounter{0};
 
-[[noreturn]] void abortOpenCbPendingFailOpen(const char* reason) {
-  std::fprintf(stderr,
-               "[dxmt9-queue] fatal: encoded open-CB pending work could not "
-               "fail-open by submit (%s)\n",
-               reason ? reason : "unknown");
-  std::abort();
-}
-
 bool drawRunGroupByGenerationLaneEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_DRAWRUN_GROUP_BY_GEN_LANE");
@@ -103,189 +94,6 @@ bool encodeSlotPsoPrefetchDisabled() {
 
 bool encodeSlotPsoPrefetchEnabled() {
   return !publishPsoPrefetchEnabled() && !encodeSlotPsoPrefetchDisabled();
-}
-
-bool encodeTailPresentBatchEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_ENCODE_TAIL_PRESENT_BATCH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool openCbPreencodeTailPresentEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool openCbRenderSessionCarryEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_OPEN_CB_CARRY_RENDER_SESSION");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool openCbSemanticBoundaryPublishEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled &&
-         openCbPreencodeTailPresentEnabled() &&
-         openCbRenderSessionCarryEnabled();
-}
-
-bool openCbWriterActiveCpuReadyPublishEnabled() {
-  static const bool enabled = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_WRITER_ACTIVE_CPU_READY_PUBLISH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled && openCbSemanticBoundaryPublishEnabled();
-}
-
-bool openCbActiveWaitCpuReadyAppendEnabled() {
-  static const bool enabled = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_ACTIVE_WAIT_CPU_READY_APPEND");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled && openCbSemanticBoundaryPublishEnabled();
-}
-
-bool openCbWaitStartCpuReadyPublishEnabled() {
-  static const bool enabled = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_WAIT_START_CPU_READY_PUBLISH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled && openCbSemanticBoundaryPublishEnabled();
-}
-
-bool openCbDrawAttachmentBoundaryPublishEnabled() {
-  static const bool enabled = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_DRAW_ATTACHMENT_BOUNDARY_PUBLISH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled && openCbSemanticBoundaryPublishEnabled();
-}
-
-bool openCbDrawContinuationBoundaryPublishEnabled() {
-  static const bool enabled = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_DRAW_CONTINUATION_BOUNDARY_PUBLISH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled &&
-         openCbPreencodeTailPresentEnabled() &&
-         openCbRenderSessionCarryEnabled();
-}
-
-std::size_t openCbDrawContinuationCommandLimit() {
-  static const std::size_t limit = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_DRAW_CONTINUATION_COMMAND_LIMIT");
-    if (!env || env[0] == '\0') {
-      return std::size_t{0};
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    if (end == env || parsed == 0) {
-      return std::size_t{0};
-    }
-    if (parsed > std::numeric_limits<std::size_t>::max()) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    return static_cast<std::size_t>(parsed);
-  }();
-  return openCbDrawContinuationBoundaryPublishEnabled() ? limit
-                                                        : std::size_t{0};
-}
-
-render::OpenCbSemanticBoundaryReleaseMode openCbSemanticBoundaryReleaseMode() {
-  static const auto mode = [] {
-    const char* env =
-        std::getenv("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE");
-    if (env && std::strcmp(env, "deterministic") == 0) {
-      return render::OpenCbSemanticBoundaryReleaseMode::Deterministic;
-    }
-    return render::OpenCbSemanticBoundaryReleaseMode::CompletionWait;
-  }();
-  return mode;
-}
-
-std::chrono::microseconds openCbPendingTailWaitTimeout() {
-  static const auto timeout = [] {
-    const char* env = std::getenv("DXMT9_OPEN_CB_PENDING_TAIL_WAIT_US");
-    if (!env || env[0] == '\0') {
-      return std::chrono::microseconds{0};
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    if (end == env || parsed == 0) {
-      return std::chrono::microseconds{0};
-    }
-    const auto max =
-        static_cast<unsigned long long>(
-            std::chrono::microseconds::max().count());
-    return std::chrono::microseconds{
-        static_cast<std::chrono::microseconds::rep>(std::min(parsed, max))};
-  }();
-  return openCbPreencodeTailPresentEnabled() ? timeout
-                                             : std::chrono::microseconds{0};
-}
-
-bool stageTailPresentChunkEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_STAGE_TAIL_PRESENT_CHUNK");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled && encodeTailPresentBatchEnabled();
-}
-
-std::size_t stagePrePresentCommandLimit() {
-  static const std::size_t limit = [] {
-    const char* env = std::getenv("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT");
-    if (!env || env[0] == '\0') {
-      return std::size_t{0};
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    if (end == env || parsed == 0) {
-      return std::size_t{0};
-    }
-    if (parsed > std::numeric_limits<std::size_t>::max()) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    return static_cast<std::size_t>(parsed);
-  }();
-  return (encodeTailPresentBatchEnabled() || openCbPreencodeTailPresentEnabled())
-      ? limit
-      : std::size_t{0};
-}
-
-std::size_t openCbCpuReadyCommandLimit() {
-  static const std::size_t limit = [] {
-    const char* env = std::getenv("DXMT9_OPEN_CB_CPU_READY_COMMAND_LIMIT");
-    if (!env || env[0] == '\0') {
-      return std::size_t{0};
-    }
-    char* end = nullptr;
-    const auto parsed = std::strtoull(env, &end, 10);
-    if (end == env || parsed == 0) {
-      return std::size_t{0};
-    }
-    if (parsed > std::numeric_limits<std::size_t>::max()) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    return static_cast<std::size_t>(parsed);
-  }();
-  return openCbSemanticBoundaryPublishEnabled() ? limit : std::size_t{0};
 }
 
 bool unpublishedSlotPsoPrefetchEnabled() {
@@ -669,37 +477,6 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
                                  slot);
               return submission;
             };
-        if (openCbPreencodeTailPresentEnabled()) {
-          runOpenCbTailPresentEncodeLoop(
-              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
-          return;
-        }
-        if (encodeTailPresentBatchEnabled()) {
-          std::array<core::metalqueue::ReadySlotSnapshot, kCommandChunkCount> scratch{};
-          runEncodeBatchLoop(
-              std::span<core::metalqueue::ReadySlotSnapshot>(scratch),
-              [this, encodeSingleSource](
-                  std::span<core::metalqueue::ReadySlotSnapshot> sources) mutable {
-                if (sources.size() == 1u) {
-                  DXMT_ASSERT(sources.front().slot != nullptr);
-                  auto& slot = *sources.front().slot;
-                  return encodeSingleSource(sources.front().slotIndex, slot);
-                }
-                for (const auto& source : sources) {
-                  DXMT_ASSERT(source.slot != nullptr);
-                  traceEncodeFnStage("batch-entry", source.slotIndex, *source.slot);
-                }
-                auto ctx = makeEncodeContext();
-                auto submission = backend_->onChunkBatchReady(ctx, sources);
-                DXMT_ASSERT(submission.has_value() &&
-                            "tail-Present batch selector produced an unencodable batch");
-                return submission;
-              },
-              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); },
-              {},
-              render::selectTailPresentBatchPrefix);
-          return;
-        }
         runEncodeLoop(
             encodeSingleSource,
             [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
@@ -2622,14 +2399,6 @@ void markDrawRunPayloadResources(resources::Pool& pool,
   }
 }
 
-bool splitPresentChunk() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_SPLIT_PRESENT_CHUNK");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
 bool splitStretchChunk() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_SPLIT_STRETCH_CHUNK");
@@ -2803,14 +2572,6 @@ PresentPrePresentOpportunity analyzePresentPrePresentOpportunity(
   return stats;
 }
 
-perf::ChunkPublishTailCommandKind chunkPublishTailCommandKind(
-    const core::ChunkSlot& slot) {
-  if (slot.commandHeaders.empty()) {
-    return perf::ChunkPublishTailCommandKind::Empty;
-  }
-  return chunkPublishTailCommandKind(slot.commandHeaders.back().kind);
-}
-
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
                            core::ChunkSlot& slot,
@@ -2819,10 +2580,6 @@ void prepareSlotForPublish(CommandQueue& q,
   const std::uint64_t residencyNs =
       recordCurrentSlotPublishResidencyUnlocked(q, reason);
   perf::countChunkPublishReason(reason, slot.commandCount());
-  if (reason == perf::ChunkPublishReason::PresentSplitBefore) {
-    perf::countChunkPublishPresentSplitBeforeTail(
-        chunkPublishTailCommandKind(slot), slot.drawOnlyCommandStream());
-  }
   if (reason == perf::ChunkPublishReason::Present) {
     const auto stats = analyzePresentPrePresentOpportunity(slot);
     if (stats.valid()) {
@@ -2900,390 +2657,6 @@ bool maybeCommitDrawPayloadArenaUnlocked(
     ensureWritingSlotUnlocked(q, lock);
   }
   return committed;
-}
-
-bool commitAndStageCurrentPrePresentSlotUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    std::size_t postCommitHeadroom) {
-  if (!(encodeTailPresentBatchEnabled() ||
-        openCbPreencodeTailPresentEnabled()) ||
-      !q.writingSlot_ ||
-      currentSlotUnlocked(q).commandsEmpty()) {
-    return false;
-  }
-  if (q.inflightCount_ + 1u + postCommitHeadroom > kMaxQueuedChunks) {
-    return false;
-  }
-
-  const bool committed = q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& slot) {
-        prepareSlotForPublish(q, pool, slot,
-                              perf::ChunkPublishReason::PresentSplitBefore);
-      });
-  if (!committed || q.readySlots_.empty()) {
-    return false;
-  }
-
-  if (openCbPreencodeTailPresentEnabled()) {
-    if (q.skipDrawResourceMarking_) {
-      q.forceDrawResourceMarkingAfterSplit_ = true;
-    }
-    return true;
-  }
-
-  const std::size_t stagedSlotIndex = q.readySlots_.back();
-  if (!q.queueLifecycle_.stageLastReadySlot(
-          lock, q.stagedTailPresentSlots_, stagedSlotIndex)) {
-    return false;
-  }
-  if (q.skipDrawResourceMarking_) {
-    q.forceDrawResourceMarkingAfterSplit_ = true;
-  }
-  return true;
-}
-
-bool maybeStagePrePresentChunkUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock) {
-  const std::size_t limit = stagePrePresentCommandLimit();
-  if (limit == 0 || !q.writingSlot_) {
-    return false;
-  }
-  if (currentSlotUnlocked(q).commandCount() < limit) {
-    return false;
-  }
-  const bool staged = commitAndStageCurrentPrePresentSlotUnlocked(
-      q, pool, lock, /*postCommitHeadroom=*/2u);
-  if (staged) {
-    ensureWritingSlotUnlocked(q, lock);
-  }
-  return staged;
-}
-
-bool maybePublishSemanticBoundaryChunkUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock) {
-  if (!openCbSemanticBoundaryPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  if (slot.commandsEmpty() || !slot.presentRecords.empty()) {
-    return false;
-  }
-
-  const bool committed = q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& publishSlot) {
-        prepareSlotForPublish(q, pool, publishSlot,
-                              perf::ChunkPublishReason::SemanticBoundary);
-      });
-  if (!committed) {
-    return false;
-  }
-  if (q.skipDrawResourceMarking_) {
-    q.forceDrawResourceMarkingAfterSplit_ = true;
-  }
-  ensureWritingSlotUnlocked(q, lock);
-  return true;
-}
-
-bool maybePublishOpenCbCpuReadyCommandLimitUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock) {
-  const std::size_t limit = openCbCpuReadyCommandLimit();
-  if (limit == 0 || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  if (slot.commandsEmpty() ||
-      !slot.presentRecords.empty() ||
-      slot.commandCount() < limit) {
-    return false;
-  }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    return false;
-  }
-  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
-}
-
-const core::FlatDrawStateRecord* lastDrawTailState(
-    const core::ChunkSlot& slot) noexcept {
-  if (slot.commandHeaders.empty() ||
-      slot.commandHeaders.back().kind != core::MetalCommandKind::DrawRun) {
-    return nullptr;
-  }
-  const auto command = slot.drawRunCommandAt(slot.commandHeaders.size() - 1u);
-  return command.drawState.hot;
-}
-
-bool maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    const core::FlatDrawStateRecord& nextHot) {
-  if (!openCbDrawAttachmentBoundaryPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  if (slot.commandsEmpty() || !slot.presentRecords.empty()) {
-    return false;
-  }
-
-  const bool completionWaitActive =
-      q.queueLifecycle_.completionWaitActive();
-  perf::countOpenCbTailPresentDrawAttachmentBoundaryCandidate(
-      completionWaitActive);
-
-  const auto* tailHot = lastDrawTailState(slot);
-  if (!tailHot) {
-    perf::countOpenCbTailPresentDrawAttachmentBoundaryNoDrawTail();
-    return false;
-  }
-  if (render::drawAttachmentKeysMatch(*tailHot, nextHot)) {
-    perf::countOpenCbTailPresentDrawAttachmentBoundarySame();
-    return false;
-  }
-
-  perf::countOpenCbTailPresentDrawAttachmentBoundaryChanged();
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    perf::countOpenCbTailPresentDrawAttachmentBoundaryBlockedHeadroom();
-    return false;
-  }
-  const bool published = maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
-  if (published) {
-    perf::countOpenCbTailPresentDrawAttachmentBoundaryPublished(
-        completionWaitActive);
-  }
-  return published;
-}
-
-bool maybePublishOpenCbDrawContinuationBoundaryChunkUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    const core::FlatDrawStateRecord& nextHot) {
-  if (!openCbDrawContinuationBoundaryPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  const auto* tailHot = lastDrawTailState(slot);
-  const bool hasHeadroom = q.inflightCount_ + 2u <= kMaxQueuedChunks;
-  if (!render::openCbShouldPublishDrawContinuationBoundary(
-          slot.commandsEmpty(),
-          !slot.presentRecords.empty(),
-          tailHot != nullptr,
-          tailHot && render::drawAttachmentKeysMatch(*tailHot, nextHot),
-          hasHeadroom,
-          slot.commandCount(),
-          openCbDrawContinuationCommandLimit())) {
-    return false;
-  }
-
-  const bool committed = q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& publishSlot) {
-        prepareSlotForPublish(q, pool, publishSlot,
-                              perf::ChunkPublishReason::DrawContinuation);
-      });
-  if (!committed) {
-    return false;
-  }
-  if (q.skipDrawResourceMarking_) {
-    q.forceDrawResourceMarkingAfterSplit_ = true;
-  }
-  ensureWritingSlotUnlocked(q, lock);
-  return true;
-}
-
-bool maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    const core::FlatDrawStateRecord& nextHot) {
-  if (maybePublishOpenCbDrawContinuationBoundaryChunkUnlocked(
-          q, pool, lock, nextHot)) {
-    return true;
-  }
-  return maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
-      q, pool, lock, nextHot);
-}
-
-bool maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    bool pendingCanReleaseAtSemanticBoundary,
-    render::OpenCbSemanticBoundaryReleaseMode semanticBoundaryReleaseMode,
-    bool completionWaitActive,
-    bool writerActive) {
-  if (!openCbWriterActiveCpuReadyPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-  auto& slot = currentSlotUnlocked(q);
-  if (!render::openCbPendingShouldCpuReadyPublishWriterActiveSlot(
-          /*readySlotsEmpty=*/q.readySlots_.empty(),
-          pendingCanReleaseAtSemanticBoundary,
-          semanticBoundaryReleaseMode,
-          completionWaitActive,
-          writerActive,
-          slot.commandsEmpty(),
-          !slot.presentRecords.empty())) {
-    return false;
-  }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    return false;
-  }
-  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
-}
-
-bool maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    bool pendingCanReleaseAtSemanticBoundary,
-    render::OpenCbSemanticBoundaryReleaseMode semanticBoundaryReleaseMode,
-    bool completionWaitActive,
-    bool semanticReleaseAlreadyUsedDuringWait,
-    bool writerActive) {
-  if (!openCbActiveWaitCpuReadyAppendEnabled() || !q.writingSlot_) {
-    return false;
-  }
-  auto& slot = currentSlotUnlocked(q);
-  if (!render::openCbPendingShouldCpuReadyPublishActiveWaitSlot(
-          /*readySlotsEmpty=*/q.readySlots_.empty(),
-          pendingCanReleaseAtSemanticBoundary,
-          semanticBoundaryReleaseMode,
-          completionWaitActive,
-          semanticReleaseAlreadyUsedDuringWait,
-          writerActive,
-          slot.commandsEmpty(),
-          !slot.presentRecords.empty())) {
-    return false;
-  }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    return false;
-  }
-  return maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock);
-}
-
-bool maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    bool hasPendingRecord,
-    bool completionWaitActive,
-    bool writerActive) {
-  if (!openCbWaitStartCpuReadyPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-  auto& slot = currentSlotUnlocked(q);
-  const bool readySlotsEmpty = q.readySlots_.empty();
-  const bool writingSlotEmpty = slot.commandsEmpty();
-  const bool writingSlotHasPresent = !slot.presentRecords.empty();
-  if (!readySlotsEmpty ||
-      hasPendingRecord ||
-      !completionWaitActive ||
-      q.stop_ ||
-      !writerActive) {
-    return false;
-  }
-  perf::countOpenCbTailPresentWaitStartPublishCandidate();
-  if (!render::openCbShouldCpuReadyPublishWaitStartSlot(
-          readySlotsEmpty,
-          hasPendingRecord,
-          completionWaitActive,
-          q.stop_,
-          writerActive,
-          writingSlotEmpty,
-          writingSlotHasPresent)) {
-    if (writingSlotEmpty) {
-      perf::countOpenCbTailPresentWaitStartPublishSlotEmpty();
-    } else if (writingSlotHasPresent) {
-      perf::countOpenCbTailPresentWaitStartPublishSlotPresent();
-    }
-    return false;
-  }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    perf::countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
-    return false;
-  }
-  if (!maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock)) {
-    return false;
-  }
-  perf::countOpenCbTailPresentWaitStartPublished();
-  return true;
-}
-
-bool maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock) {
-  if (!openCbWaitStartCpuReadyPublishEnabled() || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  const bool readySlotsEmpty = q.readySlots_.empty();
-  const bool completionWaitActive = q.queueLifecycle_.completionWaitActive();
-  const bool writingSlotEmpty = slot.commandsEmpty();
-  const bool writingSlotHasPresent = !slot.presentRecords.empty();
-  if (!readySlotsEmpty || !completionWaitActive || q.stop_) {
-    return false;
-  }
-
-  perf::countOpenCbTailPresentWaitStartPublishCandidate();
-  perf::countOpenCbTailPresentWaitStartProducerPublishCandidate();
-  if (!render::openCbShouldCpuReadyPublishWaitStartSlot(
-          readySlotsEmpty,
-          /*hasPendingRecord=*/false,
-          completionWaitActive,
-          q.stop_,
-          /*writerActive=*/true,
-          writingSlotEmpty,
-          writingSlotHasPresent)) {
-    if (writingSlotEmpty) {
-      perf::countOpenCbTailPresentWaitStartPublishSlotEmpty();
-    } else if (writingSlotHasPresent) {
-      perf::countOpenCbTailPresentWaitStartPublishSlotPresent();
-    }
-    return false;
-  }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
-    perf::countOpenCbTailPresentWaitStartPublishBlockedHeadroom();
-    return false;
-  }
-  if (!maybePublishSemanticBoundaryChunkUnlocked(q, pool, lock)) {
-    return false;
-  }
-  perf::countOpenCbTailPresentWaitStartPublished();
-  perf::countOpenCbTailPresentWaitStartProducerPublished();
-  return true;
-}
-
-bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
-    const CommandQueue& q,
-    bool carryRenderSession,
-    bool hasPendingSession) {
-  if (q.readySlots_.empty()) {
-    return false;
-  }
-  const std::size_t slotIndex = q.readySlots_.front();
-  if (slotIndex >= q.slots_.size()) {
-    return false;
-  }
-  const auto& slot = q.slots_[slotIndex];
-  return render::slotCanAppendToOpenCbPending(
-      slot,
-      carryRenderSession,
-      hasPendingSession,
-      /*tailReadyForCurrentHead=*/false);
 }
 
 }  // namespace
@@ -3411,8 +2784,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
     PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
     ensureWritingSlotUnlocked(*this, lock);
     maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-    (void)maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
-        *this, pool_, lock, state.hot);
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
@@ -3431,11 +2802,7 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(*this, pool_, lock) &&
-        !maybePublishOpenCbCpuReadyCommandLimitUnlocked(*this, pool_, lock) &&
-        !maybeStagePrePresentChunkUnlocked(*this, pool_, lock)) {
-      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
-    }
+    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
   }
 }
 
@@ -3496,12 +2863,6 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
       ensureWritingSlotUnlocked(queue, lock);
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
       DXMT_ASSERT(batch.front().stateMaterialized);
-      const bool sourceBoundaryPublished =
-          maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
-              queue, pool, lock, batch.front().materializedState().hot);
-      forceDrawResourceMarkingAfterSplit =
-          forceDrawResourceMarkingAfterSplit ||
-          (sourceBoundaryPublished && skipDrawResourceMarking);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
@@ -3532,21 +2893,10 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      const bool cpuReadyPublished =
-          maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) ||
-          maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock);
-      if (cpuReadyPublished) {
-        forceDrawResourceMarkingAfterSplit =
-            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
-      } else if (!maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
-        const bool committed = maybeCommitDrawChunkUnlocked(queue, pool, lock);
-        forceDrawResourceMarkingAfterSplit =
-            forceDrawResourceMarkingAfterSplit ||
-            (committed && skipDrawResourceMarking);
-      } else {
-        forceDrawResourceMarkingAfterSplit =
-            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
-      }
+      const bool committed = maybeCommitDrawChunkUnlocked(queue, pool, lock);
+      forceDrawResourceMarkingAfterSplit =
+          forceDrawResourceMarkingAfterSplit ||
+          (committed && skipDrawResourceMarking);
     }
     batchStart = batchEnd;
   }
@@ -3626,12 +2976,6 @@ void submitDrawRunBatchAndRunImpl(
       ensureWritingSlotUnlocked(queue, lock);
       maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
       DXMT_ASSERT(batch.front().stateMaterialized);
-      const bool sourceBoundaryPublished =
-          maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
-              queue, pool, lock, batch.front().materializedState().hot);
-      forceDrawResourceMarkingAfterSplit =
-          forceDrawResourceMarkingAfterSplit ||
-          (sourceBoundaryPublished && skipDrawResourceMarking);
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
@@ -3661,14 +3005,6 @@ void submitDrawRunBatchAndRunImpl(
       noteCurrentSlotCommandAppendStartedUnlocked(queue);
       currentSlotUnlocked(queue).appendDrawRunBatch(batch);
     }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      if (maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) ||
-          maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock)) {
-        forceDrawResourceMarkingAfterSplit =
-            forceDrawResourceMarkingAfterSplit || skipDrawResourceMarking;
-      }
-    }
     batchStart = batchEnd;
   }
 
@@ -3692,12 +3028,6 @@ void submitDrawRunBatchAndRunImpl(
     PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
     ensureWritingSlotUnlocked(queue, lock);
     maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
-    const bool sourceBoundaryPublished =
-        maybePublishOpenCbDrawSourceBoundaryChunkUnlocked(
-            queue, pool, lock, state.hot);
-    forceDrawResourceMarkingAfterSplit =
-        forceDrawResourceMarkingAfterSplit ||
-        (sourceBoundaryPublished && skipDrawResourceMarking);
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
@@ -3716,11 +3046,7 @@ void submitDrawRunBatchAndRunImpl(
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    if (!maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(queue, pool, lock) &&
-        !maybePublishOpenCbCpuReadyCommandLimitUnlocked(queue, pool, lock) &&
-        !maybeStagePrePresentChunkUnlocked(queue, pool, lock)) {
-      (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
-    }
+    (void)maybeCommitDrawChunkUnlocked(queue, pool, lock);
   }
 }
 
@@ -3812,7 +3138,6 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  maybePublishSemanticBoundaryChunkUnlocked(*this, pool_, lock);
   traceTextureClear(pool_, desc);
   for (const auto& attachment : desc.colorAttachments) {
     traceTextureSurfaceOp(pool_, "Clear", attachment.handle, desc.depthStencil.handle);
@@ -3828,7 +3153,6 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
 void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  maybePublishSemanticBoundaryChunkUnlocked(*this, pool_, lock);
   traceTextureSurfaceOp(pool_, "SurfaceCopy", desc.source, desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendSurfaceCopy(desc);
@@ -3847,7 +3171,6 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
         });
   }
   ensureWritingSlotUnlocked(*this, lock);
-  maybePublishSemanticBoundaryChunkUnlocked(*this, pool_, lock);
   traceTextureSurfaceOp(pool_, "StretchRect", desc.source, desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendStretchRect(desc);
@@ -3873,7 +3196,6 @@ void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
 void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  maybePublishSemanticBoundaryChunkUnlocked(*this, pool_, lock);
   traceTextureSurfaceOp(pool_, "ColorFill", desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendColorFill(desc);
@@ -3888,7 +3210,6 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   // so currentBackBuffer_ is left untouched.
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
-  maybePublishSemanticBoundaryChunkUnlocked(*this, pool_, lock);
   traceTextureSurfaceOp(pool_, "DepthResolve", desc.msaaDepth, desc.intzDest);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
   currentSlotUnlocked(*this).appendDepthResolve(desc);
@@ -3970,62 +3291,13 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     perf::countPresentSourceSelection(static_cast<bool>(queuedDesc.sourceSurface),
                                       sourceHandle.value != 0 &&
                                           sourceHandle.value == currentBackBuffer_.value);
-    const bool hasStagedPrePresent = !stagedTailPresentSlots_.empty();
-    const bool hasCurrentPrePresentWork =
-        writingSlot_.has_value() &&
-        !currentSlotUnlocked(*this).commandsEmpty();
-    const bool shouldSplitOpenCbPresentTail =
-        render::openCbPresentTailNeedsPrePresentSplit(
-            openCbPreencodeTailPresentEnabled(),
-            hasCurrentPrePresentWork);
-    const bool shouldUseTailPresentStaging =
-        hasStagedPrePresent ||
-        shouldSplitOpenCbPresentTail ||
-        (stageTailPresentChunkEnabled() && hasCurrentPrePresentWork);
-    if (shouldUseTailPresentStaging) {
-      if (writingSlot_.has_value() &&
-          !currentSlotUnlocked(*this).commandsEmpty()) {
-        (void)commitAndStageCurrentPrePresentSlotUnlocked(
-            *this, pool_, lock, /*postCommitHeadroom=*/1u);
-      }
-      ensureWritingSlotUnlocked(*this, lock);
-      queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
-      const bool tailCommitted = queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot,
-                                  perf::ChunkPublishReason::Present);
-          });
-      if (tailCommitted) {
-        presentSeqId = lastCommittedSeqId_;
-      }
-      if (tailCommitted && !readySlots_.empty()) {
-        (void)queueLifecycle_.releaseStagedSlotsBeforeReadyTail(
-            lock, stagedTailPresentSlots_, readySlots_.back());
-      }
-    } else if (splitPresentChunk()) {
-      queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(
-                *this, pool_, slot,
-                perf::ChunkPublishReason::PresentSplitBefore);
-          });
-      ensureWritingSlotUnlocked(*this, lock);
-      queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
-      queueLifecycle_.commitCurrentChunk(
-          lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot,
-                                  perf::ChunkPublishReason::Present);
-          });
-      presentSeqId = lastCommittedSeqId_;
-    } else {
-      queueLifecycle_.presentAndCommit(
-          lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
-          [this](core::ChunkSlot& slot) {
-            prepareSlotForPublish(*this, pool_, slot,
-                                  perf::ChunkPublishReason::Present);
-          });
-      presentSeqId = lastCommittedSeqId_;
-    }
+    queueLifecycle_.presentAndCommit(
+        lock, kMaxQueuedChunks, queuedDesc, sourceHandle,
+        [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::Present);
+        });
+    presentSeqId = lastCommittedSeqId_;
   }
 
   // R-BACK-2.51(g) — per-present decision, not a global offload-enabled
@@ -4307,820 +3579,6 @@ void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubm
   while (true) {
     std::unique_lock lock(mutex_);
     if (!queueLifecycle_.runEncodeIteration(lock, encodeChunk, onSubmitted)) {
-      return;
-    }
-  }
-}
-
-void CommandQueue::runOpenCbTailPresentEncodeLoop(OnSubmittedFn onSubmitted) {
-  using core::metalqueue::EncodeSessionSourceList;
-  using core::metalqueue::QueueCompletionSource;
-  using core::metalqueue::QueueSubmissionRecord;
-  using core::metalqueue::ReadySlotSnapshot;
-
-  std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
-  std::optional<QueueSubmissionRecord> pendingRecord;
-  EncodeSessionSourceList pendingSources;
-  encoders::EncodeChunkSession pendingSession;
-  bool pendingCanReleaseAtSemanticBoundary = false;
-  bool semanticBoundaryReleaseUsedDuringWait = false;
-  const bool carryRenderSession = openCbRenderSessionCarryEnabled();
-  const auto semanticBoundaryReleaseMode =
-      openCbSemanticBoundaryReleaseMode();
-  const auto pendingTailWaitTimeout = openCbPendingTailWaitTimeout();
-  const bool pendingTailTimeoutEnabled =
-      pendingTailWaitTimeout.count() > 0;
-  // Positive timeout remains a diagnostic release point. The production-shaped
-  // path starts a pre-Present head under queue-local state and releases it on a
-  // ready source, stop, or inactive writer rather than on wallclock time.
-  const bool allowPendingHeadWithoutReadyTail = carryRenderSession;
-
-  auto encodeSource = [this](const ReadySlotSnapshot& source,
-                             encoders::EncodeChunkOptions options) {
-    DXMT_ASSERT(source.slot != nullptr);
-    auto& slot = *source.slot;
-    traceEncodeFnStage("entry", source.slotIndex, slot);
-    if (encodeSlotPsoPrefetchEnabled() &&
-        !slot.prefetchedPipelinesSealed()) {
-      traceEncodeFnStage("before-pso-prefetch", source.slotIndex, slot);
-      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
-      prefetchSlotPipelines(slot);
-      traceEncodeFnStage("after-pso-prefetch", source.slotIndex, slot);
-    }
-    traceEncodeFnStage("before-make-context", source.slotIndex, slot);
-    auto ctx = makeEncodeContext();
-    traceEncodeFnStage("after-make-context", source.slotIndex, slot);
-    traceEncodeFnStage("before-backend-onChunkReady", source.slotIndex, slot);
-    auto submission = backend_->onChunkReady(ctx, source.slotIndex, slot,
-                                             std::move(options));
-    traceEncodeFnStage(submission.has_value()
-                           ? "after-backend-onChunkReady-submission"
-                           : "after-backend-onChunkReady-inline",
-                       source.slotIndex,
-                       slot);
-    if (submission.has_value() && !submission->commandBuffer) {
-      submission.reset();
-    }
-    return submission;
-  };
-
-  auto completeInlineSnapshot = [this, &onSubmitted](
-                                    const ReadySlotSnapshot& source) {
-    DXMT_ASSERT(source.slot != nullptr);
-    const std::uint64_t seqId = source.seqId;
-    queueLifecycle_.completeInlineChunk(source.slotIndex, seqId);
-    if (onSubmitted) {
-      onSubmitted(seqId);
-    }
-  };
-
-  auto retainSource = [this](std::unique_lock<std::mutex>& lock,
-                             const ReadySlotSnapshot& source,
-                             QueueCompletionSource& retained) {
-    std::array<QueueCompletionSource, 1> out{};
-    const std::span<const ReadySlotSnapshot> sources(&source, 1u);
-    const std::size_t count =
-        queueLifecycle_.retainEncodedSourcesForPendingTail(
-            lock, sources, std::span<QueueCompletionSource>(out));
-    if (count != 1u) {
-      return false;
-    }
-    retained = out.front();
-    return true;
-  };
-
-  auto submitRecordLocked = [this](std::unique_lock<std::mutex>& lock,
-                                   QueueSubmissionRecord& record) {
-    auto callbacks = std::move(record.postCommitCallbacks);
-    queueLifecycle_.submitEncodedSubmission(lock, record);
-    lock.unlock();
-    for (auto& callback : callbacks) {
-      if (callback) {
-        callback();
-      }
-    }
-  };
-
-  auto finalizePendingSessionForSubmitLocked =
-      [this, &pendingRecord, &pendingSession](
-          std::unique_lock<std::mutex>& lock) {
-        if (!pendingSession) {
-          return true;
-        }
-        if (!encoders::encodeChunkSessionHasDeferredSubmissionPayload(
-                *pendingSession)) {
-          pendingSession.reset();
-          return true;
-        }
-        if (!pendingRecord.has_value()) {
-          return false;
-        }
-
-        lock.unlock();
-        auto ctx = makeEncodeContext();
-        const bool finalized =
-            encoders::finalizeEncodeChunkSessionIntoSubmission(
-                ctx, *pendingSession, *pendingRecord);
-        lock.lock();
-        if (finalized) {
-          if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
-                  std::move(pendingSession), *pendingRecord)) {
-            return false;
-          }
-        }
-        return finalized;
-      };
-
-  auto submitPendingRecordLocked =
-      [&pendingRecord, &pendingSources, &pendingSession,
-       &pendingCanReleaseAtSemanticBoundary,
-       &finalizePendingSessionForSubmitLocked, &submitRecordLocked](
-          std::unique_lock<std::mutex>& lock) {
-        if (!pendingRecord.has_value()) {
-          return false;
-        }
-        if (!finalizePendingSessionForSubmitLocked(lock)) {
-          return false;
-        }
-        submitRecordLocked(lock, *pendingRecord);
-        pendingRecord.reset();
-        pendingSources.clear();
-        pendingSession.reset();
-        pendingCanReleaseAtSemanticBoundary = false;
-        return true;
-      };
-
-  auto countCompletionWaitPendingState =
-      [&pendingRecord, &pendingSession,
-       &pendingCanReleaseAtSemanticBoundary,
-       &semanticBoundaryReleaseUsedDuringWait](
-          bool completionWaitActive,
-          bool readySlotsEmpty) {
-        if (!completionWaitActive || !pendingRecord.has_value()) {
-          return;
-        }
-        perf::countOpenCbTailPresentCompletionWaitPendingState(
-            pendingCanReleaseAtSemanticBoundary,
-            semanticBoundaryReleaseUsedDuringWait,
-            pendingSession &&
-                encoders::encodeChunkSessionHasActiveRender(*pendingSession),
-            readySlotsEmpty);
-      };
-
-  while (true) {
-    std::unique_lock lock(mutex_);
-    {
-      const bool completionWaitActive =
-          queueLifecycle_.completionWaitActive();
-      const bool writerActive = writingSlot_.has_value();
-      if (maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
-              *this, pool_, lock, pendingRecord.has_value(),
-              completionWaitActive, writerActive)) {
-        continue;
-      }
-      if (semanticBoundaryReleaseMode ==
-              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
-          !completionWaitActive) {
-        semanticBoundaryReleaseUsedDuringWait = false;
-      }
-    }
-
-    if (pendingRecord.has_value() && !readySlots_.empty()) {
-      if (render::openCbPendingShouldSubmitForProducerSequenceWait(
-              pendingRecord.has_value(),
-              queueLifecycle_.producerSequenceWaitActive())) {
-        if (submitPendingRecordLocked(lock)) {
-          if (stop_) {
-            return;
-          }
-          continue;
-        }
-        perf::countOpenCbTailPresentPendingAbandonedNoReady();
-        abortOpenCbPendingFailOpen("producer sequence wait release before ready");
-      }
-      const bool completionWaitActive = queueLifecycle_.completionWaitActive();
-      countCompletionWaitPendingState(
-          completionWaitActive, /*readySlotsEmpty=*/false);
-      if (render::openCbPendingReadySourceBlocksSemanticReleaseNoCompletionWait(
-              /*readySlotsEmpty=*/false,
-              pendingCanReleaseAtSemanticBoundary,
-              semanticBoundaryReleaseMode,
-              completionWaitActive)) {
-        perf::countOpenCbTailPresentSemanticReleaseBlockedReadySourceNoCompletionWait();
-      }
-      if (pendingCanReleaseAtSemanticBoundary &&
-          (completionWaitActive ||
-           semanticBoundaryReleaseMode ==
-               render::OpenCbSemanticBoundaryReleaseMode::Deterministic)) {
-        perf::countOpenCbTailPresentSemanticReleaseCandidate();
-        if (semanticBoundaryReleaseMode ==
-                render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
-            semanticBoundaryReleaseUsedDuringWait) {
-          perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
-        }
-      }
-      const bool appendReadyBeforeRelease =
-          openCbActiveWaitCpuReadyAppendEnabled() &&
-          render::openCbPendingShouldAppendReadySourceBeforeSemanticRelease(
-              /*readySlotsEmpty=*/false,
-              pendingCanReleaseAtSemanticBoundary,
-              semanticBoundaryReleaseMode,
-              completionWaitActive,
-              semanticBoundaryReleaseUsedDuringWait,
-              firstOpenCbReadySourceCanAppendToPendingUnlocked(
-                  *this, carryRenderSession,
-                  static_cast<bool>(pendingSession)));
-      if (!appendReadyBeforeRelease &&
-          render::openCbPendingShouldReleaseBeforeReadySource(
-              /*readySlotsEmpty=*/false,
-              pendingCanReleaseAtSemanticBoundary,
-              semanticBoundaryReleaseMode,
-              completionWaitActive,
-              semanticBoundaryReleaseUsedDuringWait)) {
-        if (submitPendingRecordLocked(lock)) {
-          if (semanticBoundaryReleaseMode ==
-              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait) {
-            semanticBoundaryReleaseUsedDuringWait = true;
-          }
-          perf::countOpenCbTailPresentSemanticReleaseSubmitted();
-          if (stop_) {
-            return;
-          }
-          continue;
-        }
-        perf::countOpenCbTailPresentSemanticReleaseFailed();
-        perf::countOpenCbTailPresentPendingAbandonedNoReady();
-        abortOpenCbPendingFailOpen("semantic boundary release before ready");
-      }
-    }
-
-    if (pendingRecord.has_value() && readySlots_.empty()) {
-      if (render::openCbPendingShouldSubmitForProducerSequenceWait(
-              pendingRecord.has_value(),
-              queueLifecycle_.producerSequenceWaitActive())) {
-        if (submitPendingRecordLocked(lock)) {
-          if (stop_) {
-            return;
-          }
-          continue;
-        }
-        perf::countOpenCbTailPresentPendingAbandonedNoReady();
-        abortOpenCbPendingFailOpen("producer sequence wait release");
-      }
-      const bool completionWaitActive = queueLifecycle_.completionWaitActive();
-      const bool writerActive = writingSlot_.has_value();
-      countCompletionWaitPendingState(
-          completionWaitActive, /*readySlotsEmpty=*/true);
-      if (pendingCanReleaseAtSemanticBoundary) {
-        perf::countOpenCbTailPresentSemanticReleaseCandidate();
-        const auto noWaitBlock =
-            render::classifyOpenCbPendingSemanticReleaseNoCompletionWaitBlock(
-                /*readySlotsEmpty=*/true,
-                pendingCanReleaseAtSemanticBoundary,
-                semanticBoundaryReleaseMode,
-                completionWaitActive,
-                writerActive);
-        switch (noWaitBlock) {
-          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::None:
-            if (semanticBoundaryReleaseMode ==
-                    render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
-                completionWaitActive &&
-                semanticBoundaryReleaseUsedDuringWait) {
-              perf::countOpenCbTailPresentSemanticReleaseBlockedAlreadyUsed();
-            }
-            break;
-          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterActive:
-            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
-            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActive();
-            {
-              const auto& writerSlot = currentSlotUnlocked(*this);
-              const auto writerSlotState =
-                  render::classifyOpenCbPendingSemanticReleaseWriterActiveSlotState(
-                      noWaitBlock,
-                      writerSlot.commandsEmpty(),
-                      !writerSlot.presentRecords.empty());
-              switch (writerSlotState) {
-              case render::OpenCbSemanticReleaseWriterActiveSlotState::None:
-                break;
-              case render::OpenCbSemanticReleaseWriterActiveSlotState::Empty:
-                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotEmpty();
-                break;
-              case render::OpenCbSemanticReleaseWriterActiveSlotState::NonPresentWork:
-                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotNonPresent();
-                {
-                  const auto shape =
-                      core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape(
-                          writerSlot);
-                  perf::countOpenCbTailPresentSemanticReleaseWriterActiveNonPresentSlotShape(
-                      shape.commandCount,
-                      shape.drawRunCommands,
-                      shape.drawItems,
-                      shape.nonDrawCommands,
-                      shape.payloadBytes);
-                  if (maybePublishOpenCbWriterActiveCpuReadySlotUnlocked(
-                          *this, pool_, lock,
-                          pendingCanReleaseAtSemanticBoundary,
-                          semanticBoundaryReleaseMode,
-                          completionWaitActive,
-                          writerActive)) {
-                    continue;
-                  }
-                }
-                break;
-              case render::OpenCbSemanticReleaseWriterActiveSlotState::PresentBearing:
-                perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterActiveSlotPresent();
-                break;
-              }
-            }
-            break;
-          case render::OpenCbSemanticReleaseNoCompletionWaitBlock::WriterInactive:
-            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWait();
-            perf::countOpenCbTailPresentSemanticReleaseBlockedNoCompletionWaitWriterInactive();
-            break;
-        }
-      }
-      if (semanticBoundaryReleaseMode ==
-              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait &&
-          !completionWaitActive) {
-        semanticBoundaryReleaseUsedDuringWait = false;
-      }
-      if (maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
-              *this, pool_, lock,
-              pendingCanReleaseAtSemanticBoundary,
-              semanticBoundaryReleaseMode,
-              completionWaitActive,
-              semanticBoundaryReleaseUsedDuringWait,
-              writerActive)) {
-        continue;
-      }
-      if (render::openCbPendingCanReleaseAtSemanticBoundary(
-              pendingCanReleaseAtSemanticBoundary,
-              /*sourceHasFinalPresentTail=*/false,
-              semanticBoundaryReleaseMode,
-              completionWaitActive,
-              semanticBoundaryReleaseUsedDuringWait)) {
-        if (submitPendingRecordLocked(lock)) {
-          if (semanticBoundaryReleaseMode ==
-              render::OpenCbSemanticBoundaryReleaseMode::CompletionWait) {
-            semanticBoundaryReleaseUsedDuringWait = true;
-          }
-          perf::countOpenCbTailPresentSemanticReleaseSubmitted();
-          if (stop_) {
-            return;
-          }
-          continue;
-        }
-        perf::countOpenCbTailPresentSemanticReleaseFailed();
-        perf::countOpenCbTailPresentPendingAbandonedNoReady();
-        abortOpenCbPendingFailOpen("semantic boundary release");
-      }
-      const auto waitAction =
-          render::selectOpenCbPendingTailWaitAction(
-              pendingRecord.has_value(), readySlots_.empty(), stop_,
-              writerActive, pendingTailTimeoutEnabled);
-      if (waitAction == render::OpenCbPendingTailWaitAction::SubmitPending) {
-        if (submitPendingRecordLocked(lock)) {
-          if (stop_) {
-            return;
-          }
-          continue;
-        }
-        perf::countOpenCbTailPresentPendingAbandonedNoReady();
-        abortOpenCbPendingFailOpen("deterministic tail release");
-      }
-      if (waitAction == render::OpenCbPendingTailWaitAction::WaitForReady) {
-        bool readyOrStopped = false;
-        const bool waitObservedCompletionWaitActive =
-            queueLifecycle_.completionWaitActive();
-        const auto pendingWakePredicate =
-            [this,
-             &pendingCanReleaseAtSemanticBoundary,
-             &semanticBoundaryReleaseUsedDuringWait,
-             semanticBoundaryReleaseMode,
-             waitObservedCompletionWaitActive] {
-          const bool completionWaitActive =
-              queueLifecycle_.completionWaitActive();
-          return stop_ || !readySlots_.empty() ||
-                 !writingSlot_.has_value() ||
-                 queueLifecycle_.producerSequenceWaitActive() ||
-                 render::openCbPendingCompletionWaitTransitionNeedsRecheck(
-                     completionWaitActive,
-                     waitObservedCompletionWaitActive,
-                     semanticBoundaryReleaseMode,
-                     pendingCanReleaseAtSemanticBoundary,
-                     semanticBoundaryReleaseUsedDuringWait);
-        };
-        if (pendingTailTimeoutEnabled) {
-          readyOrStopped =
-              encodeCv_.wait_for(lock, pendingTailWaitTimeout,
-                                  pendingWakePredicate);
-        } else {
-          encodeCv_.wait(lock, pendingWakePredicate);
-          readyOrStopped = stop_ || !readySlots_.empty() ||
-                           !writingSlot_.has_value();
-        }
-        if (pendingRecord.has_value() && readySlots_.empty()) {
-          if (render::openCbPendingShouldSubmitForProducerSequenceWait(
-                  pendingRecord.has_value(),
-                  queueLifecycle_.producerSequenceWaitActive())) {
-            if (submitPendingRecordLocked(lock)) {
-              if (stop_) {
-                return;
-              }
-              continue;
-            }
-            perf::countOpenCbTailPresentPendingAbandonedNoReady();
-            abortOpenCbPendingFailOpen("producer sequence wait wake release");
-          }
-          const bool completionWaitActiveAfterWake =
-              queueLifecycle_.completionWaitActive();
-          if (render::openCbPendingCompletionWaitTransitionNeedsRecheck(
-                  completionWaitActiveAfterWake,
-                  waitObservedCompletionWaitActive,
-                  semanticBoundaryReleaseMode,
-                  pendingCanReleaseAtSemanticBoundary,
-                  semanticBoundaryReleaseUsedDuringWait)) {
-            continue;
-          }
-        }
-        if (readySlots_.empty() &&
-            (!readyOrStopped || stop_ || !writingSlot_.has_value())) {
-          if (pendingTailTimeoutEnabled && !readyOrStopped && !stop_) {
-            perf::countOpenCbTailPresentPendingTailWaitTimeout();
-          }
-          if (submitPendingRecordLocked(lock)) {
-            if (pendingTailTimeoutEnabled && !readyOrStopped && !stop_) {
-              perf::countOpenCbTailPresentPendingTimeoutSubmitted();
-            }
-            if (stop_) {
-              return;
-            }
-          } else {
-            perf::countOpenCbTailPresentPendingAbandonedNoReady();
-            abortOpenCbPendingFailOpen("tail wait release");
-          }
-          continue;
-        }
-      }
-    }
-
-    const std::size_t count =
-        queueLifecycle_.dequeueReadySlotBatchPrefix(
-            lock,
-            std::span<ReadySlotSnapshot>(scratch),
-            [carryRenderSession](
-                const std::deque<std::size_t>& readySlots,
-                std::span<const core::ChunkSlot> slots,
-                std::size_t maxCount) noexcept -> std::size_t {
-              if (carryRenderSession) {
-                return render::selectOpenCbTailPresentBatchPrefix(
-                    readySlots, slots, maxCount);
-              }
-              return maxCount == 0u ? std::size_t{0} : std::size_t{1};
-            });
-    if (count == 0) {
-      if (pendingRecord.has_value()) {
-        if (!submitPendingRecordLocked(lock)) {
-          perf::countOpenCbTailPresentPendingAbandonedNoReady();
-          abortOpenCbPendingFailOpen("queue drained");
-        }
-      }
-      return;
-    }
-
-    const bool selectedTailReadyPrefix =
-        carryRenderSession && count > 1u &&
-        scratch[count - 1u].slot &&
-        render::slotHasFinalPresentTail(*scratch[count - 1u].slot);
-    const bool selectedOpenCbSessionPrefix =
-        render::selectedOpenCbPrefixStartsSession(
-            std::span<const ReadySlotSnapshot>(scratch.data(), count),
-            carryRenderSession);
-    const bool selectedSemanticStartPrefix =
-        selectedOpenCbSessionPrefix && !selectedTailReadyPrefix &&
-        scratch[0].slot &&
-        scratch[0].slot->publishReason ==
-            perf::ChunkPublishReason::SemanticBoundary;
-    const bool selectorCompletionWaitActive =
-        queueLifecycle_.completionWaitActive();
-    if (selectedTailReadyPrefix) {
-      perf::countOpenCbTailPresentSelectorTailPrefix(
-          static_cast<std::uint64_t>(count),
-          selectorCompletionWaitActive);
-    } else if (selectedSemanticStartPrefix) {
-      perf::countOpenCbTailPresentSelectorSemanticPrefix(
-          static_cast<std::uint64_t>(count),
-          selectorCompletionWaitActive);
-    } else if (selectedOpenCbSessionPrefix) {
-      perf::countOpenCbTailPresentSelectorOrdinaryPrefix(
-          static_cast<std::uint64_t>(count),
-          selectorCompletionWaitActive);
-    }
-    std::array<QueueCompletionSource, kCommandChunkCount>
-        selectedCompletionSources{};
-    bool selectedCompletionSourcesValid = false;
-    if (selectedOpenCbSessionPrefix) {
-      const std::size_t retainedCount =
-          queueLifecycle_.retainEncodedSourcesForPendingTail(
-              lock,
-              std::span<const ReadySlotSnapshot>(scratch.data(), count),
-              std::span<QueueCompletionSource>(
-                  selectedCompletionSources.data(), count));
-      selectedCompletionSourcesValid = retainedCount == count;
-      DXMT_ASSERT(selectedCompletionSourcesValid);
-    }
-    auto retainedSourceForIndex =
-        [&retainSource, &selectedCompletionSources,
-         selectedCompletionSourcesValid](
-            std::unique_lock<std::mutex>& lock,
-            std::size_t sourceIndex,
-            const ReadySlotSnapshot& source,
-            QueueCompletionSource& retained) {
-          if (selectedCompletionSourcesValid) {
-            retained = selectedCompletionSources[sourceIndex];
-            return true;
-          }
-          return retainSource(lock, source, retained);
-        };
-    for (std::size_t sourceIndex = 0; sourceIndex < count; ++sourceIndex) {
-      if (!lock.owns_lock()) {
-        lock.lock();
-      }
-      const ReadySlotSnapshot source = scratch[sourceIndex];
-      DXMT_ASSERT(source.slot != nullptr);
-      const bool sourceHasFinalPresentTail =
-          render::slotHasFinalPresentTail(*source.slot);
-      const bool sourceIsOpenHead =
-          render::slotIsOpenCbPreencodeHead(*source.slot);
-      const bool sourceIsSemanticBoundary =
-          source.slot->publishReason ==
-          perf::ChunkPublishReason::SemanticBoundary;
-      const bool tailReadyForCurrentHead =
-          selectedTailReadyPrefix && sourceIndex + 1u < count;
-      const bool sourceCanStartSession =
-          render::slotCanStartOpenCbPendingSession(
-              *source.slot, carryRenderSession, tailReadyForCurrentHead);
-      bool sourceCanAppendToPending =
-          render::slotCanAppendToOpenCbPending(
-              *source.slot, carryRenderSession,
-              static_cast<bool>(pendingSession), tailReadyForCurrentHead);
-
-      if (pendingRecord.has_value() &&
-          !sourceCanAppendToPending) {
-        perf::countOpenCbTailPresentPendingAbandonedNonAppendable();
-        if (!submitPendingRecordLocked(lock)) {
-          abortOpenCbPendingFailOpen("non-appendable source");
-        }
-        if (!lock.owns_lock()) {
-          lock.lock();
-        }
-      }
-      if (pendingRecord.has_value() &&
-          render::openCbPendingShouldSubmitBeforeInitializerWait(
-              sourceCanAppendToPending,
-              pendingSession &&
-                  encoders::encodeChunkSessionHasActiveRender(
-                      *pendingSession),
-              initializer_ &&
-                  initializer_->hasPendingUploadsUnlocked())) {
-        if (!submitPendingRecordLocked(lock)) {
-          abortOpenCbPendingFailOpen("initializer wait boundary");
-        }
-        if (!lock.owns_lock()) {
-          lock.lock();
-        }
-        sourceCanAppendToPending = false;
-      }
-
-      bool appendToPending =
-          pendingRecord.has_value() && sourceCanAppendToPending;
-      if (appendToPending) {
-        const QueueCompletionSource candidate = selectedCompletionSourcesValid
-            ? selectedCompletionSources[sourceIndex]
-            : core::metalqueue::completionSourceForReadySlot(source);
-        const bool queueSourcesCanAppend =
-            pendingSources.canAppend(candidate);
-        const bool sessionSourcesCanAppend =
-            !pendingSession ||
-            encoders::canAppendEncodeChunkSessionSource(
-                *pendingSession, candidate);
-        if (!queueSourcesCanAppend || !sessionSourcesCanAppend) {
-          if (!submitPendingRecordLocked(lock)) {
-            abortOpenCbPendingFailOpen("session source preflight failed");
-          }
-          if (!lock.owns_lock()) {
-            lock.lock();
-          }
-          appendToPending = false;
-        }
-      }
-      const bool suppressCarryHeadWithoutTail =
-          carryRenderSession && !allowPendingHeadWithoutReadyTail &&
-          !pendingRecord.has_value() && sourceIsOpenHead &&
-          !tailReadyForCurrentHead;
-      if (suppressCarryHeadWithoutTail) {
-        perf::countOpenCbTailPresentPendingSuppressedNoTail();
-      }
-      bool startPending = !pendingRecord.has_value() && sourceCanStartSession &&
-          !suppressCarryHeadWithoutTail;
-      QueueCompletionSource appendRetained{};
-      bool appendRetainedValid = false;
-      if (appendToPending) {
-        if (!retainedSourceForIndex(lock, sourceIndex, source,
-                                    appendRetained)) {
-          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
-          if (!submitPendingRecordLocked(lock)) {
-            abortOpenCbPendingFailOpen("append source retain failed");
-          }
-          if (!lock.owns_lock()) {
-            lock.lock();
-          }
-          appendToPending = false;
-          startPending = sourceCanStartSession && tailReadyForCurrentHead;
-        } else {
-          appendRetainedValid = true;
-        }
-      }
-      QueueCompletionSource startRetained{};
-      bool startRetainedValid = false;
-      if (startPending) {
-        if (!retainedSourceForIndex(lock, sourceIndex, source,
-                                    startRetained)) {
-          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
-          startPending = false;
-        } else {
-          startRetainedValid = true;
-        }
-      }
-
-      encoders::EncodeChunkOptions options{};
-      if (appendToPending || startPending) {
-        options.allowInjectedCommandBufferMidChunkCommits =
-            render::openCbPendingAllowsSemanticMidChunkCommits(
-                appendToPending);
-        options.disablePresentAcquireSplit = true;
-      }
-      if (carryRenderSession && (appendToPending || startPending)) {
-        if (!pendingSession) {
-          pendingSession = encoders::makeEncodeChunkSession();
-        }
-        options.session = pendingSession.get();
-        options.deferSessionFinalization = !sourceHasFinalPresentTail;
-        options.sessionSource =
-            appendToPending ? appendRetained : startRetained;
-        if (selectedOpenCbSessionPrefix && selectedCompletionSourcesValid) {
-          options.sessionLookaheadSources =
-              std::span<const ReadySlotSnapshot>(scratch.data() + sourceIndex,
-                                                 count - sourceIndex);
-        }
-      }
-      if (appendToPending) {
-        options.commandBuffer = pendingRecord->commandBuffer;
-      }
-
-      lock.unlock();
-      auto submission = encodeSource(source, std::move(options));
-      lock.lock();
-
-      if (!submission.has_value()) {
-        if (appendToPending) {
-          perf::countOpenCbTailPresentPendingAbandonedEncodeNull();
-          if (!submitPendingRecordLocked(lock)) {
-            abortOpenCbPendingFailOpen("append encode returned null");
-          }
-          if (!lock.owns_lock()) {
-            lock.lock();
-          }
-        }
-        if (startPending) {
-          pendingSession.reset();
-        }
-        completeInlineSnapshot(source);
-        continue;
-      }
-
-      if (startPending) {
-        if (!startRetainedValid) {
-          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
-          submitRecordLocked(lock, *submission);
-          pendingSession.reset();
-          pendingCanReleaseAtSemanticBoundary = false;
-          continue;
-        }
-        pendingSources.clear();
-        if (!pendingSources.append(startRetained)) {
-          DXMT_ASSERT(false && "first encoded session source must be valid");
-          perf::countOpenCbTailPresentPendingAbandonedRetainFailed();
-          pendingRecord = std::move(*submission);
-          if (!submitPendingRecordLocked(lock)) {
-            abortOpenCbPendingFailOpen("initial session source rejected");
-          }
-          continue;
-        }
-        pendingRecord = std::move(*submission);
-        pendingCanReleaseAtSemanticBoundary =
-            sourceIsSemanticBoundary && !sourceHasFinalPresentTail;
-        const bool pendingStartedDuringCompletionWait =
-            queueLifecycle_.completionWaitActive();
-        perf::countOpenCbTailPresentPendingStarted(
-            pendingStartedDuringCompletionWait);
-        if (tailReadyForCurrentHead) {
-          perf::countOpenCbTailPresentPendingStartedTailReady(
-              pendingStartedDuringCompletionWait);
-        } else if (sourceIsSemanticBoundary) {
-          perf::countOpenCbTailPresentPendingStartedSemantic(
-              pendingStartedDuringCompletionWait);
-        } else {
-          perf::countOpenCbTailPresentPendingStartedOrdinary(
-              pendingStartedDuringCompletionWait);
-        }
-        continue;
-      }
-
-      if (appendToPending) {
-        const std::uint64_t appendChainLength =
-            std::max<std::uint64_t>(
-                1, submission->commandBufferChainLength);
-        const bool appendCommittedPendingTail =
-            appendRetainedValid &&
-            pendingRecord.has_value() &&
-            pendingRecord->commandBuffer &&
-            submission->commandBuffer &&
-            pendingRecord->commandBuffer.handle !=
-                submission->commandBuffer.handle &&
-            appendChainLength > 1u;
-        EncodeSessionSourceList mergedSources;
-        const bool merged =
-            appendRetainedValid &&
-            core::metalqueue::mergeEncodedPendingTailSubmission(
-                *submission, *pendingRecord, pendingSources.span(),
-                appendRetained, appendCommittedPendingTail,
-                sourceHasFinalPresentTail ? nullptr : &mergedSources);
-        if (!merged) {
-          perf::countOpenCbTailPresentPendingMergeFailed();
-          if (!appendRetainedValid || !submission->commandBuffer) {
-            if (!submitPendingRecordLocked(lock)) {
-              abortOpenCbPendingFailOpen("merge failed before append submit");
-            }
-            if (!lock.owns_lock()) {
-              lock.lock();
-            }
-            if (submission->commandBuffer) {
-              submitRecordLocked(lock, *submission);
-            } else {
-              completeInlineSnapshot(source);
-            }
-            continue;
-          }
-          abortOpenCbPendingFailOpen("pending append metadata merge failed");
-        }
-
-        pendingRecord.reset();
-        pendingSources.clear();
-        pendingCanReleaseAtSemanticBoundary = false;
-        if (!sourceHasFinalPresentTail) {
-          pendingSources = mergedSources;
-          pendingRecord = std::move(*submission);
-          pendingCanReleaseAtSemanticBoundary =
-              sourceIsSemanticBoundary && !sourceHasFinalPresentTail;
-          perf::countOpenCbTailPresentHeadAppended();
-          if (sourceIsSemanticBoundary) {
-            perf::countOpenCbTailPresentHeadAppendedSemantic();
-          } else {
-            perf::countOpenCbTailPresentHeadAppendedOrdinary();
-          }
-          continue;
-        }
-
-        perf::countOpenCbTailPresentTailAppended();
-        if (pendingSession &&
-            !encoders::retainEncodeChunkSessionUntilSubmissionComplete(
-                std::move(pendingSession), *submission)) {
-          perf::countOpenCbTailPresentPendingMergeFailed();
-          abortOpenCbPendingFailOpen("merged tail session retain failed");
-        }
-        submitRecordLocked(lock, *submission);
-        perf::countOpenCbTailPresentTailSubmitted();
-        pendingSession.reset();
-        pendingCanReleaseAtSemanticBoundary = false;
-        continue;
-      }
-
-      submitRecordLocked(lock, *submission);
-    }
-  }
-}
-
-void CommandQueue::runEncodeBatchLoop(
-    std::span<core::metalqueue::ReadySlotSnapshot> scratch,
-    EncodeBatchFn encodeBatch,
-    OnSubmittedFn onSubmitted,
-    core::metalqueue::ReadySlotBatchAppendPredicate canAppend,
-    core::metalqueue::ReadySlotBatchPrefixSelector selectPrefix) {
-  while (true) {
-    std::unique_lock lock(mutex_);
-    if (!queueLifecycle_.runEncodeBatchIteration(
-            lock, scratch, encodeBatch, onSubmitted, canAppend, selectPrefix)) {
       return;
     }
   }

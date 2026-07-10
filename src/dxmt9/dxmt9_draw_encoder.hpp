@@ -478,9 +478,6 @@ struct EncodeChunkOptions {
   // into a new tail CB when the caller can merge the already-committed prefix
   // into the final completion source list without violating locality.
   bool allowInjectedCommandBufferMidChunkCommits = false;
-  // Same carrier class must also avoid the optional pre-acquire split that can
-  // commit the pre-Present head immediately before encoding Present.
-  bool disablePresentAcquireSplit = false;
   // Optional session owner for render-pass carry candidates. When a final
   // submission is returned, the caller must transfer the session owner into the
   // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()

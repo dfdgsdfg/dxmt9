@@ -3511,58 +3511,6 @@ OUT
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PERF_VS_CONST_SETTER_RANGE=1", result.stdout)
 
-    def test_wrapper_dry_run_includes_open_cb_session_carry_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--open-cb-preencode-tail-present",
-            "--open-cb-carry-render-session",
-            "--stage-pre-present-command-limit",
-            "128",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1", result.stdout)
-        self.assertIn("DXMT9_OPEN_CB_CARRY_RENDER_SESSION=1", result.stdout)
-        self.assertIn("DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT=128", result.stdout)
-
-    def test_wrapper_dry_run_includes_open_cb_semantic_release_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--open-cb-preencode-tail-present",
-            "--open-cb-carry-render-session",
-            "--open-cb-semantic-boundary-publish",
-            "--open-cb-semantic-boundary-release-mode",
-            "deterministic",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_OPEN_CB_PREENCODE_TAIL_PRESENT=1", result.stdout)
-        self.assertIn("DXMT9_OPEN_CB_CARRY_RENDER_SESSION=1", result.stdout)
-        self.assertIn("DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_PUBLISH=1", result.stdout)
-        self.assertIn(
-            "DXMT9_OPEN_CB_SEMANTIC_BOUNDARY_RELEASE_MODE=deterministic",
-            result.stdout,
-        )
-
-    def test_wrapper_rejects_invalid_open_cb_semantic_release_mode(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--open-cb-semantic-boundary-release-mode",
-            "always",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn(
-            "--open-cb-semantic-boundary-release-mode must be completion_wait or deterministic",
-            result.stderr,
-        )
-
     def test_wrapper_dry_run_includes_chunk_end_carry_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

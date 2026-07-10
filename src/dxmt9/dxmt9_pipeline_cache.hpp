@@ -186,7 +186,6 @@ ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept;
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool trimVertexTemps,
                                 bool trimVsOutputScratch,
-                                bool fsHalfPrecision,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
                                 bool forceFragmentShaderColor,

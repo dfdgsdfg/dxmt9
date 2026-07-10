@@ -562,7 +562,6 @@ void logPipelineBuildFailureOnce(const char* stage,
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool trimVertexTemps,
                                 bool trimVsOutputScratch,
-                                bool fsHalfPrecision,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
                                 bool forceFragmentShaderColor,
@@ -583,7 +582,6 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
   hash = mix(hash, static_cast<u64>(trimVertexTemps));
   hash = mix(hash, static_cast<u64>(trimVsOutputScratch));
-  hash = mix(hash, static_cast<u64>(fsHalfPrecision));
   hash = mix(hash, static_cast<u64>(forceFullscreenVertex));
   hash = mix(hash, static_cast<u64>(flipTranslatedVertexY));
   hash = mix(hash, static_cast<u64>(forceFragmentShaderColor));
@@ -617,7 +615,6 @@ u64 currentShaderSourceDebugEnvKey(
       envFlag("DXMT9_TRIM_UNUSED_VARYINGS"),
       envFlag("DXMT9_TRIM_VERTEX_TEMPS"),
       envFlag("DXMT9_TRIM_VS_OUTPUT_SCRATCH"),
-      envFlag("DXMT9_FS_HALF_PRECISION"),
       envFlag("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX"),
       envFlag("DXMT_DEBUG_FLIP_VERTEX_Y"),
       envFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR"),
@@ -642,7 +639,7 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
 bool shaderSourceDebugEnvIsDefault() noexcept {
   static const u64 kDefaultKey = makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/false, /*trimVertexTemps=*/false,
-      /*trimVsOutputScratch=*/false, /*fsHalfPrecision=*/false,
+      /*trimVsOutputScratch=*/false,
       /*forceFullscreenVertex=*/false, /*flipTranslatedVertexY=*/false,
       /*forceFragmentShaderColor=*/false, /*disableAlphaTest=*/false,
       /*disableFog=*/false, /*forceTextureWhite=*/false,

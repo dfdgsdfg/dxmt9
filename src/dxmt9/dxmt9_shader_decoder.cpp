@@ -62,11 +62,10 @@ enum class DecoderRejectReason : u32 {
   OobRegister,
   MissingEnd,
   InvalidOpcode,
-  // SM3 half-precision temporary (`kD3DSPR_TEMPFLOAT16` = 16). dxmt9
-  // has no fp16 lowering path (the `DXMT9_FS_HALF_PRECISION` env knob
-  // is documented experimental and not functional). A register operand
-  // that encodes this kind cannot be honored, so the decoder rejects
-  // cleanly instead of silently misbinding it as a fp32 temp.
+  // SM3 half-precision temporary (`kD3DSPR_TEMPFLOAT16` = 16). dxmt9 has
+  // no fp16 lowering path. A register operand that encodes this kind
+  // cannot be honored, so the decoder rejects cleanly instead of
+  // silently misbinding it as a fp32 temp.
   TempFloat16Unsupported,
   // SM3 subroutine-label register kind (`kD3DSPR_LABEL` = 18). The
   // opcode-level LABEL / CALL / CALLNZ are already inlined by

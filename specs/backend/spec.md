@@ -373,24 +373,27 @@ Invariants the overlap must preserve:
 - **Tail-Present staging** — GT1 H86 shows the current Present-published slot is
   already a large tail-Present stream (`~329` commands and `~739` draw items per
   present before the final Present command, `100%` tail-Present slots). The
-  production candidate is therefore not the existing diagnostic
-  `DXMT9_SPLIT_PRESENT_CHUNK` path, which publishes pre-Present work and Present
-  as separate chunks, but a CPU-ready staging form where the encoder can still
-  choose a coalesced tail command-buffer / render-pass shape.
+  production candidate is therefore not a chunk-splitting path that publishes
+  pre-Present work and Present as separate chunks, but a CPU-ready staging form
+  where the encoder can still choose a coalesced tail command-buffer /
+  render-pass shape.
 
-Existing reusable primitives (built; not wired to a production carrier): the
-queue already exposes the multi-source ownership/completion surface the §2.2.3
-design needs — `dequeueReadySlotBatch()` (move several consecutive ready slots to
-`Encoding` without allocating), `runEncodeBatchLoop()` /
-`IRenderBackend::onChunkBatchReady()` (default backend delegates a single-source
-batch to `onChunkReady` and returns `nullopt` for empty/multi-source batches),
-and `PendingCompletion` CB-to-N-`seqId` expansion. The production encode loop
-still calls `runEncodeIteration()` / `onChunkReady()`; these primitives change no
-default behavior. The opt-in tail-Present batch path consumes source slots
-through `EncodeSession` refs instead of materializing a copied aggregate
-`ChunkSlot`, but remains diagnostic until the §2.2.3 gates pass. The §2.2.3
-completion contract (R-BACK-2.49) is authoritative for how one Metal tail expands
-to ordered per-source `seqId` completion.
+Prior reusable primitives for this design — `runEncodeBatchLoop()`,
+`IRenderBackend::onChunkBatchReady()`, `render::tail_present_batch`'s selector
+helpers, and the `DXMT9_OPEN_CB_*` / `DXMT9_SPLIT_PRESENT_CHUNK` /
+`DXMT9_ENCODE_TAIL_PRESENT_BATCH` / `DXMT9_STAGE_TAIL_PRESENT_CHUNK` /
+`DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT` opt-in carriers built to exercise them —
+were removed after the `present-pacing` H86-H189 experiment chain concluded the
+open-CB carrier could not recover H187's command-buffer/render-pass locality
+shape (see `docs/perfomance/present-pacing/log.md` and
+`agents/rules/environment_variables_present.rules.md`). `dequeueReadySlotBatch()`
+(move several consecutive ready slots to `Encoding` without allocating) remains,
+and `PendingCompletion` CB-to-N-`seqId` expansion remains. The production encode
+loop still calls `runEncodeIteration()` / `onChunkReady()` exclusively; no
+default behavior changed by the removal. A future §2.2.3 implementation needs to
+rebuild the batch-encode/multi-source carrier from these remaining primitives.
+The §2.2.3 completion contract (R-BACK-2.49) is authoritative for how one Metal
+tail expands to ordered per-source `seqId` completion.
 
 Verification (the full ordered gate set is in §2.2.3 *Verification Shape*; in
 brief):
@@ -415,12 +418,16 @@ brief):
 - Reverted carriers — the A/C and B prototypes (`DXMT9_OFFSCREEN_RUN_AHEAD` plus
   ready-slot coalescing, then CPU-ready staging) moved the P4 wait but failed
   locality, total-wait, and visual-correctness gates and were reverted; current
-  source honors none of those historical envs. The opt-in open-CB
-  `EncodeSession` carrier is separate diagnostic infrastructure and remains
-  gated by the §2.2.3 promotion requirements, not a reintroduced A/C/B carrier.
+  source honors none of those historical envs. The open-CB `EncodeSession`
+  carrier (`DXMT9_OPEN_CB_*` and the split/stage/tail-Present precursor envs)
+  was a separate diagnostic infrastructure track that reached H86-H189 without
+  clearing the §2.2.3 promotion requirements and was removed; a future
+  implementation is a distinct carrier, not a reintroduction of the removed
+  prototype.
 - Performance model — `docs/perfomance/present-pacing/index.md` (H10 under-pipelining,
   H54/H56 draw-count-carrier rejection, H57 locality gates, H73 run-ahead design
-  gate, H108–H116/H134–H136 open-CB and render-session-carry failures).
+  gate, H108–H189 open-CB / render-session-carry / tail-Present carrier history,
+  retired per `agents/rules/environment_variables_present.rules.md`).
 
 ### 2.2.3 EncodeSession / Open-Render-Encoder Pass Streaming
 
