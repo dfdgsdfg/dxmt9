@@ -5791,7 +5791,8 @@ if (( capture_gputrace )); then
       "$max_top_buffer_write_regression_mib"
     )
   fi
-  for row_key in "${target_row_keys[@]}"; do
+  # bash 3.2 + set -u rejects empty-array [@] expansion; guard with the + idiom.
+  for row_key in ${target_row_keys[@]+"${target_row_keys[@]}"}; do
     finalize_cmd+=(--target-row-key "$row_key")
   done
   if (( require_target_index_cache_miss32_decrease )); then
