@@ -11,7 +11,7 @@ related: docs/perfomance/snapshot-cache/overview.md; docs/perfomance/snapshot-ca
 
 # Snapshot Cache — D3D9 frontend draw-state snapshot/rebuild CPU bottleneck
 
-Latest tracked row: `H38` - Same-generation draw-submission state-copy elision directly causes the latest transparent-weapon / black-vertex report (rejected for the sampled effects-heavy window; `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION=1` forces `d3d9_snapshot_state_elided=0`, while the default path elides `411,532` states / `4.211GiB`, and both screenshots render coherent bloom, sparks, geometry, and lighting. Keep the knob as an exact-window diagnostic, but do not demote P4 work based on state elision alone).
+Latest tracked row: `H39` - GT1 t=40s giant-triangle artifact fixed (`a123166d`): cross-lane invalidation reason-mask poisoning let the batch snapshot cache reuse a stale shader layout; layout reuse now keys off a dedicated generation, pinned by permanent hit-path asserts and a bite-proven regression test.
 
 ## Start Here
 
