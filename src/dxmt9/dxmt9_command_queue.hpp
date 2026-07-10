@@ -157,20 +157,20 @@ inline PresentBoundaryAction resolvePresentBoundaryAction(bool pacedByPresentOrd
 // double-wait on the same present token; any other present still
 // participates in the inline boundary even while this flag is on elsewhere
 // in the process. Opt-in (default off): unset/empty/"0" all resolve to
-// false. NOTE (2026-07-10 default-flip investigation): flipping this to a
-// default-on read-once resolver was scoped for this change but reverted
-// after discovering the offload replay path has a separate, pre-existing
-// resource-lifetime bug (reproduces on unmodified master with this flag
-// forced to "1" — see specs/backend/gap.md "Commit-replay offload" row and
-// the session report) that crashes `dxmt9-imported-apply-state-value-spec`
-// / `dxmt9-resource-hazard-spec` with heap corruption in
-// applyDrawPacketStateDirect's render-target/surface handling. That bug is
-// out of this change's scope (drain-fence/resource-retention territory) and
-// must be fixed before this resolver's default can safely change.
+// Engine default ON since d45af067 (the "heap corruption" that briefly
+// blocked the flip was root-caused to a native-spec harness drain gap, not
+// a production race — cad446ce). This copy MUST stay parse-identical to the
+// canonical resolver in src/d3d9/device_c_replay_offload.cpp: a drifted
+// default here fires the submitPresent pacedByPresentOrdinal assert because
+// the d3d9 layer paces presents while this layer believes the offload is
+// off (caught by the 2026-07-10 assert-provider GT1 hunt).
 inline bool offloadCommitReplayEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_OFFLOAD_COMMIT_REPLAY");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+    if (!value || value[0] == '\0') {
+      return true;
+    }
+    return !(value[0] == '0' && value[1] == '\0');
   }();
   return enabled;
 }
