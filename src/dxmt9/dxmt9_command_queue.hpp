@@ -156,7 +156,7 @@ inline PresentBoundaryAction resolvePresentBoundaryAction(bool pacedByPresentOrd
 // set only by the D3D9 chunk-replay path), or the two mechanisms would
 // double-wait on the same present token; any other present still
 // participates in the inline boundary even while this flag is on elsewhere
-// in the process. Opt-in (default off): unset/empty/"0" all resolve to
+// in the process.
 // Engine default ON since d45af067 (the "heap corruption" that briefly
 // blocked the flip was root-caused to a native-spec harness drain gap, not
 // a production race — cad446ce). This copy MUST stay parse-identical to the
