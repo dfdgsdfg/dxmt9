@@ -436,6 +436,129 @@ void testIndexedDrawPolicyContracts() {
           41u, "forced-mark mixed carrier keeps run draw params");
 }
 
+// Regression test for the GT1 t=40s giant-triangle bug: rigid prop meshes
+// were re-drawn with the soldiers' skinning VS + UBYTE4 blend-indices
+// declaration. Root cause: cachedBaseDrawStateForSubmissionBatch (the
+// binding-agnostic "batch lane") decided reuseShaderLayout from the shared
+// drawStateInvalidationReasonMask_ accumulator, but cachedBaseDrawState
+// (the "full lane", used by drawPrimitiveRunCanonical) ALSO consumes and
+// clears that same mask on its own miss-rebuilds. A shader/decl switch's
+// Shader|FvfVdecl bits can therefore be cleared by an intervening full-lane
+// rebuild; a later binding-only change (SetStreamSource) then re-populates
+// the mask with only non-layout bits at the same stable generation the
+// batch lane next observes, so the old mask-based check concluded "layout
+// unaffected" and reused a stale shaderLayout. The fix (already applied in
+// this tree) keys reuseShaderLayout off a dedicated shaderLayoutGeneration
+// bumped only inside invalidateDrawStateCache, immune to the other lane's
+// mask clear.
+void testBatchLaneShaderLayoutSurvivesInterleavedFullLaneRebuild() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory(BackendLimits{}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 16;
+  params.backBufferHeight = 16;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{6161};
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "stale layout device creation");
+
+  const auto makeBytecodeShader = [](const std::vector<u32>& words) {
+    ShaderRef shader{};
+    shader.kind = ShaderRef::Kind::Bytecode;
+    shader.bytecode.bytes.assign(reinterpret_cast<const u8*>(words.data()),
+                                 reinterpret_cast<const u8*>(words.data() + words.size()));
+    shader.bytecode.hash =
+        hashBytes(std::as_bytes(std::span<const u32>(words.data(), words.size())));
+    return shader;
+  };
+  const ShaderRef vsA = makeBytecodeShader(makeVertexBytecode());
+  const ShaderRef vsB = makeBytecodeShader(makeVertexTexcoordBytecode());
+
+  constexpr u32 kD3DDeclTypeFloat3 = 2u;
+  constexpr u32 kD3DDeclTypeUbyte4 = 5u;
+  constexpr u32 kD3DDeclUsageBlendIndices = 2u;
+  const std::vector<VertexElement> declA{
+      VertexElement{0, 0, kD3DDeclTypeFloat3, 0, kD3DDeclUsagePosition, 0},
+  };
+  const std::vector<VertexElement> declB{
+      VertexElement{0, 0, kD3DDeclTypeFloat3, 0, kD3DDeclUsagePosition, 0},
+      VertexElement{0, 12, kD3DDeclTypeUbyte4, 0, kD3DDeclUsageBlendIndices, 0},
+  };
+
+  checkEq(device->setVertexShader(vsA), D3D_OK, "stale layout bind VS A");
+  checkEq(device->setVertexDeclaration(declA), D3D_OK, "stale layout bind decl A");
+
+  // 1. Snapshot via the batch lane: materializes shaderLayout A and stamps
+  //    {generation, shaderLayoutGeneration} on the binding-agnostic cache.
+  DrawParam drawA{};
+  drawA.primitiveType = PrimitiveType::TriangleList;
+  drawA.primitiveCount = 1;
+  DrawRunSubmission submissionA{};
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(drawA, submissionA),
+          D3D_OK, "stale layout snapshot A");
+  check(submissionA.stateMaterialized, "stale layout submission A materialized");
+  checkEq(submissionA.materializedState().shaderLayout.vertexShader.bytecode,
+          vsA.bytecode, "stale layout submission A carries VS A");
+
+  // 2. Force a FULL-lane rebuild (drawPrimitiveRunCanonical ->
+  //    cachedBaseDrawState) while the shared mask still holds the
+  //    Shader|FvfVdecl bits from step 1's setters. Its miss-rebuild tail
+  //    clears drawStateInvalidationReasonMask_ back to Unknown.
+  std::array<DrawParam, 1> fullLaneKick1{};
+  fullLaneKick1[0].primitiveType = PrimitiveType::TriangleList;
+  fullLaneKick1[0].primitiveCount = 1;
+  checkEq(device->drawPrimitiveRunCanonical(std::span<const DrawParam>(
+              fullLaneKick1.data(), fullLaneKick1.size())),
+          D3D_OK, "stale layout full-lane kick 1");
+
+  // 3. Switch to VS B + decl B: bumps drawStableStateGeneration_ AND the
+  //    dedicated drawShaderLayoutGeneration_, and re-populates the shared
+  //    mask with Shader|FvfVdecl bits.
+  checkEq(device->setVertexShader(vsB), D3D_OK, "stale layout bind VS B");
+  checkEq(device->setVertexDeclaration(declB), D3D_OK, "stale layout bind decl B");
+
+  // 4. Force ANOTHER full-lane rebuild so the OTHER lane consumes and clears
+  //    the Shader|FvfVdecl bits set in step 3 before the batch lane ever
+  //    observes them.
+  std::array<DrawParam, 1> fullLaneKick2{};
+  fullLaneKick2[0].primitiveType = PrimitiveType::TriangleList;
+  fullLaneKick2[0].primitiveCount = 1;
+  checkEq(device->drawPrimitiveRunCanonical(std::span<const DrawParam>(
+              fullLaneKick2.data(), fullLaneKick2.size())),
+          D3D_OK, "stale layout full-lane kick 2");
+
+  // 5. Binding-only change: SetStreamSource repopulates the shared mask
+  //    with Stream-only bits at the SAME stable/layout generation stamped
+  //    in step 3. The old mask-based reuse check read this as "layout
+  //    unaffected" and would reuse the stale VS A / decl A layout
+  //    materialized in step 1.
+  auto vertexBuffer = device->createBuffer({64, Pool::Default, UsageVertexBuffer});
+  check(vertexBuffer != nullptr, "stale layout vertex buffer");
+  checkEq(device->setStreamSource(0, vertexBuffer, 0, 16), D3D_OK,
+          "stale layout binding-only stream change");
+
+  // 6. Snapshot via the batch lane again. Pre-fix this silently reused the
+  //    stale shaderLayout materialized in step 1 (VS A / decl A) even
+  //    though live state is VS B / decl B -- the GT1 giant-triangle
+  //    symptom. Post-fix the dedicated shaderLayoutGeneration forces a
+  //    rebuild from live state.
+  DrawParam drawB{};
+  drawB.primitiveType = PrimitiveType::TriangleList;
+  drawB.primitiveCount = 1;
+  DrawRunSubmission submissionB{};
+  checkEq(device->snapshotDrawSubmissionFromCurrentState(drawB, submissionB),
+          D3D_OK, "stale layout snapshot B");
+  check(submissionB.stateMaterialized, "stale layout submission B materialized");
+  checkEq(submissionB.materializedState().shaderLayout.vertexShader.bytecode,
+          vsB.bytecode,
+          "batch lane must reuse live VS B, not the stale VS A layout");
+  checkEq(submissionB.materializedState().shaderLayout.vertexDecl.elements,
+          declB,
+          "batch lane must reuse live decl B, not the stale decl A layout");
+}
+
 void testCubeTextureSubresourceFlow() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory(BackendLimits{}, backend);
@@ -970,6 +1093,7 @@ int main() {
   try {
     testRasterStateCoverage();
     testIndexedDrawPolicyContracts();
+    testBatchLaneShaderLayoutSurvivesInterleavedFullLaneRebuild();
     testMetalSamplerBorderColorCoverage();
     testCubeTextureSubresourceFlow();
     testAutogenUpdateTextureRegeneratesMipShadow();

@@ -2213,6 +2213,14 @@ class Device : public std::enable_shared_from_this<Device> {
 
   struct CachedBaseDrawState {
     u64 generation = 0;
+    // Guards shaderLayout reuse across rebuilds. The accumulated
+    // drawStateInvalidationReasonMask_ is shared by BOTH cache lanes and is
+    // cleared by whichever lane rebuilds first, so a mask-based "layout
+    // unaffected" reuse decision can lose another lane's Shader/FvfVdecl
+    // bits and stamp a stale shader layout with a fresh generation (GT1
+    // t=40s giant-triangle bug). Layout reuse must key off this dedicated
+    // generation instead.
+    u64 shaderLayoutGeneration = 0;
     u64 uniformGeneration = 0;
     u64 vertexShaderConstantGeneration = 0;
     u64 pixelShaderConstantGeneration = 0;
@@ -2274,6 +2282,11 @@ class Device : public std::enable_shared_from_this<Device> {
   DeviceState state_{};
   u64 drawStateGeneration_ = 1;
   u64 drawStableStateGeneration_ = 1;
+  // Bumped by invalidateDrawStateCache whenever the reason can affect the
+  // derived shader layout (Shader, FvfVdecl, Unknown, ...). Independent of
+  // the shared reason-mask accumulator so per-lane layout reuse cannot be
+  // poisoned by another lane consuming/clearing the mask.
+  u64 drawShaderLayoutGeneration_ = 1;
   u64 drawUniformGeneration_ = 1;
   u64 drawVertexShaderConstantGeneration_ = 1;
   u64 drawPixelShaderConstantGeneration_ = 1;

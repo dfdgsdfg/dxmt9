@@ -3289,6 +3289,9 @@ void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
   invalidateDrawFlatStateSetCache(reasonMask);
   if (!drawStateInvalidationIsBindingOnly(reasonMask)) {
     bumpGeneration(drawStableStateGeneration_);
+    if (drawStateInvalidationAffectsShaderLayout(reasonMask)) {
+      bumpGeneration(drawShaderLayoutGeneration_);
+    }
     if (drawStateInvalidationAffectsUniformNonConstants(reasonMask)) {
       invalidateDrawUniformNonConstantCache();
     }
@@ -3471,6 +3474,7 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
           FlatDrawStateUniformInputs{.hashes = &uniformHashes}, viewport);
     }
     cache.generation = drawStateGeneration_;
+    cache.shaderLayoutGeneration = drawShaderLayoutGeneration_;
     cache.uniformGeneration = drawUniformGeneration_;
     cache.vertexShaderConstantGeneration = drawVertexShaderConstantGeneration_;
     cache.pixelShaderConstantGeneration = drawPixelShaderConstantGeneration_;
@@ -3561,6 +3565,35 @@ Device::cachedBaseDrawStateForSubmissionBatch(
     dxmt9::perf::countD3D9DrawStateCacheLookup(/*hit=*/true,
                                                 /*includeIndexBuffer=*/false);
     dxmt9::perf::countD3D9DrawStateCacheBatchLookup(/*hit=*/true);
+    // Debug cross-check for the same-generation trust chain: a hit must mean
+    // the cached snapshot still matches the live DeviceState. A stale hit
+    // here would silently ride the {stateGeneration, lane} stamp into
+    // draw-run batching and re-draw with another draw's shaders/declaration
+    // (the GT1 t=40s giant-triangle class), which submission-level asserts
+    // cannot see because every stale submission is self-consistent. This
+    // used to be a budgeted fprintf forensic probe; now that
+    // shaderLayoutGeneration guards reuse (see above), a hit is expected to
+    // always be fresh, so any staleness here is a hard invariant violation.
+    //
+    // The cached shaderLayout stores the EFFECTIVE shader (a null live
+    // shader normalizes to an FFP ref at layout-build time), so compare
+    // normalization-aware: a live Bytecode shader must match the cached
+    // bytecode; a live null shader is stale only if the cache still holds a
+    // Bytecode ref.
+#ifndef NDEBUG
+    {
+      const auto staleShader = [](const ShaderRef& live, const ShaderRef& cached) {
+        if (live.kind == ShaderRef::Kind::Bytecode) {
+          return cached.kind != ShaderRef::Kind::Bytecode ||
+                 !(cached.bytecode == live.bytecode);
+        }
+        return cached.kind == ShaderRef::Kind::Bytecode;
+      };
+      DXMT_ASSERT(!staleShader(state_.vertexShader, cache.shaderLayout.vertexShader));
+      DXMT_ASSERT(!staleShader(state_.pixelShader, cache.shaderLayout.pixelShader));
+      DXMT_ASSERT(cache.shaderLayout.vertexDecl.elements == state_.vertexDecl.elements);
+    }
+#endif
     if (drawStateInvalidationIsBindingOnly(drawStateInvalidationReasonMask_)) {
       drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
     }
@@ -3600,9 +3633,15 @@ Device::cachedBaseDrawStateForSubmissionBatch(
         cache.shaderLayout.pixelConstantUsage;
     const auto previousClipPlaneMask = cache.shaderLayout.clipPlaneMask;
 
+    // Key layout reuse off the dedicated layout generation, NOT the shared
+    // reason-mask accumulator: the mask is consumed/cleared by whichever
+    // cache lane rebuilds first, so it can lose another lane's
+    // Shader/FvfVdecl bits and let this lane reuse a stale shader layout
+    // under a fresh stable generation (GT1 t=40s giant-triangle bug: rigid
+    // props re-drawn with the soldiers' skinning VS + UBYTE4 declaration).
     const bool reuseShaderLayout =
         cache.valid &&
-        !drawStateInvalidationAffectsShaderLayout(invalidationReasonMask);
+        cache.shaderLayoutGeneration == drawShaderLayoutGeneration_;
     dxmt9::perf::countD3D9SnapshotCacheBatchMissShaderLayoutReuse(
         reuseShaderLayout);
     const bool recordShaderLayoutCompatibility =
@@ -3868,6 +3907,7 @@ Device::cachedBaseDrawStateForSubmissionBatch(
                            kProbeSize);
     }
     cache.generation = drawStableStateGeneration_;
+    cache.shaderLayoutGeneration = drawShaderLayoutGeneration_;
     cache.uniformGeneration = drawUniformGeneration_;
     cache.vertexShaderConstantGeneration = drawVertexShaderConstantGeneration_;
     cache.pixelShaderConstantGeneration = drawPixelShaderConstantGeneration_;
