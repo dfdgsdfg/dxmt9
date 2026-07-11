@@ -636,14 +636,14 @@ class QueueLifecycleController {
   void submitEncodedSubmission(std::unique_lock<std::mutex>& lock,
                                QueueSubmissionRecord& record);
   // TLA+: EncodeCompleteInline.
-  void completeInlineChunk(size_t slotIndex, u64 seqId);
+  std::vector<DrawShaderLayoutContext> completeInlineChunk(size_t slotIndex, u64 seqId);
   // TLA+: FinishDequeue, and PresentComplete for eligible present seq IDs.
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
   // TLA+: ReclaimFree.
-  void reclaimCompletedGpuSlots(u64 seqId);
+  std::vector<DrawShaderLayoutContext> reclaimCompletedGpuSlots(u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
   // Queue-local observation used by experimental open-CB carriers to decide

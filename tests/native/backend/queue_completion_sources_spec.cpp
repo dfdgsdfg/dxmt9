@@ -654,6 +654,37 @@ void runEncodeIterationPassesLiveSlotStorage() {
         "inline single-source completion releases the live slot");
 }
 
+void finishReleasesSlotResourceOwnersOutsideQueueLock() {
+  QueueFixture fixture;
+  fixture.slots[0].state = ChunkSlot::State::GPU;
+  fixture.slots[0].seqId = 1;
+  fixture.completedSeqQueue.push_back(1);
+  fixture.inflightCount = 1;
+  fixture.lastCommittedSeqId = 1;
+
+  bool released = false;
+  bool releasedWhileLocked = false;
+  std::unique_lock lock(fixture.mutex, std::defer_lock);
+  auto buffer = std::shared_ptr<dxmt9::core::Buffer>(
+      reinterpret_cast<dxmt9::core::Buffer*>(0x1),
+      [&](dxmt9::core::Buffer*) {
+        released = true;
+        releasedWhileLocked = lock.owns_lock();
+      });
+  fixture.slots[0].drawShaderLayouts.emplace_back()
+      .vertexDecl.streams[0].buffer = buffer;
+  buffer.reset();
+
+  lock.lock();
+  check(fixture.controller.runFinishIteration(lock),
+        "resource-owning GPU slot completion drains");
+  check(released, "GPU slot completion releases its final buffer owner");
+  check(!releasedWhileLocked,
+        "GPU slot resource owners are released outside the queue mutex");
+  check(lock.owns_lock(),
+        "finish iteration restores queue mutex ownership after release");
+}
+
 void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -1320,6 +1351,7 @@ int main() {
     firstPublishSlotShapeRejectsPostPresentWorkAsTail();
     firstPublishSlotShapeKeepsNoPresentSlotUnclassified();
     runEncodeIterationPassesLiveSlotStorage();
+    finishReleasesSlotResourceOwnersOutsideQueueLock();
     dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding();
     dequeueReadySlotBatchRespectsOutputCapacity();
     dequeueReadySlotBatchHonorsAppendPredicate();

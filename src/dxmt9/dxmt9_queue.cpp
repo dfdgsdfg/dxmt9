@@ -1347,7 +1347,10 @@ bool QueueLifecycleController::runEncodeIteration(
   } else {
     traceEncodeIterationStage("iteration.before-inline-complete",
                               source.slotIndex, *source.slot);
-    completeInlineChunk(source.slotIndex, source.seqId);
+    auto deferredReleases = completeInlineChunk(source.slotIndex, source.seqId);
+    lock.unlock();
+    deferredReleases.clear();
+    lock.lock();
     traceEncodeIterationStage("iteration.after-inline-complete",
                               source.slotIndex, *source.slot);
     if (onInlineComplete) {
@@ -1393,13 +1396,15 @@ void QueueLifecycleController::submitEncodedSubmission(
   submit(record);
 }
 
-void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
+std::vector<DrawShaderLayoutContext>
+QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
   // TLA+: QueueLifecycleRefinement / EncodeCompleteInline.
   if (slotIndex >= submissionBinding_.slots.size()) {
-    return;
+    return {};
   }
 
   auto& slot = submissionBinding_.slots[slotIndex];
+  auto deferredReleases = slot.detachResourceOwners();
   auto* completedSeqId = submissionBinding_.completedSeqId;
   auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
   finishInline(slotIndex, seqId, [&] {
@@ -1420,6 +1425,7 @@ void QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) 
   if (submissionBinding_.finishCv) {
     submissionBinding_.finishCv->notify_all();
   }
+  return deferredReleases;
 }
 
 bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mutex>& lock,
@@ -1483,22 +1489,30 @@ bool QueueLifecycleController::runFinishIteration(std::unique_lock<std::mutex>& 
   if (!drainCompletedSequence(lock, seqId)) {
     return false;
   }
-  reclaimCompletedGpuSlots(seqId);
+  auto deferredReleases = reclaimCompletedGpuSlots(seqId);
+  lock.unlock();
+  deferredReleases.clear();
+  lock.lock();
   if (onAfterFinish) {
     onAfterFinish(seqId);
   }
   return true;
 }
 
-void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
+std::vector<DrawShaderLayoutContext>
+QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
   // TLA+: QueueLifecycleRefinement / ReclaimFree.
   bool reclaimed = false;
+  std::vector<DrawShaderLayoutContext> deferredReleases;
   auto& slots = submissionBinding_.slots;
   for (size_t slotIndex = 0; slotIndex < slots.size(); ++slotIndex) {
     auto& slot = slots[slotIndex];
     if (slot.state != ChunkSlot::State::GPU || slot.seqId != seqId) {
       continue;
     }
+    DXMT_ASSERT(deferredReleases.empty() &&
+                "a sequence id must identify only one GPU slot");
+    deferredReleases = slot.detachResourceOwners();
     reclaimFree(slotIndex, seqId, [&] {
       slot.state = ChunkSlot::State::Free;
       slot.clearCommands();
@@ -1509,6 +1523,7 @@ void QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
   if (reclaimed && submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
   }
+  return deferredReleases;
 }
 
 void QueueLifecycleController::waitForSequence(std::unique_lock<std::mutex>& lock,

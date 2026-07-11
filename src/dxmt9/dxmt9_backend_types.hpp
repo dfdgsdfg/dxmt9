@@ -1008,6 +1008,13 @@ struct ChunkSlot {
     return true;
   }
 
+  // VertexDeclSnapshot retains core buffers. Detach it before clearing a slot
+  // under the queue mutex so a last-owner Buffer destructor can re-enter the
+  // backend resource pool only after that mutex is released.
+  std::vector<DrawShaderLayoutContext> detachResourceOwners() {
+    return std::move(drawShaderLayouts);
+  }
+
   void clearCommands() {
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
