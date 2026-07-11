@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-07-08
+updated: 2026-07-11
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H218` - H217 orphan sweep (`a083bc8f`, -694) plus rejected preflush merge/mixed-carrier lanes removed (`92047c4e`, -139); `AndRun` carrier kept for the retained chunk-end-carry path, suites/audits green.
+Latest tracked row: `H219` - rejected chunk-end carry lane removed (`570a5cde`, +39/-1354) together with the orphaned `AndRun` carrier family H218 had retained; suites/audits green, cooled GT1 smoke `2,280` presents with the engine-default trio live.
 
 ## Start Here
 
