@@ -128,6 +128,27 @@ historical `result.json` files). Do not schedule new runs with either env
 unless the carry lane is intentionally reintroduced and this rules file is
 updated in the same change.
 
+The compact uniform submission envs `DXMT9_ENABLE_COMPACT_UNIFORM_SUBMISSIONS`
+(H156) and its attribution companion `DXMT9_PERF_UNIFORM_COMPACT_BREAKDOWN`
+are not honored by the current HEAD; their resolvers, the
+`DrawRunCompactSubmission` / `DrawUniformCompactSubmissionPayload` /
+`DrawSubmissionUniformScratch` producer carrier types, the
+`queueCompactDraw*Submission` replay lanes, the
+`submitCompactDraw{Submission,Run}Batch` `Device`/`CommandQueue`/`BackendDevice`
+family, the backend `DrawUniformCompactPayloadView` find/append overloads, the
+`d3d9_snapshot_uniform_compact_*` timers, and the always-on
+`d3d9_snapshot_uniform_materialized_compact_*` opportunity-sizing counters
+were removed. H156 proved the per-submission byte reduction but rejected the
+scratch carrier as a default CPU win. The H132 accepted always-on compact
+stage-constant storage (usage-live VS/PS constant byte prefixes in the
+backend `ChunkSlot` uniform arenas) is unrelated and remains in place. The
+reopen premise died with the engine-default commit-replay offload
+(`DXMT9_OFFLOAD_COMMIT_REPLAY`, H195/`d45af067`), which moved the whole
+producer replay cost class onto a worker idling ~39.4ms/present, and the H212
+producer attribution showing the residual wall is the game's own CPU. Do not
+schedule new runs with these envs unless the compact carrier is intentionally
+reintroduced and this rules file is updated in the same change.
+
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
 `Disabled > DeferredPresentCompletion > PresentCompletion > Completion >

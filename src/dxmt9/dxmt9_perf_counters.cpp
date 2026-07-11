@@ -1103,23 +1103,10 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotUniformBuildPsConstHashBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterialized{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactCandidateBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactSavedBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactFixedBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactVertexBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformMaterializedCompactPixelBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactCpuNs{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedCpuNs{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactVertexStageCpuNs{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactPixelStageCpuNs{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadAppends{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadReuses{0};
-  std::atomic<std::uint64_t> d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierRecords{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierStateStorageBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUniformStorageBytes{0};
-  std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords{0};
   std::atomic<std::uint64_t> d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes{0};
   std::atomic<std::uint64_t> d3d9SnapshotUniformElided{0};
@@ -3263,23 +3250,10 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_snapshot_uniform_copy_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCopyCpuNs, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_materialized", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterialized, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_materialized_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_materialized_compact_candidate_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactCandidateBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_materialized_compact_saved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactSavedBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_materialized_compact_fixed_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactFixedBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_materialized_compact_vertex_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactVertexBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_materialized_compact_pixel_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformMaterializedCompactPixelBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactCpuNs, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_fixed_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactFixedCpuNs, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_vertex_stage_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactVertexStageCpuNs, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_pixel_stage_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::d3d9SnapshotUniformCompactPixelStageCpuNs, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_fixed_payload_appends", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadAppends, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_fixed_payload_reuses", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadReuses, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_uniform_compact_fixed_payload_reuse_saved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierRecords, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_state_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierStateStorageBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUniformStorageBytes, nullptr, nullptr, 0.0},
-    {"d3d9_snapshot_submission_carrier_compact_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_unused_uniform_storage_records", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_submission_carrier_unused_uniform_storage_bytes", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes, nullptr, nullptr, 0.0},
     {"d3d9_snapshot_uniform_elided", CounterEntry::Kind::UnsignedCount, &Counters::d3d9SnapshotUniformElided, nullptr, nullptr, 0.0},
@@ -7692,63 +7666,16 @@ void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes) {
   add(c.d3d9SnapshotUniformMaterializedBytes, bytes);
 }
 
-void countD3D9SnapshotUniformMaterializedCompactOpportunity(
-    std::uint64_t candidateBytes,
-    std::uint64_t savedBytes,
-    std::uint64_t fixedBytes,
-    std::uint64_t vertexBytes,
-    std::uint64_t pixelBytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformMaterializedCompactCandidateBytes, candidateBytes);
-  add(c.d3d9SnapshotUniformMaterializedCompactSavedBytes, savedBytes);
-  add(c.d3d9SnapshotUniformMaterializedCompactFixedBytes, fixedBytes);
-  add(c.d3d9SnapshotUniformMaterializedCompactVertexBytes, vertexBytes);
-  add(c.d3d9SnapshotUniformMaterializedCompactPixelBytes, pixelBytes);
-}
-
-void countD3D9SnapshotUniformCompactCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotUniformCompactCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotUniformCompactFixedCpuTime(
-    std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotUniformCompactFixedCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotUniformCompactVertexStageCpuTime(
-    std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotUniformCompactVertexStageCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotUniformCompactPixelStageCpuTime(
-    std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotUniformCompactPixelStageCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotUniformCompactFixedPayload(bool reused,
-                                                 std::uint64_t bytes) {
-  auto& c = counters();
-  if (reused) {
-    add(c.d3d9SnapshotUniformCompactFixedPayloadReuses);
-    add(c.d3d9SnapshotUniformCompactFixedPayloadReuseSavedBytes, bytes);
-  } else {
-    add(c.d3d9SnapshotUniformCompactFixedPayloadAppends);
-  }
-}
-
 void countD3D9SnapshotSubmissionCarrier(
     std::uint64_t carrierBytes,
     std::uint64_t stateStorageBytes,
     std::uint64_t uniformStorageBytes,
-    std::uint64_t compactUniformStorageBytes,
     bool uniformStorageUnused) {
   auto& c = counters();
   add(c.d3d9SnapshotSubmissionCarrierRecords);
   add(c.d3d9SnapshotSubmissionCarrierBytes, carrierBytes);
   add(c.d3d9SnapshotSubmissionCarrierStateStorageBytes, stateStorageBytes);
   add(c.d3d9SnapshotSubmissionCarrierUniformStorageBytes, uniformStorageBytes);
-  add(c.d3d9SnapshotSubmissionCarrierCompactUniformStorageBytes,
-      compactUniformStorageBytes);
   if (uniformStorageUnused && uniformStorageBytes != 0) {
     add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords);
     add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes,

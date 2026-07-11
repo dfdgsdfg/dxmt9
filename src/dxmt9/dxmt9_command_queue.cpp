@@ -2806,14 +2806,13 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
 }
 
-template <typename Submission>
 void submitDrawRunBatchImpl(CommandQueue& queue,
                             resources::Pool& pool,
                             std::mutex& mutex,
                             core::Handle& currentBackBuffer,
                             bool skipDrawResourceMarking,
                             bool forceDrawResourceMarkingAfterSplit,
-                            std::span<Submission> submissions) {
+                            std::span<core::DrawRunSubmission> submissions) {
   if (submissions.empty()) {
     return;
   }
@@ -2904,14 +2903,6 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
 
 void CommandQueue::submitDrawRunBatch(
     std::span<core::DrawRunSubmission> submissions) {
-  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
-                         skipDrawResourceMarking_,
-                         forceDrawResourceMarkingAfterSplit_,
-                         submissions);
-}
-
-void CommandQueue::submitCompactDrawRunBatch(
-    std::span<core::DrawRunCompactSubmission> submissions) {
   submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
                          skipDrawResourceMarking_,
                          forceDrawResourceMarkingAfterSplit_,

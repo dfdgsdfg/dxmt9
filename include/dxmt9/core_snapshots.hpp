@@ -939,44 +939,6 @@ inline std::span<const u8> drawPayloadRangeBytes(
   return arena.subspan(offset, size);
 }
 
-inline constexpr u32 kInvalidDrawUniformFixedPayloadIndex =
-    std::numeric_limits<u32>::max();
-
-struct DrawUniformCompactSubmissionPayload {
-  u32 fixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
-  DrawUniformStageConstantsSpan vertexConstants{};
-  DrawPayloadRange vertexConstantsRange{};
-  DrawUniformStageConstantsSpan pixelConstants{};
-  DrawPayloadRange pixelConstantsRange{};
-  u64 vertexConstantsHash = 0;
-  u64 pixelConstantsHash = 0;
-  u64 fixedPayloadHash = 0;
-  u64 hash = 0;
-
-  constexpr bool valid() const noexcept {
-    return fixedPayloadIndex != kInvalidDrawUniformFixedPayloadIndex;
-  }
-};
-
-struct DrawUniformCompactPayloadArenaView {
-  std::span<const DrawUniformFixedPayload> fixedPayloads{};
-  std::span<const u8> stageBytes{};
-};
-
-struct DrawSubmissionUniformScratch {
-  std::vector<DrawUniformFixedPayload> fixedPayloads;
-  std::vector<u8> stageBytes;
-  u64 lastFixedPayloadHash = 0;
-  u32 lastFixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
-
-  void clear() noexcept {
-    fixedPayloads.clear();
-    stageBytes.clear();
-    lastFixedPayloadHash = 0;
-    lastFixedPayloadIndex = kInvalidDrawUniformFixedPayloadIndex;
-  }
-};
-
 struct DrawBufferBindingSnapshot {
   u64 metalHandle = 0;
   u64 contentsAddress = 0;
@@ -1080,8 +1042,6 @@ enum class DrawRunSubmissionStateLane : u8 {
 struct DrawRunSubmission {
   std::optional<CanonicalDrawState> state{};
   std::optional<DrawUniformPayload> uniforms{};
-  std::optional<DrawUniformCompactSubmissionPayload> compactUniforms{};
-  DrawUniformCompactPayloadArenaView compactUniformArena{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
   DrawBindingOverride bindingOverride{};
@@ -1107,38 +1067,6 @@ struct DrawRunSubmission {
   const DrawUniformPayload& uniformPayload() const noexcept {
     DXMT_ASSERT(uniforms.has_value());
     return *uniforms;
-  }
-  const DrawUniformCompactSubmissionPayload& compactUniformPayload() const noexcept {
-    DXMT_ASSERT(compactUniforms.has_value());
-    return *compactUniforms;
-  }
-};
-
-struct DrawRunCompactSubmission {
-  std::optional<CanonicalDrawState> state{};
-  std::optional<DrawUniformCompactSubmissionPayload> compactUniforms{};
-  DrawUniformCompactPayloadArenaView compactUniformArena{};
-  DrawParam draw{};
-  DrawParamPayloadView payload{};
-  DrawBindingOverride bindingOverride{};
-  u64 stateGeneration = 0;
-  u64 uniformGeneration = 0;
-  u64 uniformFixedPayloadGeneration = 0;
-  u64 uniformPayloadHash = 0;
-  DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
-  bool stateMaterialized = true;
-
-  CanonicalDrawState& materializedState() noexcept {
-    DXMT_ASSERT(stateMaterialized && state.has_value());
-    return *state;
-  }
-  const CanonicalDrawState& materializedState() const noexcept {
-    DXMT_ASSERT(stateMaterialized && state.has_value());
-    return *state;
-  }
-  const DrawUniformCompactSubmissionPayload& compactUniformPayload() const noexcept {
-    DXMT_ASSERT(compactUniforms.has_value());
-    return *compactUniforms;
   }
 };
 
@@ -1301,32 +1229,6 @@ inline std::uint64_t drawRunSubmissionCarrierStateStorageBytes() noexcept {
 
 inline std::uint64_t drawRunSubmissionCarrierUniformStorageBytes() noexcept {
   return sizeof(std::optional<DrawUniformPayload>);
-}
-
-inline std::uint64_t
-drawRunSubmissionCarrierCompactUniformStorageBytes() noexcept {
-  return sizeof(std::optional<DrawUniformCompactSubmissionPayload>) +
-         sizeof(DrawUniformCompactPayloadArenaView);
-}
-
-inline std::uint64_t drawRunCompactSubmissionCarrierBytes() noexcept {
-  return sizeof(DrawRunCompactSubmission);
-}
-
-inline std::uint64_t
-drawRunCompactSubmissionCarrierStateStorageBytes() noexcept {
-  return sizeof(std::optional<CanonicalDrawState>);
-}
-
-inline std::uint64_t
-drawRunCompactSubmissionCarrierUniformStorageBytes() noexcept {
-  return 0;
-}
-
-inline std::uint64_t
-drawRunCompactSubmissionCarrierCompactUniformStorageBytes() noexcept {
-  return sizeof(std::optional<DrawUniformCompactSubmissionPayload>) +
-         sizeof(DrawUniformCompactPayloadArenaView);
 }
 
 template <typename SubmissionA, typename SubmissionB>
@@ -2036,17 +1938,8 @@ class Device : public std::enable_shared_from_this<Device> {
                                     std::span<const DrawParamPayloadView> payloads = {});
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
-      const DrawRunSubmission* previousSubmission = nullptr,
-      DrawSubmissionUniformScratch* uniformScratch = nullptr,
-      bool compactUniformSubmission = false,
-      bool compactSubmissionCarrier = false);
-  HResult snapshotDrawSubmissionFromCurrentState(
-      DrawParam draw, DrawRunCompactSubmission& submission,
-      const DrawRunCompactSubmission* previousSubmission = nullptr,
-      DrawSubmissionUniformScratch* uniformScratch = nullptr);
+      const DrawRunSubmission* previousSubmission = nullptr);
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
-  void submitCompactDrawSubmissionBatch(
-      std::span<DrawRunCompactSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;
@@ -2123,13 +2016,6 @@ class Device : public std::enable_shared_from_this<Device> {
       DeviceState baseState,
       std::span<const DrawParam> draws,
       std::span<const DrawParamPayloadView> payloads = {});
-  template <typename Submission, typename PreviousSubmission>
-  HResult snapshotDrawSubmissionFromCurrentStateImpl(
-      DrawParam draw, Submission& submission,
-      const PreviousSubmission* previousSubmission,
-      DrawSubmissionUniformScratch* uniformScratch,
-      bool compactUniformSubmission,
-      bool compactSubmissionCarrier);
   void submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   u32 experimentCaptureRequestedCount() const;
@@ -2189,8 +2075,7 @@ class Device : public std::enable_shared_from_this<Device> {
   void invalidateDrawUniformNonConstantCache() noexcept;
   void invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
-  const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch(
-      bool directCompactUniformSource = false);
+  const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch();
 
   AdapterInfo adapter_{};
   BackendLimits limits_{};

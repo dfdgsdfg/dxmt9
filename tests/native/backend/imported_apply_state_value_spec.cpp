@@ -197,11 +197,6 @@ struct RecordingDxmt9Device final : dxmt9::Device {
     dxmt9::Device::submitDrawRunBatch(submissions);
   }
 
-  void submitCompactDrawRunBatch(
-      std::span<DrawRunCompactSubmission> submissions) override {
-    compactDrawBatchSizes.push_back(submissions.size());
-  }
-
   void flush() override {
     RecordedEvent event;
     event.kind = EventKind::Flush;
@@ -213,7 +208,6 @@ struct RecordingDxmt9Device final : dxmt9::Device {
   std::uint64_t nextHandle = 1;
   std::vector<RecordedEvent> events;
   std::vector<std::size_t> drawBatchSizes;
-  std::vector<std::size_t> compactDrawBatchSizes;
   BackendDevice::DeviceLostObserver deviceLostObserver;
   BackendDevice::PresentationStatusObserver presentationStatusObserver;
 };

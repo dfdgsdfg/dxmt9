@@ -479,22 +479,9 @@ void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes);
-void countD3D9SnapshotUniformMaterializedCompactOpportunity(
-    std::uint64_t candidateBytes,
-    std::uint64_t savedBytes,
-    std::uint64_t fixedBytes,
-    std::uint64_t vertexBytes,
-    std::uint64_t pixelBytes);
-void countD3D9SnapshotUniformCompactCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotUniformCompactFixedCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotUniformCompactVertexStageCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotUniformCompactPixelStageCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotUniformCompactFixedPayload(bool reused,
-                                                 std::uint64_t bytes);
 void countD3D9SnapshotSubmissionCarrier(std::uint64_t carrierBytes,
                                         std::uint64_t stateStorageBytes,
                                         std::uint64_t uniformStorageBytes,
-                                        std::uint64_t compactUniformStorageBytes,
                                         bool uniformStorageUnused);
 void countD3D9SnapshotUniformElided(std::uint64_t bytes);
 void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,

@@ -200,68 +200,6 @@ struct DrawUniformPayloadRecord {
         hash(uniformPayloadHash) {}
 };
 
-struct DrawUniformCompactPayloadView {
-  const DrawUniformFixedPayload* fixedPayload = nullptr;
-  DrawUniformStageConstantsSpan vertexConstants{};
-  std::span<const u8> vertexConstantsBytes{};
-  DrawUniformStageConstantsSpan pixelConstants{};
-  std::span<const u8> pixelConstantsBytes{};
-  u64 vertexConstantsHash = 0;
-  u64 pixelConstantsHash = 0;
-  u64 fixedPayloadHash = 0;
-  u64 hash = 0;
-
-  bool valid() const noexcept {
-    return fixedPayload &&
-           vertexConstants.byteSize == vertexConstantsBytes.size() &&
-           pixelConstants.byteSize == pixelConstantsBytes.size();
-  }
-};
-
-template <typename Submission>
-inline DrawUniformCompactPayloadView drawUniformCompactPayloadView(
-    const Submission& submission) noexcept {
-  if (!submission.compactUniforms.has_value()) {
-    return {};
-  }
-  const auto& compact = submission.compactUniformPayload();
-  if (!compact.valid() ||
-      compact.fixedPayloadIndex >= submission.compactUniformArena.fixedPayloads.size()) {
-    return {};
-  }
-  const auto vertexBytes = drawPayloadRangeBytes(
-      compact.vertexConstantsRange, submission.compactUniformArena.stageBytes);
-  const auto pixelBytes = drawPayloadRangeBytes(
-      compact.pixelConstantsRange, submission.compactUniformArena.stageBytes);
-  return DrawUniformCompactPayloadView{
-      .fixedPayload =
-          &submission.compactUniformArena.fixedPayloads[compact.fixedPayloadIndex],
-      .vertexConstants = compact.vertexConstants,
-      .vertexConstantsBytes = vertexBytes,
-      .pixelConstants = compact.pixelConstants,
-      .pixelConstantsBytes = pixelBytes,
-      .vertexConstantsHash = compact.vertexConstantsHash,
-      .pixelConstantsHash = compact.pixelConstantsHash,
-      .fixedPayloadHash = compact.fixedPayloadHash,
-      .hash = compact.hash,
-  };
-}
-
-inline bool drawRunSubmissionHasFullUniformPayload(
-    const DrawRunSubmission& submission) noexcept {
-  return submission.uniforms.has_value();
-}
-
-inline bool drawRunSubmissionHasFullUniformPayload(
-    const DrawRunCompactSubmission& /*submission*/) noexcept {
-  return false;
-}
-
-inline const DrawUniformPayload& drawRunSubmissionFullUniformPayload(
-    const DrawRunSubmission& submission) noexcept {
-  return submission.uniformPayload();
-}
-
 struct MetalCommandHeader {
   MetalCommandKind kind = MetalCommandKind::DrawRun;
   CommandPayloadIndex payloadIndex{};
@@ -441,44 +379,6 @@ inline bool drawUniformPixelConstantsMatches(
              payload.psConst, record.constants, constantsBytes);
 }
 
-inline bool drawUniformStageConstantsSpanBytesMatch(
-    DrawUniformStageConstantsSpan recordSpan,
-    std::span<const u8> recordBytes,
-    DrawUniformStageConstantsSpan expectedSpan,
-    std::span<const u8> expectedBytes) noexcept {
-  return recordSpan.byteSize == expectedSpan.byteSize &&
-         recordSpan.floatCount == expectedSpan.floatCount &&
-         recordSpan.intCount == expectedSpan.intCount &&
-         recordSpan.boolCount == expectedSpan.boolCount &&
-         recordBytes.size() == recordSpan.byteSize &&
-         expectedBytes.size() == expectedSpan.byteSize &&
-         (recordBytes.empty() ||
-          std::memcmp(recordBytes.data(), expectedBytes.data(),
-                      recordBytes.size()) == 0);
-}
-
-inline bool drawUniformVertexConstantsMatches(
-    const DrawUniformVertexConstantsRecord& record,
-    std::span<const u8> constantsBytes,
-    const DrawUniformCompactPayloadView& payload) noexcept {
-  return payload.valid() &&
-         record.handle.hash == payload.vertexConstantsHash &&
-         drawUniformStageConstantsSpanBytesMatch(
-             record.constants, constantsBytes,
-             payload.vertexConstants, payload.vertexConstantsBytes);
-}
-
-inline bool drawUniformPixelConstantsMatches(
-    const DrawUniformPixelConstantsRecord& record,
-    std::span<const u8> constantsBytes,
-    const DrawUniformCompactPayloadView& payload) noexcept {
-  return payload.valid() &&
-         record.handle.hash == payload.pixelConstantsHash &&
-         drawUniformStageConstantsSpanBytesMatch(
-             record.constants, constantsBytes,
-             payload.pixelConstants, payload.pixelConstantsBytes);
-}
-
 inline void materializeDrawUniformPayload(
     const DrawUniformPayloadRecord& record,
     const DrawUniformFixedPayloadRecord& fixedRecord,
@@ -534,32 +434,6 @@ inline bool drawUniformPayloadRecordMatches(
          drawUniformPixelConstantsMatches(
              pixelRecord, pixelConstantsBytes, payload) &&
          drawUniformFixedPayloadMatches(fixedRecord, payload);
-}
-
-inline bool drawUniformPayloadRecordMatches(
-    const DrawUniformPayloadRecord& record,
-    const DrawUniformFixedPayloadRecord& fixedRecord,
-    const DrawUniformVertexConstantsRecord& vertexRecord,
-    std::span<const u8> vertexConstantsBytes,
-    const DrawUniformPixelConstantsRecord& pixelRecord,
-    std::span<const u8> pixelConstantsBytes,
-    const DrawUniformCompactPayloadView& payload) noexcept {
-  return payload.valid() &&
-         record.handle.hash == payload.hash &&
-         record.hash == payload.hash &&
-         record.vertexConstantsHash == payload.vertexConstantsHash &&
-         record.pixelConstantsHash == payload.pixelConstantsHash &&
-         record.fixedPayloadHash == payload.fixedPayloadHash &&
-         record.vertexConstantsHandle == vertexRecord.handle &&
-         record.pixelConstantsHandle == pixelRecord.handle &&
-         vertexRecord.handle.hash == payload.vertexConstantsHash &&
-         pixelRecord.handle.hash == payload.pixelConstantsHash &&
-         drawUniformVertexConstantsMatches(
-             vertexRecord, vertexConstantsBytes, payload) &&
-         drawUniformPixelConstantsMatches(
-             pixelRecord, pixelConstantsBytes, payload) &&
-         drawUniformFixedPayloadMatches(
-             fixedRecord, *payload.fixedPayload, payload.fixedPayloadHash);
 }
 
 inline const DrawUniformFixedPayloadRecord* drawRunFixedPayloadRecord(
@@ -1164,23 +1038,9 @@ struct ChunkSlot {
         record, drawUniformVertexConstantsBytes(record), payload);
   }
 
-  bool drawUniformVertexConstantsRecordMatches(
-      const DrawUniformVertexConstantsRecord& record,
-      const DrawUniformCompactPayloadView& payload) const noexcept {
-    return drawUniformVertexConstantsMatches(
-        record, drawUniformVertexConstantsBytes(record), payload);
-  }
-
   bool drawUniformPixelConstantsRecordMatches(
       const DrawUniformPixelConstantsRecord& record,
       const DrawUniformPayload& payload) const noexcept {
-    return drawUniformPixelConstantsMatches(
-        record, drawUniformPixelConstantsBytes(record), payload);
-  }
-
-  bool drawUniformPixelConstantsRecordMatches(
-      const DrawUniformPixelConstantsRecord& record,
-      const DrawUniformCompactPayloadView& payload) const noexcept {
     return drawUniformPixelConstantsMatches(
         record, drawUniformPixelConstantsBytes(record), payload);
   }
@@ -1386,93 +1246,7 @@ struct ChunkSlot {
   }
 
   DrawUniformStageHandle
-  findDrawUniformVertexConstants(
-      const DrawUniformCompactPayloadView& payload) noexcept {
-    if (const auto* record =
-            drawUniformVertexConstantsRecord(lastUniformVertexConstantsHandle)) {
-      if (drawUniformVertexConstantsRecordMatches(*record, payload)) {
-        return record->handle;
-      }
-    }
-
-    if (drawUniformStageLookupReady(drawUniformVertexConstants,
-                                    drawUniformVertexConstantsLookupHeads,
-                                    drawUniformVertexConstantsLookupTails,
-                                    drawUniformVertexConstantsLookupNext)) {
-      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
-          payload.vertexConstantsHash, drawUniformVertexConstantsLookupHeads.size());
-      auto recordIndex = drawUniformVertexConstantsLookupHeads[bucketIndex];
-      for (std::size_t visited = 0;
-           recordIndex != detail::kChunkSlotInvalidUniformIndex &&
-           visited < drawUniformVertexConstants.size();
-           ++visited) {
-        if (recordIndex >= drawUniformVertexConstants.size()) {
-          break;
-        }
-        const auto& record = drawUniformVertexConstants[recordIndex];
-        if (drawUniformVertexConstantsRecordMatches(record, payload)) {
-          lastUniformVertexConstantsHandle = record.handle;
-          return record.handle;
-        }
-        recordIndex = drawUniformVertexConstantsLookupNext[recordIndex];
-      }
-      return {};
-    }
-
-    for (const auto& record : drawUniformVertexConstants) {
-      if (drawUniformVertexConstantsRecordMatches(record, payload)) {
-        lastUniformVertexConstantsHandle = record.handle;
-        return record.handle;
-      }
-    }
-    return {};
-  }
-
-  DrawUniformStageHandle
   findDrawUniformPixelConstants(const DrawUniformPayload& payload) noexcept {
-    if (const auto* record =
-            drawUniformPixelConstantsRecord(lastUniformPixelConstantsHandle)) {
-      if (drawUniformPixelConstantsRecordMatches(*record, payload)) {
-        return record->handle;
-      }
-    }
-
-    if (drawUniformStageLookupReady(drawUniformPixelConstants,
-                                    drawUniformPixelConstantsLookupHeads,
-                                    drawUniformPixelConstantsLookupTails,
-                                    drawUniformPixelConstantsLookupNext)) {
-      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
-          payload.pixelConstantsHash, drawUniformPixelConstantsLookupHeads.size());
-      auto recordIndex = drawUniformPixelConstantsLookupHeads[bucketIndex];
-      for (std::size_t visited = 0;
-           recordIndex != detail::kChunkSlotInvalidUniformIndex &&
-           visited < drawUniformPixelConstants.size();
-           ++visited) {
-        if (recordIndex >= drawUniformPixelConstants.size()) {
-          break;
-        }
-        const auto& record = drawUniformPixelConstants[recordIndex];
-        if (drawUniformPixelConstantsRecordMatches(record, payload)) {
-          lastUniformPixelConstantsHandle = record.handle;
-          return record.handle;
-        }
-        recordIndex = drawUniformPixelConstantsLookupNext[recordIndex];
-      }
-      return {};
-    }
-
-    for (const auto& record : drawUniformPixelConstants) {
-      if (drawUniformPixelConstantsRecordMatches(record, payload)) {
-        lastUniformPixelConstantsHandle = record.handle;
-        return record.handle;
-      }
-    }
-    return {};
-  }
-
-  DrawUniformStageHandle
-  findDrawUniformPixelConstants(
-      const DrawUniformCompactPayloadView& payload) noexcept {
     if (const auto* record =
             drawUniformPixelConstantsRecord(lastUniformPixelConstantsHandle)) {
       if (drawUniformPixelConstantsRecordMatches(*record, payload)) {
@@ -1552,26 +1326,6 @@ struct ChunkSlot {
     return true;
   }
 
-  bool appendDrawUniformStageConstantsBytes(
-      std::vector<u8>& arena,
-      std::span<const u8> constantsBytes,
-      DrawUniformStageConstantsSpan& span) {
-    if (constantsBytes.size() != span.byteSize) {
-      return false;
-    }
-    if (!detail::chunkSlotCanAppendU32Range(arena.size(), span.byteSize)) {
-      return false;
-    }
-    span.byteOffset = static_cast<std::uint32_t>(arena.size());
-    if (span.byteSize == 0) {
-      return true;
-    }
-    const auto oldSize = arena.size();
-    detail::chunkSlotReserveAtLeast(arena, oldSize + span.byteSize);
-    arena.insert(arena.end(), constantsBytes.begin(), constantsBytes.end());
-    return true;
-  }
-
   DrawUniformStageHandle
   appendDrawUniformVertexConstants(const DrawUniformPayload& payload) {
     detail::ChunkSlotPerfScope appendScope(
@@ -1619,57 +1373,6 @@ struct ChunkSlot {
   }
 
   DrawUniformStageHandle
-  appendDrawUniformVertexConstants(
-      const DrawUniformCompactPayloadView& payload) {
-    detail::ChunkSlotPerfScope appendScope(
-        dxmt9::perf::countDrawUniformPayloadAppendVertexAppendCpuTime);
-    if (!payload.valid()) {
-      return {};
-    }
-    const bool canUseUniformSoA =
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformVertexConstants.size());
-    DXMT_ASSERT(canUseUniformSoA &&
-                "draw uniform vertex-constant storage exceeded 32-bit range storage");
-    if (!canUseUniformSoA) {
-      return {};
-    }
-
-    const auto recordIndex =
-        static_cast<std::uint32_t>(drawUniformVertexConstants.size());
-    const auto handle = detail::chunkSlotUniformStageHandle(
-        recordIndex, payload.vertexConstantsHash);
-    auto constantsSpan = payload.vertexConstants;
-    if (!appendDrawUniformStageConstantsBytes(
-            drawUniformVertexConstantBytes, payload.vertexConstantsBytes,
-            constantsSpan)) {
-      return {};
-    }
-    const auto appendBytes =
-        sizeof(DrawUniformVertexConstantsRecord) + constantsSpan.byteSize;
-    if (dxmt9::perf::enabled()) {
-      dxmt9::perf::countDrawUniformVertexConstantsAppend();
-      dxmt9::perf::countDrawUniformVertexConstantsAppendBytes(appendBytes);
-      dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
-    }
-    reserveDrawUniformStageLookup(drawUniformVertexConstants,
-                                  drawUniformVertexConstantsLookupHeads,
-                                  drawUniformVertexConstantsLookupTails,
-                                  drawUniformVertexConstantsLookupNext,
-                                  drawUniformVertexConstants.size() + 1u);
-    drawUniformVertexConstants.push_back(DrawUniformVertexConstantsRecord{
-        .handle = handle,
-        .constants = constantsSpan,
-    });
-    appendDrawUniformStageLookup(drawUniformVertexConstants,
-                                 drawUniformVertexConstantsLookupHeads,
-                                 drawUniformVertexConstantsLookupTails,
-                                 drawUniformVertexConstantsLookupNext,
-                                 recordIndex);
-    lastUniformVertexConstantsHandle = handle;
-    return handle;
-  }
-
-  DrawUniformStageHandle
   appendDrawUniformPixelConstants(const DrawUniformPayload& payload) {
     detail::ChunkSlotPerfScope appendScope(
         dxmt9::perf::countDrawUniformPayloadAppendPixelAppendCpuTime);
@@ -1688,57 +1391,6 @@ struct ChunkSlot {
     auto constantsSpan = makeDrawUniformPixelConstantsSpan(payload, 0u);
     if (!appendDrawUniformStageConstantsBytes(
             drawUniformPixelConstantBytes, payload.psConst, constantsSpan)) {
-      return {};
-    }
-    const auto appendBytes =
-        sizeof(DrawUniformPixelConstantsRecord) + constantsSpan.byteSize;
-    if (dxmt9::perf::enabled()) {
-      dxmt9::perf::countDrawUniformPixelConstantsAppend();
-      dxmt9::perf::countDrawUniformPixelConstantsAppendBytes(appendBytes);
-      dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
-    }
-    reserveDrawUniformStageLookup(drawUniformPixelConstants,
-                                  drawUniformPixelConstantsLookupHeads,
-                                  drawUniformPixelConstantsLookupTails,
-                                  drawUniformPixelConstantsLookupNext,
-                                  drawUniformPixelConstants.size() + 1u);
-    drawUniformPixelConstants.push_back(DrawUniformPixelConstantsRecord{
-        .handle = handle,
-        .constants = constantsSpan,
-    });
-    appendDrawUniformStageLookup(drawUniformPixelConstants,
-                                 drawUniformPixelConstantsLookupHeads,
-                                 drawUniformPixelConstantsLookupTails,
-                                 drawUniformPixelConstantsLookupNext,
-                                 recordIndex);
-    lastUniformPixelConstantsHandle = handle;
-    return handle;
-  }
-
-  DrawUniformStageHandle
-  appendDrawUniformPixelConstants(
-      const DrawUniformCompactPayloadView& payload) {
-    detail::ChunkSlotPerfScope appendScope(
-        dxmt9::perf::countDrawUniformPayloadAppendPixelAppendCpuTime);
-    if (!payload.valid()) {
-      return {};
-    }
-    const bool canUseUniformSoA =
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
-    DXMT_ASSERT(canUseUniformSoA &&
-                "draw uniform pixel-constant storage exceeded 32-bit range storage");
-    if (!canUseUniformSoA) {
-      return {};
-    }
-
-    const auto recordIndex =
-        static_cast<std::uint32_t>(drawUniformPixelConstants.size());
-    const auto handle = detail::chunkSlotUniformStageHandle(
-        recordIndex, payload.pixelConstantsHash);
-    auto constantsSpan = payload.pixelConstants;
-    if (!appendDrawUniformStageConstantsBytes(
-            drawUniformPixelConstantBytes, payload.pixelConstantsBytes,
-            constantsSpan)) {
       return {};
     }
     const auto appendBytes =
@@ -1981,132 +1633,6 @@ struct ChunkSlot {
     return {};
   }
 
-  DrawUniformHandle findDrawUniformPayload(
-      const DrawUniformCompactPayloadView& payload,
-      DrawUniformHandle candidate = {}) noexcept {
-    detail::ChunkSlotPerfScope lookupScope(
-        dxmt9::perf::countDrawUniformPayloadLookupCpuTime);
-    if (!payload.valid()) {
-      return {};
-    }
-    const bool recordPerf = dxmt9::perf::enabled();
-    bool sawSemanticHashFullMismatch = false;
-    auto payloadMatches = [&](const DrawUniformPayloadRecord& record) noexcept {
-      if (record.handle.hash != payload.hash) {
-        return false;
-      }
-      const auto* fixedRecord = drawUniformFixedPayloadRecord(record.fixedHandle);
-      const auto* vertexRecord =
-          drawUniformVertexConstantsRecord(record.vertexConstantsHandle);
-      const auto* pixelRecord =
-          drawUniformPixelConstantsRecord(record.pixelConstantsHandle);
-      if (fixedRecord && vertexRecord && pixelRecord &&
-          drawUniformPayloadRecordMatches(
-              record, *fixedRecord,
-              *vertexRecord, drawUniformVertexConstantsBytes(*vertexRecord),
-              *pixelRecord, drawUniformPixelConstantsBytes(*pixelRecord),
-              payload)) {
-        return true;
-      }
-      sawSemanticHashFullMismatch = true;
-      return false;
-    };
-    auto countSemanticHashMiss = [&]() noexcept {
-      if (recordPerf && sawSemanticHashFullMismatch) {
-        dxmt9::perf::countDrawUniformPayloadLookupSemanticHashMiss(
-            sizeof(DrawUniformPayloadRecord));
-      }
-    };
-    if (const auto* record = drawUniformPayloadRecord(candidate)) {
-      if (payloadMatches(*record)) {
-        if (recordPerf) {
-          dxmt9::perf::countDrawUniformPayloadLookupCandidateHit();
-        }
-        lastUniformHandle = record->handle;
-        return record->handle;
-      }
-    }
-
-    if (const auto* record = drawUniformPayloadRecord(lastUniformHandle)) {
-      if (payloadMatches(*record)) {
-        if (recordPerf) {
-          dxmt9::perf::countDrawUniformPayloadLookupLastHit();
-        }
-        return record->handle;
-      }
-    }
-
-    if (drawUniformPayloadLookupReady()) {
-      detail::ChunkSlotPerfScope bucketScope(
-          dxmt9::perf::countDrawUniformPayloadLookupBucketCpuTime);
-      const auto bucketIndex = detail::chunkSlotUniformLookupBucket(
-          payload.hash, drawUniformPayloadLookupHeads.size());
-      auto uniformIndex = drawUniformPayloadLookupHeads[bucketIndex];
-      bool lookupIntact = true;
-      std::uint64_t bucketProbes = 0;
-      std::uint64_t bucketCollisions = 0;
-      std::uint64_t hashCollisions = 0;
-      for (std::size_t visited = 0;
-           uniformIndex != detail::kChunkSlotInvalidUniformIndex &&
-           visited < drawUniformPayloads.size();
-           ++visited) {
-        if (uniformIndex >= drawUniformPayloads.size()) {
-          lookupIntact = false;
-          break;
-        }
-
-        const auto& record = drawUniformPayloads[uniformIndex];
-        ++bucketProbes;
-        const bool hashMatches = record.handle.hash == payload.hash;
-        if (payloadMatches(record)) {
-          if (recordPerf) {
-            dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
-            dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
-                bucketCollisions);
-            dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
-                hashCollisions);
-            dxmt9::perf::countDrawUniformPayloadLookupBucketHit();
-          }
-          lastUniformHandle = record.handle;
-          return record.handle;
-        }
-        if (hashMatches) {
-          ++hashCollisions;
-        } else {
-          ++bucketCollisions;
-        }
-        uniformIndex = drawUniformPayloadLookupNext[uniformIndex];
-      }
-      if (recordPerf) {
-        dxmt9::perf::countDrawUniformPayloadLookupBucketProbe(bucketProbes);
-        dxmt9::perf::countDrawUniformPayloadLookupBucketCollision(
-            bucketCollisions);
-        dxmt9::perf::countDrawUniformPayloadLookupHashCollision(
-            hashCollisions);
-      }
-      if (lookupIntact && uniformIndex == detail::kChunkSlotInvalidUniformIndex) {
-        if (recordPerf) {
-          dxmt9::perf::countDrawUniformPayloadLookupBucketMiss();
-        }
-        countSemanticHashMiss();
-        return {};
-      }
-    }
-
-    for (std::size_t i = 0; i < drawUniformPayloads.size(); ++i) {
-      const auto& record = drawUniformPayloads[i];
-      if (payloadMatches(record)) {
-        if (recordPerf) {
-          dxmt9::perf::countDrawUniformPayloadLookupLinearHit();
-        }
-        lastUniformHandle = record.handle;
-        return record.handle;
-      }
-    }
-    countSemanticHashMiss();
-    return {};
-  }
-
   DrawUniformHandle appendDrawUniformPayload(
       const DrawUniformPayload& payload,
       DrawUniformFixedHandle fixedHandleCandidate = {}) {
@@ -2185,105 +1711,6 @@ struct ChunkSlot {
       drawUniformPayloads.emplace_back(uniformHandle, fixedHandle,
                                        vertexConstantsHandle,
                                        pixelConstantsHandle, payload);
-    }
-    {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendLinkCpuTime);
-      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-        appendDrawUniformPayloadLookup(uniformIndex);
-      }
-    }
-    lastUniformHandle = uniformHandle;
-    return uniformHandle;
-  }
-
-  DrawUniformHandle appendDrawUniformPayload(
-      const DrawUniformCompactPayloadView& payload,
-      DrawUniformFixedHandle fixedHandleCandidate = {}) {
-    if (!payload.valid()) {
-      return {};
-    }
-    const bool canUseUniformSoA =
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size()) &&
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformVertexConstants.size()) &&
-        detail::chunkSlotCanAppendU32IndexedElement(drawUniformPixelConstants.size());
-    DXMT_ASSERT(canUseUniformSoA && "draw uniform payload storage exceeded 32-bit range storage");
-    if (!canUseUniformSoA) {
-      return {};
-    }
-
-    DrawUniformFixedHandle fixedHandle = fixedHandleCandidate;
-    if (fixedHandle.valid()) {
-      const auto* record = drawUniformFixedPayloadRecord(fixedHandle);
-      if (!record || record->handle.hash != payload.fixedPayloadHash) {
-        fixedHandle = {};
-      }
-    }
-    if (!fixedHandle.valid() &&
-        !detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendFixedFindCpuTime);
-      fixedHandle = findDrawUniformFixedPayload(*payload.fixedPayload,
-                                                payload.fixedPayloadHash);
-    }
-    if (!fixedHandle.valid()) {
-      fixedHandle = appendDrawUniformFixedPayload(*payload.fixedPayload,
-                                                  payload.fixedPayloadHash);
-      if (!fixedHandle.valid()) {
-        return {};
-      }
-    }
-
-    DrawUniformStageHandle vertexConstantsHandle{};
-    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendVertexFindCpuTime);
-      vertexConstantsHandle = findDrawUniformVertexConstants(payload);
-    }
-    if (!vertexConstantsHandle.valid()) {
-      vertexConstantsHandle = appendDrawUniformVertexConstants(payload);
-      if (!vertexConstantsHandle.valid()) {
-        return {};
-      }
-    }
-
-    DrawUniformStageHandle pixelConstantsHandle{};
-    if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendPixelFindCpuTime);
-      pixelConstantsHandle = findDrawUniformPixelConstants(payload);
-    }
-    if (!pixelConstantsHandle.valid()) {
-      pixelConstantsHandle = appendDrawUniformPixelConstants(payload);
-      if (!pixelConstantsHandle.valid()) {
-        return {};
-      }
-    }
-
-    const auto uniformIndex = static_cast<std::uint32_t>(drawUniformPayloads.size());
-    const auto uniformHandle = detail::chunkSlotUniformHandle(uniformIndex, payload.hash);
-    if (dxmt9::perf::enabled()) {
-      dxmt9::perf::countDrawUniformPayloadAppend();
-      dxmt9::perf::countDrawUniformPayloadAppendBytes(sizeof(DrawUniformPayloadRecord));
-    }
-    {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendReserveCpuTime);
-      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-        reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
-      }
-    }
-    {
-      detail::ChunkSlotPerfScope scope(
-          dxmt9::perf::countDrawUniformPayloadAppendCopyCpuTime);
-      drawUniformPayloads.emplace_back(uniformHandle, fixedHandle,
-                                       vertexConstantsHandle,
-                                       pixelConstantsHandle,
-                                       payload.vertexConstantsHash,
-                                       payload.pixelConstantsHash,
-                                       payload.fixedPayloadHash,
-                                       payload.hash);
     }
     {
       detail::ChunkSlotPerfScope scope(
@@ -2493,8 +1920,7 @@ struct ChunkSlot {
     drawPsoSubviews.push_back(psoSubview);
   }
 
-  template <typename Submission>
-  void appendDrawRunBatch(std::span<Submission> submissions) {
+  void appendDrawRunBatch(std::span<DrawRunSubmission> submissions) {
     if (submissions.empty()) {
       return;
     }
@@ -2632,63 +2058,14 @@ struct ChunkSlot {
                 previousFixedPayloadGeneration
                 ? previousFixedHandle
                 : DrawUniformFixedHandle{};
-        if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
-          if (drawRunSubmissionHasFullUniformPayload(submissions[i])) {
-            const auto& uniformPayload =
-                drawRunSubmissionFullUniformPayload(submissions[i]);
-            if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-              uniformHandle = findDrawUniformPayload(uniformPayload);
-            }
-            if (!uniformHandle.valid()) {
-              uniformHandle =
-                  appendDrawUniformPayload(uniformPayload,
-                                           fixedHandleCandidate);
-              if (!uniformHandle.valid()) {
-                return;
-              }
-            }
-          } else if (submissions[i].compactUniforms.has_value()) {
-            const auto compactUniform = drawUniformCompactPayloadView(submissions[i]);
-            DXMT_ASSERT(compactUniform.valid() &&
-                        "compact draw submission uniforms require valid scratch arena");
-            if (!compactUniform.valid()) {
-              return;
-            }
-            if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-              uniformHandle = findDrawUniformPayload(compactUniform);
-            }
-            if (!uniformHandle.valid()) {
-              uniformHandle =
-                  appendDrawUniformPayload(compactUniform,
-                                           fixedHandleCandidate);
-              if (!uniformHandle.valid()) {
-                return;
-              }
-            }
-          } else {
-            const bool sameUniformGeneration =
-                submissions[i].uniformGeneration != 0 &&
-                submissions[i].uniformGeneration == previousUniformGeneration;
-            DXMT_ASSERT(i != 0u &&
-                        "batch-front draw submission must materialize uniforms");
-            DXMT_ASSERT(sameUniformGeneration && previousUniformHandle.valid() &&
-                        "elided draw submission uniforms require previous handle");
-            (void)sameUniformGeneration;
-            uniformHandle = previousUniformHandle;
-          }
-        } else if (submissions[i].compactUniforms.has_value()) {
-          const auto compactUniform = drawUniformCompactPayloadView(submissions[i]);
-          DXMT_ASSERT(compactUniform.valid() &&
-                      "compact draw submission uniforms require valid scratch arena");
-          if (!compactUniform.valid()) {
-            return;
-          }
+        if (submissions[i].uniforms.has_value()) {
+          const auto& uniformPayload = submissions[i].uniformPayload();
           if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
-            uniformHandle = findDrawUniformPayload(compactUniform);
+            uniformHandle = findDrawUniformPayload(uniformPayload);
           }
           if (!uniformHandle.valid()) {
             uniformHandle =
-                appendDrawUniformPayload(compactUniform,
+                appendDrawUniformPayload(uniformPayload,
                                          fixedHandleCandidate);
             if (!uniformHandle.valid()) {
               return;

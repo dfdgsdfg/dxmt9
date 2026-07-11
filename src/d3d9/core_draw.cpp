@@ -1008,66 +1008,6 @@ void hashDrawUniformNonConstantComponents(
   }
 }
 
-void hashDrawUniformNonConstantComponents(
-    const DrawUniformFixedPayload &payload, DrawUniformPayloadHashes &hashes,
-    DrawUniformPayloadHashOptions options = {}) {
-  const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
-  auto recorder = [&](void (*fn)(std::uint64_t)) {
-    return recordPerf ? fn : nullptr;
-  };
-
-  {
-    PerfScope scope(recorder(
-        dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashCpuTime));
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashWorldViewProjCpuTime));
-      hashes.worldViewProjHash = hashTrivial(payload.worldViewProj);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime));
-      hashes.ffpWorldViewHash = hashTrivial(payload.ffpWorldView);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpNormalMatrixCpuTime));
-      hashes.ffpNormalMatrixHash = hashTrivial(payload.ffpNormalMatrix);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashMaterialCpuTime));
-      hashes.materialHash = hashMaterial(payload.material);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashLightsCpuTime));
-      for (std::size_t i = 0; i < payload.lights.size(); ++i) {
-        hashes.lightHashes[i] = hashLight(payload.lights[i]);
-      }
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpBlendWvpCpuTime));
-      hashes.ffpBlendWorldViewProjHash =
-          hashBlendWorldViewProj(payload.ffpBlendWorldViewProj);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashTextureTransformsCpuTime));
-      hashes.textureTransformsHash =
-          hashTextureTransforms(payload.textureTransforms);
-      hashes.nonIdentityTextureTransformStageMask =
-          nonIdentityTextureTransformStageMask(payload.textureTransforms);
-    }
-    {
-      PerfScope fieldScope(recorder(
-          dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashClipPlanesCpuTime));
-      hashes.clipPlanesHash = hashClipPlanes(payload.clipPlanes);
-    }
-  }
-}
-
 void copyDrawUniformNonConstantHashes(
     DrawUniformPayloadHashes &dst,
     const DrawUniformPayloadHashes &src) noexcept {
@@ -1141,285 +1081,6 @@ u64 hashDrawUniformPayload(const DrawUniformPayload &payload,
   }
   return combineDrawUniformPayloadHashes(
       hashes, payload.clipPlaneMask, options.recordSnapshotPerf);
-}
-
-struct DrawUniformPayloadCompactByteBreakdown {
-  std::uint64_t fixedBytes = 0;
-  std::uint64_t vertexBytes = 0;
-  std::uint64_t pixelBytes = 0;
-
-  std::uint64_t candidateBytes() const noexcept {
-    const auto total = fixedBytes + vertexBytes + pixelBytes;
-    return std::min<std::uint64_t>(
-        total, drawRunSubmissionUniformCopyBytes());
-  }
-};
-
-DrawUniformPayloadCompactByteBreakdown drawUniformPayloadCompactByteBreakdown(
-    const DrawUniformPayloadHashes &hashes) {
-  const auto vertexBytes = std::min<std::uint64_t>(
-      hashes.vertexConstantsBytes, sizeof(VertexShaderConstants));
-  const auto pixelBytes = std::min<std::uint64_t>(
-      hashes.pixelConstantsBytes, sizeof(PixelShaderConstants));
-  return DrawUniformPayloadCompactByteBreakdown{
-      .fixedBytes = sizeof(DrawUniformFixedPayload),
-      .vertexBytes = vertexBytes,
-      .pixelBytes = pixelBytes,
-  };
-}
-
-bool drawUniformFixedPayloadMatchesPayload(
-    const DrawUniformFixedPayload& fixed,
-    const DrawUniformPayload& payload) noexcept {
-  return fixed.worldViewProj == payload.worldViewProj &&
-         fixed.ffpWorldView == payload.ffpWorldView &&
-         fixed.ffpNormalMatrix == payload.ffpNormalMatrix &&
-         fixed.material == payload.material &&
-         fixed.lights == payload.lights &&
-         fixed.ffpBlendWorldViewProj == payload.ffpBlendWorldViewProj &&
-         fixed.textureTransforms == payload.textureTransforms &&
-         fixed.clipPlaneMask == payload.clipPlaneMask &&
-         fixed.clipPlanes == payload.clipPlanes;
-}
-
-bool uniformCompactBreakdownEnabled() {
-  static const bool enabled = dxmt9::util::getenvFlag(
-      "DXMT9_PERF_UNIFORM_COMPACT_BREAKDOWN");
-  return enabled;
-}
-
-void (*uniformCompactBreakdownRecorder(
-    void (*record)(std::uint64_t)))(std::uint64_t) {
-  return uniformCompactBreakdownEnabled() && dxmt9::perf::enabled() ? record
-                                                                    : nullptr;
-}
-
-template <std::size_t FloatCount>
-bool appendDrawUniformStageConstantsToScratch(
-    const ShaderConstantSnapshot<FloatCount>& constants,
-    DrawUniformStageConstantsSpan& span,
-    std::vector<u8>& arena,
-    DrawPayloadRange& range) {
-  if (span.byteSize == 0) {
-    range = {};
-    span.byteOffset = 0;
-    return true;
-  }
-  const auto oldSize = arena.size();
-  constexpr auto kMaxU32 =
-      static_cast<std::size_t>(std::numeric_limits<u32>::max());
-  const auto byteSize = static_cast<std::size_t>(span.byteSize);
-  if (oldSize > kMaxU32 || byteSize > kMaxU32 - oldSize) {
-    return false;
-  }
-  range = DrawPayloadRange{
-      .offset = static_cast<u32>(oldSize),
-      .size = span.byteSize,
-  };
-  span.byteOffset = range.offset;
-  arena.resize(oldSize + span.byteSize);
-  auto* cursor = arena.data() + oldSize;
-
-  const auto floatBytes =
-      static_cast<std::size_t>(span.floatCount) * sizeof(constants.float4[0]);
-  if (floatBytes != 0) {
-    std::memcpy(cursor, constants.float4.data(), floatBytes);
-    cursor += floatBytes;
-  }
-
-  const auto intBytes =
-      static_cast<std::size_t>(span.intCount) * sizeof(constants.int4[0]);
-  if (intBytes != 0) {
-    std::memcpy(cursor, constants.int4.data(), intBytes);
-    cursor += intBytes;
-  }
-
-  const auto boolBytes =
-      static_cast<std::size_t>(span.boolCount) * sizeof(constants.bools[0]);
-  if (boolBytes != 0) {
-    std::memcpy(cursor, constants.bools.data(), boolBytes);
-  }
-  return true;
-}
-
-bool snapshotCompactDrawUniformPayload(
-    const DrawUniformPayload& payload,
-    DrawSubmissionUniformScratch& scratch,
-    DrawUniformCompactSubmissionPayload& compact) {
-  PerfScope compactScope(uniformCompactBreakdownRecorder(
-      dxmt9::perf::countD3D9SnapshotUniformCompactCpuTime));
-  const auto oldFixedPayloadCount = scratch.fixedPayloads.size();
-  const auto oldStageByteCount = scratch.stageBytes.size();
-  const auto oldLastFixedPayloadHash = scratch.lastFixedPayloadHash;
-  const auto oldLastFixedPayloadIndex = scratch.lastFixedPayloadIndex;
-  compact = {};
-  compact.vertexConstants = makeDrawUniformVertexConstantsSpan(payload, 0u);
-  compact.pixelConstants = makeDrawUniformPixelConstantsSpan(payload, 0u);
-  compact.vertexConstantsHash = payload.vertexConstantsHash;
-  compact.pixelConstantsHash = payload.pixelConstantsHash;
-  compact.fixedPayloadHash = payload.fixedPayloadHash;
-  compact.hash = payload.hash;
-
-  bool canReuseLastFixedPayload = false;
-  {
-    PerfScope fixedScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactFixedCpuTime));
-    const auto lastFixedPayloadIndex = scratch.lastFixedPayloadIndex;
-    canReuseLastFixedPayload =
-        lastFixedPayloadIndex != kInvalidDrawUniformFixedPayloadIndex &&
-        lastFixedPayloadIndex < scratch.fixedPayloads.size() &&
-        scratch.lastFixedPayloadHash == payload.fixedPayloadHash &&
-        drawUniformFixedPayloadMatchesPayload(
-            scratch.fixedPayloads[lastFixedPayloadIndex], payload);
-    if (canReuseLastFixedPayload) {
-      compact.fixedPayloadIndex = lastFixedPayloadIndex;
-    } else {
-      if (scratch.fixedPayloads.size() >=
-          static_cast<std::size_t>(std::numeric_limits<u32>::max())) {
-        return false;
-      }
-      const auto fixedPayload = makeDrawUniformFixedPayload(payload);
-      compact.fixedPayloadIndex = static_cast<u32>(oldFixedPayloadCount);
-      scratch.fixedPayloads.push_back(fixedPayload);
-      scratch.lastFixedPayloadHash = payload.fixedPayloadHash;
-      scratch.lastFixedPayloadIndex = compact.fixedPayloadIndex;
-    }
-  }
-  bool vertexStageAppended = false;
-  {
-    PerfScope vertexStageScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactVertexStageCpuTime));
-    vertexStageAppended = appendDrawUniformStageConstantsToScratch(
-        payload.vsConst, compact.vertexConstants, scratch.stageBytes,
-        compact.vertexConstantsRange);
-  }
-  bool pixelStageAppended = false;
-  if (vertexStageAppended) {
-    PerfScope pixelStageScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactPixelStageCpuTime));
-    pixelStageAppended = appendDrawUniformStageConstantsToScratch(
-        payload.psConst, compact.pixelConstants, scratch.stageBytes,
-        compact.pixelConstantsRange);
-  }
-  if (!vertexStageAppended || !pixelStageAppended) {
-    scratch.fixedPayloads.resize(oldFixedPayloadCount);
-    scratch.stageBytes.resize(oldStageByteCount);
-    scratch.lastFixedPayloadHash = oldLastFixedPayloadHash;
-    scratch.lastFixedPayloadIndex = oldLastFixedPayloadIndex;
-    compact = {};
-    return false;
-  }
-  dxmt9::perf::countD3D9SnapshotUniformCompactFixedPayload(
-      canReuseLastFixedPayload, sizeof(DrawUniformFixedPayload));
-  return true;
-}
-
-template <std::size_t FloatCount>
-DrawUniformStageConstantsSpan makeDrawUniformStageConstantsSpanFromHashes(
-    const ShaderConstantSnapshot<FloatCount>& constants, u16 floatCount,
-    u16 intCount, u16 boolCount, std::uint32_t byteOffset) noexcept {
-  if (boolCount != 0) {
-    floatCount = static_cast<u16>(constants.float4.size());
-    intCount = static_cast<u16>(constants.int4.size());
-  } else if (intCount != 0) {
-    floatCount = static_cast<u16>(constants.float4.size());
-  }
-  return makeDrawUniformStageConstantsSpan(
-      constants, floatCount, intCount, boolCount, byteOffset);
-}
-
-DrawUniformStageConstantsSpan makeDrawUniformVertexConstantsSpanFromState(
-    const DeviceState& state, const DrawUniformPayloadHashes& hashes,
-    std::uint32_t byteOffset) noexcept {
-  return makeDrawUniformStageConstantsSpanFromHashes(
-      state.vsConst, hashes.vertexFloatConstantCount,
-      hashes.vertexIntConstantCount, hashes.vertexBoolConstantCount,
-      byteOffset);
-}
-
-DrawUniformStageConstantsSpan makeDrawUniformPixelConstantsSpanFromState(
-    const DeviceState& state, const DrawUniformPayloadHashes& hashes,
-    std::uint32_t byteOffset) noexcept {
-  return makeDrawUniformStageConstantsSpanFromHashes(
-      state.psConst, hashes.pixelFloatConstantCount,
-      hashes.pixelIntConstantCount, hashes.pixelBoolConstantCount,
-      byteOffset);
-}
-
-bool snapshotCompactDrawUniformPayloadFromState(
-    const DeviceState& state,
-    const DrawUniformFixedPayload& fixedPayload,
-    const DrawUniformPayloadHashes& hashes,
-    u64 uniformPayloadHash,
-    u64 fixedPayloadHash,
-    DrawSubmissionUniformScratch& scratch,
-    DrawUniformCompactSubmissionPayload& compact) {
-  PerfScope compactScope(uniformCompactBreakdownRecorder(
-      dxmt9::perf::countD3D9SnapshotUniformCompactCpuTime));
-  const auto oldFixedPayloadCount = scratch.fixedPayloads.size();
-  const auto oldStageByteCount = scratch.stageBytes.size();
-  const auto oldLastFixedPayloadHash = scratch.lastFixedPayloadHash;
-  const auto oldLastFixedPayloadIndex = scratch.lastFixedPayloadIndex;
-  compact = {};
-  compact.vertexConstants =
-      makeDrawUniformVertexConstantsSpanFromState(state, hashes, 0u);
-  compact.pixelConstants =
-      makeDrawUniformPixelConstantsSpanFromState(state, hashes, 0u);
-  compact.vertexConstantsHash = hashes.vertexConstantsHash;
-  compact.pixelConstantsHash = hashes.pixelConstantsHash;
-  compact.fixedPayloadHash = fixedPayloadHash;
-  compact.hash = uniformPayloadHash;
-
-  bool canReuseLastFixedPayload = false;
-  {
-    PerfScope fixedScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactFixedCpuTime));
-    const auto lastFixedPayloadIndex = scratch.lastFixedPayloadIndex;
-    canReuseLastFixedPayload =
-        lastFixedPayloadIndex != kInvalidDrawUniformFixedPayloadIndex &&
-        lastFixedPayloadIndex < scratch.fixedPayloads.size() &&
-        scratch.lastFixedPayloadHash == fixedPayloadHash &&
-        scratch.fixedPayloads[lastFixedPayloadIndex] == fixedPayload;
-    if (canReuseLastFixedPayload) {
-      compact.fixedPayloadIndex = lastFixedPayloadIndex;
-    } else {
-      if (scratch.fixedPayloads.size() >=
-          static_cast<std::size_t>(std::numeric_limits<u32>::max())) {
-        return false;
-      }
-      compact.fixedPayloadIndex = static_cast<u32>(oldFixedPayloadCount);
-      scratch.fixedPayloads.push_back(fixedPayload);
-      scratch.lastFixedPayloadHash = fixedPayloadHash;
-      scratch.lastFixedPayloadIndex = compact.fixedPayloadIndex;
-    }
-  }
-  bool vertexStageAppended = false;
-  {
-    PerfScope vertexStageScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactVertexStageCpuTime));
-    vertexStageAppended = appendDrawUniformStageConstantsToScratch(
-        state.vsConst, compact.vertexConstants, scratch.stageBytes,
-        compact.vertexConstantsRange);
-  }
-  bool pixelStageAppended = false;
-  if (vertexStageAppended) {
-    PerfScope pixelStageScope(uniformCompactBreakdownRecorder(
-        dxmt9::perf::countD3D9SnapshotUniformCompactPixelStageCpuTime));
-    pixelStageAppended = appendDrawUniformStageConstantsToScratch(
-        state.psConst, compact.pixelConstants, scratch.stageBytes,
-        compact.pixelConstantsRange);
-  }
-  if (!vertexStageAppended || !pixelStageAppended) {
-    scratch.fixedPayloads.resize(oldFixedPayloadCount);
-    scratch.stageBytes.resize(oldStageByteCount);
-    scratch.lastFixedPayloadHash = oldLastFixedPayloadHash;
-    scratch.lastFixedPayloadIndex = oldLastFixedPayloadIndex;
-    compact = {};
-    return false;
-  }
-  dxmt9::perf::countD3D9SnapshotUniformCompactFixedPayload(
-      canReuseLastFixedPayload, sizeof(DrawUniformFixedPayload));
-  return true;
 }
 
 void applyDrawUniformPayloadHashes(FlatDrawStateRecord &hot,
@@ -2189,80 +1850,6 @@ makeDrawShaderLayoutContextFromState(const DeviceState &state) {
   context.pixelConstantUsage = scanShaderConstantUsage(context.pixelShader);
   context.clipPlaneMask = clipPlaneMaskFromState(state);
   return context;
-}
-
-DrawUniformFixedPayload makeDrawUniformFixedPayloadFromState(
-    const DeviceState &state, u32 clipPlaneMask,
-    bool recordSnapshotPerf = false) {
-  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
-  auto recorder = [&](void (*fn)(std::uint64_t)) {
-    return recordPerf ? fn : nullptr;
-  };
-
-  DrawUniformFixedPayload payload{};
-  {
-    PerfScope scope(recorder(
-        dxmt9::perf::countD3D9SnapshotUniformBuildFfpMatrixCpuTime));
-    payload.ffpWorldView = makeWorldViewFromState(state);
-    payload.ffpNormalMatrix =
-        makeNormalMatrixFromWorldView(payload.ffpWorldView);
-    payload.worldViewProj = makeWorldViewProjFromState(state);
-    payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
-  }
-  {
-    PerfScope scope(recorder(
-        dxmt9::perf::countD3D9SnapshotUniformBuildFfpMaterialLightCpuTime));
-    payload.material = state.material;
-    payload.lights = state.lights;
-  }
-  {
-    PerfScope scope(recorder(
-        dxmt9::perf::countD3D9SnapshotUniformBuildTextureTransformCpuTime));
-    payload.textureTransforms = makeTextureTransformsFromState(state);
-  }
-  payload.clipPlaneMask = clipPlaneMask;
-  {
-    PerfScope scope(recorder(
-        dxmt9::perf::countD3D9SnapshotUniformBuildClipPlaneCpuTime));
-    payload.clipPlanes =
-        makeClipPlanesFromState(state, clipPlaneMask, payload.worldViewProj);
-  }
-  return payload;
-}
-
-u64 hashDrawUniformPayloadFromStateComponents(
-    const DeviceState &state, const DrawUniformFixedPayload &fixedPayload,
-    u32 clipPlaneMask, DrawUniformPayloadHashes &hashes,
-    bool recordSnapshotPerf, const DrawShaderLayoutContext &shaderLayout,
-    const DrawUniformPayloadHashes *reusableNonConstantHashes = nullptr,
-    const DrawUniformPayloadHashes *reusableShaderConstantHashes = nullptr,
-    bool reuseVertexConstantsHash = false,
-    bool reusePixelConstantsHash = false) {
-  PerfScope scope(recordSnapshotPerf && dxmt9::perf::enabled()
-                      ? dxmt9::perf::countD3D9SnapshotUniformBuildHashCpuTime
-                      : nullptr);
-  const DrawUniformPayloadHashOptions options{
-      .vertexUsage = &shaderLayout.vertexConstantUsage,
-      .pixelUsage = &shaderLayout.pixelConstantUsage,
-      .reusableNonConstantHashes = reusableNonConstantHashes,
-      .reusableShaderConstantHashes = reusableShaderConstantHashes,
-      .reuseVertexConstantsHash = reuseVertexConstantsHash,
-      .reusePixelConstantsHash = reusePixelConstantsHash,
-      .vertexUsageFromBytecode =
-          shaderLayout.vertexShader.kind == ShaderRef::Kind::Bytecode,
-      .pixelUsageFromBytecode =
-          shaderLayout.pixelShader.kind == ShaderRef::Kind::Bytecode,
-      .recordSnapshotPerf = recordSnapshotPerf,
-  };
-  hashDrawUniformShaderConstantSnapshots(state.vsConst, state.psConst,
-                                         hashes, options);
-  if (reusableNonConstantHashes) {
-    copyDrawUniformNonConstantHashes(hashes, *reusableNonConstantHashes);
-  } else {
-    hashDrawUniformNonConstantComponents(fixedPayload, hashes, options);
-  }
-  return combineDrawUniformPayloadHashes(hashes, clipPlaneMask,
-                                         recordSnapshotPerf);
 }
 
 DrawUniformPayload makeDrawUniformPayloadFromState(
@@ -3489,8 +3076,7 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
 }
 
 const Device::CachedBaseDrawState &
-Device::cachedBaseDrawStateForSubmissionBatch(
-    bool directCompactUniformSource) {
+Device::cachedBaseDrawStateForSubmissionBatch() {
   auto &cache = drawStateCacheBindingAgnostic_;
   const auto refreshBindingLayout = [&]() {
     refreshShaderLayoutExtraStreamStrides(cache.shaderLayout, state_);
@@ -3502,23 +3088,7 @@ Device::cachedBaseDrawStateForSubmissionBatch(
     const bool reusePixelConstants =
         cache.pixelShaderConstantGeneration ==
         drawPixelShaderConstantGeneration_;
-    if (directCompactUniformSource && cache.uniformFixedPayloadValid) {
-      DrawUniformPayloadHashes uniformHashes = cache.uniformHashes;
-      {
-        PerfScope uniformBuildScope(
-            dxmt9::perf::countD3D9SnapshotCacheUniformBuildCpuTime);
-        cache.uniformPayloadHash = hashDrawUniformPayloadFromStateComponents(
-            state_, cache.uniformFixedPayload,
-            cache.shaderLayout.clipPlaneMask, uniformHashes,
-            /*recordSnapshotPerf=*/true, cache.shaderLayout,
-            &cache.uniformHashes, &cache.uniformHashes,
-            reuseVertexConstants, reusePixelConstants);
-        cache.uniformHashes = uniformHashes;
-        cache.uniformFixedPayloadHash = combineDrawUniformFixedPayloadHash(
-            cache.uniformHashes, cache.shaderLayout.clipPlaneMask);
-        cache.fullUniformsValid = false;
-      }
-    } else {
+    {
       if (!cache.fullUniformsValid) {
         DrawUniformPayloadHashes uniformHashes{};
         {
@@ -3603,7 +3173,7 @@ Device::cachedBaseDrawStateForSubmissionBatch(
       refreshBindingLayout();
     }
     if (cache.uniformGeneration != drawUniformGeneration_ ||
-        (!directCompactUniformSource && !cache.fullUniformsValid)) {
+        !cache.fullUniformsValid) {
       dxmt9::perf::countD3D9DrawStateCacheUniformRefresh();
       PerfScope uniformRefreshScope(
           dxmt9::perf::countD3D9SnapshotCacheUniformRefreshCpuTime);
@@ -3698,13 +3268,9 @@ Device::cachedBaseDrawStateForSubmissionBatch(
         previousPixelConstantUsage == cache.shaderLayout.pixelConstantUsage &&
         previousClipPlaneMask == cache.shaderLayout.clipPlaneMask;
     const bool reuseUniformPayload =
-        matchingUniformPayload &&
-        (directCompactUniformSource ? cache.uniformFixedPayloadValid
-                                    : cache.fullUniformsValid);
+        matchingUniformPayload && cache.fullUniformsValid;
     const bool canReuseNonConstantPayload =
-        reusableNonConstantHashes != nullptr &&
-        (directCompactUniformSource ? cache.uniformFixedPayloadValid
-                                    : cache.fullUniformsValid);
+        reusableNonConstantHashes != nullptr && cache.fullUniformsValid;
     const bool reuseNonConstantPayload =
         !reuseUniformPayload && canReuseNonConstantPayload;
     dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformPayloadPath(
@@ -3752,75 +3318,42 @@ Device::cachedBaseDrawStateForSubmissionBatch(
                               cache.shaderLayout.pixelConstantUsage));
     }
     {
-      if (directCompactUniformSource) {
-        if (reuseUniformPayload) {
-          uniformHashes = cache.uniformHashes;
-        } else {
-          PerfScope uniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
-          PerfScope batchUniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
-          dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
-              uniformBuildContext(
-                  dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
-          if (reuseNonConstantPayload) {
-            uniformHashes = cache.uniformHashes;
-          } else {
-            cache.uniformFixedPayload = makeDrawUniformFixedPayloadFromState(
-                state_, cache.shaderLayout.clipPlaneMask,
-                /*recordSnapshotPerf=*/true);
-            cache.uniformFixedPayloadValid = true;
-          }
-          cache.uniformPayloadHash = hashDrawUniformPayloadFromStateComponents(
-              state_, cache.uniformFixedPayload,
-              cache.shaderLayout.clipPlaneMask, uniformHashes,
-              /*recordSnapshotPerf=*/true, cache.shaderLayout,
-              reuseNonConstantPayload ? &cache.uniformHashes : nullptr,
-              reusableShaderConstantHashes, reuseVertexConstantsHash,
-              reusePixelConstantsHash);
-          cache.uniformHashes = uniformHashes;
-          cache.uniformFixedPayloadHash = combineDrawUniformFixedPayloadHash(
-              cache.uniformHashes, cache.shaderLayout.clipPlaneMask);
-        }
-        cache.fullUniformsValid = false;
+      if (reuseUniformPayload) {
+        uniformHashes = cache.uniformHashes;
+      } else if (reuseNonConstantPayload) {
+        PerfScope uniformBuildScope(
+            dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+        PerfScope batchUniformBuildScope(
+            dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
+        dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
+            uniformBuildContext(
+                dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
+        uniformHashes = cache.uniformHashes;
+        refreshDrawUniformPayloadShaderConstantsFromState(
+            state_, cache.uniforms, uniformHashes, cache.shaderLayout,
+            /*recordSnapshotPerf=*/true, reuseVertexConstantsHash,
+            reusePixelConstantsHash);
+        cache.uniformHashes = uniformHashes;
       } else {
-        if (reuseUniformPayload) {
-          uniformHashes = cache.uniformHashes;
-        } else if (reuseNonConstantPayload) {
-          PerfScope uniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
-          PerfScope batchUniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
-          dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
-              uniformBuildContext(
-                  dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
-          uniformHashes = cache.uniformHashes;
-          refreshDrawUniformPayloadShaderConstantsFromState(
-              state_, cache.uniforms, uniformHashes, cache.shaderLayout,
-              /*recordSnapshotPerf=*/true, reuseVertexConstantsHash,
-              reusePixelConstantsHash);
-          cache.uniformHashes = uniformHashes;
-        } else {
-          PerfScope uniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
-          PerfScope batchUniformBuildScope(
-              dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
-          dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
-              uniformBuildContext(
-                  dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
-          cache.uniforms = makeDrawUniformPayloadFromState(
-              state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
-              /*recordSnapshotPerf=*/true, &cache.shaderLayout,
-              reusableNonConstantHashes, reusableShaderConstantHashes,
-              reuseVertexConstantsHash, reusePixelConstantsHash);
-          cache.uniformHashes = uniformHashes;
-        }
-        cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);
-        cache.uniformPayloadHash = cache.uniforms.hash;
-        cache.uniformFixedPayloadHash = cache.uniforms.fixedPayloadHash;
-        cache.fullUniformsValid = true;
-        cache.uniformFixedPayloadValid = true;
+        PerfScope uniformBuildScope(
+            dxmt9::perf::countD3D9SnapshotCacheMissUniformBuildCpuTime);
+        PerfScope batchUniformBuildScope(
+            dxmt9::perf::countD3D9SnapshotCacheBatchMissUniformBuildCpuTime);
+        dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
+            uniformBuildContext(
+                dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
+        cache.uniforms = makeDrawUniformPayloadFromState(
+            state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+            /*recordSnapshotPerf=*/true, &cache.shaderLayout,
+            reusableNonConstantHashes, reusableShaderConstantHashes,
+            reuseVertexConstantsHash, reusePixelConstantsHash);
+        cache.uniformHashes = uniformHashes;
       }
+      cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);
+      cache.uniformPayloadHash = cache.uniforms.hash;
+      cache.uniformFixedPayloadHash = cache.uniforms.fixedPayloadHash;
+      cache.fullUniformsValid = true;
+      cache.uniformFixedPayloadValid = true;
     }
     if (shaderHashMemoProbe) {
       storeShaderHashMemo(drawStateCacheBatchMissVsConstHashMemo_,
@@ -3942,13 +3475,9 @@ void Device::submitDrawRunInternalFromCurrentState(
   submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
 }
 
-template <typename Submission, typename PreviousSubmission>
-HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
-    DrawParam draw, Submission& submission,
-    const PreviousSubmission* previousSubmission,
-    DrawSubmissionUniformScratch* uniformScratch,
-    bool compactUniformSubmission,
-    bool compactSubmissionCarrier) {
+HResult Device::snapshotDrawSubmissionFromCurrentState(
+    DrawParam draw, DrawRunSubmission& submission,
+    const DrawRunSubmission* previousSubmission) {
   PerfScope scope(dxmt9::perf::countD3D9SnapshotDrawSubmissionCpuTime);
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
     return D3DERR_INVALIDCALL;
@@ -3957,16 +3486,13 @@ HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
   draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
   const CachedBaseDrawState* cachedPtr = nullptr;
   const bool useBindingAgnosticSnapshot = !renderTraceEnabled();
-  const bool directCompactUniformSource =
-      useBindingAgnosticSnapshot && compactUniformSubmission &&
-      compactSubmissionCarrier;
   const bool includeIndexBuffer = !useBindingAgnosticSnapshot &&
       drawRunUsesBoundIndexBuffer(std::span<const DrawParam>(&draw, 1), {});
   {
     PerfScope cacheLookupScope(
         dxmt9::perf::countD3D9SnapshotCacheLookupCpuTime);
     cachedPtr = &(useBindingAgnosticSnapshot
-        ? cachedBaseDrawStateForSubmissionBatch(directCompactUniformSource)
+        ? cachedBaseDrawStateForSubmissionBatch()
         : cachedBaseDrawState(includeIndexBuffer));
   }
   const auto& cached = *cachedPtr;
@@ -3999,101 +3525,34 @@ HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
         samePreviousGenerationLane, samePreviousUniformGeneration,
         drawRunSubmissionUniformCopyBytes());
   }
-  if (stateCopyElisionEnabled && previousSubmission) {
-    const DrawUniformPayload* previousFullUniform = nullptr;
-    const DrawUniformCompactSubmissionPayload* previousCompactUniform = nullptr;
-    if constexpr (std::is_same_v<PreviousSubmission, DrawRunSubmission>) {
-      if (previousSubmission->uniforms.has_value()) {
-        previousFullUniform = &previousSubmission->uniformPayload();
-      }
-    }
-    if (!previousFullUniform &&
-        previousSubmission->compactUniforms.has_value()) {
-      previousCompactUniform = &previousSubmission->compactUniformPayload();
-    }
-    if (previousFullUniform) {
-      dxmt9::perf::countD3D9SnapshotUniformAdjacentComponentHashes(
-          samePreviousGenerationLane, samePreviousUniformGeneration,
-          previousFullUniform->vertexConstantsHash ==
-              cached.uniformHashes.vertexConstantsHash,
-          previousFullUniform->pixelConstantsHash ==
-              cached.uniformHashes.pixelConstantsHash,
-          previousFullUniform->fixedPayloadHash ==
-              cached.uniformFixedPayloadHash);
-    } else if (previousCompactUniform) {
-      dxmt9::perf::countD3D9SnapshotUniformAdjacentComponentHashes(
-          samePreviousGenerationLane, samePreviousUniformGeneration,
-          previousCompactUniform->vertexConstantsHash ==
-              cached.uniformHashes.vertexConstantsHash,
-          previousCompactUniform->pixelConstantsHash ==
-              cached.uniformHashes.pixelConstantsHash,
-          previousCompactUniform->fixedPayloadHash ==
-              cached.uniformFixedPayloadHash);
-    }
+  if (stateCopyElisionEnabled && previousSubmission &&
+      previousSubmission->uniforms.has_value()) {
+    const auto& previousFullUniform = previousSubmission->uniformPayload();
+    dxmt9::perf::countD3D9SnapshotUniformAdjacentComponentHashes(
+        samePreviousGenerationLane, samePreviousUniformGeneration,
+        previousFullUniform.vertexConstantsHash ==
+            cached.uniformHashes.vertexConstantsHash,
+        previousFullUniform.pixelConstantsHash ==
+            cached.uniformHashes.pixelConstantsHash,
+        previousFullUniform.fixedPayloadHash ==
+            cached.uniformFixedPayloadHash);
   }
   const bool elideUniformCopy = stateCopyElisionEnabled &&
       samePreviousGenerationLane &&
       samePreviousUniformGeneration;
   if (elideUniformCopy) {
-    if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
-      submission.uniforms.reset();
-    }
-    submission.compactUniforms.reset();
-    submission.compactUniformArena = {};
+    submission.uniforms.reset();
     dxmt9::perf::countD3D9SnapshotUniformElided(
         drawRunSubmissionUniformCopyBytes());
   } else {
     const auto uniformBytes = drawRunSubmissionUniformCopyBytes();
-    const auto compactBreakdown =
-        drawUniformPayloadCompactByteBreakdown(cached.uniformHashes);
-    const auto compactCandidateBytes = compactBreakdown.candidateBytes();
-    bool compactMaterialized = false;
-    if (uniformScratch && compactUniformSubmission &&
-        useBindingAgnosticSnapshot) {
-      DrawUniformCompactSubmissionPayload compactPayload{};
+    {
       PerfScope uniformCopyScope(
           dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
-      compactMaterialized = directCompactUniformSource
-          ? snapshotCompactDrawUniformPayloadFromState(
-                state_, cached.uniformFixedPayload, cached.uniformHashes,
-                cached.uniformPayloadHash, cached.uniformFixedPayloadHash,
-                *uniformScratch, compactPayload)
-          : snapshotCompactDrawUniformPayload(
-                cached.uniforms, *uniformScratch, compactPayload);
-      if (compactMaterialized) {
-        if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
-          submission.uniforms.reset();
-        }
-        submission.compactUniforms.emplace(compactPayload);
-        submission.compactUniformArena = {};
-      }
+      DXMT_ASSERT(cached.fullUniformsValid);
+      submission.uniforms = cached.uniforms;
     }
-    if (compactMaterialized) {
-      dxmt9::perf::countD3D9SnapshotUniformMaterialized(
-          compactCandidateBytes);
-    } else {
-      if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
-        {
-          PerfScope uniformCopyScope(
-              dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
-          DXMT_ASSERT(cached.fullUniformsValid);
-          submission.uniforms = cached.uniforms;
-        }
-        submission.compactUniforms.reset();
-        submission.compactUniformArena = {};
-        dxmt9::perf::countD3D9SnapshotUniformMaterialized(uniformBytes);
-      } else {
-        return D3DERR_INVALIDCALL;
-      }
-    }
-    dxmt9::perf::countD3D9SnapshotUniformMaterializedCompactOpportunity(
-        compactCandidateBytes,
-        compactCandidateBytes < uniformBytes
-            ? uniformBytes - compactCandidateBytes
-            : 0,
-        compactBreakdown.fixedBytes,
-        compactBreakdown.vertexBytes,
-        compactBreakdown.pixelBytes);
+    dxmt9::perf::countD3D9SnapshotUniformMaterialized(uniformBytes);
   }
   const bool elideStateCopy = stateCopyElisionEnabled &&
       samePreviousGenerationLane;
@@ -4155,46 +3614,13 @@ HResult Device::snapshotDrawSubmissionFromCurrentStateImpl(
           submission.bindingOverride.streamMask;
     }
   }
-  bool fullUniformLaneUnused = false;
-  if constexpr (std::is_same_v<Submission, DrawRunSubmission>) {
-    fullUniformLaneUnused = !submission.uniforms.has_value();
-  }
+  const bool fullUniformLaneUnused = !submission.uniforms.has_value();
   dxmt9::perf::countD3D9SnapshotSubmissionCarrier(
-      compactSubmissionCarrier
-          ? drawRunCompactSubmissionCarrierBytes()
-          : drawRunSubmissionCarrierBytes(),
-      compactSubmissionCarrier
-          ? drawRunCompactSubmissionCarrierStateStorageBytes()
-          : drawRunSubmissionCarrierStateStorageBytes(),
-      compactSubmissionCarrier
-          ? drawRunCompactSubmissionCarrierUniformStorageBytes()
-          : drawRunSubmissionCarrierUniformStorageBytes(),
-      compactSubmissionCarrier
-          ? drawRunCompactSubmissionCarrierCompactUniformStorageBytes()
-          : drawRunSubmissionCarrierCompactUniformStorageBytes(),
+      drawRunSubmissionCarrierBytes(),
+      drawRunSubmissionCarrierStateStorageBytes(),
+      drawRunSubmissionCarrierUniformStorageBytes(),
       fullUniformLaneUnused);
   return D3D_OK;
-}
-
-HResult Device::snapshotDrawSubmissionFromCurrentState(
-    DrawParam draw, DrawRunSubmission& submission,
-    const DrawRunSubmission* previousSubmission,
-    DrawSubmissionUniformScratch* uniformScratch,
-    bool compactUniformSubmission,
-    bool compactSubmissionCarrier) {
-  return snapshotDrawSubmissionFromCurrentStateImpl(
-      draw, submission, previousSubmission, uniformScratch,
-      compactUniformSubmission, compactSubmissionCarrier);
-}
-
-HResult Device::snapshotDrawSubmissionFromCurrentState(
-    DrawParam draw, DrawRunCompactSubmission& submission,
-    const DrawRunCompactSubmission* previousSubmission,
-    DrawSubmissionUniformScratch* uniformScratch) {
-  return snapshotDrawSubmissionFromCurrentStateImpl(
-      draw, submission, previousSubmission, uniformScratch,
-      /*compactUniformSubmission=*/true,
-      /*compactSubmissionCarrier=*/true);
 }
 
 void Device::submitDrawRunInternal(
@@ -4323,32 +3749,6 @@ void Device::submitDrawSubmissionBatch(
     }
   }
   upperDevice_->submitDrawRunBatch(submissions);
-  submittedSequenceId_ += static_cast<u64>(submissions.size());
-  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
-}
-
-void Device::submitCompactDrawSubmissionBatch(
-    std::span<DrawRunCompactSubmission> submissions) {
-  if (submissions.empty()) {
-    return;
-  }
-
-  for (auto &submission : submissions) {
-    ensureDrawRunSubmissionBindingOverridePayload(submission);
-  }
-
-  DXMT_ASSERT(!renderTraceEnabled() &&
-              "compact draw submission carrier is a no-trace batch path");
-  if (renderTraceEnabled()) {
-    return;
-  }
-
-  if (activeOcclusionQuery_) {
-    for (const auto &submission : submissions) {
-      activeOcclusionCount_ += submission.draw.primitiveCount;
-    }
-  }
-  upperDevice_->submitCompactDrawRunBatch(submissions);
   submittedSequenceId_ += static_cast<u64>(submissions.size());
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
 }
