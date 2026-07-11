@@ -372,10 +372,6 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
   std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushOpportunities{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushPendingRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRunPreflushCombinedRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStored{0};
   std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStoredRecords{0};
   std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmission{0};
@@ -2521,10 +2517,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_replay_pending_flush_forced_resource_marking_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_forced_resource_marking_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingFlushes, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_forced_resource_marking_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushForcedResourceMarkingRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_run_preflush_opportunities", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushOpportunities, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_run_preflush_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushPendingRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_run_preflush_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushRunRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_run_preflush_combined_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayDrawRunPreflushCombinedRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_end_flush_probe_stored", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStored, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_end_flush_probe_stored_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStoredRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_end_flush_probe_first_submission", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmission, nullptr, nullptr, 0.0},
@@ -5413,17 +5405,6 @@ void countCommitChunkReplayPendingFlushForcedResourceMarking(
   add(c.commitChunkReplayPendingFlushForcedResourceMarkingCpuNs, nanoseconds);
   add(c.commitChunkReplayPendingFlushForcedResourceMarkingFlushes);
   add(c.commitChunkReplayPendingFlushForcedResourceMarkingRecords, records);
-}
-
-void countCommitChunkReplayDrawRunPreflushOpportunity(
-    std::uint64_t pendingRecords,
-    std::uint64_t runRecords) {
-  auto& c = counters();
-  add(c.commitChunkReplayDrawRunPreflushOpportunities);
-  add(c.commitChunkReplayDrawRunPreflushPendingRecords, pendingRecords);
-  add(c.commitChunkReplayDrawRunPreflushRunRecords, runRecords);
-  add(c.commitChunkReplayDrawRunPreflushCombinedRecords,
-      pendingRecords + runRecords);
 }
 
 void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords) {

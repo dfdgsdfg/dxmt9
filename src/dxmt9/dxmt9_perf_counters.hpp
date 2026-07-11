@@ -339,9 +339,6 @@ void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
 void countCommitChunkReplayPendingFlushForcedResourceMarking(
     std::uint64_t nanoseconds,
     std::uint64_t records);
-void countCommitChunkReplayDrawRunPreflushOpportunity(
-    std::uint64_t pendingRecords,
-    std::uint64_t runRecords);
 void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords);
 void countCommitChunkReplayEndFlushProbeFirstSubmission(
     std::uint64_t pendingRecords,

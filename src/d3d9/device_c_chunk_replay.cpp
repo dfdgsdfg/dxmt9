@@ -119,22 +119,6 @@ bool compactUniformSubmissionsEnabled() {
   return enabled;
 }
 
-bool drawRunPreflushMergeEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_ENABLE_DRAW_RUN_PREFLUSH_MERGE");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
-
-bool drawRunPreflushMixedCarrierEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_ENABLE_DRAW_RUN_PREFLUSH_MIXED_CARRIER");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
-
 bool chunkEndCarryEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_ENABLE_CHUNK_END_CARRY");
@@ -2010,65 +1994,6 @@ int32_t queueCompactDrawIndexedPrimitiveSubmission(
   return finish(dxmt9::core::D3D_OK);
 }
 
-int32_t queueImportedDrawRunAsSubmissions(
-    D9CDevice* d, const ImportedWireChunkView& importedChunk,
-    const ImportedDrawRunScan& scan,
-    std::vector<dxmt9::core::DrawRunSubmission>& submissions,
-    std::vector<dxmt9::core::DrawRunCompactSubmission>& compactSubmissions,
-    dxmt9::core::DrawSubmissionUniformScratch& uniformScratch) {
-  std::uint32_t queued = 0;
-  std::uint32_t runIndex = scan.firstRecord.index;
-  while (runIndex < scan.endIndex) {
-    const auto nextRecord = nextImportedRecord(importedChunk, runIndex);
-    if (!nextRecord || !nextRecord->valid()) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-
-    int32_t hr = dxmt9::core::D3DERR_INVALIDCALL;
-    if (nextRecord->header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE) {
-      D9CCommandRecordDrawPrimitive decoded{};
-      std::memcpy(&decoded, nextRecord->record, sizeof(decoded));
-      if (runIndex != scan.firstRecord.index) {
-        markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet);
-      }
-      countCommitChunkDrawReplay(d, decoded.packet);
-      if (compactSubmissionCarrierEnabled()) {
-        hr = queueCompactDrawPrimitiveSubmission(d, decoded.packet,
-                                                 compactSubmissions,
-                                                 uniformScratch);
-      } else {
-        hr = queueDrawPrimitiveSubmission(d, decoded.packet, submissions,
-                                          uniformScratch);
-      }
-    } else if (nextRecord->header.type ==
-               D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
-      D9CCommandRecordDrawIndexedPrimitive decoded{};
-      std::memcpy(&decoded, nextRecord->record, sizeof(decoded));
-      if (runIndex != scan.firstRecord.index) {
-        markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
-      }
-      countCommitChunkDrawReplay(d, decoded.packet);
-      if (compactSubmissionCarrierEnabled()) {
-        hr = queueCompactDrawIndexedPrimitiveSubmission(d, decoded.packet,
-                                                        compactSubmissions,
-                                                        uniformScratch);
-      } else {
-        hr = queueDrawIndexedPrimitiveSubmission(d, decoded.packet, submissions,
-                                                 uniformScratch);
-      }
-    }
-
-    if (failed(hr)) {
-      return hr;
-    }
-    ++queued;
-    runIndex = nextRecord->nextIndex();
-  }
-
-  return queued == scan.recordCount ? dxmt9::core::D3D_OK
-                                    : dxmt9::core::D3DERR_INVALIDCALL;
-}
-
 int32_t applyDrawPrimitiveUPPacket(D9CDevice* d,
                                    const D9CDrawPrimitiveUPPacket& packet,
                                    const dxmt9::core::u8* record,
@@ -2298,16 +2223,6 @@ int32_t replayImportedChunk(D9CDevice* d,
     pendingRequiresResourceMarking = false;
     return hr;
   };
-  const auto countDrawRunPreflushOpportunity =
-      [&](const ImportedDrawRunScan& scan) {
-    const auto pendingRecordCount = pendingDrawSubmissionCount();
-    if (pendingRecordCount == 0) {
-      return;
-    }
-    dxmt9::perf::countCommitChunkReplayDrawRunPreflushOpportunity(
-        pendingRecordCount, scan.recordCount);
-  };
-
   std::uint32_t recordIndex = 0;
   while (auto recordView = nextImportedRecord(importedChunk, recordIndex)) {
     if (!recordView->valid()) {
@@ -2378,23 +2293,15 @@ int32_t replayImportedChunk(D9CDevice* d,
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
-        countDrawRunPreflushOpportunity(scan);
+        // Combine already-pending submissions with this draw run only when
+        // the chunk-end carry (R-BACK-2.51 H198/H199, DXMT9_ENABLE_CHUNK_END_CARRY)
+        // forced resource marking on them; the H192 mixed-carrier experiment
+        // flag that used to widen this condition was removed after the
+        // commit-replay offload (H195) and H212 producer attribution
+        // invalidated its reopen premise.
         const bool useMixedCarrier =
-            (drawRunPreflushMixedCarrierEnabled() ||
-             pendingRequiresResourceMarking) &&
+            pendingRequiresResourceMarking &&
             pendingDrawSubmissionCount() != 0;
-        if (!useMixedCarrier && drawRunPreflushMergeEnabled() &&
-            pendingDrawSubmissionCount() != 0) {
-          hr = queueImportedDrawRunAsSubmissions(
-              d, importedChunk, scan, pendingDrawSubmissions,
-              pendingCompactDrawSubmissions, pendingUniformScratch);
-          if (failed(hr)) {
-            return commitChunkFail("draw-run-merge-queue", recordIndex,
-                                   header.type, hr);
-          }
-          recordIndex = scan.endIndex;
-          continue;
-        }
         if (!useMixedCarrier) {
           hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
           if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
@@ -2537,23 +2444,12 @@ int32_t replayImportedChunk(D9CDevice* d,
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
-        countDrawRunPreflushOpportunity(scan);
+        // See the DRAW_PRIMITIVE case above: combine only when the
+        // chunk-end carry forced resource marking on the pending
+        // submissions; the H192 mixed-carrier flag was removed.
         const bool useMixedCarrier =
-            (drawRunPreflushMixedCarrierEnabled() ||
-             pendingRequiresResourceMarking) &&
+            pendingRequiresResourceMarking &&
             pendingDrawSubmissionCount() != 0;
-        if (!useMixedCarrier && drawRunPreflushMergeEnabled() &&
-            pendingDrawSubmissionCount() != 0) {
-          hr = queueImportedDrawRunAsSubmissions(
-              d, importedChunk, scan, pendingDrawSubmissions,
-              pendingCompactDrawSubmissions, pendingUniformScratch);
-          if (failed(hr)) {
-            return commitChunkFail("indexed-draw-run-merge-queue", recordIndex,
-                                   header.type, hr);
-          }
-          recordIndex = scan.endIndex;
-          continue;
-        }
         if (!useMixedCarrier) {
           hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
           if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);

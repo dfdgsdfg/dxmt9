@@ -78,6 +78,31 @@ is updated in the same change. R-BACK-2.39/2.40/2.43 (pass-streaming source
 attachment) remain open requirements for a future design; see
 `specs/backend/gap.md`.
 
+The commit-replay draw-run preflush envs `DXMT9_ENABLE_DRAW_RUN_PREFLUSH_MERGE`
+(H187 opportunity / H188 runtime A/B) and
+`DXMT9_ENABLE_DRAW_RUN_PREFLUSH_MIXED_CARRIER` (H192 follow-up) are not
+honored by the current HEAD; their resolvers, the merge-lane
+`queueImportedDrawRunAsSubmissions` helper, and the always-on
+`commit_chunk_replay_draw_run_preflush_{opportunities,pending_records,
+run_records,combined_records}` opportunity-sizing counters were removed from
+`src/d3d9/device_c_chunk_replay.cpp` and `src/dxmt9/dxmt9_perf_counters.{hpp,cpp}`.
+Both lanes tried to avoid flushing a pending draw-submission batch before an
+immediately following imported draw-run; H188 showed materializing the run as
+submissions (the merge lane) raised snapshot/queue CPU, and H192's mixed
+backend call was the corrected shape for the same H187 opportunity. The
+reopen premise behind both was invalidated once the commit-replay offload
+(`DXMT9_OFFLOAD_COMMIT_REPLAY`, H195) landed and the H212 producer
+attribution showed the residual wall is the game's own CPU, not a
+producer-serial preflush boundary dxmt9 can shrink. The `submitDrawRunBatchAndRun*`
+/ `submitDrawSubmissionBatchAndDrawRunCanonical*` `CommandQueue`/`Device`
+family stays in source: it remains the live combine path used when the
+retained `DXMT9_ENABLE_CHUNK_END_CARRY` carry forces resource marking on
+pending submissions ahead of a draw run (`pendingRequiresResourceMarking` in
+`device_c_chunk_replay.cpp`), and it has direct coverage in
+`tests/native/core/core_device_coverage_spec.cpp`. Do not schedule new runs
+with the two removed envs unless the merge/mixed-carrier lanes are
+intentionally reintroduced and this rules file is updated in the same change.
+
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
 `Disabled > DeferredPresentCompletion > PresentCompletion > Completion >
