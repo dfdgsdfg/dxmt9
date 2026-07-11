@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H217` - Rejected open-CB/tail-present/fs-half experiment lanes removed (`6379d5c8`, -6,428 lines); default path byte-identical, TLA green, engine-default smoke at 2,220 presents.
+Latest tracked row: `H218` - H217 orphan sweep (`a083bc8f`, -694) plus rejected preflush merge/mixed-carrier lanes removed (`92047c4e`, -139); `AndRun` carrier kept for the retained chunk-end-carry path, suites/audits green.
 
 ## Start Here
 
