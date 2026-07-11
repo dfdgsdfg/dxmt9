@@ -111,14 +111,6 @@ bool peRecorderStatsEnabled() {
   return enabled;
 }
 
-bool drawRunCanonicalFastPathEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_ENABLE_DRAW_RUN_CANONICAL_FAST_PATH");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
-
 std::uint64_t currentNativeThreadId() {
 #if defined(__APPLE__)
   std::uint64_t tid = 0;
@@ -1875,9 +1867,7 @@ int32_t replayImportedChunk(D9CDevice* d,
 
         {
           const auto runSubmitStart = std::chrono::steady_clock::now();
-          hr = drawRunCanonicalFastPathEnabled()
-                   ? d->dev().drawPrimitiveRunCanonical(runParams, runPayloads)
-                   : d->dev().drawPrimitiveRun(runParams, runPayloads);
+          hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
           countDurationSince(runSubmitStart,
                              dxmt9::perf::countCommitChunkDrawRunSubmitCpuTime);
         }
@@ -2007,9 +1997,7 @@ int32_t replayImportedChunk(D9CDevice* d,
 
         {
           const auto runSubmitStart = std::chrono::steady_clock::now();
-          hr = drawRunCanonicalFastPathEnabled()
-                   ? d->dev().drawPrimitiveRunCanonical(runParams, runPayloads)
-                   : d->dev().drawPrimitiveRun(runParams, runPayloads);
+          hr = d->dev().drawPrimitiveRun(runParams, runPayloads);
           countDurationSince(runSubmitStart,
                              dxmt9::perf::countCommitChunkDrawRunSubmitCpuTime);
         }

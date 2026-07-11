@@ -149,6 +149,24 @@ producer attribution showing the residual wall is the game's own CPU. Do not
 schedule new runs with these envs unless the compact carrier is intentionally
 reintroduced and this rules file is updated in the same change.
 
+The canonical draw-run fast-path env `DXMT9_ENABLE_DRAW_RUN_CANONICAL_FAST_PATH`
+(H189) is not honored by the current HEAD; its resolver, the chunk-replay
+branch routing scanner-accepted imported draw-runs through
+`drawPrimitiveRunCanonical()` instead of the public `drawPrimitiveRun()`,
+`Device::drawPrimitiveRunCanonical` itself, and its exclusive native coverage
+(H189's canonical TriangleList submission and defensive TriangleFan rejection
+cases in `tests/native/core/core_device_coverage_spec.cpp`) were removed; the
+stale-shader-layout regression test that used the canonical call only as a
+full-lane cache kick was adapted to `drawPrimitiveRun()`. H189 runtime-rejected
+the lane: the targeted draw-run submit row stayed flat
+(`1.169 -> 1.161ms/present`) and FPS did not improve (`16.546 -> 16.412`), and
+the A/B predates the offload. The reopen premise died with the engine-default
+commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`, H195/`d45af067`), which
+moved the whole replay cost class onto a worker idling ~39.4ms/present, and
+the H212 producer attribution showing the residual wall is the game's own
+CPU. Do not schedule new runs with this env unless the canonical fast path is
+intentionally reintroduced and this rules file is updated in the same change.
+
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
 `Disabled > DeferredPresentCompletion > PresentCompletion > Completion >

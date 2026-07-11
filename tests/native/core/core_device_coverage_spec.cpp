@@ -301,34 +301,6 @@ void testIndexedDrawPolicyContracts() {
              std::span<const u8>(upIndexBytes.data(), upIndexBytes.size()),
              "indexed UP draw preserves user index payload");
 
-  std::array<DrawParam, 1> canonicalRun{};
-  canonicalRun[0].primitiveType = PrimitiveType::TriangleList;
-  canonicalRun[0].primitiveCount = 1;
-  canonicalRun[0].startVertex = 7;
-  const auto beforeCanonical = backend->draws.size();
-  checkEq(device->drawPrimitiveRunCanonical(
-              std::span<const DrawParam>(canonicalRun.data(),
-                                         canonicalRun.size())),
-          D3D_OK, "indexed policy canonical draw-run fast path");
-  checkEq(backend->draws.size(), beforeCanonical + 1u,
-          "canonical draw-run reaches backend");
-  checkEq(backend->draws.back().param.primitiveType,
-          PrimitiveType::TriangleList,
-          "canonical draw-run keeps primitive type");
-  checkEq(backend->draws.back().param.startVertex, 7u,
-          "canonical draw-run keeps start vertex");
-
-  std::array<DrawParam, 1> canonicalFan{};
-  canonicalFan[0].primitiveType = PrimitiveType::TriangleFan;
-  canonicalFan[0].primitiveCount = 1;
-  const auto beforeRejectedCanonical = backend->draws.size();
-  checkEq(device->drawPrimitiveRunCanonical(
-              std::span<const DrawParam>(canonicalFan.data(),
-                                         canonicalFan.size())),
-          D3DERR_INVALIDCALL,
-          "canonical draw-run fast path rejects TriangleFan");
-  checkEq(backend->draws.size(), beforeRejectedCanonical,
-          "rejected canonical fan does not reach backend");
 }
 
 // Regression test for the GT1 t=40s giant-triangle bug: rigid prop meshes
@@ -336,7 +308,7 @@ void testIndexedDrawPolicyContracts() {
 // declaration. Root cause: cachedBaseDrawStateForSubmissionBatch (the
 // binding-agnostic "batch lane") decided reuseShaderLayout from the shared
 // drawStateInvalidationReasonMask_ accumulator, but cachedBaseDrawState
-// (the "full lane", used by drawPrimitiveRunCanonical) ALSO consumes and
+// (the "full lane", used by drawPrimitiveRun) ALSO consumes and
 // clears that same mask on its own miss-rebuilds. A shader/decl switch's
 // Shader|FvfVdecl bits can therefore be cleared by an intervening full-lane
 // rebuild; a later binding-only change (SetStreamSource) then re-populates
@@ -397,14 +369,14 @@ void testBatchLaneShaderLayoutSurvivesInterleavedFullLaneRebuild() {
   checkEq(submissionA.materializedState().shaderLayout.vertexShader.bytecode,
           vsA.bytecode, "stale layout submission A carries VS A");
 
-  // 2. Force a FULL-lane rebuild (drawPrimitiveRunCanonical ->
+  // 2. Force a FULL-lane rebuild (drawPrimitiveRun ->
   //    cachedBaseDrawState) while the shared mask still holds the
   //    Shader|FvfVdecl bits from step 1's setters. Its miss-rebuild tail
   //    clears drawStateInvalidationReasonMask_ back to Unknown.
   std::array<DrawParam, 1> fullLaneKick1{};
   fullLaneKick1[0].primitiveType = PrimitiveType::TriangleList;
   fullLaneKick1[0].primitiveCount = 1;
-  checkEq(device->drawPrimitiveRunCanonical(std::span<const DrawParam>(
+  checkEq(device->drawPrimitiveRun(std::span<const DrawParam>(
               fullLaneKick1.data(), fullLaneKick1.size())),
           D3D_OK, "stale layout full-lane kick 1");
 
@@ -420,7 +392,7 @@ void testBatchLaneShaderLayoutSurvivesInterleavedFullLaneRebuild() {
   std::array<DrawParam, 1> fullLaneKick2{};
   fullLaneKick2[0].primitiveType = PrimitiveType::TriangleList;
   fullLaneKick2[0].primitiveCount = 1;
-  checkEq(device->drawPrimitiveRunCanonical(std::span<const DrawParam>(
+  checkEq(device->drawPrimitiveRun(std::span<const DrawParam>(
               fullLaneKick2.data(), fullLaneKick2.size())),
           D3D_OK, "stale layout full-lane kick 2");
 

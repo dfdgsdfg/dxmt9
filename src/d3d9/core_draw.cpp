@@ -3803,21 +3803,6 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws,
   return D3D_OK;
 }
 
-HResult Device::drawPrimitiveRunCanonical(
-    std::span<const DrawParam> draws,
-    std::span<const DrawParamPayloadView> payloads) {
-  if (draws.empty()) {
-    return D3D_OK;
-  }
-  for (const auto& draw : draws) {
-    if (draw.primitiveType == PrimitiveType::TriangleFan) {
-      return D3DERR_INVALIDCALL;
-    }
-  }
-  submitDrawRunInternalFromCurrentState(draws, payloads);
-  return D3D_OK;
-}
-
 HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount,
                               u32 startVertex) {
   DrawParam draw{};

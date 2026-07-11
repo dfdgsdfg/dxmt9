@@ -1931,11 +1931,6 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult drawPrimitiveRun(std::span<const DrawParam> draws,
                            std::span<const DrawParamPayloadView> payloads);
-  // Chunk-importer fast path for scanned draw-runs that already exclude
-  // TriangleFan and therefore do not need public DrawPrimitive fan
-  // normalization. Borrowed spans are consumed before the call returns.
-  HResult drawPrimitiveRunCanonical(std::span<const DrawParam> draws,
-                                    std::span<const DrawParamPayloadView> payloads = {});
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
       const DrawRunSubmission* previousSubmission = nullptr);
