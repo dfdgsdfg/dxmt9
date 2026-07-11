@@ -40,8 +40,6 @@ draw_packet_actual_change=${DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE:-0}
 vs_const_setter_range=${DXMT9_PERF_VS_CONST_SETTER_RANGE:-0}
 pe_recorder_stats=${DXMT9_PE_RECORDER_STATS:-0}
 pe_recorder_chunk_log=${DXMT9_PE_RECORDER_CHUNK_LOG:-0}
-pe_flush_after_clear=${DXMT9_PE_FLUSH_AFTER_CLEAR:-0}
-pe_flush_after_draw=${DXMT9_PE_FLUSH_AFTER_DRAW:-0}
 pe_draw_full_snapshot=${DXMT9_PE_DRAW_FULL_SNAPSHOT:-0}
 pe_chunk_max_records=${DXMT9_PE_CHUNK_MAX_RECORDS:-}
 pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
@@ -719,12 +717,6 @@ Options:
                       DXMT_LOG_LEVEL=info so recorder timing lines reach logs.
   --pe-recorder-chunk-log
                       Set DXMT9_PE_RECORDER_CHUNK_LOG=1.
-  --pe-flush-after-clear
-                      Set DXMT9_PE_FLUSH_AFTER_CLEAR=1 for PE chunk pacing
-                      probes.
-  --pe-flush-after-draw
-                      Set DXMT9_PE_FLUSH_AFTER_DRAW=1 for PE chunk pacing
-                      probes.
   --pe-draw-full-snapshot
                       Set DXMT9_PE_DRAW_FULL_SNAPSHOT=1 for bridge debug
                       probes.
@@ -1755,14 +1747,6 @@ while (($#)); do
       ;;
     --pe-recorder-chunk-log)
       pe_recorder_chunk_log=1
-      shift
-      ;;
-    --pe-flush-after-clear)
-      pe_flush_after_clear=1
-      shift
-      ;;
-    --pe-flush-after-draw)
-      pe_flush_after_draw=1
       shift
       ;;
     --pe-draw-full-snapshot)
@@ -4271,14 +4255,6 @@ fi
 
 if [[ "$pe_recorder_chunk_log" != "0" && -n "$pe_recorder_chunk_log" ]]; then
   env_args+=("DXMT9_PE_RECORDER_CHUNK_LOG=$pe_recorder_chunk_log")
-fi
-
-if [[ "$pe_flush_after_clear" != "0" && -n "$pe_flush_after_clear" ]]; then
-  env_args+=("DXMT9_PE_FLUSH_AFTER_CLEAR=$pe_flush_after_clear")
-fi
-
-if [[ "$pe_flush_after_draw" != "0" && -n "$pe_flush_after_draw" ]]; then
-  env_args+=("DXMT9_PE_FLUSH_AFTER_DRAW=$pe_flush_after_draw")
 fi
 
 if [[ "$pe_draw_full_snapshot" != "0" && -n "$pe_draw_full_snapshot" ]]; then

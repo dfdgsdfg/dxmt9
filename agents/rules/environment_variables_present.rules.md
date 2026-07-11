@@ -185,6 +185,25 @@ is the game's own CPU. Do not schedule new runs with these envs unless the
 publish-time placement is intentionally reintroduced and this rules file is
 updated in the same change.
 
+The PE-recorder flush pacing probe envs `DXMT9_PE_FLUSH_AFTER_CLEAR`
+(H27/H28 rejected as a simple early-publish lever; H181 re-rejected) and
+`DXMT9_PE_FLUSH_AFTER_DRAW` (H114 rejected diagnostic — exploded PE/unix
+crossings and lost scene progress) are not honored by the current HEAD;
+their resolvers, the post-`Clear` flush trigger, the
+`flushAfterDrawIfRequested()` helper and its four draw/UP append call sites,
+the wrapper `--pe-flush-after-clear` / `--pe-flush-after-draw` plumbing in
+`run_3dmark05_perf_probe.sh`, and the dead `clear=` bucket in the PE recorder
+stats `flushReasons{...}` log were removed. The `PeRecorderFlushReason::Clear`
+/ `::Draw` enum values stay for stats-index numbering stability and
+historical log decoding. Both probes tried to create producer overlap via an
+earlier useful chunk publish; that premise was superseded by the
+engine-default commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`,
+H195/`d45af067` — the whole replay cost class now rides a worker idling
+~39.4ms/present) and the H212 producer attribution showing the residual wall
+is the game's own CPU. Do not schedule new runs with these envs unless the
+pacing probes are intentionally reintroduced and this rules file is updated
+in the same change.
+
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
 `Disabled > DeferredPresentCompletion > PresentCompletion > Completion >

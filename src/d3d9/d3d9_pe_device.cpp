@@ -98,16 +98,6 @@ static bool dxmt9PeRecorderChunkLogEnabled() {
     return enabled;
 }
 
-static bool dxmt9PeFlushAfterClearEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_FLUSH_AFTER_CLEAR");
-    return enabled;
-}
-
-static bool dxmt9PeFlushAfterDrawEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_FLUSH_AFTER_DRAW");
-    return enabled;
-}
-
 // R-BACK-2.52 (Inline Const Delta, opt-in): read once at first use. Off
 // (default/unset) keeps every Draw* record on the pre-existing standalone
 // D9C_COMMAND_RECORD_SET_*_CONST_* + fixed-size record path verbatim
@@ -8266,8 +8256,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "gapDrawIndexedPsConstFTop2MaxMs=%.3f "
             "flushReasons{explicit=%llu capacityPre=%llu capacityPost=%llu "
             "barrier=%llu present=%llu readback=%llu reset=%llu "
-            "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu "
-            "clear=%llu} "
+            "stateblock=%llu child=%llu destructor=%llu stateMutation=%llu} "
             "up{drawPrimitiveUPCalls=%llu drawIndexedPrimitiveUPCalls=%llu "
             "vertexBytes=%llu indexBytes=%llu}",
             event ? event : "unknown", this,
@@ -8557,9 +8546,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(
                 peRecorderStats_.flushReasons[
                     static_cast<std::size_t>(PeRecorderFlushReason::StateMutation)]),
-            static_cast<unsigned long long>(
-                peRecorderStats_.flushReasons[
-                    static_cast<std::size_t>(PeRecorderFlushReason::Clear)]),
             static_cast<unsigned long long>(peRecorderStats_.drawPrimitiveUPCalls),
             static_cast<unsigned long long>(peRecorderStats_.drawIndexedPrimitiveUPCalls),
             static_cast<unsigned long long>(peRecorderStats_.upVertexBytes),
@@ -9297,8 +9283,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             record.header.size = sizeof(record);
             hr = appendCommandRecord(&record, sizeof(record));
         }
-        if (FAILED(hr)) return hr;
-        return flushAfterDrawIfRequested();
+        return hr;
     }
 
     HRESULT appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
@@ -9370,8 +9355,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             peState_.pendingIb = false;
         }
-        if (FAILED(hr)) return hr;
-        return flushAfterDrawIfRequested();
+        return hr;
     }
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
@@ -9461,8 +9445,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
         if (SUCCEEDED(hr)) {
             recordDrawPrimitiveUPCopy(vertexBytes);
-            const HRESULT flushHr = flushAfterDrawIfRequested();
-            if (FAILED(flushHr)) return flushHr;
         }
         return hr;
     }
@@ -9580,8 +9562,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
         if (SUCCEEDED(hr)) {
             recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
-            const HRESULT flushHr = flushAfterDrawIfRequested();
-            if (FAILED(flushHr)) return flushHr;
         }
         return hr;
     }
@@ -9591,13 +9571,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
         return flushPendingCommandChunk(reason);
-    }
-
-    HRESULT flushAfterDrawIfRequested() {
-        if (!dxmt9PeFlushAfterDrawEnabled()) {
-            return S_OK;
-        }
-        return flushPendingCommandChunk(PeRecorderFlushReason::Draw);
     }
 
     // Variable-size const-array record append. The record is
@@ -11629,11 +11602,6 @@ public:
                     std::memcpy(record + header.rectOffset, pRects, rectBytes);
                 }
             });
-        if (SUCCEEDED(hr) && dxmt9PeFlushAfterClearEnabled()) {
-            const HRESULT flushHr = flushPendingCommandChunk(
-                PeRecorderFlushReason::Clear);
-            if (FAILED(flushHr)) return finishPeCall(flushHr);
-        }
         return finishPeCall(hr);
     }
 

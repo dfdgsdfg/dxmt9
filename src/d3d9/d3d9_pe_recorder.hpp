@@ -30,6 +30,9 @@ enum class PeRecorderFlushReason : std::uint32_t {
     Child,
     Destructor,
     StateMutation,
+    // Clear/Draw have no producers since the DXMT9_PE_FLUSH_AFTER_CLEAR /
+    // DXMT9_PE_FLUSH_AFTER_DRAW pacing probes were removed; the values stay
+    // for stats-index numbering stability and historical log decoding.
     Clear,
     Draw,
     Count,
