@@ -148,7 +148,6 @@ void countSubmitPresentCommitCpuTime(std::uint64_t nanoseconds);
 void countSubmitPresentBoundaryCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotForPublishCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds);
-void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount);

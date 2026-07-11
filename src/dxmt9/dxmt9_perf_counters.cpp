@@ -119,8 +119,6 @@ struct Counters {
   std::atomic<std::uint64_t> prepareSlotForPublishCpuMaxNs{0};
   std::atomic<std::uint64_t> prepareSlotResourceMarkCpuNs{0};
   std::atomic<std::uint64_t> prepareSlotResourceMarkCpuMaxNs{0};
-  std::atomic<std::uint64_t> prepareSlotPsoPrefetchCpuNs{0};
-  std::atomic<std::uint64_t> prepareSlotPsoPrefetchCpuMaxNs{0};
   std::atomic<std::uint64_t> unpublishedSlotPsoPrefetchCpuNs{0};
   std::atomic<std::uint64_t> unpublishedSlotPsoPrefetchCpuMaxNs{0};
   std::atomic<std::uint64_t> chunkPublishReasonUnknown{0};
@@ -1782,7 +1780,6 @@ struct Counters {
   PercentileRing submitPresentBoundaryCpuRing;
   PercentileRing prepareSlotForPublishCpuRing;
   PercentileRing prepareSlotResourceMarkCpuRing;
-  PercentileRing prepareSlotPsoPrefetchCpuRing;
   PercentileRing unpublishedSlotPsoPrefetchCpuRing;
   PercentileRing chunkPublishSlotResidencyRing;
   PercentileRing chunkPublishSlotResidencyPresentRing;
@@ -2138,10 +2135,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"prepare_slot_resource_mark_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotResourceMarkCpuMaxNs, nullptr, nullptr, 0.0},
     {"prepare_slot_resource_mark_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotResourceMarkCpuRing, 0.5},
     {"prepare_slot_resource_mark_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotResourceMarkCpuRing, 0.95},
-    {"prepare_slot_pso_prefetch_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotPsoPrefetchCpuNs, nullptr, nullptr, 0.0},
-    {"prepare_slot_pso_prefetch_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::prepareSlotPsoPrefetchCpuMaxNs, nullptr, nullptr, 0.0},
-    {"prepare_slot_pso_prefetch_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotPsoPrefetchCpuRing, 0.5},
-    {"prepare_slot_pso_prefetch_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::prepareSlotPsoPrefetchCpuRing, 0.95},
     {"unpublished_slot_pso_prefetch_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::unpublishedSlotPsoPrefetchCpuNs, nullptr, nullptr, 0.0},
     {"unpublished_slot_pso_prefetch_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::unpublishedSlotPsoPrefetchCpuMaxNs, nullptr, nullptr, 0.0},
     {"unpublished_slot_pso_prefetch_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::unpublishedSlotPsoPrefetchCpuRing, 0.5},
@@ -4230,13 +4223,6 @@ void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds) {
   add(c.prepareSlotResourceMarkCpuNs, nanoseconds);
   updateMax(c.prepareSlotResourceMarkCpuMaxNs, nanoseconds);
   recordRing(c.prepareSlotResourceMarkCpuRing, nanoseconds);
-}
-
-void countPrepareSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.prepareSlotPsoPrefetchCpuNs, nanoseconds);
-  updateMax(c.prepareSlotPsoPrefetchCpuMaxNs, nanoseconds);
-  recordRing(c.prepareSlotPsoPrefetchCpuRing, nanoseconds);
 }
 
 void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {

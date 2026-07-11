@@ -64,26 +64,6 @@ bool drawRunGroupByGenerationLaneEnabled() {
   return enabled;
 }
 
-bool publishPsoPrefetchDisabled() {
-  static const bool disabled = [] {
-    const char* env = std::getenv("DXMT9_DISABLE_PUBLISH_PSO_PREFETCH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return disabled;
-}
-
-bool publishPsoPrefetchForced() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_ENABLE_PUBLISH_PSO_PREFETCH");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
-bool publishPsoPrefetchEnabled() {
-  return publishPsoPrefetchForced() && !publishPsoPrefetchDisabled();
-}
-
 bool encodeSlotPsoPrefetchDisabled() {
   static const bool disabled = [] {
     const char* env = std::getenv("DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH");
@@ -93,7 +73,7 @@ bool encodeSlotPsoPrefetchDisabled() {
 }
 
 bool encodeSlotPsoPrefetchEnabled() {
-  return !publishPsoPrefetchEnabled() && !encodeSlotPsoPrefetchDisabled();
+  return !encodeSlotPsoPrefetchDisabled();
 }
 
 bool unpublishedSlotPsoPrefetchEnabled() {
@@ -2595,12 +2575,6 @@ void prepareSlotForPublish(CommandQueue& q,
   {
     PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
     markSlotResourcesUnlocked(pool, slot);
-  }
-  {
-    PerfScope stageScope(perf::countPrepareSlotPsoPrefetchCpuTime);
-    if (publishPsoPrefetchEnabled()) {
-      q.prefetchSlotPipelines(slot);
-    }
   }
 }
 

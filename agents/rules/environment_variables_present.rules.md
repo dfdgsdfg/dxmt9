@@ -167,6 +167,24 @@ the H212 producer attribution showing the residual wall is the game's own
 CPU. Do not schedule new runs with this env unless the canonical fast path is
 intentionally reintroduced and this rules file is updated in the same change.
 
+The legacy publish-time PSO prefetch envs `DXMT9_ENABLE_PUBLISH_PSO_PREFETCH`
+and `DXMT9_DISABLE_PUBLISH_PSO_PREFETCH` (only meaningful with the former set)
+are not honored by the current HEAD; their resolvers, the
+`prepareSlotForPublish` legacy branch that resolved draw-run PSO/depth-state
+handles while publishing the slot, and the
+`prepare_slot_pso_prefetch_cpu_{,max_,p50_,p95_}ms` counters were removed
+(`summarize_3dmark05_perf.py` keeps its tolerant report rows for historical
+`result.json` files). The legacy placement was rejected because GT1 showed it
+serializes `submitPresent()` by ~`2.5ms/present`; the promoted default —
+resolving handles on the encode worker's slot copy — and its live opt-out
+`DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH` stay, as does the open
+`DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO` P4 probe. The reopen premise died with
+the engine-default commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`,
+H195/`d45af067`) and the H212 producer attribution showing the residual wall
+is the game's own CPU. Do not schedule new runs with these envs unless the
+publish-time placement is intentionally reintroduced and this rules file is
+updated in the same change.
+
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority
 `Disabled > DeferredPresentCompletion > PresentCompletion > Completion >
