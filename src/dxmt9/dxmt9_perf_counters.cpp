@@ -372,21 +372,6 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
   std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStored{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeStoredRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmission{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRun{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeFirstDrawRunRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedNonDraw{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedDrawFallback{0};
-  std::atomic<std::uint64_t> commitChunkReplayEndFlushProbeBlockedPendingRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
@@ -2505,21 +2490,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_replay_pending_flush_draw_fallback_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_failure_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_end_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_stored", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStored, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_stored_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeStoredRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmission, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_same_uniform_generation", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_same_uniform_payload_hash", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_generation", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_same_state_lane_and_uniform_payload_hash", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_submission_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_draw_run", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRun, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_draw_run_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_first_draw_run_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeFirstDrawRunRunRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_blocked_non_draw", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedNonDraw, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_blocked_draw_fallback", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedDrawFallback, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_end_flush_probe_blocked_pending_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayEndFlushProbeBlockedPendingRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.5},
@@ -5378,60 +5348,6 @@ void countCommitChunkReplayPendingFlushEnd(std::uint64_t records) {
   auto& c = counters();
   add(c.commitChunkReplayPendingFlushEndFlushes);
   add(c.commitChunkReplayPendingFlushEndRecords, records);
-}
-
-void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords) {
-  auto& c = counters();
-  add(c.commitChunkReplayEndFlushProbeStored);
-  add(c.commitChunkReplayEndFlushProbeStoredRecords, pendingRecords);
-}
-
-void countCommitChunkReplayEndFlushProbeFirstSubmission(
-    std::uint64_t pendingRecords,
-    bool sameStateLane,
-    bool sameUniformGeneration,
-    bool sameUniformPayloadHash) {
-  auto& c = counters();
-  add(c.commitChunkReplayEndFlushProbeFirstSubmission);
-  add(c.commitChunkReplayEndFlushProbeFirstSubmissionPendingRecords,
-      pendingRecords);
-  if (sameStateLane) {
-    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLane);
-  }
-  if (sameUniformGeneration) {
-    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameUniformGeneration);
-  }
-  if (sameUniformPayloadHash) {
-    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameUniformPayloadHash);
-  }
-  if (sameStateLane && sameUniformGeneration) {
-    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformGeneration);
-  }
-  if (sameStateLane && sameUniformPayloadHash) {
-    add(c.commitChunkReplayEndFlushProbeFirstSubmissionSameStateLaneAndUniformPayloadHash);
-  }
-}
-
-void countCommitChunkReplayEndFlushProbeFirstDrawRun(
-    std::uint64_t pendingRecords,
-    std::uint64_t runRecords) {
-  auto& c = counters();
-  add(c.commitChunkReplayEndFlushProbeFirstDrawRun);
-  add(c.commitChunkReplayEndFlushProbeFirstDrawRunPendingRecords,
-      pendingRecords);
-  add(c.commitChunkReplayEndFlushProbeFirstDrawRunRunRecords, runRecords);
-}
-
-void countCommitChunkReplayEndFlushProbeBlocked(
-    bool drawFallback,
-    std::uint64_t pendingRecords) {
-  auto& c = counters();
-  if (drawFallback) {
-    add(c.commitChunkReplayEndFlushProbeBlockedDrawFallback);
-  } else {
-    add(c.commitChunkReplayEndFlushProbeBlockedNonDraw);
-  }
-  add(c.commitChunkReplayEndFlushProbeBlockedPendingRecords, pendingRecords);
 }
 
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds) {

@@ -119,10 +119,14 @@ submits rather than being removed. The reopen premise is structurally dead:
 the engine-default commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`,
 H195/`d45af067`) moved the whole cost class onto a worker that idles
 ~39.4ms/present, and the H212 producer attribution showed the residual wall
-is the game's own CPU. The `DXMT9_PERF_CHUNK_END_FLUSH_PROBE` opportunity
-probe stays in source as a future-removal candidate. Do not schedule new runs
-with this env unless the carry lane is intentionally reintroduced and this
-rules file is updated in the same change.
+is the game's own CPU. The companion `DXMT9_PERF_CHUNK_END_FLUSH_PROBE`
+opportunity probe — which existed only to size that carrier — was removed in
+the follow-up sweep together with its `D9CDevice::ChunkEndFlushProbe` stamp
+storage and the fifteen `commit_chunk_replay_end_flush_probe_*` counters
+(`summarize_3dmark05_perf.py` keeps its tolerant report section for
+historical `result.json` files). Do not schedule new runs with either env
+unless the carry lane is intentionally reintroduced and this rules file is
+updated in the same change.
 
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority

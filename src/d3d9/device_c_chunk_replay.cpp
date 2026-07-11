@@ -127,14 +127,6 @@ bool drawRunCanonicalFastPathEnabled() {
   return enabled;
 }
 
-bool chunkEndFlushProbeEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_PERF_CHUNK_END_FLUSH_PROBE");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
-
 bool renderTraceEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT_TRACE_RENDER");
@@ -418,62 +410,6 @@ void countPendingDrawFlushReasonVolume(PendingDrawFlushReason reason,
     dxmt9::perf::countCommitChunkReplayPendingFlushEnd(records);
     break;
   }
-}
-
-template <typename Submission>
-void storeChunkEndFlushProbe(D9CDevice* d,
-                             const Submission& submission,
-                             std::uint64_t pendingRecords) {
-  if (!chunkEndFlushProbeEnabled() || !d) {
-    return;
-  }
-  d->chunkEndFlushProbe = D9CDevice::ChunkEndFlushProbe{
-      .valid = true,
-      .pendingRecords = pendingRecords,
-      .stateGeneration = submission.stateGeneration,
-      .uniformGeneration = submission.uniformGeneration,
-      .uniformPayloadHash = submission.uniformPayloadHash,
-      .stateLane = submission.stateLane,
-  };
-  dxmt9::perf::countCommitChunkReplayEndFlushProbeStored(pendingRecords);
-}
-
-template <typename Submission>
-void resolveChunkEndFlushProbeWithSubmission(D9CDevice* d,
-                                             const Submission& submission) {
-  if (!chunkEndFlushProbeEnabled() || !d || !d->chunkEndFlushProbe.valid) {
-    return;
-  }
-  const auto probe = d->chunkEndFlushProbe;
-  d->chunkEndFlushProbe = {};
-  const bool sameStateLane =
-      probe.stateGeneration == submission.stateGeneration &&
-      probe.stateLane == submission.stateLane;
-  dxmt9::perf::countCommitChunkReplayEndFlushProbeFirstSubmission(
-      probe.pendingRecords, sameStateLane,
-      probe.uniformGeneration == submission.uniformGeneration,
-      probe.uniformPayloadHash == submission.uniformPayloadHash);
-}
-
-void resolveChunkEndFlushProbeWithDrawRun(D9CDevice* d,
-                                          std::uint64_t runRecords) {
-  if (!chunkEndFlushProbeEnabled() || !d || !d->chunkEndFlushProbe.valid) {
-    return;
-  }
-  const auto pendingRecords = d->chunkEndFlushProbe.pendingRecords;
-  d->chunkEndFlushProbe = {};
-  dxmt9::perf::countCommitChunkReplayEndFlushProbeFirstDrawRun(
-      pendingRecords, runRecords);
-}
-
-void blockChunkEndFlushProbe(D9CDevice* d, bool drawFallback) {
-  if (!chunkEndFlushProbeEnabled() || !d || !d->chunkEndFlushProbe.valid) {
-    return;
-  }
-  const auto pendingRecords = d->chunkEndFlushProbe.pendingRecords;
-  d->chunkEndFlushProbe = {};
-  dxmt9::perf::countCommitChunkReplayEndFlushProbeBlocked(
-      drawFallback, pendingRecords);
 }
 
 template <typename Submission>
@@ -1706,7 +1642,6 @@ int32_t queueDrawPrimitiveSubmission(
     submissions.pop_back();
     return finish(hr);
   }
-  resolveChunkEndFlushProbeWithSubmission(d, submission);
   return finish(dxmt9::core::D3D_OK);
 }
 
@@ -1755,7 +1690,6 @@ int32_t queueDrawIndexedPrimitiveSubmission(
     submissions.pop_back();
     return finish(hr);
   }
-  resolveChunkEndFlushProbeWithSubmission(d, submission);
   return finish(dxmt9::core::D3D_OK);
 }
 
@@ -1791,7 +1725,6 @@ int32_t queueCompactDrawPrimitiveSubmission(
     submissions.pop_back();
     return finish(hr);
   }
-  resolveChunkEndFlushProbeWithSubmission(d, submission);
   DXMT_ASSERT(submission.compactUniforms.has_value() ||
               previousSubmission == nullptr ||
               submission.uniformGeneration == previousSubmission->uniformGeneration);
@@ -1840,7 +1773,6 @@ int32_t queueCompactDrawIndexedPrimitiveSubmission(
     submissions.pop_back();
     return finish(hr);
   }
-  resolveChunkEndFlushProbeWithSubmission(d, submission);
   DXMT_ASSERT(submission.compactUniforms.has_value() ||
               previousSubmission == nullptr ||
               submission.uniformGeneration == previousSubmission->uniformGeneration);
@@ -1944,10 +1876,6 @@ int32_t replayImportedChunk(D9CDevice* d,
               std::chrono::duration_cast<std::chrono::nanoseconds>(
                   std::chrono::steady_clock::now() - submitStart)
                   .count()));
-      if (reason == PendingDrawFlushReason::End) {
-        storeChunkEndFlushProbe(d, pendingDrawSubmissions.back(),
-                                pendingRecordCount);
-      }
       pendingDrawSubmissions.clear();
     }
     if (!pendingCompactDrawSubmissions.empty()) {
@@ -1963,10 +1891,6 @@ int32_t replayImportedChunk(D9CDevice* d,
               std::chrono::duration_cast<std::chrono::nanoseconds>(
                   std::chrono::steady_clock::now() - submitStart)
                   .count()));
-      if (reason == PendingDrawFlushReason::End) {
-        storeChunkEndFlushProbe(d, pendingCompactDrawSubmissions.back(),
-                                pendingRecordCount);
-      }
       pendingCompactDrawSubmissions.clear();
     }
     pendingUniformScratch.clear();
@@ -1994,7 +1918,6 @@ int32_t replayImportedChunk(D9CDevice* d,
     const bool batchThroughRecord =
         commitChunkRecordAllowsPendingDrawBatchThrough(header.type);
     if (!batchableDrawRecord && !batchThroughRecord) {
-      blockChunkEndFlushProbe(d, /*drawFallback=*/false);
       hr = flushPendingDrawSubmissions(PendingDrawFlushReason::BeforeRecord);
       if (failed(hr)) {
         return commitChunkFail("draw-batch-flush", recordIndex, header.type, hr);
@@ -2034,7 +1957,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       countDurationSince(scanStart, dxmt9::perf::countCommitChunkDrawRunScanCpuTime);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
-        resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
         if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
         // Apply the first record's full state once. Stream/IB changes from
@@ -2145,7 +2067,6 @@ int32_t replayImportedChunk(D9CDevice* d,
                                             pendingUniformScratch);
         }
       } else {
-        blockChunkEndFlushProbe(d, /*drawFallback=*/true);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawFallback);
         if (failed(hr)) return commitChunkFail("draw-flush", recordIndex, header.type, hr);
         hr = applyDrawPrimitivePacket(d, decoded.packet);
@@ -2171,7 +2092,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       countDurationSince(scanStart, dxmt9::perf::countCommitChunkDrawRunScanCpuTime);
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
-        resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
         if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
         hr = timedApplyDrawPacketState(d, decoded.packet.state);
@@ -2286,7 +2206,6 @@ int32_t replayImportedChunk(D9CDevice* d,
                                                    pendingUniformScratch);
         }
       } else {
-        blockChunkEndFlushProbe(d, /*drawFallback=*/true);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawFallback);
         if (failed(hr)) return commitChunkFail("indexed-draw-flush", recordIndex, header.type, hr);
         hr = applyDrawIndexedPrimitivePacket(d, decoded.packet);
@@ -2303,7 +2222,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       if (failed(hr)) {
         break;
       }
-      blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       hr = applyDrawPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
@@ -2318,7 +2236,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       if (failed(hr)) {
         break;
       }
-      blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;

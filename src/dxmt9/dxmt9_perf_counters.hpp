@@ -336,17 +336,6 @@ void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records);
 void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records);
 void countCommitChunkReplayPendingFlushFailure(std::uint64_t records);
 void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
-void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords);
-void countCommitChunkReplayEndFlushProbeFirstSubmission(
-    std::uint64_t pendingRecords,
-    bool sameStateLane,
-    bool sameUniformGeneration,
-    bool sameUniformPayloadHash);
-void countCommitChunkReplayEndFlushProbeFirstDrawRun(
-    std::uint64_t pendingRecords,
-    std::uint64_t runRecords);
-void countCommitChunkReplayEndFlushProbeBlocked(bool drawFallback,
-                                                std::uint64_t pendingRecords);
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds);

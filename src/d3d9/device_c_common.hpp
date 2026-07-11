@@ -142,16 +142,6 @@ struct D9CFactory {
 };
 
 struct D9CDevice {
-  struct ChunkEndFlushProbe {
-    bool valid = false;
-    std::uint64_t pendingRecords = 0;
-    std::uint64_t stateGeneration = 0;
-    std::uint64_t uniformGeneration = 0;
-    std::uint64_t uniformPayloadHash = 0;
-    dxmt9::core::DrawRunSubmissionStateLane stateLane =
-        dxmt9::core::DrawRunSubmissionStateLane::Unknown;
-  };
-
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t> refs{1};
   std::array<std::shared_ptr<dxmt9::core::Surface>, dxmt9::core::kMaxRenderTargets> renderTargets;
@@ -160,7 +150,6 @@ struct D9CDevice {
   std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
-  ChunkEndFlushProbe chunkEndFlushProbe{};
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
