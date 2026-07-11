@@ -2163,7 +2163,7 @@ OUT
         self.assertIn("DXMT9_MEASURE_INDEX_REUSE=1", result.stdout)
         self.assertIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
 
-    def test_wrapper_default_perf_profile_does_not_enable_mutating_index_opts(self) -> None:
+    def test_wrapper_default_enables_promoted_pair_but_not_mutating_probes(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
             "--no-gputrace",
@@ -2173,10 +2173,29 @@ OUT
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT_EXPERIMENT_PROFILE=perf", result.stdout)
         self.assertIn("DXMT_DISABLE_AUTO_EXPAND_INDEXED=1", result.stdout)
-        self.assertNotIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        # The promoted offload+index-cache pair matches the engine default
+        # (on); the env vars are the off switch.
+        self.assertIn("DXMT9_OFFLOAD_COMMIT_REPLAY=1", result.stdout)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1", result.stdout)
+        # Diagnostic mutating probes stay off without their explicit flags.
         self.assertNotIn("DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE=1", result.stdout)
         self.assertNotIn("DXMT9_PROBE_APPLY_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
         self.assertNotIn("DXMT9_MEASURE_INDEX_CACHE_OPT_CANDIDATE=1", result.stdout)
+
+    def test_wrapper_env_opt_out_disables_promoted_pair(self) -> None:
+        result = self.run_script(
+            RUN_WRAPPER,
+            "--no-gputrace",
+            "--dry-run",
+            env={
+                "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+                "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DXMT9_OFFLOAD_COMMIT_REPLAY=0", result.stdout)
+        self.assertIn("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=0", result.stdout)
 
     def test_wrapper_dry_run_includes_apply_index_cache_opt_candidate_env(self) -> None:
         result = self.run_script(

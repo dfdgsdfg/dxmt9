@@ -903,10 +903,12 @@ Options:
                       a small vertex cache through a transient IB. Uses the
                       same row/class/span filters as reverse-indexed-triangles
   --optimize-opaque-depth-index-cache
-                      Set DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1 to submit
+                      Force DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1 to submit
                       cached LRU32 reordered IBs for opaque depth-writing
-                      triangle-list draws. This is opt-in, never bypasses the
-                      opaque-depth-write safety gate, and is not row-scoped.
+                      triangle-list draws. Already the engine/wrapper default;
+                      export DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=0 to opt
+                      out. Never bypasses the opaque-depth-write safety gate,
+                      and is not row-scoped.
   --optimize-opaque-depth-index-cache-min-gain-pct PCT
                       Set DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT
                       (default in dxmt9: 10)
@@ -4201,11 +4203,12 @@ env_args=(
   "DXMT_DISABLE_AUTO_EXPAND_INDEXED=1"
   "DXMT_3DMARK05_RESULT_FILE=$result_file"
   "DXMT_3DMARK05_LOG=$output_dir/3dmark05-direct.log"
-  # The shared perf experiment profile defaults the promoted offload+index-cache
-  # pair on (H195 promotion proof). This diagnostic wrapper stays explicit so
-  # documented probe recipes and A/B baselines keep their historical shape:
-  # off unless the caller exports the env or passes the wrapper opt-in flag.
-  "DXMT9_OFFLOAD_COMMIT_REPLAY=${DXMT9_OFFLOAD_COMMIT_REPLAY:-0}"
+  # The promoted offload+index-cache pair is the engine default (H195/H216).
+  # The wrapper still pins an explicit value for recipe determinism, but the
+  # pinned default matches the engine: on, and the env is the off switch
+  # (export DXMT9_OFFLOAD_COMMIT_REPLAY=0 to opt out). Historical default-off
+  # A/B recipes must now pass =0 explicitly.
+  "DXMT9_OFFLOAD_COMMIT_REPLAY=${DXMT9_OFFLOAD_COMMIT_REPLAY:-1}"
 )
 
 if (( encoder_breakdown_enabled )); then
@@ -4461,10 +4464,10 @@ fi
 if (( optimize_opaque_depth_index_cache )); then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1")
 else
-  # Pin against the perf-profile default (see the env_args comment above):
-  # without the wrapper opt-in flag, probes stay index-cache-off unless the
-  # caller exported the env explicitly.
-  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-0}")
+  # Pin an explicit value for recipe determinism (see the env_args comment
+  # above): the pinned default matches the engine default (on); export
+  # DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=0 to opt out.
+  env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-1}")
 fi
 
 if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then
