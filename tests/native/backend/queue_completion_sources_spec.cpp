@@ -29,7 +29,6 @@ using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
 using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
-using dxmt9::core::metalqueue::prepareBatchCompletionSources;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
 using dxmt9::core::ChunkSlot;
 
@@ -1302,101 +1301,6 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
         "overflow rejection leaves merged source output empty");
 }
 
-void multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath() {
-  QueueFixture fixture;
-  fixture.addReadySlot(0, 1);
-  fixture.addReadySlot(1, 2);
-
-  std::array<ReadySlotSnapshot, 2> snapshots{};
-  {
-    std::unique_lock lock(fixture.mutex);
-    const std::size_t sourceCount =
-        fixture.controller.dequeueReadySlotBatch(
-            lock, std::span<ReadySlotSnapshot>(snapshots));
-    checkEq(sourceCount, 2u, "test setup dequeues both source slots");
-  }
-
-  dxmt9::core::metalqueue::QueueSubmissionRecord record;
-  record.slotIndex = snapshots[1].slotIndex;
-  record.seqId = snapshots[1].seqId;
-  check(record.explicitCompletionSourceSpan().empty(),
-        "test setup starts without explicit completion sources");
-
-  check(dxmt9::core::metalqueue::assignBatchCompletionSourcesIfNeeded(
-            record, std::span<const ReadySlotSnapshot>(
-                        snapshots.data(), snapshots.size())),
-        "multi-source batch submission receives fixed completion sources");
-
-  const auto sources = record.explicitCompletionSourceSpan();
-  checkEq(sources.size(), 2u,
-          "multi-source batch stores every completion source");
-  checkEq(sources[0].slotIndex, snapshots[0].slotIndex,
-          "first source slot metadata is preserved");
-  checkEq(sources[0].seqId, snapshots[0].seqId,
-          "first source seqId metadata is preserved");
-  checkEq(sources[1].slotIndex, snapshots[1].slotIndex,
-          "tail source slot metadata is preserved");
-  checkEq(sources[1].seqId, snapshots[1].seqId,
-          "tail source seqId metadata is preserved");
-  checkEq(sources[0].commandBegin, snapshots[0].commandBegin,
-          "first source command begin metadata is preserved");
-  checkEq(sources[1].commandCount, snapshots[1].commandCount,
-          "tail source command count metadata is preserved");
-}
-
-void multiSourceBatchAcceptsExplicitCompletionSourcePrefix() {
-  QueueFixture fixture;
-  fixture.addReadySlot(0, 1);
-  fixture.addReadySlot(1, 2);
-
-  std::array<ReadySlotSnapshot, 2> snapshots{};
-  {
-    std::unique_lock lock(fixture.mutex);
-    const std::size_t sourceCount =
-        fixture.controller.dequeueReadySlotBatch(
-            lock, std::span<ReadySlotSnapshot>(snapshots));
-    checkEq(sourceCount, 2u, "test setup dequeues both source slots");
-  }
-
-  QueueSubmissionRecord partial;
-  const QueueCompletionSource first =
-      completionSourceForReadySlot(snapshots[0]);
-  check(partial.assignFixedCompletionSources(
-            std::span<const QueueCompletionSource>(&first, 1u)),
-        "test setup assigns a partial explicit source list");
-  checkEq(prepareBatchCompletionSources(
-              partial, std::span<const ReadySlotSnapshot>(
-                           snapshots.data(), snapshots.size())),
-          1u,
-          "multi-source batch accepts a strict explicit source prefix");
-
-  QueueSubmissionRecord mismatch;
-  std::array<QueueCompletionSource, 2> wrong{{
-      completionSourceForReadySlot(snapshots[0]),
-      completionSourceForReadySlot(snapshots[1]),
-  }};
-  wrong[1].commandCount += 1u;
-  check(mismatch.assignFixedCompletionSources(wrong),
-        "test setup assigns explicit sources with mismatched metadata");
-  checkEq(prepareBatchCompletionSources(
-              mismatch, std::span<const ReadySlotSnapshot>(
-                            snapshots.data(), snapshots.size())),
-          0u,
-          "multi-source batch rejects explicit source metadata mismatches");
-
-  QueueSubmissionRecord exact;
-  std::array<QueueCompletionSource, 2> expected{{
-      completionSourceForReadySlot(snapshots[0]),
-      completionSourceForReadySlot(snapshots[1]),
-  }};
-  check(exact.assignFixedCompletionSources(expected),
-        "test setup assigns full explicit source metadata");
-  check(assignBatchCompletionSourcesIfNeeded(
-            exact, std::span<const ReadySlotSnapshot>(
-                       snapshots.data(), snapshots.size())),
-        "multi-source batch accepts explicit sources that cover the batch");
-}
-
 }  // namespace
 
 int main() {
@@ -1429,8 +1333,6 @@ int main() {
     mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsSequenceGaps();
     mergeEncodedPendingTailSubmissionRejectsSourceListOverflow();
-    multiSourceBatchSubmissionAssignsCompletionSourcesBeforeAsyncPath();
-    multiSourceBatchAcceptsExplicitCompletionSourcePrefix();
   } catch (const TestFailure& error) {
     std::cerr << "queue_completion_sources_spec failed: " << error.what() << '\n';
     return 1;

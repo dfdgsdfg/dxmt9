@@ -14566,67 +14566,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto& requestedRenderEncoderGpuSamples =
       session.requestedRenderEncoderGpuSamples;
 
-  if (options.session) {
-    perf::countEncodeSessionCarrySourceEntry(
-        static_cast<bool>(activeRenderEncoder),
-        static_cast<bool>(activeBlitEncoder),
-        pendingClear.has_value());
-  }
-  const bool sessionSourceEntryActiveRender =
-      options.session && static_cast<bool>(activeRenderEncoder);
-  bool sessionSourceFirstDrawDecisionRecorded = false;
-  bool sessionSourceActiveRenderClosedBeforeFirstDraw = false;
-  auto recordSessionSourceActiveRenderClosedBeforeFirstDraw =
-      [&](perf::EncoderSplitReason reason) {
-        if (!sessionSourceEntryActiveRender ||
-            sessionSourceFirstDrawDecisionRecorded ||
-            sessionSourceActiveRenderClosedBeforeFirstDraw) {
-          return;
-        }
-        sessionSourceActiveRenderClosedBeforeFirstDraw = true;
-        perf::countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
-            reason);
-      };
-  auto recordSessionSourceFirstDrawDecision =
-      [&](RenderPassEntryDecision decision) {
-        if (!options.session || sessionSourceFirstDrawDecisionRecorded) {
-          return;
-        }
-        sessionSourceFirstDrawDecisionRecorded = true;
-        switch (decision) {
-        case RenderPassEntryDecision::ContinueActive:
-          perf::countEncodeSessionCarryFirstDrawContinueActive();
-          if (sessionSourceEntryActiveRender) {
-            perf::countEncodeSessionCarryActiveEntryFirstDrawContinueActive();
-          }
-          break;
-        case RenderPassEntryDecision::BeginPass:
-          perf::countEncodeSessionCarryFirstDrawBeginPass();
-          if (sessionSourceEntryActiveRender) {
-            perf::countEncodeSessionCarryActiveEntryFirstDrawBeginPass();
-          }
-          break;
-        case RenderPassEntryDecision::SplitRenderTargetChange:
-          perf::countEncodeSessionCarryFirstDrawSplitRenderTargetChange();
-          if (sessionSourceEntryActiveRender) {
-            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange();
-          }
-          break;
-        case RenderPassEntryDecision::SplitHazard:
-          perf::countEncodeSessionCarryFirstDrawSplitHazard();
-          if (sessionSourceEntryActiveRender) {
-            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitHazard();
-          }
-          break;
-        case RenderPassEntryDecision::SplitTileMidPassIneligible:
-          perf::countEncodeSessionCarryFirstDrawSplitOther();
-          if (sessionSourceEntryActiveRender) {
-            perf::countEncodeSessionCarryActiveEntryFirstDrawSplitOther();
-          }
-          break;
-        }
-      };
-
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
       session, WMT::Device{ctx.device.handle},
@@ -15004,7 +14943,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   auto flushRender = [&](perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final) {
     if (activeRenderEncoder) {
-      recordSessionSourceActiveRenderClosedBeforeFirstDraw(reason);
       // TLA+: EncoderLifecycle / EndEncoder(Render)
       DXMT_ASSERT(hasActiveRender);
       DXMT_ASSERT(!activeBlitEncoder);
@@ -15520,12 +15458,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       initializerFlush.value > 0) {
     if (activeRenderEncoder || activeBlitEncoder || pendingClear.has_value()) {
       traceEncodeStage("before-initializer-wait-finalize-session");
-      if (options.session) {
-        perf::countEncodeSessionCarryForcedFinalizeInitializerWait(
-            static_cast<bool>(activeRenderEncoder),
-            static_cast<bool>(activeBlitEncoder),
-            pendingClear.has_value());
-      }
       finalizeEncodeChunkSessionForReturn();
       traceEncodeStage("after-initializer-wait-finalize-session");
     }
@@ -15681,7 +15613,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const auto clearKey = makeAttachmentKey(*pendingClear);
       const auto clearHazard = makeAttachmentHazard(*pendingClear);
       if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
-        recordSessionSourceFirstDrawDecision(RenderPassEntryDecision::BeginPass);
         startRenderPass(stateView, pendingClear, commandIndex, renderPsoHandle);
         pendingClear.reset();
         pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
@@ -15707,7 +15638,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             !renderTargetChanged,
             hazardDetected,
             tileResplit);
-        recordSessionSourceFirstDrawDecision(entryDecision);
         if (entryDecision != RenderPassEntryDecision::ContinueActive) {
           if (entryDecision ==
               RenderPassEntryDecision::SplitRenderTargetChange) {
@@ -15755,7 +15685,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           !renderTargetChanged,
           hazardDetected,
           tileResplit);
-      recordSessionSourceFirstDrawDecision(entryDecision);
       if (entryDecision != RenderPassEntryDecision::ContinueActive) {
         if (entryDecision ==
             RenderPassEntryDecision::SplitRenderTargetChange) {
@@ -16443,15 +16372,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   }
 
-  if (deferSessionFinalization) {
-    perf::countEncodeSessionCarryDeferredChunk(
-        static_cast<bool>(activeRenderEncoder),
-        static_cast<bool>(activeBlitEncoder),
-        pendingClear.has_value());
-  } else {
-    if (options.session) {
-      perf::countEncodeSessionCarryFinalChunk();
-    }
+  if (!deferSessionFinalization) {
     finalizeEncodeChunkSessionForReturn();
   }
 

@@ -277,28 +277,6 @@ void countDrawSkippedNoPipeline();
 void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
-void countEncodeSessionCarryDeferredChunk(bool activeRender,
-                                          bool activeBlit,
-                                          bool pendingClear);
-void countEncodeSessionCarryFinalChunk();
-void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
-                                                          bool activeBlit,
-                                                          bool pendingClear);
-void countEncodeSessionCarrySourceEntry(bool activeRender,
-                                        bool activeBlit,
-                                        bool pendingClear);
-void countEncodeSessionCarryFirstDrawContinueActive();
-void countEncodeSessionCarryFirstDrawBeginPass();
-void countEncodeSessionCarryFirstDrawSplitRenderTargetChange();
-void countEncodeSessionCarryFirstDrawSplitHazard();
-void countEncodeSessionCarryFirstDrawSplitOther();
-void countEncodeSessionCarryActiveEntryFirstDrawContinueActive();
-void countEncodeSessionCarryActiveEntryFirstDrawBeginPass();
-void countEncodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange();
-void countEncodeSessionCarryActiveEntryFirstDrawSplitHazard();
-void countEncodeSessionCarryActiveEntryFirstDrawSplitOther();
-void countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
-    EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaRenderState = 1u << 0,
@@ -1306,37 +1284,6 @@ struct CounterSnapshot {
   std::uint64_t commandBuffers = 0;
   std::uint64_t renderPassBegin = 0;
   std::uint64_t renderPassEnd = 0;
-  std::uint64_t encodeSessionCarryDeferredChunks = 0;
-  std::uint64_t encodeSessionCarryDeferredActiveRenderChunks = 0;
-  std::uint64_t encodeSessionCarryFinalChunks = 0;
-  std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaits = 0;
-  std::uint64_t encodeSessionCarryForcedFinalizeInitializerWaitActiveRender = 0;
-  std::uint64_t encodeSessionCarrySourceEntries = 0;
-  std::uint64_t encodeSessionCarrySourceEntryActiveRender = 0;
-  std::uint64_t encodeSessionCarrySourceEntryActiveBlit = 0;
-  std::uint64_t encodeSessionCarrySourceEntryPendingClear = 0;
-  std::uint64_t encodeSessionCarryFirstDrawContinueActive = 0;
-  std::uint64_t encodeSessionCarryFirstDrawBeginPass = 0;
-  std::uint64_t encodeSessionCarryFirstDrawSplitRenderTargetChange = 0;
-  std::uint64_t encodeSessionCarryFirstDrawSplitHazard = 0;
-  std::uint64_t encodeSessionCarryFirstDrawSplitOther = 0;
-  std::uint64_t encodeSessionCarryActiveEntryFirstDrawContinueActive = 0;
-  std::uint64_t encodeSessionCarryActiveEntryFirstDrawBeginPass = 0;
-  std::uint64_t encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange = 0;
-  std::uint64_t encodeSessionCarryActiveEntryFirstDrawSplitHazard = 0;
-  std::uint64_t encodeSessionCarryActiveEntryFirstDrawSplitOther = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire = 0;
-  std::uint64_t encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible = 0;
   std::uint64_t drawCalls = 0;
   std::uint64_t drawIndexedCalls = 0;
   std::uint64_t drawPrimitiveCount = 0;

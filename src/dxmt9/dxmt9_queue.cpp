@@ -339,52 +339,6 @@ QueueCompletionSource completionSourceForReadySlot(
   };
 }
 
-std::size_t prepareBatchCompletionSources(
-    QueueSubmissionRecord& submission,
-    std::span<const ReadySlotSnapshot> sources) {
-  if (sources.empty()) {
-    return 0;
-  }
-
-  const auto existingSources = submission.explicitCompletionSourceSpan();
-  if (!existingSources.empty()) {
-    if (existingSources.size() > sources.size()) {
-      return 0;
-    }
-    for (std::size_t i = 0; i < existingSources.size(); ++i) {
-      const auto expected = completionSourceForReadySlot(sources[i]);
-      const auto& actual = existingSources[i];
-      if (actual.slotIndex != expected.slotIndex ||
-          actual.seqId != expected.seqId ||
-          actual.hasPresent != expected.hasPresent ||
-          actual.commandBegin != expected.commandBegin ||
-          actual.commandCount != expected.commandCount) {
-        return 0;
-      }
-    }
-    return existingSources.size();
-  }
-  if (sources.size() <= 1u) {
-    return sources.size();
-  }
-
-  EncodeSessionSourceList completionSources;
-  for (const auto& source : sources) {
-    if (!completionSources.append(completionSourceForReadySlot(source))) {
-      return 0;
-    }
-  }
-  return submission.assignFixedCompletionSources(completionSources.span())
-      ? sources.size()
-      : 0;
-}
-
-bool assignBatchCompletionSourcesIfNeeded(
-    QueueSubmissionRecord& submission,
-    std::span<const ReadySlotSnapshot> sources) {
-  return prepareBatchCompletionSources(submission, sources) != 0;
-}
-
 void appendCompletionSourcesToQueues(
     std::deque<u64>& completedSeqQueue,
     std::deque<u64>* completedPresentSeqQueue,

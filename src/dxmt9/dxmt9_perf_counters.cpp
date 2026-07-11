@@ -128,23 +128,17 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonPayloadLimit{0};
   std::atomic<std::uint64_t> chunkPublishReasonPresent{0};
   std::atomic<std::uint64_t> chunkPublishReasonPresentAcquire{0};
-  std::atomic<std::uint64_t> chunkPublishReasonPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishReasonFlush{0};
   std::atomic<std::uint64_t> chunkPublishReasonStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishReasonMapWait{0};
-  std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
-  std::atomic<std::uint64_t> chunkPublishReasonDrawContinuation{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPresent{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPresentAcquire{0};
-  std::atomic<std::uint64_t> chunkPublishCommandsPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishCommandsFlush{0};
   std::atomic<std::uint64_t> chunkPublishCommandsStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
-  std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
-  std::atomic<std::uint64_t> chunkPublishCommandsDrawContinuation{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
@@ -367,41 +361,6 @@ struct Counters {
   std::atomic<std::uint64_t> renderSplitPresent{0};
   std::atomic<std::uint64_t> renderSplitPresentAcquire{0};
   std::atomic<std::uint64_t> renderSplitTileMidPassIneligible{0};
-  std::atomic<std::uint64_t> encodeSessionCarryDeferredChunks{0};
-  std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveRenderChunks{0};
-  std::atomic<std::uint64_t> encodeSessionCarryDeferredActiveBlitChunks{0};
-  std::atomic<std::uint64_t> encodeSessionCarryDeferredPendingClearChunks{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFinalChunks{0};
-  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaits{0};
-  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveRender{0};
-  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit{0};
-  std::atomic<std::uint64_t> encodeSessionCarryForcedFinalizeInitializerWaitPendingClear{0};
-  std::atomic<std::uint64_t> encodeSessionCarrySourceEntries{0};
-  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryActiveRender{0};
-  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryActiveBlit{0};
-  std::atomic<std::uint64_t> encodeSessionCarrySourceEntryPendingClear{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawContinueActive{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawBeginPass{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitRenderTargetChange{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitHazard{0};
-  std::atomic<std::uint64_t> encodeSessionCarryFirstDrawSplitOther{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryFirstDrawContinueActive{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryFirstDrawBeginPass{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryFirstDrawSplitHazard{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryFirstDrawSplitOther{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire{0};
-  std::atomic<std::uint64_t> encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
@@ -2233,23 +2192,17 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_reason_payload_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonPayloadLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_present", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonPresent, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonPresentAcquire, nullptr, nullptr, 0.0},
-    {"chunk_publish_reason_present_split_before", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonPresentSplitBefore, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonMapWait, nullptr, nullptr, 0.0},
-    {"chunk_publish_reason_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonSemanticBoundary, nullptr, nullptr, 0.0},
-    {"chunk_publish_reason_draw_continuation", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonDrawContinuation, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_unknown", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsUnknown, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_draw_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_payload_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPayloadLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_present", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPresent, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPresentAcquire, nullptr, nullptr, 0.0},
-    {"chunk_publish_commands_present_split_before", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPresentSplitBefore, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsMapWait, nullptr, nullptr, 0.0},
-    {"chunk_publish_commands_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsSemanticBoundary, nullptr, nullptr, 0.0},
-    {"chunk_publish_commands_draw_continuation", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawContinuation, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
@@ -2484,41 +2437,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_split_present", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresent, nullptr, nullptr, 0.0},
     {"render_split_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresentAcquire, nullptr, nullptr, 0.0},
     {"render_split_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitTileMidPassIneligible, nullptr, nullptr, 0.0},
-    {"encode_session_carry_deferred_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredChunks, nullptr, nullptr, 0.0},
-    {"encode_session_carry_deferred_active_render_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveRenderChunks, nullptr, nullptr, 0.0},
-    {"encode_session_carry_deferred_active_blit_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredActiveBlitChunks, nullptr, nullptr, 0.0},
-    {"encode_session_carry_deferred_pending_clear_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryDeferredPendingClearChunks, nullptr, nullptr, 0.0},
-    {"encode_session_carry_final_chunks", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFinalChunks, nullptr, nullptr, 0.0},
-    {"encode_session_carry_forced_finalize_initializer_waits", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaits, nullptr, nullptr, 0.0},
-    {"encode_session_carry_forced_finalize_initializer_wait_active_render", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveRender, nullptr, nullptr, 0.0},
-    {"encode_session_carry_forced_finalize_initializer_wait_active_blit", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit, nullptr, nullptr, 0.0},
-    {"encode_session_carry_forced_finalize_initializer_wait_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryForcedFinalizeInitializerWaitPendingClear, nullptr, nullptr, 0.0},
-    {"encode_session_carry_source_entries", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntries, nullptr, nullptr, 0.0},
-    {"encode_session_carry_source_entry_active_render", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryActiveRender, nullptr, nullptr, 0.0},
-    {"encode_session_carry_source_entry_active_blit", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryActiveBlit, nullptr, nullptr, 0.0},
-    {"encode_session_carry_source_entry_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarrySourceEntryPendingClear, nullptr, nullptr, 0.0},
-    {"encode_session_carry_first_draw_continue_active", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawContinueActive, nullptr, nullptr, 0.0},
-    {"encode_session_carry_first_draw_begin_pass", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawBeginPass, nullptr, nullptr, 0.0},
-    {"encode_session_carry_first_draw_split_rt", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitRenderTargetChange, nullptr, nullptr, 0.0},
-    {"encode_session_carry_first_draw_split_hazard", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitHazard, nullptr, nullptr, 0.0},
-    {"encode_session_carry_first_draw_split_other", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryFirstDrawSplitOther, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_first_draw_continue_active", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryFirstDrawContinueActive, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_first_draw_begin_pass", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryFirstDrawBeginPass, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_first_draw_split_rt", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_first_draw_split_hazard", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryFirstDrawSplitHazard, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_first_draw_split_other", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryFirstDrawSplitOther, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_final", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_rt", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_hazard", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_clear", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_readback", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_present", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire, nullptr, nullptr, 0.0},
-    {"encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
@@ -4432,10 +4350,6 @@ void countChunkPublishReason(ChunkPublishReason reason,
     count = &c.chunkPublishReasonPresentAcquire;
     commands = &c.chunkPublishCommandsPresentAcquire;
     break;
-  case ChunkPublishReason::PresentSplitBefore:
-    count = &c.chunkPublishReasonPresentSplitBefore;
-    commands = &c.chunkPublishCommandsPresentSplitBefore;
-    break;
   case ChunkPublishReason::Flush:
     count = &c.chunkPublishReasonFlush;
     commands = &c.chunkPublishCommandsFlush;
@@ -4448,14 +4362,14 @@ void countChunkPublishReason(ChunkPublishReason reason,
     count = &c.chunkPublishReasonMapWait;
     commands = &c.chunkPublishCommandsMapWait;
     break;
+  // PresentSplitBefore/SemanticBoundary/DrawContinuation: the open-CB/
+  // tail-present carrier that could produce these reasons was removed in
+  // 6379d5c8. No live prepareSlotForPublish() call site passes them; keep
+  // the enum values (table numbering stability) but fold them into the
+  // Unknown bucket instead of a dedicated counter.
+  case ChunkPublishReason::PresentSplitBefore:
   case ChunkPublishReason::SemanticBoundary:
-    count = &c.chunkPublishReasonSemanticBoundary;
-    commands = &c.chunkPublishCommandsSemanticBoundary;
-    break;
   case ChunkPublishReason::DrawContinuation:
-    count = &c.chunkPublishReasonDrawContinuation;
-    commands = &c.chunkPublishCommandsDrawContinuation;
-    break;
   case ChunkPublishReason::Unknown:
     break;
   }
@@ -4991,139 +4905,6 @@ void countRenderPassBegin() {
 void countRenderPassEnd(EncoderSplitReason reason) {
   add(counters().renderPassEnd);
   add(splitReasonCounter(counters(), reason));
-}
-
-void countEncodeSessionCarryDeferredChunk(bool activeRender,
-                                          bool activeBlit,
-                                          bool pendingClear) {
-  auto& c = counters();
-  add(c.encodeSessionCarryDeferredChunks);
-  if (activeRender) {
-    add(c.encodeSessionCarryDeferredActiveRenderChunks);
-  }
-  if (activeBlit) {
-    add(c.encodeSessionCarryDeferredActiveBlitChunks);
-  }
-  if (pendingClear) {
-    add(c.encodeSessionCarryDeferredPendingClearChunks);
-  }
-}
-
-void countEncodeSessionCarryFinalChunk() {
-  add(counters().encodeSessionCarryFinalChunks);
-}
-
-void countEncodeSessionCarryForcedFinalizeInitializerWait(bool activeRender,
-                                                          bool activeBlit,
-                                                          bool pendingClear) {
-  auto& c = counters();
-  add(c.encodeSessionCarryForcedFinalizeInitializerWaits);
-  if (activeRender) {
-    add(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender);
-  }
-  if (activeBlit) {
-    add(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveBlit);
-  }
-  if (pendingClear) {
-    add(c.encodeSessionCarryForcedFinalizeInitializerWaitPendingClear);
-  }
-}
-
-void countEncodeSessionCarrySourceEntry(bool activeRender,
-                                        bool activeBlit,
-                                        bool pendingClear) {
-  auto& c = counters();
-  add(c.encodeSessionCarrySourceEntries);
-  if (activeRender) {
-    add(c.encodeSessionCarrySourceEntryActiveRender);
-  }
-  if (activeBlit) {
-    add(c.encodeSessionCarrySourceEntryActiveBlit);
-  }
-  if (pendingClear) {
-    add(c.encodeSessionCarrySourceEntryPendingClear);
-  }
-}
-
-void countEncodeSessionCarryFirstDrawContinueActive() {
-  add(counters().encodeSessionCarryFirstDrawContinueActive);
-}
-
-void countEncodeSessionCarryFirstDrawBeginPass() {
-  add(counters().encodeSessionCarryFirstDrawBeginPass);
-}
-
-void countEncodeSessionCarryFirstDrawSplitRenderTargetChange() {
-  add(counters().encodeSessionCarryFirstDrawSplitRenderTargetChange);
-}
-
-void countEncodeSessionCarryFirstDrawSplitHazard() {
-  add(counters().encodeSessionCarryFirstDrawSplitHazard);
-}
-
-void countEncodeSessionCarryFirstDrawSplitOther() {
-  add(counters().encodeSessionCarryFirstDrawSplitOther);
-}
-
-void countEncodeSessionCarryActiveEntryFirstDrawContinueActive() {
-  add(counters().encodeSessionCarryActiveEntryFirstDrawContinueActive);
-}
-
-void countEncodeSessionCarryActiveEntryFirstDrawBeginPass() {
-  add(counters().encodeSessionCarryActiveEntryFirstDrawBeginPass);
-}
-
-void countEncodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange() {
-  add(counters().encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange);
-}
-
-void countEncodeSessionCarryActiveEntryFirstDrawSplitHazard() {
-  add(counters().encodeSessionCarryActiveEntryFirstDrawSplitHazard);
-}
-
-void countEncodeSessionCarryActiveEntryFirstDrawSplitOther() {
-  add(counters().encodeSessionCarryActiveEntryFirstDrawSplitOther);
-}
-
-void countEncodeSessionCarryActiveEntryLostActiveBeforeFirstDraw(
-    EncoderSplitReason reason) {
-  auto& c = counters();
-  add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw);
-  switch (reason) {
-  case EncoderSplitReason::Final:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal);
-    break;
-  case EncoderSplitReason::RenderTargetChange:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange);
-    break;
-  case EncoderSplitReason::Hazard:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard);
-    break;
-  case EncoderSplitReason::ClearBarrier:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier);
-    break;
-  case EncoderSplitReason::SurfaceCopy:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy);
-    break;
-  case EncoderSplitReason::StretchRect:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect);
-    break;
-  case EncoderSplitReason::Readback:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback);
-    break;
-  case EncoderSplitReason::ColorFill:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill);
-    break;
-  case EncoderSplitReason::Present:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent);
-    break;
-  case EncoderSplitReason::PresentAcquire:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire);
-    break;
-  case EncoderSplitReason::TileMidPassIneligible:
-    add(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible);
-    break;
-  }
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
@@ -10564,67 +10345,6 @@ CounterSnapshot snapshot() {
   s.commandBuffers = load(c.commandBuffers);
   s.renderPassBegin = load(c.renderPassBegin);
   s.renderPassEnd = load(c.renderPassEnd);
-  s.encodeSessionCarryDeferredChunks =
-      load(c.encodeSessionCarryDeferredChunks);
-  s.encodeSessionCarryDeferredActiveRenderChunks =
-      load(c.encodeSessionCarryDeferredActiveRenderChunks);
-  s.encodeSessionCarryFinalChunks = load(c.encodeSessionCarryFinalChunks);
-  s.encodeSessionCarryForcedFinalizeInitializerWaits =
-      load(c.encodeSessionCarryForcedFinalizeInitializerWaits);
-  s.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender =
-      load(c.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender);
-  s.encodeSessionCarrySourceEntries =
-      load(c.encodeSessionCarrySourceEntries);
-  s.encodeSessionCarrySourceEntryActiveRender =
-      load(c.encodeSessionCarrySourceEntryActiveRender);
-  s.encodeSessionCarrySourceEntryActiveBlit =
-      load(c.encodeSessionCarrySourceEntryActiveBlit);
-  s.encodeSessionCarrySourceEntryPendingClear =
-      load(c.encodeSessionCarrySourceEntryPendingClear);
-  s.encodeSessionCarryFirstDrawContinueActive =
-      load(c.encodeSessionCarryFirstDrawContinueActive);
-  s.encodeSessionCarryFirstDrawBeginPass =
-      load(c.encodeSessionCarryFirstDrawBeginPass);
-  s.encodeSessionCarryFirstDrawSplitRenderTargetChange =
-      load(c.encodeSessionCarryFirstDrawSplitRenderTargetChange);
-  s.encodeSessionCarryFirstDrawSplitHazard =
-      load(c.encodeSessionCarryFirstDrawSplitHazard);
-  s.encodeSessionCarryFirstDrawSplitOther =
-      load(c.encodeSessionCarryFirstDrawSplitOther);
-  s.encodeSessionCarryActiveEntryFirstDrawContinueActive =
-      load(c.encodeSessionCarryActiveEntryFirstDrawContinueActive);
-  s.encodeSessionCarryActiveEntryFirstDrawBeginPass =
-      load(c.encodeSessionCarryActiveEntryFirstDrawBeginPass);
-  s.encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange =
-      load(c.encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange);
-  s.encodeSessionCarryActiveEntryFirstDrawSplitHazard =
-      load(c.encodeSessionCarryActiveEntryFirstDrawSplitHazard);
-  s.encodeSessionCarryActiveEntryFirstDrawSplitOther =
-      load(c.encodeSessionCarryActiveEntryFirstDrawSplitOther);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire);
-  s.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible =
-      load(c.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible);
   s.drawCalls = load(c.drawCalls);
   s.drawIndexedCalls = load(c.drawIndexedCalls);
   s.drawPrimitiveCount = load(c.drawPrimitiveCount);
@@ -10704,37 +10424,6 @@ void emitFrameDelta(std::uint64_t frameId,
       "submit_draw=%llu submit_clear=%llu submit_stretch=%llu "
       "submit_present=%llu submit_flush=%llu command_buffers=%llu "
       "render_pass_begin=%llu render_pass_end=%llu "
-      "encode_session_carry_deferred_chunks=%llu "
-      "encode_session_carry_deferred_active_render_chunks=%llu "
-      "encode_session_carry_final_chunks=%llu "
-      "encode_session_carry_forced_finalize_initializer_waits=%llu "
-      "encode_session_carry_forced_finalize_initializer_wait_active_render=%llu "
-      "encode_session_carry_source_entries=%llu "
-      "encode_session_carry_source_entry_active_render=%llu "
-      "encode_session_carry_source_entry_active_blit=%llu "
-      "encode_session_carry_source_entry_pending_clear=%llu "
-      "encode_session_carry_first_draw_continue_active=%llu "
-      "encode_session_carry_first_draw_begin_pass=%llu "
-      "encode_session_carry_first_draw_split_rt=%llu "
-      "encode_session_carry_first_draw_split_hazard=%llu "
-      "encode_session_carry_first_draw_split_other=%llu "
-      "encode_session_carry_active_entry_first_draw_continue_active=%llu "
-      "encode_session_carry_active_entry_first_draw_begin_pass=%llu "
-      "encode_session_carry_active_entry_first_draw_split_rt=%llu "
-      "encode_session_carry_active_entry_first_draw_split_hazard=%llu "
-      "encode_session_carry_active_entry_first_draw_split_other=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_final=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_rt=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_hazard=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_clear=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_surface_copy=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_stretch_rect=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_readback=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_color_fill=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_present=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_present_acquire=%llu "
-      "encode_session_carry_active_entry_lost_active_before_first_draw_tile_midpass=%llu "
       "draw_calls=%llu draw_indexed=%llu draw_primitives=%llu "
       "draw_triangles=%llu draw_vertices=%llu bind_pipeline=%llu "
       "present_encoded=%llu "
@@ -10773,99 +10462,6 @@ void emitFrameDelta(std::uint64_t frameId,
       static_cast<unsigned long long>(delta(prev.commandBuffers, curr.commandBuffers)),
       static_cast<unsigned long long>(delta(prev.renderPassBegin, curr.renderPassBegin)),
       static_cast<unsigned long long>(delta(prev.renderPassEnd, curr.renderPassEnd)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryDeferredChunks,
-                curr.encodeSessionCarryDeferredChunks)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryDeferredActiveRenderChunks,
-                curr.encodeSessionCarryDeferredActiveRenderChunks)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFinalChunks,
-                curr.encodeSessionCarryFinalChunks)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryForcedFinalizeInitializerWaits,
-                curr.encodeSessionCarryForcedFinalizeInitializerWaits)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender,
-                curr.encodeSessionCarryForcedFinalizeInitializerWaitActiveRender)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarrySourceEntries,
-                curr.encodeSessionCarrySourceEntries)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarrySourceEntryActiveRender,
-                curr.encodeSessionCarrySourceEntryActiveRender)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarrySourceEntryActiveBlit,
-                curr.encodeSessionCarrySourceEntryActiveBlit)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarrySourceEntryPendingClear,
-                curr.encodeSessionCarrySourceEntryPendingClear)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFirstDrawContinueActive,
-                curr.encodeSessionCarryFirstDrawContinueActive)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFirstDrawBeginPass,
-                curr.encodeSessionCarryFirstDrawBeginPass)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFirstDrawSplitRenderTargetChange,
-                curr.encodeSessionCarryFirstDrawSplitRenderTargetChange)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFirstDrawSplitHazard,
-                curr.encodeSessionCarryFirstDrawSplitHazard)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryFirstDrawSplitOther,
-                curr.encodeSessionCarryFirstDrawSplitOther)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryFirstDrawContinueActive,
-                curr.encodeSessionCarryActiveEntryFirstDrawContinueActive)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryFirstDrawBeginPass,
-                curr.encodeSessionCarryActiveEntryFirstDrawBeginPass)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange,
-                curr.encodeSessionCarryActiveEntryFirstDrawSplitRenderTargetChange)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryFirstDrawSplitHazard,
-                curr.encodeSessionCarryActiveEntryFirstDrawSplitHazard)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryFirstDrawSplitOther,
-                curr.encodeSessionCarryActiveEntryFirstDrawSplitOther)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDraw)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawFinal)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawRenderTargetChange)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawHazard)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawClearBarrier)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawSurfaceCopy)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawStretchRect)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawReadback)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawColorFill)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresent)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawPresentAcquire)),
-      static_cast<unsigned long long>(
-          delta(prev.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible,
-                curr.encodeSessionCarryActiveEntryLostActiveBeforeFirstDrawTileMidPassIneligible)),
       static_cast<unsigned long long>(delta(prev.drawCalls, curr.drawCalls)),
       static_cast<unsigned long long>(delta(prev.drawIndexedCalls, curr.drawIndexedCalls)),
       static_cast<unsigned long long>(delta(prev.drawPrimitiveCount, curr.drawPrimitiveCount)),

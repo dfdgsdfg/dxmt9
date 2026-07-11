@@ -350,13 +350,6 @@ struct QueueSubmissionRecord {
   std::vector<std::shared_ptr<void>> retainedPayloads;
 };
 
-bool assignBatchCompletionSourcesIfNeeded(
-    QueueSubmissionRecord& submission,
-    std::span<const ReadySlotSnapshot> sources);
-std::size_t prepareBatchCompletionSources(
-    QueueSubmissionRecord& submission,
-    std::span<const ReadySlotSnapshot> sources);
-
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
                                         std::span<const ChunkObservation> observations);
