@@ -1556,58 +1556,6 @@ class BackendDevice {
     (void)draws;
     (void)payloads;
   }
-  virtual void submitDrawRunBatchWithResourceMarking(
-      std::span<DrawRunSubmission> submissions) {
-    if (submissions.empty()) {
-      return;
-    }
-    const auto& frontState = submissions.front().materializedState();
-    const DrawUniformPayload* previousUniform = nullptr;
-    std::uint64_t previousUniformGeneration = 0;
-    for (auto& submission : submissions) {
-      const std::span<const DrawParam> draws(&submission.draw, 1);
-      std::span<const DrawParamPayloadView> payloads{};
-      if (!submission.payload.userVertexData.empty() ||
-          !submission.payload.userIndexData.empty() ||
-          !submission.payload.bindingOverrideData.empty() ||
-          !submission.payload.bindingSnapshotData.empty()) {
-        payloads = std::span<const DrawParamPayloadView>(&submission.payload, 1);
-      }
-      if (submission.uniforms.has_value()) {
-        previousUniform = &submission.uniformPayload();
-        previousUniformGeneration = submission.uniformGeneration;
-      } else {
-        const bool sameUniformGeneration =
-            submission.uniformGeneration == previousUniformGeneration;
-        DXMT_ASSERT(previousUniform && sameUniformGeneration);
-        (void)sameUniformGeneration;
-      }
-      submitDrawRun(submission.stateMaterialized
-                        ? submission.materializedState()
-                        : frontState,
-                    *previousUniform, draws, payloads);
-    }
-  }
-  virtual void submitCompactDrawRunBatchWithResourceMarking(
-      std::span<DrawRunCompactSubmission> /*submissions*/) {}
-  virtual void submitDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads) {
-    submitDrawRunBatchWithResourceMarking(submissions);
-    submitDrawRun(std::move(state), uniforms, draws, payloads);
-  }
-  virtual void submitCompactDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads) {
-    submitCompactDrawRunBatchWithResourceMarking(submissions);
-    submitDrawRun(std::move(state), uniforms, draws, payloads);
-  }
   virtual void submitClear(const ClearDesc& desc) { (void)desc; }
   virtual void submitSurfaceCopy(const SurfaceCopyDesc& desc) { (void)desc; }
   virtual void submitStretchRect(const StretchRectDesc& desc) { (void)desc; }
@@ -2086,14 +2034,6 @@ class Device : public std::enable_shared_from_this<Device> {
   // normalization. Borrowed spans are consumed before the call returns.
   HResult drawPrimitiveRunCanonical(std::span<const DrawParam> draws,
                                     std::span<const DrawParamPayloadView> payloads = {});
-  HResult submitDrawSubmissionBatchAndDrawRunCanonical(
-      std::span<DrawRunSubmission> submissions,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads = {});
-  HResult submitCompactDrawSubmissionBatchAndDrawRunCanonical(
-      std::span<DrawRunCompactSubmission> submissions,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads = {});
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
       const DrawRunSubmission* previousSubmission = nullptr,
@@ -2107,18 +2047,6 @@ class Device : public std::enable_shared_from_this<Device> {
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   void submitCompactDrawSubmissionBatch(
       std::span<DrawRunCompactSubmission> submissions);
-  void submitDrawSubmissionBatchWithResourceMarking(
-      std::span<DrawRunSubmission> submissions);
-  void submitCompactDrawSubmissionBatchWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions);
-  HResult submitDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
-      std::span<DrawRunSubmission> submissions,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads = {});
-  HResult submitCompactDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads = {});
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;

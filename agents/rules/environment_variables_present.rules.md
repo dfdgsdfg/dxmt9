@@ -95,13 +95,34 @@ reopen premise behind both was invalidated once the commit-replay offload
 attribution showed the residual wall is the game's own CPU, not a
 producer-serial preflush boundary dxmt9 can shrink. The `submitDrawRunBatchAndRun*`
 / `submitDrawSubmissionBatchAndDrawRunCanonical*` `CommandQueue`/`Device`
-family stays in source: it remains the live combine path used when the
-retained `DXMT9_ENABLE_CHUNK_END_CARRY` carry forces resource marking on
-pending submissions ahead of a draw run (`pendingRequiresResourceMarking` in
-`device_c_chunk_replay.cpp`), and it has direct coverage in
-`tests/native/core/core_device_coverage_spec.cpp`. Do not schedule new runs
-with the two removed envs unless the merge/mixed-carrier lanes are
-intentionally reintroduced and this rules file is updated in the same change.
+family was removed together with the chunk-end carry lane (next paragraph):
+its only surviving production caller was the carry's forced-resource-marking
+mixed-carrier path (`pendingRequiresResourceMarking` in
+`device_c_chunk_replay.cpp`), and its exclusive coverage in
+`tests/native/core/core_device_coverage_spec.cpp` went with it. Do not
+schedule new runs with the two removed envs unless the merge/mixed-carrier
+lanes are intentionally reintroduced and this rules file is updated in the
+same change.
+
+The chunk-end pending-submission carry env `DXMT9_ENABLE_CHUNK_END_CARRY`
+(H201 implementation of the H198/H199 opportunity) is not honored by the
+current HEAD; its resolver, the `D9CDevice` carry store/adopt/forced-flush
+machinery, the `pendingRequiresResourceMarking` cascade, the orphaned
+`submitDrawRunBatchAndRun*` / `submitCompactDrawRunBatchAndRun*` and
+`submit{Compact}DrawSubmissionBatch[AndDrawRunCanonical]WithResourceMarking`
+`CommandQueue`/`Device` family, and the
+`commit_chunk_replay_end_carry_{stored,adopted,flushed}[_records]` plus
+`commit_chunk_replay_pending_flush_forced_resource_marking_*` counters were
+removed. H202 runtime-rejected the lane: the mechanism was proven (99.84%
+adoption) but FPS was null — the carried work shifted into larger batch
+submits rather than being removed. The reopen premise is structurally dead:
+the engine-default commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`,
+H195/`d45af067`) moved the whole cost class onto a worker that idles
+~39.4ms/present, and the H212 producer attribution showed the residual wall
+is the game's own CPU. The `DXMT9_PERF_CHUNK_END_FLUSH_PROBE` opportunity
+probe stays in source as a future-removal candidate. Do not schedule new runs
+with this env unless the carry lane is intentionally reintroduced and this
+rules file is updated in the same change.
 
 The five `DXMT9_*PRESENT_BOUNDARY*` vars above resolve once at
 process init into a single `dxmt9::BoundaryPolicy` value with priority

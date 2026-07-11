@@ -48,7 +48,6 @@ pe_chunk_max_bytes=${DXMT9_PE_CHUNK_MAX_BYTES:-}
 dxmt_log_level=${DXMT_LOG_LEVEL:-}
 present_boundary_deferred=${DXMT9_PRESENT_BOUNDARY_DEFERRED:-0}
 draw_chunk_command_limit=${DXMT9_DRAW_CHUNK_COMMAND_LIMIT:-}
-enable_chunk_end_carry=${DXMT9_ENABLE_CHUNK_END_CARRY:-0}
 recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
@@ -706,9 +705,6 @@ Options:
   --draw-chunk-command-limit N
                       Set DXMT9_DRAW_CHUNK_COMMAND_LIMIT=N for ordinary
                       draw-limit source-boundary probes.
-  --enable-chunk-end-carry
-                      Set DXMT9_ENABLE_CHUNK_END_CARRY=1 for the default-off
-                      cross-chunk pending draw submission carry experiment.
   --probe-draw-packet-actual-change
                       Set DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1. Counts
                       declared draw-packet state deltas whose values do or do
@@ -1741,10 +1737,6 @@ while (($#)); do
     --draw-chunk-command-limit)
       draw_chunk_command_limit=${2:?missing value for --draw-chunk-command-limit}
       shift 2
-      ;;
-    --enable-chunk-end-carry)
-      enable_chunk_end_carry=1
-      shift
       ;;
     --probe-draw-packet-actual-change)
       draw_packet_actual_change=1
@@ -4260,10 +4252,6 @@ fi
 
 if [[ -n "$draw_chunk_command_limit" ]]; then
   env_args+=("DXMT9_DRAW_CHUNK_COMMAND_LIMIT=$draw_chunk_command_limit")
-fi
-
-if [[ "$enable_chunk_end_carry" != "0" && -n "$enable_chunk_end_carry" ]]; then
-  env_args+=("DXMT9_ENABLE_CHUNK_END_CARRY=$enable_chunk_end_carry")
 fi
 
 if [[ "$draw_packet_actual_change" != "0" && -n "$draw_packet_actual_change" ]]; then

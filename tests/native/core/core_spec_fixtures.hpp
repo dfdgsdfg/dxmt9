@@ -556,40 +556,6 @@ struct RecordingBackend final : BackendDevice {
     drawRuns.push_back(std::move(run));
   }
 
-  void submitDrawRunBatchWithResourceMarking(
-      std::span<DrawRunSubmission> submissions) override {
-    ++forcedDrawRunBatchCalls;
-    BackendDevice::submitDrawRunBatchWithResourceMarking(submissions);
-  }
-
-  void submitCompactDrawRunBatchWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions) override {
-    ++forcedCompactDrawRunBatchCalls;
-    BackendDevice::submitCompactDrawRunBatchWithResourceMarking(submissions);
-  }
-
-  void submitDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> submittedDraws,
-      std::span<const DrawParamPayloadView> payloads) override {
-    ++forcedDrawRunBatchAndRunCalls;
-    BackendDevice::submitDrawRunBatchAndRunWithResourceMarking(
-        submissions, std::move(state), uniforms, submittedDraws, payloads);
-  }
-
-  void submitCompactDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> submittedDraws,
-      std::span<const DrawParamPayloadView> payloads) override {
-    ++forcedCompactDrawRunBatchAndRunCalls;
-    BackendDevice::submitCompactDrawRunBatchAndRunWithResourceMarking(
-        submissions, std::move(state), uniforms, submittedDraws, payloads);
-  }
-
   void submitClear(const ClearDesc& desc) override {
     clears.push_back(desc);
   }
@@ -649,10 +615,6 @@ struct RecordingBackend final : BackendDevice {
   std::vector<TextureUploadRecord> textureUploads;
   std::vector<RecordedDrawRun> drawRuns;
   std::vector<RecordedDraw> draws;
-  u32 forcedDrawRunBatchCalls = 0;
-  u32 forcedCompactDrawRunBatchCalls = 0;
-  u32 forcedDrawRunBatchAndRunCalls = 0;
-  u32 forcedCompactDrawRunBatchAndRunCalls = 0;
   std::vector<ClearDesc> clears;
   std::vector<SurfaceCopyDesc> surfaceCopies;
   std::vector<StretchRectDesc> stretchRects;

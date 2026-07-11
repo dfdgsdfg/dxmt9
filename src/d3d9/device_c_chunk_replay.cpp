@@ -119,14 +119,6 @@ bool compactUniformSubmissionsEnabled() {
   return enabled;
 }
 
-bool chunkEndCarryEnabled() {
-  static const bool enabled = [] {
-    const char* value = std::getenv("DXMT9_ENABLE_CHUNK_END_CARRY");
-    return value && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-  }();
-  return enabled;
-}
-
 bool drawRunCanonicalFastPathEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_ENABLE_DRAW_RUN_CANONICAL_FAST_PATH");
@@ -502,145 +494,6 @@ void attachCompactUniformArena(
           };
     }
   }
-}
-
-template <typename Submission>
-void clearCompactUniformArena(std::vector<Submission>& submissions) {
-  for (auto& submission : submissions) {
-    submission.compactUniformArena = {};
-  }
-}
-
-template <typename Submission, typename CompactSubmission>
-std::uint32_t pendingSubmissionLaneCount(
-    const std::vector<Submission>& submissions,
-    const std::vector<CompactSubmission>& compactSubmissions) {
-  return (submissions.empty() ? 0u : 1u) +
-         (compactSubmissions.empty() ? 0u : 1u);
-}
-
-bool canStoreChunkEndCarry(D9CDevice* d,
-                           PendingDrawFlushReason reason,
-                           std::uint64_t pendingRecords,
-                           bool chunkSawQueueBoundary,
-                           std::uint32_t pendingLaneCount) {
-  constexpr std::uint64_t kMaxChunkEndCarryRecords = 512;
-  return reason == PendingDrawFlushReason::End &&
-         chunkEndCarryEnabled() &&
-         !renderTraceEnabled() &&
-         d &&
-         d->chunkEndSubmissionCarry.empty() &&
-         !chunkSawQueueBoundary &&
-         pendingLaneCount == 1u &&
-         pendingRecords != 0 &&
-         pendingRecords <= kMaxChunkEndCarryRecords;
-}
-
-int32_t storeChunkEndCarry(
-    D9CDevice* d,
-    std::vector<dxmt9::core::DrawRunSubmission>& pendingDrawSubmissions,
-    std::vector<dxmt9::core::DrawRunCompactSubmission>& pendingCompactDrawSubmissions,
-    dxmt9::core::DrawSubmissionUniformScratch& pendingUniformScratch) {
-  if (!d ||
-      pendingSubmissionLaneCount(pendingDrawSubmissions,
-                                 pendingCompactDrawSubmissions) != 1u) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
-  }
-
-  const auto records = static_cast<std::uint64_t>(pendingDrawSubmissions.size()) +
-                       static_cast<std::uint64_t>(pendingCompactDrawSubmissions.size());
-  auto& carry = d->chunkEndSubmissionCarry;
-  carry.submissions = std::move(pendingDrawSubmissions);
-  carry.compactSubmissions = std::move(pendingCompactDrawSubmissions);
-  clearCompactUniformArena(carry.submissions);
-  clearCompactUniformArena(carry.compactSubmissions);
-  carry.uniformScratch = std::move(pendingUniformScratch);
-  carry.forceResourceMarking = true;
-
-  pendingDrawSubmissions.clear();
-  pendingCompactDrawSubmissions.clear();
-  pendingUniformScratch.clear();
-  dxmt9::perf::countCommitChunkReplayEndCarryStored(records);
-  return dxmt9::core::D3D_OK;
-}
-
-int32_t adoptChunkEndCarry(
-    D9CDevice* d,
-    std::vector<dxmt9::core::DrawRunSubmission>& pendingDrawSubmissions,
-    std::vector<dxmt9::core::DrawRunCompactSubmission>& pendingCompactDrawSubmissions,
-    dxmt9::core::DrawSubmissionUniformScratch& pendingUniformScratch,
-    bool& pendingRequiresResourceMarking) {
-  if (!d || d->chunkEndSubmissionCarry.empty()) {
-    return dxmt9::core::D3D_OK;
-  }
-  if (!pendingDrawSubmissions.empty() || !pendingCompactDrawSubmissions.empty()) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
-  }
-
-  auto& carry = d->chunkEndSubmissionCarry;
-  const auto records = carry.recordCount();
-  pendingDrawSubmissions = std::move(carry.submissions);
-  pendingCompactDrawSubmissions = std::move(carry.compactSubmissions);
-  pendingUniformScratch = std::move(carry.uniformScratch);
-  pendingRequiresResourceMarking = carry.forceResourceMarking;
-  carry.clear();
-  dxmt9::perf::countCommitChunkReplayEndCarryAdopted(records);
-  return dxmt9::core::D3D_OK;
-}
-
-int32_t flushChunkEndCarry(D9CDevice* d, PendingDrawFlushReason reason) {
-  if (!d || d->chunkEndSubmissionCarry.empty()) {
-    return dxmt9::core::D3D_OK;
-  }
-  auto& carry = d->chunkEndSubmissionCarry;
-  if (!carry.submissions.empty() && !carry.compactSubmissions.empty()) {
-    dxmt9::util::logf(
-        dxmt9::util::LogLevel::Info, "dxmt9-device",
-        "chunk_end_carry_mixed_lane_flush submissions=%u compactSubmissions=%u",
-        static_cast<unsigned>(carry.submissions.size()),
-        static_cast<unsigned>(carry.compactSubmissions.size()));
-  }
-
-  const auto pendingRecordCount = carry.recordCount();
-  const auto flushStart = std::chrono::steady_clock::now();
-  if (!carry.submissions.empty()) {
-    attachCompactUniformArena(carry.submissions, carry.uniformScratch);
-    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
-        static_cast<std::uint32_t>(carry.submissions.size()));
-    const auto submitStart = std::chrono::steady_clock::now();
-    d->dev().submitDrawSubmissionBatchWithResourceMarking(carry.submissions);
-    dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - submitStart)
-                .count()));
-  }
-  if (!carry.compactSubmissions.empty()) {
-    attachCompactUniformArena(carry.compactSubmissions, carry.uniformScratch);
-    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
-        static_cast<std::uint32_t>(carry.compactSubmissions.size()));
-    const auto submitStart = std::chrono::steady_clock::now();
-    d->dev().submitCompactDrawSubmissionBatchWithResourceMarking(
-        carry.compactSubmissions);
-    dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - submitStart)
-                .count()));
-  }
-
-  carry.clear();
-  const auto flushNs = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - flushStart)
-          .count());
-  dxmt9::perf::countCommitChunkReplayPendingFlushCpuTime(flushNs);
-  dxmt9::perf::countCommitChunkReplayPendingFlushForcedResourceMarking(
-      flushNs, pendingRecordCount);
-  countPendingDrawFlushReason(reason, flushNs);
-  countPendingDrawFlushReasonVolume(reason, pendingRecordCount);
-  dxmt9::perf::countCommitChunkReplayEndCarryFlushed(pendingRecordCount);
-  return dxmt9::core::D3D_OK;
 }
 
 bool commitChunkRecordIsConstantUpload(std::uint32_t type) {
@@ -2070,8 +1923,6 @@ int32_t replayImportedChunk(D9CDevice* d,
   pendingDrawSubmissions.reserve(std::min<std::uint32_t>(importedChunk.recordCount, 256u));
   pendingCompactDrawSubmissions.reserve(
       std::min<std::uint32_t>(importedChunk.recordCount, 256u));
-  bool pendingRequiresResourceMarking = false;
-  bool chunkSawQueueBoundary = false;
   const auto flushPendingDrawSubmissions =
       [&](PendingDrawFlushReason reason) -> int32_t {
     if (pendingDrawSubmissions.empty() &&
@@ -2081,39 +1932,13 @@ int32_t replayImportedChunk(D9CDevice* d,
     const auto pendingRecordCount =
         static_cast<std::uint64_t>(pendingDrawSubmissions.size()) +
         static_cast<std::uint64_t>(pendingCompactDrawSubmissions.size());
-    const auto pendingLaneCount =
-        pendingSubmissionLaneCount(pendingDrawSubmissions,
-                                   pendingCompactDrawSubmissions);
-    if (canStoreChunkEndCarry(d, reason, pendingRecordCount,
-                              chunkSawQueueBoundary, pendingLaneCount)) {
-      if (!pendingDrawSubmissions.empty()) {
-        storeChunkEndFlushProbe(d, pendingDrawSubmissions.back(),
-                                pendingRecordCount);
-      } else {
-        storeChunkEndFlushProbe(d, pendingCompactDrawSubmissions.back(),
-                                pendingRecordCount);
-      }
-      const auto hr = storeChunkEndCarry(
-          d, pendingDrawSubmissions, pendingCompactDrawSubmissions,
-          pendingUniformScratch);
-      if (!failed(hr)) {
-        pendingRequiresResourceMarking = false;
-        return hr;
-      }
-    }
-    const bool forcedResourceMarking = pendingRequiresResourceMarking;
     const auto flushStart = std::chrono::steady_clock::now();
     if (!pendingDrawSubmissions.empty()) {
       dxmt9::perf::countCommitChunkDrawSubmissionBatch(
           static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
       attachCompactUniformArena(pendingDrawSubmissions, pendingUniformScratch);
       const auto submitStart = std::chrono::steady_clock::now();
-      if (pendingRequiresResourceMarking) {
-        d->dev().submitDrawSubmissionBatchWithResourceMarking(
-            pendingDrawSubmissions);
-      } else {
-        d->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
-      }
+      d->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
       dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
           static_cast<std::uint64_t>(
               std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2131,13 +1956,8 @@ int32_t replayImportedChunk(D9CDevice* d,
       attachCompactUniformArena(pendingCompactDrawSubmissions,
                                 pendingUniformScratch);
       const auto submitStart = std::chrono::steady_clock::now();
-      if (pendingRequiresResourceMarking) {
-        d->dev().submitCompactDrawSubmissionBatchWithResourceMarking(
-            pendingCompactDrawSubmissions);
-      } else {
-        d->dev().submitCompactDrawSubmissionBatch(
-            pendingCompactDrawSubmissions);
-      }
+      d->dev().submitCompactDrawSubmissionBatch(
+          pendingCompactDrawSubmissions);
       dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
           static_cast<std::uint64_t>(
               std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -2150,78 +1970,14 @@ int32_t replayImportedChunk(D9CDevice* d,
       pendingCompactDrawSubmissions.clear();
     }
     pendingUniformScratch.clear();
-    pendingRequiresResourceMarking = false;
     const auto flushNs = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - flushStart)
             .count());
     dxmt9::perf::countCommitChunkReplayPendingFlushCpuTime(flushNs);
-    if (forcedResourceMarking) {
-      dxmt9::perf::countCommitChunkReplayPendingFlushForcedResourceMarking(
-          flushNs, pendingRecordCount);
-    }
     countPendingDrawFlushReason(reason, flushNs);
     countPendingDrawFlushReasonVolume(reason, pendingRecordCount);
     return dxmt9::core::D3D_OK;
-  };
-  const auto pendingDrawSubmissionCount = [&]() -> std::uint64_t {
-    return static_cast<std::uint64_t>(pendingDrawSubmissions.size()) +
-           static_cast<std::uint64_t>(pendingCompactDrawSubmissions.size());
-  };
-  const auto submitPendingDrawSubmissionsAndRun =
-      [&](std::span<const dxmt9::core::DrawParam> runParams,
-          std::span<const dxmt9::core::DrawParamPayloadView> runPayloads)
-          -> int32_t {
-    if (pendingDrawSubmissions.empty() &&
-        pendingCompactDrawSubmissions.empty()) {
-      return d->dev().drawPrimitiveRunCanonical(runParams, runPayloads);
-    }
-    DXMT_ASSERT(pendingDrawSubmissions.empty() ||
-                pendingCompactDrawSubmissions.empty());
-    if (!pendingDrawSubmissions.empty() &&
-        !pendingCompactDrawSubmissions.empty()) {
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
-    if (!pendingDrawSubmissions.empty()) {
-      dxmt9::perf::countCommitChunkDrawSubmissionBatch(
-          static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
-      attachCompactUniformArena(pendingDrawSubmissions, pendingUniformScratch);
-      const auto submitStart = std::chrono::steady_clock::now();
-      const auto hr = pendingRequiresResourceMarking
-                          ? d->dev().submitDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
-                                pendingDrawSubmissions, runParams, runPayloads)
-                          : d->dev().submitDrawSubmissionBatchAndDrawRunCanonical(
-                                pendingDrawSubmissions, runParams, runPayloads);
-      dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
-          static_cast<std::uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  std::chrono::steady_clock::now() - submitStart)
-                  .count()));
-      pendingDrawSubmissions.clear();
-      pendingUniformScratch.clear();
-      pendingRequiresResourceMarking = false;
-      return hr;
-    }
-    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
-        static_cast<std::uint32_t>(pendingCompactDrawSubmissions.size()));
-    attachCompactUniformArena(pendingCompactDrawSubmissions,
-                              pendingUniformScratch);
-    const auto submitStart = std::chrono::steady_clock::now();
-    const auto hr =
-        pendingRequiresResourceMarking
-            ? d->dev().submitCompactDrawSubmissionBatchAndDrawRunCanonicalWithResourceMarking(
-                  pendingCompactDrawSubmissions, runParams, runPayloads)
-            : d->dev().submitCompactDrawSubmissionBatchAndDrawRunCanonical(
-                  pendingCompactDrawSubmissions, runParams, runPayloads);
-    dxmt9::perf::countCommitChunkDrawBatchSubmitCpuTime(
-        static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - submitStart)
-                .count()));
-    pendingCompactDrawSubmissions.clear();
-    pendingUniformScratch.clear();
-    pendingRequiresResourceMarking = false;
-    return hr;
   };
   std::uint32_t recordIndex = 0;
   while (auto recordView = nextImportedRecord(importedChunk, recordIndex)) {
@@ -2237,21 +1993,7 @@ int32_t replayImportedChunk(D9CDevice* d,
         header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
     const bool batchThroughRecord =
         commitChunkRecordAllowsPendingDrawBatchThrough(header.type);
-    if (batchableDrawRecord) {
-      hr = adoptChunkEndCarry(d, pendingDrawSubmissions,
-                              pendingCompactDrawSubmissions,
-                              pendingUniformScratch,
-                              pendingRequiresResourceMarking);
-      if (failed(hr)) {
-        return commitChunkFail("chunk-end-carry-adopt", recordIndex,
-                               header.type, hr);
-      }
-    } else if (!batchThroughRecord) {
-      hr = flushChunkEndCarry(d, PendingDrawFlushReason::BeforeRecord);
-      if (failed(hr)) {
-        return commitChunkFail("chunk-end-carry-flush", recordIndex,
-                               header.type, hr);
-      }
+    if (!batchableDrawRecord && !batchThroughRecord) {
       blockChunkEndFlushProbe(d, /*drawFallback=*/false);
       hr = flushPendingDrawSubmissions(PendingDrawFlushReason::BeforeRecord);
       if (failed(hr)) {
@@ -2293,19 +2035,8 @@ int32_t replayImportedChunk(D9CDevice* d,
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
-        // Combine already-pending submissions with this draw run only when
-        // the chunk-end carry (R-BACK-2.51 H198/H199, DXMT9_ENABLE_CHUNK_END_CARRY)
-        // forced resource marking on them; the H192 mixed-carrier experiment
-        // flag that used to widen this condition was removed after the
-        // commit-replay offload (H195) and H212 producer attribution
-        // invalidated its reopen premise.
-        const bool useMixedCarrier =
-            pendingRequiresResourceMarking &&
-            pendingDrawSubmissionCount() != 0;
-        if (!useMixedCarrier) {
-          hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
-          if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
-        }
+        hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
+        if (failed(hr)) return commitChunkFail("draw-run-flush", recordIndex, header.type, hr);
         // Apply the first record's full state once. Stream/IB changes from
         // later records ride alongside each DrawParam as low-level binding
         // overrides, then the public D3D state is advanced to the final
@@ -2385,9 +2116,7 @@ int32_t replayImportedChunk(D9CDevice* d,
         countDurationSince(runBuildStart,
                            dxmt9::perf::countCommitChunkDrawRunBuildCpuTime);
 
-        if (useMixedCarrier) {
-          hr = submitPendingDrawSubmissionsAndRun(runParams, runPayloads);
-        } else {
+        {
           const auto runSubmitStart = std::chrono::steady_clock::now();
           hr = drawRunCanonicalFastPathEnabled()
                    ? d->dev().drawPrimitiveRunCanonical(runParams, runPayloads)
@@ -2419,7 +2148,6 @@ int32_t replayImportedChunk(D9CDevice* d,
         blockChunkEndFlushProbe(d, /*drawFallback=*/true);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawFallback);
         if (failed(hr)) return commitChunkFail("draw-flush", recordIndex, header.type, hr);
-        chunkSawQueueBoundary = true;
         hr = applyDrawPrimitivePacket(d, decoded.packet);
       }
       break;
@@ -2444,16 +2172,8 @@ int32_t replayImportedChunk(D9CDevice* d,
       countCommitChunkDrawRunScan(scan);
       if (scan.replayAsRun()) {
         resolveChunkEndFlushProbeWithDrawRun(d, scan.recordCount);
-        // See the DRAW_PRIMITIVE case above: combine only when the
-        // chunk-end carry forced resource marking on the pending
-        // submissions; the H192 mixed-carrier flag was removed.
-        const bool useMixedCarrier =
-            pendingRequiresResourceMarking &&
-            pendingDrawSubmissionCount() != 0;
-        if (!useMixedCarrier) {
-          hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
-          if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
-        }
+        hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawRun);
+        if (failed(hr)) return commitChunkFail("indexed-draw-run-flush", recordIndex, header.type, hr);
         hr = timedApplyDrawPacketState(d, decoded.packet.state);
         if (failed(hr)) return commitChunkFail("indexed-draw-run-state", recordIndex, header.type, hr);
         if (decoded.packet.ibValid) {
@@ -2537,9 +2257,7 @@ int32_t replayImportedChunk(D9CDevice* d,
         countDurationSince(runBuildStart,
                            dxmt9::perf::countCommitChunkDrawRunBuildCpuTime);
 
-        if (useMixedCarrier) {
-          hr = submitPendingDrawSubmissionsAndRun(runParams, runPayloads);
-        } else {
+        {
           const auto runSubmitStart = std::chrono::steady_clock::now();
           hr = drawRunCanonicalFastPathEnabled()
                    ? d->dev().drawPrimitiveRunCanonical(runParams, runPayloads)
@@ -2571,7 +2289,6 @@ int32_t replayImportedChunk(D9CDevice* d,
         blockChunkEndFlushProbe(d, /*drawFallback=*/true);
         hr = flushPendingDrawSubmissions(PendingDrawFlushReason::DrawFallback);
         if (failed(hr)) return commitChunkFail("indexed-draw-flush", recordIndex, header.type, hr);
-        chunkSawQueueBoundary = true;
         hr = applyDrawIndexedPrimitivePacket(d, decoded.packet);
       }
       break;
@@ -2588,7 +2305,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       }
       blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
-      chunkSawQueueBoundary = true;
       hr = applyDrawPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
@@ -2604,7 +2320,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       }
       blockChunkEndFlushProbe(d, /*drawFallback=*/true);
       markDirtyFromDrawPacketState(findDirtyQueue(d), decoded.packet.state);
-      chunkSawQueueBoundary = true;
       hr = applyDrawIndexedPrimitiveUPPacket(d, decoded.packet, record, header.size);
       break;
     }
@@ -2614,7 +2329,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       const auto* rects = cl.rectCount != 0
                               ? reinterpret_cast<const D9CRect*>(record + cl.rectOffset)
                               : nullptr;
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_device_clear(d, cl.rectCount, rects, cl.flags, cl.colorARGB,
                                 cl.z, cl.stencil);
       break;
@@ -2631,7 +2345,6 @@ int32_t replayImportedChunk(D9CDevice* d,
                 .count());
         q->noteCommitChunkActiveReplayCpuBeforePublish(activeReplayNs);
       }
-      chunkSawQueueBoundary = true;
       // R-BACK-2.51(g) — dxmt9c_device_present()'s wire-ABI signature
       // (include/dxmt9/device_c.h) cannot carry this bit directly, so it
       // rides the D9CDevice-reachable core::Device instead: set here, read
@@ -2655,7 +2368,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       auto* dstSurf = wireValuePtr<D9CSurface>(sr.dstWire);
       const auto* srcR = sr.hasSrcRect ? &sr.srcRect : nullptr;
       const auto* dstR = sr.hasDstRect ? &sr.dstRect : nullptr;
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_device_stretch_rect(d, srcSurf, srcR, dstSurf, dstR, sr.filter);
       break;
     }
@@ -2664,7 +2376,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       std::memcpy(&cf, record, sizeof(cf));
       auto* surf = wireValuePtr<D9CSurface>(cf.surfaceWire);
       const auto* rect = cf.hasRect ? &cf.rect : nullptr;
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_device_color_fill(d, surf, rect, cf.colorARGB);
       break;
     }
@@ -2673,7 +2384,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       std::memcpy(&ut, record, sizeof(ut));
       auto* srcTex = wireValuePtr<D9CTexture>(ut.srcWire);
       auto* dstTex = wireValuePtr<D9CTexture>(ut.dstWire);
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_device_update_texture(d, srcTex, dstTex);
       break;
     }
@@ -2684,7 +2394,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       auto* dstSurf = wireValuePtr<D9CSurface>(us.dstWire);
       const auto* srcRect = us.hasSrcRect ? &us.srcRect : nullptr;
       const auto* dstPoint = us.hasDstPoint ? &us.dstPoint : nullptr;
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_device_update_surface(d, srcSurf, srcRect, dstSurf, dstPoint);
       break;
     }
@@ -2692,7 +2401,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       D9CCommandRecordQueryIssue qi{};
       std::memcpy(&qi, record, sizeof(qi));
       auto* query = wireValuePtr<D9CQuery>(qi.queryWire);
-      chunkSawQueueBoundary = true;
       hr = dxmt9c_query_issue(query, qi.flags);
       break;
     }
@@ -2701,7 +2409,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       std::memcpy(&rb, record, sizeof(rb));
       auto* srcSurf = wireValuePtr<D9CSurface>(rb.srcWire);
       auto* dstSurf = wireValuePtr<D9CSurface>(rb.dstWire);
-      chunkSawQueueBoundary = true;
       // Routes to the same backend path as the legacy bridge call —
       // encodes the copy + waits for GPU completion + writes pixels
       // into dst. HRESULT propagates back through commit_chunk's
@@ -2725,7 +2432,6 @@ int32_t replayImportedChunk(D9CDevice* d,
       std::memcpy(&resz, record, sizeof(resz));
       auto* msaaDepth = wireValuePtr<D9CSurface>(resz.msaaDepthHandle);
       auto* intzDest = wireValuePtr<D9CTexture>(resz.intzDestHandle);
-      chunkSawQueueBoundary = true;
       // Null wrappers are a benign no-op (fire-and-forget); the PE side
       // already suppresses emitting a record when either binding is absent.
       hr = (msaaDepth && intzDest)
@@ -2803,12 +2509,6 @@ int32_t replayImportedChunk(D9CDevice* d,
     }
 
     if (failed(hr)) {
-      const auto carryFlushHr =
-          flushChunkEndCarry(d, PendingDrawFlushReason::Failure);
-      if (failed(carryFlushHr)) {
-        return commitChunkFail("chunk-end-carry-flush-after-fail",
-                               recordIndex, header.type, carryFlushHr);
-      }
       const auto flushHr =
           flushPendingDrawSubmissions(PendingDrawFlushReason::Failure);
       if (failed(flushHr)) {

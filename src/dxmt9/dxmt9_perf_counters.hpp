@@ -336,9 +336,6 @@ void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records);
 void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records);
 void countCommitChunkReplayPendingFlushFailure(std::uint64_t records);
 void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
-void countCommitChunkReplayPendingFlushForcedResourceMarking(
-    std::uint64_t nanoseconds,
-    std::uint64_t records);
 void countCommitChunkReplayEndFlushProbeStored(std::uint64_t pendingRecords);
 void countCommitChunkReplayEndFlushProbeFirstSubmission(
     std::uint64_t pendingRecords,
@@ -350,9 +347,6 @@ void countCommitChunkReplayEndFlushProbeFirstDrawRun(
     std::uint64_t runRecords);
 void countCommitChunkReplayEndFlushProbeBlocked(bool drawFallback,
                                                 std::uint64_t pendingRecords);
-void countCommitChunkReplayEndCarryStored(std::uint64_t records);
-void countCommitChunkReplayEndCarryAdopted(std::uint64_t records);
-void countCommitChunkReplayEndCarryFlushed(std::uint64_t records);
 void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds);

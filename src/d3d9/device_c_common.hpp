@@ -152,29 +152,6 @@ struct D9CDevice {
         dxmt9::core::DrawRunSubmissionStateLane::Unknown;
   };
 
-  struct ChunkEndSubmissionCarry {
-    std::vector<dxmt9::core::DrawRunSubmission> submissions;
-    std::vector<dxmt9::core::DrawRunCompactSubmission> compactSubmissions;
-    dxmt9::core::DrawSubmissionUniformScratch uniformScratch;
-    bool forceResourceMarking = false;
-
-    bool empty() const noexcept {
-      return submissions.empty() && compactSubmissions.empty();
-    }
-
-    std::uint64_t recordCount() const noexcept {
-      return static_cast<std::uint64_t>(submissions.size()) +
-             static_cast<std::uint64_t>(compactSubmissions.size());
-    }
-
-    void clear() noexcept {
-      submissions.clear();
-      compactSubmissions.clear();
-      uniformScratch.clear();
-      forceResourceMarking = false;
-    }
-  };
-
   dxmt9::com::IDirect3DDevice9Ex* iface;
   std::atomic<uint32_t> refs{1};
   std::array<std::shared_ptr<dxmt9::core::Surface>, dxmt9::core::kMaxRenderTargets> renderTargets;
@@ -184,7 +161,6 @@ struct D9CDevice {
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
   ChunkEndFlushProbe chunkEndFlushProbe{};
-  ChunkEndSubmissionCarry chunkEndSubmissionCarry{};
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 

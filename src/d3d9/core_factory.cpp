@@ -135,40 +135,6 @@ public:
     }
     backend_->submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
-  void submitDrawRunBatchWithResourceMarking(
-      std::span<DrawRunSubmission> submissions) override {
-    if (backend_) {
-      backend_->submitDrawRunBatchWithResourceMarking(submissions);
-    }
-  }
-  void submitCompactDrawRunBatchWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions) override {
-    if (backend_) {
-      backend_->submitCompactDrawRunBatchWithResourceMarking(submissions);
-    }
-  }
-  void submitDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads) override {
-    if (backend_) {
-      backend_->submitDrawRunBatchAndRunWithResourceMarking(
-          submissions, std::move(state), uniforms, draws, payloads);
-    }
-  }
-  void submitCompactDrawRunBatchAndRunWithResourceMarking(
-      std::span<DrawRunCompactSubmission> submissions,
-      CanonicalDrawState state,
-      const DrawUniformPayload& uniforms,
-      std::span<const DrawParam> draws,
-      std::span<const DrawParamPayloadView> payloads) override {
-    if (backend_) {
-      backend_->submitCompactDrawRunBatchAndRunWithResourceMarking(
-          submissions, std::move(state), uniforms, draws, payloads);
-    }
-  }
   void submitClear(const ClearDesc &desc) override {
     if (backend_)
       backend_->submitClear(desc);

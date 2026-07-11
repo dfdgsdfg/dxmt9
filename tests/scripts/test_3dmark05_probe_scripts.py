@@ -3511,17 +3511,6 @@ OUT
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("DXMT9_PERF_VS_CONST_SETTER_RANGE=1", result.stdout)
 
-    def test_wrapper_dry_run_includes_chunk_end_carry_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--enable-chunk-end-carry",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_ENABLE_CHUNK_END_CARRY=1", result.stdout)
-
     def test_wrapper_dry_run_includes_force_expand_indexed_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
