@@ -37,16 +37,23 @@ domains, mirroring the [3DMark05 GT1 map](overview-3dmark05-gt1.md).
   than the recorded one). Re-check visually on a quiet desktop if it recurs.
   Evidence: `experiments/output/app-d3d9-sfiv-benchmark-flicker-{A-offload-on,B-offload-off}-20260712`,
   `experiments/output/sfiv-flicker-{A-offload-on,B-offload-off}` capture sets.
-- **The frame wall (~11-16fps) is a periodic frame-period GPU stall in the
-  scene pass, not render-pass fragmentation, not desktop contention, and not
-  the engine-default trio.** SFIV's own GPU execution is ~20ms/frame; the
-  scene pass (rt=`006`+depth=`005`) is bimodal 0.2ms vs 88-96ms (= one frame
-  period) every 3-10 frames with split-and-resumed encoder intervals, while
-  SFIV's CBs occupy the fragment channel 80.6% (~5.9s/10s open-but-stalled).
-  Leading hypothesis: cross-frame WAR hazard on the scene RT (frame N's write
-  waits for frame N-1's post-chain/composite reads). Owning row/leaf:
-  [present-pacing H222](present-pacing/log.md) /
-  [present-pacing-sfiv-scene-pass-stall.204](present-pacing/present-pacing-sfiv-scene-pass-stall.204.md).
+- **The frame wall (~11-16fps) is real, data-dependent fragment-shader cost
+  in the 11-fullscreen-quad effect composite pass** (rt=`006`+depth=`005`) —
+  not render-pass fragmentation, not desktop contention, not the
+  engine-default trio, not cross-frame hazards, and not present pacing. The
+  pass is bimodal 0.2ms vs 88-96ms on 23-31% of frames with an invariant
+  shape (11 draws, 22 primitives, 5 PS variants; dumped MSL statically
+  unremarkable) — a 440x data-dependent swing (denormal/special-value
+  arithmetic on effect-pulse frames is the classic suspect). Wait hypotheses
+  were refuted by quiet-desktop `DXMT9_MAX_FRAME_LATENCY=1` (cluster
+  unchanged) and `DXMT9_DISABLE_VSYNC=1` (no movement);
+  `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1` erases the cluster and proves
+  **+264% presents headroom** (1,560 → 5,462; CB p50 110 → 1.2ms);
+  `DXMT_FORCE_TEXTURE_WHITE=1` does not help (ALU/shader-structure cost, not
+  texture fetch). Owning rows/leaves:
+  [present-pacing H222-H223](present-pacing/log.md) /
+  [.204](present-pacing/present-pacing-sfiv-scene-pass-stall.204.md) /
+  [.205](present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md).
 - **Frame anatomy: fixed 25-pass shape** (23 render + blit + present,
   44 draws): a 13-pass ink/bloom RAW post chain (unmergeable), the scene
   pass, HUD/composite, full-surface StretchRect, and 5 clear-only passes of
@@ -59,13 +66,15 @@ domains, mirroring the [3DMark05 GT1 map](overview-3dmark05-gt1.md).
 
 ## Open gates
 
-1. **Stall mechanism confirm**: `DXMT9_MAX_FRAME_LATENCY=1` A/B with a 10s
-   Metal System Trace — a 1-deep pipeline should erase the 88ms cluster if
-   the cross-frame WAR hypothesis is right.
-2. **RT versioning/renaming opportunity sizing** once (1) confirms; then a
-   prototype that rotates the scene RT allocation per frame or narrows the
-   hazard scope.
+1. **Name the draw/instruction**: single-frame `.gputrace` of a slow frame
+   (wine capture-layer wrapper + `DXMT_METAL_CAPTURE_FRAME`), Xcode per-draw
+   profiling + shader profiler — real work reproduces in replay.
+2. **Translation-side fix** for the named pattern (e.g., denormal
+   clamp/flush), gated by an SFIV visual anchor.
 3. Dead-clear DCE / clear folding as a framegraph follow-up (second-order).
+
+Closed gates: `DXMT9_MAX_FRAME_LATENCY=1` mechanism probe (WAR refuted) and
+RT versioning/renaming (killed — targets a refuted mechanism).
 
 ## Measurement notes
 

@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H222` - SFIV (D3D9Ex) attribution: the frame wall is a periodic scene-pass frame-period GPU stall (cross-frame WAR leading hypothesis), not fragmentation/contention/trio; SFIV's own GPU work is ~20ms/frame. Workload map: [overview-sfiv](../overview-sfiv.md).
+Latest tracked row: `H223` - SFIV (D3D9Ex): the ~88ms scene-pass instances are real data-dependent fragment-shader work (wait hypotheses refuted; `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1` proves +264% presents headroom). Next gate: slow-frame `.gputrace` per-draw naming. Workload map: [overview-sfiv](../overview-sfiv.md).
 
 ## Start Here
 
@@ -21,6 +21,7 @@ Latest tracked row: `H222` - SFIV (D3D9Ex) attribution: the frame wall is a peri
 
 ## Recent Leaf Documents
 
+- [present-pacing-sfiv-shader-cost-attribution.205 - The SFIV 88ms Instances Are Real Shader Work, Not A Wait](present-pacing-sfiv-shader-cost-attribution.205.md)
 - [present-pacing-sfiv-scene-pass-stall.204 - SFIV Scene-Pass Frame-Period Stall Owns The Frame Wall](present-pacing-sfiv-scene-pass-stall.204.md)
 - [present-pacing-engine-default-trio.203 - The Promoted Trio Becomes The Engine Default](present-pacing-engine-default-trio.203.md)
 - [present-pacing-archive-prewarm-hardening.202 - Archive Prewarm Hardening Closes The Startup-Flake Class](present-pacing-archive-prewarm-hardening.202.md)

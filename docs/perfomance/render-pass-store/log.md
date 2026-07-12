@@ -320,6 +320,8 @@ workload map: [overview-sfiv](../overview-sfiv.md)):
   These are direct framegraph DCE / clear-folding candidates.
 - Caveat for prioritization: on SFIV all render passes except the scene pass
   sum to <2ms/frame of fragment GPU time — pass-count reduction is
-  second-order there; the frame wall is the scene-pass frame-period stall
-  tracked as [present-pacing H222](../present-pacing/log.md) /
-  [present-pacing-sfiv-scene-pass-stall.204](../present-pacing/present-pacing-sfiv-scene-pass-stall.204.md).
+  second-order there; the frame wall is real data-dependent fragment-shader
+  cost in the effect composite pass, tracked as
+  [present-pacing H222-H223](../present-pacing/log.md) /
+  [present-pacing-sfiv-scene-pass-stall.204](../present-pacing/present-pacing-sfiv-scene-pass-stall.204.md) /
+  [present-pacing-sfiv-shader-cost-attribution.205](../present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md).
