@@ -435,7 +435,8 @@ failure — poisoning later commits and aborting pending present-ordinal
 waits — without synthesizing a per-record HRESULT for a chunk that failed
 after its synchronous validation phase already returned success; and (f)
 remain byte-identical to the inline (non-offload) replay path when the flag
-is unset. (g) *(Per-present-context boundary suppression.)* Enabling the
+is explicitly set to `0` (the opt-out — unset resolves to ON since the
+2026-07-10 engine-default flip). (g) *(Per-present-context boundary suppression.)* Enabling the
 offload flag must not globally suppress `CommandQueue::submitPresent`'s
 inline seqId-based present boundary for every present in the process — only
 the specific present whose `core::SwapDesc::pacedByPresentOrdinal` was
@@ -459,10 +460,13 @@ mechanics), `dxmt9-present-boundary-policy-spec`
 `PresentFrameLatency.tla` ordinal-variant invariants
 (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. Clauses (g)
 and (h) close the two boundary-pacing gaps that previously blocked promoting
-this flag to an engine default; a separate, still-open resource-retention
-defect in the replay worker's draw-packet path (unrelated to boundary
-pacing) remains and must be fixed before the default can safely change — see
-`specs/backend/gap.md` "Commit-replay offload" row.
+this flag to an engine default; the third blocker — offload-forced crashes in
+`dxmt9-imported-apply-state-value-spec` / `dxmt9-resource-hazard-spec` that
+looked like a replay-worker resource-retention defect — was root-caused as a
+test-harness drain gap, not a production race (`cad446ce`, regression-pinned
+by the `-offload` spec variants). With all three resolved, the engine default
+flipped to ON on 2026-07-10 (`d45af067`) — see the `specs/backend/gap.md`
+"Commit-replay offload" row.
 
 **R-BACK-2.52** *(Inline const delta contract.)* The opt-in inline-const-delta
 wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first use) must

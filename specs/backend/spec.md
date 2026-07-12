@@ -538,9 +538,12 @@ optimization exists only to create source availability for R-BACK-2.40 and
 R-BACK-2.43; it does not relax ordered completion, Present semantic boundaries,
 or the locality gates above.
 
-#### Commit-Replay Offload (opt-in)
+#### Commit-Replay Offload (engine default ON)
 
-`DXMT9_OFFLOAD_COMMIT_REPLAY=1` moves the record-replay phase of
+The commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON
+since 2026-07-10**, `d45af067` — explicit `0` opts out;
+`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` unset follows the offload state
+because the pair is coupled) moves the record-replay phase of
 `dxmt9c_device_commit_chunk` off the app thread onto a device-owned replay
 worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
 The observable contract is `R-BACK-2.51`. The mechanics:
@@ -585,19 +588,20 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   commits, releases retained wrappers of abandoned chunks, and aborts pending
   ordinal waits). The historical per-record synchronous HRESULT
   short-circuit of `commit_chunk` does not hold in offload mode.
-- With the flag unset the entire path is byte-identical to the inline replay.
+- With the flag explicitly set to `0` (the opt-out) the entire path is
+  byte-identical to the inline replay.
 
-The two boundary-pacing gaps above (global-only inline-boundary suppression;
-ordinal wait ignoring `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS`) are fixed and
-no longer block promoting this flag to an engine default. A separate,
-still-open blocker does: forcing this flag on (even on an otherwise-unmodified
-checkout) reproducibly crashes `dxmt9-imported-apply-state-value-spec` and
-`dxmt9-resource-hazard-spec` with heap corruption inside
-`applyDrawPacketStateDirect`'s render-target/surface handling
-(`device_c_chunk_replay.cpp`) — a resource-retention/use-after-free issue in
-the replay worker's draw-packet path, unrelated to boundary pacing. See
-`specs/backend/gap.md` "Commit-replay offload" row; do not flip the engine
-default until that is root-caused and fixed.
+All three former promotion blockers are resolved. The two boundary-pacing
+gaps (global-only inline-boundary suppression; ordinal wait ignoring
+`DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS`) fell to R-BACK-2.51(g)/(h)
+(`72132513`), and the offload-forced native-spec crashes that looked like a
+replay-worker resource-retention defect were root-caused as a test-harness
+drain gap, not a production race — the two specs passed stack-allocated wire
+wrappers and bypassed the `drainDeferredReplay()` fence every real bridge
+call gets (`cad446ce`, regression-pinned by the `-offload` spec variants).
+The engine default flipped to ON on 2026-07-10 (`d45af067`; H216 in
+`docs/perfomance/present-pacing/log.md`). See the `specs/backend/gap.md`
+"Commit-replay offload" row for the full evidence chain.
 
 ```mermaid
 sequenceDiagram
