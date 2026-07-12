@@ -4,7 +4,7 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/index.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md
 ---
@@ -13,16 +13,19 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md
 
 > Root navigation: [index](index.md). Shared log: [log](log.md).
 
-Date: 2026-06-05
+Date: 2026-07-12
 
 Scope:
 
 - macOS Wine D3D9 path using dxmt9 PE `d3d9.dll`, PE `winemetal.dll`,
   and unix `winemetal.so`.
 - General dxmt9 performance model, not a title-specific investigation.
-- Current backend structure: chunked D3D9 command recording, encode-thread
-  replay, Metal render/pass encoding, sub-command-buffer chaining, and
-  present-frame pacing.
+- Current backend structure: chunked D3D9 command recording, an engine-default
+  commit-replay offload worker (`DXMT9_OFFLOAD_COMMIT_REPLAY`, ON since
+  2026-07-10 — wire validation/import/handle-marking stay synchronous on the
+  app thread while record replay and queue publish run on a device-owned
+  worker; explicit `0` opts out), encode-thread replay, Metal render/pass
+  encoding, sub-command-buffer chaining, and present-frame pacing.
 - This document keeps the existing directory spelling, `docs/perfomance/`,
   to match the current repository path.
 
@@ -297,7 +300,7 @@ flowchart TD
 
 | Class | Symptom counters | Typical root cause | Preferred fix direction |
 |---|---|---|---|
-| Commit chunk replay | `bridge_commit_latency_ns`, `commit_chunk_import_cpu_ms`, `commit_chunk_handle_cpu_ms`, `commit_chunk_replay_cpu_ms`, `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`, draw-run child timers, `submit_draw_run_*_cpu_ms`, `submit_draw_run_batch_*_cpu_ms` | The synchronous `commit_chunk` call is spending time in unix-side record replay, draw-run scanning, snapshot/draw submission construction, queued submission flushing, or queue slot append/resource-mark/chunk-commit work. A large historical `bridge_commit_latency_ns` value is not necessarily raw PE/unix bridge overhead. | Split replay and submit children first; optimize snapshot/draw submission, record dispatch, draw-run scan, constant-upload pass-through, submission batch construction, resource marking, and chunk append/publish cost before changing the ABI. |
+| Commit chunk replay | `bridge_commit_latency_ns`, `commit_chunk_import_cpu_ms`, `commit_chunk_handle_cpu_ms`, `commit_chunk_replay_cpu_ms`, `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`, draw-run child timers, `submit_draw_run_*_cpu_ms`, `submit_draw_run_batch_*_cpu_ms` | Unix-side record replay, draw-run scanning, snapshot/draw submission construction, queued submission flushing, or queue slot append/resource-mark/chunk-commit work. With the engine-default commit-replay offload, this class runs on the device-owned replay worker rather than inside the synchronous `commit_chunk` call (only validation/import/handle-marking stay app-thread synchronous); `bridge_commit_latency_ns` then measures raw-queue push backpressure, and a large historical value is not necessarily raw PE/unix bridge overhead. | Split replay and submit children first; optimize snapshot/draw submission, record dispatch, draw-run scan, constant-upload pass-through, submission batch construction, resource marking, and chunk append/publish cost before changing the ABI. Replay-worker-side CPU wins are FPS-flat while the worker has idle headroom; check worker idle before promoting them. |
 | Snapshot cache invalidation | `d3d9_snapshot_cache_lookup_cpu_ms`, `d3d9_snapshot_cache_miss_cpu_ms`, `d3d9_snapshot_cache_uniform_refresh_cpu_ms`, `d3d9_snapshot_uniform_build_calls`, `draw_uniform_payload_appends`, `draw_uniform_payload_append_bytes`, `draw_packet_declared_nonbinding`, `draw_packet_actual_nonbinding`, `draw_packet_redundant_nonbinding`, `draw_packet_redundant_uniform` | D3D9 snapshot submission rebuilds shader layout, hot state, or uniform payload too often. Current GT1 proof rejects broad same-value non-binding deltas (`redundant_nonbinding=0`), and the accepted cache-hit uniform refresh fast path proves a large part is real component payload construction/hash rather than redundant invalidation. | Keep cache-hit shader-constant refresh on the fast path. Remaining work is miss hot-build, VS indexed constant fallback, and stronger proof before revisiting invalidation policy. |
 | Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
 | Payload/upload pressure | `transient_upload_calls`, `transient_upload_bytes`, `uniform_*`, payload arena counters | Stable constants or state are uploaded at draw frequency. | Split stable/volatile payloads, coalesce slab reservations, skip duplicate payload copies. |
@@ -411,6 +414,15 @@ This default is a compromise:
   preservation and command-buffer commit overhead.
 - Still workload-dependent. Heavy render targets, MSAA, many attachments, or
   high store/load pressure can erase the pipelining win.
+
+Beyond the sub-CB grain, the current engine-default policy set also includes
+the promoted trio (2026-07-10, `d45af067`): the commit-replay offload
+(`DXMT9_OFFLOAD_COMMIT_REPLAY`, explicit `0` opts out), the opaque-depth
+index-cache locality opt-in whose unset default follows the offload
+(`DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`), and the ungated PE-side readonly
+managed-buffer lock cache. The 3DMark05 probe wrapper pins the pair to the
+same defaults since 2026-07-12 (`e5129346`); probe baselines after that date
+are trio-on unless `0` is exported explicitly.
 
 ## Experiment And Validation Areas
 

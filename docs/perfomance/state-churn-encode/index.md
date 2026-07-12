@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching"
 type: domain-index
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/state-churn-encode/overview.md; docs/perfomance/state-churn-encode/log.md
 ---
@@ -12,6 +12,8 @@ related: docs/perfomance/state-churn-encode/overview.md; docs/perfomance/state-c
 # State-Churn Encode — the CPU encode path and draw-run batching
 
 Latest tracked row: `H210` - Uniform append residual after fixed-handle carry is bounded local cleanup (accepted direction).
+
+Current status: the commit-replay offload is engine-default ON (`d45af067`, H216 in [present-pacing](../present-pacing/index.md)), and the rejected replay-carrier lanes documented in this domain's history (chunk-end carry + `AndRun`/`WithResourceMarking` family, draw-run preflush merge/mixed-carrier, compact uniform submission carrier, canonical draw-run fast path, publish-time PSO prefetch) were removed from the tree in the H217-H220 cleanup waves — see the [overview](overview.md) current-status section.
 
 ## Start Here
 

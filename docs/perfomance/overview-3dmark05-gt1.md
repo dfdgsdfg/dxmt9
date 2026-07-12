@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/index.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md
 ---
@@ -33,8 +33,8 @@ mix together:
 | Axis | Current readout | Detail owner |
 |---|---|---|
 | Hot-frame GPU cost | Top render encoders are dominated by hidden Apple vertex/tiler/parameter-buffer storage, not dxmt CPU upload bytes or visible `VSOut` width. | [hidden-backend-storage](hidden-backend-storage/overview.md), [tvb-mechanism-proof](tvb-mechanism-proof/overview.md) |
-| Proven GPU lever | Reducing VS invocations through semantic-safe opaque-depth index-cache locality moves the hidden-write bucket and passes the refreshed promotion proof, but the default/profile vehicle still depends on runtime cost and integration gates. | [index-cache-locality](index-cache-locality/overview.md) |
-| Wallclock / FPS cost | CPU producer, replay, queue-submission, snapshot, encode, and present-completion pacing are separate from the hot-frame GPU owner. H197 removes the unix-side readonly managed-buffer lock storm but is explicitly not an FPS promotion. | [present-pacing](present-pacing/overview.md), [state-churn-encode](state-churn-encode/overview.md), [snapshot-cache](snapshot-cache/overview.md) |
+| Proven GPU lever | Reducing VS invocations through semantic-safe opaque-depth index-cache locality moves the hidden-write bucket and passed the full promotion proof (H195). Since `d45af067` (H216) the flag is engine-default ON, coupled to the commit-replay offload. | [index-cache-locality](index-cache-locality/overview.md) |
+| Wallclock / FPS cost | The engine-default trio (commit-replay offload, coupled index-cache, ungated PE readonly managed-buffer lock cache) is promoted and cumulative: GT1 `1,800 -> 2,220-2,293` presents/120s (`~+26%`, H211/H216). The residual wall is the game's own Rosetta CPU + Wine thunking (H212): dxmt9 unix app-thread cost is `~1.8%` of the frame; PE recording is `~8.5ms/present` (H213). | [present-pacing](present-pacing/overview.md), [state-churn-encode](state-churn-encode/overview.md), [snapshot-cache](snapshot-cache/overview.md) |
 | Correctness gate | Visual parity is a promotion gate, not a proof of a hardware wall. Weapon/muzzle/bloom reports require same-frame or draw-local final-writer proof before redirecting the performance plan. | [snapshot-cache](snapshot-cache/overview.md), [backend-shape-classifiers](backend-shape-classifiers/overview.md) |
 | Pass/store and backend-shape alternatives | Render-pass store traffic, Tile-FFP, mesh/object, programmable tile routes, PSO/state shape, and visible-width probes remain either rejected-current or reduced-A/B prerequisites. | [render-pass-store](render-pass-store/overview.md), [hidden-backend-storage](hidden-backend-storage/overview.md), [vsout-layout](vsout-layout/overview.md), [shader-codegen](shader-codegen/overview.md) |
 
@@ -54,10 +54,18 @@ A GT1 candidate must say which axis it moves:
 
 The accepted GPU mechanism is narrow but real: opaque-depth index-cache locality
 reduces post-transform cache misses, VS invocations, hidden VS writes, and target
-GPU time. The accepted producer cleanup is also real but different: the PE
-readonly managed-buffer cache collapses bridge-visible lock/mutex work and
-shadow traffic, while the measured FPS sample remains throughput-neutral. Keep
-those conclusions separate.
+GPU time. The accepted wallclock win is the engine-default trio: the
+commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`, engine-default ON since
+`d45af067`, explicit `0` opts out), the coupled index-cache default, and the
+ungated PE readonly managed-buffer lock cache — cumulatively
+`1,800 -> 2,220-2,293` presents/120s (`~+26%`). Keep the GPU-mechanism and
+wallclock conclusions separate. All rejected experiment lanes from the
+2025-26 carrier chains were removed from the tree in the H217-H221 cleanup
+arc (see [present-pacing](present-pacing/index.md)); every remaining opt-in
+env is either a diagnostic A/B switch for a live default path or an open
+frontier (tile-FFP two-stage encode, argbuf direct-cbuf scout, unpublished-slot
+PSO prefetch, sparse const records, `DXMT9_PE_INLINE_CONST_DELTA` — mechanism
+proven, FPS-null, kept opt-in per H214).
 
 ## Promotion Gates
 
@@ -102,7 +110,7 @@ flowchart TD
 | [baselines](baselines/index.md) | reference captures and frame anchors | Use for canonical frame/run shape, not as a mutable experiment journal. |
 | [hidden-backend-storage](hidden-backend-storage/index.md) | hidden VS/TVB/parameter-buffer attribution | Central GPU explanation; detailed gate history and rejected backend-shape paths live in its overview/log. |
 | [tvb-mechanism-proof](tvb-mechanism-proof/index.md) | proof that VS-invocation reduction moves TVB writes | Load-bearing mechanism proof behind index-cache locality. |
-| [index-cache-locality](index-cache-locality/index.md) | opaque-depth and screen-blend locality | Only accepted production-shaped GPU win; screen-blend remains policy/oracle-bound. |
+| [index-cache-locality](index-cache-locality/index.md) | opaque-depth and screen-blend locality | Only accepted production-shaped GPU win, engine-default ON since `d45af067` (coupled to the offload); screen-blend remains policy/oracle-bound. |
 | [index-reuse-measurement](index-reuse-measurement/index.md) | cache-miss and geometry reuse measurement | Supports locality attribution and candidate ranking. |
 | [primitive-reorder-diagnostics](primitive-reorder-diagnostics/index.md) | reverse/min-index/split reorder probes | Keeps frame-shape artifacts out of promotion claims. |
 | [mini-replay-bisection](mini-replay-bisection/index.md) | row-local replay and final-writer bisection | Supplies correctness/oracle evidence before Xcode spend. |
@@ -111,10 +119,10 @@ flowchart TD
 | [backend-shape-classifiers](backend-shape-classifiers/index.md) | alpha/depth/cull/scissor/fog/texture classifiers | Mostly rejected or secondary; still relevant to visual/perf coupling. |
 | [attachment-pixelformat](attachment-pixelformat/index.md) | R32F/X8 attachment format probes | Secondary texture/write path, not the central VS owner. |
 | [const-upload](const-upload/index.md) | cbuf/argbuf upload and constant traffic | CPU amplifier; accepted cleanups do not by themselves prove GPU/FPS promotion. |
-| [state-churn-encode](state-churn-encode/index.md) | replay, draw-run, PSO/bind/state encode cost | Large CPU track; many local wins are FPS-flat until P4/replay overlap moves. |
+| [state-churn-encode](state-churn-encode/index.md) | replay, draw-run, PSO/bind/state encode cost | Large CPU track; the engine-default offload moved the replay cost class onto a worker (idle `~39.4ms/present`), and the rejected carrier lanes were removed (H217-H220). Remaining local wins are FPS-flat; the frontier is encode-side P4 overlap and pass-streaming (R-BACK-2.39/2.40/2.43). |
 | [snapshot-cache](snapshot-cache/index.md) | D3D9 snapshot rebuild and visual-gate history | CPU track plus current visual gate owner for reported correctness artifacts. |
 | [render-pass-store](render-pass-store/index.md) | pass re-entry, load/store, tile preservation | P1 locality/pass-shape track; must not regress while chasing overlap. |
-| [present-pacing](present-pacing/index.md) | completion wait, producer cadence, bridge/lock attribution | Average-FPS/pacing owner; H197 is mechanism-confirmed but not FPS promotion. |
+| [present-pacing](present-pacing/index.md) | completion wait, producer cadence, bridge/lock attribution | Average-FPS/pacing owner; owns the engine-default trio promotion (H211/H216), the H217-H221 dead-lane cleanup arc, and the H212/H213 residual attribution (game's own CPU; PE recording `~8.5ms/present`). |
 
 ## Reading Rules
 

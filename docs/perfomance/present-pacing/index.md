@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-07-11
+updated: 2026-07-12
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
@@ -21,15 +21,15 @@ Latest tracked row: `H221` - probe-wrapper defaults aligned with the promoted en
 
 ## Recent Leaf Documents
 
+- [present-pacing-engine-default-trio.203 - The Promoted Trio Becomes The Engine Default](present-pacing-engine-default-trio.203.md)
+- [present-pacing-archive-prewarm-hardening.202 - Archive Prewarm Hardening Closes The Startup-Flake Class](present-pacing-archive-prewarm-hardening.202.md)
+- [present-pacing-inline-const-delta.201 - Inline Const Delta Proves Mechanism But Lands Inside The Noise Band](present-pacing-inline-const-delta.201.md)
+- [present-pacing-decimated-pe-stats.200 - Decimated PE Stats Size The Recorder Core At ~8.5ms/present](present-pacing-decimated-pe-stats.200.md)
+- [present-pacing-postcache-resample.199 - Post-Cache Producer Re-Sample - The Wall Is Now The Guest Blob](present-pacing-postcache-resample.199.md)
+- [present-pacing-readonly-cache-stacking.198 - Readonly Cache Stacks With The Promoted Pair For +26% Cumulative](present-pacing-readonly-cache-stacking.198.md)
 - [present-pacing-readonly-managed-buffer-cache.197 - Readonly Managed Buffer Cache Collapses The Lock Bridge Storm](present-pacing-readonly-managed-buffer-cache.197.md)
 - [present-pacing-producer-sampling-attribution.196 - Non-Perturbing Producer Sampling Finds The Buffer-Lock Bridge Storm](present-pacing-producer-sampling-attribution.196.md)
 - [present-pacing-consolidation-long-confirm.194 - Consolidation Long Confirm - Offload+IndexCache +10% Over The Full Demo](present-pacing-consolidation-long-confirm.194.md)
 - [present-pacing-pe-const-overhead-cut.193 - PE Const-Chain Overhead Cuts Land Clean But Move No FPS](present-pacing-pe-const-overhead-cut.193.md)
 - [present-pacing-pe-cost-verification.192 - PE Recording Cost Is Real (~10ms/present, Overhead-Corrected)](present-pacing-pe-cost-verification.192.md)
 - [present-pacing-offload-backpressure-attribution.191 - Offload Backpressure Attribution Closes The Mechanism Gate](present-pacing-offload-backpressure-attribution.191.md)
-- [present-pacing-commit-replay-offload.190 - Commit-Replay Offload First Runtime Proof](present-pacing-commit-replay-offload.190.md)
-- [present-pacing-deferred-boundary-isolated.189 - Isolated Deferred Present Boundary On The Baseline Shape](present-pacing-deferred-boundary-isolated.189.md)
-- [present-pacing-encode-session-deferred-boundary.188 - EncodeSession Deferred Present Boundary Prototype](present-pacing-encode-session-deferred-boundary.188.md)
-- [present-pacing-encode-session-stable-rerun.187 - EncodeSession Stable Rerun](present-pacing-encode-session-stable-rerun.187.md)
-- [present-pacing-encode-session-draw-continuation-command-floor.186 - EncodeSession Draw-Continuation Command Floor](present-pacing-encode-session-draw-continuation-command-floor.186.md)
-- [present-pacing-encode-session-selected-prefix-retain.185 - EncodeSession Selected-Prefix Retain](present-pacing-encode-session-selected-prefix-retain.185.md)

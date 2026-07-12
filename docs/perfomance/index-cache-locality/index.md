@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Index-Cache Locality — the only accepted production GPU win"
 type: domain-index
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/index-cache-locality/overview.md; docs/perfomance/index-cache-locality/log.md
 ---
@@ -12,6 +12,8 @@ related: docs/perfomance/index-cache-locality/overview.md; docs/perfomance/index
 # Index-Cache Locality — the only accepted production GPU win
 
 Latest tracked row: `H26` - The paired offload+opt-in `.gputrace` proof passes every promotion gate (accepted; frame60 finalizer verdict "all requested requirement gates were satisfied" vs the June baseline: target rows `60/0+60/1` GPU `-7.39%`, VS buffer write `-16.54%`, VS invocations `-14.12%` (identical to the historical proof), `175` candidate draws with miss32 `582,658 -> 450,807`; stable-frame, PSO-attribution, and coverage gates all pass, so the opt-in's evidence is complete — its default remains coupled to the offload because the CPU tax is only absorbed there).
+
+Current status: the coupled pair is engine-default ON since `d45af067` (2026-07-10, H216 in [present-pacing](../present-pacing/index.md)) — unset follows the offload, explicit `0` opts out — and the probe wrapper pins match the engine defaults since `e5129346` (2026-07-12, H221).
 
 ## Start Here
 

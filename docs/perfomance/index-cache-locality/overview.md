@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Index-Cache Locality — the only accepted production GPU win - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/index-cache-locality/log.md; docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/index-cache-locality/index.md; docs/perfomance/index-cache-locality/log.md
 ---
@@ -20,12 +20,20 @@ This domain owns the **one accepted production optimization** of the whole GT1
 investigation: a cached, semantic-safe post-transform index-cache reorder that
 lowers VS invocations — and therefore the hidden TVB / parameter-buffer write
 bucket — for **opaque depth-writing triangle lists**. It covers the production
-flag `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` (+ `_MIN_GAIN_PCT`), the
+flag `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` (+ `_MIN_GAIN_PCT`), the
 explicit-tolerance-only screen-blend variant `DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE`,
 min-gain threshold tuning, the no-mutate identity scouts that fed candidate
 selection, the CPU-cost optimization of the cache path, and the remaining `50/2`
 bottleneck triage. The mechanism behind why this works is proven separately by
 [tvb-mechanism-proof](../tvb-mechanism-proof/index.md): TVB write ≈ `VS invocations × per-vertex VSOut bytes`.
+
+**Current default state:** since `d45af067` (2026-07-10, H216 in
+[present-pacing](../present-pacing/index.md)) the flag's unset default follows
+`DXMT9_OFFLOAD_COMMIT_REPLAY` — itself engine-default ON — so the coupled pair
+is on by default everywhere; explicit `0` opts out. The offload absorbs the
+candidate/lookup CPU tax (H25), which is why the coupling is one-way. The
+3DMark05 probe wrapper pins the pair to the same defaults since 2026-07-12
+(`e5129346`, H221): probe baselines after that date are trio-on by default.
 
 ## Latest Conclusions
 
