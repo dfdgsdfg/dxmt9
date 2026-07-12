@@ -54,11 +54,45 @@ frames — denormal/special-value arithmetic is the classic suspect).
   removed — an upper bound (force-frag-color is correctness-invalid).
 - RT versioning/renaming is dead as a candidate (targets a refuted mechanism).
 
-## Next gates
+## Xcode + follow-up probes (same day)
 
-1. Single-frame `.gputrace` of a slow frame (wine capture-layer wrapper +
-   `DXMT_METAL_CAPTURE_FRAME`), Xcode per-draw profiling + shader profiler —
-   real work reproduces in replay, so this names the exact draw and
-   instruction hot spot.
-2. Then a shader-translation fix (e.g., clamp/flush denormals, restructure the
-   offending pattern) gated by the `v0.0.3`-style visual anchor for SFIV.
+Three `.gputrace` captures (frames 505/509/512, wine capture-layer wrapper)
+all replay the scene pass at 104-110ms. Xcode findings, with a caveat: the
+replay ran on an active desktop, and the Fragment timeline shows 7x ~11.4ms
+"External Process" interleaves inside the pass (≈80ms) — replay GPU-time and
+byte counters are contaminated by desktop work, so per-line SHAPE is trusted,
+absolute splits are not.
+
+- Top Shaders: one `dxmt9_fs` variant owns 96.02% of replay GPU time; the
+  per-line profiler attributes 93.35% to the function-signature line
+  (= prologue), split Sync Wait Memory 32.7% / Memory Load 19.7% / ALU
+  Integer 26.6% / ALU Float 0.15% — **per-fragment cbuf loads, not math**.
+  Line-pattern match identifies the file as
+  `translated-fs-shader-2796994317804760615` (PS `0x26d0eb834f89ee27`) — a
+  trivial 2-instruction shader whose prologue/epilogue still chases
+  `abuf.psConsts`/`abuf.ffpPs` and loads alpha-test/fog state per fragment.
+- Live discriminators: `DXMT9_ARGBUF_DIRECT_CBUF=1` no change (1,322
+  presents) — the argbuf-table indirection per se is not the cost.
+  `DXMT_DISABLE_ALPHA_TEST=1 DXMT_DISABLE_FOG=1` (strips the generated tail
+  and its `ffpPs` loads) **halves CB GPU time (p50 110 -> 60.5ms)** at
+  unchanged presents (1,383 — the wall shifts toward app CPU).
+
+## Final mechanism
+
+The scene pass's fullscreen effect quads run shaders whose per-fragment cost
+is dominated by serialized dependent cbuf loads (pointer-chase into
+`PsConsts`/`FfpPsConsts`, no compiler constant-preload), ~10-100x the actual
+math. The frame-to-frame bimodality is invocation-count driven: on
+effect-idle frames the quads cover ~nothing (11 near-empty draws, 0.2ms); on
+effect frames they cover the screen (~6.5M invocations at 720p with 6.9x
+overdraw) and the load latency bill comes due (~88ms).
+
+## Fix directions (shader-codegen)
+
+1. Compile-time shader variants keyed on alpha-test/fog enables — proven
+   worth ~half the pathological GPU time by the strip probe.
+2. Hoist/vectorize the remaining per-fragment cbuf loads (single wide
+   preamble load, or direct `[[buffer]]` bindings verified to hit the
+   constant-preload path — note the current direct-cbuf scout does not cover
+   the FFP-tail loads).
+3. Gate any change on an SFIV visual anchor and a no-gputrace presents A/B.

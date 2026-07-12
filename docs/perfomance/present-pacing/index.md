@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H223` - SFIV (D3D9Ex): the ~88ms scene-pass instances are real data-dependent fragment-shader work (wait hypotheses refuted; `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1` proves +264% presents headroom). Next gate: slow-frame `.gputrace` per-draw naming. Workload map: [overview-sfiv](../overview-sfiv.md).
+Latest tracked row: `H224` - SFIV scene-pass cost named: per-fragment serialized cbuf loads in the translated FS prologue/tail (Xcode per-line profile + strip probe halving CB GPU p50 `110 -> 60.5ms`); fix design = compile-time alpha-test/fog variants + cbuf-load hoisting. Workload map: [overview-sfiv](../overview-sfiv.md).
 
 ## Start Here
 

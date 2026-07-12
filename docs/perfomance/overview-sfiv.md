@@ -66,15 +66,21 @@ domains, mirroring the [3DMark05 GT1 map](overview-3dmark05-gt1.md).
 
 ## Open gates
 
-1. **Name the draw/instruction**: single-frame `.gputrace` of a slow frame
-   (wine capture-layer wrapper + `DXMT_METAL_CAPTURE_FRAME`), Xcode per-draw
-   profiling + shader profiler — real work reproduces in replay.
-2. **Translation-side fix** for the named pattern (e.g., denormal
-   clamp/flush), gated by an SFIV visual anchor.
+1. **Shader-codegen fix** (H224 design): compile-time shader variants keyed
+   on alpha-test/fog enables (the strip probe halves CB GPU p50
+   `110 -> 60.5ms`), plus hoisting/vectorizing the remaining per-fragment
+   `PsConsts`/`FfpPsConsts` loads (serialized dependent loads are ~10-100x
+   the shaders' math; the current direct-cbuf scout does not cover them).
+   Gate on an SFIV visual anchor + no-gputrace presents A/B.
+2. After the GPU fix, re-attribute the wall (app CPU under Rosetta is the
+   expected next owner at ~60-68ms/frame).
 3. Dead-clear DCE / clear folding as a framegraph follow-up (second-order).
 
-Closed gates: `DXMT9_MAX_FRAME_LATENCY=1` mechanism probe (WAR refuted) and
-RT versioning/renaming (killed — targets a refuted mechanism).
+Closed gates: `DXMT9_MAX_FRAME_LATENCY=1` mechanism probe (WAR refuted), RT
+versioning/renaming (killed), `DXMT9_ARGBUF_DIRECT_CBUF` (no change — the
+argbuf-table indirection per se is not the cost). Measurement caveat: Xcode
+replay profiling on an active desktop interleaves "External Process" GPU work
+into encoder windows — trust per-line shape, not absolute replay numbers.
 
 ## Measurement notes
 
