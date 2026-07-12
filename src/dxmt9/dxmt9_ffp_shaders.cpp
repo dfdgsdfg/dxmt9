@@ -1306,7 +1306,13 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  }\n";
     out << "  if (!pass) { discard_fragment(); }\n";
   }
-  if (emitFog && key.fogMode != FogMode::None) {
+  // H224 — the FfpPixelKey bakes a non-None fogMode whenever a fog
+  // table/vertex mode render state is set even while D3DRS_FOGENABLE is off
+  // (buildFfpPsConsts then uploads ffpPs.fogMode = 0 and dxmt9_apply_fog
+  // no-ops at runtime). context.fogActive carries the resolved could-apply
+  // predicate, so a fog-disabled draw now omits the call and its per-fragment
+  // ffpPs.fog* loads entirely instead of runtime-gating them.
+  if (emitFog && key.fogMode != FogMode::None && context.fogActive) {
     out << "  float fogDepth = color.a;\n";
     out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, "
         << stageInFloatRead(context, "fogFactor") << ");\n";

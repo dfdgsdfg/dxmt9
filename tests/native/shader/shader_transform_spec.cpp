@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
 #include <optional>
 #include <span>
@@ -250,9 +251,30 @@ std::string translatePixelWithAlphaTestStrip(std::span<const u32> words) {
   const auto shader = makeShader(words);
   DrawDesc desc{};
   desc.pixelShader = shader;
+  // Enable alpha test in the draw state so the debug strip is proven to win
+  // over an alpha-test-active draw (H224 variant gating composes with the
+  // DXMT_DISABLE_ALPHA_TEST strip; strip wins).
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
   auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
   context.stripAlphaTestForDebug = true;
   return dxmt9::translator::makeTranslatedFragmentSource(shader, context);
+}
+
+// H224 — compile-time alpha-test/fog fragment tails. Build the fixture with
+// explicit render states so makeShaderSourceContext(DrawDesc) resolves the
+// alphaTestActive/fogActive gates exactly like the production flat-state
+// overload does.
+std::string translatePixelWithRenderStates(
+    std::span<const u32> words,
+    std::initializer_list<std::pair<u32, u32>> renderStates) {
+  const auto shader = makeShader(words);
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  for (const auto& [state, value] : renderStates) {
+    desc.rs.values[state] = value;
+  }
+  return dxmt9::translator::makeTranslatedFragmentSource(
+      shader, dxmt9::drawshader::makeShaderSourceContext(desc));
 }
 
 std::string translateVertex(std::span<const u32> words) {
@@ -1652,13 +1674,106 @@ void testPs30VFaceDecodeAndSourceContract() {
 }
 
 void testPixelShaderOutputReceivesFixedFunctionFog() {
-  const auto source = translatePixel(makePs20ColorInputBytecode());
+  // H224 — the D3D9 fog tail is a compile-time variant keyed on the draw's
+  // resolved fog state (RS_FOG_ENABLE plus a table/vertex fog mode). The
+  // fog-active variant keeps the historical runtime ffpPs.fogMode gate so
+  // fog params stay uniform loads and never widen the PSO key.
+  const auto source = translatePixelWithRenderStates(
+      makePs20ColorInputBytecode(),
+      {{RS_FOG_ENABLE, 1u},
+       {RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::Linear)}});
   checkContains(source, "if (ffpPs.fogMode != 0u)",
-                "translated pixel shaders dynamically gate fixed-function fog");
+                "fog-active translated pixel shaders dynamically gate fixed-function fog");
   checkContains(source, "dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor)",
-                "translated pixel shaders apply table fog after shader color output");
+                "fog-active translated pixel shaders apply table fog after shader color output");
   checkContains(source, "outColor[0] = color",
                 "fogged color is written back to the primary color output");
+}
+
+void testTranslatedFragmentTailsAreCompileTimeVariants() {
+  // H224 — a draw whose render state can enable neither alpha test nor fog
+  // must emit neither tail nor any per-fragment FfpPsConsts load; the
+  // buffer(3) param itself is dropped when nothing else reads ffpPs.
+  const auto inactive = translatePixel(makePs20ColorInputBytecode());
+  checkNotContains(inactive, "ffpPs.alphaTestEnable",
+                   "tail-inactive translated PS emits no alpha-test guard");
+  checkNotContains(inactive, "discard_fragment()",
+                   "tail-inactive translated PS emits no alpha-test discard");
+  checkNotContains(inactive, "dxmt9_apply_fog(color, ffpPs",
+                   "tail-inactive translated PS emits no fog tail call");
+  checkNotContains(inactive, "FfpPsConsts& ffpPs [[buffer(3)]]",
+                   "tail-inactive translated PS drops the unused FfpPsConsts param");
+
+  const auto alphaOnly = translatePixelWithRenderStates(
+      makePs20ColorInputBytecode(), {{RS_ALPHA_TEST_ENABLE, 1u}});
+  checkContains(alphaOnly, "if (ffpPs.alphaTestEnable != 0u)",
+                "alpha-test-active PS keeps the runtime alpha-test guard");
+  checkContains(alphaOnly, "switch (ffpPs.alphaTestFunc)",
+                "alpha-test-active PS keeps the runtime alpha-func switch");
+  checkContains(alphaOnly, "discard_fragment()",
+                "alpha-test-active PS keeps the discard tail");
+  checkContains(alphaOnly, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
+                "alpha-test-active PS keeps the FfpPsConsts param");
+  checkNotContains(alphaOnly, "dxmt9_apply_fog(color, ffpPs",
+                   "alpha-test-only PS emits no fog tail");
+
+  const auto fogVertexOnly = translatePixelWithRenderStates(
+      makePs20ColorInputBytecode(),
+      {{RS_FOG_ENABLE, 1u},
+       {RS_FOG_FROM_VERTEX, static_cast<u32>(FogMode::Linear)}});
+  checkContains(fogVertexOnly,
+                "dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor)",
+                "vertex-fog draw state keeps the fog tail (mirrors the ffpPs.fogMode fallback)");
+  checkNotContains(fogVertexOnly, "ffpPs.alphaTestEnable",
+                   "fog-only PS emits no alpha-test guard");
+
+  // A fog mode without RS_FOG_ENABLE can never produce a non-zero
+  // ffpPs.fogMode at upload time (buildFfpPsConsts zeroes it), so the
+  // fog-disabled variant is safe.
+  const auto fogModeWithoutEnable = translatePixelWithRenderStates(
+      makePs20ColorInputBytecode(),
+      {{RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::Linear)}});
+  checkNotContains(fogModeWithoutEnable, "dxmt9_apply_fog(color, ffpPs",
+                   "fog mode without RS_FOG_ENABLE emits no fog tail");
+}
+
+void testTranslatedLegacyBumpEnvRetainsFfpPsWithoutTails() {
+  // ps1.x TEXBEM/TEXBEML/BEM read ffpPs.bumpEnvMat/bumpEnvLum, so the
+  // FfpPsConsts param must survive even when both tails are inactive.
+  const auto source = translatePixel(makePs13LegacyTextureFamilyBytecode());
+  checkContains(source, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
+                "legacy bump-env PS keeps the FfpPsConsts param without tails");
+  checkContains(source, "ffpPs.bumpEnvMat[0]",
+                "legacy bump-env PS still reads the bump matrix");
+  checkNotContains(source, "ffpPs.alphaTestEnable",
+                   "legacy bump-env PS emits no alpha-test tail by default");
+}
+
+void testFfpFogTailIsCompileTimeGated() {
+  // H224 — the FFP pixel key bakes a fog mode whenever a table/vertex fog
+  // mode render state is set even while RS_FOG_ENABLE is off. The emitted
+  // fog call is now additionally gated on the resolved could-apply
+  // predicate; the FfpPsConsts deref stays because FFP stage machinery
+  // (tfactor/stageConstants) reads it unconditionally.
+  FfpPixelKey key{};
+  key.fogMode = FogMode::Linear;
+  DrawDesc desc{};
+  desc.pixelShader.kind = ShaderRef::Kind::FixedFunctionPixel;
+  desc.pixelShader.pixelKey = key;
+
+  const auto inactive = dxmt9::ffp::makeFfpPixelSource(
+      key, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkNotContains(inactive, "dxmt9_apply_fog(color, ffpPs",
+                   "fog-keyed FFP PS with fog-disabled draw state emits no fog call");
+  checkContains(inactive, "ffpPs.textureFactor",
+                "FFP PS keeps the FfpPsConsts deref for stage machinery");
+
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
+  const auto active = dxmt9::ffp::makeFfpPixelSource(
+      key, dxmt9::drawshader::makeShaderSourceContext(desc));
+  checkContains(active, "dxmt9_apply_fog(color, ffpPs, fogDepth",
+                "fog-active FFP PS keeps the fog call");
 }
 
 void testLegacyShaderModelDecodeContracts() {
@@ -1853,11 +1968,12 @@ void testFfpMipLodBiasClearOmitsShaderSideBias() {
 }
 
 void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
-  const auto normal = translatePixel(makePs20ColorInputBytecode());
+  const auto normal = translatePixelWithRenderStates(
+      makePs20ColorInputBytecode(), {{RS_ALPHA_TEST_ENABLE, 1u}});
   checkContains(normal, "ffpPs.alphaTestEnable",
-                "normal translated PS emits runtime alpha-test guard");
+                "alpha-test-active translated PS emits runtime alpha-test guard");
   checkContains(normal, "discard_fragment()",
-                "normal translated PS emits alpha-test discard tail");
+                "alpha-test-active translated PS emits alpha-test discard tail");
 
   const auto stripped = translatePixelWithAlphaTestStrip(makePs20ColorInputBytecode());
   checkNotContains(stripped, "ffpPs.alphaTestEnable",
@@ -2986,6 +3102,9 @@ int main() {
     testD3DBCDecodeAndClassificationFixtures();
     testPs30VFaceDecodeAndSourceContract();
     testPixelShaderOutputReceivesFixedFunctionFog();
+    testTranslatedFragmentTailsAreCompileTimeVariants();
+    testTranslatedLegacyBumpEnvRetainsFfpPsWithoutTails();
+    testFfpFogTailIsCompileTimeGated();
     testLegacyShaderModelDecodeContracts();
     testPs30PredicatedInstructionLowersGuard();
     testD3DOpcodeNamesCoverUnsupportedSurface();

@@ -843,6 +843,11 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   hash = mix(hash, static_cast<u64>(key.linear));
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
   hash = mix(hash, static_cast<u64>(key.alphaTest));
+  // H224: the fog-tail variant bit participates in the key hash so the
+  // fog-active (runtime-gated tail) and fog-inactive (tail omitted) variants
+  // of the same shader hit distinct PSO cache slots — including the probe key
+  // path, which drops only the actual source hashes.
+  hash = mix(hash, static_cast<u64>(key.fogActive));
   hash = mix(hash, static_cast<u64>(key.alphaToCoverage));
   // R-BACK-13.3: tile_ffp_mode participates in the PSO key hash so the
   // fragment-stage and tile-stage variants of the same FFPKeyPS hit
@@ -1923,7 +1928,12 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;
   key.clipPlanes = hot.clipPlaneMask != 0;
-  key.alphaTest = core::flatStateOr(hot.renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0;
+  // H224 — compile-time fragment tail gates. Both bits read the same
+  // single-source predicates as makeShaderSourceContext and the FfpPsConsts
+  // upload (dxmt9_draw_state), so the emitted MSL, the PSO key, and the
+  // uploaded constants stay in lockstep.
+  key.alphaTest = state::fragmentAlphaTestEnabled(hot.renderStates);
+  key.fogActive = state::fragmentFogCouldApply(hot.renderStates);
   // R-FORMAT-13: alpha-to-coverage is driven by the cross-vendor render-state
   // hack on D3DRS_ADAPTIVETESS_Y. Writing the ATOC FOURCC (or the ATI A2M1
   // alias) enables it; 0, the A2M0 alias, or any other value leaves it

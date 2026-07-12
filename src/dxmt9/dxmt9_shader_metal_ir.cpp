@@ -2399,6 +2399,24 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const u32 colorOutputCount = pixelColorOutputCount(module);
   const bool writesDepth = pixelWritesDepth(module);
   const bool usesFragmentOutStruct = colorOutputCount > 1u || writesDepth;
+  // H224 — compile-time alpha-test/fog fragment tails. When the resolved draw
+  // state cannot enable a tail (context.alphaTestActive / context.fogActive,
+  // keyed as ShaderVariantKey::alphaTest / ::fogActive), emit neither the
+  // tail code nor its per-fragment FfpPsConsts loads. The debug strips
+  // compose on top and win in the disabled direction. The ffpPs param/alias
+  // itself is dropped only when nothing else reads it: the legacy ps1.x
+  // bump-env ops (TEXBEM/TEXBEML/BEM) read ffpPs.bumpEnvMat/bumpEnvLum.
+  const bool emitAlphaTestTail =
+      context.alphaTestActive && !context.stripAlphaTestForDebug;
+  const bool emitFogTail = context.fogActive && !context.stripFogForDebug;
+  const bool usesFfpBumpEnv = std::any_of(
+      module.instructions.begin(), module.instructions.end(),
+      [](const auto& instruction) {
+        return instruction.opcode == kD3DSIO_TEXBEM ||
+               instruction.opcode == kD3DSIO_TEXBEML ||
+               instruction.opcode == kD3DSIO_BEM;
+      });
+  const bool usesFfpPsConsts = emitAlphaTestTail || emitFogTail || usesFfpBumpEnv;
   if (usesFragmentOutStruct) {
     out << "struct FSOut {\n";
     for (u32 i = 0; i < colorOutputCount; ++i) {
@@ -2452,7 +2470,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
-      out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      if (usesFfpPsConsts) {
+        out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      }
       for (u32 stage = 0; stage < kMaxSamplers; ++stage) {
         if (!samplerUsage[stage]) {
           continue;
@@ -2478,13 +2498,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       }
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
-      out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      if (usesFfpPsConsts) {
+        out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      }
     } else {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
       emitFrontFacingParameter();
-      out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
-      out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
+      if (usesFfpPsConsts) {
+        out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+        out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]], ";
+      } else {
+        out << "                     constant PsConsts& psConsts [[buffer(0)]], ";
+      }
       emitFragmentTextureArguments(out, samplerUsage, module, context);
       if (emitLodBias) {
         out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
@@ -2499,13 +2525,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     constant ArgbufLayout& abuf [[buffer("
           << kArgbufHybridBindSlot << ")]]) {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
-      out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      if (usesFfpPsConsts) {
+        out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
+      }
     } else {
       out << "fragment " << fragmentReturnType
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
       emitFrontFacingParameter();
-      out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
-      out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+      if (usesFfpPsConsts) {
+        out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
+        out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+      } else {
+        out << "                     constant PsConsts& psConsts [[buffer(0)]]) {\n";
+      }
     }
   }
   auto emitFragmentDebugReturn = [&](std::string_view valueExpr) {
@@ -3558,7 +3590,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   } else {
     out << "  color = outColor[0];\n";
   }
-  if (!context.stripAlphaTestForDebug) {
+  if (emitAlphaTestTail) {
     out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
     out << "    bool pass = true;\n";
     out << "    switch (ffpPs.alphaTestFunc) {\n";
@@ -3576,7 +3608,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "    }\n";
     out << "  }\n";
   }
-  if (!context.stripFogForDebug) {
+  if (emitFogTail) {
 		  out << "  if (ffpPs.fogMode != 0u) {\n";
 		  out << "    color = dxmt9_apply_fog(color, ffpPs, in.position.z, "
           << stageInFloatRead(context, "in.fogFactor") << ");\n";

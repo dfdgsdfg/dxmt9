@@ -380,6 +380,10 @@ void testTranslatedPixelStage1Bindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
+  // H224 — the FfpPsConsts param is emitted only when the shader reads it
+  // (alpha-test/fog tails or ps1.x bump env). Keep this binding-shape spec
+  // exercising the ffpPs-using variant by enabling alpha test.
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/false));
   checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
@@ -401,6 +405,8 @@ void testTranslatedPixelStage2Bindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
+  // H224 — keep the ffpPs argbuf alias in play (see Stage 1 spec).
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
@@ -431,6 +437,8 @@ void testTranslatedPixelStage2bDirectCbufBindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
+  // H224 — keep the direct ffpPs binding in play (see Stage 1 spec).
+  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeDirectCbufContext(desc));
   checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
@@ -447,6 +455,25 @@ void testTranslatedPixelStage2bDirectCbufBindings() {
                    "Stage 2b translated pixel must not reference ArgbufLayout");
   checkNotContains(src, "abuf.",
                    "Stage 2b translated pixel must not dereference an argbuf pointer");
+}
+
+void testTranslatedPixelStage2InactiveTailsDropFfpPsAlias() {
+  // H224 — with alpha-test/fog inactive in the draw state and no ps1.x
+  // bump-env reads, the Stage 2 prelude keeps the ArgbufLayout ffpPs member
+  // (host encoder ABI) but the fragment body drops the unused
+  // `constant FfpPsConsts& ffpPs = *abuf.ffpPs;` alias.
+  ShaderRef shader = makePixelShaderRef();
+  DrawDesc desc{};
+  desc.pixelShader = shader;
+  desc.textures[2].handle = Handle{3};
+  const auto src = dxmt9::translator::makeTranslatedFragmentSource(
+      shader, makeContext(desc, /*argbufHybridMode=*/true));
+  checkContains(src, "abuf.psConsts",
+                "tail-inactive Stage 2 translated pixel still aliases psConsts");
+  checkNotContains(src, "abuf.ffpPs",
+                   "tail-inactive Stage 2 translated pixel drops the ffpPs alias");
+  checkContains(src, "constant FfpPsConsts* ffpPs    [[id(3)]]",
+                "ArgbufLayout keeps the ffpPs member for the host encoder ABI");
 }
 
 // Vertex bytecode: vs_3_0 dcl_position o0; mov o0, c0. Pulled from the

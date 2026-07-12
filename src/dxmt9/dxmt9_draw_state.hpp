@@ -153,6 +153,31 @@ SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);
 // this same predicate over the same flat draw state, so the shader's
 // `[[buffer(4)]]` declaration and the bind can never drift apart.
 bool anySamplerLodBiasNonzero(core::FlatDrawStateView state);
+
+// H224 PSO-variant gate predicates for the generated fragment alpha-test/fog
+// tails. Single source of truth shared by the PSO key
+// (ShaderVariantKey::alphaTest / ::fogActive, set in makeShaderVariantKey),
+// the shader-source context (ShaderSourceContext::alphaTestActive /
+// ::fogActive, set in makeShaderSourceContext), and the FfpPsConsts upload
+// (fillFfpPsConsts), so the emitted MSL and the uploaded constants can never
+// disagree in the enabled direction. resolveFragmentFog mirrors the historical
+// buildFfpPsConsts resolution exactly: RS_FOG_ENABLE gates fog entirely, the
+// table mode wins, and the vertex mode is the fallback (fogSource=1 marks the
+// vertex-fog-factor lane). The RenderStateSnapshot overloads serve fixture /
+// offline DrawDesc paths with identical semantics.
+struct ResolvedFragmentFog {
+  u32 fogMode = static_cast<u32>(core::FogMode::None);
+  u32 fogSource = 0;  // 1 = interpolated vertex fog factor, 0 = table/depth fog
+};
+bool fragmentAlphaTestEnabled(const core::FlatRenderStateSet& renderStates);
+bool fragmentAlphaTestEnabled(const core::RenderStateSnapshot& renderStates);
+ResolvedFragmentFog resolveFragmentFog(const core::FlatRenderStateSet& renderStates);
+ResolvedFragmentFog resolveFragmentFog(const core::RenderStateSnapshot& renderStates);
+// True iff the resolved draw state can produce a non-zero ffpPs.fogMode at
+// upload time — the coarse "could fog apply" signal the fog variant keys on.
+bool fragmentFogCouldApply(const core::FlatRenderStateSet& renderStates);
+bool fragmentFogCouldApply(const core::RenderStateSnapshot& renderStates);
+
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride);
 

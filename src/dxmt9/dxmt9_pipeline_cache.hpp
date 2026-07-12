@@ -100,6 +100,16 @@ struct ShaderVariantKey {
   bool linear = false;
   bool clipPlanes = false;
   bool alphaTest = false;
+  // H224 — fragment fog-tail PSO-variant gate, twin of the `alphaTest` bit
+  // above. True iff the resolved draw state can produce a non-zero
+  // ffpPs.fogMode at upload time (state::fragmentFogCouldApply:
+  // D3DRS_FOGENABLE plus a non-None table/vertex fog mode). When clear, the
+  // generated fragment source omits the dxmt9_apply_fog tail and its
+  // per-fragment FfpPsConsts loads; when set, the tail keeps the historical
+  // runtime ffpPs.fogMode switch. Only the two enable bits participate in the
+  // key — alpha func/ref and fog params stay runtime uniform loads, bounding
+  // the tail variant fan-out at 4x per shader.
+  bool fogActive = false;
   bool alphaToCoverage = false;
   // R-BACK-13.3 — tile-FFP-mode bit. Two draws with the same FFPKeyPS
   // but different tile-mode selection compile separate pipeline states

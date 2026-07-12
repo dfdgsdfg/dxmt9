@@ -312,25 +312,68 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
   return out;
 }
 
+namespace {
+
+// Shared fog-mode resolution over either render-state storage shape. The
+// H224 fog PSO-variant bit (fragmentFogCouldApply) and the FfpPsConsts upload
+// both go through this single transform so the compile-time fog gate and the
+// runtime ffpPs.fogMode can never disagree in the enabled direction.
+template <typename StateOr>
+ResolvedFragmentFog resolveFragmentFogImpl(StateOr&& stateOr) {
+  ResolvedFragmentFog out{};
+  const bool fogEnabled = stateOr(RS_FOG_ENABLE, 0u) != 0u;
+  if (!fogEnabled) {
+    return out;
+  }
+  out.fogMode = stateOr(RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));
+  if (out.fogMode == static_cast<u32>(FogMode::None)) {
+    out.fogMode = stateOr(RS_FOG_FROM_VERTEX, static_cast<u32>(FogMode::None));
+    out.fogSource = out.fogMode != static_cast<u32>(FogMode::None) ? 1u : 0u;
+  }
+  return out;
+}
+
+}  // namespace
+
+bool fragmentAlphaTestEnabled(const core::FlatRenderStateSet& renderStates) {
+  return core::flatStateOr(renderStates, RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+}
+
+bool fragmentAlphaTestEnabled(const core::RenderStateSnapshot& renderStates) {
+  return renderStates.values.valueOr(RS_ALPHA_TEST_ENABLE, 0u) != 0u;
+}
+
+ResolvedFragmentFog resolveFragmentFog(const core::FlatRenderStateSet& renderStates) {
+  return resolveFragmentFogImpl([&](u32 key, u32 fallback) {
+    return core::flatStateOr(renderStates, key, fallback);
+  });
+}
+
+ResolvedFragmentFog resolveFragmentFog(const core::RenderStateSnapshot& renderStates) {
+  return resolveFragmentFogImpl([&](u32 key, u32 fallback) {
+    return renderStates.values.valueOr(key, fallback);
+  });
+}
+
+bool fragmentFogCouldApply(const core::FlatRenderStateSet& renderStates) {
+  return resolveFragmentFog(renderStates).fogMode != static_cast<u32>(FogMode::None);
+}
+
+bool fragmentFogCouldApply(const core::RenderStateSnapshot& renderStates) {
+  return resolveFragmentFog(renderStates).fogMode != static_cast<u32>(FogMode::None);
+}
+
 static void fillFfpPsConsts(core::FlatDrawStateView state, FfpPsConsts& out) {
   const auto& rs = state.hot->renderStates;
   if (const auto* textureFactor = core::findFlatState(rs, RS_TEXTURE_FACTOR)) {
     out.textureFactor = normalizedD3DColor(textureFactor->value);
   }
-  out.alphaTestEnable = !debug::disableAlphaTest() &&
-                        core::flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u) != 0;
+  out.alphaTestEnable = !debug::disableAlphaTest() && fragmentAlphaTestEnabled(rs);
   out.alphaTestFunc =
       core::flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
-  const bool fogEnabled = core::flatStateOr(rs, RS_FOG_ENABLE, 0u) != 0;
-  out.fogMode = fogEnabled
-                    ? core::flatStateOr(rs, RS_FOG_TABLE_MODE,
-                                        static_cast<u32>(FogMode::None))
-                    : static_cast<u32>(FogMode::None);
-  if (fogEnabled && out.fogMode == static_cast<u32>(FogMode::None)) {
-    out.fogMode = core::flatStateOr(rs, RS_FOG_FROM_VERTEX,
-                                    static_cast<u32>(FogMode::None));
-    out.fogSource = out.fogMode != static_cast<u32>(FogMode::None) ? 1u : 0u;
-  }
+  const auto fog = resolveFragmentFog(rs);
+  out.fogMode = fog.fogMode;
+  out.fogSource = fog.fogSource;
   out.fogColor = normalizedD3DColor(core::flatStateOr(rs, RS_FOG_COLOR, 0u));
   out.alphaRef =
       static_cast<f32>(core::flatStateOr(rs, RS_ALPHA_REF, 0u)) / 255.0f;

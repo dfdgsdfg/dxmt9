@@ -1,5 +1,6 @@
 #include "dxmt9_draw_shader.hpp"
 
+#include "dxmt9_draw_state.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_shader_sources.hpp"
 #include "dxmt9_shader_translator.hpp"
@@ -218,6 +219,12 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
   context.clipPlaneMask = layout.clipPlaneMask;
   context.unboundTextureFallback = true;
   context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
+  // H224 — resolve the compile-time fragment tail gates from the same flat
+  // render state that feeds the FfpPsConsts upload (single-source predicates
+  // in dxmt9_draw_state), keeping the emitted MSL, the PSO key bits, and the
+  // uploaded constants in lockstep.
+  context.alphaTestActive = state::fragmentAlphaTestEnabled(hot.renderStates);
+  context.fogActive = state::fragmentFogCouldApply(hot.renderStates);
   return context;
 }
 
@@ -235,6 +242,11 @@ ShaderSourceContext makeShaderSourceContext(const fixture::DrawDesc& desc) {
   context.sampleCount = std::max(1u, desc.rts.color[0].sampleCount);
   context.clipPlaneMask = layout.clipPlaneMask;
   context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
+  // H224 — mirror the production flat-state overload so fixture-generated
+  // sources carry the same compile-time fragment tail gates for the same
+  // logical draw state.
+  context.alphaTestActive = state::fragmentAlphaTestEnabled(desc.rs);
+  context.fogActive = state::fragmentFogCouldApply(desc.rs);
   return context;
 }
 

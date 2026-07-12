@@ -721,6 +721,64 @@ void testPipelineHelpersUseExplicitFlatInputs() {
   checkEq(variant.sampleCount, 4u, "flat variant helper reads render target sample count");
 }
 
+void testAlphaTestAndFogTailVariantKeyBits() {
+  // H224 — the fragment alpha-test/fog tails are compile-time shader
+  // variants. The variant key carries only the two enable bits (alphaTest
+  // from RS_ALPHA_TEST_ENABLE, fogActive from the resolved
+  // ffpPs.fogMode upload predicate); func/ref/fog params stay runtime
+  // uniform loads so the variant fan-out is bounded at 4x per shader.
+  DrawDesc desc{};
+  desc.vertexShader.hash = 0x1234u;
+  desc.pixelShader.hash = 0x5678u;
+
+  const auto baseKey = makeVariantKey(makeFlatDrawFixture(desc));
+  check(!baseKey.alphaTest, "default state leaves the alpha-test key bit clear");
+  check(!baseKey.fogActive, "default state leaves the fog key bit clear");
+
+  const auto sameKey = makeVariantKey(makeFlatDrawFixture(desc));
+  check(baseKey == sameKey, "identical draw state produces identical variant keys");
+  checkEq(dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey),
+          dxmt9::pipeline::ShaderVariantKeyHash{}(sameKey),
+          "identical draw state produces identical key hashes");
+
+  DrawDesc alphaDesc = desc;
+  alphaDesc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  const auto alphaKey = makeVariantKey(makeFlatDrawFixture(alphaDesc));
+  check(alphaKey.alphaTest, "RS_ALPHA_TEST_ENABLE sets the alpha-test key bit");
+  check(!(alphaKey == baseKey), "alpha-test enable produces a distinct variant key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(alphaKey) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey),
+        "alpha-test enable produces a distinct key hash");
+
+  DrawDesc fogDesc = desc;
+  fogDesc.rs.values[RS_FOG_ENABLE] = 1u;
+  fogDesc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
+  const auto fogKey = makeVariantKey(makeFlatDrawFixture(fogDesc));
+  check(fogKey.fogActive, "enabled fog with a table mode sets the fog key bit");
+  check(!(fogKey == baseKey), "fog enable produces a distinct variant key");
+  check(dxmt9::pipeline::ShaderVariantKeyHash{}(fogKey) !=
+            dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey),
+        "fog enable produces a distinct key hash");
+
+  // The bit mirrors buildFfpPsConsts' resolution exactly: RS_FOG_ENABLE
+  // gates, table mode wins, vertex mode is the fallback.
+  DrawDesc fogModeOnly = desc;
+  fogModeOnly.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
+  check(!makeVariantKey(makeFlatDrawFixture(fogModeOnly)).fogActive,
+        "a fog mode without RS_FOG_ENABLE leaves the fog key bit clear");
+
+  DrawDesc fogEnableOnly = desc;
+  fogEnableOnly.rs.values[RS_FOG_ENABLE] = 1u;
+  check(!makeVariantKey(makeFlatDrawFixture(fogEnableOnly)).fogActive,
+        "RS_FOG_ENABLE without any fog mode leaves the fog key bit clear");
+
+  DrawDesc vertexFogDesc = desc;
+  vertexFogDesc.rs.values[RS_FOG_ENABLE] = 1u;
+  vertexFogDesc.rs.values[RS_FOG_FROM_VERTEX] = static_cast<u32>(FogMode::Linear);
+  check(makeVariantKey(makeFlatDrawFixture(vertexFogDesc)).fogActive,
+        "vertex fog mode with RS_FOG_ENABLE sets the fog key bit");
+}
+
 void testAlphaToCoverageRenderStateHack() {
   // R-FORMAT-13: alpha-to-coverage is enabled by writing the ATOC FOURCC
   // token to D3DRS_ADAPTIVETESS_Y, and disabled by writing 0. The ATI
@@ -968,6 +1026,7 @@ int main() {
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();
+    testAlphaTestAndFogTailVariantKeyBits();
     testAlphaToCoverageRenderStateHack();
     testSamplerLodBiasVariantBit();
     testFragmentlessDepthOnlyVariantBit();
