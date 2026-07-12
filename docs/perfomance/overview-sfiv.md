@@ -66,14 +66,16 @@ domains, mirroring the [3DMark05 GT1 map](overview-3dmark05-gt1.md).
 
 ## Open gates
 
-1. **Shader-codegen fix** (H224 design): compile-time shader variants keyed
-   on alpha-test/fog enables (the strip probe halves CB GPU p50
-   `110 -> 60.5ms`), plus hoisting/vectorizing the remaining per-fragment
-   `PsConsts`/`FfpPsConsts` loads (serialized dependent loads are ~10-100x
-   the shaders' math; the current direct-cbuf scout does not cover them).
-   Gate on an SFIV visual anchor + no-gputrace presents A/B.
+1. **Residual cbuf-load hoisting** (H224 direction 2): the alpha-test/fog
+   variant fix landed (`0b82f69c`, H225 — SFIV CB GPU p50 `110 -> 82.9ms`
+   cooled, `68.2ms` in a counters-only run, near the `60.5ms` strip bound);
+   the remaining per-fragment `PsConsts` loads (and the enabled-variant
+   `FfpPsConsts` loads) are still serialized dependent loads that the
+   compiler cannot constant-preload. Hoist/vectorize or move to verified
+   preload bindings if a further slice is worth it.
 2. After the GPU fix, re-attribute the wall (app CPU under Rosetta is the
-   expected next owner at ~60-68ms/frame).
+   expected next owner at ~60-68ms/frame; SFIV presents did not move with
+   the CB drop — the frame cadence is no longer GPU-owned).
 3. Dead-clear DCE / clear folding as a framegraph follow-up (second-order).
 
 Closed gates: `DXMT9_MAX_FRAME_LATENCY=1` mechanism probe (WAR refuted), RT

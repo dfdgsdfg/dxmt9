@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H224` - SFIV scene-pass cost named: per-fragment serialized cbuf loads in the translated FS prologue/tail (Xcode per-line profile + strip probe halving CB GPU p50 `110 -> 60.5ms`); fix design = compile-time alpha-test/fog variants + cbuf-load hoisting. Workload map: [overview-sfiv](../overview-sfiv.md).
+Latest tracked row: `H225` - alpha-test/fog fragment tails are now compile-time shader variants (`0b82f69c`): disabled variants drop the tails and the `FfpPsConsts` binding entirely; SFIV CB GPU p50 `110 -> 82.9ms` cooled (counters-only run `68.2ms`), GT1 parity at `2,220` presents. Workload map: [overview-sfiv](../overview-sfiv.md).
 
 ## Start Here
 
