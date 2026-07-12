@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Render-Pass Store — the P1 GPU-memory (tile preservation) track - Historical Log"
 type: domain-log
 status: historical
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/render-pass-store/index.md
 related: docs/perfomance/render-pass-store/index.md; docs/perfomance/render-pass-store/overview.md
 ---
@@ -303,3 +303,23 @@ Detail migrated from the former long-form root [3DMark05 overview](../overview-3
   next proof has to preserve D3D9 ordering while moving or coalescing
   `Load+Store` depth-read work around `Clear+Store` opaque work.
   [render-pass-store](index.md)
+
+## SFIV Cross-Workload Note - 2026-07-12
+
+First non-GT1 datapoint for this domain, from the SFIV (D3D9Ex) frame anatomy
+(framegraph DAG dumps, frames 799-801, `experiments/output/sfiv-dag-20260712`;
+workload map: [overview-sfiv](../overview-sfiv.md)):
+
+- Fixed 25-pass frame shape (23 render + blit + present, 44 draws): a 13-pass
+  ink/bloom post chain with true pass-to-pass RAW texture dependencies
+  (unmergeable by any legal coalescer), the 12-draw scene pass, a 16-draw
+  HUD/composite, and a full-surface StretchRect.
+- **5 clear-only passes per frame, of which 3 clear attachments never used in
+  the rest of the frame** (`004`, `01c/01d`, `016/012` — dead clears) plus one
+  duplicated same-attachment clear pair (`[1]`/`[2]`). Legal pass floor ≈16/23.
+  These are direct framegraph DCE / clear-folding candidates.
+- Caveat for prioritization: on SFIV all render passes except the scene pass
+  sum to <2ms/frame of fragment GPU time — pass-count reduction is
+  second-order there; the frame wall is the scene-pass frame-period stall
+  tracked as [present-pacing H222](../present-pacing/log.md) /
+  [present-pacing-sfiv-scene-pass-stall.204](../present-pacing/present-pacing-sfiv-scene-pass-stall.204.md).

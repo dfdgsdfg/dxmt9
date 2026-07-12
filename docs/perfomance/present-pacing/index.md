@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H221` - probe-wrapper defaults aligned with the promoted engine defaults (`e5129346`): the offload+index-cache pins now default on like the engine, env `0` is the off switch, and post-2026-07-12 probe baselines are trio-on by default.
+Latest tracked row: `H222` - SFIV (D3D9Ex) attribution: the frame wall is a periodic scene-pass frame-period GPU stall (cross-frame WAR leading hypothesis), not fragmentation/contention/trio; SFIV's own GPU work is ~20ms/frame. Workload map: [overview-sfiv](../overview-sfiv.md).
 
 ## Start Here
 
@@ -21,6 +21,7 @@ Latest tracked row: `H221` - probe-wrapper defaults aligned with the promoted en
 
 ## Recent Leaf Documents
 
+- [present-pacing-sfiv-scene-pass-stall.204 - SFIV Scene-Pass Frame-Period Stall Owns The Frame Wall](present-pacing-sfiv-scene-pass-stall.204.md)
 - [present-pacing-engine-default-trio.203 - The Promoted Trio Becomes The Engine Default](present-pacing-engine-default-trio.203.md)
 - [present-pacing-archive-prewarm-hardening.202 - Archive Prewarm Hardening Closes The Startup-Flake Class](present-pacing-archive-prewarm-hardening.202.md)
 - [present-pacing-inline-const-delta.201 - Inline Const Delta Proves Mechanism But Lands Inside The Noise Band](present-pacing-inline-const-delta.201.md)

@@ -4,7 +4,7 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Documentation Index"
 type: root-index
 status: current
-updated: 2026-07-08
+updated: 2026-07-12
 source: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/log.md
 ---
@@ -19,6 +19,8 @@ This is the entry point for the `docs/perfomance/` tree.
   model for dxmt9.
 - [3DMark05 GT1 investigation map](overview-3dmark05-gt1.md) - current
   experiment knowledge graph and domain map.
+- [SFIV Benchmark investigation map](overview-sfiv.md) - D3D9Ex validation,
+  flicker triage, and the scene-pass GPU stall track.
 - [Shared performance documentation log](log.md) - root-level structure and
   maintenance history shared by both overview documents.
 
