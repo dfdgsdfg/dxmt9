@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H220` - the four remaining rejected opt-in lanes removed (compact uniform carrier `bb1bec1d` -2,161, canonical fast path `c33d250a`, publish PSO prefetch `8d16f290`, PE flush pacing `f1224bdf`); suites/audits green, cooled GT1 smoke `2,280` presents. Every remaining opt-in lane is a live-default diagnostic or an open frontier.
+Latest tracked row: `H221` - probe-wrapper defaults aligned with the promoted engine defaults (`e5129346`): the offload+index-cache pins now default on like the engine, env `0` is the off switch, and post-2026-07-12 probe baselines are trio-on by default.
 
 ## Start Here
 
