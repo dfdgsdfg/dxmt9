@@ -17,5 +17,5 @@ ffff0200 05000051 a00f0000 bf800000 00000000 3f000000
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 draw quad
-expect-source pixel contains "sign(cFloat[0])"
+expect-source pixel contains "sign(dxmt9_cdef0)"
 probe (32, 32) rgba(0.0, 0.5, 1.0, 1.0) 1

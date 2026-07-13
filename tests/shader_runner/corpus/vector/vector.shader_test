@@ -16,9 +16,9 @@ a0e40000 a0e40001 a0e40000 04000050 800f0006 a0e40000 a0e40001
 a0e40000 02000001 800f0800 80e40000 0000ffff
 
 [test]
-expect-source pixel contains "dot((cFloat[0]).xyz, (cFloat[1]).xyz)"
-expect-source pixel contains "dot(cFloat[0], cFloat[1])"
-expect-source pixel contains "cross((cFloat[0]).xyz, (cFloat[1]).xyz)"
-expect-source pixel contains "min(cFloat[0], cFloat[1])"
-expect-source pixel contains "max(cFloat[0], cFloat[1])"
-expect-source pixel contains "select(cFloat[0], cFloat[1],"
+expect-source pixel contains "dot((dxmt9_cdef0).xyz, (dxmt9_cdef1).xyz)"
+expect-source pixel contains "dot(dxmt9_cdef0, dxmt9_cdef1)"
+expect-source pixel contains "cross((dxmt9_cdef0).xyz, (dxmt9_cdef1).xyz)"
+expect-source pixel contains "min(dxmt9_cdef0, dxmt9_cdef1)"
+expect-source pixel contains "max(dxmt9_cdef0, dxmt9_cdef1)"
+expect-source pixel contains "select(dxmt9_cdef0, dxmt9_cdef1,"

@@ -11,6 +11,6 @@ ffff0200 02000001 800f0000 a1e40000 02000001 80030800 abe40001
 0000ffff
 
 [test]
-expect-source pixel contains "-(cFloat[0])"
-expect-source pixel contains "abs(cFloat[1])"
+expect-source pixel contains "-(psConsts.psFloatConst[0])"
+expect-source pixel contains "abs(psConsts.psFloatConst[1])"
 expect-source pixel contains "dxmt9_merge"

@@ -18,6 +18,6 @@ dxmt9-texture 0 2 2 A8R8G8B8 red green blue white
 dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point
 dxmt9-bind-texture 0 0
 dxmt9-draw-textured-quad-tex2
-expect-source pixel contains "reflect(normalize((cFloat[0]).xyz), normalize(dxmt9_texm.xyz))"
+expect-source pixel contains "reflect(normalize((dxmt9_cdef0).xyz), normalize(dxmt9_texm.xyz))"
 probe (16, 16) rgba(0.0, 0.0, 1.0, 1.0) 1
 probe (48, 48) rgba(0.0, 1.0, 0.0, 1.0) 1

@@ -117,6 +117,19 @@ struct ConstantUsage {
   bool hasIndexedFloat = false;
   bool hasIndexedInt = false;
   bool hasIndexedBool = false;
+  // H226 — per-category write attribution. DEF/DEFI/DEFB are compile-time
+  // literal declarations; any other opcode writing a constant register is a
+  // runtime mutation. The emitter materializes the mutable local register
+  // file only for categories with runtime writes or relative addressing;
+  // DEF-only categories hoist the literals into immutable locals and read
+  // the bound constant buffer in place, avoiding the per-invocation copy
+  // loop and the stack spill it forces for large register files.
+  bool floatDefWrite = false;
+  bool intDefWrite = false;
+  bool boolDefWrite = false;
+  bool floatRuntimeWrite = false;
+  bool intRuntimeWrite = false;
+  bool boolRuntimeWrite = false;
   u32 floatCount = 0;
   u32 intCount = 0;
   u32 boolCount = 0;

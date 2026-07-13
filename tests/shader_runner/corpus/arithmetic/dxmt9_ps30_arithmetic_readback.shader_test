@@ -20,7 +20,7 @@ a0e40000 a0e40003 02000001 80010003 80e40000 02000001
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 draw quad
-expect-source pixel contains "r[0] = (cFloat[0] * cFloat[1] + cFloat[2]);"
-expect-source pixel contains "float4(dot((cFloat[0]).xyz, (cFloat[1]).xyz))"
-expect-source pixel contains "float4(dot(cFloat[0], cFloat[3]))"
+expect-source pixel contains "r[0] = (dxmt9_cdef0 * dxmt9_cdef1 + dxmt9_cdef2);"
+expect-source pixel contains "float4(dot((dxmt9_cdef0).xyz, (dxmt9_cdef1).xyz))"
+expect-source pixel contains "float4(dot(dxmt9_cdef0, dxmt9_cdef3))"
 probe (32, 32) rgba(0.2, 0.45, 0.19, 1.0) 2

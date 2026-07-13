@@ -17,6 +17,6 @@ a0e40000 0000001a 80000007 e0e40800 0100001e 80000007
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 draw quad
-expect-source pixel contains "if (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f)"
-expect-source pixel contains "r[0] = cFloat[1];"
+expect-source pixel contains "if (((dxmt9_cdefb0 != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f)"
+expect-source pixel contains "r[0] = dxmt9_cdef1;"
 probe (32, 32) rgba(0.0, 1.0, 0.0, 1.0) 1

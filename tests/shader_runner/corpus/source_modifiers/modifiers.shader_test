@@ -14,8 +14,8 @@ ace40000 02000001 800f0003 a0b10001 02000001 800f0004 a0400001
 02000001 800f0800 80e40000 0000ffff
 
 [test]
-expect-source pixel contains "-(cFloat[0])"
-expect-source pixel contains "abs(cFloat[1])"
-expect-source pixel contains "-abs(cFloat[0])"
-expect-source pixel contains "float4(cFloat[1].y, cFloat[1].x, cFloat[1].w, cFloat[1].z)"
-expect-source pixel contains "float4(cFloat[1].x, cFloat[1].x, cFloat[1].x, cFloat[1].y)"
+expect-source pixel contains "-(dxmt9_cdef0)"
+expect-source pixel contains "abs(dxmt9_cdef1)"
+expect-source pixel contains "-abs(dxmt9_cdef0)"
+expect-source pixel contains "float4(dxmt9_cdef1.y, dxmt9_cdef1.x, dxmt9_cdef1.w, dxmt9_cdef1.z)"
+expect-source pixel contains "float4(dxmt9_cdef1.x, dxmt9_cdef1.x, dxmt9_cdef1.x, dxmt9_cdef1.y)"

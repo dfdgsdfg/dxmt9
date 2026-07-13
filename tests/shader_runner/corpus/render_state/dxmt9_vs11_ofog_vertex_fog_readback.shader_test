@@ -25,5 +25,5 @@ dxmt9-vs-const-f 0 1.0 0.0 0.0 1.0
 dxmt9-vs-const-f 1 0.25 0.25 0.25 0.25
 dxmt9-render-state fog=on fog_mode=none fog_vertex_mode=linear fog_color=rgba(0.0,1.0,0.0,1.0) zenable=off zwrite=off
 dxmt9-draw-vs-color-triangle
-expect-source vertex contains "outFogFactor = float4(cFloat[1]"
+expect-source vertex contains "outFogFactor = float4(vsConsts.vsFloatConst[1]"
 probe (32, 32) rgba(0.25, 0.75, 0.0, 1.0) 2

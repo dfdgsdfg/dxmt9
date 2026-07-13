@@ -26,7 +26,7 @@ ffff0300
 [test]
 expect-source vertex contains "texture2d<float> tex0 [[texture(0)]]"
 expect-source vertex contains "sampler samp0 [[sampler(0)]]"
-expect-source vertex contains "tex0.sample(samp0, (cFloat[0]).xy, level(cFloat[0].w))"
+expect-source vertex contains "tex0.sample(samp0, (dxmt9_cdef0).xy, level(dxmt9_cdef0.w))"
 clear rgba(0.0, 0.0, 0.0, 1.0)
 dxmt9-texture 0 1 1 A8R8G8B8 green
 dxmt9-sampler 16 address_u=clamp address_v=clamp min_filter=point mag_filter=point mip_filter=point

@@ -23,8 +23,8 @@ ffff0300
 0000ffff
 
 [test]
-expect-source pixel contains "cInt[0] = int4(1, 2, 3, 4)"
-expect-source pixel contains "cBool[0] = 1u"
-expect-source pixel contains "if ((cFloat[0]).x > (cFloat[1]).x)"
+expect-source pixel contains "const int4 dxmt9_cdefi0 = int4(1, 2, 3, 4)"
+expect-source pixel contains "const uint dxmt9_cdefb0 = 1u"
+expect-source pixel contains "if ((dxmt9_cdef0).x > (dxmt9_cdef1).x)"
 expect-source pixel contains "if (((p[0] ? float4(1.0f) : float4(0.0f))).x != 0.0f) { break; }"
 expect-source pixel contains "break;"

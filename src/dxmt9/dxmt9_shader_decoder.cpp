@@ -1147,6 +1147,22 @@ ConstantUsage collectConstantUsage(const SpirvModule& module) {
       if (isConstantRegisterKind(dst.kind)) {
         usage.mutableConstants = true;
         noteConstantUsage(usage, dst.kind, dst.index);
+        const bool defWrite = instruction.opcode == kD3DSIO_DEF ||
+                              instruction.opcode == kD3DSIO_DEFI ||
+                              instruction.opcode == kD3DSIO_DEFB;
+        switch (dst.kind) {
+          case D3DRegisterKind::ConstFloat:
+            (defWrite ? usage.floatDefWrite : usage.floatRuntimeWrite) = true;
+            break;
+          case D3DRegisterKind::ConstInt:
+            (defWrite ? usage.intDefWrite : usage.intRuntimeWrite) = true;
+            break;
+          case D3DRegisterKind::ConstBool:
+            (defWrite ? usage.boolDefWrite : usage.boolRuntimeWrite) = true;
+            break;
+          default:
+            break;
+        }
       }
       // Track max Temp / Output-Color index so the emitter sizes
       // `r[]` / `outColor[]` to actual usage rather than the spec

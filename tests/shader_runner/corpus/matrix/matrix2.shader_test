@@ -17,5 +17,5 @@ a00f0002 00000000 00000000 3f800000 00000000 05000051 a00f0003
 a0e40000 a0e40004 02000001 800f0800 80e40000 0000ffff
 
 [test]
-expect-source vertex contains "dot((cFloat[0]).xyz, cFloat[0].xyz)"
-expect-source vertex contains "dot((cFloat[0]).xyz, cFloat[4].xyz)"
+expect-source vertex contains "dot((dxmt9_cdef0).xyz, dxmt9_cdef0.xyz)"
+expect-source vertex contains "dot((dxmt9_cdef0).xyz, dxmt9_cdef4.xyz)"

@@ -119,7 +119,14 @@ def classify_shader_alpha(text: str) -> str:
         return "dynamic-expression"
     if re.search(r"outColor\[0\]\s*=\s*dxmt9_merge\(outColor\[0\],\s*float4\(in\.", text):
         return "varying-alpha"
-    if re.search(r"outColor\[0\]\s*=\s*dxmt9_merge\(outColor\[0\],\s*cFloat\[\d+\]", text):
+    # H226: direct-mode shaders read the bound constant buffer in place
+    # (psConsts.psFloatConst[N]) or a hoisted DEF local (dxmt9_cdefN)
+    # instead of the legacy materialized cFloat[N] register file.
+    if re.search(
+        r"outColor\[0\]\s*=\s*dxmt9_merge\(outColor\[0\],\s*"
+        r"(?:cFloat\[\d+\]|psConsts\.psFloatConst\[\d+\]|dxmt9_cdef\d+)",
+        text,
+    ):
         return "uniform-alpha"
     if re.search(r"return\s+float4\([^;]+,\s*1\.0f?\)", text):
         return "constant-one-alpha"

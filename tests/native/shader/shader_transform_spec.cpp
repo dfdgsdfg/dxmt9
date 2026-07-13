@@ -1836,7 +1836,7 @@ void testPs30PredicatedInstructionLowersGuard() {
   const auto source = translatePixel(makePs30DecodeFixtureBytecode());
   checkContains(source, "bool p[16];", "predicated instruction declares predicate register storage");
   checkContains(source, "if ((p[0])) {", "predicated instruction lowers to a p0 guard");
-  checkContains(source, "outColor[1] = (cBool[2] != 0u ? float4(1.0f) : float4(0.0f));",
+  checkContains(source, "outColor[1] = (psConsts.psBoolConst[2] != 0u ? float4(1.0f) : float4(0.0f));",
                 "predicated MOV body remains inside translated source");
 }
 
@@ -2048,7 +2048,7 @@ void testPs30TexkillLoweringContract() {
   checkContains(source, "if ((r[0]).x < 0.0f || (r[0]).y < 0.0f)",
                 "ps_3_0 TEXKILL lowers selected components to a negative-value discard predicate");
   checkContains(source, "discard_fragment()", "ps_3_0 TEXKILL lowers to Metal fragment discard");
-  checkContains(source, "outColor[0] = cFloat[0]", "ps_3_0 TEXKILL does not terminate subsequent translation");
+  checkContains(source, "outColor[0] = dxmt9_cdef0", "ps_3_0 TEXKILL does not terminate subsequent translation");
 }
 
 void testPs20ColorInputUsesLegacyInputMapping() {
@@ -2067,11 +2067,11 @@ void testPs20ColorInputUsesLegacyInputMapping() {
 
 void testVs30OutputSemanticMappingBySemanticIndex() {
   const auto source = translateVertex(makeVs30OutputSemanticBytecode());
-  checkContains(source, "outPosition = cFloat[0]", "vs_3_0 position semantic maps to Metal position output");
-  checkContains(source, "outTexcoord[2] = cFloat[1]",
+  checkContains(source, "outPosition = vsConsts.vsFloatConst[0]", "vs_3_0 position semantic maps to Metal position output");
+  checkContains(source, "outTexcoord[2] = vsConsts.vsFloatConst[1]",
                 "vs_3_0 texcoord semantic maps by semantic index rather than o-register index");
-  checkContains(source, "outSecondaryColor = cFloat[2]", "vs_3_0 color1 semantic maps to secondary color output");
-  checkNotContains(source, "outTexcoord[1] = cFloat[1]",
+  checkContains(source, "outSecondaryColor = vsConsts.vsFloatConst[2]", "vs_3_0 color1 semantic maps to secondary color output");
+  checkNotContains(source, "outTexcoord[1] = vsConsts.vsFloatConst[1]",
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
 }
 
@@ -2119,7 +2119,7 @@ void testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange() {
         translateVertexWithVSOutLayout(makeVs30OutputSemanticBytecode(), minimalLayout);
     checkContains(texcoordTwoSource, "float4 outTexcoord[3];",
                   "vertex output scratch trim sizes through the highest mapped texcoord semantic");
-    checkContains(texcoordTwoSource, "outTexcoord[2] = cFloat[1]",
+    checkContains(texcoordTwoSource, "outTexcoord[2] = vsConsts.vsFloatConst[1]",
                   "trimmed vertex output scratch still references the highest mapped texcoord");
   }
 }
@@ -2497,41 +2497,41 @@ void testDefaultNoPixelVFlipAndNoVertexYFlip() {
 
 void testPs30WriteMaskSwizzleAndSourceModifiers() {
   const auto source = translatePixel(makePs30WriteMaskSwizzleModifierBytecode());
-  checkContains(source, "r[0] = float4(cFloat[0].w, cFloat[0].z, cFloat[0].y, cFloat[0].x);",
+  checkContains(source, "r[0] = float4(psConsts.psFloatConst[0].w, psConsts.psFloatConst[0].z, psConsts.psFloatConst[0].y, psConsts.psFloatConst[0].x);",
                 "ps_3_0 source swizzle is preserved in MOV transform");
   checkContains(source, "r[1] = dxmt9_merge(r[1],", "ps_3_0 partial write mask uses masked merge");
   checkContains(source, "-(float4(r[0].y, r[0].x, r[0].w, r[0].z))",
                 "ps_3_0 negate source modifier wraps swizzled temp source");
-  checkContains(source, "abs(cFloat[1])", "ps_3_0 abs source modifier wraps constant source");
+  checkContains(source, "abs(psConsts.psFloatConst[1])", "ps_3_0 abs source modifier wraps constant source");
   checkContains(source, ", 5u);", "ps_3_0 xz write mask is emitted as deterministic mask token");
   checkContains(source, "outColor[0] = r[1];", "ps_3_0 transformed masked result reaches color output");
 }
 
 void testPs30MissingSourceModifierCoverage() {
   const auto source = translatePixel(makePs30SourceModifierCoverageBytecode());
-  checkContains(source, "r[0] = -(cFloat[0] * float4(2.0f) - float4(1.0f));",
+  checkContains(source, "r[0] = -(psConsts.psFloatConst[0] * float4(2.0f) - float4(1.0f));",
                 "ps_3_0 signneg source modifier lowers to negated signed x2 bias");
-  checkContains(source, "r[1] = (float4(1.0f) - cFloat[1]);",
+  checkContains(source, "r[1] = (float4(1.0f) - psConsts.psFloatConst[1]);",
                 "ps_3_0 complement source modifier lowers to 1-src");
-  checkContains(source, "r[2] = (cFloat[2] * float4(2.0f));",
+  checkContains(source, "r[2] = (psConsts.psFloatConst[2] * float4(2.0f));",
                 "ps_3_0 x2 source modifier lowers to multiply by two");
-  checkContains(source, "r[3] = -(cFloat[3] * float4(2.0f));",
+  checkContains(source, "r[3] = -(psConsts.psFloatConst[3] * float4(2.0f));",
                 "ps_3_0 x2neg source modifier lowers to negated multiply by two");
-  checkContains(source, "r[4] = ((cFloat[4]) / float4((cFloat[4]).z));",
+  checkContains(source, "r[4] = ((psConsts.psFloatConst[4]) / float4((psConsts.psFloatConst[4]).z));",
                 "ps_3_0 dz source modifier lowers to z-projected vector");
-  checkContains(source, "r[5] = ((cFloat[5]) / float4((cFloat[5]).w));",
+  checkContains(source, "r[5] = ((psConsts.psFloatConst[5]) / float4((psConsts.psFloatConst[5]).w));",
                 "ps_3_0 dw source modifier lowers to w-projected vector");
   checkContains(source,
                 "r[6] = select(float4(1.0f), float4(0.0f), "
-                "((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))) != float4(0.0f));",
+                "((psConsts.psBoolConst[0] != 0u ? float4(1.0f) : float4(0.0f))) != float4(0.0f));",
                 "ps_3_0 not source modifier lowers boolean-like source to inverted 0/1 float mask");
-  checkContains(source, "r[8] = (cFloat[8] - float4(0.5f));",
+  checkContains(source, "r[8] = (psConsts.psFloatConst[8] - float4(0.5f));",
                 "ps_3_0 bias source modifier lowers to src-0.5");
-  checkContains(source, "r[9] = -((cFloat[9]) - float4(0.5f));",
+  checkContains(source, "r[9] = -((psConsts.psFloatConst[9]) - float4(0.5f));",
                 "ps_3_0 biasneg source modifier lowers to negated src-0.5");
-  checkContains(source, "r[10] = (cFloat[10] * float4(2.0f) - float4(1.0f));",
+  checkContains(source, "r[10] = (psConsts.psFloatConst[10] * float4(2.0f) - float4(1.0f));",
                 "ps_3_0 sign source modifier lowers to signed x2 bias");
-  checkContains(source, "r[11] = -abs(cFloat[11]);",
+  checkContains(source, "r[11] = -abs(psConsts.psFloatConst[11]);",
                 "ps_3_0 absneg source modifier lowers to negated absolute value");
   checkContains(source, "outColor[0] = r[7];",
                 "ps_3_0 source modifier coverage result reaches color output");
@@ -2539,22 +2539,22 @@ void testPs30MissingSourceModifierCoverage() {
 
 void testPs30ConstIntSourceLowering() {
   const auto source = translatePixel(makePs30ConstIntSourceBytecode());
-  checkContains(source, "cInt[0] = int4(1, 2, 3, 4);",
-                "ps_3_0 DEFI writes the integer constant register file");
-  checkContains(source, "r[0] = float4(cInt[0]);",
-                "ps_3_0 CONSTINT source register lowers through cInt[]");
+  checkContains(source, "const int4 dxmt9_cdefi0 = int4(1, 2, 3, 4);",
+                "ps_3_0 DEFI hoists to an immutable int4 local");
+  checkContains(source, "r[0] = float4(dxmt9_cdefi0);",
+                "ps_3_0 CONSTINT source register lowers through the DEFI local");
   checkContains(source, "outColor[0] = r[0];",
                 "ps_3_0 CONSTINT source result reaches color output");
 }
 
 void testPs30LoopRegisterConstIntLowering() {
   const auto source = translatePixel(makePs30LoopRegisterConstIntBytecode());
-  checkContains(source, "cInt[0] = int4(2, 0, 0, 0);",
+  checkContains(source, "const int4 dxmt9_cdefi0 = int4(2, 0, 0, 0);",
                 "ps_3_0 DEFI initializes the loop count constant");
   checkContains(source,
-                "for (int dxmt9_loop_1 = 0, dxmt9_loopCount_1 = max(0, int(round(float4(cInt[0]).x)));",
+                "for (int dxmt9_loop_1 = 0, dxmt9_loopCount_1 = max(0, int(round(float4(dxmt9_cdefi0).x)));",
                 "ps_3_0 LOOP aL, i# uses the CONSTINT operand as the loop count");
-  checkContains(source, "r[0] = cFloat[1];",
+  checkContains(source, "r[0] = psConsts.psFloatConst[1];",
                 "ps_3_0 LOOP body remains translated after the aL operand");
 }
 
@@ -2570,17 +2570,17 @@ void testD3DBCDestModifierPartialPrecisionLowering() {
              "D3DBC operand decode preserves combined destination modifier bits");
 
   const auto pixelSource = translatePixel(makePs30DestModifierCoverageBytecode());
-  checkContains(pixelSource, "r[0] = float4(half4(cFloat[0]));",
+  checkContains(pixelSource, "r[0] = float4(half4(psConsts.psFloatConst[0]));",
                 "ps_3_0 _pp destination lowers through half precision");
   checkContains(pixelSource,
-                "r[1] = clamp(float4(half4((cFloat[1] + cFloat[2]))), float4(0.0f), float4(1.0f));",
+                "r[1] = clamp(float4(half4((psConsts.psFloatConst[1] + psConsts.psFloatConst[2]))), float4(0.0f), float4(1.0f));",
                 "ps_3_0 combined _sat/_pp destination preserves both modifier bits");
 
   const auto vertexSource = translateVertex(makeVs20DestModifierCoverageBytecode());
-  checkContains(vertexSource, "r[0] = float4(half4(cFloat[0]));",
+  checkContains(vertexSource, "r[0] = float4(half4(vsConsts.vsFloatConst[0]));",
                 "vs_2_0 _pp destination lowers through half precision");
   checkContains(vertexSource,
-                "r[1] = clamp(float4(half4((cFloat[1] + cFloat[2]))), float4(0.0f), float4(1.0f));",
+                "r[1] = clamp(float4(half4((vsConsts.vsFloatConst[1] + vsConsts.vsFloatConst[2]))), float4(0.0f), float4(1.0f));",
                 "vs_2_0 combined _sat/_pp destination preserves both modifier bits");
 }
 
@@ -2598,20 +2598,20 @@ void testPs30CentroidInputModifierLowersToMslInterpolation() {
 
 void testPs30IfElseFlowControlTranslation() {
   const auto source = translatePixel(makePs30IfElseBytecode());
-  checkContains(source, "if ((cFloat[0]).x != 0.0f) {", "ps_3_0 IF condition lowers to scalar branch");
-  checkContains(source, "r[0] = cFloat[1];", "ps_3_0 IF body is translated");
+  checkContains(source, "if ((psConsts.psFloatConst[0]).x != 0.0f) {", "ps_3_0 IF condition lowers to scalar branch");
+  checkContains(source, "r[0] = psConsts.psFloatConst[1];", "ps_3_0 IF body is translated");
   checkContains(source, "} else {", "ps_3_0 ELSE lowers to structured branch");
-  checkContains(source, "r[0] = cFloat[2];", "ps_3_0 ELSE body is translated");
+  checkContains(source, "r[0] = psConsts.psFloatConst[2];", "ps_3_0 ELSE body is translated");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 flow-control result reaches color output");
 }
 
 void testPs30LoopFlowControlTranslation() {
   const auto source = translatePixel(makePs30LoopBytecode());
   checkContains(source,
-                "for (int dxmt9_loop_0 = 0, dxmt9_loopCount_0 = max(0, int(round(cFloat[0].x))); "
+                "for (int dxmt9_loop_0 = 0, dxmt9_loopCount_0 = max(0, int(round(psConsts.psFloatConst[0].x))); "
                 "dxmt9_loop_0 < dxmt9_loopCount_0; ++dxmt9_loop_0) {",
                 "ps_3_0 LOOP lowers to deterministic counted for-loop");
-  checkContains(source, "r[0] = cFloat[1];", "ps_3_0 LOOP body is translated");
+  checkContains(source, "r[0] = psConsts.psFloatConst[1];", "ps_3_0 LOOP body is translated");
   checkContains(source, "// endloop", "ps_3_0 ENDLOOP opcode is preserved in generated source comments");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 LOOP result reaches color output");
 }
@@ -2619,14 +2619,14 @@ void testPs30LoopFlowControlTranslation() {
 void testPs30NestedLoopFlowControlTranslation() {
   const auto source = translatePixel(makePs30NestedLoopBytecode());
   checkContains(source,
-                "for (int dxmt9_loop_0 = 0, dxmt9_loopCount_0 = max(0, int(round(cFloat[0].x))); "
+                "for (int dxmt9_loop_0 = 0, dxmt9_loopCount_0 = max(0, int(round(psConsts.psFloatConst[0].x))); "
                 "dxmt9_loop_0 < dxmt9_loopCount_0; ++dxmt9_loop_0) {",
                 "outer ps_3_0 LOOP lowers to a counted for-loop");
   checkContains(source,
-                "for (int dxmt9_rep_1 = 0, dxmt9_repCount_1 = max(0, int(round(cFloat[1].x))); "
+                "for (int dxmt9_rep_1 = 0, dxmt9_repCount_1 = max(0, int(round(psConsts.psFloatConst[1].x))); "
                 "dxmt9_rep_1 < dxmt9_repCount_1; ++dxmt9_rep_1) {",
                 "inner ps_3_0 REP lowers to a distinct counted for-loop");
-  checkContains(source, "r[0] = (r[0] + cFloat[2]);",
+  checkContains(source, "r[0] = (r[0] + psConsts.psFloatConst[2]);",
                 "nested loop body remains inside the generated source");
   checkContains(source, "outColor[0] = r[0];",
                 "nested loop result reaches color output after both loops close");
@@ -2635,10 +2635,10 @@ void testPs30NestedLoopFlowControlTranslation() {
 void testPs30RepFlowControlTranslation() {
   const auto source = translatePixel(makePs30RepBytecode());
   checkContains(source,
-                "for (int dxmt9_rep_0 = 0, dxmt9_repCount_0 = max(0, int(round(cFloat[2].x))); "
+                "for (int dxmt9_rep_0 = 0, dxmt9_repCount_0 = max(0, int(round(psConsts.psFloatConst[2].x))); "
                 "dxmt9_rep_0 < dxmt9_repCount_0; ++dxmt9_rep_0) {",
                 "ps_3_0 REP lowers to deterministic counted for-loop");
-  checkContains(source, "r[1] = cFloat[3];", "ps_3_0 REP body is translated");
+  checkContains(source, "r[1] = psConsts.psFloatConst[3];", "ps_3_0 REP body is translated");
   checkContains(source, "// endrep", "ps_3_0 ENDREP opcode is preserved in generated source comments");
   checkContains(source, "outColor[0] = r[1];", "ps_3_0 REP result reaches color output");
 }
@@ -2646,9 +2646,9 @@ void testPs30RepFlowControlTranslation() {
 void testPs30BreakcFlowControlTranslation() {
   const auto source = translatePixel(makePs30BreakcBytecode());
   checkContains(source,
-                "if ((cFloat[0]).x > (cFloat[1]).x) { break; }",
+                "if ((psConsts.psFloatConst[0]).x > (psConsts.psFloatConst[1]).x) { break; }",
                 "ps_3_0 BREAKC lowers comparison controls into a conditional break");
-  checkContains(source, "r[0] = cFloat[3];", "ps_3_0 BREAKC body continues after the guard");
+  checkContains(source, "r[0] = psConsts.psFloatConst[3];", "ps_3_0 BREAKC body continues after the guard");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 BREAKC result reaches color output");
 }
 
@@ -2656,16 +2656,16 @@ void testPs30CallLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallLabelRetBytecode());
   checkContains(source, "bool dxmt9_call_ret_0 = false;",
                 "ps_3_0 CALL creates a call-frame return guard");
-  checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALL/LABEL body is translated");
+  checkContains(source, "r[0] = psConsts.psFloatConst[4];", "ps_3_0 CALL/LABEL body is translated");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALL/LABEL/RET result reaches color output");
 }
 
 void testPs30CallnzLabelRetFlowControlTranslation() {
   const auto source = translatePixel(makePs30CallnzLabelRetBytecode());
   checkContains(source,
-                "if (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f) {",
+                "if (((psConsts.psBoolConst[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f) {",
                 "ps_3_0 CALLNZ guards the inlined call body with a bool-source nonzero test");
-  checkContains(source, "r[0] = cFloat[4];", "ps_3_0 CALLNZ/LABEL body is translated");
+  checkContains(source, "r[0] = psConsts.psFloatConst[4];", "ps_3_0 CALLNZ/LABEL body is translated");
   checkContains(source, "outColor[0] = r[0];", "ps_3_0 CALLNZ/LABEL/RET result reaches color output");
 }
 
@@ -2678,59 +2678,59 @@ void testPs30CallLabelNestedRetKeepsSubroutineBodyGuarded() {
                 "RET inside an inlined label body sets the return flag");
   checkContains(source, "if ((!dxmt9_call_ret_0)) {",
                 "instructions after a nested RET stay guarded by the call return flag");
-  checkContains(source, "r[0] = cFloat[2];",
+  checkContains(source, "r[0] = psConsts.psFloatConst[2];",
                 "label body after nested control flow remains available when RET did not execute");
 }
 
 void testPs30PredicatedFlowControlTranslation() {
   const auto ifSource = translatePixel(makePs30PredicatedIfBytecode());
-  checkContains(ifSource, "if (((p[0])) && ((cFloat[0]).x != 0.0f)) {",
+  checkContains(ifSource, "if (((p[0])) && ((psConsts.psFloatConst[0]).x != 0.0f)) {",
                 "predicated IF combines p0 with the branch condition");
   checkContains(ifSource, "} else if ((p[0])) {",
                 "predicated IF keeps ELSE under the same p0 guard");
 
   const auto breakSource = translatePixel(makePs30PredicatedBreakcBytecode());
-  checkContains(breakSource, "if (((p[0])) && ((cFloat[0]).x > (cFloat[1]).x)) { break; }",
+  checkContains(breakSource, "if (((p[0])) && ((psConsts.psFloatConst[0]).x > (psConsts.psFloatConst[1]).x)) { break; }",
                 "predicated BREAKC combines p0 with the comparison condition");
 
   const auto callnzSource = translatePixel(makePs30PredicatedCallnzLabelRetBytecode());
   checkContains(callnzSource,
-                "if (((p[0])) && (((cBool[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f)) {",
+                "if (((p[0])) && (((psConsts.psBoolConst[0] != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f)) {",
                 "predicated CALLNZ combines p0 with the CALLNZ source condition");
 }
 
 void testPs30ArithmeticOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30ArithmeticOpcodeMatrixBytecode());
-  checkContains(source, "r[0] = (cFloat[0] * cFloat[1] + cFloat[2]);",
+  checkContains(source, "r[0] = (psConsts.psFloatConst[0] * psConsts.psFloatConst[1] + psConsts.psFloatConst[2]);",
                 "MAD lowers to multiply-add expression");
-  checkContains(source, "float4(dot((r[0]).xyz, (cFloat[3]).xyz))", "DP3 lowers to xyz dot splat");
-  checkContains(source, "float4(dot(r[0], cFloat[4]))", "DP4 lowers to full-vector dot splat");
-  checkContains(source, "select(cFloat[7], cFloat[6], cFloat[5] >= float4(0.0f))",
+  checkContains(source, "float4(dot((r[0]).xyz, (psConsts.psFloatConst[3]).xyz))", "DP3 lowers to xyz dot splat");
+  checkContains(source, "float4(dot(r[0], psConsts.psFloatConst[4]))", "DP4 lowers to full-vector dot splat");
+  checkContains(source, "select(psConsts.psFloatConst[7], psConsts.psFloatConst[6], psConsts.psFloatConst[5] >= float4(0.0f))",
                 "CMP lowers to sign-test select with source order preserved");
-  checkContains(source, "select(float4(0.0f), float4(1.0f), (cFloat[8]) < (cFloat[9]))",
+  checkContains(source, "select(float4(0.0f), float4(1.0f), (psConsts.psFloatConst[8]) < (psConsts.psFloatConst[9]))",
                 "SLT lowers to boolean select mask");
-  checkContains(source, "select(float4(0.0f), float4(1.0f), (cFloat[10]) >= (cFloat[11]))",
+  checkContains(source, "select(float4(0.0f), float4(1.0f), (psConsts.psFloatConst[10]) >= (psConsts.psFloatConst[11]))",
                 "SGE lowers to boolean select mask");
-  checkContains(source, "pow(cFloat[12], cFloat[13])", "POW lowers to pow source expression");
+  checkContains(source, "pow(psConsts.psFloatConst[12], psConsts.psFloatConst[13])", "POW lowers to pow source expression");
   checkContains(source, "outColor[0] = r[6];", "arithmetic opcode matrix result reaches color output");
 }
 
 void testPs30TranscendentalOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30TranscendentalOpcodeBytecode());
-  checkContains(source, "float4(sin(cFloat[0]), cos(cFloat[0]), 0.0f, 0.0f)",
+  checkContains(source, "float4(sin(psConsts.psFloatConst[0]), cos(psConsts.psFloatConst[0]), 0.0f, 0.0f)",
                 "SINCOS lowers to sin/cos vector construction");
-  checkContains(source, "float4(log2(abs(cFloat[1])))",
+  checkContains(source, "float4(log2(abs(psConsts.psFloatConst[1])))",
                 "LOG lowers to D3D9 abs log2 expression");
-  checkContains(source, "float4(exp2(cFloat[2]))", "EXP lowers to exp2 expression");
+  checkContains(source, "float4(exp2(psConsts.psFloatConst[2]))", "EXP lowers to exp2 expression");
   checkContains(source, "outColor[0] = r[2];", "transcendental opcode result reaches color output");
 }
 
 void testPs30MatrixOpcodeLoweringContracts() {
   const auto source = translatePixel(makePs30MatrixOpcodeBytecode());
-  checkContains(source, "dot(cFloat[0], cFloat[4])", "M4x4 starts at the declared matrix constant base");
-  checkContains(source, "dot(cFloat[0], cFloat[7])", "M4x4 consumes four matrix rows from the base constant");
-  checkContains(source, "dot((cFloat[1]).xyz, cFloat[8].xyz)", "M3x3 starts at the declared matrix constant base");
-  checkContains(source, "dot((cFloat[1]).xyz, cFloat[10].xyz)", "M3x3 consumes three xyz matrix rows");
+  checkContains(source, "dot(psConsts.psFloatConst[0], psConsts.psFloatConst[4])", "M4x4 starts at the declared matrix constant base");
+  checkContains(source, "dot(psConsts.psFloatConst[0], psConsts.psFloatConst[7])", "M4x4 consumes four matrix rows from the base constant");
+  checkContains(source, "dot((psConsts.psFloatConst[1]).xyz, psConsts.psFloatConst[8].xyz)", "M3x3 starts at the declared matrix constant base");
+  checkContains(source, "dot((psConsts.psFloatConst[1]).xyz, psConsts.psFloatConst[10].xyz)", "M3x3 consumes three xyz matrix rows");
   checkContains(source, "outColor[0] = r[1];", "matrix opcode result reaches color output");
 }
 
@@ -2739,9 +2739,9 @@ void testPs30TextureLodOpcodeLoweringContracts() {
   checkContains(source, "texture2d<float> tex3 [[texture(3)]]", "TEXLDD declares the referenced sampler slot");
   checkContains(source, "sampler samp4 [[sampler(4)]]", "TEXLDL declares the referenced sampler state slot");
   checkContains(source,
-                "tex3.sample(samp3, (cFloat[0]).xy, gradient2d((cFloat[2]).xy, (cFloat[3]).xy))",
+                "tex3.sample(samp3, (psConsts.psFloatConst[0]).xy, gradient2d((psConsts.psFloatConst[2]).xy, (psConsts.psFloatConst[3]).xy))",
                 "TEXLDD lowers to an explicit-gradient sample call");
-  checkContains(source, "tex4.sample(samp4, (cFloat[1]).xy, level(cFloat[1].w))",
+  checkContains(source, "tex4.sample(samp4, (psConsts.psFloatConst[1]).xy, level(psConsts.psFloatConst[1].w))",
                 "TEXLDL lowers to explicit level sample call");
   checkContains(source, "outColor[0] = r[1];", "texture LOD opcode result reaches color output");
 }
@@ -2751,14 +2751,14 @@ void testPs30TextureSamplerDimensionalityContracts() {
   checkContains(cubeSource, "texturecube<float> tex3 [[texture(3)]]",
                 "cube DCL sampler declares texturecube in MSL");
   checkContains(cubeSource,
-                "tex3.sample(samp3, (cFloat[0]).xyz, gradientcube((cFloat[2]).xyz, (cFloat[3]).xyz))",
+                "tex3.sample(samp3, (psConsts.psFloatConst[0]).xyz, gradientcube((psConsts.psFloatConst[2]).xyz, (psConsts.psFloatConst[3]).xyz))",
                 "cube TEXLDD lowers to xyz explicit-gradient sample");
 
   const auto volumeSource = translatePixel(makePs30TexlddSamplerTypeBytecode(4u));
   checkContains(volumeSource, "texture3d<float> tex3 [[texture(3)]]",
                 "volume DCL sampler declares texture3d in MSL");
   checkContains(volumeSource,
-                "tex3.sample(samp3, (cFloat[0]).xyz, gradient3d((cFloat[2]).xyz, (cFloat[3]).xyz))",
+                "tex3.sample(samp3, (psConsts.psFloatConst[0]).xyz, gradient3d((psConsts.psFloatConst[2]).xyz, (psConsts.psFloatConst[3]).xyz))",
                 "volume TEXLDD lowers to xyz explicit-gradient sample");
 }
 
@@ -2781,11 +2781,11 @@ void testVs11FixedFunctionOutputLoweringContract() {
   const auto source = translateVertex(makeVs11FixedFunctionOutputBytecode());
   checkContains(source, "outPosition = vin0;",
                 "vs_1_1 oPos writes lower to the Metal position output");
-  checkContains(source, "outColor = cFloat[0];",
+  checkContains(source, "outColor = vsConsts.vsFloatConst[0];",
                 "vs_1_1 oD0 writes lower to the primary color output");
-  checkContains(source, "outSecondaryColor = cFloat[1];",
+  checkContains(source, "outSecondaryColor = vsConsts.vsFloatConst[1];",
                 "vs_1_1 oD1 writes lower to the secondary color output");
-  checkContains(source, "outTexcoord[3] = cFloat[2];",
+  checkContains(source, "outTexcoord[3] = vsConsts.vsFloatConst[2];",
                 "vs_1_1 oT3 writes lower to the matching texcoord output");
   checkContains(source, "out.position = outPosition;",
                 "vs_1_1 translated source returns the lowered position");
@@ -2859,9 +2859,9 @@ void testCallnzFixedOperandCountDecodeContract() {
 
 void testD3DBCFixedOperandCountDecodeContract() {
   const auto source = translatePixel(makePs30FixedOperandCountDecodeBytecode());
-  checkContains(source, "r[0] = float4(dot(cFloat[0], cFloat[1]));",
+  checkContains(source, "r[0] = float4(dot(psConsts.psFloatConst[0], psConsts.psFloatConst[1]));",
                 "known DP4 opcode decodes with its fixed operand count");
-  checkContains(source, "r[1] = (r[0] * cFloat[2] + cFloat[3]);",
+  checkContains(source, "r[1] = (r[0] * psConsts.psFloatConst[2] + psConsts.psFloatConst[3]);",
                 "known MAD opcode decodes with its fixed operand count");
   checkContains(source, "outColor[0] = r[1];", "fixed operand-count decode result reaches color output");
 }
@@ -2869,7 +2869,7 @@ void testD3DBCFixedOperandCountDecodeContract() {
 void testPs30RelativeAddressingLowersTempDestinationIndex() {
   const auto source = translatePixel(makePs30RelativeAddressingBytecode());
   checkContains(source,
-                "r[clamp(a0.x + 0, 0, 31)] = cFloat[0];",
+                "r[clamp(a0.x + 0, 0, 31)] = psConsts.psFloatConst[0];",
                 "ps_3_0 temp destination relative addressing lowers to a clamped r[] write");
 }
 
@@ -2921,7 +2921,7 @@ void testVs30MissingInputDefaultsToZero() {
 void testVs30RelativeAddressingLowersTexcoordDestinationIndex() {
   const auto source = translateVertex(makeVs30TexcoordRelativeDestinationBytecode());
   checkContains(source,
-                "outTexcoord[clamp(a0.x + 1, 0, 7)] = cFloat[1];",
+                "outTexcoord[clamp(a0.x + 1, 0, 7)] = vsConsts.vsFloatConst[1];",
                 "vs_3_0 texcoord output relative destination lowers to a clamped output write");
 }
 
@@ -3074,12 +3074,246 @@ void testVs30VertexTextureFetchLowersDeterministically() {
 
 void testPs14ConstantSourcesClampBeforeArithmetic() {
   const auto source = translatePixel(makePs14ConstantClampBytecode());
-  checkContains(source, "clamp(cFloat[1], float4(-1.0f), float4(1.0f))",
+  checkContains(source, "clamp(psConsts.psFloatConst[1], float4(-1.0f), float4(1.0f))",
                 "ps_1_4 runtime float constants are clamped before MOV");
-  checkContains(source, "clamp(cFloat[2], float4(-1.0f), float4(1.0f))",
+  checkContains(source, "clamp(dxmt9_cdef2, float4(-1.0f), float4(1.0f))",
                 "ps_1_4 DEF constants are clamped before ADD");
   checkContains(source, "color = r[0];",
                 "ps_1_4 final color comes from r0 instead of the SM2+ outColor path");
+}
+
+// H226 — translated shaders must read the constant register file in place
+// instead of copying the whole bound category into a per-invocation local
+// array. The historical `float4 cFloat[N]; for (...) cFloat[i] = ...;`
+// prologue cannot be register-allocated for large N and spills to stack
+// (device memory) on Apple GPUs: SFIV fullscreen passes paid ~30ms/draw of
+// stack write/read traffic and GT1's hidden VS-buffer-write bucket tracked
+// the same shape.
+
+std::vector<u32> makePs30HighConstReadBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      // mov oC0, c136 — a single high-register read must not materialize a
+      // 137-entry local register file.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 136),
+      kD3DSIO_END,
+  };
+}
+
+void testPs30ConstReadsBindConstantBufferInPlace() {
+  const auto source = translatePixel(makePs30HighConstReadBytecode());
+  checkContains(source, "outColor[0] = psConsts.psFloatConst[136];",
+                "ps_3_0 static constant reads reference the bound constant buffer in place");
+  checkNotContains(source, "float4 cFloat[",
+                   "ps_3_0 without relative addressing must not materialize a local register file");
+  checkNotContains(source, "cFloat[i] = psConsts.psFloatConst[i]",
+                   "ps_3_0 without relative addressing must not copy the register file per invocation");
+  checkNotContains(source, "cFloat",
+                   "ps_3_0 without relative addressing must not reference a cFloat local at all");
+}
+
+std::vector<u32> makeVs30HighConstReadBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 3, 0),
+      // dcl_position o0
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(0u, 0u),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      // mov o0, c200 — SFIV/GT1 VS shaders copied the full 256-entry file
+      // (4KB) for reads like this.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEXCRDOUT, 0),
+      makeSrcToken(kD3DSPR_CONST, 200),
+      kD3DSIO_END,
+  };
+}
+
+void testVs30ConstReadsBindConstantBufferInPlace() {
+  const auto source = translateVertex(makeVs30HighConstReadBytecode());
+  checkContains(source, "outPosition = vsConsts.vsFloatConst[200];",
+                "vs_3_0 static constant reads reference the bound constant buffer in place");
+  checkNotContains(source, "float4 cFloat[",
+                   "vs_3_0 without relative addressing must not materialize a local register file");
+  checkNotContains(source, "cFloat[i] = vsConsts.vsFloatConst[i]",
+                   "vs_3_0 without relative addressing must not copy the register file per invocation");
+  checkNotContains(source, "cFloat",
+                   "vs_3_0 without relative addressing must not reference a cFloat local at all");
+}
+
+std::vector<u32> makePs30DefAndRuntimeConstBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      // def c0, 0.0, 0.0, 0.0, 1.0
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 0),
+      0x00000000u,
+      0x00000000u,
+      0x00000000u,
+      0x3F800000u,
+      // defi i0, 2, 0, 0, 0
+      makeInstructionToken(kD3DSIO_DEFI, 5),
+      makeDstToken(kD3DSPR_CONSTINT, 0),
+      2u,
+      0u,
+      0u,
+      0u,
+      // defb b0, true
+      makeInstructionToken(kD3DSIO_DEFB, 2),
+      makeDstToken(kD3DSPR_CONSTBOOL, 0),
+      1u,
+      // mov r0, c0 — DEF'd register must win at the use site.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      // add r0, r0, c5 — non-DEF'd register reads the bound buffer.
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 5),
+      // if b0
+      makeInstructionToken(kD3DSIO_IF, 1),
+      makeSrcToken(kD3DSPR_CONSTBOOL, 0),
+      // loop aL, i0
+      makeInstructionToken(kD3DSIO_LOOP, 2),
+      makeSrcToken(kD3DSPR_LOOP, 0),
+      makeSrcToken(kD3DSPR_CONSTINT, 0),
+      // add r0, r0, c1
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 1),
+      makeInstructionToken(kD3DSIO_ENDLOOP, 0),
+      makeInstructionToken(kD3DSIO_ENDIF, 0),
+      // mov oC0, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+void testPs30DefConstantsHoistToImmutableLocalsAndWinAtUseSites() {
+  const auto source = translatePixel(makePs30DefAndRuntimeConstBytecode());
+  checkContains(source, "const float4 dxmt9_cdef0 = float4(0.0f, 0.0f, 0.0f, 1.0f);",
+                "ps_3_0 DEF hoists to an immutable float4 local");
+  checkContains(source, "const int4 dxmt9_cdefi0 = int4(2, 0, 0, 0);",
+                "ps_3_0 DEFI hoists to an immutable int4 local");
+  checkContains(source, "const uint dxmt9_cdefb0 = 1u;",
+                "ps_3_0 DEFB hoists to an immutable uint local");
+  checkContains(source, "r[0] = dxmt9_cdef0;",
+                "ps_3_0 DEF'd register use site references the def local (defs win)");
+  checkContains(source, "r[0] = (r[0] + psConsts.psFloatConst[5]);",
+                "ps_3_0 non-DEF'd register use site reads the bound constant buffer in place");
+  checkContains(source, "r[0] = (r[0] + psConsts.psFloatConst[1]);",
+                "ps_3_0 loop-body constant read stays a direct buffer read");
+  checkContains(source, "if (((dxmt9_cdefb0 != 0u ? float4(1.0f) : float4(0.0f))).x != 0.0f) {",
+                "ps_3_0 IF b0 condition references the DEFB local");
+  checkContains(source, "max(0, int(round(float4(dxmt9_cdefi0).x)))",
+                "ps_3_0 LOOP count references the DEFI local");
+  checkNotContains(source, "cFloat",
+                   "ps_3_0 DEF-only float file must not materialize a cFloat local");
+  checkNotContains(source, "cInt",
+                   "ps_3_0 DEF-only int file must not materialize a cInt local");
+  checkNotContains(source, "cBool",
+                   "ps_3_0 DEF-only bool file must not materialize a cBool local");
+}
+
+std::vector<u32> makeVs20DefAndRuntimeConstBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      // def c0, 1.0, 2.0, 3.0, 4.0
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 0),
+      0x3F800000u,
+      0x40000000u,
+      0x40400000u,
+      0x40800000u,
+      // mov r0, c0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 0),
+      // add r0, r0, c5
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 5),
+      // mov oPos, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+void testVs20DefConstantsHoistToImmutableLocalsAndWinAtUseSites() {
+  const auto source = translateVertex(makeVs20DefAndRuntimeConstBytecode());
+  checkContains(source, "const float4 dxmt9_cdef0 = float4(1.0f, 2.0f, 3.0f, 4.0f);",
+                "vs_2_0 DEF hoists to an immutable float4 local");
+  checkContains(source, "r[0] = dxmt9_cdef0;",
+                "vs_2_0 DEF'd register use site references the def local (defs win)");
+  checkContains(source, "r[0] = (r[0] + vsConsts.vsFloatConst[5]);",
+                "vs_2_0 non-DEF'd register use site reads the bound constant buffer in place");
+  checkNotContains(source, "cFloat",
+                   "vs_2_0 DEF-only float file must not materialize a cFloat local");
+}
+
+std::vector<u32> makeVs20RelativeConstReadWithDefBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      // def c6, 1.0, 0.0, 0.0, 0.0
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 6),
+      0x3F800000u,
+      0u,
+      0u,
+      0u,
+      // dcl_blendindices v3
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(2u, 0u),
+      makeDstToken(kD3DSPR_INPUT, 3),
+      // mova a0.x, v3
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x1u),
+      makeSrcToken(kD3DSPR_INPUT, 3),
+      // mov r0, c[a0+5]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 5),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      // add r0, r0, c6 — static read of the DEF'd register in the same
+      // shader that addresses the float file relatively.
+      makeInstructionToken(kD3DSIO_ADD, 3),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      makeSrcToken(kD3DSPR_CONST, 6),
+      // mov oPos, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+void testVs20RelativeConstReadWithDefKeepsRegisterFileArray() {
+  const auto source = translateVertex(makeVs20RelativeConstReadWithDefBytecode());
+  checkContains(source, "float4 cFloat[256];",
+                "vs_2_0 relative addressing plus DEF keeps the materialized register file");
+  checkContains(source,
+                "for (uint i = 0; i < 256; ++i) { cFloat[i] = vsConsts.vsFloatConst[i]; }",
+                "vs_2_0 relative addressing plus DEF keeps the register-file copy loop");
+  checkContains(source, "cFloat[6] = float4(1.0f, 0.0f, 0.0f, 0.0f);",
+                "vs_2_0 DEF overwrites the copied array entry in the relative-addressing path");
+  checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)]",
+                "vs_2_0 relative constant read stays a clamped array access");
+  checkContains(source, "r[0] = (r[0] + cFloat[6]);",
+                "vs_2_0 static read of the DEF'd register resolves through the array (defs win)");
 }
 
 }  // namespace
@@ -3176,6 +3410,11 @@ int main() {
     testVsMovaHonorsDestinationWriteMask();
     testVs30VertexTextureFetchLowersDeterministically();
     testPs14ConstantSourcesClampBeforeArithmetic();
+    testPs30ConstReadsBindConstantBufferInPlace();
+    testVs30ConstReadsBindConstantBufferInPlace();
+    testPs30DefConstantsHoistToImmutableLocalsAndWinAtUseSites();
+    testVs20DefConstantsHoistToImmutableLocalsAndWinAtUseSites();
+    testVs20RelativeConstReadWithDefKeepsRegisterFileArray();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

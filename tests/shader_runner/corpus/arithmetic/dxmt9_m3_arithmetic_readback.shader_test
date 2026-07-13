@@ -25,7 +25,7 @@ ffff0200
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 draw quad
-expect-source pixel contains "fract(cFloat[2])"
-expect-source pixel contains "mix(cFloat[2], cFloat[1], cFloat[0])"
-expect-source pixel contains "dot((cFloat[3]).xy, (cFloat[1]).xy) + (cFloat[0]).x"
+expect-source pixel contains "fract(dxmt9_cdef2)"
+expect-source pixel contains "mix(dxmt9_cdef2, dxmt9_cdef1, dxmt9_cdef0)"
+expect-source pixel contains "dot((dxmt9_cdef3).xy, (dxmt9_cdef1).xy) + (dxmt9_cdef0).x"
 probe (32, 32) rgba(0.375, 0.5, 0.75, 1.0) 1

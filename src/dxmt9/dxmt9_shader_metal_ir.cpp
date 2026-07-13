@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -464,16 +465,19 @@ void promoteIndexedConstantDestinations(ConstantUsage& usage, const SpirvModule&
     switch (dst.kind) {
       case D3DRegisterKind::ConstFloat:
         usage.mutableConstants = true;
+        usage.floatRuntimeWrite = true;
         usage.hasFloat = true;
         usage.floatCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
         break;
       case D3DRegisterKind::ConstInt:
         usage.mutableConstants = true;
+        usage.intRuntimeWrite = true;
         usage.hasInt = true;
         usage.intCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
         break;
       case D3DRegisterKind::ConstBool:
         usage.mutableConstants = true;
+        usage.boolRuntimeWrite = true;
         usage.hasBool = true;
         usage.boolCount = constantRegisterMaxIndex(dst.kind, vertexStage) + 1u;
         break;
@@ -481,6 +485,135 @@ void promoteIndexedConstantDestinations(ConstantUsage& usage, const SpirvModule&
         break;
     }
   }
+}
+
+// H226 — constant register-file access strategy. The historical emission
+// copied the whole bound constant category into a mutable local array
+// (`float4 cFloat[N]; for (...) { cFloat[i] = psConsts.psFloatConst[i]; }`)
+// so DEF/DEFI/DEFB literals could overwrite individual entries. Apple's
+// MSL → AIR pipeline cannot register-allocate the large dynamically-copied
+// array and spills it to stack (device memory); the per-invocation copy
+// loop plus 2-4KB of stack write/read traffic owned SFIV's ~30ms fullscreen
+// scene passes and tracks GT1's hidden VS-buffer-write bucket. When a
+// category has no relative addressing and no runtime (non-DEF) constant
+// writes — every shader in the SFIV dump corpus — each use site reads the
+// bound buffer in place and DEF literals hoist into immutable locals, so
+// defs still win over runtime constants exactly like the array overwrite
+// did. Categories with relative reads or runtime writes keep the previous
+// alias/array emission unchanged.
+std::string floatDefLocalName(u32 index) { return "dxmt9_cdef" + std::to_string(index); }
+std::string intDefLocalName(u32 index) { return "dxmt9_cdefi" + std::to_string(index); }
+std::string boolDefLocalName(u32 index) { return "dxmt9_cdefb" + std::to_string(index); }
+
+struct ConstantAccess {
+  bool directFloat = false;
+  bool directInt = false;
+  bool directBool = false;
+  std::string floatBuffer;  // e.g. "psConsts.psFloatConst"
+  std::string intBuffer;
+  std::string boolBuffer;
+  // DEF'd register index → formatted literal (last DEF wins, matching the
+  // array-overwrite order of the legacy emission).
+  std::map<u32, std::string> floatDefs;
+  std::map<u32, std::string> intDefs;
+  std::map<u32, std::string> boolDefs;
+
+  // Static-index read expressions. Non-direct categories keep the local
+  // cFloat/cInt/cBool register file emitted by emitConstantBindings.
+  std::string floatName(u32 index) const {
+    if (directFloat) {
+      if (floatDefs.count(index) != 0) {
+        return floatDefLocalName(index);
+      }
+      return floatBuffer + "[" + std::to_string(index) + "]";
+    }
+    return "cFloat[" + std::to_string(index) + "]";
+  }
+  std::string intName(u32 index) const {
+    if (directInt) {
+      if (intDefs.count(index) != 0) {
+        return intDefLocalName(index);
+      }
+      return intBuffer + "[" + std::to_string(index) + "]";
+    }
+    return "cInt[" + std::to_string(index) + "]";
+  }
+  std::string boolName(u32 index) const {
+    if (directBool) {
+      if (boolDefs.count(index) != 0) {
+        return boolDefLocalName(index);
+      }
+      return boolBuffer + "[" + std::to_string(index) + "]";
+    }
+    return "cBool[" + std::to_string(index) + "]";
+  }
+
+  // Array-base names for relative-addressed reads. Direct categories have
+  // no relative reads by construction; the buffer expression keeps a
+  // defensive fallback valid MSL shape.
+  std::string floatPrefix() const { return directFloat ? floatBuffer : "cFloat"; }
+  std::string intPrefix() const { return directInt ? intBuffer : "cInt"; }
+  std::string boolPrefix() const { return directBool ? boolBuffer : "cBool"; }
+};
+
+ConstantAccess makeConstantAccess(const SpirvModule& module, bool vertexStage,
+                                  const ConstantUsage& usage) {
+  ConstantAccess access;
+  const char* container = vertexStage ? "vsConsts" : "psConsts";
+  access.floatBuffer = std::string(container) + (vertexStage ? ".vsFloatConst" : ".psFloatConst");
+  access.intBuffer = std::string(container) + (vertexStage ? ".vsIntConst" : ".psIntConst");
+  access.boolBuffer = std::string(container) + (vertexStage ? ".vsBoolConst" : ".psBoolConst");
+  access.directFloat = !usage.hasIndexedFloat && !usage.floatRuntimeWrite;
+  access.directInt = !usage.hasIndexedInt && !usage.intRuntimeWrite;
+  access.directBool = !usage.hasIndexedBool && !usage.boolRuntimeWrite;
+  for (const auto& instruction : module.instructions) {
+    if (instruction.operands.empty()) {
+      continue;
+    }
+    switch (instruction.opcode) {
+      case kD3DSIO_DEF: {
+        if (instruction.operands.size() < 5) {
+          break;
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (dst.kind == D3DRegisterKind::ConstFloat) {
+          access.floatDefs[dst.index] =
+              formatFloatVec4({std::bit_cast<f32>(instruction.operands[1]),
+                               std::bit_cast<f32>(instruction.operands[2]),
+                               std::bit_cast<f32>(instruction.operands[3]),
+                               std::bit_cast<f32>(instruction.operands[4])});
+        }
+        break;
+      }
+      case kD3DSIO_DEFI: {
+        if (instruction.operands.size() < 5) {
+          break;
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (dst.kind == D3DRegisterKind::ConstInt) {
+          access.intDefs[dst.index] =
+              formatIntVec4({static_cast<i32>(instruction.operands[1]),
+                             static_cast<i32>(instruction.operands[2]),
+                             static_cast<i32>(instruction.operands[3]),
+                             static_cast<i32>(instruction.operands[4])});
+        }
+        break;
+      }
+      case kD3DSIO_DEFB: {
+        if (instruction.operands.size() < 2) {
+          break;
+        }
+        const auto dst = decodeRegisterRef(instruction.operands[0], module.stage);
+        if (dst.kind == D3DRegisterKind::ConstBool) {
+          access.boolDefs[dst.index] = instruction.operands[1] != 0u ? "1u" : "0u";
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return access;
 }
 
 D3DRegisterRef decodeOperandRegister(const D3DDecodedInstruction& instruction, size_t index,
@@ -614,8 +747,7 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
                                   const std::string& outPosition, const std::string& outColor,
                                   const std::string& outSecondaryColor, const std::string& outTexcoord,
                                   const std::string& outFogFactor, const std::string& outPointSize,
-                                  const std::string& tempPrefix, const std::string& constPrefix,
-                                  const std::string& intPrefix, const std::string& boolPrefix,
+                                  const std::string& tempPrefix, const ConstantAccess& constants,
                                   const std::string& predicatePrefix,
                                   const VertexOutputSemantics* vertexOutputSemantics = nullptr,
                                   u32 maxTempIndex = 31u,
@@ -632,24 +764,24 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       if (reg.relAddrToken != 0u) {
         const std::string maxIdx = vertexStage ? std::to_string(::dxmt9::core::kMaxVertexConstants - 1u)
                                                : std::to_string(::dxmt9::core::kMaxPixelConstants - 1u);
-        return constPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+        return constants.floatPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
                + std::to_string(reg.index) + ", 0, " + maxIdx + ")]";
       }
-      return constPrefix + "[" + std::to_string(reg.index) + "]";
+      return constants.floatName(reg.index);
     case D3DRegisterKind::ConstInt:
       if (reg.relAddrToken != 0u) {
-        return "float4(" + intPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+        return "float4(" + constants.intPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
                + std::to_string(reg.index) + ", 0, "
                + std::to_string(::dxmt9::core::kMaxIntegerConstants - 1u) + ")])";
       }
-      return "float4(" + intPrefix + "[" + std::to_string(reg.index) + "])";
+      return "float4(" + constants.intName(reg.index) + ")";
     case D3DRegisterKind::ConstBool:
       if (reg.relAddrToken != 0u) {
-        return "(" + boolPrefix + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+        return "(" + constants.boolPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
                + std::to_string(reg.index) + ", 0, "
                + std::to_string(::dxmt9::core::kMaxBoolConstants - 1u) + ")] != 0u ? float4(1.0f) : float4(0.0f))";
       }
-      return "(" + boolPrefix + "[" + std::to_string(reg.index) + "] != 0u ? float4(1.0f) : float4(0.0f))";
+      return "(" + constants.boolName(reg.index) + " != 0u ? float4(1.0f) : float4(0.0f))";
     case D3DRegisterKind::Input:
       if (vertexStage) {
         if (vertexInputArray) {
@@ -741,9 +873,21 @@ std::string decodeOperandToken(const u32 token, D3DShaderStage stage, bool desti
   return name;
 }
 
-void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage) {
+void emitConstantBindings(std::ostringstream& out, bool vertexStage, const ConstantUsage& usage,
+                          const ConstantAccess& access) {
   // Constant pointers route to the per-stage category buffer (VsConsts at slot 0
   // for vertex, PsConsts at slot 0 for fragment). See specs/backend/draw-uniforms.
+  //
+  // H226 — per category:
+  //   direct (no relative reads, no runtime writes; DEF-only or read-only):
+  //     no local register file at all. Use sites read the bound buffer in
+  //     place; DEF/DEFI/DEFB literals hoist here as immutable locals so
+  //     defs win over runtime constants at every use site, matching the
+  //     legacy array-overwrite semantics for well-formed bytecode (D3D9
+  //     places all defs ahead of code).
+  //   relative reads without any write: constant pointer alias (legacy).
+  //   runtime writes (or relative reads combined with defs): materialized
+  //     mutable array + copy loop (legacy); body writes mutate the copy.
   const char* container = vertexStage ? "vsConsts" : "psConsts";
   const char* floatMember = vertexStage ? "vsFloatConst" : "psFloatConst";
   const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
@@ -758,25 +902,34 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
   const u32 boolCount = usage.hasIndexedBool
                             ? constantRegisterMaxIndex(D3DRegisterKind::ConstBool, vertexStage) + 1u
                             : usage.boolCount;
-  const bool aliasFloat = !usage.mutableConstants;
-  const bool aliasInt = !usage.mutableConstants;
-  const bool aliasBool = !usage.mutableConstants;
 
-  if (aliasFloat) {
+  if (access.directFloat) {
+    for (const auto& [index, literal] : access.floatDefs) {
+      out << "  const float4 " << floatDefLocalName(index) << " = " << literal << ";\n";
+    }
+  } else if (!usage.floatDefWrite && !usage.floatRuntimeWrite) {
     out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
   } else {
     out << "  float4 cFloat[" << std::max(1u, floatCount) << "];\n";
     out << "  for (uint i = 0; i < " << floatCount << "; ++i) { cFloat[i] = "
         << container << "." << floatMember << "[i]; }\n";
   }
-  if (aliasInt) {
+  if (access.directInt) {
+    for (const auto& [index, literal] : access.intDefs) {
+      out << "  const int4 " << intDefLocalName(index) << " = " << literal << ";\n";
+    }
+  } else if (!usage.intDefWrite && !usage.intRuntimeWrite) {
     out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
   } else {
     out << "  int4 cInt[" << std::max(1u, intCount) << "];\n";
     out << "  for (uint i = 0; i < " << intCount << "; ++i) { cInt[i] = "
         << container << "." << intMember << "[i]; }\n";
   }
-  if (aliasBool) {
+  if (access.directBool) {
+    for (const auto& [index, literal] : access.boolDefs) {
+      out << "  const uint " << boolDefLocalName(index) << " = " << literal << ";\n";
+    }
+  } else if (!usage.boolDefWrite && !usage.boolRuntimeWrite) {
     out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
   } else {
     out << "  uint cBool[" << std::max(1u, boolCount) << "];\n";
@@ -1520,6 +1673,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	    out << "  int aL = 0;\n";
       auto constantUsage = collectConstantUsage(module);
       promoteIndexedConstantDestinations(constantUsage, module, true);
+      const auto constantAccess = makeConstantAccess(module, true, constantUsage);
       // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array by
       // default. FS sizing is already always-on, but a prior shared VS+FS
       // trim produced a visual regression in SFIV stage-transition overlays.
@@ -1534,7 +1688,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	    out << "  float4 r[" << tempCount << "];\n";
 	    out << "  for (uint i = 0; i < " << tempCount
 	        << "u; ++i) { r[i] = float4(0.0f); }\n";
-	    emitConstantBindings(out, true, constantUsage);
+	    emitConstantBindings(out, true, constantUsage, constantAccess);
     emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     std::vector<bool> callConditionalStack;
@@ -1577,7 +1731,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         std::string expr = readOperandExpression(instruction, reg, "vin", "in", true,
                                                  useVertexInputArray,
                                                  "outPosition", "outColor", "outSecondaryColor", "outTexcoord",
-                                                 "outFogFactor", "outPointSize", "r", "cFloat", "cInt", "cBool",
+                                                 "outFogFactor", "outPointSize", "r", constantAccess,
                                                  "p", &outputSemantics, tempCount - 1u,
                                                  texcoordScratchMaxIndex);
         expr = applySwizzle(expr, decodeSwizzle(token));
@@ -2064,10 +2218,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 throw std::runtime_error("M4x4 requires a float constant matrix base");
               }
               const auto src = readSrc(1);
-              value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
-                      ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
-                      std::to_string(base.index + 2) + "]), dot(" + src + ", cFloat[" +
-                      std::to_string(base.index + 3) + "]))";
+              value = "float4(dot(" + src + ", " + constantAccess.floatName(base.index + 0) + "), dot(" + src +
+                      ", " + constantAccess.floatName(base.index + 1) + "), dot(" + src + ", " +
+                      constantAccess.floatName(base.index + 2) + "), dot(" + src + ", " +
+                      constantAccess.floatName(base.index + 3) + "))";
               break;
             }
             case kD3DSIO_M4x3: {
@@ -2076,9 +2230,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 throw std::runtime_error("M4x3 requires a float constant matrix base");
               }
               const auto src = readSrc(1);
-              value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
-                      ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
-                      std::to_string(base.index + 2) + "]), 0.0f)";
+              value = "float4(dot(" + src + ", " + constantAccess.floatName(base.index + 0) + "), dot(" + src +
+                      ", " + constantAccess.floatName(base.index + 1) + "), dot(" + src + ", " +
+                      constantAccess.floatName(base.index + 2) + "), 0.0f)";
               break;
             }
             case kD3DSIO_M3x4: {
@@ -2087,10 +2241,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 throw std::runtime_error("M3x4 requires a float constant matrix base");
               }
               const auto src = readSrc(1);
-              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 3) + "].xyz))";
+              value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 2) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 3) + ".xyz))";
               break;
             }
             case kD3DSIO_M3x3: {
@@ -2099,10 +2253,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 throw std::runtime_error("M3x3 requires a float constant matrix base");
               }
               const auto src = readSrc(1);
-              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
-                      "].xyz), 0.0f)";
+              value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 2) +
+                      ".xyz), 0.0f)";
               break;
             }
             case kD3DSIO_M3x2: {
@@ -2111,9 +2265,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                 throw std::runtime_error("M3x2 requires a float constant matrix base");
               }
               const auto src = readSrc(1);
-              value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                      "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                      "].xyz), 0.0f, 0.0f)";
+              value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                      ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                      ".xyz), 0.0f, 0.0f)";
               break;
             }
             case kD3DSIO_RCP:
@@ -2248,7 +2402,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                     << " kind=" << static_cast<u32>(dst.kind);
             throw std::runtime_error(message.str());
           }
-          out << "  " << constantDestinationTarget(dst, true) << " = " << formatFloatVec4(values) << ";\n";
+          // H226 — in direct mode the DEF literal is hoisted into an
+          // immutable local by emitConstantBindings; use sites reference
+          // it, so there is no array entry to overwrite.
+          if (!constantAccess.directFloat) {
+            out << "  " << constantDestinationTarget(dst, true) << " = " << formatFloatVec4(values) << ";\n";
+          }
           break;
         }
         case kD3DSIO_DEFI: {
@@ -2264,7 +2423,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (dst.kind != D3DRegisterKind::ConstInt) {
             throw std::runtime_error("DEFI requires an integer constant destination");
           }
-          out << "  " << constantDestinationTarget(dst, true) << " = " << formatIntVec4(values) << ";\n";
+          if (!constantAccess.directInt) {
+            out << "  " << constantDestinationTarget(dst, true) << " = " << formatIntVec4(values) << ";\n";
+          }
           break;
         }
         case kD3DSIO_DEFB: {
@@ -2276,8 +2437,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (dst.kind != D3DRegisterKind::ConstBool) {
             throw std::runtime_error("DEFB requires a boolean constant destination");
           }
-          out << "  " << constantDestinationTarget(dst, true) << " = "
-              << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+          if (!constantAccess.directBool) {
+            out << "  " << constantDestinationTarget(dst, true) << " = "
+                << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+          }
           break;
         }
         case kD3DSIO_DCL:
@@ -2595,6 +2758,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   // half alone is not implicated in.
   auto constantUsage = collectConstantUsage(module);
   promoteIndexedConstantDestinations(constantUsage, module, false);
+  const auto constantAccess = makeConstantAccess(module, false, constantUsage);
   const u32 tempCount =
       static_cast<u32>(std::max<std::int32_t>(1, constantUsage.maxTempIndex + 1));
   const u32 colorCount =
@@ -2634,7 +2798,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 	  out << "  float4 r[" << tempCount << "];\n";
 	  out << "  for (uint i = 0; i < " << tempCount
 	      << "u; ++i) { r[i] = float4(0.0f); }\n";
-    emitConstantBindings(out, false, constantUsage);
+    emitConstantBindings(out, false, constantUsage, constantAccess);
     emitPredicateBindings(out, shaderUsesPredicateRegisters(module));
     std::vector<FlowBlock> controlStack;
     std::vector<bool> callConditionalStack;
@@ -2684,7 +2848,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       } else {
         expr = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                      "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
-                                     "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
+                                     "outPointSize", "r", constantAccess, "p",
                                      nullptr, tempCount - 1u);
       }
       if (clampSm1Constants && module.major == 1u && reg.kind == D3DRegisterKind::ConstFloat) {
@@ -3043,7 +3207,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   << " kind=" << static_cast<u32>(dst.kind);
           throw std::runtime_error(message.str());
         }
-        out << "  " << constantDestinationTarget(dst, false) << " = " << formatFloatVec4(values) << ";\n";
+        // H226 — in direct mode the DEF literal is hoisted into an
+        // immutable local by emitConstantBindings; use sites reference it,
+        // so there is no array entry to overwrite.
+        if (!constantAccess.directFloat) {
+          out << "  " << constantDestinationTarget(dst, false) << " = " << formatFloatVec4(values) << ";\n";
+        }
         break;
       }
       case kD3DSIO_DEFI: {
@@ -3056,7 +3225,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (dst.kind != D3DRegisterKind::ConstInt) {
           throw std::runtime_error("DEFI requires an integer constant destination");
         }
-        out << "  " << constantDestinationTarget(dst, false) << " = " << formatIntVec4(values) << ";\n";
+        if (!constantAccess.directInt) {
+          out << "  " << constantDestinationTarget(dst, false) << " = " << formatIntVec4(values) << ";\n";
+        }
         break;
       }
       case kD3DSIO_DEFB: {
@@ -3065,8 +3236,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (dst.kind != D3DRegisterKind::ConstBool) {
           throw std::runtime_error("DEFB requires a boolean constant destination");
         }
-        out << "  " << constantDestinationTarget(dst, false) << " = "
-            << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+        if (!constantAccess.directBool) {
+          out << "  " << constantDestinationTarget(dst, false) << " = "
+              << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
+        }
         break;
       }
       case kD3DSIO_MOV: {
@@ -3153,7 +3326,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         } else {
           value = readOperandExpression(instruction, reg, "float4(0.0f)", "in", false, false, "outPosition",
                                         "outColor", "outSecondaryColor", "outTexcoord", "outFogFactor",
-                                        "outPointSize", "r", "cFloat", "cInt", "cBool", "p",
+                                        "outPointSize", "r", constantAccess, "p",
                                         nullptr, tempCount - 1u);
         }
         out << "  if (" << texkillMaskCondition(value, decodeWriteMask(instruction.operands[0])) << ") {\n";
@@ -3268,10 +3441,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               throw std::runtime_error("M4x4 requires a float constant matrix base");
             }
             const auto src = readSrc(1);
-            value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
-                    ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
-                    std::to_string(base.index + 2) + "]), dot(" + src + ", cFloat[" +
-                    std::to_string(base.index + 3) + "]))";
+            value = "float4(dot(" + src + ", " + constantAccess.floatName(base.index + 0) + "), dot(" + src +
+                    ", " + constantAccess.floatName(base.index + 1) + "), dot(" + src + ", " +
+                    constantAccess.floatName(base.index + 2) + "), dot(" + src + ", " +
+                    constantAccess.floatName(base.index + 3) + "))";
             break;
           }
           case kD3DSIO_M4x3: {
@@ -3280,9 +3453,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               throw std::runtime_error("M4x3 requires a float constant matrix base");
             }
             const auto src = readSrc(1);
-            value = "float4(dot(" + src + ", cFloat[" + std::to_string(base.index + 0) + "]), dot(" + src +
-                    ", cFloat[" + std::to_string(base.index + 1) + "]), dot(" + src + ", cFloat[" +
-                    std::to_string(base.index + 2) + "]), 0.0f)";
+            value = "float4(dot(" + src + ", " + constantAccess.floatName(base.index + 0) + "), dot(" + src +
+                    ", " + constantAccess.floatName(base.index + 1) + "), dot(" + src + ", " +
+                    constantAccess.floatName(base.index + 2) + "), 0.0f)";
             break;
           }
           case kD3DSIO_M3x4: {
@@ -3291,10 +3464,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               throw std::runtime_error("M3x4 requires a float constant matrix base");
             }
             const auto src = readSrc(1);
-            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 3) + "].xyz))";
+            value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 2) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 3) + ".xyz))";
             break;
           }
           case kD3DSIO_M3x3: {
@@ -3303,10 +3476,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               throw std::runtime_error("M3x3 requires a float constant matrix base");
             }
             const auto src = readSrc(1);
-            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 2) +
-                    "].xyz), 0.0f)";
+            value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 2) +
+                    ".xyz), 0.0f)";
             break;
           }
           case kD3DSIO_M3x2: {
@@ -3315,9 +3488,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
               throw std::runtime_error("M3x2 requires a float constant matrix base");
             }
             const auto src = readSrc(1);
-            value = "float4(dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 0) +
-                    "].xyz), dot((" + src + ").xyz, cFloat[" + std::to_string(base.index + 1) +
-                    "].xyz), 0.0f, 0.0f)";
+            value = "float4(dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 0) +
+                    ".xyz), dot((" + src + ").xyz, " + constantAccess.floatName(base.index + 1) +
+                    ".xyz), 0.0f, 0.0f)";
             break;
           }
           case kD3DSIO_RCP:

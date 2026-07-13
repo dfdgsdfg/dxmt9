@@ -24,10 +24,10 @@ void testShaderThunk() {
           "vertex shader source size");
   checkContains(vertexSource, "vertex VSOut dxmt9_vs", "vertex shader source");
   checkContains(vertexSource, "def c0", "vertex shader decode comment");
-  checkContains(vertexSource, "cFloat[0] = float4(1.0f, 2.0f, 3.0f, 4.0f)", "vertex shader constant define");
+  checkContains(vertexSource, "const float4 dxmt9_cdef0 = float4(1.0f, 2.0f, 3.0f, 4.0f)", "vertex shader constant define");
   checkContains(vertexSource, "for (uint i = 0; i < 32u; ++i) { r[i] = float4(0.0f); }",
                 "vertex shader temp initialization");
-  checkContains(vertexSource, "outPosition = cFloat[0]", "vertex shader mov translation");
+  checkContains(vertexSource, "outPosition = dxmt9_cdef0", "vertex shader mov translation");
   checkContains(vertexSource, "clip_distance", "vertex shader clip distance");
   dxmt9_winemetal_destroy_shader(vertexHandle);
 
@@ -40,7 +40,7 @@ void testShaderThunk() {
   const auto vertexTexcoordHandle = dxmt9_winemetal_compile_shader(&vertexTexcoordRequest);
   check(vertexTexcoordHandle != 0, "vertex texcoord shader thunk");
   const auto vertexTexcoordSource = shaderSourceToString(vertexTexcoordHandle);
-  checkContains(vertexTexcoordSource, "outTexcoord[1] = cFloat[0]", "vertex texcoord oT1 write");
+  checkContains(vertexTexcoordSource, "outTexcoord[1] = dxmt9_cdef0", "vertex texcoord oT1 write");
   checkContains(vertexTexcoordSource, "out.texcoord1 = outTexcoord[1]", "vertex texcoord oT1 output");
   dxmt9_winemetal_destroy_shader(vertexTexcoordHandle);
 
@@ -62,7 +62,7 @@ void testShaderThunk() {
   checkContains(pixelSource, "for (uint i = 0; i < 1u; ++i) { r[i] = float4(0.0f); }",
                 "pixel shader trimmed temp initialization");
   checkContains(pixelSource, "add r0, c0, c0", "pixel shader arithmetic comment");
-  checkContains(pixelSource, "r[0] = (cFloat[0] + cFloat[0])", "pixel shader arithmetic translation");
+  checkContains(pixelSource, "r[0] = (dxmt9_cdef0 + dxmt9_cdef0)", "pixel shader arithmetic translation");
   checkContains(pixelSource, "discard_fragment()", "pixel shader alpha test");
   dxmt9_winemetal_destroy_shader(pixelHandle);
 
@@ -77,7 +77,7 @@ void testShaderThunk() {
   const auto pixelMrtSource = shaderSourceToString(pixelMrtHandle);
   checkContains(pixelMrtSource, "struct FSOut", "pixel mrt output struct");
   checkContains(pixelMrtSource, "float4 color1 [[color(1)]]", "pixel mrt color1 output");
-  checkContains(pixelMrtSource, "outColor[1] = cFloat[1]", "pixel mrt color1 write");
+  checkContains(pixelMrtSource, "outColor[1] = dxmt9_cdef1", "pixel mrt color1 write");
   dxmt9_winemetal_destroy_shader(pixelMrtHandle);
 
   DeviceState state;
@@ -136,7 +136,7 @@ void testShaderThunk() {
   const auto controlSource = shaderSourceToString(controlHandle);
   checkContains(controlSource, "vertex VSOut dxmt9_vs", "control flow vertex shader source");
   checkContains(controlSource, "r[3] = float4(sin(", "control flow call body is inlined at call site");
-  checkContains(controlSource, "if ((cFloat[0]).x != 0.0f)", "control flow if translation");
+  checkContains(controlSource, "if ((dxmt9_cdef0).x != 0.0f)", "control flow if translation");
   checkContains(controlSource, "} else {", "control flow else translation");
   checkContains(controlSource, "for (int dxmt9_loop_", "control flow loop translation");
   checkContains(controlSource, "for (int dxmt9_rep_", "control flow rep translation");
@@ -283,10 +283,10 @@ void testVertexShaderOutputSemanticTranslation() {
   desc.vertexShader = shader;
   const auto source = dxmt9::translator::makeTranslatedVertexSource(
       shader, dxmt9::drawshader::makeShaderSourceContext(desc));
-  checkContains(source, "outPosition = cFloat[0]", "vs_3_0 dcl_position o0 maps to Metal position");
-  checkContains(source, "outTexcoord[0] = cFloat[1]", "vs_3_0 dcl_texcoord0 o1 maps by semantic index");
-  checkContains(source, "outSecondaryColor = cFloat[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");
-  check(source.find("outTexcoord[1] = cFloat[1]") == std::string::npos,
+  checkContains(source, "outPosition = vsConsts.vsFloatConst[0]", "vs_3_0 dcl_position o0 maps to Metal position");
+  checkContains(source, "outTexcoord[0] = vsConsts.vsFloatConst[1]", "vs_3_0 dcl_texcoord0 o1 maps by semantic index");
+  checkContains(source, "outSecondaryColor = vsConsts.vsFloatConst[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");
+  check(source.find("outTexcoord[1] = vsConsts.vsFloatConst[1]") == std::string::npos,
         "vs_3_0 output mapping ignores raw o-register index for texcoord semantic");
   if (getenvFlag("DXMT_DEBUG_FLIP_VERTEX_Y")) {
     checkContains(source, "out.position.y = -out.position.y", "vertex shader forced Y flip source contract");

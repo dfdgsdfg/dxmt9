@@ -19,6 +19,6 @@ ffff0300 05000051 a00f0000 40000000 00000000 00000000
 [test]
 clear rgba(0.0, 0.0, 0.0, 1.0)
 draw quad
-expect-source pixel contains "if ((cFloat[0]).x > (cFloat[1]).x) { break; }"
-expect-source pixel contains "r[0] = cFloat[3];"
+expect-source pixel contains "if ((dxmt9_cdef0).x > (dxmt9_cdef1).x) { break; }"
+expect-source pixel contains "r[0] = dxmt9_cdef3;"
 probe (32, 32) rgba(1.0, 0.0, 0.0, 1.0) 1

@@ -19,5 +19,5 @@ dxmt9-bind-texture 7 0
 dxmt9-ps-const-f 1 0.25 0.50 1.00 1.0
 dxmt9-draw-textured-quad
 expect-source pixel contains "tex7.sample(samp7"
-expect-source pixel contains "cFloat[1]"
+expect-source pixel contains "psConsts.psFloatConst[1]"
 probe (32, 32) rgba(0.25, 0.50, 1.0, 1.0) 1
