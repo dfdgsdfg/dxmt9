@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H225` - alpha-test/fog fragment tails are now compile-time shader variants (`0b82f69c`): disabled variants drop the tails and the `FfpPsConsts` binding entirely; SFIV CB GPU p50 `110 -> 82.9ms` cooled (counters-only run `68.2ms`), GT1 parity at `2,220` presents. Workload map: [overview-sfiv](../overview-sfiv.md).
+Latest tracked row: `H226` - translated shaders now read constant registers in place instead of copying the register file per invocation (`7abaa20e`): the spilled `cFloat[N]` prologue copy was the true owner of SFIV's ~88ms scene-pass instances — SFIV CB GPU p50 `73 -> 2.4ms`, presents `1,740 -> 5,100` (~44.75 in-game FPS), GT1 parity. Workload map: [overview-sfiv](../overview-sfiv.md).
 
 ## Start Here
 
