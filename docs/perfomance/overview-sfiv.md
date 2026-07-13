@@ -73,9 +73,17 @@ domains, mirroring the [3DMark05 GT1 map](overview-3dmark05-gt1.md).
    `FfpPsConsts` loads) are still serialized dependent loads that the
    compiler cannot constant-preload. Hoist/vectorize or move to verified
    preload bindings if a further slice is worth it.
-2. After the GPU fix, re-attribute the wall (app CPU under Rosetta is the
-   expected next owner at ~60-68ms/frame; SFIV presents did not move with
-   the CB drop — the frame cadence is no longer GPU-owned).
+2. **Re-attribute the post-H225 wall — measured: it is NOT CPU.** Per-thread
+   kernel CPU accounting over a 10s fight window (`ps -M` delta, 2026-07-13)
+   shows the whole game process using 1.17 CPU-s (12% of one core; busiest
+   thread 4.6%), and PE recording is only ~1.8ms/present
+   (`DXMT9_PE_STATS_DECIMATION=64`: append 1.08 + const setter/flush 0.68 +
+   draw packet 0.05). Game/Rosetta/Wine are all nearly idle — the frame
+   cadence owner is still on the GPU/present side (post-H225 CB p50 68-83ms
+   still tracks the 59-75ms frame period with ~2x window overlap). Next:
+   re-run the quiet xctrace per-encoder attribution on post-H225 shaders to
+   see what fills the CB now, and check vsync-quantum coupling (the earlier
+   `DXMT9_DISABLE_VSYNC` null was measured pre-H225).
 3. Dead-clear DCE / clear folding as a framegraph follow-up (second-order).
 
 Closed gates: `DXMT9_MAX_FRAME_LATENCY=1` mechanism probe (WAR refuted), RT
