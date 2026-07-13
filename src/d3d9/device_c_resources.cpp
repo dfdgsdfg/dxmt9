@@ -344,7 +344,7 @@ extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* d, uint32_t 
   if (!buf) {
     return nullptr;
   }
-  auto* out = new D9CBuffer{buf};
+  auto* out = new D9CBuffer{buf, d};
   out->desc.size = len;
   out->desc.usage = usage;
   out->desc.pool = pool;
@@ -363,7 +363,7 @@ extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* d, uint32_t l
   if (!buf) {
     return nullptr;
   }
-  auto* out = new D9CBuffer{buf};
+  auto* out = new D9CBuffer{buf, d};
   out->desc.size = len;
   out->desc.usage = usage;
   out->desc.pool = pool;

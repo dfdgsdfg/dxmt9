@@ -27,6 +27,12 @@ namespace dxmt9::core::metalqueue {
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+constexpr u64 committedSequenceWaitTarget(u64 requestedSeqId,
+                                          u64 lastCommittedSeqId) noexcept {
+  return requestedSeqId <= lastCommittedSeqId ? requestedSeqId
+                                               : lastCommittedSeqId;
+}
+
 enum class RenderEncoderGpuPassType : u32 {
   Unknown = 0,
   Draw,

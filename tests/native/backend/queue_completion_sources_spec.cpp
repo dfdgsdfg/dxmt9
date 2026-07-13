@@ -27,6 +27,7 @@ using dxmt9::core::metalqueue::EncodeSessionSourceList;
 using dxmt9::core::metalqueue::kMaxEncodeSessionSources;
 using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
+using dxmt9::core::metalqueue::committedSequenceWaitTarget;
 using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
@@ -56,6 +57,15 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 template <typename T>
 std::span<const T> asSpan(const std::vector<T>& values) {
   return std::span<const T>(values.data(), values.size());
+}
+
+void mapWaitTargetNeverExceedsCommittedWaterline() {
+  checkEq(committedSequenceWaitTarget(8, 6), 6ull,
+          "future resource mark clamps to committed waterline");
+  checkEq(committedSequenceWaitTarget(4, 6), 4ull,
+          "committed resource mark keeps its requested sequence");
+  checkEq(committedSequenceWaitTarget(0, 6), 0ull,
+          "no resource dependency remains no wait");
 }
 
 void appendsSingleLegacySource() {
@@ -1336,6 +1346,7 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
 
 int main() {
   try {
+    mapWaitTargetNeverExceedsCommittedWaterline();
     appendsSingleLegacySource();
     appendsMultiSourceBatchInStrictSeqOrder();
     respectsAlreadyQueuedCompletions();

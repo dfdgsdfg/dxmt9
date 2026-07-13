@@ -172,6 +172,13 @@ void drainDeferredReplay(D9CDevice* d) {
   queue.waitDrained();
 }
 
+void drainDeferredReplay(D9CBuffer* b) {
+  if (!b) {
+    return;
+  }
+  drainDeferredReplay(b->device);
+}
+
 void drainDeferredReplay(D9CSwapChain* s) {
   if (!s) {
     return;

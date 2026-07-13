@@ -201,6 +201,7 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
 
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;
+  D9CDevice* device = nullptr;
   std::atomic<uint32_t> refs{1};
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
   D9CBufferDesc desc{};
@@ -209,7 +210,9 @@ struct D9CBuffer {
   uint32_t lastLockSize = 0;
   uint32_t lastLockFlags = 0;
 
-  explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o) : obj(std::move(o)) {}
+  explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o,
+                     D9CDevice* d = nullptr)
+      : obj(std::move(o)), device(d) {}
 };
 
 struct D9CSurface {

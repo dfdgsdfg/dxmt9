@@ -539,7 +539,7 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
 
     D9CSurface renderTargetWire(renderTarget);
     D9CSurface readbackTargetWire(readbackTarget);
-    D9CBuffer vertexBufferWire(vertexBuffer);
+    D9CBuffer vertexBufferWire(vertexBuffer, &cDevice);
 
     const auto draw0 = makeDrawRecord(&renderTargetWire, &vertexBufferWire, 0u);
     const auto clear = makeColorClearRecord();
@@ -579,12 +579,10 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
     recorder->events.clear();
     checkEq(dxmt9c_device_commit_chunk(&cDevice, &chunk), D3D_OK,
             "commit imported chunk");
-    // See imported_apply_state_value_spec.cpp's commitWireChunk() comment:
-    // this harness's D9C* wire objects are stack-scoped locals, so under
-    // DXMT9_OFFLOAD_COMMIT_REPLAY=1 the caller must fence against the
-    // offload worker before those locals (or the enclosing D9CDevice) start
-    // unwinding. No-op when offload is disabled.
-    dxmt9::d3d9::drainDeferredReplay(&cDevice);
+    // Buffer Lock uses this owner-based fence before entering the provider.
+    // Exercise the same path so deferred replay cannot outlive the stack wire
+    // objects or leave the later map waiting on an unappended sequence.
+    dxmt9::d3d9::drainDeferredReplay(&vertexBufferWire);
 
     checkEq(recorder->events.size(), expectedEventCount(9u),
             "imported chunk event count");

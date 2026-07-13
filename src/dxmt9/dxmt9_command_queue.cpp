@@ -3300,8 +3300,14 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
                                 perf::ChunkPublishReason::MapWait);
         });
   }
-  if (waitSeq > completedSeqId_) {
-    queueLifecycle_.waitForSequence(lock, waitSeq);
+  // Resource pre-marking may stamp the queue's next sequence even when the
+  // replayed chunk emits no backend commands. An empty commit cannot publish
+  // that sequence, so waiting for it would have no producer and never finish.
+  const std::uint64_t waitTarget =
+      core::metalqueue::committedSequenceWaitTarget(waitSeq,
+                                                     lastCommittedSeqId_);
+  if (waitTarget > completedSeqId_) {
+    queueLifecycle_.waitForSequence(lock, waitTarget);
   }
   const auto waitEnd = std::chrono::steady_clock::now();
   perf::countMapBufferWait(

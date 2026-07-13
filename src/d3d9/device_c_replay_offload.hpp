@@ -13,6 +13,7 @@
 #include "dxmt9/core.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
@@ -184,6 +185,11 @@ bool offloadCommitReplayEnabled();
 // a plain no-op return: no counter touch, no wait. Cheap on the common/off
 // path: one pointer test plus one mutex-guarded depth() read.
 void drainDeferredReplay(D9CDevice* d);
+
+// Buffer Lock is also a direct bridge call. Resolve its owning device before
+// entering the provider so deferred draws cannot leave Lock waiting on a
+// sequence that the replay worker has not appended yet.
+void drainDeferredReplay(D9CBuffer* b);
 
 // dxmt9c_swapchain_present overload: D9CSwapChain is an opaque forward
 // declaration in the bridge TUs (they only see the ABI-facing

@@ -98,6 +98,7 @@ extern "C" uint32_t dxmt9c_buffer_release(D9CBuffer* arg0) {
 }
 
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* arg0, uint32_t offset, uint32_t size, void** data, uint32_t flags) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_buffer_lock(arg0, offset, size, data, flags);
 }
 
