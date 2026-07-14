@@ -5111,20 +5111,26 @@ WMTWinding frontFaceWinding() {
 }
 
 WMTCullMode applyDebugCullOverride(WMTCullMode cullMode) {
-  const char* env = std::getenv("DXMT_DEBUG_FORCE_CULL_MODE");
-  if (!env || env[0] == '\0') {
-    return cullMode;
-  }
-  if (std::strcmp(env, "none") == 0) {
-    return WMTCullModeNone;
-  }
-  if (std::strcmp(env, "front") == 0) {
-    return WMTCullModeFront;
-  }
-  if (std::strcmp(env, "back") == 0) {
-    return WMTCullModeBack;
-  }
-  return cullMode;
+  // Read-once contract (environment_variables.rules.md): this runs twice per
+  // draw, and an uncached getenv here sampled at >1% of the encode thread on
+  // draw-heavy scenes (GT2, ~1.7k draws/frame).
+  static const std::optional<WMTCullMode> override = []() -> std::optional<WMTCullMode> {
+    const char* env = std::getenv("DXMT_DEBUG_FORCE_CULL_MODE");
+    if (!env || env[0] == '\0') {
+      return std::nullopt;
+    }
+    if (std::strcmp(env, "none") == 0) {
+      return WMTCullModeNone;
+    }
+    if (std::strcmp(env, "front") == 0) {
+      return WMTCullModeFront;
+    }
+    if (std::strcmp(env, "back") == 0) {
+      return WMTCullModeBack;
+    }
+    return std::nullopt;
+  }();
+  return override.value_or(cullMode);
 }
 
 WMTTriangleFillMode triangleFillModeFromRenderState(
@@ -13043,7 +13049,7 @@ bool encodeDraw(EncodeContext& ctx,
             }
           }
           if (ffLayout && ffLayout->preTransformed && vertexCount >= 6 && hot.textures[0]) {
-            const bool traceExpanded = [] {
+            static const bool traceExpanded = [] {
               const char* env = std::getenv("DXMT_TRACE_FVF_EXPANDED");
               return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
             }();
