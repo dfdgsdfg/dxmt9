@@ -37,8 +37,12 @@ using u64 = std::uint64_t;
 // Shader-source identity that is orthogonal to D3D9 input state. Bump the
 // emitter/layout versions when MSL text or host-visible source layout changes;
 // debugEnvKey covers source-affecting env toggles for the current process.
-inline constexpr u32 kShaderEmitterVersion = 2u;
-inline constexpr u32 kShaderSourceLayoutVersion = 2u;
+// v3: H228 single-variant alpha test — the fragment alpha-test tail reads the
+// per-draw FsVolatile immediate at fragment buffer 5 (new prelude struct +
+// entry-point param) instead of FfpPsConsts, and the alpha-test variant-key
+// bit is gone.
+inline constexpr u32 kShaderEmitterVersion = 3u;
+inline constexpr u32 kShaderSourceLayoutVersion = 3u;
 inline constexpr u32 kShaderDebugEnvSchemaVersion = 2u;
 
 struct BlendAttachmentKey {
@@ -99,16 +103,17 @@ struct ShaderVariantKey {
   u32 textureMask = 0;
   bool linear = false;
   bool clipPlanes = false;
-  bool alphaTest = false;
-  // H224 — fragment fog-tail PSO-variant gate, twin of the `alphaTest` bit
-  // above. True iff the resolved draw state can produce a non-zero
-  // ffpPs.fogMode at upload time (state::fragmentFogCouldApply:
-  // D3DRS_FOGENABLE plus a non-None table/vertex fog mode). When clear, the
-  // generated fragment source omits the dxmt9_apply_fog tail and its
-  // per-fragment FfpPsConsts loads; when set, the tail keeps the historical
-  // runtime ffpPs.fogMode switch. Only the two enable bits participate in the
-  // key — alpha func/ref and fog params stay runtime uniform loads, bounding
-  // the tail variant fan-out at 4x per shader.
+  // H224 — fragment fog-tail PSO-variant gate. True iff the resolved draw
+  // state can produce a non-zero ffpPs.fogMode at upload time
+  // (state::fragmentFogCouldApply: D3DRS_FOGENABLE plus a non-None
+  // table/vertex fog mode). When clear, the generated fragment source omits
+  // the dxmt9_apply_fog tail and its per-fragment FfpPsConsts loads; when
+  // set, the tail keeps the historical runtime ffpPs.fogMode switch. Fog
+  // params stay runtime uniform loads, bounding the fog fan-out at 2x per
+  // shader. Alpha test deliberately has NO key bit (H228): the alpha-test
+  // tail is a single always-emitted variant evaluated from the per-draw
+  // FsVolatile immediate, so alpha-test render-state toggles never split the
+  // PSO and draw runs / submission batches can span them.
   bool fogActive = false;
   bool alphaToCoverage = false;
   // R-BACK-13.3 — tile-FFP-mode bit. Two draws with the same FFPKeyPS

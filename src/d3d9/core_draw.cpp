@@ -3606,6 +3606,20 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
         submission.bindingOverride.indexType = draw.indexType;
         submission.bindingOverride.indexBufferValid = true;
       }
+      // H228 — binding-agnostic submissions always ride an external override,
+      // so stamp this draw's alpha-test trio (raw D3DRS values) here. A later
+      // submitDrawRunBatch may group this draw under a base whose canonical
+      // state carries a different trio; the per-draw record keeps alpha-test
+      // authoritative without breaking the batch (the batch predicate exempts
+      // exactly these three registers). Defaults mirror fillFfpPsConsts.
+      submission.bindingOverride.alphaTestEnable =
+          flatStateOr(cached.hot.renderStates, RS_ALPHA_TEST_ENABLE, 0u);
+      submission.bindingOverride.alphaTestFunc = flatStateOr(
+          cached.hot.renderStates, RS_ALPHA_FUNC,
+          static_cast<u32>(CompareFunc::Always));
+      submission.bindingOverride.alphaTestRef =
+          flatStateOr(cached.hot.renderStates, RS_ALPHA_REF, 0u);
+      submission.bindingOverride.alphaTestStateValid = true;
     }
     dxmt9::perf::countD3D9SnapshotBindingOverride(
         kMaxStreams, streamRecords, draw.indexed);

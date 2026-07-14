@@ -10,5 +10,5 @@
 clear rgba(0.0, 0.0, 0.0, 1.0)
 alpha-test enable less 0.5
 draw quad
-expect-source pixel contains "case 2u: pass = color.a < ffpPs.alphaRef;"
+expect-source pixel contains "case 2u: pass = color.a < fsVolatile.alphaRef;"
 expect-source pixel contains "discard_fragment()"

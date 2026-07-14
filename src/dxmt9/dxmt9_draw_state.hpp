@@ -116,6 +116,23 @@ struct DrawVolatile {
 static_assert(sizeof(DrawVolatile) == 16,
               "DrawVolatile layout must match MSL prelude declaration");
 
+// H228 — per-draw fragment immediate carrying the alpha-test state. Bound via
+// setFragmentBytes at fragment buffer slot 5 (the fragment-stage mirror of the
+// vertex DrawVolatile slot-5 immediate lane; fragment slots 0/3 are the direct
+// cbufs, 4 is SamplerLodBias, 30 is the argbuf — 5 is free in every binding
+// mode and, like DrawVolatile, stays direct under the argbuf hybrid). The
+// generated fragment alpha-test tail is a SINGLE shader variant that reads
+// this struct at runtime, so draw runs / submission batches can span per-draw
+// alpha-test toggles without a PSO switch.
+struct FsVolatile {
+  u32 alphaTest = 0;   // 0 = alpha test off, else D3DCMPFUNC (1..8)
+  f32 alphaRef = 0.0f; // RS_ALPHA_REF DWORD / 255.0f (matches fillFfpPsConsts)
+
+  friend constexpr bool operator==(const FsVolatile&, const FsVolatile&) = default;
+};
+static_assert(sizeof(FsVolatile) == 8,
+              "FsVolatile layout must match the MSL struct bound at fragment buffer 5");
+
 // Per-sampler mip LOD bias (D3DSAMP_MIPMAPLODBIAS, gap_d3d9 B.3). Metal's
 // MTLSamplerDescriptor has no LOD-bias field — the bias is applied at sample
 // time in the shader via `texture.sample(sampler, coord, bias(b))`. This is a
@@ -154,13 +171,15 @@ SamplerLodBias buildSamplerLodBias(core::FlatDrawStateView state);
 // `[[buffer(4)]]` declaration and the bind can never drift apart.
 bool anySamplerLodBiasNonzero(core::FlatDrawStateView state);
 
-// H224 PSO-variant gate predicates for the generated fragment alpha-test/fog
-// tails. Single source of truth shared by the PSO key
-// (ShaderVariantKey::alphaTest / ::fogActive, set in makeShaderVariantKey),
-// the shader-source context (ShaderSourceContext::alphaTestActive /
-// ::fogActive, set in makeShaderSourceContext), and the FfpPsConsts upload
-// (fillFfpPsConsts), so the emitted MSL and the uploaded constants can never
-// disagree in the enabled direction. resolveFragmentFog mirrors the historical
+// Fragment tail gate predicates. Fog stays an H224 compile-time PSO variant:
+// fragmentFogCouldApply is the single source of truth shared by the PSO key
+// (ShaderVariantKey::fogActive, set in makeShaderVariantKey), the
+// shader-source context (ShaderSourceContext::fogActive, set in
+// makeShaderSourceContext), and the FfpPsConsts upload (fillFfpPsConsts).
+// Alpha test is NOT a variant anymore (H228): the tail is always emitted and
+// reads the per-draw FsVolatile immediate; fragmentAlphaTestEnabled now feeds
+// only the FfpPsConsts upload, buildFsVolatile, and encoder diagnostics.
+// resolveFragmentFog mirrors the historical
 // buildFfpPsConsts resolution exactly: RS_FOG_ENABLE gates fog entirely, the
 // table mode wins, and the vertex mode is the fallback (fogSource=1 marks the
 // vertex-fog-factor lane). The RenderStateSnapshot overloads serve fixture /
@@ -180,6 +199,16 @@ bool fragmentFogCouldApply(const core::RenderStateSnapshot& renderStates);
 
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride);
+
+// H228 — single-source conversion from raw D3DRS alpha-test values to the
+// per-draw fragment immediate. Both the flat-state path (canonical/base
+// draws) and the per-draw DrawBindingOverride path (run/batch draws) funnel
+// through makeFsVolatile so the 0-255 -> float alphaRef conversion and the
+// DXMT_DISABLE_ALPHA_TEST composition can never drift from the FfpPsConsts
+// upload semantics in fillFfpPsConsts.
+FsVolatile makeFsVolatile(u32 alphaTestEnable, u32 alphaTestFunc,
+                          u32 alphaTestRefRaw);
+FsVolatile buildFsVolatile(core::FlatDrawStateView state);
 
 // Compose a depth/stencil cache key from flat render-state storage.
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state);

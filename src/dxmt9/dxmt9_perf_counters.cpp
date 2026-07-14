@@ -394,6 +394,7 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideIbRecords{0};
+  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideAlphaRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawBatchConstUploadPassthrough{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchRecords{0};
@@ -2444,6 +2445,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_run_binding_override_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideBytes, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_binding_override_stream_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideStreamRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_binding_override_ib_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideIbRecords, nullptr, nullptr, 0.0},
+    {"commit_chunk_draw_run_binding_override_alpha_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideAlphaRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_batch_const_upload_passthrough", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawBatchConstUploadPassthrough, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSubmits, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchRecords, nullptr, nullptr, 0.0},
@@ -5192,6 +5194,7 @@ void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask) {
 
 void countCommitChunkDrawRunBindingOverride(bool streamOverride,
                                             bool indexBufferOverride,
+                                            bool alphaTestOverride,
                                             std::size_t bytes) {
   auto& c = counters();
   add(c.commitChunkDrawRunBindingOverrideRecords);
@@ -5201,6 +5204,11 @@ void countCommitChunkDrawRunBindingOverride(bool streamOverride,
   }
   if (indexBufferOverride) {
     add(c.commitChunkDrawRunBindingOverrideIbRecords);
+  }
+  if (alphaTestOverride) {
+    // H228 -- per-draw alpha-test immediate override carried by an imported
+    // draw run (trio-only state deltas no longer break run coalescing).
+    add(c.commitChunkDrawRunBindingOverrideAlphaRecords);
   }
 }
 

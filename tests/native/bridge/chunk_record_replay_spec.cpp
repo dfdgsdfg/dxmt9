@@ -204,6 +204,77 @@ void testDrawRunScanAllowsRepeatedStreamDelta() {
           "stream-only delta scan reaches chunk end");
 }
 
+void testDrawRunScanAllowsAlphaTestTrioDelta() {
+  // H228 — per-draw state deltas touching ONLY the alpha-test trio
+  // (RS_ALPHA_TEST_ENABLE=15 / RS_ALPHA_REF=24 / RS_ALPHA_FUNC=25) stay
+  // run-eligible; the replay materializes them as per-draw
+  // DrawBindingOverride alpha records instead of breaking the run.
+  const auto firstDraw = makeDrawPrimitiveRecord(0u, 1u);
+  auto alphaOnDraw = makeDrawPrimitiveRecord(3u, 1u);
+  alphaOnDraw.packet.renderStateCount = 3u;
+  alphaOnDraw.packet.renderStates[0].state = dxmt9::core::RS_ALPHA_TEST_ENABLE;
+  alphaOnDraw.packet.renderStates[0].value = 1u;
+  alphaOnDraw.packet.renderStates[1].state = dxmt9::core::RS_ALPHA_REF;
+  alphaOnDraw.packet.renderStates[1].value = 0x80u;
+  alphaOnDraw.packet.renderStates[2].state = dxmt9::core::RS_ALPHA_FUNC;
+  alphaOnDraw.packet.renderStates[2].value = 7u;  // D3DCMP_GREATEREQUAL
+  auto alphaOffDraw = makeDrawPrimitiveRecord(6u, 1u);
+  alphaOffDraw.packet.renderStateCount = 1u;
+  alphaOffDraw.packet.renderStates[0].state = dxmt9::core::RS_ALPHA_TEST_ENABLE;
+  alphaOffDraw.packet.renderStates[0].value = 0u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, alphaOnDraw);
+  appendRecord(bytes, alphaOffDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 3u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "alpha-trio draw-run scan first record exists");
+  check(first->valid(), "alpha-trio draw-run scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(scan.replayAsRun(),
+        "alpha-test trio deltas can be carried as per-draw overrides");
+  checkEq(scan.recordCount, 3u,
+          "draw-run scan accepts alpha-test-on and alpha-test-off deltas");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::EndOfChunk),
+          "alpha-trio-only delta scan reaches chunk end");
+}
+
+void testDrawRunScanRejectsAlphaTestTrioWithOtherStateDelta() {
+  // H228 boundary — the exemption covers exactly the trio; a delta touching
+  // the trio PLUS any other render state still breaks the run.
+  const auto firstDraw = makeDrawPrimitiveRecord(0u, 1u);
+  auto mixedDraw = makeDrawPrimitiveRecord(3u, 1u);
+  mixedDraw.packet.renderStateCount = 2u;
+  mixedDraw.packet.renderStates[0].state = dxmt9::core::RS_ALPHA_TEST_ENABLE;
+  mixedDraw.packet.renderStates[0].value = 1u;
+  mixedDraw.packet.renderStates[1].state = dxmt9::core::RS_ALPHABLEND_ENABLE;
+  mixedDraw.packet.renderStates[1].value = 1u;
+
+  std::vector<std::uint8_t> bytes;
+  appendRecord(bytes, firstDraw);
+  appendRecord(bytes, mixedDraw);
+
+  const auto chunk = makeImportedChunkView(
+      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 2u);
+  const auto first = nextImportedRecord(chunk, 0u, 0u);
+  check(first.has_value(), "alpha+blend scan first record exists");
+  check(first->valid(), "alpha+blend scan first record validates");
+
+  const auto scan = scanImportedDrawRun(chunk, *first);
+  check(!scan.replayAsRun(),
+        "alpha trio plus another render state still breaks the run");
+  checkEq(scan.recordCount, 1u,
+          "alpha+blend scan keeps only the first draw");
+  checkEq(static_cast<int>(scan.stop),
+          static_cast<int>(ImportedDrawRunScanStop::StateDelta),
+          "alpha+blend scan reports a state-delta boundary");
+}
+
 void testDrawRunScanAllowsMixedDirectAndIndexedNoDelta() {
   const auto directDraw = makeDrawPrimitiveRecord(0u, 1u);
   auto indexedDraw = makeDrawIndexedPrimitiveRecord(3u, 2u);
@@ -548,6 +619,8 @@ int main() {
     testDrawRunScanReportsConstantUploadBoundary();
     testDrawRunScanUsesFirstStateDeltaAsRunBase();
     testDrawRunScanAllowsRepeatedStreamDelta();
+    testDrawRunScanAllowsAlphaTestTrioDelta();
+    testDrawRunScanRejectsAlphaTestTrioWithOtherStateDelta();
     testDrawRunScanAllowsMixedDirectAndIndexedNoDelta();
     testDrawRunScanAllowsLateIndexBufferDeltaInMixedRun();
     testIndexedDrawRunScanPreservesPerRecordParams();

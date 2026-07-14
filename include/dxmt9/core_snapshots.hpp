@@ -960,6 +960,19 @@ struct DrawBindingOverride {
   Handle indexBuffer{};
   IndexType indexType = IndexType::UInt16;
   bool indexBufferValid = false;
+  // H228 — per-draw alpha-test immediate override. Raw D3DRS DWORD values
+  // (RS_ALPHA_TEST_ENABLE / RS_ALPHA_FUNC / RS_ALPHA_REF); the dxmt9 encoder
+  // converts them into the fragment FsVolatile immediate with
+  // state::makeFsVolatile, single-sourcing the 0-255 -> float alphaRef
+  // conversion with the FfpPsConsts upload. When alphaTestStateValid is set,
+  // this draw's alpha-test trio is authoritative; when clear, the draw falls
+  // back to the run's shared canonical render state. This is what lets draw
+  // runs and submission batches span per-draw alpha-test toggles without a
+  // PSO switch (alpha test is no longer a shader-variant key bit).
+  u32 alphaTestEnable = 0;
+  u32 alphaTestFunc = 0;
+  u32 alphaTestRef = 0;
+  bool alphaTestStateValid = false;
 };
 static_assert(std::is_trivially_copyable_v<DrawBindingOverride>,
               "DrawBindingOverride is serialized into draw-run payload bytes.");
@@ -1084,7 +1097,16 @@ inline std::span<const u8> drawBindingSnapshotBytes(
 
 inline bool drawBindingOverrideEmpty(
     const DrawBindingOverride& binding) noexcept {
-  return binding.streamMask == 0 && !binding.indexBufferValid;
+  return binding.streamMask == 0 && !binding.indexBufferValid &&
+         !binding.alphaTestStateValid;
+}
+
+// H228 — true when the override carries stream/index binding content (as
+// opposed to only a per-draw alpha-test record). Run replay uses this to
+// skip the hot-state copy + binding rewrite for alpha-only overrides.
+inline bool drawBindingOverrideHasBindings(
+    const DrawBindingOverride& binding) noexcept {
+  return binding.streamMask != 0 || binding.indexBufferValid;
 }
 
 inline bool drawBindingSnapshotEmpty(
@@ -1127,7 +1149,53 @@ inline void ensureDrawRunSubmissionBindingOverridePayload(
   }
 }
 
-inline bool drawStateKeysCompatibleForDrawRunBatch(
+// H228 — the alpha-test render-state trio is exempt from draw-run batch
+// compatibility: alpha test is evaluated from per-draw FsVolatile immediates
+// in a single fragment-shader variant (the PSO no longer splits on it), and
+// each batched submission carries its own trio through DrawBindingOverride.
+// The exemption is bounded to exactly these three registers; every other
+// render state still breaks a batch.
+inline bool renderStateIsAlphaTestTrio(u32 rs) noexcept {
+  return rs == RS_ALPHA_TEST_ENABLE || rs == RS_ALPHA_REF ||
+         rs == RS_ALPHA_FUNC;
+}
+
+inline bool flatRenderStatesEqualExceptAlphaTest(
+    const FlatRenderStateSet& a,
+    const FlatRenderStateSet& b) noexcept {
+  if (a.overflow || b.overflow) {
+    // Overflowed sets dropped entries; only exact equality is provable.
+    return a == b;
+  }
+  const auto* pa = a.entries.data();
+  const auto* ea = pa + (a.count <= a.entries.size() ? a.count : a.entries.size());
+  const auto* pb = b.entries.data();
+  const auto* eb = pb + (b.count <= b.entries.size() ? b.count : b.entries.size());
+  while (pa != ea || pb != eb) {
+    if (pb == eb || (pa != ea && pa->state < pb->state)) {
+      if (!renderStateIsAlphaTestTrio(pa->state)) return false;
+      ++pa;
+    } else if (pa == ea || pb->state < pa->state) {
+      if (!renderStateIsAlphaTestTrio(pb->state)) return false;
+      ++pb;
+    } else {
+      if (pa->value != pb->value && !renderStateIsAlphaTestTrio(pa->state)) {
+        return false;
+      }
+      ++pa;
+      ++pb;
+    }
+  }
+  return true;
+}
+
+// Key comparison shared by the exact and alpha-trio-exempt predicates. The
+// renderStateHash term is intentionally excluded here: the batch predicate
+// (H228) compares the actual flat render-state sets with the alpha trio
+// exempt instead, while drawStateKeysCompatibleForDrawRunBatch re-adds the
+// exact hash term for key-only callers (e.g. the encoder's skipBaseStateBind
+// check, which has no entry sets to compare).
+inline bool drawStateKeysCompatibleForDrawRunBatchExceptRenderState(
     const FlatDrawStateKey& a,
     const FlatDrawStateKey& b) noexcept {
   return a.vertexElementCount == b.vertexElementCount &&
@@ -1143,7 +1211,6 @@ inline bool drawStateKeysCompatibleForDrawRunBatch(
          a.textureStageStateHashes == b.textureStageStateHashes &&
          a.samplerStateHashes == b.samplerStateHashes &&
          a.samplerStateMask == b.samplerStateMask &&
-         a.renderStateHash == b.renderStateHash &&
          a.colorAttachments == b.colorAttachments &&
          a.depthStencil == b.depthStencil &&
          a.renderTargetMask == b.renderTargetMask &&
@@ -1151,14 +1218,25 @@ inline bool drawStateKeysCompatibleForDrawRunBatch(
          a.clipPlaneMask == b.clipPlaneMask;
 }
 
+inline bool drawStateKeysCompatibleForDrawRunBatch(
+    const FlatDrawStateKey& a,
+    const FlatDrawStateKey& b) noexcept {
+  return drawStateKeysCompatibleForDrawRunBatchExceptRenderState(a, b) &&
+         a.renderStateHash == b.renderStateHash;
+}
+
 inline bool drawStatesCompatibleForDrawRunBatch(
     const FlatDrawStateRecord& a,
     const FlatDrawStateRecord& b) noexcept {
-  return drawStateKeysCompatibleForDrawRunBatch(a.key, b.key) &&
+  // H228 — render state is compared entry-wise with the alpha trio exempt;
+  // the key renderStateHash term is replaced by that comparison (PSO identity
+  // no longer depends on the trio because the alpha-test variant-key bit is
+  // gone). Every other group keeps exact equality.
+  return drawStateKeysCompatibleForDrawRunBatchExceptRenderState(a.key, b.key) &&
          a.textures == b.textures &&
          a.textureLods == b.textureLods &&
          a.textureMask == b.textureMask &&
-         a.renderStates == b.renderStates &&
+         flatRenderStatesEqualExceptAlphaTest(a.renderStates, b.renderStates) &&
          a.textureStageStates == b.textureStageStates &&
          a.samplerStates == b.samplerStates &&
          a.colorAttachments == b.colorAttachments &&
@@ -1466,6 +1544,29 @@ inline void prepareDrawRunSubmissionBindingOverride(
     submission.bindingOverride.indexBuffer = submissionState.hot.indexBuffer;
     submission.bindingOverride.indexType = submission.draw.indexType;
     submission.bindingOverride.indexBufferValid = true;
+  }
+
+  // H228 — batched submissions share the base's canonical state, so a draw
+  // whose alpha-test trio differs from the base must carry its own values as
+  // a per-draw immediate override (the batch predicate exempts exactly this
+  // trio). Raw D3DRS values; defaults mirror fillFfpPsConsts' reads.
+  const auto alphaTrioOf = [](const FlatRenderStateSet& rs) {
+    struct Trio { u32 enable, func, ref; };
+    return Trio{
+        flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u),
+        flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always)),
+        flatStateOr(rs, RS_ALPHA_REF, 0u),
+    };
+  };
+  const auto baseTrio = alphaTrioOf(baseState.hot.renderStates);
+  const auto submissionTrio = alphaTrioOf(submissionState.hot.renderStates);
+  if (baseTrio.enable != submissionTrio.enable ||
+      baseTrio.func != submissionTrio.func ||
+      baseTrio.ref != submissionTrio.ref) {
+    submission.bindingOverride.alphaTestEnable = submissionTrio.enable;
+    submission.bindingOverride.alphaTestFunc = submissionTrio.func;
+    submission.bindingOverride.alphaTestRef = submissionTrio.ref;
+    submission.bindingOverride.alphaTestStateValid = true;
   }
 
   if (!drawBindingOverrideEmpty(submission.bindingOverride)) {

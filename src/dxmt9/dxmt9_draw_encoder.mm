@@ -2099,6 +2099,20 @@ void recordedSetVertexBytes(EncodeContext& ctx,
   }
 }
 
+void recordedSetFragmentBytes(EncodeContext& ctx,
+                              WMT::RenderCommandEncoder& encoder,
+                              const void* bytes,
+                              u64 length,
+                              std::uint8_t index) {
+  if (auto* recorder = ctx.drawRecorder;
+      recorder && recorder->setFragmentBytes) {
+    recorder->setFragmentBytes(recorder->userdata, bytes, length, index);
+  }
+  if (!suppressRecordedMetalCalls(ctx)) {
+    encoder.setFragmentBytes(bytes, length, index);
+  }
+}
+
 void recordedDrawPrimitives(EncodeContext& ctx,
                             WMT::RenderCommandEncoder& encoder,
                             WMTPrimitiveType primitiveType,
@@ -10321,6 +10335,11 @@ bool encodeDraw(EncodeContext& ctx,
                  const PreUploadedDrawData* preUploaded,
                  const core::DrawParam* paramOverride,
                  std::span<const u8> paramPayloadArena,
+                 // H228 — parsed per-draw DrawBindingOverride for run/batch
+                 // draws (nullptr for canonical draws). encodeDraw reads only
+                 // the alphaTest* fields; stream/index rewrites were already
+                 // applied by the caller onto drawState's hot record.
+                 const core::DrawBindingOverride* paramBindingOverride,
                  const core::DrawBindingSnapshot* bindingSnapshot,
                  uniform::DirtyState* dirty,
                  bool tileFfpMode,
@@ -12871,6 +12890,39 @@ bool encodeDraw(EncodeContext& ctx,
         << " forceVisible=" << (debug::forceVisibleDraw() ? 1 : 0);
     emitQueueTraceLine(out.str());
   }
+  // H228 — per-draw fragment alpha-test immediate (fragment buffer 5,
+  // shadowed per render encoder). Run/batch draws carrying a per-draw alpha
+  // override use its raw trio; canonical draws resolve the trio from the
+  // shared flat render state. Both funnel through state::makeFsVolatile so
+  // the conversion is single-sourced with the FfpPsConsts upload. Pushed once
+  // per draw ahead of both the indexed and non-indexed issue paths below; the
+  // shadow collapses redundant pushes on unchanged values. Harmless for PSOs
+  // without the tail (debug strip / tile / fragmentless): binding bytes to an
+  // unreferenced fragment slot is a Metal no-op.
+  {
+    const state::FsVolatile fsVolatile =
+        (paramBindingOverride && paramBindingOverride->alphaTestStateValid)
+            ? state::makeFsVolatile(paramBindingOverride->alphaTestEnable,
+                                    paramBindingOverride->alphaTestFunc,
+                                    paramBindingOverride->alphaTestRef)
+            : state::buildFsVolatile(drawState);
+    bool skipFsVolatilePush = false;
+    if (textureSamplerShadow) {
+      auto& shadowSlot = textureSamplerShadow->fsVolatile;
+      skipFsVolatilePush = shadowSlot.valid &&
+                           shadowSlot.alphaTest == fsVolatile.alphaTest &&
+                           shadowSlot.alphaRef == fsVolatile.alphaRef;
+      if (!skipFsVolatilePush) {
+        shadowSlot.valid = true;
+        shadowSlot.alphaTest = fsVolatile.alphaTest;
+        shadowSlot.alphaRef = fsVolatile.alphaRef;
+      }
+    }
+    if (!skipFsVolatilePush) {
+      recordedSetFragmentBytes(ctx, encoder, &fsVolatile,
+                               sizeof(fsVolatile), 5);
+    }
+  }
   if (indexedDraw) {
     const bool texture0R32FCube = [&] {
       if (!hot.textures[0]) {
@@ -14405,10 +14457,12 @@ bool encodeDraw(EncodeContext& ctx,
                 bool reopenArgbufHybrid,
                 TextureSamplerBindShadow* textureSamplerShadow,
                 std::uint32_t commandIndex,
-                const core::DrawBindingSnapshot* bindingSnapshot) {
+                const core::DrawBindingSnapshot* bindingSnapshot,
+                const core::DrawBindingOverride* paramBindingOverride) {
   return encodeDraw(ctx, commandBuffer, encoder, drawState, seqId,
                     skipBaseStateBind, preUploaded, paramOverride,
-                    paramPayloadArena, bindingSnapshot, dirty, tileFfpMode,
+                    paramPayloadArena, paramBindingOverride,
+                    bindingSnapshot, dirty, tileFfpMode,
                     argbufHybridMode, argbufResourceArray,
                     argbufDirectCbufMode, reopenArgbufHybrid,
                     /*argbufVsPayloadSourceChanged=*/false,
@@ -15829,7 +15883,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           drawParamBindingOverride(param, recordPayloadArena, bindingOverride);
       const bool hasBindingSnapshot =
           drawParamBindingSnapshot(param, recordPayloadArena, bindingSnapshot);
-      if (hasBindingOverride) {
+      // H228 — an alpha-test-only override (drawBindingOverrideHasBindings
+      // false) needs no hot-state copy or binding rewrite; its trio is
+      // consumed by encodeDraw's FsVolatile push directly.
+      if (hasBindingOverride &&
+          core::drawBindingOverrideHasBindings(bindingOverride)) {
         overrideHot = hot;
         if (drawStateView.shaderLayout) {
           overrideShaderLayout = *drawStateView.shaderLayout;
@@ -16030,6 +16088,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      anyUpData ? &preData : nullptr,
                      &param,
                      recordPayloadArena,
+                     hasBindingOverride ? &bindingOverride : nullptr,
                      hasBindingSnapshot ? &bindingSnapshot : nullptr,
                      &uniformDirty,
                      /*tileFfpMode=*/activePassUsesTileFfp,

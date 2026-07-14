@@ -368,6 +368,12 @@ static void fillFfpPsConsts(core::FlatDrawStateView state, FfpPsConsts& out) {
   if (const auto* textureFactor = core::findFlatState(rs, RS_TEXTURE_FACTOR)) {
     out.textureFactor = normalizedD3DColor(textureFactor->value);
   }
+  // H228 note: the portable FFP/translated fragment tails no longer read
+  // ffpPs.alphaTestEnable/alphaTestFunc/alphaRef — alpha test moved to the
+  // per-draw FsVolatile immediate (makeFsVolatile below is the single-source
+  // twin of this resolution). The fields and this upload stay for now: the
+  // tile-FFP kernel (makeFfpTilePixelSource) still runtime-gates on them, and
+  // ripping the layout is a separate change.
   out.alphaTestEnable = !debug::disableAlphaTest() && fragmentAlphaTestEnabled(rs);
   out.alphaTestFunc =
       core::flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
@@ -454,6 +460,32 @@ DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
   out.vertexStreamOffset = vertexStreamOffset;
   out.vertexStreamStride = vertexStreamStride;
   return out;
+}
+
+FsVolatile makeFsVolatile(u32 alphaTestEnable, u32 alphaTestFunc,
+                          u32 alphaTestRefRaw) {
+  // H228 — mirrors fillFfpPsConsts exactly: DXMT_DISABLE_ALPHA_TEST forces
+  // the runtime state off (the debug strip also removes the generated tail),
+  // alphaRef is the raw D3DRS_ALPHAREF byte scaled by 1/255, and the func
+  // rides through unchanged (the generated switch treats NEVER and unknown
+  // funcs as pass, byte-identical to the historical ffpPs.alphaTestFunc
+  // switch). alphaTest folds enable+func: 0 = off, else the D3DCMPFUNC.
+  FsVolatile out;
+  if (debug::disableAlphaTest() || alphaTestEnable == 0u) {
+    return out;
+  }
+  out.alphaTest = alphaTestFunc;
+  out.alphaRef = static_cast<f32>(alphaTestRefRaw) / 255.0f;
+  return out;
+}
+
+FsVolatile buildFsVolatile(core::FlatDrawStateView state) {
+  const auto& rs = state.hot->renderStates;
+  return makeFsVolatile(
+      fragmentAlphaTestEnabled(rs) ? 1u : 0u,
+      core::flatStateOr(rs, RS_ALPHA_FUNC,
+                        static_cast<u32>(CompareFunc::Always)),
+      core::flatStateOr(rs, RS_ALPHA_REF, 0u));
 }
 
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {

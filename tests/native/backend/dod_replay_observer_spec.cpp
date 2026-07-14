@@ -1022,6 +1022,82 @@ void testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState() {
           "second draw param points at serialized binding override");
 }
 
+void testDrawRunBatchExemptsAlphaTestTrioOnly() {
+  // H228 — a pair differing ONLY in the alpha-test render-state trio
+  // (RS_ALPHA_TEST_ENABLE / RS_ALPHA_REF / RS_ALPHA_FUNC) stays
+  // batch-compatible: alpha test is a single fragment-shader variant reading
+  // per-draw FsVolatile immediates, so the PSO does not split. The non-base
+  // draw carries its trio as a DrawBindingOverride alpha record. Any other
+  // render-state difference alongside the trio still breaks the batch.
+  DrawDesc desc{};
+  desc.primitiveCount = 1u;
+  desc.rts.color[0] = RenderTargetAttachment{.handle = Handle{0x3000u}};
+  desc.vertexShader.kind = ShaderRef::Kind::Bytecode;
+  desc.vertexShader.hash = 0x4444u;
+  desc.pixelShader.kind = ShaderRef::Kind::Bytecode;
+  desc.pixelShader.hash = 0x8888u;
+
+  DrawDesc alphaOnDesc = desc;
+  alphaOnDesc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  alphaOnDesc.rs.values[RS_ALPHA_REF] = 0x80u;
+  alphaOnDesc.rs.values[RS_ALPHA_FUNC] =
+      static_cast<u32>(CompareFunc::GreaterEqual);
+
+  auto uniform = makeDrawUniformPayload(desc);
+  std::array<DrawRunSubmission, 2> submissions{
+      DrawRunSubmission{
+          .state = makeCanonicalDrawStateForTest(desc),
+          .uniforms = uniform,
+          .draw = makeDrawParam(1u, 0u),
+      },
+      DrawRunSubmission{
+          .state = makeCanonicalDrawStateForTest(alphaOnDesc),
+          .uniforms = uniform,
+          .draw = makeDrawParam(1u, 3u),
+      },
+  };
+  check(!(submissions[0].materializedState().hot.renderStates ==
+          submissions[1].materializedState().hot.renderStates),
+        "alpha trio fixture states differ in render state");
+  check(drawRunSubmissionStatesCompatibleForBatch(submissions[0], submissions[1]),
+        "alpha-test-trio-only render-state changes are batch-compatible (H228)");
+
+  prepareDrawRunSubmissionBindingOverride(submissions[0], submissions[0]);
+  prepareDrawRunSubmissionBindingOverride(submissions[0], submissions[1]);
+  check(submissions[0].payload.bindingOverrideData.empty(),
+        "base draw needs no alpha override payload");
+  checkEq(submissions[1].payload.bindingOverrideData.size(),
+          sizeof(DrawBindingOverride),
+          "alpha-differing draw stores an override payload");
+  DrawBindingOverride override{};
+  std::memcpy(&override, submissions[1].payload.bindingOverrideData.data(),
+              sizeof(override));
+  check(override.alphaTestStateValid,
+        "override marks the per-draw alpha trio authoritative");
+  checkEq(override.alphaTestEnable, 1u, "override captures alpha-test enable");
+  checkEq(override.alphaTestRef, 0x80u, "override captures raw alpha ref");
+  checkEq(override.alphaTestFunc, static_cast<u32>(CompareFunc::GreaterEqual),
+          "override captures alpha func");
+  checkEq(override.streamMask, 0u, "alpha-only override carries no stream rewrites");
+  check(!override.indexBufferValid, "alpha-only override carries no index rewrite");
+
+  DrawDesc mixedDesc = alphaOnDesc;
+  mixedDesc.rs.values[RS_ALPHABLEND_ENABLE] = 1u;
+  DrawRunSubmission mixed{
+      .state = makeCanonicalDrawStateForTest(mixedDesc),
+      .uniforms = uniform,
+      .draw = makeDrawParam(1u, 6u),
+  };
+  check(!drawRunSubmissionStatesCompatibleForBatch(submissions[0], mixed),
+        "alpha trio plus blend render-state change stays batch-incompatible");
+  const auto incompat = classifyDrawRunBatchIncompatibility(
+      submissions[0].materializedState().hot, mixed.materializedState().hot,
+      submissions[0].materializedState().shaderLayout,
+      mixed.materializedState().shaderLayout);
+  check(incompat.firstDiff == DrawRunBatchIncompatClass::RenderState,
+        "trio+blend pair classifies as a render-state incompatibility");
+}
+
 void testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData() {
   DrawDesc desc{};
   desc.primitiveCount = 1u;
@@ -1168,6 +1244,7 @@ int main() {
     testChunkSlotUniformStageConstantsPreserveAbiPrefixForBoolUpload();
     testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload();
     testDrawRunBatchBindingOverrideNormalizesStreamAndIndexState();
+    testDrawRunBatchExemptsAlphaTestTrioOnly();
     testChunkSlotDrawRunBatchKeepsElidedNonFrontDrawData();
     testChunkSlotDrawRunBatchReusesElidedUniformPayload();
     testDrawRunSubmissionAcceptedPreviousStateChain();

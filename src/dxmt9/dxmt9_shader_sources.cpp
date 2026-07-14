@@ -344,6 +344,14 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "  uint vertexStreamStride;\n";
   out << "  uint _pad;\n";
   out << "};\n";
+  // H228 — per-draw fragment alpha-test immediate (host struct
+  // dxmt9::state::FsVolatile, setFragmentBytes at fragment buffer 5). The
+  // alpha-test tail is a single shader variant reading this at runtime;
+  // alphaTest is 0 for off, else the D3DCMPFUNC (1..8).
+  out << "struct FsVolatile {\n";
+  out << "  uint alphaTest;\n";
+  out << "  float alphaRef;\n";
+  out << "};\n";
   out << "struct VSOut {\n";
   out << "  float4 position [[position]];\n";
   if (vsoutEmitColor(options.vsOutLayout)) {

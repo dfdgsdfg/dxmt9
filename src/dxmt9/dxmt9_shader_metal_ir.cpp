@@ -2562,15 +2562,17 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   const u32 colorOutputCount = pixelColorOutputCount(module);
   const bool writesDepth = pixelWritesDepth(module);
   const bool usesFragmentOutStruct = colorOutputCount > 1u || writesDepth;
-  // H224 — compile-time alpha-test/fog fragment tails. When the resolved draw
-  // state cannot enable a tail (context.alphaTestActive / context.fogActive,
-  // keyed as ShaderVariantKey::alphaTest / ::fogActive), emit neither the
-  // tail code nor its per-fragment FfpPsConsts loads. The debug strips
-  // compose on top and win in the disabled direction. The ffpPs param/alias
-  // itself is dropped only when nothing else reads it: the legacy ps1.x
-  // bump-env ops (TEXBEM/TEXBEML/BEM) read ffpPs.bumpEnvMat/bumpEnvLum.
-  const bool emitAlphaTestTail =
-      context.alphaTestActive && !context.stripAlphaTestForDebug;
+  // H228 — the alpha-test tail is a SINGLE shader variant: always emitted
+  // (unless the DXMT_DISABLE_ALPHA_TEST debug strip removes it) and evaluated
+  // from the per-draw FsVolatile immediate at fragment buffer 5 instead of
+  // FfpPsConsts, so per-draw alpha-test toggles never split the PSO and draw
+  // runs / submission batches can span them. Fog stays the H224 compile-time
+  // variant (context.fogActive, keyed as ShaderVariantKey::fogActive): when
+  // the resolved draw state cannot enable fog, neither the tail code nor its
+  // per-fragment FfpPsConsts loads are emitted. The ffpPs param/alias itself
+  // is dropped only when nothing else reads it: the legacy ps1.x bump-env ops
+  // (TEXBEM/TEXBEML/BEM) read ffpPs.bumpEnvMat/bumpEnvLum.
+  const bool emitAlphaTestTail = !context.stripAlphaTestForDebug;
   const bool emitFogTail = context.fogActive && !context.stripFogForDebug;
   const bool usesFfpBumpEnv = std::any_of(
       module.instructions.begin(), module.instructions.end(),
@@ -2579,7 +2581,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                instruction.opcode == kD3DSIO_TEXBEML ||
                instruction.opcode == kD3DSIO_BEM;
       });
-  const bool usesFfpPsConsts = emitAlphaTestTail || emitFogTail || usesFfpBumpEnv;
+  const bool usesFfpPsConsts = emitFogTail || usesFfpBumpEnv;
   if (usesFragmentOutStruct) {
     out << "struct FSOut {\n";
     for (u32 i = 0; i < colorOutputCount; ++i) {
@@ -2614,6 +2616,14 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "                     bool frontFacing [[front_facing]],\n";
     }
   };
+  // H228 — the FsVolatile immediate param travels with the alpha-test tail
+  // (struct declared in the shared prelude; slot 5 mirrors the vertex
+  // DrawVolatile lane and stays direct in every argbuf mode).
+  auto emitFsVolatileParameter = [&] {
+    if (emitAlphaTestTail) {
+      out << ",\n                     constant FsVolatile& fsVolatile [[buffer(5)]]";
+    }
+  };
   if (textured) {
     if (fragmentArgbufResourceArray) {
       // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler
@@ -2631,6 +2641,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (emitLodBias) {
         out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParameter();
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       if (usesFfpPsConsts) {
@@ -2659,6 +2670,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (emitLodBias) {
         out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParameter();
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       if (usesFfpPsConsts) {
@@ -2678,6 +2690,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (emitLodBias) {
         out << ",\n                     constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParameter();
       out << ") {\n";
     }
   } else {
@@ -2686,7 +2699,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << " dxmt9_fs(VSOut in [[stage_in]],\n";
       emitFrontFacingParameter();
       out << "                     constant ArgbufLayout& abuf [[buffer("
-          << kArgbufHybridBindSlot << ")]]) {\n";
+          << kArgbufHybridBindSlot << ")]]";
+      emitFsVolatileParameter();
+      out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       if (usesFfpPsConsts) {
         out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -2697,10 +2712,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       emitFrontFacingParameter();
       if (usesFfpPsConsts) {
         out << "                     constant PsConsts& psConsts [[buffer(0)]],\n";
-        out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {\n";
+        out << "                     constant FfpPsConsts& ffpPs [[buffer(3)]]";
       } else {
-        out << "                     constant PsConsts& psConsts [[buffer(0)]]) {\n";
+        out << "                     constant PsConsts& psConsts [[buffer(0)]]";
       }
+      emitFsVolatileParameter();
+      out << ") {\n";
     }
   }
   auto emitFragmentDebugReturn = [&](std::string_view valueExpr) {
@@ -3764,15 +3781,18 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     out << "  color = outColor[0];\n";
   }
   if (emitAlphaTestTail) {
-    out << "  if (ffpPs.alphaTestEnable != 0u) {\n";
+    // H228 — single-variant alpha test: runtime-gated on the per-draw
+    // FsVolatile immediate (0 = off, else D3DCMPFUNC). Comparison semantics
+    // are byte-identical to the historical ffpPs.alphaTestFunc switch.
+    out << "  if (fsVolatile.alphaTest != 0u) {\n";
     out << "    bool pass = true;\n";
-    out << "    switch (ffpPs.alphaTestFunc) {\n";
-    out << "      case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
-    out << "      case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
-    out << "      case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
-    out << "      case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
-    out << "      case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
-    out << "      case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
+    out << "    switch (fsVolatile.alphaTest) {\n";
+    out << "      case 2u: pass = color.a < fsVolatile.alphaRef; break;\n";
+    out << "      case 3u: pass = color.a == fsVolatile.alphaRef; break;\n";
+    out << "      case 4u: pass = color.a <= fsVolatile.alphaRef; break;\n";
+    out << "      case 5u: pass = color.a > fsVolatile.alphaRef; break;\n";
+    out << "      case 6u: pass = color.a != fsVolatile.alphaRef; break;\n";
+    out << "      case 7u: pass = color.a >= fsVolatile.alphaRef; break;\n";
     out << "      case 8u: pass = true; break;\n";
     out << "      default: pass = true; break;\n";
     out << "    }\n";

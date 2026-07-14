@@ -85,6 +85,37 @@ D9CDrawPrimitivePacket drawPacketWithoutStreamDelta(
   return packet;
 }
 
+// H228 — the alpha-test render-state trio is exempt from run-break rules the
+// same way stream deltas are: the replay materializes trio changes as
+// per-draw DrawBindingOverride alpha records (consumed by the encoder's
+// FsVolatile immediate) and advances the public render state to the final
+// trio after the run. The exemption is bounded to exactly these three
+// registers.
+bool drawPacketRenderStateIsAlphaTestTrio(std::uint32_t state) noexcept {
+  return state == dxmt9::core::RS_ALPHA_TEST_ENABLE ||
+         state == dxmt9::core::RS_ALPHA_REF ||
+         state == dxmt9::core::RS_ALPHA_FUNC;
+}
+
+D9CDrawPrimitivePacket drawPacketWithoutAlphaTestTrioDelta(
+    D9CDrawPrimitivePacket packet) noexcept {
+  const std::uint32_t count =
+      std::min<std::uint32_t>(packet.renderStateCount,
+                              D9C_DRAW_PACKET_MAX_RENDER_STATES);
+  std::uint32_t kept = 0;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (drawPacketRenderStateIsAlphaTestTrio(packet.renderStates[i].state)) {
+      continue;
+    }
+    packet.renderStates[kept++] = packet.renderStates[i];
+  }
+  for (std::uint32_t i = kept; i < count; ++i) {
+    packet.renderStates[i] = {};
+  }
+  packet.renderStateCount = kept;
+  return packet;
+}
+
 bool packetHasNoStateDeltaExceptStream(const D9CDrawPrimitivePacket& p) noexcept {
   return packetHasNoStateDelta(drawPacketWithoutStreamDelta(p));
 }
@@ -119,8 +150,20 @@ bool drawPacketStateDeltaCompatibleWithRunBase(
   if (packetHasNoStateDeltaExceptStream(candidate)) {
     return true;
   }
+  // H228 — strip the alpha-test trio like the stream delta above: a
+  // candidate whose remaining delta is empty (trio-only, or trio+stream) or
+  // byte-equal to the base's trio-stripped delta stays run-eligible. The
+  // replay tracks the effective trio per record, carries it as a per-draw
+  // alpha override, and applies the final trio to public state after the
+  // run — so acceptance here never loses state. A delta touching any OTHER
+  // render state still breaks the run below.
+  const auto candidateNoAlpha = drawPacketWithoutAlphaTestTrioDelta(candidate);
+  if (packetHasNoStateDeltaExceptStream(candidateNoAlpha)) {
+    return true;
+  }
   return !packetHasNoStateDelta(base) &&
-         drawPacketStateDeltaEqualsExceptStream(base, candidate);
+         drawPacketStateDeltaEqualsExceptStream(
+             drawPacketWithoutAlphaTestTrioDelta(base), candidateNoAlpha);
 }
 
 struct ImportedDrawRecordDelta {

@@ -660,7 +660,14 @@ ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept {
 
 bool fragmentlessDepthOnlyShaderSafe(const drawshader::ShaderSourceContext& shaderSource) {
   try {
-    auto fragment = drawshader::makeDrawShaderSource(shaderSource, false);
+    // H228: the alpha-test tail is always emitted (single variant) and would
+    // trip the discard scan on every shader. The probe path has already
+    // rejected alpha-test-enabled draw state before reaching this scan, so
+    // strip the (runtime-off) tail from the scanned source; any remaining
+    // discard is a genuine shader side effect (e.g. TEXKILL).
+    auto scanSource = shaderSource;
+    scanSource.stripAlphaTestForDebug = true;
+    auto fragment = drawshader::makeDrawShaderSource(scanSource, false);
     return fragment.find("discard_fragment()") == std::string::npos &&
            fragment.find("[[depth") == std::string::npos;
   } catch (const std::exception& ex) {
@@ -842,7 +849,9 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
   hash = mix(hash, key.textureMask);
   hash = mix(hash, static_cast<u64>(key.linear));
   hash = mix(hash, static_cast<u64>(key.clipPlanes));
-  hash = mix(hash, static_cast<u64>(key.alphaTest));
+  // H228: alpha test deliberately does NOT participate in the key hash —
+  // the alpha-test tail is a single variant reading per-draw FsVolatile
+  // immediates, so alpha-test render-state toggles map to the same PSO.
   // H224: the fog-tail variant bit participates in the key hash so the
   // fog-active (runtime-gated tail) and fog-inactive (tail omitted) variants
   // of the same shader hit distinct PSO cache slots — including the probe key
@@ -906,6 +915,7 @@ std::size_t ShaderVariantKeyHash::operator()(const ShaderVariantKey& key) const 
 }
 
 void logFragmentlessDepthOnlyProbeDecision(const ShaderVariantKey& key,
+                                           bool alphaTestEnabled,
                                            bool accepted,
                                            const char* reason) {
   static std::mutex mutex;
@@ -925,7 +935,7 @@ void logFragmentlessDepthOnlyProbeDecision(const ShaderVariantKey& key,
              static_cast<unsigned long long>(keyHash),
              reason ? reason : "unknown",
              key.vsOutLayoutKey,
-             key.alphaTest ? 1u : 0u,
+             alphaTestEnabled ? 1u : 0u,
              key.alphaToCoverage ? 1u : 0u,
              key.tileFfpMode ? 1u : 0u);
 }
@@ -1640,10 +1650,14 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
   if (fragmentlessDepthOnly) {
     ScopedPerfCounter scope(
         perf::countEncodeSlotPsoPrefetchDrawResolveFragmentlessCpuTime);
+    // H228: alpha test left the variant key, so the reject predicate reads
+    // the same single-source state predicate the key bit used to carry.
+    const bool alphaTestEnabled =
+        state::fragmentAlphaTestEnabled(state.hot->renderStates);
     const char* rejectReason = nullptr;
     if (tileFfpMode) {
       rejectReason = "tile-ffp-mode";
-    } else if (key.alphaTest) {
+    } else if (alphaTestEnabled) {
       rejectReason = "alpha-test";
     } else if (key.alphaToCoverage) {
       rejectReason = "alpha-to-coverage";
@@ -1658,7 +1672,7 @@ Cache::resolveDrawPipelineState(const core::BackendLimits& limits,
     }
     key.fragmentlessDepthOnly = fragmentlessDepthOnly;
     logFragmentlessDepthOnlyProbeDecision(
-        key, fragmentlessDepthOnly,
+        key, alphaTestEnabled, fragmentlessDepthOnly,
         fragmentlessDepthOnly
             ? (debug::probeFragmentlessDepthOnlyKeepVSOut()
                    ? "accepted-keep-vsout"
@@ -1928,11 +1942,12 @@ ShaderVariantKey makeShaderVariantKey(core::FlatDrawStateView state,
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MIN_FILTER, 0u) == 2u ||
       core::flatStateOr(hot.samplerStates[0], core::SAMP_MAG_FILTER, 0u) == 2u;
   key.clipPlanes = hot.clipPlaneMask != 0;
-  // H224 — compile-time fragment tail gates. Both bits read the same
-  // single-source predicates as makeShaderSourceContext and the FfpPsConsts
-  // upload (dxmt9_draw_state), so the emitted MSL, the PSO key, and the
-  // uploaded constants stay in lockstep.
-  key.alphaTest = state::fragmentAlphaTestEnabled(hot.renderStates);
+  // H224 — compile-time fragment fog tail gate. Reads the same single-source
+  // predicate as makeShaderSourceContext and the FfpPsConsts upload
+  // (dxmt9_draw_state), so the emitted MSL, the PSO key, and the uploaded
+  // constants stay in lockstep. Alpha test intentionally sets NO key bit
+  // (H228): the tail is a single variant reading per-draw FsVolatile
+  // immediates, so alpha-test toggles reuse the same PSO.
   key.fogActive = state::fragmentFogCouldApply(hot.renderStates);
   // R-FORMAT-13: alpha-to-coverage is driven by the cross-vendor render-state
   // hack on D3DRS_ADAPTIVETESS_Y. Writing the ATOC FOURCC (or the ATI A2M1

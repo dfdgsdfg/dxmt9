@@ -312,6 +312,7 @@ void countCommitChunkDrawRunScan(std::uint32_t stop,
 void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask);
 void countCommitChunkDrawRunBindingOverride(bool streamOverride,
                                             bool indexBufferOverride,
+                                            bool alphaTestOverride,
                                             std::size_t bytes);
 void countCommitChunkDrawBatchConstUploadPassthrough();
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);

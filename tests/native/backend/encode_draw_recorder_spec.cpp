@@ -58,6 +58,7 @@ enum class RecordedKind {
   SetVertexSamplerState,
   SetVertexBuffer,
   SetVertexBytes,
+  SetFragmentBytes,
   DrawPrimitives,
   DrawIndexedPrimitives,
 };
@@ -283,6 +284,20 @@ void recordSetVertexBytes(void* userdata,
   auto* capture = static_cast<Capture*>(userdata);
   RecordedCommand command{};
   command.kind = RecordedKind::SetVertexBytes;
+  command.length = length;
+  command.index = index;
+  check(length <= command.bytes.size(), "recorded bytes fit capture storage");
+  std::memcpy(command.bytes.data(), bytes, static_cast<std::size_t>(length));
+  capture->commands.push_back(command);
+}
+
+void recordSetFragmentBytes(void* userdata,
+                            const void* bytes,
+                            std::uint64_t length,
+                            std::uint8_t index) {
+  auto* capture = static_cast<Capture*>(userdata);
+  RecordedCommand command{};
+  command.kind = RecordedKind::SetFragmentBytes;
   command.length = length;
   command.index = index;
   check(length <= command.bytes.size(), "recorded bytes fit capture storage");
@@ -639,7 +654,8 @@ void runEncodeDraw(Harness& harness,
 	                   bool skipBaseStateBind = true,
 	                   bool argbufHybridMode = false,
 	                   TextureSamplerBindShadow* textureSamplerShadow = nullptr,
-	                   const dxmt9::core::DrawBindingSnapshot* bindingSnapshot = nullptr) {
+	                   const dxmt9::core::DrawBindingSnapshot* bindingSnapshot = nullptr,
+	                   const dxmt9::core::DrawBindingOverride* paramBindingOverride = nullptr) {
   auto ctx = makeContext(harness, recorder);
   WMT::CommandBuffer commandBuffer{};
   WMT::RenderCommandEncoder encoder{};
@@ -664,7 +680,8 @@ void runEncodeDraw(Harness& harness,
 	      /*reopenArgbufHybrid=*/true,
 	      textureSamplerShadow,
 	      std::numeric_limits<std::uint32_t>::max(),
-	      bindingSnapshot);
+	      bindingSnapshot,
+	      paramBindingOverride);
 
   check(encoded, "encodeDraw emits a draw");
 }
@@ -1142,6 +1159,97 @@ void testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset() {
       WMTPrimitiveTypeTriangle,
       0u,
       6u);
+}
+
+void testFsVolatileAlphaTestImmediatePushShadowAndOverride() {
+  // H228 — every draw pushes the per-draw FsVolatile alpha-test immediate at
+  // fragment buffer 5: canonical draws resolve the trio from the flat render
+  // state, run/batch draws with a per-draw alpha override use its raw values,
+  // and the per-encoder shadow collapses redundant pushes.
+  Harness harness;
+  Capture capture;
+  auto recorder = makeRecorder(capture);
+  recorder.setFragmentBytes = recordSetFragmentBytes;
+
+  constexpr obj_handle_t kBoundVertex = 0x5600005600005fcull;
+  auto state = makeProgrammableState(28u);
+  state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 8192u);
+  setSortedRenderStates(state, {
+      dxmt9::core::FlatStateEntry{dxmt9::core::RS_ALPHA_TEST_ENABLE, 1u},
+      dxmt9::core::FlatStateEntry{dxmt9::core::RS_ALPHA_REF, 0x80u},
+      dxmt9::core::FlatStateEntry{
+          dxmt9::core::RS_ALPHA_FUNC,
+          static_cast<u32>(dxmt9::core::CompareFunc::GreaterEqual)},
+  });
+
+  dxmt9::core::DrawParam param{};
+  param.primitiveType = PrimitiveType::TriangleList;
+  param.primitiveCount = 1u;
+  param.indexed = false;
+
+  PreUploadedDrawData preUploaded{};
+  TextureSamplerBindShadow shadow{};
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                &shadow);
+
+  auto fsVolatileAt = [&](std::size_t nth) {
+    std::size_t seen = 0;
+    for (const auto& command : capture.commands) {
+      if (command.kind != RecordedKind::SetFragmentBytes) {
+        continue;
+      }
+      if (seen++ == nth) {
+        checkEq(static_cast<unsigned>(command.index), 5u,
+                "FsVolatile binds fragment buffer slot 5");
+        checkEq(command.length, std::uint64_t{sizeof(dxmt9::state::FsVolatile)},
+                "FsVolatile push length matches the host struct");
+        dxmt9::state::FsVolatile value{};
+        std::memcpy(&value, command.bytes.data(), sizeof(value));
+        return value;
+      }
+    }
+    fail("missing expected FsVolatile push");
+  };
+
+  checkEq(countCommands(capture, RecordedKind::SetFragmentBytes),
+          std::size_t{1}, "state-resolved draw pushes one FsVolatile");
+  const auto fromState = fsVolatileAt(0);
+  checkEq(fromState.alphaTest,
+          static_cast<u32>(dxmt9::core::CompareFunc::GreaterEqual),
+          "FsVolatile carries the alpha func when alpha test is enabled");
+  checkNear(fromState.alphaRef, 128.0f / 255.0f, 1.0e-6f,
+            "FsVolatile alphaRef uses the fillFfpPsConsts 1/255 conversion");
+
+  // Same values + live shadow => the second draw skips the push.
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                &shadow);
+  checkEq(countCommands(capture, RecordedKind::SetFragmentBytes),
+          std::size_t{1}, "unchanged FsVolatile is deduped by the encoder shadow");
+
+  // A per-draw alpha override wins over the shared state: alpha off here.
+  dxmt9::core::DrawBindingOverride alphaOverride{};
+  alphaOverride.alphaTestEnable = 0u;
+  alphaOverride.alphaTestFunc =
+      static_cast<u32>(dxmt9::core::CompareFunc::GreaterEqual);
+  alphaOverride.alphaTestRef = 0x80u;
+  alphaOverride.alphaTestStateValid = true;
+  runEncodeDraw(harness, recorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/true,
+                /*argbufHybridMode=*/false,
+                &shadow,
+                /*bindingSnapshot=*/nullptr,
+                &alphaOverride);
+  checkEq(countCommands(capture, RecordedKind::SetFragmentBytes),
+          std::size_t{2}, "per-draw alpha override forces a new FsVolatile push");
+  const auto fromOverride = fsVolatileAt(1);
+  checkEq(fromOverride.alphaTest, 0u,
+          "alpha-off override pushes alphaTest=0 despite alpha-on shared state");
+  checkNear(fromOverride.alphaRef, 0.0f, 1.0e-6f,
+            "alpha-off override zeroes the immediate ref");
 }
 
 void testNonIndexedDrawIgnoresStaleIndexIntent() {
@@ -2811,6 +2919,7 @@ int main() {
     testTextureSamplerShadowDedupsDirectFragmentAndVertexBinds();
     testTextureSamplerShadowResetForcesDirectRebind();
     testNonIndexedDrawPrimitivesAbsorbsStartVertexIntoOffset();
+    testFsVolatileAlphaTestImmediatePushShadowAndOverride();
     testNonIndexedDrawIgnoresStaleIndexIntent();
     testIndexedPrimitiveTopologyAndIndexWidthBoundaries();
     testNonIndexedPrimitiveTopologyVertexCounts();

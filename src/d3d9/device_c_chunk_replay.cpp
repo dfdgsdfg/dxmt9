@@ -782,6 +782,98 @@ dxmt9::core::DrawParamPayloadView bindingOverridePayloadView(
   };
 }
 
+// H228 — effective alpha-test trio tracked across an imported draw run,
+// mirroring EffectiveDrawBindings for stream/IB deltas. The run scanner
+// accepts per-draw state deltas touching ONLY this trio; the replay carries
+// each draw's effective trio as a DrawBindingOverride alpha record (consumed
+// by the encoder's FsVolatile immediate) and advances the public render
+// state to the final trio after the run.
+struct EffectiveAlphaTestState {
+  std::uint32_t enable = 0;
+  std::uint32_t func = static_cast<std::uint32_t>(dxmt9::core::CompareFunc::Always);
+  std::uint32_t ref = 0;
+
+  friend bool operator==(const EffectiveAlphaTestState&,
+                         const EffectiveAlphaTestState&) = default;
+};
+
+EffectiveAlphaTestState effectiveAlphaTestFromState(
+    const dxmt9::core::DeviceState& state) {
+  EffectiveAlphaTestState out;
+  out.enable = state.renderStates.valueOr(dxmt9::core::RS_ALPHA_TEST_ENABLE, 0u);
+  out.func = state.renderStates.valueOr(
+      dxmt9::core::RS_ALPHA_FUNC,
+      static_cast<std::uint32_t>(dxmt9::core::CompareFunc::Always));
+  out.ref = state.renderStates.valueOr(dxmt9::core::RS_ALPHA_REF, 0u);
+  return out;
+}
+
+void applyAlphaTestDeltas(EffectiveAlphaTestState& alpha,
+                          const D9CDrawPrimitivePacket& packet) {
+  const std::uint32_t count = std::min<std::uint32_t>(
+      packet.renderStateCount, D9C_DRAW_PACKET_MAX_RENDER_STATES);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    const auto& entry = packet.renderStates[i];
+    switch (entry.state) {
+    case dxmt9::core::RS_ALPHA_TEST_ENABLE:
+      alpha.enable = entry.value;
+      break;
+    case dxmt9::core::RS_ALPHA_FUNC:
+      alpha.func = entry.value;
+      break;
+    case dxmt9::core::RS_ALPHA_REF:
+      alpha.ref = entry.value;
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+void stampAlphaTestOverride(dxmt9::core::DrawBindingOverride& override,
+                            const EffectiveAlphaTestState& base,
+                            const EffectiveAlphaTestState& effective,
+                            bool& changed) {
+  if (effective == base) {
+    return;
+  }
+  override.alphaTestEnable = effective.enable;
+  override.alphaTestFunc = effective.func;
+  override.alphaTestRef = effective.ref;
+  override.alphaTestStateValid = true;
+  changed = true;
+}
+
+// Companion to applyFinalBindingState: after the run is submitted, advance
+// the public D3D render state to the last trio the run's swallowed deltas
+// produced, so post-run draws observe the same state as unbatched replay.
+int32_t applyFinalAlphaTestState(D9CDevice* d,
+                                 const EffectiveAlphaTestState& base,
+                                 const EffectiveAlphaTestState& effective) {
+  if (base.enable != effective.enable) {
+    const int32_t hr = dxmt9c_device_set_render_state(
+        d, dxmt9::core::RS_ALPHA_TEST_ENABLE, effective.enable);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  if (base.func != effective.func) {
+    const int32_t hr = dxmt9c_device_set_render_state(
+        d, dxmt9::core::RS_ALPHA_FUNC, effective.func);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  if (base.ref != effective.ref) {
+    const int32_t hr = dxmt9c_device_set_render_state(
+        d, dxmt9::core::RS_ALPHA_REF, effective.ref);
+    if (failed(hr)) {
+      return hr;
+    }
+  }
+  return dxmt9::core::D3D_OK;
+}
+
 int32_t applyFinalBindingState(D9CDevice* d,
                                const EffectiveDrawBindings& base,
                                const EffectiveDrawBindings& effective) {
@@ -1794,6 +1886,10 @@ int32_t replayImportedChunk(D9CDevice* d,
         if (failed(hr)) return commitChunkFail("draw-run-state", recordIndex, header.type, hr);
         const auto baseBindings = effectiveBindingsFromState(d->dev().state());
         auto effectiveBindings = baseBindings;
+        // H228 — trio deltas swallowed from later records ride per-draw
+        // alpha overrides; track the effective trio like stream bindings.
+        const auto baseAlphaTest = effectiveAlphaTestFromState(d->dev().state());
+        auto effectiveAlphaTest = baseAlphaTest;
         const auto runBuildStart = std::chrono::steady_clock::now();
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
@@ -1803,12 +1899,18 @@ int32_t replayImportedChunk(D9CDevice* d,
         runPayloads.reserve(scan.recordCount);
         const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet);
+          applyAlphaTestDeltas(effectiveAlphaTest, packet);
           auto param = makeRunParam(packet);
           param.indexType = effectiveBindings.indexType;
           dxmt9::core::DrawBindingOverride override{};
-          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+          bool overrideChanged =
+              makeBindingOverride(baseBindings, effectiveBindings, override);
+          stampAlphaTestOverride(override, baseAlphaTest, effectiveAlphaTest,
+                                 overrideChanged);
+          if (overrideChanged) {
             dxmt9::perf::countCommitChunkDrawRunBindingOverride(
-                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+                override.streamMask != 0, override.indexBufferValid,
+                override.alphaTestStateValid, sizeof(override));
             bindingOverrides.push_back(override);
             runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
           } else {
@@ -1819,12 +1921,18 @@ int32_t replayImportedChunk(D9CDevice* d,
         const auto appendIndexedRunParam = [&](const D9CDrawIndexedPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet.state);
           applyIndexBindingDelta(effectiveBindings, packet);
+          applyAlphaTestDeltas(effectiveAlphaTest, packet.state);
           auto param = makeRunParam(packet);
           param.indexType = effectiveBindings.indexType;
           dxmt9::core::DrawBindingOverride override{};
-          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+          bool overrideChanged =
+              makeBindingOverride(baseBindings, effectiveBindings, override);
+          stampAlphaTestOverride(override, baseAlphaTest, effectiveAlphaTest,
+                                 overrideChanged);
+          if (overrideChanged) {
             dxmt9::perf::countCommitChunkDrawRunBindingOverride(
-                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+                override.streamMask != 0, override.indexBufferValid,
+                override.alphaTestStateValid, sizeof(override));
             bindingOverrides.push_back(override);
             runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
           } else {
@@ -1874,6 +1982,9 @@ int32_t replayImportedChunk(D9CDevice* d,
         if (failed(hr)) return commitChunkFail("draw-run", recordIndex, header.type, hr);
         const auto finalBindStart = std::chrono::steady_clock::now();
         hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        if (!failed(hr)) {
+          hr = applyFinalAlphaTestState(d, baseAlphaTest, effectiveAlphaTest);
+        }
         countDurationSince(finalBindStart,
                            dxmt9::perf::countCommitChunkDrawRunFinalBindCpuTime);
         if (failed(hr)) return commitChunkFail("draw-run-final-bind", recordIndex, header.type, hr);
@@ -1924,6 +2035,9 @@ int32_t replayImportedChunk(D9CDevice* d,
         }
         const auto baseBindings = effectiveBindingsFromState(d->dev().state());
         auto effectiveBindings = baseBindings;
+        // H228 — see the DRAW_PRIMITIVE run block above.
+        const auto baseAlphaTest = effectiveAlphaTestFromState(d->dev().state());
+        auto effectiveAlphaTest = baseAlphaTest;
         const auto runBuildStart = std::chrono::steady_clock::now();
         std::vector<dxmt9::core::DrawParam> runParams;
         runParams.reserve(scan.recordCount);
@@ -1933,12 +2047,18 @@ int32_t replayImportedChunk(D9CDevice* d,
         runPayloads.reserve(scan.recordCount);
         const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet);
+          applyAlphaTestDeltas(effectiveAlphaTest, packet);
           auto param = makeRunParam(packet);
           param.indexType = effectiveBindings.indexType;
           dxmt9::core::DrawBindingOverride override{};
-          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+          bool overrideChanged =
+              makeBindingOverride(baseBindings, effectiveBindings, override);
+          stampAlphaTestOverride(override, baseAlphaTest, effectiveAlphaTest,
+                                 overrideChanged);
+          if (overrideChanged) {
             dxmt9::perf::countCommitChunkDrawRunBindingOverride(
-                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+                override.streamMask != 0, override.indexBufferValid,
+                override.alphaTestStateValid, sizeof(override));
             bindingOverrides.push_back(override);
             runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
           } else {
@@ -1949,12 +2069,18 @@ int32_t replayImportedChunk(D9CDevice* d,
         const auto appendIndexedRunParam = [&](const D9CDrawIndexedPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet.state);
           applyIndexBindingDelta(effectiveBindings, packet);
+          applyAlphaTestDeltas(effectiveAlphaTest, packet.state);
           auto param = makeRunParam(packet);
           param.indexType = effectiveBindings.indexType;
           dxmt9::core::DrawBindingOverride override{};
-          if (makeBindingOverride(baseBindings, effectiveBindings, override)) {
+          bool overrideChanged =
+              makeBindingOverride(baseBindings, effectiveBindings, override);
+          stampAlphaTestOverride(override, baseAlphaTest, effectiveAlphaTest,
+                                 overrideChanged);
+          if (overrideChanged) {
             dxmt9::perf::countCommitChunkDrawRunBindingOverride(
-                override.streamMask != 0, override.indexBufferValid, sizeof(override));
+                override.streamMask != 0, override.indexBufferValid,
+                override.alphaTestStateValid, sizeof(override));
             bindingOverrides.push_back(override);
             runPayloads.push_back(bindingOverridePayloadView(bindingOverrides.back()));
           } else {
@@ -2004,6 +2130,9 @@ int32_t replayImportedChunk(D9CDevice* d,
         if (failed(hr)) return commitChunkFail("indexed-draw-run", recordIndex, header.type, hr);
         const auto finalBindStart = std::chrono::steady_clock::now();
         hr = applyFinalBindingState(d, baseBindings, effectiveBindings);
+        if (!failed(hr)) {
+          hr = applyFinalAlphaTestState(d, baseAlphaTest, effectiveAlphaTest);
+        }
         countDurationSince(finalBindStart,
                            dxmt9::perf::countCommitChunkDrawRunFinalBindCpuTime);
         if (failed(hr)) return commitChunkFail("indexed-draw-run-final-bind", recordIndex, header.type, hr);

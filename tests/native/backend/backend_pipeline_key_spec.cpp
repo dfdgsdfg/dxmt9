@@ -717,22 +717,22 @@ void testPipelineHelpersUseExplicitFlatInputs() {
   check(variant.textured, "flat variant helper reads texture bindings");
   check(variant.linear, "flat variant helper reads sampler filtering");
   check(variant.clipPlanes, "flat variant helper reads clip plane mask");
-  check(variant.alphaTest, "flat variant helper reads alpha test state");
   checkEq(variant.sampleCount, 4u, "flat variant helper reads render target sample count");
 }
 
 void testAlphaTestAndFogTailVariantKeyBits() {
-  // H224 — the fragment alpha-test/fog tails are compile-time shader
-  // variants. The variant key carries only the two enable bits (alphaTest
-  // from RS_ALPHA_TEST_ENABLE, fogActive from the resolved
-  // ffpPs.fogMode upload predicate); func/ref/fog params stay runtime
-  // uniform loads so the variant fan-out is bounded at 4x per shader.
+  // H224/H228 — fog is the only compile-time fragment tail variant left. The
+  // variant key carries the fog enable bit (fogActive from the resolved
+  // ffpPs.fogMode upload predicate); fog params stay runtime uniform loads.
+  // Alpha test is a SINGLE variant (H228): the tail is always emitted and
+  // reads per-draw FsVolatile immediates, so the alpha-test render-state trio
+  // must NOT change the variant key — that is what lets draw runs and
+  // submission batches span per-draw alpha-test toggles.
   DrawDesc desc{};
   desc.vertexShader.hash = 0x1234u;
   desc.pixelShader.hash = 0x5678u;
 
   const auto baseKey = makeVariantKey(makeFlatDrawFixture(desc));
-  check(!baseKey.alphaTest, "default state leaves the alpha-test key bit clear");
   check(!baseKey.fogActive, "default state leaves the fog key bit clear");
 
   const auto sameKey = makeVariantKey(makeFlatDrawFixture(desc));
@@ -743,12 +743,14 @@ void testAlphaTestAndFogTailVariantKeyBits() {
 
   DrawDesc alphaDesc = desc;
   alphaDesc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  alphaDesc.rs.values[RS_ALPHA_FUNC] = static_cast<u32>(CompareFunc::GreaterEqual);
+  alphaDesc.rs.values[RS_ALPHA_REF] = 0x80u;
   const auto alphaKey = makeVariantKey(makeFlatDrawFixture(alphaDesc));
-  check(alphaKey.alphaTest, "RS_ALPHA_TEST_ENABLE sets the alpha-test key bit");
-  check(!(alphaKey == baseKey), "alpha-test enable produces a distinct variant key");
-  check(dxmt9::pipeline::ShaderVariantKeyHash{}(alphaKey) !=
-            dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey),
-        "alpha-test enable produces a distinct key hash");
+  check(alphaKey == baseKey,
+        "the alpha-test render-state trio does not change the variant key (H228 single variant)");
+  checkEq(dxmt9::pipeline::ShaderVariantKeyHash{}(alphaKey),
+          dxmt9::pipeline::ShaderVariantKeyHash{}(baseKey),
+          "the alpha-test render-state trio does not change the key hash");
 
   DrawDesc fogDesc = desc;
   fogDesc.rs.values[RS_FOG_ENABLE] = 1u;

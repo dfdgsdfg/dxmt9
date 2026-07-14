@@ -262,7 +262,7 @@ std::string translatePixelWithAlphaTestStrip(std::span<const u32> words) {
 
 // H224 — compile-time alpha-test/fog fragment tails. Build the fixture with
 // explicit render states so makeShaderSourceContext(DrawDesc) resolves the
-// alphaTestActive/fogActive gates exactly like the production flat-state
+// fogActive gate exactly like the production flat-state
 // overload does.
 std::string translatePixelWithRenderStates(
     std::span<const u32> words,
@@ -1690,32 +1690,33 @@ void testPixelShaderOutputReceivesFixedFunctionFog() {
                 "fogged color is written back to the primary color output");
 }
 
-void testTranslatedFragmentTailsAreCompileTimeVariants() {
-  // H224 — a draw whose render state can enable neither alpha test nor fog
-  // must emit neither tail nor any per-fragment FfpPsConsts load; the
-  // buffer(3) param itself is dropped when nothing else reads ffpPs.
+void testTranslatedFragmentTailsSingleAlphaVariantAndFogVariant() {
+  // H228 — the alpha-test tail is a SINGLE shader variant: always emitted,
+  // reading the per-draw FsVolatile immediate (fragment buffer 5) instead of
+  // ffpPs, and identical across alpha-test render-state values so alpha-test
+  // toggles never split the PSO. Fog stays the H224 compile-time variant.
   const auto inactive = translatePixel(makePs20ColorInputBytecode());
+  checkContains(inactive, "constant FsVolatile& fsVolatile [[buffer(5)]]",
+                "translated PS always declares the FsVolatile immediate param");
+  checkContains(inactive, "if (fsVolatile.alphaTest != 0u)",
+                "translated PS always emits the runtime alpha-test guard");
+  checkContains(inactive, "switch (fsVolatile.alphaTest)",
+                "translated PS alpha-test switch reads the immediate func");
+  checkContains(inactive, "pass = color.a >= fsVolatile.alphaRef",
+                "translated PS alpha-test compares against the immediate ref");
+  checkContains(inactive, "discard_fragment()",
+                "translated PS keeps the discard tail");
   checkNotContains(inactive, "ffpPs.alphaTestEnable",
-                   "tail-inactive translated PS emits no alpha-test guard");
-  checkNotContains(inactive, "discard_fragment()",
-                   "tail-inactive translated PS emits no alpha-test discard");
+                   "translated PS no longer reads alpha-test state from ffpPs");
   checkNotContains(inactive, "dxmt9_apply_fog(color, ffpPs",
-                   "tail-inactive translated PS emits no fog tail call");
+                   "fog-inactive translated PS emits no fog tail call");
   checkNotContains(inactive, "FfpPsConsts& ffpPs [[buffer(3)]]",
-                   "tail-inactive translated PS drops the unused FfpPsConsts param");
+                   "fog-inactive translated PS drops the unused FfpPsConsts param");
 
   const auto alphaOnly = translatePixelWithRenderStates(
       makePs20ColorInputBytecode(), {{RS_ALPHA_TEST_ENABLE, 1u}});
-  checkContains(alphaOnly, "if (ffpPs.alphaTestEnable != 0u)",
-                "alpha-test-active PS keeps the runtime alpha-test guard");
-  checkContains(alphaOnly, "switch (ffpPs.alphaTestFunc)",
-                "alpha-test-active PS keeps the runtime alpha-func switch");
-  checkContains(alphaOnly, "discard_fragment()",
-                "alpha-test-active PS keeps the discard tail");
-  checkContains(alphaOnly, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
-                "alpha-test-active PS keeps the FfpPsConsts param");
-  checkNotContains(alphaOnly, "dxmt9_apply_fog(color, ffpPs",
-                   "alpha-test-only PS emits no fog tail");
+  checkEqual(alphaOnly, inactive,
+             "alpha-test enable produces byte-identical translated fragment source (single variant)");
 
   const auto fogVertexOnly = translatePixelWithRenderStates(
       makePs20ColorInputBytecode(),
@@ -1724,8 +1725,8 @@ void testTranslatedFragmentTailsAreCompileTimeVariants() {
   checkContains(fogVertexOnly,
                 "dxmt9_apply_fog(color, ffpPs, in.position.z, in.fogFactor)",
                 "vertex-fog draw state keeps the fog tail (mirrors the ffpPs.fogMode fallback)");
-  checkNotContains(fogVertexOnly, "ffpPs.alphaTestEnable",
-                   "fog-only PS emits no alpha-test guard");
+  checkContains(fogVertexOnly, "if (fsVolatile.alphaTest != 0u)",
+                "fog-active PS keeps the single-variant alpha-test tail");
 
   // A fog mode without RS_FOG_ENABLE can never produce a non-zero
   // ffpPs.fogMode at upload time (buildFfpPsConsts zeroes it), so the
@@ -1739,14 +1740,16 @@ void testTranslatedFragmentTailsAreCompileTimeVariants() {
 
 void testTranslatedLegacyBumpEnvRetainsFfpPsWithoutTails() {
   // ps1.x TEXBEM/TEXBEML/BEM read ffpPs.bumpEnvMat/bumpEnvLum, so the
-  // FfpPsConsts param must survive even when both tails are inactive.
+  // FfpPsConsts param must survive even when the fog tail is inactive.
   const auto source = translatePixel(makePs13LegacyTextureFamilyBytecode());
   checkContains(source, "constant FfpPsConsts& ffpPs [[buffer(3)]]",
-                "legacy bump-env PS keeps the FfpPsConsts param without tails");
+                "legacy bump-env PS keeps the FfpPsConsts param without the fog tail");
   checkContains(source, "ffpPs.bumpEnvMat[0]",
                 "legacy bump-env PS still reads the bump matrix");
   checkNotContains(source, "ffpPs.alphaTestEnable",
-                   "legacy bump-env PS emits no alpha-test tail by default");
+                   "legacy bump-env PS alpha test does not read ffpPs (H228 immediates)");
+  checkContains(source, "if (fsVolatile.alphaTest != 0u)",
+                "legacy bump-env PS keeps the single-variant alpha-test tail");
 }
 
 void testFfpFogTailIsCompileTimeGated() {
@@ -1970,19 +1973,22 @@ void testFfpMipLodBiasClearOmitsShaderSideBias() {
 void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
   const auto normal = translatePixelWithRenderStates(
       makePs20ColorInputBytecode(), {{RS_ALPHA_TEST_ENABLE, 1u}});
-  checkContains(normal, "ffpPs.alphaTestEnable",
-                "alpha-test-active translated PS emits runtime alpha-test guard");
+  checkContains(normal, "fsVolatile.alphaTest",
+                "translated PS emits the FsVolatile runtime alpha-test guard");
   checkContains(normal, "discard_fragment()",
-                "alpha-test-active translated PS emits alpha-test discard tail");
+                "translated PS emits the alpha-test discard tail");
 
   const auto stripped = translatePixelWithAlphaTestStrip(makePs20ColorInputBytecode());
-  checkNotContains(stripped, "ffpPs.alphaTestEnable",
-                   "alpha-test debug strip removes translated PS alpha-test guard");
+  checkNotContains(stripped, "fsVolatile",
+                   "alpha-test debug strip removes translated PS FsVolatile guard and param");
   checkNotContains(stripped, "discard_fragment()",
                    "alpha-test debug strip removes translated PS alpha-test discard");
 }
 
 void testFfpAlphaTestDebugStripOmitsDiscard() {
+  // H228: the FFP alpha-test tail no longer keys on FfpPixelKey — it is a
+  // single variant reading FsVolatile. The key's legacy alphaTestEnable bits
+  // are still set here to prove they do not change the emitted source.
   FfpPixelKey key{};
   key.alphaTestEnable = true;
   key.alphaTestFunc = static_cast<u32>(CompareFunc::GreaterEqual);
@@ -1995,15 +2001,26 @@ void testFfpAlphaTestDebugStripOmitsDiscard() {
   auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
 
   const auto normal = dxmt9::ffp::makeFfpPixelSource(key, context);
-  checkContains(normal, "ffpPs.alphaTestFunc",
-                "normal FFP PS emits alpha-test function switch");
+  checkContains(normal, "constant FsVolatile& fsVolatile [[buffer(5)]]",
+                "FFP PS declares the FsVolatile immediate param");
+  checkContains(normal, "switch (fsVolatile.alphaTest)",
+                "FFP PS emits the FsVolatile alpha-test function switch");
   checkContains(normal, "discard_fragment()",
-                "normal FFP PS emits alpha-test discard");
+                "FFP PS emits alpha-test discard");
+  checkNotContains(normal, "ffpPs.alphaTestFunc",
+                   "FFP PS no longer reads alpha-test state from ffpPs");
+
+  auto keyWithoutAlpha = key;
+  keyWithoutAlpha.alphaTestEnable = false;
+  keyWithoutAlpha.alphaTestFunc = 0u;
+  const auto sameVariant = dxmt9::ffp::makeFfpPixelSource(keyWithoutAlpha, context);
+  checkEqual(sameVariant, normal,
+             "FfpPixelKey alpha-test bits do not change the emitted FFP source (single variant)");
 
   context.stripAlphaTestForDebug = true;
   const auto stripped = dxmt9::ffp::makeFfpPixelSource(key, context);
-  checkNotContains(stripped, "ffpPs.alphaTestFunc",
-                   "alpha-test debug strip removes FFP alpha-test branch");
+  checkNotContains(stripped, "fsVolatile",
+                   "alpha-test debug strip removes FFP FsVolatile guard and param");
   checkNotContains(stripped, "discard_fragment()",
                    "alpha-test debug strip removes FFP alpha-test discard");
 }
@@ -3336,7 +3353,7 @@ int main() {
     testD3DBCDecodeAndClassificationFixtures();
     testPs30VFaceDecodeAndSourceContract();
     testPixelShaderOutputReceivesFixedFunctionFog();
-    testTranslatedFragmentTailsAreCompileTimeVariants();
+    testTranslatedFragmentTailsSingleAlphaVariantAndFogVariant();
     testTranslatedLegacyBumpEnvRetainsFfpPsWithoutTails();
     testFfpFogTailIsCompileTimeGated();
     testLegacyShaderModelDecodeContracts();

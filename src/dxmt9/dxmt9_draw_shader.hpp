@@ -73,22 +73,24 @@ struct ShaderSourceContext {
   // off on the base-colour build). Only ever set alongside a tile-FFP draw
   // selection; default off keeps the portable FFP fragment byte-identical.
   bool stripFogAlphaTestForTileBase = false;
-  // H224 — compile-time fragment tail gates resolved from the draw's render
-  // state. alphaTestActive mirrors D3DRS_ALPHATESTENABLE
-  // (state::fragmentAlphaTestEnabled); fogActive mirrors the resolved
-  // ffpPs.fogMode upload predicate (state::fragmentFogCouldApply:
-  // D3DRS_FOGENABLE plus a non-None table/vertex fog mode). When a gate is
-  // false the fragment emitters omit the corresponding tail and its
-  // per-fragment FfpPsConsts loads entirely — SFIV H224 showed the
-  // runtime-guarded tails' serialized cbuf loads dominating scene-pass GPU
-  // time. When true the emitted tail keeps the historical runtime-uniform
-  // switch, so alpha func/ref and fog params never enter the PSO key (variant
-  // fan-out is bounded at 4x per shader). Both makeShaderSourceContext
-  // overloads resolve these from state; the conservative enabled defaults keep
-  // bare contexts (offline WinemetalShaderCompileRequest compiles) on the
-  // legacy full-tail shape. The paired PSO-key bits are
-  // ShaderVariantKey::alphaTest / ::fogActive.
-  bool alphaTestActive = true;
+  // H224 — compile-time fragment fog tail gate resolved from the draw's
+  // render state: fogActive mirrors the resolved ffpPs.fogMode upload
+  // predicate (state::fragmentFogCouldApply: D3DRS_FOGENABLE plus a non-None
+  // table/vertex fog mode). When false the fragment emitters omit the fog
+  // tail and its per-fragment FfpPsConsts loads entirely — SFIV H224 showed
+  // the runtime-guarded tails' serialized cbuf loads dominating scene-pass
+  // GPU time. When true the emitted tail keeps the historical runtime-uniform
+  // switch, so fog params never enter the PSO key. Both
+  // makeShaderSourceContext overloads resolve this from state; the
+  // conservative enabled default keeps bare contexts (offline
+  // WinemetalShaderCompileRequest compiles) on the legacy full-tail shape.
+  // The paired PSO-key bit is ShaderVariantKey::fogActive.
+  //
+  // H228 — alpha test is intentionally NOT a compile-time gate anymore: the
+  // alpha-test tail is a single always-emitted variant reading the per-draw
+  // FsVolatile immediate (fragment buffer 5), so per-draw alpha-test toggles
+  // never split the PSO. Only the DXMT_DISABLE_ALPHA_TEST debug strip
+  // (stripAlphaTestForDebug) and the tile base-colour strip remove it.
   bool fogActive = true;
   // Diagnostic alpha-test source stripper. When DXMT_DISABLE_ALPHA_TEST is set,
   // generated fragment shaders omit the alpha-test discard path instead of only

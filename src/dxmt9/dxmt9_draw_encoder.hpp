@@ -123,6 +123,12 @@ struct EncodeDrawRecorder {
                          const void* bytes,
                          std::uint64_t length,
                          std::uint8_t index) = nullptr;
+  // H228 — observes the per-draw FsVolatile alpha-test immediate push
+  // (fragment buffer 5).
+  void (*setFragmentBytes)(void* userdata,
+                           const void* bytes,
+                           std::uint64_t length,
+                           std::uint8_t index) = nullptr;
   void (*drawPrimitives)(void* userdata,
                          WMTPrimitiveType primitiveType,
                          std::uint64_t vertexStart,
@@ -353,9 +359,19 @@ struct BufferBindShadowSlot {
   std::uint64_t offset = 0;
 };
 
+// H228 — per-encoder shadow of the last-pushed FsVolatile alpha-test
+// immediate (fragment buffer 5). Values are the raw FsVolatile fields so the
+// header stays independent of dxmt9_draw_state.hpp.
+struct FsVolatileBindShadowSlot {
+  bool valid = false;
+  std::uint32_t alphaTest = 0;
+  float alphaRef = 0.0f;
+};
+
 struct TextureSamplerBindShadow {
   TextureSamplerBindShadowSlot renderPipeline{};
   TextureSamplerBindShadowSlot depthStencil{};
+  FsVolatileBindShadowSlot fsVolatile{};
   std::array<BufferBindShadowSlot, 32> vertexBuffers{};
   std::array<TextureSamplerBindShadowSlot, core::kMaxSamplers> fragmentTextures{};
   std::array<SamplerBindShadowSlot, core::kMaxSamplers> fragmentSamplers{};
@@ -463,7 +479,13 @@ bool encodeDraw(EncodeContext& ctx,
                  // provenance logs. Direct encodeDraw callers can leave it
                  // invalid.
                  std::uint32_t commandIndex = std::numeric_limits<std::uint32_t>::max(),
-                 const core::DrawBindingSnapshot* bindingSnapshot = nullptr);
+                 const core::DrawBindingSnapshot* bindingSnapshot = nullptr,
+                 // H228 — parsed per-draw DrawBindingOverride carrying the
+                 // alpha-test immediate trio for run/batch draws. encodeDraw
+                 // reads only the alphaTest* fields (stream/index rewrites
+                 // are the caller's job); nullptr resolves the trio from
+                 // drawState's flat render state.
+                 const core::DrawBindingOverride* paramBindingOverride = nullptr);
 
 struct EncodeChunkOptions {
   // Optional open command buffer supplied by an encoded-pending-tail carrier.

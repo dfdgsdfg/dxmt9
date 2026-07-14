@@ -219,11 +219,11 @@ ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layou
   context.clipPlaneMask = layout.clipPlaneMask;
   context.unboundTextureFallback = true;
   context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
-  // H224 — resolve the compile-time fragment tail gates from the same flat
-  // render state that feeds the FfpPsConsts upload (single-source predicates
-  // in dxmt9_draw_state), keeping the emitted MSL, the PSO key bits, and the
-  // uploaded constants in lockstep.
-  context.alphaTestActive = state::fragmentAlphaTestEnabled(hot.renderStates);
+  // H224 — resolve the compile-time fog tail gate from the same flat render
+  // state that feeds the FfpPsConsts upload (single-source predicate in
+  // dxmt9_draw_state), keeping the emitted MSL, the PSO key bit, and the
+  // uploaded constants in lockstep. Alpha test has no gate here (H228): the
+  // tail is a single variant reading per-draw FsVolatile immediates.
   context.fogActive = state::fragmentFogCouldApply(hot.renderStates);
   return context;
 }
@@ -243,9 +243,8 @@ ShaderSourceContext makeShaderSourceContext(const fixture::DrawDesc& desc) {
   context.clipPlaneMask = layout.clipPlaneMask;
   context.enableHalfVSOut = shaders::vsoutProbeHalfEnabled();
   // H224 — mirror the production flat-state overload so fixture-generated
-  // sources carry the same compile-time fragment tail gates for the same
-  // logical draw state.
-  context.alphaTestActive = state::fragmentAlphaTestEnabled(desc.rs);
+  // sources carry the same compile-time fog tail gate for the same logical
+  // draw state (alpha test is variant-free per H228).
   context.fogActive = state::fragmentFogCouldApply(desc.rs);
   return context;
 }

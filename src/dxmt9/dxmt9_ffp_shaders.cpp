@@ -972,6 +972,20 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // argbuf so every downstream sample site is byte-identical.
   const bool argbufResourceArray =
       argbufHybrid && context.argbufResourceArray && hasTextureParams;
+  // R-BACK-13.1 — when this is the tile-FFP base-colour variant, the fog
+  // blend and the alpha-test discard are NOT emitted here; the tile kernel
+  // (makeFfpTilePixelSource) applies them over the rasterized base colour in
+  // the imageblock. Emitting them here too would double-apply fog and would
+  // discard fragments the tile kernel is supposed to alpha-test.
+  //
+  // H228 — the alpha-test tail is a SINGLE shader variant: no longer gated
+  // on FfpPixelKey::alphaTestEnable, it is always emitted (unless stripped
+  // for the tile base or by DXMT_DISABLE_ALPHA_TEST) and evaluated from the
+  // per-draw FsVolatile immediate at fragment buffer 5, so alpha-test-only
+  // render-state toggles never split the PSO and stay run/batch-eligible.
+  const bool emitFogAlphaTest = !context.stripFogAlphaTestForTileBase;
+  const bool emitFog = emitFogAlphaTest && !context.stripFogForDebug;
+  const bool emitAlphaTest = emitFogAlphaTest && !context.stripAlphaTestForDebug;
   shaders::ShaderPreludeOptions preludeOptions{};
   preludeOptions.withClipDistances = context.clipPlaneMask != 0;
   preludeOptions.vsOutLayout = context.vsOutLayout;
@@ -1016,6 +1030,14 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << ", float2 dxmt9_pointCoord [[point_coord]]";
     }
   };
+  // H228 — the FsVolatile immediate param travels with the alpha-test tail
+  // (struct declared in the shared prelude; fragment buffer 5 mirrors the
+  // vertex DrawVolatile lane and stays direct in every argbuf mode).
+  const auto emitFsVolatileParam = [&]() {
+    if (emitAlphaTest) {
+      out << ", constant FsVolatile& fsVolatile [[buffer(5)]]";
+    }
+  };
   if (hasTextureParams) {
     if (argbufResourceArray) {
       // R-BACK-12.22..12.26 (resource-array sub-mode) — texture/sampler
@@ -1031,6 +1053,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       if (emitLodBias) {
         out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParam();
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -1059,6 +1082,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       if (emitLodBias) {
         out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParam();
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -1079,6 +1103,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       if (emitLodBias) {
         out << ", constant SamplerLodBias& samplerLodBias [[buffer(4)]]";
       }
+      emitFsVolatileParam();
       out << ") {\n";
     }
     out << "  (void)psConsts;\n";
@@ -1088,6 +1113,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
              "constant ArgbufLayout& abuf [[buffer("
           << shaders::kArgbufHybridBindSlot << ")]]";
       emitPointCoordParam();
+      emitFsVolatileParam();
       out << ") {\n";
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
@@ -1096,6 +1122,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
              "constant PsConsts& psConsts [[buffer(0)]], "
              "constant FfpPsConsts& ffpPs [[buffer(3)]]";
       emitPointCoordParam();
+      emitFsVolatileParam();
       out << ") {\n";
     }
     out << "  (void)psConsts;\n";
@@ -1282,29 +1309,25 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     }
     out << "  color = current;\n";
   }
-  // R-BACK-13.1 — when this is the tile-FFP base-colour variant, the fog
-  // blend and the alpha-test discard are NOT emitted here; the tile kernel
-  // (makeFfpTilePixelSource) applies them over the rasterized base colour in
-  // the imageblock. Emitting them here too would double-apply fog and would
-  // discard fragments the tile kernel is supposed to alpha-test (the tile
-  // kernel reads back the imageblock color, so a discarded base fragment
-  // would never reach it).
-  const bool emitFogAlphaTest = !context.stripFogAlphaTestForTileBase;
-  const bool emitFog = emitFogAlphaTest && !context.stripFogForDebug;
-  const bool emitAlphaTest = emitFogAlphaTest && !context.stripAlphaTestForDebug;
-  if (emitAlphaTest && key.alphaTestEnable) {
-    out << "  bool pass = true;\n";
-    out << "  switch (ffpPs.alphaTestFunc) {\n";
-    out << "    case 2u: pass = color.a < ffpPs.alphaRef; break;\n";
-    out << "    case 3u: pass = color.a == ffpPs.alphaRef; break;\n";
-    out << "    case 4u: pass = color.a <= ffpPs.alphaRef; break;\n";
-    out << "    case 5u: pass = color.a > ffpPs.alphaRef; break;\n";
-    out << "    case 6u: pass = color.a != ffpPs.alphaRef; break;\n";
-    out << "    case 7u: pass = color.a >= ffpPs.alphaRef; break;\n";
-    out << "    case 8u: pass = true; break;\n";
-    out << "    default: pass = true; break;\n";
+  // H228 — single-variant alpha test (gates hoisted above the entry-point
+  // signature so the FsVolatile param and the tail stay in lockstep):
+  // runtime-gated on the per-draw immediate, byte-identical comparison
+  // semantics to the historical ffpPs.alphaTestFunc switch.
+  if (emitAlphaTest) {
+    out << "  if (fsVolatile.alphaTest != 0u) {\n";
+    out << "    bool pass = true;\n";
+    out << "    switch (fsVolatile.alphaTest) {\n";
+    out << "      case 2u: pass = color.a < fsVolatile.alphaRef; break;\n";
+    out << "      case 3u: pass = color.a == fsVolatile.alphaRef; break;\n";
+    out << "      case 4u: pass = color.a <= fsVolatile.alphaRef; break;\n";
+    out << "      case 5u: pass = color.a > fsVolatile.alphaRef; break;\n";
+    out << "      case 6u: pass = color.a != fsVolatile.alphaRef; break;\n";
+    out << "      case 7u: pass = color.a >= fsVolatile.alphaRef; break;\n";
+    out << "      case 8u: pass = true; break;\n";
+    out << "      default: pass = true; break;\n";
+    out << "    }\n";
+    out << "    if (!pass) { discard_fragment(); }\n";
     out << "  }\n";
-    out << "  if (!pass) { discard_fragment(); }\n";
   }
   // H224 — the FfpPixelKey bakes a non-None fogMode whenever a fog
   // table/vertex mode render state is set even while D3DRS_FOGENABLE is off

@@ -380,10 +380,12 @@ void testTranslatedPixelStage1Bindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
-  // H224 — the FfpPsConsts param is emitted only when the shader reads it
-  // (alpha-test/fog tails or ps1.x bump env). Keep this binding-shape spec
-  // exercising the ffpPs-using variant by enabling alpha test.
-  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  // H224/H228 — the FfpPsConsts param is emitted only when the shader reads
+  // it (fog tail or ps1.x bump env; alpha test moved to FsVolatile
+  // immediates). Keep this binding-shape spec exercising the ffpPs-using
+  // variant by enabling fog.
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/false));
   checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
@@ -405,8 +407,9 @@ void testTranslatedPixelStage2Bindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
-  // H224 — keep the ffpPs argbuf alias in play (see Stage 1 spec).
-  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  // H224/H228 — keep the ffpPs argbuf alias in play via fog (see Stage 1 spec).
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeContext(desc, /*argbufHybridMode=*/true));
   checkContains(src, "[[buffer(30)]]",
@@ -437,8 +440,9 @@ void testTranslatedPixelStage2bDirectCbufBindings() {
   DrawDesc desc{};
   desc.pixelShader = shader;
   desc.textures[2].handle = Handle{3};
-  // H224 — keep the direct ffpPs binding in play (see Stage 1 spec).
-  desc.rs.values[RS_ALPHA_TEST_ENABLE] = 1u;
+  // H224/H228 — keep the direct ffpPs binding in play via fog (see Stage 1 spec).
+  desc.rs.values[RS_FOG_ENABLE] = 1u;
+  desc.rs.values[RS_FOG_TABLE_MODE] = static_cast<u32>(FogMode::Linear);
   const auto src = dxmt9::translator::makeTranslatedFragmentSource(
       shader, makeDirectCbufContext(desc));
   checkContains(src, "constant PsConsts& psConsts [[buffer(0)]]",
