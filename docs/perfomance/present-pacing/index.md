@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H226` - translated shaders now read constant registers in place instead of copying the register file per invocation (`7abaa20e`): the spilled `cFloat[N]` prologue copy was the true owner of SFIV's ~88ms scene-pass instances — SFIV CB GPU p50 `73 -> 2.4ms`, presents `1,740 -> 5,100` (~44.75 in-game FPS), GT1 parity. Workload map: [overview-sfiv](../overview-sfiv.md).
+Latest tracked row: `H227` - GT2 attribution: a third bottleneck class — high-draw-count serialized pipeline, every stage half-idle (encode thread 18% in `nextDrawable`, 48% of adjacent draw pairs batch-incompatible); per-draw getenv bug fixed (`676ca734`), `DXMT9_PRESENT_ASYNC_ACQUIRE` ruled out (hang).
 
 ## Start Here
 
