@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H227` - GT2 attribution: a third bottleneck class — high-draw-count serialized pipeline, every stage half-idle (encode thread 18% in `nextDrawable`, 48% of adjacent draw pairs batch-incompatible); per-draw getenv bug fixed (`676ca734`), `DXMT9_PRESENT_ASYNC_ACQUIRE` ruled out (hang).
+Latest tracked row: `H228` - alpha test now evaluates from per-draw slot-5 immediates in a single fragment variant (`e982a76a`; the H225 variant bit removed, both batching layers exempt the trio). GT2's supposed alpha-test-only batch breaks were shader alternation (542/542 pairs switch VS+PS — classifier semantics corrected in `dddfbaef`); GT2's remaining levers are run-break cost and pass-streaming overlap.
 
 ## Start Here
 
