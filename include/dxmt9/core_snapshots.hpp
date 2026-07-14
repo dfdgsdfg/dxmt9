@@ -1439,7 +1439,11 @@ inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
   result.textureOnly = !textureEq && samplerEq && tssEq && renderStateEq &&
                        shaderEq && declEq && attachmentEq && viewportEq &&
                        clipEq && usageEq;
-  if (!renderStateEq) {
+  // Sub-classify the render-state diff only when render state is the SOLE
+  // differing group; otherwise the rs_* counters overstate rescuable pairs
+  // (H228 lesson: GT2's "alpha-test-only" pairs also switched shaders).
+  if (!renderStateEq && textureEq && samplerEq && tssEq && shaderEq &&
+      declEq && attachmentEq && viewportEq && clipEq && usageEq) {
     result.renderStateDiff = classifyDrawRunBatchRenderStateDiff(
         a.renderStates, b.renderStates, &result.renderStateDiffFirstRegister);
   }
