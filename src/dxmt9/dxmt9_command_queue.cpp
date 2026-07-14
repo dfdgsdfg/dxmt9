@@ -2024,6 +2024,14 @@ bool drawSubmissionStatesCompatible(
   DXMT_ASSERT(a.stateMaterialized && b.stateMaterialized);
   const bool compatible = core::drawRunSubmissionStatesCompatibleForBatch(a, b);
   perf::countSubmitDrawRunBatchCompatPair(false, compatible);
+  if (!compatible) {
+    const auto& aState = a.materializedState();
+    const auto& bState = b.materializedState();
+    const auto incompat = core::classifyDrawRunBatchIncompatibility(
+        aState.hot, bState.hot, aState.shaderLayout, bState.shaderLayout);
+    perf::countSubmitDrawRunBatchIncompat(
+        static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
+  }
   return compatible;
 }
 
@@ -2061,6 +2069,15 @@ bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
   const bool compatible =
       core::drawRunSubmissionStatesCompatibleForBatch(base, candidate);
   perf::countSubmitDrawRunBatchCompatPair(false, compatible);
+  if (!compatible) {
+    const auto& baseState = base.materializedState();
+    const auto& candidateState = candidate.materializedState();
+    const auto incompat = core::classifyDrawRunBatchIncompatibility(
+        baseState.hot, candidateState.hot, baseState.shaderLayout,
+        candidateState.shaderLayout);
+    perf::countSubmitDrawRunBatchIncompat(
+        static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
+  }
   return compatible;
 }
 

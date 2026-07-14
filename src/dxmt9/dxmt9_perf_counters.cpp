@@ -270,6 +270,18 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLane{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLaneCompatible{0};
   std::atomic<std::uint64_t> submitDrawRunBatchCompatSameGenerationLaneIncompatible{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatTexture{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatSampler{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatTextureStageState{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRenderState{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatShader{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatVertexDecl{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatAttachment{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatViewport{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatClipPlane{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatLayoutUsage{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatUnknown{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatTextureOnly{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingSnapshotCpuNs{0};
@@ -2342,6 +2354,18 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_compat_same_generation_lane", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLane, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_same_generation_lane_compatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLaneCompatible, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_compat_same_generation_lane_incompatible", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchCompatSameGenerationLaneIncompatible, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_texture", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatTexture, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_sampler", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatSampler, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_texture_stage_state", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatTextureStageState, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_render_state", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRenderState, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_shader", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatShader, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_vertex_decl", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatVertexDecl, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_attachment", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatAttachment, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_viewport", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatViewport, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_clip_plane", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatClipPlane, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_layout_usage", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatLayoutUsage, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_unknown", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatUnknown, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_texture_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatTextureOnly, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
@@ -5471,6 +5495,27 @@ void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane,
   add(compatible
           ? c.submitDrawRunBatchCompatSameGenerationLaneCompatible
           : c.submitDrawRunBatchCompatSameGenerationLaneIncompatible);
+}
+
+void countSubmitDrawRunBatchIncompat(std::uint8_t firstDiffClass,
+                                     bool textureOnly) {
+  auto& c = counters();
+  switch (firstDiffClass) {
+  case 0: add(c.submitDrawRunBatchIncompatTexture); break;
+  case 1: add(c.submitDrawRunBatchIncompatSampler); break;
+  case 2: add(c.submitDrawRunBatchIncompatTextureStageState); break;
+  case 3: add(c.submitDrawRunBatchIncompatRenderState); break;
+  case 4: add(c.submitDrawRunBatchIncompatShader); break;
+  case 5: add(c.submitDrawRunBatchIncompatVertexDecl); break;
+  case 6: add(c.submitDrawRunBatchIncompatAttachment); break;
+  case 7: add(c.submitDrawRunBatchIncompatViewport); break;
+  case 8: add(c.submitDrawRunBatchIncompatClipPlane); break;
+  case 9: add(c.submitDrawRunBatchIncompatLayoutUsage); break;
+  default: add(c.submitDrawRunBatchIncompatUnknown); break;
+  }
+  if (textureOnly) {
+    add(c.submitDrawRunBatchIncompatTextureOnly);
+  }
 }
 
 void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds) {

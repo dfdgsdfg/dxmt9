@@ -1180,6 +1180,90 @@ inline bool shaderLayoutsCompatibleForDrawRunBatch(
          a.clipPlaneMask == b.clipPlaneMask;
 }
 
+// Diagnostic classification for batch-incompatible submission pairs: names
+// the first differing state group (ordered roughly by expected churn) so
+// run-break attribution can decide which group is worth an override/widening
+// mechanism. `textureOnly` is the precise claim that extending the existing
+// binding-override machinery to texture bindings would have kept the pair
+// batchable: every non-texture group is equal and a texture group differs.
+enum class DrawRunBatchIncompatClass : std::uint8_t {
+  Texture,
+  Sampler,
+  TextureStageState,
+  RenderState,
+  Shader,
+  VertexDecl,
+  Attachment,
+  Viewport,
+  ClipPlane,
+  LayoutUsage,
+  Unknown,
+};
+
+struct DrawRunBatchIncompat {
+  DrawRunBatchIncompatClass firstDiff = DrawRunBatchIncompatClass::Unknown;
+  bool textureOnly = false;
+};
+
+inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
+    const FlatDrawStateRecord& a,
+    const FlatDrawStateRecord& b,
+    const DrawShaderLayoutContext& la,
+    const DrawShaderLayoutContext& lb) noexcept {
+  const bool textureEq = a.key.textures == b.key.textures &&
+                         a.key.textureLods == b.key.textureLods &&
+                         a.key.textureMask == b.key.textureMask &&
+                         a.textures == b.textures &&
+                         a.textureLods == b.textureLods &&
+                         a.textureMask == b.textureMask;
+  const bool samplerEq = a.key.samplerStateHashes == b.key.samplerStateHashes &&
+                         a.key.samplerStateMask == b.key.samplerStateMask &&
+                         a.samplerStates == b.samplerStates;
+  const bool tssEq = a.key.textureStageStateHashes == b.key.textureStageStateHashes &&
+                     a.textureStageStates == b.textureStageStates;
+  const bool renderStateEq = a.key.renderStateHash == b.key.renderStateHash &&
+                             a.renderStates == b.renderStates;
+  const bool shaderEq = a.key.vertexShaderKind == b.key.vertexShaderKind &&
+                        a.key.pixelShaderKind == b.key.pixelShaderKind &&
+                        a.key.vertexShaderHash == b.key.vertexShaderHash &&
+                        a.key.pixelShaderHash == b.key.pixelShaderHash &&
+                        la.vertexShader == lb.vertexShader &&
+                        la.pixelShader == lb.pixelShader;
+  const bool declEq = a.key.vertexElementCount == b.key.vertexElementCount &&
+                      a.key.fvf == b.key.fvf &&
+                      a.key.vertexDeclHash == b.key.vertexDeclHash &&
+                      la.vertexDecl.elements == lb.vertexDecl.elements &&
+                      la.vertexDecl.fvf == lb.vertexDecl.fvf;
+  const bool attachmentEq = a.key.colorAttachments == b.key.colorAttachments &&
+                            a.key.depthStencil == b.key.depthStencil &&
+                            a.key.renderTargetMask == b.key.renderTargetMask &&
+                            a.colorAttachments == b.colorAttachments &&
+                            a.depthStencil == b.depthStencil &&
+                            a.renderTargetMask == b.renderTargetMask;
+  const bool viewportEq = a.key.viewportHash == b.key.viewportHash &&
+                          a.viewport == b.viewport;
+  const bool clipEq = a.key.clipPlaneMask == b.key.clipPlaneMask &&
+                      a.clipPlaneMask == b.clipPlaneMask &&
+                      la.clipPlaneMask == lb.clipPlaneMask;
+  const bool usageEq = la.vertexConstantUsage == lb.vertexConstantUsage &&
+                       la.pixelConstantUsage == lb.pixelConstantUsage;
+  DrawRunBatchIncompat result{};
+  if (!textureEq) result.firstDiff = DrawRunBatchIncompatClass::Texture;
+  else if (!samplerEq) result.firstDiff = DrawRunBatchIncompatClass::Sampler;
+  else if (!tssEq) result.firstDiff = DrawRunBatchIncompatClass::TextureStageState;
+  else if (!renderStateEq) result.firstDiff = DrawRunBatchIncompatClass::RenderState;
+  else if (!shaderEq) result.firstDiff = DrawRunBatchIncompatClass::Shader;
+  else if (!declEq) result.firstDiff = DrawRunBatchIncompatClass::VertexDecl;
+  else if (!attachmentEq) result.firstDiff = DrawRunBatchIncompatClass::Attachment;
+  else if (!viewportEq) result.firstDiff = DrawRunBatchIncompatClass::Viewport;
+  else if (!clipEq) result.firstDiff = DrawRunBatchIncompatClass::ClipPlane;
+  else if (!usageEq) result.firstDiff = DrawRunBatchIncompatClass::LayoutUsage;
+  result.textureOnly = !textureEq && samplerEq && tssEq && renderStateEq &&
+                       shaderEq && declEq && attachmentEq && viewportEq &&
+                       clipEq && usageEq;
+  return result;
+}
+
 template <typename Submission>
 inline bool drawRunSubmissionStatesCompatibleForBatch(
     const Submission& a,
