@@ -1200,10 +1200,110 @@ enum class DrawRunBatchIncompatClass : std::uint8_t {
   Unknown,
 };
 
+// Sub-classification for RenderState incompatibility: names the register
+// group the differing entries fall into, so run-break attribution can tell a
+// per-draw alpha-test/blend toggle (PSO-relevant, genuinely unbatchable) from
+// an encoder-dynamic register that an override lane could absorb.
+enum class DrawRunBatchRenderStateDiffClass : std::uint8_t {
+  AlphaTestOnly,
+  BlendOnly,
+  CullOnly,
+  DepthOnly,
+  FogOnly,
+  TextureFactorOnly,
+  SingleOther,
+  Mixed,
+  None,
+};
+
 struct DrawRunBatchIncompat {
   DrawRunBatchIncompatClass firstDiff = DrawRunBatchIncompatClass::Unknown;
   bool textureOnly = false;
+  DrawRunBatchRenderStateDiffClass renderStateDiff =
+      DrawRunBatchRenderStateDiffClass::None;
+  u32 renderStateDiffFirstRegister = 0;
 };
+
+inline DrawRunBatchRenderStateDiffClass classifyDrawRunBatchRenderStateDiff(
+    const FlatRenderStateSet& a,
+    const FlatRenderStateSet& b,
+    u32* firstRegister) noexcept {
+  const auto groupOf = [](u32 rs) -> std::uint8_t {
+    switch (rs) {
+    case RS_ALPHA_TEST_ENABLE:
+    case RS_ALPHA_REF:
+    case RS_ALPHA_FUNC:
+      return 0;  // alpha test
+    case RS_ALPHABLEND_ENABLE:
+    case RS_SRC_BLEND:
+    case RS_DEST_BLEND:
+    case RS_BLEND_OP:
+    case RS_BLEND_FACTOR:
+    case RS_SEPARATE_ALPHA_BLEND_ENABLE:
+    case RS_SRC_BLEND_ALPHA:
+    case RS_DEST_BLEND_ALPHA:
+    case RS_BLEND_OP_ALPHA:
+      return 1;  // blend
+    case RS_CULL_MODE:
+      return 2;  // cull
+    case RS_Z_ENABLE:
+    case RS_Z_WRITE_ENABLE:
+    case RS_Z_FUNC:
+    case RS_DEPTH_BIAS:
+    case RS_SLOPE_SCALE_DEPTH_BIAS:
+      return 3;  // depth
+    case RS_FOG_ENABLE:
+    case RS_FOG_TABLE_MODE:
+    case RS_FOG_FROM_VERTEX:
+    case RS_FOG_COLOR:
+    case RS_FOG_START:
+    case RS_FOG_END:
+    case RS_FOG_DENSITY:
+      return 4;  // fog
+    case RS_TEXTURE_FACTOR:
+      return 5;  // tfactor
+    default:
+      return 6;  // other
+    }
+  };
+  std::uint32_t groupMask = 0;
+  std::uint32_t diffCount = 0;
+  u32 first = 0;
+  const auto note = [&](u32 rs) {
+    if (diffCount == 0) first = rs;
+    ++diffCount;
+    groupMask |= 1u << groupOf(rs);
+  };
+  const auto* pa = a.entries.data();
+  const auto* ea = pa + (a.count <= a.entries.size() ? a.count : a.entries.size());
+  const auto* pb = b.entries.data();
+  const auto* eb = pb + (b.count <= b.entries.size() ? b.count : b.entries.size());
+  while (pa != ea || pb != eb) {
+    if (pb == eb || (pa != ea && pa->state < pb->state)) {
+      note(pa->state); ++pa;
+    } else if (pa == ea || pb->state < pa->state) {
+      note(pb->state); ++pb;
+    } else {
+      if (pa->value != pb->value) note(pa->state);
+      ++pa; ++pb;
+    }
+  }
+  if (firstRegister) *firstRegister = first;
+  if (diffCount == 0) return DrawRunBatchRenderStateDiffClass::None;
+  const bool single = (groupMask & (groupMask - 1)) == 0;
+  if (!single) return DrawRunBatchRenderStateDiffClass::Mixed;
+  switch (groupMask) {
+  case 1u << 0: return DrawRunBatchRenderStateDiffClass::AlphaTestOnly;
+  case 1u << 1: return DrawRunBatchRenderStateDiffClass::BlendOnly;
+  case 1u << 2: return DrawRunBatchRenderStateDiffClass::CullOnly;
+  case 1u << 3: return DrawRunBatchRenderStateDiffClass::DepthOnly;
+  case 1u << 4: return DrawRunBatchRenderStateDiffClass::FogOnly;
+  case 1u << 5: return DrawRunBatchRenderStateDiffClass::TextureFactorOnly;
+  default:
+    return diffCount == 1 ? DrawRunBatchRenderStateDiffClass::SingleOther
+                          : DrawRunBatchRenderStateDiffClass::Mixed;
+  }
+}
 
 inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
     const FlatDrawStateRecord& a,
@@ -1261,6 +1361,10 @@ inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
   result.textureOnly = !textureEq && samplerEq && tssEq && renderStateEq &&
                        shaderEq && declEq && attachmentEq && viewportEq &&
                        clipEq && usageEq;
+  if (!renderStateEq) {
+    result.renderStateDiff = classifyDrawRunBatchRenderStateDiff(
+        a.renderStates, b.renderStates, &result.renderStateDiffFirstRegister);
+  }
   return result;
 }
 

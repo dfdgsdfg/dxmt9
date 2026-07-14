@@ -282,6 +282,14 @@ struct Counters {
   std::atomic<std::uint64_t> submitDrawRunBatchIncompatLayoutUsage{0};
   std::atomic<std::uint64_t> submitDrawRunBatchIncompatUnknown{0};
   std::atomic<std::uint64_t> submitDrawRunBatchIncompatTextureOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsAlphaTestOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsBlendOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsCullOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsDepthOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsFogOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsTextureFactorOnly{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsSingleOther{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchIncompatRsMixed{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingOverrideCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunBatchBindingSnapshotCpuNs{0};
@@ -2366,6 +2374,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"submit_draw_run_batch_incompat_layout_usage", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatLayoutUsage, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_incompat_unknown", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatUnknown, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_incompat_texture_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatTextureOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_alpha_test_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsAlphaTestOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_blend_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsBlendOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_cull_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsCullOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_depth_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsDepthOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_fog_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsFogOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_texture_factor_only", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsTextureFactorOnly, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_single_other", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsSingleOther, nullptr, nullptr, 0.0},
+    {"submit_draw_run_batch_incompat_rs_mixed", CounterEntry::Kind::UnsignedCount, &Counters::submitDrawRunBatchIncompatRsMixed, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_override_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingOverrideCpuMaxNs, nullptr, nullptr, 0.0},
     {"submit_draw_run_batch_binding_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::submitDrawRunBatchBindingSnapshotCpuNs, nullptr, nullptr, 0.0},
@@ -5515,6 +5531,21 @@ void countSubmitDrawRunBatchIncompat(std::uint8_t firstDiffClass,
   }
   if (textureOnly) {
     add(c.submitDrawRunBatchIncompatTextureOnly);
+  }
+}
+
+void countSubmitDrawRunBatchIncompatRenderState(std::uint8_t diffClass) {
+  auto& c = counters();
+  switch (diffClass) {
+  case 0: add(c.submitDrawRunBatchIncompatRsAlphaTestOnly); break;
+  case 1: add(c.submitDrawRunBatchIncompatRsBlendOnly); break;
+  case 2: add(c.submitDrawRunBatchIncompatRsCullOnly); break;
+  case 3: add(c.submitDrawRunBatchIncompatRsDepthOnly); break;
+  case 4: add(c.submitDrawRunBatchIncompatRsFogOnly); break;
+  case 5: add(c.submitDrawRunBatchIncompatRsTextureFactorOnly); break;
+  case 6: add(c.submitDrawRunBatchIncompatRsSingleOther); break;
+  case 7: add(c.submitDrawRunBatchIncompatRsMixed); break;
+  default: break;
   }
 }
 

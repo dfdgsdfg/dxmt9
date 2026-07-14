@@ -2031,6 +2031,11 @@ bool drawSubmissionStatesCompatible(
         aState.hot, bState.hot, aState.shaderLayout, bState.shaderLayout);
     perf::countSubmitDrawRunBatchIncompat(
         static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
+    if (incompat.renderStateDiff !=
+        core::DrawRunBatchRenderStateDiffClass::None) {
+      perf::countSubmitDrawRunBatchIncompatRenderState(
+          static_cast<std::uint8_t>(incompat.renderStateDiff));
+    }
   }
   return compatible;
 }
@@ -2077,6 +2082,11 @@ bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
         candidateState.shaderLayout);
     perf::countSubmitDrawRunBatchIncompat(
         static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
+    if (incompat.renderStateDiff !=
+        core::DrawRunBatchRenderStateDiffClass::None) {
+      perf::countSubmitDrawRunBatchIncompatRenderState(
+          static_cast<std::uint8_t>(incompat.renderStateDiff));
+    }
   }
   return compatible;
 }

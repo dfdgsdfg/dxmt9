@@ -360,6 +360,7 @@ void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane);
 void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane, bool compatible);
 void countSubmitDrawRunBatchIncompat(std::uint8_t firstDiffClass,
                                      bool textureOnly);
+void countSubmitDrawRunBatchIncompatRenderState(std::uint8_t diffClass);
 void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds);
