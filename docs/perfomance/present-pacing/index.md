@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H228` - alpha test now evaluates from per-draw slot-5 immediates in a single fragment variant (`e982a76a`; the H225 variant bit removed, both batching layers exempt the trio). GT2's supposed alpha-test-only batch breaks were shader alternation (542/542 pairs switch VS+PS — classifier semantics corrected in `dddfbaef`); GT2's remaining levers are run-break cost and pass-streaming overlap.
+Latest tracked row: `H229` - open-CB overlap carrier reintroduced behind `DXMT9_OPEN_CB_CARRIER` (`85ee2483`): GT2 overlap opens (wait-time commits 452 -> 1,321, zero fail-open) but FPS stays flat — the freed waits moved to chunk-ring writer/offload-drain backpressure (~37 publishes/present); next lever is ring width or a publish-rate governor.
 
 ## Start Here
 
