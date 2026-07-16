@@ -1290,6 +1290,115 @@ size_t QueueLifecycleController::dequeueReadySlotBatch(
   return count;
 }
 
+size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
+    std::unique_lock<std::mutex>& lock,
+    std::span<ReadySlotSnapshot> out,
+    const ReadySlotBatchPrefixSelector& selectPrefix) {
+  // TLA+: QueueLifecycleRefinement / EncodeDequeue.
+  if (out.empty()) {
+    return 0;
+  }
+  auto* readySlots = submissionBinding_.readySlots;
+  auto* encodeCv = submissionBinding_.encodeCv;
+  auto* stop = submissionBinding_.stop;
+  if (!readySlots || !encodeCv || !stop) {
+    return 0;
+  }
+
+  encodeCv->wait(lock, [&] { return *stop || !readySlots->empty(); });
+  if (*stop && readySlots->empty()) {
+    return 0;
+  }
+
+  perf::countEncodeDequeueReadyDepth(
+      static_cast<std::uint64_t>(readySlots->size()));
+  const size_t maxCount = std::min(out.size(), readySlots->size());
+  size_t count = 0;
+  if (selectPrefix) {
+    count = selectPrefix(
+        *readySlots,
+        std::span<const ChunkSlot>(
+            submissionBinding_.slots.data(),
+            submissionBinding_.slots.size()),
+        maxCount);
+    DXMT_ASSERT(count <= maxCount);
+    count = std::min(count, maxCount);
+  }
+  if (count == 0) {
+    count = 1u;
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    const size_t slotIndex = readySlots->front();
+    auto& slot = submissionBinding_.slots[slotIndex];
+    traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
+    if (i == 0) {
+      recordNoEnqueueWaitGapToEncodeDequeue();
+    }
+    encodeDequeue(slotIndex, slot.seqId, [&] {
+      readySlots->pop_front();
+      slot.state = ChunkSlot::State::Encoding;
+    });
+    traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
+    traceEncodeIterationStage("dequeue.before-slot-copy", slotIndex, slot);
+    out[i] = makeReadySlotSnapshot(slotIndex, slot);
+    traceEncodeIterationStage("dequeue.after-slot-copy", slotIndex, *out[i].slot);
+  }
+  return count;
+}
+
+size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
+    std::unique_lock<std::mutex>& lock,
+    std::span<const ReadySlotSnapshot> sources,
+    std::span<QueueCompletionSource> out) {
+  DXMT_ASSERT(lock.owns_lock());
+  static_cast<void>(lock);
+  if (sources.empty() || out.size() < sources.size()) {
+    return 0;
+  }
+
+  u64 previousSeqId = 0;
+  for (const auto& source : sources) {
+    if (source.slotIndex >= submissionBinding_.slots.size()) {
+      return 0;
+    }
+    if (!source.slot) {
+      return 0;
+    }
+    const auto& liveSlot = submissionBinding_.slots[source.slotIndex];
+    if (&liveSlot != source.slot ||
+        liveSlot.state != ChunkSlot::State::Encoding ||
+        liveSlot.seqId != source.seqId ||
+        liveSlot.seqId == 0 ||
+        !commandRangeWithinSlot(liveSlot,
+                                source.commandBegin,
+                                source.commandCount) ||
+        commandRangeHasPresent(liveSlot,
+                               source.commandBegin,
+                               source.commandCount) != source.hasPresent) {
+      return 0;
+    }
+    if (previousSeqId != 0 && source.seqId != previousSeqId + 1) {
+      return 0;
+    }
+    previousSeqId = source.seqId;
+  }
+
+  for (size_t i = 0; i < sources.size(); ++i) {
+    out[i] = QueueCompletionSource{
+        .slotIndex = sources[i].slotIndex,
+        .seqId = sources[i].seqId,
+        .hasPresent = sources[i].hasPresent,
+        .commandBegin = sources[i].commandBegin,
+        .commandCount = sources[i].commandCount,
+    };
+  }
+#ifndef NDEBUG
+  assertQueueLifecycleInvariants();
+#endif
+  return sources.size();
+}
+
 bool QueueLifecycleController::runEncodeIteration(
     std::unique_lock<std::mutex>& lock,
     const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,

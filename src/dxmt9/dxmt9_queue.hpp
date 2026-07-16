@@ -624,6 +624,19 @@ class QueueLifecycleController {
   size_t dequeueReadySlotBatch(std::unique_lock<std::mutex>& lock,
                                std::span<ReadySlotSnapshot> out,
                                const ReadySlotBatchAppendPredicate& canAppend = {});
+  // TLA+: EncodeDequeue for a caller-selected ready-slot prefix. The selector
+  // must only return a FIFO prefix length. Returning zero falls back to the
+  // legacy single-source dequeue so incomplete multi-source patterns cannot
+  // be consumed accidentally.
+  size_t dequeueReadySlotBatchPrefix(std::unique_lock<std::mutex>& lock,
+                                     std::span<ReadySlotSnapshot> out,
+                                     const ReadySlotBatchPrefixSelector& selectPrefix);
+  // Encoded-head carrier for open-CB / pending-tail experiments. Sources must
+  // already be dequeued into Encoding state; this records their completion
+  // identity without making them ready-visible or GPU-complete.
+  size_t retainEncodedSourcesForPendingTail(std::unique_lock<std::mutex>& lock,
+                                            std::span<const ReadySlotSnapshot> sources,
+                                            std::span<QueueCompletionSource> out);
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,

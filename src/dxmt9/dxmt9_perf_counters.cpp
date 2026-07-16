@@ -129,6 +129,8 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonFlush{0};
   std::atomic<std::uint64_t> chunkPublishReasonStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishReasonMapWait{0};
+  std::atomic<std::uint64_t> chunkPublishReasonPresentSplitBefore{0};
+  std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -137,6 +139,26 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsFlush{0};
   std::atomic<std::uint64_t> chunkPublishCommandsStretchSplit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsPresentSplitBefore{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
+  // H229 open-CB overlap carrier (DXMT9_OPEN_CB_CARRIER) — minimal
+  // mechanism-proof set. Publication side:
+  std::atomic<std::uint64_t> openCbCarrierWaitStartPublished{0};
+  std::atomic<std::uint64_t> openCbCarrierActiveWaitPublished{0};
+  std::atomic<std::uint64_t> openCbCarrierProducerWaitPublished{0};
+  std::atomic<std::uint64_t> openCbCarrierAttachmentBoundaryPublished{0};
+  // Carrier lifecycle on the encode thread:
+  std::atomic<std::uint64_t> openCbCarrierPendingStarted{0};
+  std::atomic<std::uint64_t> openCbCarrierPendingStartedInWait{0};
+  std::atomic<std::uint64_t> openCbCarrierHeadAppended{0};
+  std::atomic<std::uint64_t> openCbCarrierTailSubmitted{0};
+  // Release attribution (why a pending open CB was submitted early):
+  std::atomic<std::uint64_t> openCbCarrierReleasedSemanticWait{0};
+  std::atomic<std::uint64_t> openCbCarrierReleasedProducerWait{0};
+  std::atomic<std::uint64_t> openCbCarrierReleasedNonAppendable{0};
+  std::atomic<std::uint64_t> openCbCarrierReleasedInitializerWait{0};
+  std::atomic<std::uint64_t> openCbCarrierReleasedDrain{0};
+  std::atomic<std::uint64_t> openCbCarrierReleasedFailPath{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
@@ -2168,6 +2190,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_reason_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_reason_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonMapWait, nullptr, nullptr, 0.0},
+    {"chunk_publish_reason_present_split_before", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonPresentSplitBefore, nullptr, nullptr, 0.0},
+    {"chunk_publish_reason_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishReasonSemanticBoundary, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_unknown", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsUnknown, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_draw_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsDrawLimit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_payload_limit", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPayloadLimit, nullptr, nullptr, 0.0},
@@ -2176,6 +2200,22 @@ constexpr CounterEntry kCounterTable[] = {
     {"chunk_publish_commands_flush", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsFlush, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_stretch_split", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsStretchSplit, nullptr, nullptr, 0.0},
     {"chunk_publish_commands_map_wait", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsMapWait, nullptr, nullptr, 0.0},
+    {"chunk_publish_commands_present_split_before", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsPresentSplitBefore, nullptr, nullptr, 0.0},
+    {"chunk_publish_commands_semantic_boundary", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishCommandsSemanticBoundary, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_wait_start_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierWaitStartPublished, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_active_wait_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierActiveWaitPublished, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_producer_wait_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierProducerWaitPublished, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_attachment_boundary_published", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierAttachmentBoundaryPublished, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierPendingStarted, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_pending_started_in_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierPendingStartedInWait, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierHeadAppended, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierTailSubmitted, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_semantic_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedSemanticWait, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedProducerWait, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_non_appendable", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedNonAppendable, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_initializer_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedInitializerWait, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_drain", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedDrain, nullptr, nullptr, 0.0},
+    {"open_cb_carrier_released_fail_path", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedFailPath, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
@@ -4308,13 +4348,18 @@ void countChunkPublishReason(ChunkPublishReason reason,
     count = &c.chunkPublishReasonMapWait;
     commands = &c.chunkPublishCommandsMapWait;
     break;
-  // PresentSplitBefore/SemanticBoundary/DrawContinuation: the open-CB/
-  // tail-present carrier that could produce these reasons was removed in
-  // 6379d5c8. No live prepareSlotForPublish() call site passes them; keep
-  // the enum values (table numbering stability) but fold them into the
-  // Unknown bucket instead of a dedicated counter.
   case ChunkPublishReason::PresentSplitBefore:
+    count = &c.chunkPublishReasonPresentSplitBefore;
+    commands = &c.chunkPublishCommandsPresentSplitBefore;
+    break;
   case ChunkPublishReason::SemanticBoundary:
+    count = &c.chunkPublishReasonSemanticBoundary;
+    commands = &c.chunkPublishCommandsSemanticBoundary;
+    break;
+  // DrawContinuation: the H229 open-CB carrier (DXMT9_OPEN_CB_CARRIER)
+  // deliberately does not publish same-key draw-continuation boundaries —
+  // removing them was H183's decisive difference from H182. Keep the enum
+  // value (table numbering stability) folded into the Unknown bucket.
   case ChunkPublishReason::DrawContinuation:
   case ChunkPublishReason::Unknown:
     break;
@@ -4357,6 +4402,62 @@ void countChunkPublishPresentPrePresentOpportunityTail(
   }
   if (drawOnly) {
     add(c.chunkPublishPresentPrePresentOpportunityDrawOnly);
+  }
+}
+
+void countOpenCbCarrierWaitStartPublished() {
+  add(counters().openCbCarrierWaitStartPublished);
+}
+
+void countOpenCbCarrierActiveWaitPublished() {
+  add(counters().openCbCarrierActiveWaitPublished);
+}
+
+void countOpenCbCarrierProducerWaitPublished() {
+  add(counters().openCbCarrierProducerWaitPublished);
+}
+
+void countOpenCbCarrierAttachmentBoundaryPublished() {
+  add(counters().openCbCarrierAttachmentBoundaryPublished);
+}
+
+void countOpenCbCarrierPendingStarted(bool duringCompletionWait) {
+  auto& c = counters();
+  add(c.openCbCarrierPendingStarted);
+  if (duringCompletionWait) {
+    add(c.openCbCarrierPendingStartedInWait);
+  }
+}
+
+void countOpenCbCarrierHeadAppended() {
+  add(counters().openCbCarrierHeadAppended);
+}
+
+void countOpenCbCarrierTailSubmitted() {
+  add(counters().openCbCarrierTailSubmitted);
+}
+
+void countOpenCbCarrierReleased(OpenCbCarrierReleaseReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case OpenCbCarrierReleaseReason::SemanticWait:
+    add(c.openCbCarrierReleasedSemanticWait);
+    break;
+  case OpenCbCarrierReleaseReason::ProducerWait:
+    add(c.openCbCarrierReleasedProducerWait);
+    break;
+  case OpenCbCarrierReleaseReason::NonAppendable:
+    add(c.openCbCarrierReleasedNonAppendable);
+    break;
+  case OpenCbCarrierReleaseReason::InitializerWait:
+    add(c.openCbCarrierReleasedInitializerWait);
+    break;
+  case OpenCbCarrierReleaseReason::Drain:
+    add(c.openCbCarrierReleasedDrain);
+    break;
+  case OpenCbCarrierReleaseReason::FailPath:
+    add(c.openCbCarrierReleasedFailPath);
+    break;
   }
 }
 

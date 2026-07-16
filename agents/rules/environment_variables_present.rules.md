@@ -37,6 +37,7 @@ others are ignored. See `dxmt9::resolveAcquirePolicy` in
 | `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` | Limit max frame latency to backbuffer count | `0` |
 | `DXMT9_MAX_FRAME_LATENCY` | Override max frame latency (numeric) | unset |
 | `DXMT9_SYNC_PRESENT_FLUSH` | Flush synchronously after present for present-path triage | `0` |
+| `DXMT9_OPEN_CB_CARRIER` | H229 open-CB overlap carrier — single opt-in re-implementation lane for the R-BACK-2.39/2.43 overlap experiments. Supersedes-by-reimplementation the retired 12-knob `DXMT9_OPEN_CB_*` family (removed in `6379d5c8`): the H183-proven shape is baked in — encode-thread carrier keeps the Metal CB open across appendable chunk boundaries via `EncodeChunkSessionState` carry, producers publish `SemanticBoundary` chunks at Clear/SurfaceCopy/StretchRect/ColorFill/DepthResolve and draw-attachment-key changes plus wait-start/active-wait CPU-ready publication, the Present tail splits into `PresentSplitBefore` head + Present-only closer, and pending work releases during completion AND producer waits (CompletionWait mode, once per wait; f1fb1b04's producer-wait lesson). No draw-continuation publication, no wallclock timeout, no sub-knobs. Mechanism proof: `open_cb_carrier_*` counters plus `chunk_publish_reason_{semantic_boundary,present_split_before}` and the surviving `completion_wait_*` overlap set. Motivated by GT2's serialized produce→replay→encode→present chain (H227/H228); GT1 evidence (H183-H188) says expect CB/pass locality regressions there — measure, do not default on | `0` |
 
 ## Retired present/overlap experiments
 
@@ -74,7 +75,11 @@ producer-side `DXMT9_OFFLOAD_COMMIT_REPLAY` win (H190+) and formally retired
 once that offload plus the accepted index-cache locality opt-in covered the
 proven average-FPS gains. Do not schedule new runs with these envs unless the
 open-CB/tail-Present carrier is intentionally reintroduced and this rules file
-is updated in the same change. R-BACK-2.39/2.40/2.43 (pass-streaming source
+is updated in the same change. H229 reintroduced the carrier as a fresh
+single-knob lane, `DXMT9_OPEN_CB_CARRIER` (table above), motivated by GT2's
+serialized chain (H227/H228); the retired multi-knob envs above stay dead —
+the new lane bakes the H183 shape instead of resurrecting them.
+R-BACK-2.39/2.40/2.43 (pass-streaming source
 attachment) remain open requirements for a future design; see
 `specs/backend/gap.md`.
 

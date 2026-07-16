@@ -790,6 +790,90 @@ void dequeueReadySlotBatchHonorsAppendPredicate() {
         "later candidate remains Pending");
 }
 
+void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+
+  bool selectorCalled = false;
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatchPrefix(
+          lock,
+          std::span<ReadySlotSnapshot>(snapshots),
+          [&](const std::deque<std::size_t>& readySlots,
+              std::span<const ChunkSlot> slots,
+              std::size_t maxCount) {
+            selectorCalled = true;
+            checkEq(maxCount, 3u, "selector sees caller capacity");
+            checkEq(readySlots.size(), 3u, "selector sees ready depth");
+            checkEq(readySlots[0], 0u, "selector sees first FIFO source");
+            checkEq(readySlots[1], 1u, "selector sees second FIFO source");
+            checkEq(readySlots[2], 2u, "selector sees third FIFO source");
+            checkEq(slots[2].seqId, 3ull, "selector can inspect slot payloads");
+            return 3u;
+          });
+
+  check(selectorCalled, "prefix selector is invoked");
+  checkEq(count, 3u, "prefix selector controls dequeue count");
+  check(fixture.readySlots.empty(), "complete prefix drains selected sources");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "first prefix source moves to Encoding");
+  check(fixture.slots[1].state == ChunkSlot::State::Encoding,
+        "second prefix source moves to Encoding");
+  check(fixture.slots[2].state == ChunkSlot::State::Encoding,
+        "third prefix source moves to Encoding");
+  checkEq(snapshots[2].slotIndex, 2u, "third snapshot records slot index");
+  check(snapshots[2].slot == &fixture.slots[2],
+        "third snapshot references live slot storage");
+  checkEq(snapshots[2].seqId, 3ull, "third snapshot records seqId");
+  check(!snapshots[2].hasPresent, "third snapshot records present absence");
+  checkEq(snapshots[2].commandBegin, 0u,
+          "third snapshot records whole-source begin");
+  checkEq(snapshots[2].commandCount, fixture.slots[2].commandCount(),
+          "third snapshot records command count");
+}
+
+void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatchPrefix(
+          lock,
+          std::span<ReadySlotSnapshot>(snapshots),
+          [](const std::deque<std::size_t>&,
+             std::span<const ChunkSlot>,
+             std::size_t) { return 0u; });
+
+  checkEq(count, 1u, "rejected prefix falls back to one source");
+  checkEq(fixture.readySlots.size(), 2u,
+          "fallback leaves later ready sources pending");
+  checkEq(fixture.readySlots.front(), 1u,
+          "fallback keeps the first rejected source FIFO-visible");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "fallback source moves to Encoding");
+  check(fixture.slots[1].state == ChunkSlot::State::Pending,
+        "first rejected source remains Pending");
+  check(fixture.slots[2].state == ChunkSlot::State::Pending,
+        "later rejected source remains Pending");
+  checkEq(snapshots[0].slotIndex, 0u, "fallback snapshot records first source");
+  check(snapshots[0].slot == &fixture.slots[0],
+        "fallback snapshot references live slot storage");
+  checkEq(snapshots[0].seqId, 1ull, "fallback snapshot records first seq");
+  check(!snapshots[0].hasPresent, "fallback snapshot records present absence");
+  checkEq(snapshots[0].commandBegin, 0u,
+          "fallback snapshot records whole-source begin");
+  checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
+          "fallback snapshot records command count");
+}
+
 void completionSourceForReadySlotPreservesPresentMetadata() {
   ChunkSlot slot{};
   ReadySlotSnapshot snapshot{};
@@ -832,6 +916,220 @@ void completionSourceForReadySlotPreservesRangeMetadata() {
   check(!source.hasPresent, "range source preserves non-present metadata");
   checkEq(source.commandBegin, 0u, "range source preserves command begin");
   checkEq(source.commandCount, 1u, "range source preserves command count");
+}
+
+void retainEncodedSourcesRejectsPendingSources() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+
+  ReadySlotSnapshot snapshot{};
+  snapshot.slotIndex = 0;
+  snapshot.seqId = fixture.slots[0].seqId;
+  snapshot.hasPresent = false;
+  snapshot.commandCount = fixture.slots[0].commandCount();
+  snapshot.slot = &fixture.slots[0];
+  std::array<QueueCompletionSource, 1> retained{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count = fixture.controller.retainEncodedSourcesForPendingTail(
+      lock,
+      std::span<const ReadySlotSnapshot>(&snapshot, 1),
+      std::span<QueueCompletionSource>(retained));
+
+  checkEq(count, 0u, "pending sources are not retained as encoded heads");
+  checkEq(fixture.readySlots.size(), 1u,
+          "rejected pending source remains ready-visible");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending,
+        "rejected pending source keeps Pending state");
+}
+
+void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.slots[0].appendClear({});
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(count, 1u, "test setup dequeues one source");
+
+  ReadySlotSnapshot stale = snapshots[0];
+  stale.commandBegin = 1;
+  std::array<QueueCompletionSource, 1> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(&stale, 1),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, 0u, "stale command-begin metadata is rejected");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "rejected stale source remains owned by the current encode");
+}
+
+void retainEncodedSourcesAcceptsPartialRangeMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[0].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0x99});
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(count, 1u, "test setup dequeues one source");
+
+  ReadySlotSnapshot head = snapshots[0];
+  head.hasPresent = false;
+  head.commandBegin = 0;
+  head.commandCount = 1;
+  std::array<QueueCompletionSource, 1> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(&head, 1),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, 1u, "partial non-present range is retained");
+  checkEq(retained[0].commandBegin, 0u,
+          "retained partial range preserves command begin");
+  checkEq(retained[0].commandCount, 1u,
+          "retained partial range preserves command count");
+  check(!retained[0].hasPresent,
+        "retained partial range preserves hasPresent=false");
+}
+
+void retainEncodedSourcesAcceptsSelectedPrefixMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[1].appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[2].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0xA3});
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t sourceCount =
+      fixture.controller.dequeueReadySlotBatchPrefix(
+          lock,
+          std::span<ReadySlotSnapshot>(snapshots),
+          [](const std::deque<std::size_t>&,
+             std::span<const ChunkSlot>,
+             std::size_t) { return 3u; });
+  checkEq(sourceCount, 3u, "test setup selects the whole source prefix");
+
+  std::array<QueueCompletionSource, 3> retained{};
+  const std::size_t retainedCount =
+      fixture.controller.retainEncodedSourcesForPendingTail(
+          lock,
+          std::span<const ReadySlotSnapshot>(snapshots.data(), sourceCount),
+          std::span<QueueCompletionSource>(retained));
+
+  checkEq(retainedCount, sourceCount,
+          "selected source prefix is retained as compact metadata");
+  checkEq(retained[0].seqId, 1ull, "first prefix source keeps seqId");
+  checkEq(retained[1].seqId, 2ull, "middle prefix source keeps seqId");
+  checkEq(retained[2].seqId, 3ull, "tail prefix source keeps seqId");
+  check(!retained[0].hasPresent, "first prefix source is non-present");
+  check(!retained[1].hasPresent, "middle prefix source is non-present");
+  check(retained[2].hasPresent, "tail prefix source preserves present flag");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "first retained prefix source remains encode-owned");
+  check(fixture.slots[1].state == ChunkSlot::State::Encoding,
+        "middle retained prefix source remains encode-owned");
+  check(fixture.slots[2].state == ChunkSlot::State::Encoding,
+        "tail retained prefix source remains encode-owned");
+}
+
+void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+
+  std::array<ReadySlotSnapshot, 1> head{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t headCount =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(head));
+  checkEq(headCount, 1u, "test setup dequeues one head source");
+  check(fixture.readySlots.empty(), "encoded head is no longer ready-visible");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "head source enters Encoding before retention");
+
+  std::array<QueueCompletionSource, 1> retainedHeads{};
+  const std::size_t retainedCount = fixture.controller.retainEncodedSourcesForPendingTail(
+      lock,
+      std::span<const ReadySlotSnapshot>(head.data(), headCount),
+      std::span<QueueCompletionSource>(retainedHeads));
+  checkEq(retainedCount, 1u, "encoded head is retained for the pending tail");
+  checkEq(retainedHeads[0].slotIndex, 0u, "retained head keeps slot index");
+  checkEq(retainedHeads[0].seqId, 1ull, "retained head keeps seqId");
+  check(!retainedHeads[0].hasPresent, "retained head is not a present source");
+  checkEq(retainedHeads[0].commandBegin, head[0].commandBegin,
+          "retained head keeps command begin metadata");
+  checkEq(retainedHeads[0].commandCount, head[0].commandCount,
+          "retained head keeps command count metadata");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "retaining head does not make it GPU-visible");
+
+  fixture.addReadySlot(1, 2);
+  fixture.slots[1].appendPresent(dxmt9::core::SwapDesc{},
+                                 dxmt9::core::Handle{0xA1});
+  std::array<ReadySlotSnapshot, 1> tail{};
+  const std::size_t tailCount =
+      fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(tail));
+  checkEq(tailCount, 1u, "test setup dequeues the present tail");
+  check(tail[0].slot && tail[0].slot->presentRecords.size() == 1u,
+        "tail snapshot carries present metadata");
+
+  QueueSubmissionRecord record;
+  record.slotIndex = tail[0].slotIndex;
+  record.seqId = tail[0].seqId;
+  const std::array<QueueCompletionSource, 2> recordSources{{
+      retainedHeads[0],
+      completionSourceForReadySlot(tail[0]),
+  }};
+  check(record.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(
+                recordSources.data(), recordSources.size())),
+        "tail carrier stores retained sources in fixed completion metadata");
+
+  fixture.controller.submitEncodedSubmission(lock, record);
+  check(fixture.slots[0].state == ChunkSlot::State::GPU,
+        "retained head enters GPU state with the tail carrier");
+  check(fixture.slots[1].state == ChunkSlot::State::GPU,
+        "tail source enters GPU state with the same carrier");
+  check(fixture.completedSeqQueue.empty(),
+        "carrier submission alone does not mark sources completed");
+
+  appendCompletionSourcesToQueues(
+      fixture.completedSeqQueue,
+      &fixture.completedPresentSeqQueue,
+      fixture.completedSeqId,
+      record.explicitCompletionSourceSpan());
+
+  std::uint64_t finishedSeq = 0;
+  const bool finishedHead = fixture.controller.runFinishIteration(
+      lock, [&](std::uint64_t seqId) { finishedSeq = seqId; });
+  check(finishedHead, "head completion drains first");
+  checkEq(finishedSeq, 1ull, "head seq completes first");
+  check(fixture.slots[0].state == ChunkSlot::State::Free,
+        "head is freed only after tail-carrier completion");
+  check(fixture.slots[1].state == ChunkSlot::State::GPU,
+        "tail remains GPU-visible until its own completion drains");
+  checkEq(fixture.presentCompletedSeqId, 0ull,
+          "present completion waits for the present tail seq");
+
+  const bool finishedTail = fixture.controller.runFinishIteration(
+      lock, [&](std::uint64_t seqId) { finishedSeq = seqId; });
+  check(finishedTail, "tail completion drains second");
+  checkEq(finishedSeq, 2ull, "tail seq completes second");
+  check(fixture.slots[1].state == ChunkSlot::State::Free,
+        "tail is freed after its completion drains");
+  checkEq(fixture.completedSeqId, 2ull, "completed seq advances through tail");
+  checkEq(fixture.presentCompletedSeqId, 2ull,
+          "present completion advances at the tail seq");
 }
 
 void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
@@ -1366,8 +1664,15 @@ int main() {
     dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding();
     dequeueReadySlotBatchRespectsOutputCapacity();
     dequeueReadySlotBatchHonorsAppendPredicate();
+    dequeueReadySlotBatchPrefixUsesCompleteSelectorCount();
+    dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects();
     completionSourceForReadySlotPreservesPresentMetadata();
     completionSourceForReadySlotPreservesRangeMetadata();
+    retainEncodedSourcesRejectsPendingSources();
+    retainEncodedSourcesRejectsStaleSnapshotMetadata();
+    retainEncodedSourcesAcceptsPartialRangeMetadata();
+    retainEncodedSourcesAcceptsSelectedPrefixMetadata();
+    retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();
     mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources();

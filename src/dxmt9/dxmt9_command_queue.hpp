@@ -552,6 +552,12 @@ class CommandQueue {
           std::size_t slotIndex, core::ChunkSlot& slot)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
+  // H229 open-CB overlap carrier encode lane (DXMT9_OPEN_CB_CARRIER).
+  // Keeps the current Metal command buffer open across appendable chunk
+  // boundaries, accepts semantically-published ready work into it, and
+  // releases pending work during completion AND producer waits. See
+  // render/open_cb_carrier.hpp for the baked H183 policy shape.
+  void runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted);
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
