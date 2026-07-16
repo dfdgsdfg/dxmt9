@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H229` - open-CB overlap carrier reintroduced behind `DXMT9_OPEN_CB_CARRIER` (`85ee2483`): GT2 overlap opens (wait-time commits 452 -> 1,321, zero fail-open) but FPS stays flat — the freed waits moved to chunk-ring writer/offload-drain backpressure (~37 publishes/present); next lever is ring width or a publish-rate governor.
+Latest tracked row: `H230` - chunk-ring width diagnostic (32 -> 128, uncommitted): ring backpressure confirmed as the H229 absorber (`queue_writer_wait 24.8s -> ~7s`), but GT2 presents stay flat in 2 of 3 runs — one bimodal run finished the scene 2x faster; the open question is that bimodality, not more ring width.
 
 ## Start Here
 
