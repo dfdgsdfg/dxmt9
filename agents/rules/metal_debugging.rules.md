@@ -224,7 +224,15 @@ expected artifacts is acceptable input for finalizer comparison; do not use the
 Wine process lifetime or a manual kill as a performance metric. If a run had
 to be killed manually because it was stuck at the final frame, treat that as a
 timeout-policy failure and verify the wrapper watchdog rather than repeating an
-unsupervised launch. If the desktop may be locked when a probe is scheduled,
+unsupervised launch. For GT2 (`-gt2`) A/B runs, never use `result.json`
+presents-at-kill as the FPS metric: GT2 is a fixed ~68s animation timeline
+that finishes in-window and then often hangs post-scene until the timeout
+kill, and SIGKILL loses the final counter flush, so `result.json` reports the
+last periodic emission (~8% presents undercount observed, H231). Enable
+`DXMT9_PERF_FRAME_SAMPLING=1` and compute scene-fps from the per-frame
+`wall_ms` samples in the run log instead; total process elapsed and
+timed-out-vs-natural-exit only distinguish whether the post-scene hang
+occurred, not render speed. If the desktop may be locked when a probe is scheduled,
 pass `run_3dmark05_perf_probe.sh --wait-unlocked-sec N`; the wrapper polls
 before Wine launch and does not create probe artifacts when the wait expires.
 For no-gputrace A/B runs whose FPS or present count is used as evidence, add

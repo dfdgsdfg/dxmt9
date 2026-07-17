@@ -11,7 +11,7 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H230` - chunk-ring width diagnostic (32 -> 128, uncommitted): ring backpressure confirmed as the H229 absorber (`queue_writer_wait 24.8s -> ~7s`), but GT2 presents stay flat in 2 of 3 runs — one bimodal run finished the scene 2x faster; the open question is that bimodality, not more ring width.
+Latest tracked row: `H231` - GT2 bimodality root-caused: presents-at-kill was a hang-run counter-flush artifact; frame-sampled scene-fps shows GT2 fixed ~68s timeline at ~7.3-7.7fps across ring32/128 x carrier on/off — every queue-side lever is <=~4%, the wall is outside the queue.
 
 ## Start Here
 
