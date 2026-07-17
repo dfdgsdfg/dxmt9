@@ -1631,24 +1631,32 @@ D3D9 supports up to 6 user clip planes (`D3DRS_CLIPPLANEENABLE` bitmask,
 
 ### Uniform layout
 
-Clip planes are stored in the fixed-function uniform buffer and also injected into
-the programmable shader constant block:
+Clip planes are stored in the fixed-function uniform buffer used by both generated
+and translated vertex shaders:
 
 ```
 // Appended to FFPVertexUniforms when any clip plane is enabled:
 float4  clipPlane[6]   // in clip space (post-projection)
 ```
 
-D3D9 clip planes are specified in world space. The core must transform them to
-clip space before passing to the backend:
+D3D9 assigns the plane coordinate space according to the active vertex pipeline.
+For fixed function, the app coefficients are in world space. With the core's
+D3D row-vector matrix storage, the clip-space coefficients are:
 
 ```
-clipPlane_clip[i] = transpose(inverse(worldViewProj)) * clipPlane_world[i]
+clipPlane_clip[i] = inverse(view * projection) * clipPlane_world[i]
 ```
+
+The world matrix is excluded because fixed-function vertices have already entered
+world space before the clip-plane test. For a programmable vertex shader, the app
+coefficients are already in the same clip space as the shader's output position
+and must be copied unchanged.
 
 ### Vertex shader emission
 
-When `clipPlaneMask != 0`, the vertex shader must output `[[clip_distance]]` values.
+When `clipPlaneMask != 0`, the vertex shader outputs one Metal
+`[[clip_distance]]` value containing the minimum distance over all enabled D3D9
+planes. A negative distance from any source plane therefore clips the primitive.
 
 **For fixed-function shaders:** the backend generates code in the FFP vertex shader:
 ```metal
@@ -1656,29 +1664,28 @@ vertex VSOut ff_vertex(...) {
     VSOut out;
     // ... standard transform ...
     out.position = projPos;
-    out.clipDist[0] = dot(projPos, uniforms.clipPlane[0]);  // if bit 0 set
-    out.clipDist[1] = dot(projPos, uniforms.clipPlane[1]);  // if bit 1 set
-    // ... up to 6
+    out.clipDist = min_enabled_dot(projPos, uniforms.clipPlane,
+                                   uniforms.clipPlaneMask);
     return out;
 }
 ```
 
 **For programmable shaders:** the translator injects a post-transform epilog after
-the shader's `oPos` write. The clip plane values are passed as additional float4
-constants above the normal constant register range (or via a separate small buffer).
+the shader's `oPos` write and computes the same minimum from the unmodified
+app-provided clip-space planes.
 
 ### `[[clip_distance]]` declaration in MSL
 
 ```metal
 struct VertexOut {
     float4 position [[position]];
-    float  clipDist [[clip_distance]] [6];
+    float  clipDist [[clip_distance]];
     // ... other varyings
 };
 ```
 
-Only the enabled clip planes (per `clipPlaneMask`) need to be written; others may be
-zero. Metal clips the primitive when any `clipDist[i] < 0`.
+Only enabled planes participate in the minimum. Metal clips the primitive when
+`clipDist < 0`.
 
 ### Variant key
 

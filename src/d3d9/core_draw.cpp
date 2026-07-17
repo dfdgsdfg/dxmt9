@@ -1509,18 +1509,13 @@ bool invertMatrix(const Matrix4x4 &matrix, Matrix4x4 *out) {
   return true;
 }
 
-ClipPlane transformClipPlane(const Matrix4x4 &transform,
-                             const ClipPlane &plane) {
-  Matrix4x4 inverse{};
-  if (!invertMatrix(transform, &inverse)) {
-    return plane;
-  }
-  const Matrix4x4 inverseTranspose = transposeMatrix(inverse);
+ClipPlane transformFfpClipPlane(const Matrix4x4 &inverseViewProjection,
+                                const ClipPlane &plane) {
   ClipPlane out{};
   for (size_t row = 0; row < 4; ++row) {
     float sum = 0.0f;
     for (size_t col = 0; col < 4; ++col) {
-      sum += inverseTranspose.m[row * 4 + col] * plane[col];
+      sum += inverseViewProjection.m[row * 4 + col] * plane[col];
     }
     out[row] = sum;
   }
@@ -1774,12 +1769,26 @@ makeTextureTransformsFromState(const DeviceState &state) {
 }
 
 std::array<ClipPlane, kMaxClipPlanes>
-makeClipPlanesFromState(const DeviceState &state, u32 clipPlaneMask,
-                        const Matrix4x4 &worldViewProj) {
+makeClipPlanesFromState(const DeviceState &state, u32 clipPlaneMask) {
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
+  // Fixed-function planes are world-space; programmable planes are already
+  // in the clip space produced by the app's vertex shader.
+  const bool programmable =
+      state.vertexShader.kind == ShaderRef::Kind::Bytecode;
+  Matrix4x4 inverseViewProjection{};
+  bool hasInverseViewProjection = false;
+  if (!programmable) {
+    const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
+    const Matrix4x4 projection = lookupTransform(state, XFORM_PROJECTION);
+    hasInverseViewProjection = invertMatrix(
+        multiplyMatrix(view, projection), &inverseViewProjection);
+  }
   for (size_t i = 0; i < kMaxClipPlanes; ++i) {
     if ((clipPlaneMask & (1u << i)) != 0) {
-      clipPlanes[i] = transformClipPlane(worldViewProj, state.clipPlanes[i]);
+      clipPlanes[i] = programmable || !hasInverseViewProjection
+                          ? state.clipPlanes[i]
+                          : transformFfpClipPlane(inverseViewProjection,
+                                                  state.clipPlanes[i]);
     }
   }
   return clipPlanes;
@@ -1902,8 +1911,7 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
   {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildClipPlaneCpuTime));
-    payload.clipPlanes =
-        makeClipPlanesFromState(state, clipPlaneMask, payload.worldViewProj);
+    payload.clipPlanes = makeClipPlanesFromState(state, clipPlaneMask);
   }
   {
     PerfScope scope(recorder(
@@ -3202,6 +3210,8 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     const auto previousPixelConstantUsage =
         cache.shaderLayout.pixelConstantUsage;
     const auto previousClipPlaneMask = cache.shaderLayout.clipPlaneMask;
+    const bool previousProgrammableVertexShader =
+        cache.shaderLayout.vertexShader.kind == ShaderRef::Kind::Bytecode;
 
     // Key layout reuse off the dedicated layout generation, NOT the shared
     // reason-mask accumulator: the mask is consumed/cleared by whichever
@@ -3228,6 +3238,11 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
           dxmt9::perf::countD3D9SnapshotCacheBatchMissShaderLayoutCpuTime);
       cache.shaderLayout = makeDrawShaderLayoutContextFromState(state_);
     }
+    const bool sameClipPlaneCoordinateSpace =
+        !hadCachedState ||
+        (previousClipPlaneMask | cache.shaderLayout.clipPlaneMask) == 0 ||
+        previousProgrammableVertexShader ==
+            (cache.shaderLayout.vertexShader.kind == ShaderRef::Kind::Bytecode);
     {
       PerfScope bindingLayoutScope(
           dxmt9::perf::countD3D9SnapshotCacheBindingLayoutCpuTime);
@@ -3241,6 +3256,7 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     DrawUniformPayloadHashes uniformHashes{};
     const DrawUniformPayloadHashes *reusableNonConstantHashes =
         cache.valid &&
+            sameClipPlaneCoordinateSpace &&
             cache.uniformNonConstantGeneration ==
                 drawUniformNonConstantGeneration_
             ? &cache.uniformHashes
@@ -3261,6 +3277,7 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
             : nullptr;
     const bool matchingUniformPayload =
         hadCachedState &&
+        sameClipPlaneCoordinateSpace &&
         cache.uniformNonConstantGeneration == drawUniformNonConstantGeneration_ &&
         previousVertexConstantGeneration == drawVertexShaderConstantGeneration_ &&
         previousPixelConstantGeneration == drawPixelShaderConstantGeneration_ &&

@@ -1,0 +1,30 @@
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Microsoft D3D9 SetClipPlane programmable clip-space contract
+; oracle-date: 2026-07-17
+
+[vertex shader d3dbc-hex]
+fffe0300 0200001f 80000000 900f0000 0200001f 8000000a 900f0001
+0200001f 80000000 e00f0000 0200001f 8000000a e00f0001 02000001
+e00f0000 90e40000 02000001 e00f0001 90e40001 0000ffff
+
+[pixel shader d3dbc-hex]
+ffff0300 0200001f 8000000a 900f0000 02000001 800f0800 90e40000
+0000ffff
+
+[test]
+clear rgba(1.0, 0.0, 0.0, 1.0)
+clip-plane-mask 1
+; A programmable VS receives clip planes in its output clip space. This
+; non-identity view transform must not rotate the plane from y to x. The
+; preceding FFP draw also pins cache invalidation across the space change.
+dxmt9-transform view 0.0 1.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0
+dxmt9-clip-plane 0 0.0 1.0 0.0 0.0
+dxmt9-render-state zenable=off clip_planes=1
+dxmt9-draw-ffp-then-vs-color-triangle
+; Positive clip-space y survives; negative clip-space y stays clear.
+probe (34, 8) rgba(0.0, 1.0, 0.0, 1.0) 2
+probe (34, 56) rgba(1.0, 0.0, 0.0, 1.0) 2

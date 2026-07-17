@@ -795,12 +795,17 @@ lambdas, process-local pointers, COM object pointers, or Objective-C object poin
 ## 10. Clip Planes
 
 **R-BACK-10.1** When the production draw state has `clipPlaneMask != 0`, the
-vertex shader must output `[[clip_distance]]` values. The number of active clip
-distances must equal the number of set bits in `clipPlaneMask` (maximum 6).
+vertex shader must output one Metal `[[clip_distance]]` value equal to the
+minimum signed distance across the enabled D3D9 clip planes (maximum 6 source
+planes). This preserves D3D9's rule that a vertex outside any enabled plane is
+clipped while respecting the Apple GPU single-distance limitation.
 
-**R-BACK-10.2** Clip plane uniforms (transformed to clip space by the core) must be
-passed to the vertex shader via the fixed-function uniform buffer or a dedicated
-small constant buffer.
+**R-BACK-10.2** With a fixed-function vertex pipeline, the core must transform
+world-space clip planes into clip space using the inverse of `View * Projection`;
+the world transform must not be included. With a programmable vertex shader,
+the core must preserve the app-provided clip-space coefficients unchanged. The
+resulting planes must be passed through the fixed-function uniform buffer or a
+dedicated small constant buffer.
 
 **R-BACK-10.3** `clipPlaneMask` must be part of the vertex shader variant key. Draws
 with different `clipPlaneMask` values must not share a compiled vertex shader.

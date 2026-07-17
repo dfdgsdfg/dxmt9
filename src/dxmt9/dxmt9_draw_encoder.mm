@@ -15899,6 +15899,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawStateView.hot = &overrideHot;
       }
       drawStateView.uniforms = drawUniformPayload;
+      // Clip planes share FfpVsConsts with the fixed-function uniforms, but
+      // their derived coefficients can change when only the vertex-shader
+      // coordinate space changes.  That transition has no SetClipPlane
+      // record to mark FfpVsClip dirty, so compare the canonical payload key
+      // at the draw boundary before either direct or argbuf bindings consume
+      // the dirty mask.
+      if (activeDrawStateKey.has_value() &&
+          (activeDrawStateKey->clipPlaneMask !=
+               drawStateView.hot->key.clipPlaneMask ||
+           activeDrawStateKey->clipPlanesHash !=
+               drawStateView.hot->key.clipPlanesHash)) {
+        uniform::setBit(uniformDirty, uniform::DirtyBit::FfpVsClip);
+      }
       const auto drawArgbufPayloadDeltaKey =
           makeArgbufPayloadDeltaKey(drawStateView);
       const u64 drawArgbufPayloadHash = drawUniformPayload->hash;

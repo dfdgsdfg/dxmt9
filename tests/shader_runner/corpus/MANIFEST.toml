@@ -371,6 +371,18 @@ oracle = "math-derivation"
 oracle-date = "2026-05-16"
 
 [[test]]
+file = "render_state/dxmt9_clip_plane_programmable_space_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["vs_3_0", "ps_3_0"]
+opcodes = ["DCL", "MOV", "PROBE"]
+oracle = "Microsoft D3D9 SetClipPlane programmable clip-space contract"
+oracle-date = "2026-07-17"
+
+[[test]]
 file = "render_state/dxmt9_clip_plane_halfspace_readback.shader_test"
 status = "passing"
 source = "dxmt9"

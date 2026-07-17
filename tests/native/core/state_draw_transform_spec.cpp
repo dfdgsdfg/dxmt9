@@ -1063,7 +1063,7 @@ void testClipPlaneTransformPayloadAndMaskBounds() {
       5.0f, 0.0f, 0.0f, 0.0f,
       0.0f, 7.0f, 0.0f, 0.0f,
       0.0f, 0.0f, 11.0f, 0.0f,
-      0.0f, 0.0f, 0.0f, 1.0f,
+      1.0f, 2.0f, 3.0f, 1.0f,
   };
   Matrix4x4 projection{};
   projection.m = {
@@ -1076,10 +1076,10 @@ void testClipPlaneTransformPayloadAndMaskBounds() {
   state.transforms[XFORM_VIEW] = view;
   state.transforms[XFORM_PROJECTION] = projection;
 
-  state.clipPlanes[0] = {130.0f, 714.0f, 2508.0f, -4.0f};
+  state.clipPlanes[0] = {65.0f, 238.0f, 627.0f, 248.0f};
   state.clipPlanes[1] = {999.0f, 999.0f, 999.0f, 999.0f};
-  state.clipPlanes[2] = {-260.0f, 357.0f, 0.0f, 9.0f};
-  state.clipPlanes[5] = {0.0f, 0.0f, -836.0f, 8.0f};
+  state.clipPlanes[2] = {-130.0f, 119.0f, 0.0f, 17.0f};
+  state.clipPlanes[5] = {0.0f, 0.0f, -209.0f, -49.0f};
   constexpr u32 kClipMask =
       (1u << 0u) | (1u << 2u) | (1u << 5u) | (1u << 9u);
   state.renderStates[RS_CLIP_PLANE_ENABLE] = kClipMask;
@@ -1109,10 +1109,11 @@ void testClipPlaneTransformPayloadAndMaskBounds() {
   for (size_t plane = 0; plane < expected.size(); ++plane) {
     for (size_t component = 0; component < 4; ++component) {
       checkNear(desc.clipPlanes[plane][component], expected[plane][component],
-                "draw desc stores transformed enabled clip planes only");
+                "fixed-function draw transforms world-space clip planes "
+                "using view-projection only");
       checkNear(uniforms.clipPlanes[plane][component],
                 expected[plane][component],
-                "uniform payload stores transformed enabled clip planes only");
+                "fixed-function uniforms store transformed enabled clip planes only");
     }
   }
 
@@ -1123,6 +1124,35 @@ void testClipPlaneTransformPayloadAndMaskBounds() {
   }();
   check(changed.hot.key.clipPlanesHash != canonical.hot.key.clipPlanesHash,
         "transformed clip-plane payload participates in canonical key hash");
+
+  DeviceState programmable = state;
+  programmable.vertexShader = makeBytecodeShader(
+      0x3010203040506070ull,
+      wordsToBytes({
+          0xfffe0200u,
+          makeInstructionToken(1u, 2u),
+          makeRegisterToken(4u, 0u),
+          makeRegisterToken(2u, 0u),
+          0xffffu,
+      }));
+  const DrawDesc programmableDesc =
+      makeDrawDescFromState(programmable, {});
+  const auto programmableUniforms =
+      makeDrawUniformPayload(programmableDesc);
+  for (size_t plane = 0; plane < kMaxClipPlanes; ++plane) {
+    const ClipPlane expectedPlane =
+        (kClipMask & (1u << plane)) != 0
+            ? programmable.clipPlanes[plane]
+            : ClipPlane{};
+    for (size_t component = 0; component < 4; ++component) {
+      checkNear(programmableDesc.clipPlanes[plane][component],
+                expectedPlane[component],
+                "programmable draw preserves clip-space plane coefficients");
+      checkNear(programmableUniforms.clipPlanes[plane][component],
+                expectedPlane[component],
+                "programmable uniforms preserve clip-space plane coefficients");
+    }
+  }
 }
 
 void testConstantsAndShaderRefs() {
