@@ -150,10 +150,10 @@ graph LR
 
 **PE CommandChunk** holds:
 - A compact command header array and POD payload arena
-- V2 target: stable object-ID/generation table entries for buffers, textures,
+- V2 production default: stable object-ID/generation table entries for buffers, textures,
   surfaces, shaders, vertex declarations, and queries
-- V1 compatibility: integer-encoded unix wrapper addresses retained by the PE
-  recorder; this is explicit migration debt, not an acceptable new schema
+- V1 diagnostic compatibility: integer-encoded unix wrapper addresses retained
+  by the PE recorder; this is a forced fallback, not an acceptable new schema
 - No raw pointer-typed fields, COM pointers, ObjC pointers, lambdas, or owning
   C++ containers in the wire image
 - Command-count and byte-size fields used to bound tail latency
@@ -1001,9 +1001,9 @@ Import is transactional and ordered:
 V2 is selected only after PE/unix capability negotiation and the generated
 bridge ABI-hash handshake agree. An importer may support V1 and V2 during
 migration, but one chunk has one version and one payload grammar; there is no
-mixed V1/V2 record mode. V1 remains the fallback until the V2 registry,
+mixed V1/V2 record mode. Production `auto` selects V2 after the registry,
 producer, importer, native parity tests, PE x64/x86 builds, and runtime bridge-op
-evidence are complete.
+gates passed. V1 remains available only as an explicit diagnostic fallback.
 
 ### 2.5 Draw-Run Batch Compatibility
 
