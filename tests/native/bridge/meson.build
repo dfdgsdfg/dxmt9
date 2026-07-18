@@ -196,7 +196,6 @@ foreach spec : [
   ['chunk-record-v2-layout', 'chunk_record_v2_layout_spec.cpp'],
   ['chunk-record-v2-registry', 'chunk_record_v2_registry_spec.cpp'],
   ['chunk-record-v2-validation', 'chunk_record_v2_validation_spec.cpp'],
-  ['pe-chunk-record-v2-value', 'pe_chunk_record_v2_value_spec.cpp'],
   ['chunk-record-v1-v2-equivalence', 'chunk_record_v1_v2_equivalence_spec.cpp'],
 ]
   target = executable(
@@ -209,3 +208,20 @@ foreach spec : [
   test('dxmt9-' + spec[0] + '-spec', target,
        env: dxmt9_native_test_env)
 endforeach
+
+pe_chunk_record_v2_value_spec = executable(
+  'dxmt9-pe-chunk-record-v2-value-spec',
+  [
+    'pe_chunk_record_v2_value_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-chunk-record-v2-value-spec',
+     pe_chunk_record_v2_value_spec,
+     env: dxmt9_native_test_env)

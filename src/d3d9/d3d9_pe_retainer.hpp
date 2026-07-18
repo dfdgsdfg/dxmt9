@@ -68,6 +68,32 @@ public:
                [](D9CQuery* value) { dxmt9c_query_addref(value); });
     }
 
+    void retainWireObject(std::uint32_t kind, void* object,
+                          Acquired& acquired) {
+        switch (kind) {
+        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+            retainTexture(static_cast<D9CTexture*>(object), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_SURFACE:
+            retainSurface(static_cast<D9CSurface*>(object), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_BUFFER:
+            retainBuffer(static_cast<D9CBuffer*>(object), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_SHADER:
+            retainShader(static_cast<D9CShader*>(object), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+            retainVdecl(static_cast<D9CVertexDecl*>(object), acquired);
+            break;
+        case D9C_CHUNK_HANDLE_KIND_QUERY:
+            retainQuery(static_cast<D9CQuery*>(object), acquired);
+            break;
+        default:
+            break;
+        }
+    }
+
     void retainWireHandle(const D9CCommandChunkWireHandleEntry& handle,
                           Acquired& acquired) {
         const auto ptr = static_cast<std::uintptr_t>(handle.opaqueHandle);

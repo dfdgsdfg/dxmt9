@@ -58,12 +58,16 @@ class D3D9VertexDeclImpl final : public IDirect3DVertexDeclaration9 {
   ULONG refs_ = 1;
   D9CVertexDecl *d_;
   IDirect3DDevice9 *device_;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9VertexDeclImpl(D9CVertexDecl *d, IDirect3DDevice9 *device)
       : d_(d), device_(device) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        d_, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+        dxmt9c_vdecl_get_wire_identity, wireObject_);
   }
   ~D3D9VertexDeclImpl() {
     dxmt9c_vdecl_release(d_);
@@ -72,6 +76,9 @@ public:
   }
 
   D9CVertexDecl *raw() const { return d_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -132,6 +139,7 @@ class D3D9QueryImpl final : public IDirect3DQuery9 {
   D9CQuery *q_;
   IDirect3DDevice9 *device_;
   D3D9PeRecorderFlush *recorder_;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9QueryImpl(D9CQuery *q, IDirect3DDevice9 *device,
@@ -139,11 +147,19 @@ public:
       : q_(q), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        q_, D9C_CHUNK_HANDLE_KIND_QUERY,
+        dxmt9c_query_get_wire_identity, wireObject_);
   }
   ~D3D9QueryImpl() {
     dxmt9c_query_release(q_);
     if (device_)
       device_->Release();
+  }
+
+  D9CQuery *raw() const { return q_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
   }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
@@ -792,4 +808,20 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
 
 D9CVertexDecl *D3D9PeRawVertexDecl(IDirect3DVertexDeclaration9 *decl) {
   return decl ? static_cast<D3D9VertexDeclImpl *>(decl)->raw() : nullptr;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireVertexDecl(IDirect3DVertexDeclaration9 *decl) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return decl ? static_cast<D3D9VertexDeclImpl *>(decl)->wireObject() : empty;
+}
+
+D9CQuery *D3D9PeRawQuery(IDirect3DQuery9 *query) {
+  return query ? static_cast<D3D9QueryImpl *>(query)->raw() : nullptr;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireQuery(IDirect3DQuery9 *query) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return query ? static_cast<D3D9QueryImpl *>(query)->wireObject() : empty;
 }

@@ -270,6 +270,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_end_scene:
   case BridgeOpcode::dxmt9c_device_set_gamma_ramp:
   case BridgeOpcode::dxmt9c_device_check_device_multisample:
+  case BridgeOpcode::dxmt9c_device_negotiate_command_chunk:
     return BridgeClass::Lifecycle;
 
   case BridgeOpcode::dxmt9c_device_set_viewport:
@@ -371,17 +372,20 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_texture_set_lod:
   case BridgeOpcode::dxmt9c_texture_sample_2d:
   case BridgeOpcode::dxmt9c_texture_set_palette:
+  case BridgeOpcode::dxmt9c_texture_get_wire_identity:
   case BridgeOpcode::dxmt9c_buffer_addref:
   case BridgeOpcode::dxmt9c_buffer_release:
   case BridgeOpcode::dxmt9c_buffer_lock:
   case BridgeOpcode::dxmt9c_buffer_unlock:
   case BridgeOpcode::dxmt9c_buffer_get_desc:
+  case BridgeOpcode::dxmt9c_buffer_get_wire_identity:
   case BridgeOpcode::dxmt9c_surface_addref:
   case BridgeOpcode::dxmt9c_surface_release:
   case BridgeOpcode::dxmt9c_surface_lock_rect:
   case BridgeOpcode::dxmt9c_surface_unlock_rect:
   case BridgeOpcode::dxmt9c_surface_get_desc:
   case BridgeOpcode::dxmt9c_surface_get_container_texture:
+  case BridgeOpcode::dxmt9c_surface_get_wire_identity:
     return BridgeClass::Resource;
 
   case BridgeOpcode::dxmt9c_device_create_vertex_shader:
@@ -390,9 +394,11 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_shader_addref:
   case BridgeOpcode::dxmt9c_shader_release:
   case BridgeOpcode::dxmt9c_shader_get_bytecode:
+  case BridgeOpcode::dxmt9c_shader_get_wire_identity:
   case BridgeOpcode::dxmt9c_vdecl_addref:
   case BridgeOpcode::dxmt9c_vdecl_release:
   case BridgeOpcode::dxmt9c_vdecl_get_declaration:
+  case BridgeOpcode::dxmt9c_vdecl_get_wire_identity:
     return BridgeClass::Shader;
 
   case BridgeOpcode::dxmt9c_device_create_query:
@@ -402,6 +408,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_query_get_data:
   case BridgeOpcode::dxmt9c_query_get_data_size:
   case BridgeOpcode::dxmt9c_query_get_type:
+  case BridgeOpcode::dxmt9c_query_get_wire_identity:
     return BridgeClass::Query;
 
   case BridgeOpcode::dxmt9c_device_create_state_block:

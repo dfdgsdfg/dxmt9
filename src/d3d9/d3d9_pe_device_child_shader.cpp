@@ -15,6 +15,7 @@ class D3D9VertexShaderImpl final : public IDirect3DVertexShader9 {
   D9CShader *s_;
   IDirect3DDevice9 *device_;
   std::uint64_t hash_ = 0;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9VertexShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
@@ -22,6 +23,9 @@ public:
       : s_(s), device_(device), hash_(hash) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        s_, D9C_CHUNK_HANDLE_KIND_SHADER,
+        dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9VertexShaderImpl() {
     dxmt9c_shader_release(s_);
@@ -30,6 +34,9 @@ public:
   }
 
   D9CShader *raw() const { return s_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
   std::uint64_t hash() const { return hash_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
@@ -79,6 +86,7 @@ class D3D9PixelShaderImpl final : public IDirect3DPixelShader9 {
   D9CShader *s_;
   IDirect3DDevice9 *device_;
   std::uint64_t hash_ = 0;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
 
 public:
   D3D9PixelShaderImpl(D9CShader *s, IDirect3DDevice9 *device,
@@ -86,6 +94,9 @@ public:
       : s_(s), device_(device), hash_(hash) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        s_, D9C_CHUNK_HANDLE_KIND_SHADER,
+        dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9PixelShaderImpl() {
     dxmt9c_shader_release(s_);
@@ -94,6 +105,9 @@ public:
   }
 
   D9CShader *raw() const { return s_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
   std::uint64_t hash() const { return hash_; }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
@@ -157,6 +171,20 @@ D9CShader *D3D9PeRawVertexShader(IDirect3DVertexShader9 *shader) {
 
 D9CShader *D3D9PeRawPixelShader(IDirect3DPixelShader9 *shader) {
   return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->raw() : nullptr;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireVertexShader(IDirect3DVertexShader9 *shader) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return shader ? static_cast<D3D9VertexShaderImpl *>(shader)->wireObject()
+                : empty;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWirePixelShader(IDirect3DPixelShader9 *shader) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return shader ? static_cast<D3D9PixelShaderImpl *>(shader)->wireObject()
+                : empty;
 }
 
 std::uint64_t D3D9PeVertexShaderHash(IDirect3DVertexShader9 *shader) {

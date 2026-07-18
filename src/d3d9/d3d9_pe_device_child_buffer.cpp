@@ -262,6 +262,7 @@ class D3D9VertexBufferImpl final : public IDirect3DVertexBuffer9 {
   bool descValid_ = false;
   bool defaultPoolTracked_ = false;
   D3D9PeBufferLockState lockState_{};
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -271,6 +272,9 @@ public:
       : b_(b), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        b_, D9C_CHUNK_HANDLE_KIND_BUFFER,
+        dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              bufferIsDefaultPool(desc_, descValid_));
@@ -283,6 +287,9 @@ public:
   }
 
   D9CBuffer *raw() const { return b_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
   void invalidateReadonlyCache() noexcept {
     lockState_.readonlyCache.invalidate();
   }
@@ -398,6 +405,7 @@ class D3D9IndexBufferImpl final : public IDirect3DIndexBuffer9 {
   bool descValid_ = false;
   bool defaultPoolTracked_ = false;
   D3D9PeBufferLockState lockState_{};
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -407,6 +415,9 @@ public:
       : b_(b), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        b_, D9C_CHUNK_HANDLE_KIND_BUFFER,
+        dxmt9c_buffer_get_wire_identity, wireObject_);
     descValid_ = loadBufferDesc(b_, desc_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              bufferIsDefaultPool(desc_, descValid_));
@@ -419,6 +430,9 @@ public:
   }
 
   D9CBuffer *raw() const { return b_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
   void invalidateReadonlyCache() noexcept {
     lockState_.readonlyCache.invalidate();
   }
@@ -544,6 +558,20 @@ D9CBuffer *D3D9PeRawVertexBuffer(IDirect3DVertexBuffer9 *buffer) {
 
 D9CBuffer *D3D9PeRawIndexBuffer(IDirect3DIndexBuffer9 *buffer) {
   return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->raw() : nullptr;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireVertexBuffer(IDirect3DVertexBuffer9 *buffer) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return buffer ? static_cast<D3D9VertexBufferImpl *>(buffer)->wireObject()
+                : empty;
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireIndexBuffer(IDirect3DIndexBuffer9 *buffer) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return buffer ? static_cast<D3D9IndexBufferImpl *>(buffer)->wireObject()
+                : empty;
 }
 
 void D3D9PeInvalidateVertexBufferReadonlyCache(IDirect3DVertexBuffer9 *buffer) {

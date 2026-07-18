@@ -421,6 +421,7 @@ class D3D9SurfaceImpl final : public IDirect3DSurface9 {
   // recorder flush. Distinct from the C-side authority but kept in
   // sync via the C-side return values.
   bool locked_ = false;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   // Wine d3d9 conformance: surfaces obtained through
   // IDirect3DTexture9::GetSurfaceLevel share their lock state with the
   // owning texture and accept a redundant Unlock with S_OK (cube and
@@ -444,6 +445,9 @@ public:
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        s_, D9C_CHUNK_HANDLE_KIND_SURFACE,
+        dxmt9c_surface_get_wire_identity, wireObject_);
     descValid_ = loadSurfaceDesc(s_, desc_);
     if (container_)
       container_->AddRef();
@@ -475,6 +479,9 @@ public:
   }
 
   D9CSurface *raw() const { return s_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -827,6 +834,7 @@ class D3D9TextureImpl final : public IDirect3DTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   // T4 (D3D9Ex shared-handle, SYSTEMMEM partial): when non-null this
   // texture aliases caller-owned memory; LockRect (level 0) returns the
   // user pointer directly. Only level 0 is supported here because the
@@ -845,6 +853,9 @@ public:
         userMemory_(userMemory), userMemoryPitch_(userMemoryPitch) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
@@ -856,6 +867,9 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -1138,6 +1152,7 @@ class D3D9CubeTextureImpl final : public IDirect3DCubeTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -1147,6 +1162,9 @@ public:
       : t_(t), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
@@ -1158,6 +1176,9 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
 
   bool subresourceIndex(D3DCUBEMAP_FACES face, UINT level, UINT &out) const {
     const UINT mipCount = dxmt9c_texture_get_level_count(t_);
@@ -1516,6 +1537,7 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  dxmt9::d3d9::pe::PeWireObjectRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
 
@@ -1525,6 +1547,9 @@ public:
       : t_(t), device_(device), recorder_(recorder) {
     if (device_)
       device_->AddRef();
+    dxmt9::d3d9::pe::cacheWireObjectRef(
+        t_, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+        dxmt9c_texture_get_wire_identity, wireObject_);
     trackDefaultPoolResource(recorder_, defaultPoolTracked_,
                              textureIsDefaultPool(t_));
   }
@@ -1536,6 +1561,9 @@ public:
   }
 
   D9CTexture *raw() const { return t_; }
+  const dxmt9::d3d9::pe::PeWireObjectRef &wireObject() const {
+    return wireObject_;
+  }
 
   ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
@@ -1764,6 +1792,13 @@ D9CSurface *D3D9PeRawSurface(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->raw() : nullptr;
 }
 
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireSurface(IDirect3DSurface9 *surface) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  return surface ? static_cast<D3D9SurfaceImpl *>(surface)->wireObject()
+                 : empty;
+}
+
 bool D3D9PeSurfaceIsLocked(IDirect3DSurface9 *surface) {
   return surface ? static_cast<D3D9SurfaceImpl *>(surface)->peLocked() : false;
 }
@@ -1780,5 +1815,22 @@ D9CTexture *D3D9PeRawTexture(IDirect3DBaseTexture9 *texture) {
     return static_cast<D3D9VolumeTextureImpl *>(texture)->raw();
   default:
     return nullptr;
+  }
+}
+
+const dxmt9::d3d9::pe::PeWireObjectRef &
+D3D9PeWireTexture(IDirect3DBaseTexture9 *texture) {
+  static const dxmt9::d3d9::pe::PeWireObjectRef empty{};
+  if (!texture)
+    return empty;
+  switch (texture->GetType()) {
+  case D3DRTYPE_TEXTURE:
+    return static_cast<D3D9TextureImpl *>(texture)->wireObject();
+  case D3DRTYPE_CUBETEXTURE:
+    return static_cast<D3D9CubeTextureImpl *>(texture)->wireObject();
+  case D3DRTYPE_VOLUMETEXTURE:
+    return static_cast<D3D9VolumeTextureImpl *>(texture)->wireObject();
+  default:
+    return empty;
   }
 }
