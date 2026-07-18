@@ -3415,12 +3415,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     std::array<std::uint64_t, 3u> commandChunkBytesByVersion_{};
     PeRecorderStats peRecorderStats_{};
     // DXMT9_PE_STATS_DECIMATION diagnostic accumulators (const_flush,
-    // draw_packet scopes). append/const_setter accumulators live next to
-    // their respective owners (PeCommandChunkBuilder::appendDecimatedStats_,
-    // touchConstShadow's function-local static) — see
+    // draw_packet, and V2 append scopes). The V1 append/const_setter
+    // accumulators live next to their respective owners
+    // (PeCommandChunkBuilder::appendDecimatedStats_, touchConstShadow's
+    // function-local static) — see
     // d3d9_pe_stats_decimation.hpp and logPeStatsDecimation() below.
     // draw_packet's stats are mutable because buildDrawPrimitivePacket()
     // is a const method.
+    PeDecimatedScopeStats peV2AppendDecimatedStats_{};
     PeDecimatedScopeStats peConstFlushDecimatedStats_{};
     mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
     std::uint64_t peStatsDecimationPresents_ = 0;
@@ -8975,14 +8977,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (decimationN == 0) {
             return;
         }
-        const auto& appendStats = commandChunk_.appendDecimatedStats();
+        const auto& appendStats =
+            commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2
+                ? peV2AppendDecimatedStats_
+                : commandChunk_.appendDecimatedStats();
         const auto& constSetterStats = peConstSetterDecimatedStats();
         dxmt9DeviceInfoLog(
             "[dxmt9-pe-decimated] presents=%llu decimation=%u "
             "append_events=%llu append_sampled=%llu append_sampled_ms=%.3f "
             "const_setter_events=%llu const_setter_sampled=%llu const_setter_sampled_ms=%.3f "
             "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
-            "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f",
+            "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
+            "identity_getter_calls=%llu",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -8996,7 +9002,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<double>(peConstFlushDecimatedStats_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(peDrawPacketDecimatedStats_.events),
             static_cast<unsigned long long>(peDrawPacketDecimatedStats_.sampled),
-            static_cast<double>(peDrawPacketDecimatedStats_.sampledNs) / 1.0e6);
+            static_cast<double>(peDrawPacketDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(
+                dxmt9::d3d9::pe::wireIdentityGetterCallCount()));
     }
 
     // Present-cadence tick for the decimated dump: increments a cumulative
@@ -9151,6 +9159,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
         HRESULT hr = S_OK;
         if (useV2) {
+            DxmtPeDecimatedScopeGuard appendDecimatedScope;
+            const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+            if (decimationN != 0 &&
+                PeDecimatedScopeTimer::shouldSample(
+                    peV2AppendDecimatedStats_, decimationN)) {
+                appendDecimatedScope.stats = &peV2AppendDecimatedStats_;
+                appendDecimatedScope.t0 = std::chrono::steady_clock::now();
+            }
             if (willFlushBeforeAppend) {
                 hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
             }
