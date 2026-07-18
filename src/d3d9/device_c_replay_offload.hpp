@@ -7,9 +7,12 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <vector>
 
+#include "device_c_chunk_v2_registry.hpp"
+#include "device_c_chunk_v2_validate.hpp"
 #include "dxmt9/core.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -29,8 +32,11 @@ struct RetainedWireHandle {
 
 struct RawCommandChunk {
   std::vector<dxmt9::core::u8> recordBlob;
+  uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION;
   uint32_t recordCount = 0;
   uint32_t recordBytes = 0;
+  uint32_t handleCount = 0;
+  bool preflightValidated = false;
   bool hasPresent = false;
   // Wow64 pointer-decode semantics are carried by a thread_local
   // (g_wow64ClientCallDepth) on the committing app thread. The deferred
@@ -39,9 +45,20 @@ struct RawCommandChunk {
   // raw pointers (garbage vtable -> jump to 0, which wedges Wine's
   // signal handling on a non-Wine thread).
   bool wow64ClientCall = false;
+  // V2 objects are resolved and retained synchronously before enqueue.
+  // The worker consumes these pointers directly and never looks a stable
+  // registry ID up after the app-thread commit returns.
+  std::vector<void*> resolvedObjects;
   std::vector<RetainedWireHandle> retainedWrappers;
   std::chrono::steady_clock::time_point bridgeCommitStart{};
 };
+
+bool prepareV2OffloadChunk(
+    std::span<const std::byte> blob,
+    const V2ChunkEnvelope& envelope,
+    const WireObjectRegistry& registry,
+    WireObjectRegistry::RetainFn retain,
+    RawCommandChunk& out) noexcept;
 
 // Perf hooks (defined in device_c_replay_offload.cpp) — invoked only when a
 // wait actually occurred, so the uncontended queue paths stay a predicate

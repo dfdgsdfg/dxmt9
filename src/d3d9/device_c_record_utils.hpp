@@ -8,6 +8,10 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 
+namespace dxmt9::d3d9 {
+struct ResolvedRecordV2View;
+}
+
 namespace dxmt9::d3d9::devicec {
 
 enum class D9CCommandRecordValidationStatus : std::uint8_t {
@@ -355,6 +359,17 @@ ImportedReplayOrderingDecision evaluateImportedReplayOrdering(
 ImportedReplayHazardState nextImportedReplayHazardState(
     const ImportedReplayHazardState& active,
     const ImportedReplayOrderingDecision& decision);
+
+void collectImportedRecordResourceHazardsV2(
+    const ResolvedRecordV2View& record,
+    ImportedRecordResourceHazards& hazards);
+
+bool v2RecordRequiresEffectiveResourceMarking(
+    const ResolvedRecordV2View& record) noexcept;
+
+ImportedReplayOrderingDecision evaluateImportedReplayOrderingV2(
+    const ResolvedRecordV2View& record,
+    const ImportedReplayHazardState& active) noexcept;
 
 std::vector<D9CChunkHandleEntry> makeImportedChunkHandleEntries(
     const ImportedChunkHandleSet& handles);

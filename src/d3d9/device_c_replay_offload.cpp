@@ -16,8 +16,10 @@
 
 #include "dxmt9/assert.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 
 namespace dxmt9::d3d9 {
 
@@ -100,6 +102,57 @@ void notePushBackpressureWait(std::uint64_t nanoseconds) {
 
 void noteWorkerIdleWait(std::uint64_t nanoseconds) {
   dxmt9::perf::countOffloadWorkerIdleWaitNs(nanoseconds);
+}
+
+bool prepareV2OffloadChunk(
+    std::span<const std::byte> blob,
+    const V2ChunkEnvelope& envelope,
+    const WireObjectRegistry& registry,
+    WireObjectRegistry::RetainFn retain,
+    RawCommandChunk& out) noexcept {
+  if (!out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
+    return false;
+  }
+
+  RawCommandChunk candidate;
+  try {
+    candidate.recordBlob.resize(blob.size());
+    if (!blob.empty()) {
+      std::memcpy(candidate.recordBlob.data(), blob.data(), blob.size());
+    }
+    candidate.resolvedObjects.resize(envelope.handleCount);
+    candidate.retainedWrappers.resize(envelope.handleCount);
+  } catch (...) {
+    return false;
+  }
+
+  ImportedChunkV2View view;
+  const auto ownedBytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(candidate.recordBlob.data()),
+      candidate.recordBlob.size());
+  if (!validateCommandChunkV2(ownedBytes, envelope, &view).valid() ||
+      !registry.resolveAndRetain(view.handles, candidate.resolvedObjects,
+                                retain)) {
+    return false;
+  }
+
+  for (std::size_t i = 0u; i < view.handles.size(); ++i) {
+    candidate.retainedWrappers[i] = RetainedWireHandle{
+        .kind = view.handles[i].kind,
+        .ptr = candidate.resolvedObjects[i],
+    };
+  }
+  candidate.wireVersion = D9C_COMMAND_CHUNK_VERSION_V2;
+  candidate.recordCount = envelope.recordCount;
+  candidate.recordBytes = static_cast<std::uint32_t>(blob.size());
+  candidate.handleCount = envelope.handleCount;
+  candidate.preflightValidated = true;
+  candidate.hasPresent = std::any_of(
+      view.records.begin(), view.records.end(), [](const auto& record) {
+        return record.type == D9C_COMMAND_RECORD_PRESENT;
+      });
+  out = std::move(candidate);
+  return true;
 }
 
 void ReplayOffloadWorker::start(D9CDevice* device) {

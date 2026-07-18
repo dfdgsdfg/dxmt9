@@ -2789,8 +2789,11 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     }
     dxmt9::d3d9::RawCommandChunk raw;
     raw.recordBlob.assign(records, records + chunk->recordBytes);
+    raw.wireVersion = D9C_COMMAND_CHUNK_VERSION;
     raw.recordCount = importedChunk.recordCount;
     raw.recordBytes = chunk->recordBytes;
+    raw.handleCount = importedChunk.handleCount;
+    raw.preflightValidated = true;
     // Deliberately NOT didBulkMarkResources: the synchronous bulk mark pins
     // resources against nextSeqId_ observed on the app thread, but the worker
     // publishes this chunk's draws into a later slot once it runs ahead. The
