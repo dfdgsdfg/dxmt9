@@ -131,6 +131,87 @@ struct V2SectionRule {
   std::uint32_t handleKind;
 };
 
+struct V2RecordHandleFieldRule {
+  std::uint32_t recordType;
+  std::uint32_t payloadOffset;
+  std::uint32_t handleKind;
+  bool nullable;
+};
+
+inline constexpr std::array<V2RecordHandleFieldRule, 12>
+    kV2RecordHandleFieldRules = {{
+        {D9C_COMMAND_RECORD_STRETCH_RECT,
+         offsetof(D9CCommandChunkWireStretchRectV2, srcHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_STRETCH_RECT,
+         offsetof(D9CCommandChunkWireStretchRectV2, dstHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_COLOR_FILL,
+         offsetof(D9CCommandChunkWireColorFillV2, surfaceHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+         offsetof(D9CCommandChunkWireUpdateTextureV2, srcHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+        {D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+         offsetof(D9CCommandChunkWireUpdateTextureV2, dstHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+        {D9C_COMMAND_RECORD_UPDATE_SURFACE,
+         offsetof(D9CCommandChunkWireUpdateSurfaceV2, srcHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_UPDATE_SURFACE,
+         offsetof(D9CCommandChunkWireUpdateSurfaceV2, dstHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_QUERY_ISSUE,
+         offsetof(D9CCommandChunkWireQueryIssueV2, queryHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_QUERY, false},
+        {D9C_COMMAND_RECORD_READBACK,
+         offsetof(D9CCommandChunkWireReadbackV2, srcHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_READBACK,
+         offsetof(D9CCommandChunkWireReadbackV2, dstHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
+        {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+         offsetof(D9CCommandChunkWireReszDepthResolveV2,
+                  msaaDepthHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+        {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+         offsetof(D9CCommandChunkWireReszDepthResolveV2,
+                  intzDestHandleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+    }};
+
+struct V2SectionHandleFieldRule {
+  std::uint16_t sectionKind;
+  std::uint16_t payloadOffset;
+  std::uint32_t handleKind;
+  bool nullable;
+};
+
+inline constexpr std::array<V2SectionHandleFieldRule, 7>
+    kV2SectionHandleFieldRules = {{
+        {D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+         offsetof(D9CCommandChunkWireTextureBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_TEXTURE, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
+         offsetof(D9CCommandChunkWireStreamBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_BUFFER, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_SHADER,
+         offsetof(D9CCommandChunkWireShaderBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_SHADER, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT,
+         offsetof(D9CCommandChunkWireVertexInputV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER,
+         offsetof(D9CCommandChunkWireIndexBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_BUFFER, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET,
+         offsetof(D9CCommandChunkWireRenderTargetBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, true},
+        {D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL,
+         offsetof(D9CCommandChunkWireDepthStencilBindingV2, handleIndex),
+         D9C_CHUNK_HANDLE_KIND_SURFACE, true},
+    }};
+
 inline constexpr std::array<V2SectionRule,
                             D9C_COMMAND_CHUNK_V2_SECTION_COUNT>
     kV2SectionRules = {{
@@ -235,6 +316,16 @@ constexpr const V2SectionRule* v2SectionRule(std::uint16_t kind) {
   return nullptr;
 }
 
+constexpr const V2SectionHandleFieldRule* v2SectionHandleFieldRule(
+    std::uint16_t kind) {
+  for (const auto& rule : kV2SectionHandleFieldRules) {
+    if (rule.sectionKind == kind) {
+      return &rule;
+    }
+  }
+  return nullptr;
+}
+
 constexpr bool v2RecordSchemaComplete() {
   constexpr std::array<std::uint32_t, 20> expected = {{
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
@@ -284,8 +375,43 @@ constexpr bool v2SectionSchemaComplete() {
   return true;
 }
 
+constexpr bool v2HandleFieldSchemaComplete() {
+  for (const auto& recordRule : kV2RecordRules) {
+    if ((recordRule.ruleFlags & V2RecordRuleHandleRefs) == 0u ||
+        (recordRule.ruleFlags & V2RecordRuleSparseState) != 0u) {
+      continue;
+    }
+    bool found = false;
+    for (const auto& field : kV2RecordHandleFieldRules) {
+      if (field.recordType != recordRule.type) {
+        continue;
+      }
+      found = true;
+      if (field.payloadOffset + sizeof(std::uint32_t) >
+              recordRule.fixedPayloadSize ||
+          field.handleKind > D9C_CHUNK_HANDLE_KIND_QUERY) {
+        return false;
+      }
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  for (const auto& field : kV2SectionHandleFieldRules) {
+    const auto* section = v2SectionRule(field.sectionKind);
+    if (!section ||
+        (section->ruleFlags & V2SectionRuleHandleRefs) == 0u ||
+        field.payloadOffset + sizeof(std::uint32_t) > section->elementSize ||
+        field.handleKind != section->handleKind) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static_assert(v2RecordSchemaComplete());
 static_assert(v2SectionSchemaComplete());
+static_assert(v2HandleFieldSchemaComplete());
 static_assert(sizeof(D9CCommandChunkWireHeaderV2) ==
               D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE);
 static_assert(alignof(D9CCommandChunkWireHeaderV2) == 4u);
