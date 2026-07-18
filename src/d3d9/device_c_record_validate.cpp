@@ -22,13 +22,10 @@ enum class RecordSizeMode : std::uint8_t {
   // Exact mode did.
   DrawPrimitiveConstDelta,
   DrawIndexedPrimitiveConstDelta,
-  // DRAW_PRIMITIVE_UP / DRAW_INDEXED_PRIMITIVE_UP already carry a trailing
-  // vertex(/index) data region whose own bounds are validated later against
-  // the actual record bytes (recordRangeValid in device_c_chunk_replay.cpp),
-  // not here -- so the off-path behavior (no valid section) must keep the
-  // prior Minimum-mode contract of accepting any header.size >= minimumSize.
-  // Only when a section is folded in does this additionally pin header.size
-  // to vertex-data-end + const-delta-payload.
+  // DRAW_PRIMITIVE_UP / DRAW_INDEXED_PRIMITIVE_UP carry canonical contiguous
+  // vertex(/index) data followed by any const-delta payload. Whole-record
+  // validation pins every nested offset and the final size before replay can
+  // apply packet state or expose a payload span.
   DrawPrimitiveUPConstDelta,
   DrawIndexedPrimitiveUPConstDelta,
 };
@@ -175,7 +172,8 @@ bool importedWireHandleEntryValid(
   // generation domain. The cross-side equality check against the resolved
   // handle generation is performed at replay time after the wrapper is
   // dereferenced — see `device_c_chunk_replay.cpp` "bad-handle-generation".
-  return handle.kind <= D9C_CHUNK_HANDLE_KIND_VERTEX_DECL &&
+  return handle.kind <= D9C_CHUNK_HANDLE_KIND_QUERY &&
+         handle.opaqueHandle != 0u &&
          d9c_command_chunk_wire_handle_generation_valid(handle.generation) &&
          d9c_command_chunk_wire_handle_entry_reserved_valid(&handle);
 }
@@ -204,6 +202,217 @@ ImportedRecordView makeInvalidWireImportedRecordView(
       .header = legacyHeader,
       .validation = validation,
   };
+}
+
+struct PayloadHandleReference {
+  std::uint32_t kind = 0;
+  std::uint64_t handle = 0;
+};
+
+constexpr std::size_t kMaxPayloadHandleReferences =
+    D9C_DRAW_PACKET_MAX_TEXTURES + D9C_DRAW_PACKET_MAX_STREAMS +
+    D9C_DRAW_PACKET_MAX_RENDER_TARGETS +
+    5u;  // DS + VS + PS + vertex declaration + index buffer.
+
+struct PayloadHandleReferenceSet {
+  std::array<PayloadHandleReference, kMaxPayloadHandleReferences> entries{};
+  std::uint32_t count = 0;
+};
+
+bool appendPayloadHandleReference(PayloadHandleReferenceSet& references,
+                                  std::uint32_t kind,
+                                  std::uint64_t handle) noexcept {
+  if (handle == 0u || kind > D9C_CHUNK_HANDLE_KIND_QUERY) {
+    return true;
+  }
+  for (std::uint32_t i = 0; i < references.count; ++i) {
+    if (references.entries[i].kind == kind &&
+        references.entries[i].handle == handle) {
+      return true;
+    }
+  }
+  if (references.count >= references.entries.size()) {
+    return false;
+  }
+  references.entries[references.count++] = PayloadHandleReference{kind, handle};
+  return true;
+}
+
+bool collectDrawPacketPayloadHandleReferences(
+    const D9CDrawPrimitivePacket& packet,
+    PayloadHandleReferenceSet& references) noexcept {
+  for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+    if ((packet.textureMask & (1u << stage)) != 0u &&
+        !appendPayloadHandleReference(
+            references, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+            wireHandleValue(packet.textures[stage]))) {
+      return false;
+    }
+  }
+  for (std::uint32_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+    if ((packet.streamSourceMask & (1u << stream)) != 0u &&
+        !appendPayloadHandleReference(
+            references, D9C_CHUNK_HANDLE_KIND_BUFFER,
+            wireHandleValue(packet.streamSources[stream].buffer))) {
+      return false;
+    }
+  }
+  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if ((packet.rtMask & (1u << slot)) != 0u &&
+        !appendPayloadHandleReference(
+            references, D9C_CHUNK_HANDLE_KIND_SURFACE,
+            wireHandleValue(packet.rtHandles[slot]))) {
+      return false;
+    }
+  }
+  return (!packet.dsValid ||
+          appendPayloadHandleReference(
+              references, D9C_CHUNK_HANDLE_KIND_SURFACE,
+              wireHandleValue(packet.dsHandle))) &&
+         (!packet.vsValid ||
+          appendPayloadHandleReference(
+              references, D9C_CHUNK_HANDLE_KIND_SHADER,
+              wireHandleValue(packet.vsHandle))) &&
+         (!packet.psValid ||
+          appendPayloadHandleReference(
+              references, D9C_CHUNK_HANDLE_KIND_SHADER,
+              wireHandleValue(packet.psHandle))) &&
+         (!packet.vdeclValid ||
+          appendPayloadHandleReference(
+              references, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+              wireHandleValue(packet.vdeclHandle)));
+}
+
+bool collectRecordPayloadHandleReferences(
+    const ImportedRecordView& record,
+    PayloadHandleReferenceSet& references) noexcept {
+  if (!record.valid() || !record.record) {
+    return false;
+  }
+  switch (record.header.type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
+    D9CCommandRecordDrawPrimitive decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return collectDrawPacketPayloadHandleReferences(decoded.packet, references);
+  }
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+    D9CCommandRecordDrawIndexedPrimitive decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return collectDrawPacketPayloadHandleReferences(decoded.packet.state, references) &&
+           (!decoded.packet.ibValid ||
+            appendPayloadHandleReference(
+                references, D9C_CHUNK_HANDLE_KIND_BUFFER,
+                wireHandleValue(decoded.packet.ibHandle)));
+  }
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
+    D9CCommandRecordDrawPrimitiveUP decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return collectDrawPacketPayloadHandleReferences(decoded.packet.state, references);
+  }
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
+    D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return collectDrawPacketPayloadHandleReferences(decoded.packet.state, references);
+  }
+  case D9C_COMMAND_RECORD_APPLY_STATE: {
+    D9CCommandRecordApplyState decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return collectDrawPacketPayloadHandleReferences(decoded.packet, references);
+  }
+  case D9C_COMMAND_RECORD_STRETCH_RECT: {
+    D9CCommandRecordStretchRect decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.srcWire) &&
+           appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.dstWire);
+  }
+  case D9C_COMMAND_RECORD_COLOR_FILL: {
+    D9CCommandRecordColorFill decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+        references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.surfaceWire);
+  }
+  case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
+    D9CCommandRecordUpdateTexture decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_TEXTURE, decoded.srcWire) &&
+           appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_TEXTURE, decoded.dstWire);
+  }
+  case D9C_COMMAND_RECORD_UPDATE_SURFACE: {
+    D9CCommandRecordUpdateSurface decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.srcWire) &&
+           appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.dstWire);
+  }
+  case D9C_COMMAND_RECORD_READBACK: {
+    D9CCommandRecordReadback decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.srcWire) &&
+           appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.dstWire);
+  }
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE: {
+    D9CCommandRecordReszDepthResolve decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_SURFACE,
+               decoded.msaaDepthHandle) &&
+           appendPayloadHandleReference(
+               references, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+               decoded.intzDestHandle);
+  }
+  case D9C_COMMAND_RECORD_QUERY_ISSUE: {
+    D9CCommandRecordQueryIssue decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    return appendPayloadHandleReference(
+        references, D9C_CHUNK_HANDLE_KIND_QUERY, decoded.queryWire);
+  }
+  default:
+    return true;
+  }
+}
+
+bool recordPayloadHandleReferencesMatch(
+    const ImportedWireChunkView& chunk,
+    std::uint32_t recordIndex,
+    const ImportedRecordView& record) noexcept {
+  PayloadHandleReferenceSet references{};
+  if (!collectRecordPayloadHandleReferences(record, references)) {
+    return false;
+  }
+  const auto range = makeImportedWireRecordHandleView(chunk, recordIndex);
+  if (range.handleCount != references.count ||
+      (range.handleCount != 0u && !range.handles)) {
+    return false;
+  }
+  for (std::uint32_t i = 0; i < range.handleCount; ++i) {
+    const auto& entry = range.handles[i];
+    bool found = false;
+    for (std::uint32_t j = 0; j < references.count; ++j) {
+      found |= entry.kind == references.entries[j].kind &&
+               entry.opaqueHandle == references.entries[j].handle;
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  for (std::uint32_t i = 0; i < references.count; ++i) {
+    bool found = false;
+    for (std::uint32_t j = 0; j < range.handleCount; ++j) {
+      found |= range.handles[j].kind == references.entries[i].kind &&
+               range.handles[j].opaqueHandle == references.entries[i].handle;
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -297,13 +506,18 @@ D9CCommandRecordValidation validateCommandRecord(
       return makeResult(header, availableBytes, minimumSize, minimumSize,
                         D9CCommandRecordValidationStatus::SizeMismatch);
     }
-    if (d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state) != 0u) {
-      expectedSize =
-          d9c_command_record_draw_primitive_up_total_size(&decoded.packet);
-    } else {
-      // R-BACK-2.52(a): off path keeps the pre-change Minimum-mode
-      // contract exactly -- any header.size >= minimumSize is accepted.
-      expectedSize = header.size;
+    if (decoded.packet.vertexDataOffset != minimumSize) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    const auto vertexEnd =
+        static_cast<std::uint64_t>(decoded.packet.vertexDataOffset) +
+        decoded.packet.vertexDataSize;
+    expectedSize = vertexEnd +
+        d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state);
+    if (vertexEnd > header.size) {
+      return makeResult(header, availableBytes, minimumSize, expectedSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
     }
     break;
   }
@@ -314,11 +528,26 @@ D9CCommandRecordValidation validateCommandRecord(
       return makeResult(header, availableBytes, minimumSize, minimumSize,
                         D9CCommandRecordValidationStatus::SizeMismatch);
     }
-    if (d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state) != 0u) {
-      expectedSize =
-          d9c_command_record_draw_indexed_primitive_up_total_size(&decoded.packet);
-    } else {
-      expectedSize = header.size;
+    if (decoded.packet.indexDataOffset != minimumSize) {
+      return makeResult(header, availableBytes, minimumSize, minimumSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    const auto indexEnd =
+        static_cast<std::uint64_t>(decoded.packet.indexDataOffset) +
+        decoded.packet.indexDataSize;
+    if (indexEnd > 0xffffffffull ||
+        decoded.packet.vertexDataOffset != indexEnd) {
+      return makeResult(header, availableBytes, minimumSize, indexEnd,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
+    }
+    const auto vertexEnd =
+        static_cast<std::uint64_t>(decoded.packet.vertexDataOffset) +
+        decoded.packet.vertexDataSize;
+    expectedSize = vertexEnd +
+        d9c_draw_packet_const_delta_payload_bytes(&decoded.packet.state);
+    if (vertexEnd > header.size) {
+      return makeResult(header, availableBytes, minimumSize, expectedSize,
+                        D9CCommandRecordValidationStatus::SizeMismatch);
     }
     break;
   }
@@ -663,6 +892,7 @@ ImportedWireChunkValidation validateImportedWireChunk(
     }
   }
 
+  std::uint32_t nextHandle = 0u;
   for (std::uint32_t i = 0; i < chunk.recordCount; ++i) {
     const auto& wireRecord = chunk.records[i];
     if (!importedWireRecordHeaderValid(wireRecord)) {
@@ -678,6 +908,14 @@ ImportedWireChunkValidation validateImportedWireChunk(
       result.failedWireRecord = wireRecord;
       return result;
     }
+    if (wireRecord.firstHandle != nextHandle) {
+      result.status =
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences;
+      result.failedRecordIndex = i;
+      result.failedWireRecord = wireRecord;
+      return result;
+    }
+    nextHandle += wireRecord.handleCount;
 
     const auto record = makeImportedRecordView(chunk, i);
     if (!record.valid() || record.header.type != wireRecord.type) {
@@ -687,7 +925,21 @@ ImportedWireChunkValidation validateImportedWireChunk(
       result.failedRecord = record;
       return result;
     }
+    if (!recordPayloadHandleReferencesMatch(chunk, i, record)) {
+      result.status =
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences;
+      result.failedRecordIndex = i;
+      result.failedWireRecord = wireRecord;
+      result.failedRecord = record;
+      return result;
+    }
     result.parsedRecordCount = i + 1u;
+  }
+
+  if (nextHandle != chunk.handleCount) {
+    result.status =
+        ImportedWireChunkValidationStatus::InvalidRecordHandleReferences;
+    result.failedRecordIndex = chunk.recordCount;
   }
 
   return result;

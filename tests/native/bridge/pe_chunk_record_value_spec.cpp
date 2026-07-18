@@ -404,6 +404,13 @@ void testRichDrawRecordPreservesPacketValuesAndHandles() {
         "draw payload collects RT3");
   check(containsHandle(payloadHandleEntries, D9C_CHUNK_HANDLE_KIND_SURFACE, kDs),
         "draw payload collects DS");
+  check(containsHandle(payloadHandleEntries, D9C_CHUNK_HANDLE_KIND_SHADER, kVs),
+        "draw payload collects VS");
+  check(containsHandle(payloadHandleEntries, D9C_CHUNK_HANDLE_KIND_SHADER, kPs),
+        "draw payload collects PS");
+  check(containsHandle(payloadHandleEntries, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+                       kVdecl),
+        "draw payload collects vertex declaration");
 }
 
 void testMaxTextureStageAndSamplerDeltaPacketBoundaries() {
@@ -529,6 +536,9 @@ void testSetConstTailBytesRecordOrderAndWireHandleRange() {
       wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, kRt0),
       wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, kRt3),
       wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, kDs),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SHADER, kVs),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SHADER, kPs),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, kVdecl),
   };
   records.push_back(wireRecordHeader(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, drawOffset,

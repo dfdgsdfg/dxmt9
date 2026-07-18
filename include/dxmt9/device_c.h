@@ -347,8 +347,9 @@ typedef struct D9CDrawPacketConstDeltaSection {
  * Full-snapshot mode (DXMT9_PE_DRAW_FULL_SNAPSHOT=1, Phase 16) is a
  * DEBUG / STRESS knob — not the canonical wire form. When set, every
  * field is forced valid + populated from the PE shadow, making each
- * packet self-contained at the cost of wire bandwidth + disabled
- * run-coalescing. Use for: stress testing, debugging out-of-order
+ * packet self-contained; every texture/stream mask bit is set and unbound
+ * slots carry null handles so a snapshot also performs unbinds. This costs
+ * wire bandwidth + disables run-coalescing. Use for: stress testing, debugging out-of-order
  * replay, environments where importer statelessness matters more
  * than wire efficiency. */
 typedef struct D9CDrawPrimitivePacket {
@@ -459,9 +460,8 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 
 #define D9C_COMMAND_CHUNK_VERSION 1u
 
-/* Data-oriented command chunk wire shape. This is a parallel schema for the
- * bridge recorder/importer groundwork and does not replace D9CCommandChunk's
- * existing ABI. The blob layout is:
+/* Data-oriented command chunk wire V1 shape carried by D9CCommandChunk's
+ * records/recordBytes envelope. The blob layout is:
  *
  *   D9CCommandChunkWireHeader
  *   D9CCommandChunkWireRecordHeader[recordCount]
@@ -472,7 +472,12 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
  * payload ranges are byte offsets inside the payload arena. Per-record handle
  * ranges index into the chunk-level handle table. Reserved fields must be
  * written as zero by producers and validated as zero by consumers before
- * execution. */
+ * execution.
+ *
+ * V1 compatibility debt: payload handle fields and opaqueHandle contain
+ * SERVER-SIDE D9C* wrapper addresses cast to integers. New schemas must not
+ * extend that convention; wire V2 is specified to use stable object IDs and
+ * payload handle-table indices (R-BACK-2.54). */
 #define D9C_COMMAND_CHUNK_WIRE_VERSION 1u
 #define D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE 48u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE 32u
@@ -680,17 +685,19 @@ static inline int d9c_command_chunk_wire_handle_generation_matches(
                resolvedCoreHandleValue);
 }
 
-/* Per-record resource handle ranges. PE recorder derives handles from each
- * command payload plus append-time effective state dependencies, appends them
- * to the chunk handle table, then stores firstHandle / handleCount in the
- * corresponding wire record. Server-side importer uses those ranges to mark
- * resource lifetimes without rescanning unrelated records. */
+/* Per-record V1 handle ranges. The PE recorder derives the deduplicated set of
+ * direct, non-null references encoded by each command payload and appends it
+ * as one canonical contiguous table slice. The importer requires an exact
+ * bidirectional match between payload references and that slice before replay.
+ * Effective unix-state dependencies not encoded by the V1 delta remain covered
+ * by normal per-draw resource marking. */
 enum {
     D9C_CHUNK_HANDLE_KIND_TEXTURE = 0,
     D9C_CHUNK_HANDLE_KIND_SURFACE = 1,
     D9C_CHUNK_HANDLE_KIND_BUFFER = 2,
     D9C_CHUNK_HANDLE_KIND_SHADER = 3,
     D9C_CHUNK_HANDLE_KIND_VERTEX_DECL = 4,
+    D9C_CHUNK_HANDLE_KIND_QUERY = 5,
 };
 
 typedef struct D9CChunkHandleEntry {
@@ -1132,10 +1139,10 @@ typedef struct D9CCommandRecordUpdateSurface {
 
 /* Standalone Query::Issue record. queryWire is the SERVER-SIDE D9CQuery*
  * cast to uint64; importer round-trips back via reinterpret_cast.
- * flags is the D3DISSUE_* value from the caller. Query objects aren't
- * pool-tracked the same way as textures/buffers, so they don't ride on
- * chunk.handles[]; the PE-side Query wrapper holds its own AddRef on
- * the D9CQuery, keeping it alive across chunk lifetimes. */
+ * flags is the D3DISSUE_* value from the caller. The direct query reference
+ * rides the record's handle-table slice as D9C_CHUNK_HANDLE_KIND_QUERY; the
+ * PE pending-chunk retainer and offload queue each AddRef it for their own
+ * ownership interval. Queries remain outside the core resource pool. */
 typedef struct D9CCommandRecordQueryIssue {
     D9CCommandRecordHeader header;
     uint64_t queryWire;

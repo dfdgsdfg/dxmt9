@@ -96,6 +96,7 @@ enum class ImportedWireChunkValidationStatus : std::uint8_t {
   InvalidHandleEntry,
   InvalidRecordHeader,
   InvalidRecordRange,
+  InvalidRecordHandleReferences,
   InvalidRecord,
 };
 
@@ -186,7 +187,7 @@ struct ImportedRecordReplayInfo {
 };
 
 struct ImportedChunkHandleSet {
-  std::array<std::vector<std::uint64_t>, 5> byKind{};
+  std::array<std::vector<std::uint64_t>, 6> byKind{};
 };
 
 struct ImportedRecordResourceHazards {

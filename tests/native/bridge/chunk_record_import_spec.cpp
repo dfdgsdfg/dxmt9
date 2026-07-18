@@ -48,33 +48,26 @@ void testImportedMultiRecordIteration() {
   checkEq(validation.parsedRecordCount, 2u, "valid imported chunk parses count");
 }
 
-void testImportedWireRecordHandleRangesSelectSubsets() {
-  const auto present = makePresentRecord();
-  const auto draw = makeDrawPrimitiveRecord(4u, 2u);
+void testImportedWireRecordHandleRangesMatchPayloadReferences() {
+  const auto query = makeQueryIssueRecord();
+  const auto color = makeColorFillRecord();
 
   std::vector<std::uint8_t> arena;
-  appendRecord(arena, present);
-  appendRecord(arena, draw);
+  appendRecord(arena, query);
+  appendRecord(arena, color);
 
   std::vector<D9CCommandChunkWireHandleEntry> handles{
       D9CCommandChunkWireHandleEntry{
-          .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+          .kind = D9C_CHUNK_HANDLE_KIND_QUERY,
           .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-          .opaqueHandle = 0x1000u,
-          .reserved0 = 0u,
-          .reserved1 = 0u,
-      },
-      D9CCommandChunkWireHandleEntry{
-          .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
-          .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-          .opaqueHandle = 0x2000u,
+          .opaqueHandle = query.queryWire,
           .reserved0 = 0u,
           .reserved1 = 0u,
       },
       D9CCommandChunkWireHandleEntry{
           .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
           .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-          .opaqueHandle = 0x3000u,
+          .opaqueHandle = color.surfaceWire,
           .reserved0 = 0u,
           .reserved1 = 0u,
       },
@@ -82,21 +75,21 @@ void testImportedWireRecordHandleRangesSelectSubsets() {
 
   std::vector<D9CCommandChunkWireRecordHeader> records{
       D9CCommandChunkWireRecordHeader{
-          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_PRESENT),
+          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_QUERY_ISSUE),
           .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
           .payloadOffset = 0u,
-          .payloadSize = static_cast<std::uint32_t>(sizeof(present)),
-          .firstHandle = 1u,
+          .payloadSize = static_cast<std::uint32_t>(sizeof(query)),
+          .firstHandle = 0u,
           .handleCount = 1u,
           .reserved0 = 0u,
           .reserved1 = 0u,
       },
       D9CCommandChunkWireRecordHeader{
-          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_DRAW_PRIMITIVE),
+          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_COLOR_FILL),
           .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
-          .payloadOffset = static_cast<std::uint32_t>(sizeof(present)),
-          .payloadSize = static_cast<std::uint32_t>(sizeof(draw)),
-          .firstHandle = 2u,
+          .payloadOffset = static_cast<std::uint32_t>(sizeof(query)),
+          .payloadSize = static_cast<std::uint32_t>(sizeof(color)),
+          .firstHandle = 1u,
           .handleCount = 1u,
           .reserved0 = 0u,
           .reserved1 = 0u,
@@ -108,11 +101,11 @@ void testImportedWireRecordHandleRangesSelectSubsets() {
       static_cast<std::uint32_t>(arena.size()), handles.data(),
       static_cast<std::uint32_t>(handles.size()));
   check(validateImportedWireChunk(wire).valid(),
-        "wire chunk with per-record handle subsets validates");
+        "wire chunk with exact per-record handle references validates");
 
   const auto firstRange = makeImportedWireRecordHandleView(wire, 0u);
-  check(firstRange.handles == handles.data() + 1u,
-        "first wire record handle range starts at selected table entry");
+  check(firstRange.handles == handles.data(),
+        "first wire record handle range starts at its canonical table entry");
   checkEq(firstRange.handleCount, 1u,
           "first wire record handle range exposes selected count");
 
@@ -122,8 +115,9 @@ void testImportedWireRecordHandleRangesSelectSubsets() {
   const auto firstEntries = makeImportedChunkHandleEntries(firstHandles);
   checkEq(firstEntries.size(), static_cast<std::size_t>(1),
           "first wire record collects only its handle range");
-  check(containsHandle(firstEntries, D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2000u),
-        "first wire record selected the buffer handle");
+  check(containsHandle(firstEntries, D9C_CHUNK_HANDLE_KIND_QUERY,
+                       query.queryWire),
+        "first wire record selects its query handle");
 
   ImportedChunkHandleSet secondHandles;
   check(collectImportedWireRecordHandles(wire, 1u, secondHandles),
@@ -131,17 +125,16 @@ void testImportedWireRecordHandleRangesSelectSubsets() {
   const auto secondEntries = makeImportedChunkHandleEntries(secondHandles);
   checkEq(secondEntries.size(), static_cast<std::size_t>(1),
           "second wire record collects only its handle range");
-  check(containsHandle(secondEntries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x3000u),
-        "second wire record selected the surface handle");
+  check(containsHandle(secondEntries, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                       color.surfaceWire),
+        "second wire record selects its surface handle");
 
   ImportedChunkHandleSet chunkHandles;
   check(collectImportedWireChunkHandles(wire, chunkHandles),
         "wire chunk handle collection walks per-record ranges");
   const auto chunkEntries = makeImportedChunkHandleEntries(chunkHandles);
   checkEq(chunkEntries.size(), static_cast<std::size_t>(2),
-          "wire chunk collection ignores unreferenced table entries");
-  check(!containsHandle(chunkEntries, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
-        "wire chunk collection excludes handles outside all record ranges");
+          "wire chunk collection covers every exact payload reference");
 }
 
 void testImportedWireIterationBuildsLegacyRecordViews() {
@@ -193,23 +186,25 @@ void testImportedWireIterationBuildsLegacyRecordViews() {
 }
 
 void testImportedWireBlobViewUsesHeaderTablesAndArena() {
-  const auto present = makePresentRecord();
-  const auto draw = makeDrawPrimitiveRecord(11u, 2u);
+  const auto query = makeQueryIssueRecord();
+  auto draw = makeDrawPrimitiveRecord(11u, 2u);
+  draw.packet.textureMask = 1u;
+  draw.packet.textures[0] = wireHandle(0x1000u);
 
   constexpr std::uint32_t drawPayloadOffset = 8u;
-  const auto presentPayloadOffset =
+  const auto queryPayloadOffset =
       static_cast<std::uint32_t>(drawPayloadOffset + sizeof(draw) + 32u);
-  std::vector<std::uint8_t> arena(presentPayloadOffset + sizeof(present));
+  std::vector<std::uint8_t> arena(queryPayloadOffset + sizeof(query));
   writeObject(arena, drawPayloadOffset, draw);
-  writeObject(arena, presentPayloadOffset, present);
+  writeObject(arena, queryPayloadOffset, query);
 
   std::vector<D9CCommandChunkWireRecordHeader> records{
       D9CCommandChunkWireRecordHeader{
-          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_PRESENT),
+          .type = static_cast<std::uint32_t>(D9C_COMMAND_RECORD_QUERY_ISSUE),
           .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
-          .payloadOffset = presentPayloadOffset,
-          .payloadSize = static_cast<std::uint32_t>(sizeof(present)),
-          .firstHandle = 1u,
+          .payloadOffset = queryPayloadOffset,
+          .payloadSize = static_cast<std::uint32_t>(sizeof(query)),
+          .firstHandle = 0u,
           .handleCount = 1u,
           .reserved0 = 0u,
           .reserved1 = 0u,
@@ -219,7 +214,7 @@ void testImportedWireBlobViewUsesHeaderTablesAndArena() {
           .flags = D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
           .payloadOffset = drawPayloadOffset,
           .payloadSize = static_cast<std::uint32_t>(sizeof(draw)),
-          .firstHandle = 0u,
+          .firstHandle = 1u,
           .handleCount = 1u,
           .reserved0 = 0u,
           .reserved1 = 0u,
@@ -227,16 +222,16 @@ void testImportedWireBlobViewUsesHeaderTablesAndArena() {
   };
   std::vector<D9CCommandChunkWireHandleEntry> handles{
       D9CCommandChunkWireHandleEntry{
-          .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+          .kind = D9C_CHUNK_HANDLE_KIND_QUERY,
           .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-          .opaqueHandle = 0x1000u,
+          .opaqueHandle = query.queryWire,
           .reserved0 = 0u,
           .reserved1 = 0u,
       },
       D9CCommandChunkWireHandleEntry{
-          .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+          .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
           .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-          .opaqueHandle = 0x3000u,
+          .opaqueHandle = 0x1000u,
           .reserved0 = 0u,
           .reserved1 = 0u,
       },
@@ -279,9 +274,10 @@ void testImportedWireBlobViewUsesHeaderTablesAndArena() {
   const auto first = nextImportedRecord(decoded.chunk, 0u);
   check(first.has_value(), "wire blob first record exists");
   check(first->valid(), "wire blob first record validates");
-  check(first->record == blob.data() + payloadArenaOffset + presentPayloadOffset,
+  check(first->record == blob.data() + payloadArenaOffset + queryPayloadOffset,
         "wire blob first record follows record table order, not payload offset order");
-  checkEq(first->header.type, static_cast<std::uint32_t>(D9C_COMMAND_RECORD_PRESENT),
+  checkEq(first->header.type,
+          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_QUERY_ISSUE),
           "wire blob first record type");
 
   const auto second = nextImportedRecord(decoded.chunk, first->nextIndex());
@@ -298,8 +294,9 @@ void testImportedWireBlobViewUsesHeaderTablesAndArena() {
   const auto firstEntries = makeImportedChunkHandleEntries(firstHandles);
   checkEq(firstEntries.size(), static_cast<std::size_t>(1),
           "wire blob first record selects one handle");
-  check(containsHandle(firstEntries, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x3000u),
-        "wire blob first record selects handle range from table");
+  check(containsHandle(firstEntries, D9C_CHUNK_HANDLE_KIND_QUERY,
+                       query.queryWire),
+        "wire blob first record selects its exact handle range from table");
 
   auto badBlob = blob;
   header.reserved0 = 1u;
@@ -367,7 +364,7 @@ void testImportedChunkHandleAppendRejectsInvalidAndDuplicateHandles() {
   ImportedChunkHandleSet handles;
   check(!appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0u),
         "zero handle is ignored");
-  check(!appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u, 0x1u),
+  check(!appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_QUERY + 1u, 0x1u),
         "unknown handle kind is ignored");
   check(appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_BUFFER, 0x7000u),
         "first valid handle is appended");
@@ -397,7 +394,7 @@ void testImportedChunkHandleAppendRejectsInvalidAndDuplicateHandles() {
 int main() {
   try {
     testImportedMultiRecordIteration();
-    testImportedWireRecordHandleRangesSelectSubsets();
+    testImportedWireRecordHandleRangesMatchPayloadReferences();
     testImportedWireIterationBuildsLegacyRecordViews();
     testImportedWireBlobViewUsesHeaderTablesAndArena();
     testImportedRecordCountMismatch();

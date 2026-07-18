@@ -65,6 +65,18 @@ pe_chunk_record_value_spec = executable(
 test('dxmt9-pe-chunk-record-value-spec', pe_chunk_record_value_spec,
      env: dxmt9_native_test_env)
 
+pe_retainer_spec = executable(
+  'dxmt9-pe-retainer-spec',
+  'pe_retainer_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-retainer-spec', pe_retainer_spec)
+
 # Regression guard for DXMT9_PE_DRAW_FULL_SNAPSHOT (Phase 16 debug knob).
 # Proves that the delta-mode packet stream and the full-snapshot-mode
 # packet stream produce identical unix-side effective state for

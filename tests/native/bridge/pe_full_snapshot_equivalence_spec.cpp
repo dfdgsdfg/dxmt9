@@ -331,21 +331,13 @@ D9CDrawPrimitivePacket emitSnapshotPacket(const PeShadow& s, uint32_t primType,
         if (p.renderStateCount >= kMaxRs) break;
         p.renderStates[p.renderStateCount++] = {entry.first, entry.second};
     }
-    p.textureMask = 0;
+    p.textureMask = (1u << kMaxTex) - 1u;
     for (uint32_t i = 0; i < kMaxTex; ++i) {
-        if (s.textures[i].lo != 0 || s.textures[i].hi != 0) {
-            p.textureMask |= 1u << i;
-            p.textures[i] = s.textures[i];
-        }
+        p.textures[i] = s.textures[i];
     }
-    p.streamSourceMask = 0;
+    p.streamSourceMask = (1u << kMaxStream) - 1u;
     for (uint32_t i = 0; i < kMaxStream; ++i) {
-        const auto& src = s.streams[i];
-        if (src.buffer.lo != 0 || src.buffer.hi != 0 || src.stride != 0 ||
-            src.offset != 0) {
-            p.streamSourceMask |= 1u << i;
-            p.streamSources[i] = src;
-        }
+        p.streamSources[i] = s.streams[i];
     }
     p.fvfValid = 1u;
     p.fvf = s.fvf;
@@ -1011,6 +1003,48 @@ void testInterleavedStateAndDraws() {
     runEquivalenceScenario("interleaved-state-and-draws", steps);
 }
 
+// A full snapshot must carry explicit null writes. Otherwise a bind followed
+// by an unbind leaves the snapshot replay lane with the prior server binding.
+void testTextureAndStreamUnbinds() {
+    std::vector<Step> steps;
+    Step st;
+    st.kind = Step::Kind::Texture;
+    st.a = 3u;
+    st.wire = wh(0xD00D0003ull);
+    steps.push_back(st);
+    st = {};
+    st.kind = Step::Kind::Stream;
+    st.a = 5u;
+    st.stream.buffer = wh(0xB00F0005ull);
+    st.stream.offset = 24u;
+    st.stream.stride = 32u;
+    steps.push_back(st);
+    st = {};
+    st.kind = Step::Kind::Draw;
+    st.a = 4u;
+    st.c = 1u;
+    steps.push_back(st);
+
+    st = {};
+    st.kind = Step::Kind::Texture;
+    st.a = 3u;
+    st.wire = D9CWireHandle{};
+    steps.push_back(st);
+    st = {};
+    st.kind = Step::Kind::Stream;
+    st.a = 5u;
+    st.stream = D9CDrawPacketStreamSource{};
+    steps.push_back(st);
+    st = {};
+    st.kind = Step::Kind::Draw;
+    st.a = 4u;
+    st.b = 3u;
+    st.c = 1u;
+    steps.push_back(st);
+
+    runEquivalenceScenario("texture-stream-unbind", steps);
+}
+
 // Case 4: prove the per-mode wire shape contract: in delta mode the
 // quiescent (no-mutation) draw has every valid/mask bit zero (lets the
 // importer's run-coalescer fire), while in full-snapshot mode every
@@ -1272,6 +1306,7 @@ int main() {
         testFfpTriangle();
         testProgrammableShaderDraw();
         testInterleavedStateAndDraws();
+        testTextureAndStreamUnbinds();
         testWireShapeContract();
         // Non-draw barrier coverage.
         testClearBarrier();

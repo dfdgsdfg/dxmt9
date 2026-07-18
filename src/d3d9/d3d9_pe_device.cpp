@@ -3970,23 +3970,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 entry.state = state;
                 entry.value = value;
             });
-            // Texture / RT / Stream — set mask bits for every populated slot.
-            packet.textureMask = 0;
+            // A self-contained snapshot must also encode null unbinds. If a
+            // prior server state has a texture/stream in a slot that is null
+            // in this PE shadow, omitting the bit would preserve stale state.
+            packet.textureMask = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
             for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-                if (textures_[stage] != nullptr) {
-                    packet.textureMask |= 1u << stage;
-                    packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
-                }
+                packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
             }
-            packet.streamSourceMask = 0;
+            packet.streamSourceMask = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
             for (DWORD stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-                if (streamSrc_[stream] != nullptr) {
-                    packet.streamSourceMask |= 1u << stream;
-                    auto& s = packet.streamSources[stream];
-                    s.buffer = toWireHandle(rawVBuf(streamSrc_[stream]));
-                    s.offset = streamOff_[stream];
-                    s.stride = streamStr_[stream];
-                }
+                auto& s = packet.streamSources[stream];
+                s.buffer = toWireHandle(rawVBuf(streamSrc_[stream]));
+                s.offset = streamOff_[stream];
+                s.stride = streamStr_[stream];
             }
             dxmt9::d3d9::pe::populateDrawPacketAttachmentSnapshot(
                 packet, currentRtWireHandles(), currentRtExplicitMask(), true,
@@ -6057,108 +6053,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return hr;
     }
 
-    // Draw records consume the effective server state, not only the handles
-    // present in their delta packet. Capture these at append time so coarser
-    // chunks can survive later Set* mutations and wrapper releases.
-    bool appendCurrentlyBoundDrawHandles(WireHandleEntryList& handles,
-                                         std::size_t firstHandle) {
-        for (auto* tex : textures_) {
-            if (auto* raw = rawTex(tex); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                        reinterpret_cast<uint64_t>(raw))) {
-                    return false;
-                }
-            }
-        }
-        for (auto* vb : streamSrc_) {
-            if (auto* raw = rawVBuf(vb); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                        reinterpret_cast<uint64_t>(raw))) {
-                    return false;
-                }
-            }
-        }
-        if (auto* raw = rawIBuf(indexBuf_); raw != nullptr) {
-            if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                    handles, firstHandle, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                    reinterpret_cast<uint64_t>(raw))) {
-                return false;
-            }
-        }
-        for (auto* surf : rtSlots_) {
-            if (auto* raw = rawSurf(surf); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                        reinterpret_cast<uint64_t>(raw))) {
-                    return false;
-                }
-            }
-        }
-        if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-            if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                    handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                    reinterpret_cast<uint64_t>(raw))) {
-                return false;
-            }
-        }
-        // VS/PS/Vdecl have no pool retention table on the server side
-        // (importer's markChunkResources skips SHADER / VERTEX_DECL
-        // kinds), so emitting them here would be inert. Leaving them
-        // out keeps the wire payload tight.
-        return true;
-    }
-
-    bool appendCurrentlyBoundClearHandles(WireHandleEntryList& handles,
-                                          std::size_t firstHandle,
-                                          uint32_t flags) {
-        if ((flags & D3DCLEAR_TARGET) != 0) {
-            for (auto* surf : rtSlots_) {
-                if (auto* raw = rawSurf(surf); raw != nullptr) {
-                    if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                            handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                            reinterpret_cast<uint64_t>(raw))) {
-                        return false;
-                    }
-                }
-            }
-        }
-        if ((flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)) != 0) {
-            if (auto* raw = rawSurf(dsSurface_); raw != nullptr) {
-                if (!PeCommandChunkBuilder::appendRecordWireHandleFrom(
-                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_SURFACE,
-                        reinterpret_cast<uint64_t>(raw))) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
-
     bool collectAppendTimeExtraWireHandles(
-        const D9CCommandChunkWireRecordHeader& wireRecord,
-        const std::uint8_t* payload,
-        WireHandleEntryList& handles,
-        std::size_t firstHandle) {
-        switch (wireRecord.type) {
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
-        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
-        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
-            return appendCurrentlyBoundDrawHandles(handles, firstHandle);
-        case D9C_COMMAND_RECORD_CLEAR: {
-            if (!payload || wireRecord.payloadSize < sizeof(D9CCommandRecordClear)) {
-                return false;
-            }
-            D9CCommandRecordClear decoded{};
-            std::memcpy(&decoded, payload, sizeof(decoded));
-            return appendCurrentlyBoundClearHandles(
-                handles, firstHandle, decoded.flags);
-        }
-        default:
-            return true;
-        }
+        const D9CCommandChunkWireRecordHeader&,
+        const std::uint8_t*,
+        WireHandleEntryList&,
+        std::size_t) {
+        // V1 handle ranges are an exact index of references encoded in the
+        // record payload. Effective draw resources already live in unix-side
+        // DeviceState and are marked by the normal per-draw queue path.
+        return true;
     }
 
     struct PePresentCadenceClaim {
@@ -9219,8 +9122,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if (FAILED(flushHr)) return flushHr;
         }
 
-        D3D9PePendingCommandRetainer::Acquired acquired{};
         auto& retainer = commandChunk_.retainer();
+        auto acquired = retainer.beginAcquire();
         retainer.retainSurface(surface0, acquired);
         retainer.retainSurface(surface1, acquired);
         retainer.retainTexture(texture0, acquired);

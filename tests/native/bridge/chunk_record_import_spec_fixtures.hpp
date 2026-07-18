@@ -423,15 +423,32 @@ void checkExactRecordSizeMatrix(const T& validRecord,
               std::string(name) + " rejects unavailable declared bytes");
 }
 
+inline std::vector<D9CCommandChunkWireHandleEntry>
+wireHandlesForRecordPayload(const std::vector<std::uint8_t>& payload) {
+  const auto legacy = makeImportedChunkView(
+      payload.data(), static_cast<std::uint32_t>(payload.size()), 1u);
+  const auto record = nextImportedRecord(legacy, 0u, 0u);
+  check(record.has_value() && record->valid(),
+        "wire handle fixture requires a valid record payload");
+
+  ImportedChunkHandleSet payloadHandles;
+  collectImportedRecordResourceHandles(*record, payloadHandles);
+  const auto payloadEntries = makeImportedChunkHandleEntries(payloadHandles);
+  std::vector<D9CCommandChunkWireHandleEntry> result;
+  result.reserve(payloadEntries.size());
+  for (const auto& entry : payloadEntries) {
+    result.push_back(wireHandleEntry(entry.kind, entry.handle));
+  }
+  return result;
+}
+
 inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
                                   std::uint32_t type,
                                   std::string_view name) {
-  std::vector<D9CCommandChunkWireHandleEntry> handles{
-      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, 0x7000u),
-  };
+  auto handles = wireHandlesForRecordPayload(payload);
   std::vector<D9CCommandChunkWireRecordHeader> records{
       wireRecordHeader(type, 0u, static_cast<std::uint32_t>(payload.size()),
-                       0u, 1u),
+                       0u, static_cast<std::uint32_t>(handles.size())),
   };
 
   auto wire = makeImportedWireChunkView(
@@ -444,7 +461,8 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
           std::string(name) + " wire validation parses one record");
 
   records[0] = wireRecordHeader(type, static_cast<std::uint32_t>(payload.size()),
-                                1u, 0u, 1u);
+                                1u, 0u,
+                                static_cast<std::uint32_t>(handles.size()));
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
       payload.data(), static_cast<std::uint32_t>(payload.size()),
@@ -458,7 +476,7 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
   oversizedPayload.push_back(0u);
   records[0] = wireRecordHeader(type, 0u,
                                 static_cast<std::uint32_t>(oversizedPayload.size()),
-                                0u, 1u);
+                                0u, static_cast<std::uint32_t>(handles.size()));
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
       oversizedPayload.data(), static_cast<std::uint32_t>(oversizedPayload.size()),
@@ -473,7 +491,7 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
 
   records[0] = wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
                                 static_cast<std::uint32_t>(payload.size()),
-                                0u, 1u);
+                                0u, static_cast<std::uint32_t>(handles.size()));
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
       payload.data(), static_cast<std::uint32_t>(payload.size()),
@@ -487,7 +505,7 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
 
   records[0] = wireRecordHeader(type, 0u,
                                 static_cast<std::uint32_t>(payload.size()),
-                                0u, 1u);
+                                0u, static_cast<std::uint32_t>(handles.size()));
   records[0].reserved0 = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
@@ -509,9 +527,9 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidRecordHeader),
           std::string(name) + " rejects unsupported wire record flags");
 
-  records[0] = wireRecordHeader(type, 0u,
-                                static_cast<std::uint32_t>(payload.size()),
-                                1u, 1u);
+  records[0] = wireRecordHeader(
+      type, 0u, static_cast<std::uint32_t>(payload.size()),
+      static_cast<std::uint32_t>(handles.size()), 1u);
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
       payload.data(), static_cast<std::uint32_t>(payload.size()),
@@ -525,7 +543,12 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
                                 static_cast<std::uint32_t>(payload.size()),
                                 0u, 1u);
   auto badHandles = handles;
-  badHandles[0].kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u;
+  if (badHandles.empty()) {
+    badHandles.push_back(wireHandleEntry(
+        D9C_CHUNK_HANDLE_KIND_QUERY + 1u, 0x7000u));
+  } else {
+    badHandles[0].kind = D9C_CHUNK_HANDLE_KIND_QUERY + 1u;
+  }
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
       payload.data(), static_cast<std::uint32_t>(payload.size()),
@@ -536,6 +559,10 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
           std::string(name) + " rejects invalid wire handle kind");
 
   badHandles = handles;
+  if (badHandles.empty()) {
+    badHandles.push_back(
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, 0x7000u));
+  }
   badHandles[0].reserved1 = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
@@ -549,39 +576,45 @@ inline void checkWireRecordMatrix(const std::vector<std::uint8_t>& payload,
   // In-range stamped generations are now structurally valid (the
   // cross-side equality check moved into chunk replay). The wire
   // validator only flags generations that overflow the encoded domain.
-  badHandles = handles;
-  badHandles[0].generation = 1u;
-  wire = makeImportedWireChunkView(
-      records.data(), static_cast<std::uint32_t>(records.size()),
-      payload.data(), static_cast<std::uint32_t>(payload.size()),
-      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
-  validation = validateImportedWireChunk(wire);
-  checkEq(static_cast<int>(validation.status),
-          static_cast<int>(ImportedWireChunkValidationStatus::Valid),
-          std::string(name) + " accepts in-range stamped generation");
+  if (!handles.empty()) {
+    records[0].handleCount = static_cast<std::uint32_t>(handles.size());
+    badHandles = handles;
+    badHandles[0].generation = 1u;
+    wire = makeImportedWireChunkView(
+        records.data(), static_cast<std::uint32_t>(records.size()),
+        payload.data(), static_cast<std::uint32_t>(payload.size()),
+        badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+    validation = validateImportedWireChunk(wire);
+    checkEq(static_cast<int>(validation.status),
+            static_cast<int>(ImportedWireChunkValidationStatus::Valid),
+            std::string(name) + " accepts in-range stamped generation");
 
-  badHandles = handles;
-  badHandles[0].generation =
-      D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u;
-  wire = makeImportedWireChunkView(
-      records.data(), static_cast<std::uint32_t>(records.size()),
-      payload.data(), static_cast<std::uint32_t>(payload.size()),
-      badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
-  validation = validateImportedWireChunk(wire);
-  checkEq(static_cast<int>(validation.status),
-          static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
-          std::string(name) + " rejects out-of-range wire handle generations");
+    badHandles[0].generation =
+        D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u;
+    wire = makeImportedWireChunkView(
+        records.data(), static_cast<std::uint32_t>(records.size()),
+        payload.data(), static_cast<std::uint32_t>(payload.size()),
+        badHandles.data(), static_cast<std::uint32_t>(badHandles.size()));
+    validation = validateImportedWireChunk(wire);
+    checkEq(
+        static_cast<int>(validation.status),
+        static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
+        std::string(name) + " rejects out-of-range wire handle generations");
+  }
 }
 
 inline void checkWireAcceptsRecordBytes(const std::vector<std::uint8_t>& payload,
                                         std::uint32_t type,
                                         std::string_view name) {
+  const auto handles = wireHandlesForRecordPayload(payload);
   std::vector<D9CCommandChunkWireRecordHeader> records{
-      wireRecordHeader(type, 0u, static_cast<std::uint32_t>(payload.size())),
+      wireRecordHeader(type, 0u, static_cast<std::uint32_t>(payload.size()),
+                       0u, static_cast<std::uint32_t>(handles.size())),
   };
   const auto wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()),
-      payload.data(), static_cast<std::uint32_t>(payload.size()), nullptr, 0u);
+      payload.data(), static_cast<std::uint32_t>(payload.size()), handles.data(),
+      static_cast<std::uint32_t>(handles.size()));
   const auto validation = validateImportedWireChunk(wire);
   check(validation.valid(), std::string(name) + " validates as DOD wire record");
   checkEq(validation.parsedRecordCount, 1u,

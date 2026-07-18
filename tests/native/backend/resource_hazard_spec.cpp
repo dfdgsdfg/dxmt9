@@ -461,35 +461,14 @@ void checkEventKind(const std::vector<RecordedEvent>& events,
   check(events[index].kind == expected, message);
 }
 
-// device_c_chunk_replay.cpp's offload branch always replays with
-// skipDrawResourceMarking=false ("Deliberately NOT didBulkMarkResources" --
-// the worker's per-draw markDrawResources must re-pin resources at the real
-// append-time seqId instead of trusting the app-thread bulk mark's
-// nextSeqId_ snapshot, R-BACK-2.51 hardening). That means the
-// SetSkipDrawResourceMarking(true)/(false) bracket events the sync-path
-// assertions below expect never fire under DXMT9_OFFLOAD_COMMIT_REPLAY=1.
-// Delegate to the production resolver
-// (dxmt9::d3d9::offloadCommitReplayEnabled(), device_c_replay_offload.cpp)
-// so event-shape assertions can adapt instead of hard-coding a shape that
-// only holds for the synchronous replay path. A local copy of the parse
-// drifted once when the engine default flipped on — do not reintroduce it.
-bool offloadReplayActive() {
-  return dxmt9::d3d9::offloadCommitReplayEnabled();
-}
-
-// Sync-shaped event count, adjusted for the offload path's missing pair of
-// SetSkipDrawResourceMarking bracket events (present in the sync shape,
-// absent entirely when offload is active).
+// V1 bulk marking covers direct payload references only. Normal per-draw
+// marking remains enabled in both synchronous and offloaded replay.
 std::size_t expectedEventCount(std::size_t syncCount) {
-  return offloadReplayActive() ? syncCount - 2u : syncCount;
+  return syncCount - 2u;
 }
 
-// Sync-shaped event index for an event that sits strictly between the two
-// SetSkipDrawResourceMarking brackets (i.e. not the leading
-// MarkChunkResources at index 0, and not either bracket itself), adjusted
-// for the offload path's missing leading bracket.
 std::size_t midEventIndex(std::size_t syncIndex) {
-  return offloadReplayActive() ? syncIndex - 1u : syncIndex;
+  return syncIndex - 1u;
 }
 
 void testImportedChunkBulkRetentionAndBarrierOrdering() {
@@ -555,16 +534,19 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &readbackTargetWire),
     };
     const std::vector<D9CCommandChunkWireRecordHeader> records{
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 0u, sizeof(draw0), 0u, 2u),
-        wireRecordHeader(D9C_COMMAND_RECORD_CLEAR, sizeof(draw0), sizeof(clear), 0u, 1u),
+        wireRecordHeader(D9C_COMMAND_RECORD_CLEAR, sizeof(draw0), sizeof(clear), 2u, 0u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-                         sizeof(draw0) + sizeof(clear), sizeof(draw1), 0u, 2u),
+                         sizeof(draw0) + sizeof(clear), sizeof(draw1), 2u, 2u),
         wireRecordHeader(D9C_COMMAND_RECORD_READBACK,
                          sizeof(draw0) + sizeof(clear) + sizeof(draw1),
-                         sizeof(readback), 0u, 3u),
+                         sizeof(readback), 4u, 2u),
     };
     const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
 
@@ -588,12 +570,6 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
             "imported chunk event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "bulk retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "per-draw retention skip is enabled before replay");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "per-draw retention skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "first draw is replayed after retention");
     checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitClear,
@@ -606,12 +582,6 @@ void testImportedChunkBulkRetentionAndBarrierOrdering() {
                    "readback boundary flushes synchronously");
     checkEventKind(recorder->events, midEventIndex(7u), EventKind::SubmitSurfaceCopy,
                    "readback fallback copy remains after synchronous flush");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 8u, EventKind::SetSkipDrawResourceMarking,
-                     "per-draw retention skip resets after replay");
-      check(!recorder->events[8].skipDrawResourceMarking,
-            "per-draw retention skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -757,22 +727,23 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &readbackTargetWire),
     };
     const std::vector<D9CCommandChunkWireRecordHeader> records{
         wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, 0u,
                          sizeof(apply), 0u, 2u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-                         sizeof(apply), sizeof(draw0), 0u, 0u),
+                         sizeof(apply), sizeof(draw0), 2u, 0u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-                         sizeof(apply) + sizeof(draw0), sizeof(draw1), 0u, 0u),
+                         sizeof(apply) + sizeof(draw0), sizeof(draw1), 2u, 0u),
         wireRecordHeader(D9C_COMMAND_RECORD_READBACK,
                          sizeof(apply) + sizeof(draw0) + sizeof(draw1),
-                         sizeof(readback), 0u, 3u),
+                         sizeof(readback), 2u, 2u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
                          sizeof(apply) + sizeof(draw0) + sizeof(draw1) +
                              sizeof(readback),
-                         sizeof(draw2), 0u, 0u),
+                         sizeof(draw2), 4u, 0u),
     };
     const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
 
@@ -794,12 +765,6 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
             "readback-split event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "readback-split bulk retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "readback-split enables bulk-retention skip");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "readback-split bulk-retention skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "draws before readback submit as one run");
     checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitReadback,
@@ -810,12 +775,6 @@ void testReadbackBoundarySplitsCoalescedImportedDrawRun() {
                    "readback fallback copy stays before later draws");
     checkEventKind(recorder->events, midEventIndex(6u), EventKind::SubmitDraw,
                    "draw after readback starts a new run");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 7u, EventKind::SetSkipDrawResourceMarking,
-                     "readback-split resets bulk-retention skip");
-      check(!recorder->events[7].skipDrawResourceMarking,
-            "readback-split bulk-retention skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -980,20 +939,8 @@ void testImportedIndexedDrawPreservesBoundIndexPolicy() {
             "imported indexed draw event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "indexed bulk retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "indexed replay enables bulk-retention skip");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "indexed replay bulk-retention skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "indexed draw is submitted after retention");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                     "indexed replay resets bulk-retention skip");
-      check(!recorder->events[3].skipDrawResourceMarking,
-            "indexed replay bulk-retention skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1153,22 +1100,10 @@ void testImportedSurfaceOpsPreserveBoundaryPayloads() {
             "surface-op import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "surface-op retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "surface-op replay enables bulk-retention skip");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "surface-op bulk-retention skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitStretchRect,
                    "stretch rect submits after retention");
     checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitColorFill,
                    "color fill remains ordered after stretch");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
-                     "surface-op replay resets bulk-retention skip");
-      check(!recorder->events[4].skipDrawResourceMarking,
-            "surface-op bulk-retention skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1347,10 +1282,10 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, 0u,
                          sizeof(statefulDraw), 0u, 4u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-                         sizeof(statefulDraw), sizeof(runDraw0), 0u, 0u),
+                         sizeof(statefulDraw), sizeof(runDraw0), 4u, 0u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
                          sizeof(statefulDraw) + sizeof(runDraw0),
-                         sizeof(runDraw1), 0u, 0u),
+                         sizeof(runDraw1), 4u, 0u),
     };
     const auto wireBlob = makeWireChunkBlob(bytes, records, handles);
 
@@ -1372,16 +1307,8 @@ void testImportedIndexedDrawRunCoalescesParamOnlyPackets() {
             "indexed draw-run import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "indexed draw-run bulk retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "indexed draw-run replay enables bulk-retention skip");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "stateful and param-only indexed records coalesce");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                     "indexed draw-run replay resets bulk-retention skip");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1498,9 +1425,7 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
     check(unusedBuffer != nullptr, "scoped-handle unused buffer");
 
     D9CSurface renderTargetWire(renderTarget);
-    D9CSurface unusedSurfaceWire(unusedSurface);
     D9CBuffer vertexBufferWire(vertexBuffer);
-    D9CBuffer unusedBufferWire(unusedBuffer);
 
     const auto draw = makeDrawRecord(&renderTargetWire, &vertexBufferWire, 4u);
 
@@ -1510,8 +1435,6 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &vertexBufferWire),
-        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &unusedSurfaceWire),
-        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, &unusedBufferWire),
     };
     const std::vector<D9CCommandChunkWireRecordHeader> records{
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 0u, sizeof(draw),
@@ -1537,20 +1460,8 @@ void testImportedDrawRetainsOnlyRecordScopedHandles() {
             "scoped-handle import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "scoped-handle bulk retention happens first");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "scoped-handle replay enables bulk-retention skip");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "scoped-handle bulk-retention skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "scoped-handle draw submits after retention");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                     "scoped-handle replay resets bulk-retention skip");
-      check(!recorder->events[3].skipDrawResourceMarking,
-            "scoped-handle bulk-retention skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(2),

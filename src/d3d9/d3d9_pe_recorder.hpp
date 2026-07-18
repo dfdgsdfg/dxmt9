@@ -1,6 +1,7 @@
 #pragma once
 
 #include "d3d9_pe.hpp"
+#include "d3d9_pe_retainer.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "util/config/config.hpp"
 
@@ -11,7 +12,6 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -363,179 +363,6 @@ inline std::uint64_t d9cWireHandleValue(const D9CWireHandle& handle) {
            (static_cast<std::uint64_t>(handle.hi) << 32);
 }
 
-struct D3D9PePendingCommandRetainer {
-    struct Acquired {
-        std::vector<D9CSurface*> surfaces;
-        std::vector<D9CTexture*> textures;
-        std::vector<D9CBuffer*> buffers;
-        std::vector<D9CShader*> shaders;
-        std::vector<D9CVertexDecl*> vdecls;
-    };
-
-    void retainSurface(D9CSurface* surface, Acquired& acquired) {
-        if (!surface) {
-            return;
-        }
-        if (surfaces_.insert(surface).second) {
-            dxmt9c_surface_addref(surface);
-            surfaceList_.push_back(surface);
-            acquired.surfaces.push_back(surface);
-        }
-    }
-
-    void retainTexture(D9CTexture* texture, Acquired& acquired) {
-        if (!texture) {
-            return;
-        }
-        if (textures_.insert(texture).second) {
-            dxmt9c_texture_addref(texture);
-            textureList_.push_back(texture);
-            acquired.textures.push_back(texture);
-        }
-    }
-
-    void retainBuffer(D9CBuffer* buffer, Acquired& acquired) {
-        if (!buffer) {
-            return;
-        }
-        if (buffers_.insert(buffer).second) {
-            dxmt9c_buffer_addref(buffer);
-            bufferList_.push_back(buffer);
-            acquired.buffers.push_back(buffer);
-        }
-    }
-
-    void retainShader(D9CShader* shader, Acquired& acquired) {
-        if (!shader) {
-            return;
-        }
-        if (shaders_.insert(shader).second) {
-            dxmt9c_shader_addref(shader);
-            shaderList_.push_back(shader);
-            acquired.shaders.push_back(shader);
-        }
-    }
-
-    void retainVdecl(D9CVertexDecl* vdecl, Acquired& acquired) {
-        if (!vdecl) {
-            return;
-        }
-        if (vdecls_.insert(vdecl).second) {
-            dxmt9c_vdecl_addref(vdecl);
-            vdeclList_.push_back(vdecl);
-            acquired.vdecls.push_back(vdecl);
-        }
-    }
-
-    void retainWireHandle(const D9CCommandChunkWireHandleEntry& handle,
-                          Acquired& acquired) {
-        const auto ptr = static_cast<std::uintptr_t>(handle.opaqueHandle);
-        switch (handle.kind) {
-        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
-            retainTexture(reinterpret_cast<D9CTexture*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SURFACE:
-            retainSurface(reinterpret_cast<D9CSurface*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_BUFFER:
-            retainBuffer(reinterpret_cast<D9CBuffer*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SHADER:
-            retainShader(reinterpret_cast<D9CShader*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-            retainVdecl(reinterpret_cast<D9CVertexDecl*>(ptr), acquired);
-            break;
-        default:
-            break;
-        }
-    }
-
-    void retainWireHandles(
-        std::span<const D9CCommandChunkWireHandleEntry> handles,
-        Acquired& acquired) {
-        for (const auto& handle : handles) {
-            retainWireHandle(handle, acquired);
-        }
-    }
-
-    void rollback(const Acquired& acquired) {
-        for (auto* surface : acquired.surfaces) {
-            surfaces_.erase(surface);
-            eraseOne(surfaceList_, surface);
-            dxmt9c_surface_release(surface);
-        }
-        for (auto* texture : acquired.textures) {
-            textures_.erase(texture);
-            eraseOne(textureList_, texture);
-            dxmt9c_texture_release(texture);
-        }
-        for (auto* buffer : acquired.buffers) {
-            buffers_.erase(buffer);
-            eraseOne(bufferList_, buffer);
-            dxmt9c_buffer_release(buffer);
-        }
-        for (auto* shader : acquired.shaders) {
-            shaders_.erase(shader);
-            eraseOne(shaderList_, shader);
-            dxmt9c_shader_release(shader);
-        }
-        for (auto* vdecl : acquired.vdecls) {
-            vdecls_.erase(vdecl);
-            eraseOne(vdeclList_, vdecl);
-            dxmt9c_vdecl_release(vdecl);
-        }
-    }
-
-    void clear() {
-        for (auto* surface : surfaceList_) {
-            dxmt9c_surface_release(surface);
-        }
-        surfaceList_.clear();
-        surfaces_.clear();
-        for (auto* texture : textureList_) {
-            dxmt9c_texture_release(texture);
-        }
-        textureList_.clear();
-        textures_.clear();
-        for (auto* buffer : bufferList_) {
-            dxmt9c_buffer_release(buffer);
-        }
-        bufferList_.clear();
-        buffers_.clear();
-        for (auto* shader : shaderList_) {
-            dxmt9c_shader_release(shader);
-        }
-        shaderList_.clear();
-        shaders_.clear();
-        for (auto* vdecl : vdeclList_) {
-            dxmt9c_vdecl_release(vdecl);
-        }
-        vdeclList_.clear();
-        vdecls_.clear();
-    }
-
-private:
-    template<typename T>
-    static void eraseOne(std::vector<T*>& values, T* value) {
-        const auto it = std::find(values.begin(), values.end(), value);
-        if (it != values.end()) {
-            values.erase(it);
-        }
-    }
-
-    std::unordered_set<D9CSurface*> surfaces_{};
-    std::vector<D9CSurface*> surfaceList_{};
-    std::unordered_set<D9CTexture*> textures_{};
-    std::vector<D9CTexture*> textureList_{};
-    std::unordered_set<D9CBuffer*> buffers_{};
-    std::vector<D9CBuffer*> bufferList_{};
-    std::unordered_set<D9CShader*> shaders_{};
-    std::vector<D9CShader*> shaderList_{};
-    std::unordered_set<D9CVertexDecl*> vdecls_{};
-    std::vector<D9CVertexDecl*> vdeclList_{};
-};
-
 struct PeCommandChunkCommitInfo {
     std::uint32_t recordCount = 0;
     std::uint32_t payloadBytes = 0;
@@ -689,7 +516,7 @@ public:
         if (handle == 0) {
             return true;
         }
-        if (kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+        if (kind > D9C_CHUNK_HANDLE_KIND_QUERY) {
             return false;
         }
         if (!d9c_command_chunk_wire_handle_generation_valid(generation)) {
@@ -764,6 +591,24 @@ public:
             !appendRecordWireHandleFrom(handles, firstHandle,
                                         D9C_CHUNK_HANDLE_KIND_SURFACE,
                                         d9cWireHandleValue(packet.dsHandle))) {
+            return false;
+        }
+        if (packet.vsValid != 0 &&
+            !appendRecordWireHandleFrom(handles, firstHandle,
+                                        D9C_CHUNK_HANDLE_KIND_SHADER,
+                                        d9cWireHandleValue(packet.vsHandle))) {
+            return false;
+        }
+        if (packet.psValid != 0 &&
+            !appendRecordWireHandleFrom(handles, firstHandle,
+                                        D9C_CHUNK_HANDLE_KIND_SHADER,
+                                        d9cWireHandleValue(packet.psHandle))) {
+            return false;
+        }
+        if (packet.vdeclValid != 0 &&
+            !appendRecordWireHandleFrom(handles, firstHandle,
+                                        D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+                                        d9cWireHandleValue(packet.vdeclHandle))) {
             return false;
         }
         return true;
@@ -983,7 +828,7 @@ public:
             return S_OK;
         }
 
-        D3D9PePendingCommandRetainer::Acquired acquired{};
+        auto acquired = chunk_.retainer.beginAcquire();
         const auto firstHandle = chunk_.handleArena.size();
         const auto* payload = wireRecord.payloadSize == 0
             ? nullptr
@@ -1009,9 +854,7 @@ public:
         const auto* handleData = handleCount == 0
             ? nullptr
             : chunk_.handleArena.data() + firstHandle;
-        chunk_.retainer.retainWireHandles(
-            std::span<const D9CCommandChunkWireHandleEntry>(handleData, handleCount),
-            acquired);
+        chunk_.retainer.retainWireHandles(handleData, handleCount, acquired);
         wireRecord.firstHandle =
             static_cast<std::uint32_t>(firstHandle);
         wireRecord.handleCount =
@@ -1247,6 +1090,17 @@ private:
                     static_cast<std::uintptr_t>(decoded.intzDestHandle)), acquired);
             return true;
         }
+        case D9C_COMMAND_RECORD_QUERY_ISSUE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordQueryIssue)) {
+                return false;
+            }
+            D9CCommandRecordQueryIssue decoded{};
+            std::memcpy(&decoded, recordPayload, sizeof(decoded));
+            chunk_.retainer.retainQuery(
+                reinterpret_cast<D9CQuery*>(
+                    static_cast<std::uintptr_t>(decoded.queryWire)), acquired);
+            return true;
+        }
         default:
             return true;
         }
@@ -1380,6 +1234,16 @@ private:
                    appendRecordWireHandleFrom(
                        handles, firstHandle, D9C_CHUNK_HANDLE_KIND_TEXTURE,
                        decoded.intzDestHandle);
+        }
+        case D9C_COMMAND_RECORD_QUERY_ISSUE: {
+            if (wireRecord.payloadSize < sizeof(D9CCommandRecordQueryIssue)) {
+                return false;
+            }
+            D9CCommandRecordQueryIssue decoded{};
+            std::memcpy(&decoded, recordPayload, sizeof(decoded));
+            return appendRecordWireHandleFrom(
+                handles, firstHandle, D9C_CHUNK_HANDLE_KIND_QUERY,
+                decoded.queryWire);
         }
         default:
             return true;

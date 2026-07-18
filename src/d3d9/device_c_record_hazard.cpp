@@ -18,7 +18,7 @@ bool handleSetContains(
     const ImportedChunkHandleSet& handles,
     std::uint32_t kind,
     std::uint64_t handle) noexcept {
-  if (handle == 0 || kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+  if (handle == 0 || kind > D9C_CHUNK_HANDLE_KIND_QUERY) {
     return false;
   }
   const auto& bucket = handles.byKind[kind];
@@ -113,7 +113,7 @@ bool appendImportedChunkHandle(
     ImportedChunkHandleSet& handles,
     std::uint32_t kind,
     std::uint64_t handle) {
-  if (handle == 0 || kind > D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
+  if (handle == 0 || kind > D9C_CHUNK_HANDLE_KIND_QUERY) {
     return false;
   }
   auto& bucket = handles.byKind[kind];
@@ -151,6 +151,18 @@ void collectDrawPacketResourceHandles(
   if (packet.dsValid != 0) {
     appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE,
                               wireHandleValue(packet.dsHandle));
+  }
+  if (packet.vsValid != 0) {
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SHADER,
+                              wireHandleValue(packet.vsHandle));
+  }
+  if (packet.psValid != 0) {
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SHADER,
+                              wireHandleValue(packet.psHandle));
+  }
+  if (packet.vdeclValid != 0) {
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+                              wireHandleValue(packet.vdeclHandle));
   }
 }
 
@@ -242,6 +254,13 @@ void collectImportedRecordResourceHandles(
     std::memcpy(&decoded, record.record, sizeof(decoded));
     appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_SURFACE, decoded.msaaDepthHandle);
     appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_TEXTURE, decoded.intzDestHandle);
+    break;
+  }
+  case D9C_COMMAND_RECORD_QUERY_ISSUE: {
+    D9CCommandRecordQueryIssue decoded{};
+    std::memcpy(&decoded, record.record, sizeof(decoded));
+    appendImportedChunkHandle(handles, D9C_CHUNK_HANDLE_KIND_QUERY,
+                              decoded.queryWire);
     break;
   }
   default:

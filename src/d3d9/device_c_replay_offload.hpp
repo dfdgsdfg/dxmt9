@@ -20,9 +20,8 @@ namespace dxmt9::d3d9 {
 
 // Wrapper pointer retained across the offload queue boundary (see
 // retainWrappersForOffload / releaseRetainedWrappers in
-// device_c_chunk_replay.cpp). `kind` is a D9C_CHUNK_HANDLE_KIND_* value, or
-// the offload-local Query tag for wrappers that never enter the wire handle
-// table.
+// device_c_chunk_replay.cpp). `kind` is a D9C_CHUNK_HANDLE_KIND_* value;
+// Query wrappers participate in the same validated wire handle table.
 struct RetainedWireHandle {
   uint32_t kind = 0;
   void* ptr = nullptr;
@@ -33,7 +32,6 @@ struct RawCommandChunk {
   uint32_t recordCount = 0;
   uint32_t recordBytes = 0;
   bool hasPresent = false;
-  bool skipDrawResourceMarking = false;
   // Wow64 pointer-decode semantics are carried by a thread_local
   // (g_wow64ClientCallDepth) on the committing app thread. The deferred
   // replay must reproduce that context on the worker or wireValuePtr's

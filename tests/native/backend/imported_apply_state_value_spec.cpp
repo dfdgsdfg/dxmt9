@@ -390,35 +390,15 @@ void checkEventKind(const std::vector<RecordedEvent>& events,
   check(events[index].kind == expected, message);
 }
 
-// device_c_chunk_replay.cpp's offload branch always replays with
-// skipDrawResourceMarking=false ("Deliberately NOT didBulkMarkResources" --
-// the worker's per-draw markDrawResources must re-pin resources at the real
-// append-time seqId instead of trusting the app-thread bulk mark's
-// nextSeqId_ snapshot, R-BACK-2.51 hardening). That means the
-// SetSkipDrawResourceMarking(true)/(false) bracket events the sync-path
-// assertions below expect never fire under DXMT9_OFFLOAD_COMMIT_REPLAY=1.
-// Delegate to the production resolver
-// (dxmt9::d3d9::offloadCommitReplayEnabled(), device_c_replay_offload.cpp)
-// so event-shape assertions can adapt instead of hard-coding a shape that
-// only holds for the synchronous replay path. A local copy of the parse
-// drifted once when the engine default flipped on — do not reintroduce it.
-bool offloadReplayActive() {
-  return dxmt9::d3d9::offloadCommitReplayEnabled();
-}
-
-// Sync-shaped event count, adjusted for the offload path's missing pair of
-// SetSkipDrawResourceMarking bracket events (present in the sync shape,
-// absent entirely when offload is active).
+// Bulk marking covers direct V1 payload references only. Both synchronous
+// and offloaded replay keep normal per-draw marking enabled so effective
+// unix-side state that is absent from a sparse delta remains pinned.
 std::size_t expectedEventCount(std::size_t syncCount) {
-  return offloadReplayActive() ? syncCount - 2u : syncCount;
+  return syncCount - 2u;
 }
 
-// Sync-shaped event index for an event that sits strictly between the two
-// SetSkipDrawResourceMarking brackets (i.e. not the leading
-// MarkChunkResources at index 0, and not either bracket itself), adjusted
-// for the offload path's missing leading bracket.
 std::size_t midEventIndex(std::size_t syncIndex) {
-  return offloadReplayActive() ? syncIndex - 1u : syncIndex;
+  return syncIndex - 1u;
 }
 
 Matrix4x4 identityMatrix() {
@@ -976,12 +956,13 @@ void testImportedApplyStateAndSetConstValuePropagation() {
 
     std::vector<std::uint8_t> payload;
     std::vector<D9CCommandChunkWireRecordHeader> records;
+    std::uint32_t nextHandle = 0u;
     auto appendFixedRecord = [&](std::uint32_t type, const auto& record,
-                                 std::uint32_t firstHandle = 0u,
                                  std::uint32_t handleCount = 0u) {
       const auto offset = appendRecord(payload, record);
       records.push_back(wireRecordHeader(type, offset, sizeof(record),
-                                         firstHandle, handleCount));
+                                         nextHandle, handleCount));
+      nextHandle += handleCount;
     };
     auto appendConst = [&](std::uint32_t type, std::uint32_t start,
                            std::uint32_t count, const auto& data) {
@@ -992,10 +973,11 @@ void testImportedApplyStateAndSetConstValuePropagation() {
       records.push_back(wireRecordHeader(
           type, offset,
           static_cast<std::uint32_t>(sizeof(D9CCommandRecordSetConst) +
-                                     data.size() * sizeof(data[0]))));
+                                     data.size() * sizeof(data[0])),
+          nextHandle, 0u));
     };
 
-    appendFixedRecord(D9C_COMMAND_RECORD_APPLY_STATE, seedDecl);
+    appendFixedRecord(D9C_COMMAND_RECORD_APPLY_STATE, seedDecl, 1u);
     appendFixedRecord(D9C_COMMAND_RECORD_APPLY_STATE, fvfClear);
     appendFixedRecord(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, fvfDraw);
     appendConst(D9C_COMMAND_RECORD_SET_VS_CONST_F, 3u, 2u, vsConstF);
@@ -1004,11 +986,11 @@ void testImportedApplyStateAndSetConstValuePropagation() {
     appendConst(D9C_COMMAND_RECORD_SET_PS_CONST_I, 4u, 1u, psConstI);
     appendConst(D9C_COMMAND_RECORD_SET_VS_CONST_B, 1u, 3u, vsConstB);
     appendConst(D9C_COMMAND_RECORD_SET_PS_CONST_B, 2u, 2u, psConstB);
-    appendFixedRecord(D9C_COMMAND_RECORD_APPLY_STATE, richApply, 0u, 7u);
-    appendFixedRecord(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, indexedDraw,
-                      7u, 1u);
+    appendFixedRecord(D9C_COMMAND_RECORD_APPLY_STATE, richApply, 7u);
+    appendFixedRecord(D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, indexedDraw, 1u);
 
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
+        wireHandleEntry(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, &oldDecl),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &renderTargetWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &depthStencilWire),
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_TEXTURE, &textureWire),
@@ -1030,22 +1012,10 @@ void testImportedApplyStateAndSetConstValuePropagation() {
             "imported value event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "imported value bulk retention event");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "imported value skip enabled event");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "imported value skip enabled");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "FVF clearing draw event");
     checkEventKind(recorder->events, midEventIndex(3u), EventKind::SubmitDraw,
                    "rich indexed draw event");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 4u, EventKind::SetSkipDrawResourceMarking,
-                     "imported value skip disabled event");
-      check(!recorder->events[4].skipDrawResourceMarking,
-            "imported value skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(5),
@@ -1334,7 +1304,7 @@ void testImportedSparseRtAndDepthStencilBindingBoundary() {
         wireRecordHeader(D9C_COMMAND_RECORD_APPLY_STATE, bindOffset,
                          sizeof(bind), 0u, 3u),
         wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, drawOffset,
-                         sizeof(draw)),
+                         sizeof(draw), 3u, 0u),
     };
     const std::vector<D9CCommandChunkWireHandleEntry> handles{
         wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, &rt0Wire),
@@ -1353,20 +1323,8 @@ void testImportedSparseRtAndDepthStencilBindingBoundary() {
             "sparse RT/DS import event count");
     checkEventKind(recorder->events, 0u, EventKind::MarkChunkResources,
                    "sparse RT/DS retention event");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 1u, EventKind::SetSkipDrawResourceMarking,
-                     "sparse RT/DS skip enabled event");
-    }
     checkEventKind(recorder->events, midEventIndex(2u), EventKind::SubmitDraw,
                    "sparse RT/DS draw event");
-    if (!offloadReplayActive()) {
-      checkEventKind(recorder->events, 3u, EventKind::SetSkipDrawResourceMarking,
-                     "sparse RT/DS skip disabled event");
-      check(recorder->events[1].skipDrawResourceMarking,
-            "sparse RT/DS skip enabled");
-      check(!recorder->events[3].skipDrawResourceMarking,
-            "sparse RT/DS skip disabled");
-    }
 
     const auto& retained = recorder->events[0].chunkHandles;
     checkEq(retained.size(), static_cast<std::size_t>(3),
@@ -1658,6 +1616,77 @@ void testMalformedImportedRecordDoesNotMutateState() {
           "malformed chunk rejects before applying earlier records");
     check(recorder->events.empty(),
           "malformed chunk does not reach fake backend");
+
+    D9CCommandRecordDrawPrimitiveUP malformedUp{};
+    malformedUp.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+    malformedUp.header.size =
+        static_cast<std::uint32_t>(sizeof(malformedUp) + 16u);
+    malformedUp.packet.state.renderStateCount = 1u;
+    malformedUp.packet.state.renderStates[0] = {
+        RS_TEXTURE_FACTOR, 0x55667788u};
+    malformedUp.packet.state.primitiveType = 4u;
+    malformedUp.packet.primitiveCount = 1u;
+    malformedUp.packet.stride = 16u;
+    malformedUp.packet.vertexDataOffset =
+        static_cast<std::uint32_t>(sizeof(malformedUp) - 4u);
+    malformedUp.packet.vertexDataSize = 16u;
+
+    payload.clear();
+    appendRecord(payload, malformedUp);
+    payload.resize(malformedUp.header.size);
+    const std::vector<D9CCommandChunkWireRecordHeader> malformedUpRecords{
+        wireRecordHeader(D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP, 0u,
+                         malformedUp.header.size),
+    };
+    const auto malformedUpBlob =
+        makeWireChunkBlob(payload, malformedUpRecords, {});
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, malformedUpBlob, 1u, 0u),
+            D3DERR_INVALIDCALL,
+            "malformed UP nested offset rejects whole chunk");
+    check(!device->coreDevice().state().renderStates.contains(RS_TEXTURE_FACTOR),
+          "malformed UP rejects before applying its embedded state delta");
+    check(recorder->events.empty(),
+          "malformed UP does not reach fake backend");
+
+    D9CCommandRecordDrawIndexedPrimitiveUP malformedIndexedUp{};
+    malformedIndexedUp.header.type =
+        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+    malformedIndexedUp.header.size = static_cast<std::uint32_t>(
+        sizeof(malformedIndexedUp) + 6u + 16u);
+    malformedIndexedUp.packet.state.renderStateCount = 1u;
+    malformedIndexedUp.packet.state.renderStates[0] = {
+        RS_TEXTURE_FACTOR, 0x99aabbccu};
+    malformedIndexedUp.packet.state.primitiveType = 4u;
+    malformedIndexedUp.packet.primitiveCount = 1u;
+    malformedIndexedUp.packet.indexFormat = 101u;
+    malformedIndexedUp.packet.stride = 16u;
+    malformedIndexedUp.packet.indexDataOffset =
+        static_cast<std::uint32_t>(sizeof(malformedIndexedUp));
+    malformedIndexedUp.packet.indexDataSize = 6u;
+    malformedIndexedUp.packet.vertexDataOffset =
+        malformedIndexedUp.packet.indexDataOffset + 5u;
+    malformedIndexedUp.packet.vertexDataSize = 16u;
+
+    payload.clear();
+    appendRecord(payload, malformedIndexedUp);
+    payload.resize(malformedIndexedUp.header.size);
+    const std::vector<D9CCommandChunkWireRecordHeader>
+        malformedIndexedUpRecords{wireRecordHeader(
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP, 0u,
+            malformedIndexedUp.header.size)};
+    const auto malformedIndexedUpBlob =
+        makeWireChunkBlob(payload, malformedIndexedUpRecords, {});
+
+    recorder->events.clear();
+    checkEq(commitWireChunk(cDevice, malformedIndexedUpBlob, 1u, 0u),
+            D3DERR_INVALIDCALL,
+            "malformed indexed-UP nested offset rejects whole chunk");
+    check(!device->coreDevice().state().renderStates.contains(RS_TEXTURE_FACTOR),
+          "malformed indexed-UP rejects before applying embedded state");
+    check(recorder->events.empty(),
+          "malformed indexed-UP does not reach fake backend");
   }
 
   checkEq(device->Release(), 0u, "release malformed d3d device");

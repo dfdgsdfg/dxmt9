@@ -235,6 +235,31 @@ void testDrawUpValidationMatrix() {
               D9CCommandRecordValidationStatus::TruncatedRecord,
               "draw primitive UP rejects unavailable declared tail");
 
+  auto nestedDrawUp = makeDrawPrimitiveUPRecord(64u);
+  nestedDrawUp.packet.vertexDataOffset =
+      static_cast<std::uint32_t>(sizeof(D9CCommandRecordDrawPrimitiveUP) - 4u);
+  checkStatus(declaredRecordBytes(nestedDrawUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw primitive UP rejects vertex data overlapping fixed fields");
+
+  nestedDrawUp = makeDrawPrimitiveUPRecord(64u);
+  nestedDrawUp.packet.vertexDataOffset += 1u;
+  checkStatus(declaredRecordBytes(nestedDrawUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw primitive UP rejects a gap before vertex data");
+
+  nestedDrawUp = makeDrawPrimitiveUPRecord(64u);
+  nestedDrawUp.packet.vertexDataSize += 1u;
+  checkStatus(declaredRecordBytes(nestedDrawUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw primitive UP rejects vertex data past the record tail");
+
+  nestedDrawUp = makeDrawPrimitiveUPRecord(64u);
+  nestedDrawUp.header.size += 1u;
+  checkStatus(declaredRecordBytes(nestedDrawUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw primitive UP rejects unowned trailing bytes");
+
   auto indexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
   checkValidRecordBytes(declaredRecordBytes(indexedUp),
                         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
@@ -260,6 +285,31 @@ void testDrawUpValidationMatrix() {
   checkStatus(recordBytes(truncatedIndexedUp, truncatedIndexedUp.header.size - 1u),
               D9CCommandRecordValidationStatus::TruncatedRecord,
               "draw indexed primitive UP rejects unavailable declared tail");
+
+  auto nestedIndexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  nestedIndexedUp.packet.indexDataOffset = static_cast<std::uint32_t>(
+      sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) - 4u);
+  checkStatus(declaredRecordBytes(nestedIndexedUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw indexed primitive UP rejects index data overlapping fixed fields");
+
+  nestedIndexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  nestedIndexedUp.packet.vertexDataOffset -= 1u;
+  checkStatus(declaredRecordBytes(nestedIndexedUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw indexed primitive UP rejects overlapping index and vertex data");
+
+  nestedIndexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  nestedIndexedUp.packet.vertexDataOffset += 1u;
+  checkStatus(declaredRecordBytes(nestedIndexedUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw indexed primitive UP rejects a gap between index and vertex data");
+
+  nestedIndexedUp = makeDrawIndexedPrimitiveUPRecord(6u, 64u);
+  nestedIndexedUp.packet.vertexDataSize += 1u;
+  checkStatus(declaredRecordBytes(nestedIndexedUp),
+              D9CCommandRecordValidationStatus::SizeMismatch,
+              "draw indexed primitive UP rejects vertex data past the record tail");
 }
 
 void testSurfaceQueryRecordValidationMatrix() {
@@ -366,20 +416,19 @@ void testImportedWireChunkRejectsMalformedPayloadRange() {
 }
 
 void testImportedWireChunkEnforcesHandleTableAndRanges() {
-  const auto present = makePresentRecord();
-  auto bytes = recordBytes(present);
+  const auto query = makeQueryIssueRecord();
+  auto bytes = recordBytes(query);
   std::vector<D9CCommandChunkWireHandleEntry> handles{
-      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
-      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2000u),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_QUERY, query.queryWire),
   };
   const std::vector<D9CCommandChunkWireRecordHeader> validRecords{
-      wireRecordHeader(D9C_COMMAND_RECORD_PRESENT, 0u,
-                       static_cast<std::uint32_t>(sizeof(present)), 0u,
+      wireRecordHeader(D9C_COMMAND_RECORD_QUERY_ISSUE, 0u,
+                       static_cast<std::uint32_t>(sizeof(query)), 0u,
                        static_cast<std::uint32_t>(handles.size())),
   };
 
   auto records = validRecords;
-  records[0].firstHandle = 2u;
+  records[0].firstHandle = 1u;
   records[0].handleCount = 1u;
   auto wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
@@ -415,7 +464,7 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
           "wire record header rejects nonzero reserved fields");
 
   records = validRecords;
-  handles[1].kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1u;
+  handles[0].kind = D9C_CHUNK_HANDLE_KIND_QUERY + 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
       static_cast<std::uint32_t>(bytes.size()), handles.data(),
@@ -424,11 +473,11 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects unknown handle kind");
-  checkEq(validation.failedHandleIndex, 1u,
+  checkEq(validation.failedHandleIndex, 0u,
           "wire handle table reports failed handle index");
 
-  handles[1].kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
-  handles[1].reserved0 = 1u;
+  handles[0].kind = D9C_CHUNK_HANDLE_KIND_QUERY;
+  handles[0].reserved0 = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
       static_cast<std::uint32_t>(bytes.size()), handles.data(),
@@ -438,8 +487,8 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects nonzero reserved fields");
 
-  handles[1].reserved0 = 0u;
-  handles[1].reserved1 = 1u;
+  handles[0].reserved0 = 0u;
+  handles[0].reserved1 = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
       static_cast<std::uint32_t>(bytes.size()), handles.data(),
@@ -449,12 +498,12 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects nonzero trailing reserved fields");
 
-  handles[1].reserved1 = 0u;
+  handles[0].reserved1 = 0u;
   // In-range stamped generation must now pass the structural validator —
   // the cross-side equality check moved to chunk replay where the wrapper
   // pointer can be dereferenced. See
   // `device_c_chunk_replay.cpp` "bad-handle-generation".
-  handles[1].generation = 1u;
+  handles[0].generation = 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
       static_cast<std::uint32_t>(bytes.size()), handles.data(),
@@ -468,7 +517,7 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
   // invalid — a producer stamping 25+ bits of generation has corrupted the
   // encoding and the importer must reject the entry before any cross-side
   // lookup is attempted.
-  handles[1].generation =
+  handles[0].generation =
       D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK + 1u;
   wire = makeImportedWireChunkView(
       records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
@@ -478,10 +527,70 @@ void testImportedWireChunkEnforcesHandleTableAndRanges() {
   checkEq(static_cast<int>(validation.status),
           static_cast<int>(ImportedWireChunkValidationStatus::InvalidHandleEntry),
           "wire handle table rejects out-of-range stamped generations");
-  checkEq(validation.failedHandleIndex, 1u,
+  checkEq(validation.failedHandleIndex, 0u,
           "wire handle table reports failed handle index for "
           "out-of-range generation");
-  handles[1].generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE;
+  handles[0].generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE;
+
+  records = validRecords;
+  records[0].handleCount = 0u;
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), nullptr, 0u);
+  validation = validateImportedWireChunk(wire);
+  checkEq(
+      static_cast<int>(validation.status),
+      static_cast<int>(
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences),
+      "wire record rejects a payload handle missing from its range");
+
+  records = validRecords;
+  handles[0] = wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, query.queryWire);
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(), 1u);
+  validation = validateImportedWireChunk(wire);
+  checkEq(
+      static_cast<int>(validation.status),
+      static_cast<int>(
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences),
+      "wire record rejects a range entry absent from its payload");
+
+  records = validRecords;
+  handles = {
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_QUERY, query.queryWire),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, 0xfeedu),
+  };
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(), 2u);
+  validation = validateImportedWireChunk(wire);
+  checkEq(
+      static_cast<int>(validation.status),
+      static_cast<int>(
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences),
+      "wire chunk rejects an orphan handle-table suffix");
+  checkEq(validation.failedRecordIndex, 1u,
+          "wire chunk reports orphan failure after the last record");
+
+  const auto stretch = makeStretchRectRecord();
+  bytes = recordBytes(stretch);
+  handles = {
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, stretch.srcWire),
+      wireHandleEntry(D9C_CHUNK_HANDLE_KIND_SURFACE, stretch.srcWire),
+  };
+  records = {wireRecordHeader(
+      D9C_COMMAND_RECORD_STRETCH_RECT, 0u,
+      static_cast<std::uint32_t>(bytes.size()), 0u, 2u)};
+  wire = makeImportedWireChunkView(
+      records.data(), static_cast<std::uint32_t>(records.size()), bytes.data(),
+      static_cast<std::uint32_t>(bytes.size()), handles.data(), 2u);
+  validation = validateImportedWireChunk(wire);
+  checkEq(
+      static_cast<int>(validation.status),
+      static_cast<int>(
+          ImportedWireChunkValidationStatus::InvalidRecordHandleReferences),
+      "wire record rejects duplicate range entries that omit a payload handle");
 }
 
 // Cross-side generation match: the helper used by the chunk-replay

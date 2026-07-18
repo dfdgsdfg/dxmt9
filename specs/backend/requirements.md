@@ -145,7 +145,8 @@ runtime checks for negotiated header sizes before any record payload is decoded.
 **R-BACK-2.20** The importer must validate every payload range with overflow-safe
 arithmetic. `payloadOffset + payloadSize` and all nested payload-relative ranges must
 remain within the chunk payload arena and satisfy the alignment required by that
-record schema.
+record schema. Whole-chunk preflight, including nested UP index/vertex/constant
+sections, must complete before replay applies any state or dispatches any command.
 
 **R-BACK-2.21** Command record schemas must be POD and fixed-layout. Wire records and
 payloads must not contain COM pointers, Objective-C object pointers, unix-side object
@@ -156,6 +157,9 @@ containers, or any pointer that is meaningful only inside one process.
 the chunk handle table plus schema-defined kind information. The importer must reject
 out-of-range indices, kind mismatches, stale handles, and records whose declared
 handle ranges exceed the handle table before retaining any resource for execution.
+For each record, the non-null payload reference set and declared handle range must
+match in both directions; missing, extra, duplicate-substitution, and orphan table
+entries must reject the whole chunk.
 
 **R-BACK-2.23** Imported records must be stored in cache-friendly contiguous arrays or
 arena-backed POD storage owned by the execution chunk. The encode thread must be able
@@ -495,6 +499,48 @@ today; and (g) bump the PE/unix wire schema so the existing
 the PE record byte-pinning specs (off-path unchanged plus new inline-section
 rows) and an on/off replay-equivalence spec following the
 `pe_full_snapshot_equivalence_spec` pattern.
+
+**R-BACK-2.53** *(V1 compatibility hardening.)* While wire version 1 remains
+accepted, its integer-encoded server-wrapper references must be treated as a
+compatibility exception to `R-BACK-2.21`, never as the target ABI. The PE
+recorder and unix importer must derive the same deduplicated set of direct,
+non-null payload references for every record, including shaders, vertex
+declarations, and queries; record handle ranges must be canonical contiguous
+slices and match those references exactly. V1 full-state snapshots must encode
+all texture and stream slots, including explicit nulls, so snapshot replay can
+unbind prior state. V1 bulk marking must not suppress normal per-draw marking,
+because effective unix state may reference resources absent from a sparse V1
+delta.
+The generated bridge ABI generation tag must change whenever this V1 record
+grammar or ownership contract changes, even if the outer C function prototype
+is unchanged, so mixed PE/unix binaries fail the attach handshake.
+
+**R-BACK-2.54** *(V2 stable handle-index ABI.)* Wire version 2 must replace all
+payload-embedded server-wrapper addresses with `uint32_t` handle-table indices.
+Each table entry must carry a schema kind, stable object identifier, and
+generation; null must use the schema-defined index sentinel and must not occupy
+a table entry. Every non-null payload index must fall within its record's
+canonical handle slice and resolve to the declared kind and generation before
+any retain or replay side effect. A chunk must contain one wire version only,
+and PE/unix negotiation plus the ABI-hash handshake must reject unsupported or
+mixed-version builds.
+
+**R-BACK-2.55** *(V2 sparse draw packets.)* A V2 draw record must store fixed
+draw arguments plus a canonical, typed section-descriptor array. Only changed
+state sections and required draw/UP data may ride the payload; absent sections
+mean no delta, while explicit null handle indices mean unbind. Section kinds
+must be unique and sorted, and every `{offset, byteSize, elementSize, count}`
+must pass overflow-safe alignment, non-overlap, and schema-size validation.
+The importer must preflight the complete record/chunk, including UP index,
+vertex, and inline-constant sections, before applying any state.
+
+**R-BACK-2.56** *(Recorder/replay scratch ownership.)* Steady-state PE wrapper
+retention and unix replay staging must reuse capacity-preserving chunk/device or
+thread-local arenas. Per-record rollback must use checkpoints, and duplicate
+retains must be eliminated by an exact flat set or equivalent bounded
+structure. Draw-run parameters, binding overrides, payload views, pending
+submissions, and resolved core-handle lists must not allocate fresh containers
+for each replayed record or run after warm-up.
 
 ---
 

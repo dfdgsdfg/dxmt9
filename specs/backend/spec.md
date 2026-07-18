@@ -150,8 +150,12 @@ graph LR
 
 **PE CommandChunk** holds:
 - A compact command header array and POD payload arena
-- Opaque backend handles for buffers, textures, shaders, swap chains, and queries
-- No COM pointers, ObjC pointers, unix-side object pointers, or lambdas
+- V2 target: stable object-ID/generation table entries for buffers, textures,
+  surfaces, shaders, vertex declarations, and queries
+- V1 compatibility: integer-encoded unix wrapper addresses retained by the PE
+  recorder; this is explicit migration debt, not an acceptable new schema
+- No raw pointer-typed fields, COM pointers, ObjC pointers, lambdas, or owning
+  C++ containers in the wire image
 - Command-count and byte-size fields used to bound tail latency
 
 **Execution chunk** holds:
@@ -800,8 +804,8 @@ builds a fixed header plus contiguous sections:
 CommandChunkWire {
     ChunkHeader          header
     CommandRecordHeader  records[header.recordCount]
-    uint8_t              payloadArena[header.payloadBytes]
     HandleTableEntry     handleTable[header.handleCount]
+    uint8_t              payloadArena[header.payloadBytes]
 }
 ```
 
@@ -865,6 +869,141 @@ Hot-path allocation policy:
   staging, copy-temp, and imported replay storage. Cache misses may allocate cache
   objects, but steady-state replay of imported records must not allocate from the
   system heap.
+
+#### 2.4.1 Current V1 Compatibility Contract
+
+Wire V1 is implemented by `D9CCommandChunkWireHeader` and related structs in
+`include/dxmt9/device_c.h`. It has a sound bounds-checkable outer shape, but its
+resource representation is transitional: payload fields and
+`D9CCommandChunkWireHandleEntry::opaqueHandle` contain a server-side `D9C*`
+wrapper address cast to `uint64_t`. The PE recorder AddRefs those wrappers until
+commit, and offloaded replay AddRefs them again while its unix-owned blob copy is
+queued. This exception violates the pointer-free target in `R-BACK-2.21` and must
+not be copied into V2.
+
+The hardened V1 importer applies these invariants before dispatching any record:
+
+- Record handle slices are canonical and contiguous: record N starts where
+  record N-1 ends, including zero-length slices, and the final slice consumes the
+  entire table.
+- A record slice is exactly the deduplicated set of direct, non-null handles
+  encoded in that record payload. Validation is bidirectional, so missing,
+  extra, wrong-kind, orphan, and duplicate-substitution entries reject the
+  chunk. Query records use `D9C_CHUNK_HANDLE_KIND_QUERY` and participate in the
+  same retention rule.
+- `DrawPrimitiveUP` owns `[fixedHeaderEnd, vertexEnd)` followed by optional
+  inline constants. `DrawIndexedPrimitiveUP` owns a contiguous index range,
+  then a contiguous vertex range, then optional inline constants. Overlap,
+  gaps, overflow, and unowned trailing bytes reject the whole chunk.
+- A full state snapshot sets every texture and stream slot mask bit and writes
+  null handles for unbound slots. Without those explicit nulls, replay could
+  retain bindings from the prior unix state.
+- Bulk resource marking covers only direct V1 payload references. Normal
+  per-draw resource marking remains enabled because the effective unix state
+  can contain bindings not repeated by a sparse V1 delta.
+
+The PE pending-command retainer is one capacity-preserving flat entry arena.
+Each record starts with a checkpoint; failure releases and removes only the
+checkpoint suffix. Query, shader, declaration, surface, texture, and buffer
+wrappers use the same exact deduplication path. Unix commit/replay uses a
+thread-local `ReplayScratchArena` for resolved core handles, pending draw
+submissions, run parameters, binding overrides, and payload views; vector
+capacity survives calls. These changes close the known per-record container
+churn, but do not by themselves prove the complete no-system-allocation target
+in `R-BACK-2.27`.
+
+Because the generated bridge hash canonicalizes function prototypes rather
+than nested record layouts, every incompatible V1 record-grammar change also
+bumps `ABI_HASH_VERSION_TAG`. The exact-slice/Query contract uses bridge ABI
+generation `dxmt9-bridge-abi-v3`, preventing an older PE recorder from attaching
+to a hardened unix importer (or the reverse) under the same outer
+`commit_chunk` prototype.
+
+#### 2.4.2 V2 Stable-Index and Sparse Draw Design
+
+V2 keeps the outer header/record-table/handle-table/payload-arena shape and
+removes process-local identity from it:
+
+```text
+HandleTableEntryV2 {
+  u32 kind
+  u32 generation
+  u64 objectId
+}
+
+PayloadHandleRefV2 = u32 absoluteHandleIndex
+NullHandleIndexV2  = 0xffffffff
+```
+
+`objectId` is allocated by the bridge-visible object registry and remains
+stable for one wrapper lifetime; `generation` changes before an ID can be
+reused. A payload reference is an absolute table index within its record's
+`[firstHandle, firstHandle + handleCount)` slice. The entry kind must match the
+payload field schema. Null is the sentinel and never consumes a table entry.
+Slices may repeat the same object across different records to keep validation,
+retention, and offload ownership linear and record-local.
+
+A V2 draw payload is sparse rather than embedding the fixed V1
+`D9CDrawPrimitivePacket` state slab:
+
+```text
+DrawRecordV2 {
+  DrawHeaderV2       drawArgsAndFlags
+  SectionDescV2      sections[sectionCount]
+  byte               sectionPayload[]
+}
+
+SectionDescV2 {
+  u16 kind
+  u16 elementSize
+  u32 count
+  u32 payloadOffset
+  u32 byteSize
+}
+```
+
+Descriptors are unique and sorted by `kind`; payload starts are naturally
+aligned and alignment padding is zero. The initial section vocabulary is:
+
+| Section family | Contents |
+|---|---|
+| Render state | `(state, value)` deltas |
+| Textures / streams | slot plus handle index; stream also carries offset/stride/frequency |
+| Shaders / declaration / FVF / index buffer | explicit validity plus value or handle index |
+| RT / DS | slot plus handle index, including the null sentinel for detach |
+| Viewport / scissor / material / clip | typed values with explicit validity |
+| TSS / sampler | sparse `(slot, state, value)` entries |
+| Transform / light | sparse state or slot records; light enable is independent |
+| Shader constants | VS/PS float/int/bool register ranges and bytes |
+| UP data | index and vertex byte sections; indexed-UP requires both in canonical order |
+
+Absent sections mean “no delta.” Explicit validity plus a null handle index
+means “unbind.” A full snapshot sets a header flag and carries complete texture
+and stream sections, including null entries; the importer rejects a flagged
+snapshot that omits a required slot. Direct, indexed, direct-UP, and indexed-UP
+draws share the section machinery and differ only in fixed draw arguments and
+required UP/index sections.
+
+Import is transactional and ordered:
+
+1. Validate chunk/header versions, table ranges, sizes, reserved fields, and
+   canonical record handle slices.
+2. Validate every record header and every section descriptor with widened
+   arithmetic; reject duplicate kinds, misalignment, overlap, wrong element
+   sizes, invalid counts, non-zero padding, and unowned tail bytes.
+3. Validate every payload handle index against its record slice, entry kind,
+   object-ID registry entry, and generation; compare the payload reference set
+   with the slice in both directions.
+4. Resolve and retain all referenced objects into queue/offload ownership.
+5. Only after the entire chunk passes steps 1–4 may replay mutate device state
+   or submit queue work.
+
+V2 is selected only after PE/unix capability negotiation and the generated
+bridge ABI-hash handshake agree. An importer may support V1 and V2 during
+migration, but one chunk has one version and one payload grammar; there is no
+mixed V1/V2 record mode. V1 remains the fallback until the V2 registry,
+producer, importer, native parity tests, PE x64/x86 builds, and runtime bridge-op
+evidence are complete.
 
 ### 2.5 Draw-Run Batch Compatibility
 

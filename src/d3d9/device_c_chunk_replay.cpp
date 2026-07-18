@@ -129,38 +129,47 @@ std::uint64_t currentPthreadSelfBits() {
 #endif
 }
 
-struct PendingDrawSubmissionScratch {
+struct ReplayScratchArena {
   std::vector<dxmt9::core::DrawRunSubmission> submissions;
+  std::vector<dxmt9::core::DrawParam> runParams;
+  std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
+  std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
+  std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
   bool inUse = false;
+
+  void clear() noexcept {
+    submissions.clear();
+    runParams.clear();
+    bindingOverrides.clear();
+    runPayloads.clear();
+    coreEntries.clear();
+  }
 };
 
-PendingDrawSubmissionScratch& pendingDrawSubmissionScratch() {
-  static thread_local PendingDrawSubmissionScratch scratch;
+ReplayScratchArena& replayScratchArena() {
+  static thread_local ReplayScratchArena scratch;
   return scratch;
 }
 
-class ScopedPendingDrawSubmissionScratchUse {
+class ScopedReplayScratchUse {
 public:
-  explicit ScopedPendingDrawSubmissionScratchUse(
-      PendingDrawSubmissionScratch& scratch) noexcept
+  explicit ScopedReplayScratchUse(ReplayScratchArena& scratch) noexcept
       : scratch_(scratch) {
     DXMT_ASSERT(!scratch_.inUse);
     scratch_.inUse = true;
-    scratch_.submissions.clear();
+    scratch_.clear();
   }
 
-  ~ScopedPendingDrawSubmissionScratchUse() {
-    scratch_.submissions.clear();
+  ~ScopedReplayScratchUse() {
+    scratch_.clear();
     scratch_.inUse = false;
   }
 
-  ScopedPendingDrawSubmissionScratchUse(
-      const ScopedPendingDrawSubmissionScratchUse&) = delete;
-  ScopedPendingDrawSubmissionScratchUse& operator=(
-      const ScopedPendingDrawSubmissionScratchUse&) = delete;
+  ScopedReplayScratchUse(const ScopedReplayScratchUse&) = delete;
+  ScopedReplayScratchUse& operator=(const ScopedReplayScratchUse&) = delete;
 
 private:
-  PendingDrawSubmissionScratch& scratch_;
+  ReplayScratchArena& scratch_;
 };
 
 // C1 helper: route per-record dirty marking through the dxmt9
@@ -1729,12 +1738,12 @@ int32_t applyDrawPrimitiveUPPacket(D9CDevice* d,
                                    const D9CDrawPrimitiveUPPacket& packet,
                                    const dxmt9::core::u8* record,
                                    std::uint32_t recordSize) {
+  if (!recordRangeValid(recordSize, packet.vertexDataOffset, packet.vertexDataSize)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
   const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
   if (failed(stateHr)) {
     return stateHr;
-  }
-  if (!recordRangeValid(recordSize, packet.vertexDataOffset, packet.vertexDataSize)) {
-    return dxmt9::core::D3DERR_INVALIDCALL;
   }
   auto span = std::span<const dxmt9::core::u8>(record + packet.vertexDataOffset,
                                                packet.vertexDataSize);
@@ -1746,13 +1755,13 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
                                           const D9CDrawIndexedPrimitiveUPPacket& packet,
                                           const dxmt9::core::u8* record,
                                           std::uint32_t recordSize) {
-  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
-  if (failed(stateHr)) {
-    return stateHr;
-  }
   if (!recordRangeValid(recordSize, packet.indexDataOffset, packet.indexDataSize) ||
       !recordRangeValid(recordSize, packet.vertexDataOffset, packet.vertexDataSize)) {
     return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const int32_t stateHr = timedApplyDrawPacketState(d, packet.state);
+  if (failed(stateHr)) {
+    return stateHr;
   }
   auto vertexSpan = std::span<const dxmt9::core::u8>(record + packet.vertexDataOffset,
                                                      packet.vertexDataSize);
@@ -1765,37 +1774,18 @@ int32_t applyDrawIndexedPrimitiveUPPacket(D9CDevice* d,
 
 int32_t replayImportedChunk(D9CDevice* d,
                             const ImportedWireChunkView& importedChunk,
-                            bool skipDrawResourceMarking,
                             std::chrono::steady_clock::time_point bridgeCommitStart,
                             std::chrono::steady_clock::time_point replayStageStart,
                             bool pacedByPresentOrdinal) {
   auto commitChunkStageStart = replayStageStart;
 
-  // Phase 14: bulk markChunkResources has already pinned every resource
-  // in this chunk against its seqId. Suppress the submitDrawRun
-  // markDrawResources walk for the duration of this record-iter block;
-  // the RAII guard clears the flag even if a record returns early.
-  // Chunks with no retained pool resources keep the normal run-level
-  // hot-state marking path.
-  struct ResetSkipDrawMarkGuard {
-    std::shared_ptr<dxmt9::Device> upper;
-    ~ResetSkipDrawMarkGuard() {
-      if (upper) upper->setSkipDrawResourceMarking(false);
-    }
-  } resetGuard{};
-  if (skipDrawResourceMarking) {
-    if (auto upper = d->dev().upperDevice()) {
-      upper->setSkipDrawResourceMarking(true);
-      resetGuard.upper = std::move(upper);
-    }
-  }
   if (auto* q = findDirtyQueue(d)) {
     q->noteCommitChunkReplayStartForCompletionGap();
   }
 
-  auto& pendingScratch = pendingDrawSubmissionScratch();
-  ScopedPendingDrawSubmissionScratchUse pendingScratchUse(pendingScratch);
-  auto& pendingDrawSubmissions = pendingScratch.submissions;
+  auto& replayScratch = replayScratchArena();
+  ScopedReplayScratchUse replayScratchUse(replayScratch);
+  auto& pendingDrawSubmissions = replayScratch.submissions;
   pendingDrawSubmissions.reserve(std::min<std::uint32_t>(importedChunk.recordCount, 256u));
   const auto flushPendingDrawSubmissions =
       [&](PendingDrawFlushReason reason) -> int32_t {
@@ -1891,11 +1881,14 @@ int32_t replayImportedChunk(D9CDevice* d,
         const auto baseAlphaTest = effectiveAlphaTestFromState(d->dev().state());
         auto effectiveAlphaTest = baseAlphaTest;
         const auto runBuildStart = std::chrono::steady_clock::now();
-        std::vector<dxmt9::core::DrawParam> runParams;
+        auto& runParams = replayScratch.runParams;
+        auto& bindingOverrides = replayScratch.bindingOverrides;
+        auto& runPayloads = replayScratch.runPayloads;
+        runParams.clear();
+        bindingOverrides.clear();
+        runPayloads.clear();
         runParams.reserve(scan.recordCount);
-        std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
         bindingOverrides.reserve(scan.recordCount);
-        std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
         runPayloads.reserve(scan.recordCount);
         const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet);
@@ -2039,11 +2032,14 @@ int32_t replayImportedChunk(D9CDevice* d,
         const auto baseAlphaTest = effectiveAlphaTestFromState(d->dev().state());
         auto effectiveAlphaTest = baseAlphaTest;
         const auto runBuildStart = std::chrono::steady_clock::now();
-        std::vector<dxmt9::core::DrawParam> runParams;
+        auto& runParams = replayScratch.runParams;
+        auto& bindingOverrides = replayScratch.bindingOverrides;
+        auto& runPayloads = replayScratch.runPayloads;
+        runParams.clear();
+        bindingOverrides.clear();
+        runPayloads.clear();
         runParams.reserve(scan.recordCount);
-        std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
         bindingOverrides.reserve(scan.recordCount);
-        std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
         runPayloads.reserve(scan.recordCount);
         const auto appendDirectRunParam = [&](const D9CDrawPrimitivePacket& packet) {
           applyStreamBindingDeltas(effectiveBindings, packet);
@@ -2411,12 +2407,6 @@ int32_t replayImportedChunk(D9CDevice* d,
 
 namespace {
 
-// Offload-local tag for wrapper kinds that never enter the wire handle
-// table (see the verification comment above retainWrappersForOffload).
-// D9C_CHUNK_HANDLE_KIND_* runs 0..D9C_CHUNK_HANDLE_KIND_VERTEX_DECL(4).
-constexpr uint32_t kRetainedWrapperKindQuery =
-    D9C_CHUNK_HANDLE_KIND_VERTEX_DECL + 1;
-
 void retainWrapperByKind(dxmt9::d3d9::RawCommandChunk& raw, uint32_t kind, void* ptr) {
   if (!ptr) {
     return;
@@ -2437,33 +2427,13 @@ void retainWrapperByKind(dxmt9::d3d9::RawCommandChunk& raw, uint32_t kind, void*
   case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
     dxmt9c_vdecl_addref(static_cast<D9CVertexDecl*>(ptr));
     break;
-  case kRetainedWrapperKindQuery:
+  case D9C_CHUNK_HANDLE_KIND_QUERY:
     dxmt9c_query_addref(static_cast<D9CQuery*>(ptr));
     break;
   default:
     return;
   }
   raw.retainedWrappers.push_back(dxmt9::d3d9::RetainedWireHandle{kind, ptr});
-}
-
-// vsHandle/psHandle/vdeclHandle are delta fields (valid only on the record
-// where the shader/vdecl actually changed, per device_c.h), so this only
-// retains what the record itself stamped -- matching PE's
-// retainDrawPacketPayloadObjects, which has the same delta shape.
-void retainDrawStateExtraWrappers(dxmt9::d3d9::RawCommandChunk& raw,
-                                  const D9CDrawPrimitivePacket& state) {
-  if (state.vsValid) {
-    retainWrapperByKind(raw, D9C_CHUNK_HANDLE_KIND_SHADER,
-                        wireHandlePtr<D9CShader>(state.vsHandle));
-  }
-  if (state.psValid) {
-    retainWrapperByKind(raw, D9C_CHUNK_HANDLE_KIND_SHADER,
-                        wireHandlePtr<D9CShader>(state.psHandle));
-  }
-  if (state.vdeclValid) {
-    retainWrapperByKind(raw, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
-                        wireHandlePtr<D9CVertexDecl>(state.vdeclHandle));
-  }
 }
 
 // Wrapper retention for the deferred offload path.
@@ -2478,43 +2448,9 @@ void retainDrawStateExtraWrappers(dxmt9::d3d9::RawCommandChunk& raw,
 // replay. Anything only kept alive by that PE-side retention would then be
 // a use-after-free on the worker thread.
 //
-// Verification (required by the Task 4 plan) against this file's own record
-// dispatch below plus the PE-side collect/retain functions in
-// d3d9_pe_recorder.hpp:
-//   - STRETCH_RECT / COLOR_FILL / UPDATE_TEXTURE / UPDATE_SURFACE /
-//     READBACK / RESZ_DEPTH_RESOLVE: despite resolving their src/dst
-//     wrapper pointers directly from record-embedded fields via
-//     wireValuePtr<>() (not via importedChunk.handles[] at the use site),
-//     collectRecordPayloadWireHandles()'s cases for these exact record
-//     types DO stamp a D9C_CHUNK_HANDLE_KIND_SURFACE/TEXTURE entry into the
-//     shared wire handle table for each field at PE append time. So the
-//     handle-table pass below re-derives and retains the same objects.
-//   - DRAW_* / CLEAR "currently bound" resources (streams, textures, RTs,
-//     DS, and the indexed-run IB via packet.ibHandle): also covered by the
-//     handle table, via appendCurrentlyBoundDrawHandles()'s
-//     "capture full state at append time" pass -- this is true even for
-//     interior records of a multi-draw run, since each record is appended
-//     (and thus handle-collected) individually before the run is replayed
-//     as a batch.
-//   - DRAW_* / APPLY_STATE shader (vsHandle/psHandle) and vertex-decl
-//     (vdeclHandle) handles do NOT enter the handle table:
-//     appendDrawPacketWireHandles() (what collectRecordPayloadWireHandles
-//     uses for these record types) only stamps TEXTURE/BUFFER/SURFACE
-//     entries. There is no core::Handle for shaders/vertex-decls, so the
-//     cross-side generation-check loop above would reject a stamped
-//     SHADER/VERTEX_DECL entry outright (see its "bad-handle-generation"
-//     cases) -- producers must never emit one. PE-side retention is the
-//     only thing keeping these alive between append and replay, so the
-//     second (record-scan) pass below re-derives and retains them directly
-//     from each record's own vsValid/psValid/vdeclValid delta fields.
-//   - QUERY_ISSUE's queryWire is retained by NEITHER the handle table NOR
-//     PE's retainRecordPayloadObjects (there is no case for
-//     D9C_COMMAND_RECORD_QUERY_ISSUE in either PE-side function, and no
-//     D9C_CHUNK_HANDLE_KIND for queries at all). This is a pre-existing gap
-//     shared with the synchronous path -- a query Issue()'d then
-//     immediately Release()'d before the pending chunk flushes is already
-//     unsound there -- so it is retained here only defensively; it is not a
-//     regression introduced by offload.
+// Import validation has already proved an exact payload-reference ↔ handle-
+// range match, so this single linear table walk covers resource, shader,
+// vertex-declaration, and query wrappers without rescanning record payloads.
 void retainWrappersForOffload(const ImportedWireChunkView& importedChunk,
                               dxmt9::d3d9::RawCommandChunk& raw) {
   for (uint32_t i = 0; i < importedChunk.handleCount; ++i) {
@@ -2532,61 +2468,18 @@ void retainWrappersForOffload(const ImportedWireChunkView& importedChunk,
     case D9C_CHUNK_HANDLE_KIND_BUFFER:
       retainWrapperByKind(raw, entry.kind, wireValuePtr<D9CBuffer>(entry.opaqueHandle));
       break;
-    default:
-      // SHADER / VERTEX_DECL never populate this table (see above); the
-      // record-scan pass below retains them instead.
+    case D9C_CHUNK_HANDLE_KIND_SHADER:
+      retainWrapperByKind(raw, entry.kind, wireValuePtr<D9CShader>(entry.opaqueHandle));
       break;
-    }
-  }
-
-  uint32_t recordIndex = 0;
-  while (auto recordView = nextImportedRecord(importedChunk, recordIndex)) {
-    if (!recordView->valid()) {
+    case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+      retainWrapperByKind(raw, entry.kind, wireValuePtr<D9CVertexDecl>(entry.opaqueHandle));
       break;
-    }
-    const auto* record = recordView->record;
-    switch (recordView->header.type) {
-    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: {
-      D9CCommandRecordDrawPrimitive decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainDrawStateExtraWrappers(raw, decoded.packet);
+    case D9C_CHUNK_HANDLE_KIND_QUERY:
+      retainWrapperByKind(raw, entry.kind, wireValuePtr<D9CQuery>(entry.opaqueHandle));
       break;
-    }
-    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
-      D9CCommandRecordDrawIndexedPrimitive decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainDrawStateExtraWrappers(raw, decoded.packet.state);
-      break;
-    }
-    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP: {
-      D9CCommandRecordDrawPrimitiveUP decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainDrawStateExtraWrappers(raw, decoded.packet.state);
-      break;
-    }
-    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-      D9CCommandRecordDrawIndexedPrimitiveUP decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainDrawStateExtraWrappers(raw, decoded.packet.state);
-      break;
-    }
-    case D9C_COMMAND_RECORD_APPLY_STATE: {
-      D9CCommandRecordApplyState decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainDrawStateExtraWrappers(raw, decoded.packet);
-      break;
-    }
-    case D9C_COMMAND_RECORD_QUERY_ISSUE: {
-      D9CCommandRecordQueryIssue decoded{};
-      std::memcpy(&decoded, record, sizeof(decoded));
-      retainWrapperByKind(raw, kRetainedWrapperKindQuery,
-                          wireValuePtr<D9CQuery>(decoded.queryWire));
-      break;
-    }
     default:
       break;
     }
-    recordIndex = recordView->nextIndex();
   }
 }
 
@@ -2616,7 +2509,7 @@ void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
     case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
       dxmt9c_vdecl_release(static_cast<D9CVertexDecl*>(entry.ptr));
       break;
-    case kRetainedWrapperKindQuery:
+    case D9C_CHUNK_HANDLE_KIND_QUERY:
       dxmt9c_query_release(static_cast<D9CQuery*>(entry.ptr));
       break;
     default:
@@ -2680,7 +2573,7 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
   // in this chunk was already paced by that branch's
   // waitPresentOrdinalBoundary() call; pass true so the eventual
   // submitPresent() skips its own inline boundary for it.
-  const int32_t hr = replayImportedChunk(d, wireBlob.chunk, chunk.skipDrawResourceMarking,
+  const int32_t hr = replayImportedChunk(d, wireBlob.chunk,
                                         chunk.bridgeCommitStart, replayStart,
                                         /*pacedByPresentOrdinal=*/true);
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
@@ -2748,8 +2641,10 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
           commitChunkStageEnd - commitChunkStageStart).count()));
   commitChunkStageStart = commitChunkStageEnd;
 
-  // Phase 4 / 18: validate and retain only handles selected by record
-  // handle ranges.
+  // Phase 4 / 18: resolve the exact payload-reference handles selected by
+  // each record range. This bulk mark is additive: normal per-draw marking
+  // remains enabled because effective unix-side state can reference resources
+  // that a V1 delta payload does not encode.
   //
   // The wire payload from PE carries the SERVER-SIDE D9C wrapper
   // pointer (D9CTexture* / D9CBuffer* / D9CSurface*) cast to uint64,
@@ -2758,7 +2653,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // to CommandQueue::markChunkResources — otherwise pool.find{Texture,
   // Surface,Buffer} on a wrapper-pointer-as-handle would never match
   // and the bulk mark would silently be a no-op.
-  bool didBulkMarkResources = false;
   if (importedChunk.handleCount > 0) {
     // Cross-side generation check (wire-record bounds-checkable, per
     // `agents/rules/codebase_conventions.rules.md`): when a producer
@@ -2797,7 +2691,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       case D9C_CHUNK_HANDLE_KIND_SHADER:
       case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-        // Shaders / vertex decls have no `core::Handle` representation
+      case D9C_CHUNK_HANDLE_KIND_QUERY:
+        // Shaders, vertex declarations, and queries have no `core::Handle`
+        // representation
         // on the server side; the producer must not stamp a non-NONE
         // generation for these kinds. Treating any stamped value as a
         // mismatch keeps the importer honest about the supported set.
@@ -2816,41 +2712,48 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         return commitChunkFail("bad-handle-generation", i, entry.generation);
       }
     }
-    ImportedChunkHandleSet retainedWireHandles;
-    if (!collectImportedWireChunkHandles(importedChunk, retainedWireHandles)) {
-      return commitChunkFail("collect-handles");
-    }
-    const auto retainedEntries = makeImportedChunkHandleEntries(retainedWireHandles);
-
-    std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
-    coreEntries.reserve(retainedEntries.size());
-    for (const auto& handle : retainedEntries) {
-      const auto kind = static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
-      const auto wirePtr = handle.handle;
+    auto& handleScratch = replayScratchArena();
+    ScopedReplayScratchUse handleScratchUse(handleScratch);
+    auto& coreEntries = handleScratch.coreEntries;
+    coreEntries.reserve(importedChunk.handleCount);
+    for (std::uint32_t i = 0; i < importedChunk.handleCount; ++i) {
+      const auto& handle = importedChunk.handles[i];
+      const auto wirePtr = handle.opaqueHandle;
       if (wirePtr == 0) continue;
       dxmt9::core::Handle resolved{};
-      switch (kind) {
-      case dxmt9::core::ChunkHandleKind::Texture: {
+      switch (handle.kind) {
+      case D9C_CHUNK_HANDLE_KIND_TEXTURE: {
         auto* wrapper = wireValuePtr<D9CTexture>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
-      case dxmt9::core::ChunkHandleKind::Surface: {
+      case D9C_CHUNK_HANDLE_KIND_SURFACE: {
         auto* wrapper = wireValuePtr<D9CSurface>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
-      case dxmt9::core::ChunkHandleKind::Buffer: {
+      case D9C_CHUNK_HANDLE_KIND_BUFFER: {
         auto* wrapper = wireValuePtr<D9CBuffer>(wirePtr);
         if (wrapper && wrapper->obj) resolved = wrapper->obj->handle();
         break;
       }
-      case dxmt9::core::ChunkHandleKind::Shader:
-      case dxmt9::core::ChunkHandleKind::VertexDecl:
-        // No pool retention table for shaders / vertex decls — skip.
+      case D9C_CHUNK_HANDLE_KIND_SHADER:
+      case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+      case D9C_CHUNK_HANDLE_KIND_QUERY:
+        // No pool retention table for these wrapper-only kinds.
+        break;
+      default:
         break;
       }
       if (resolved.value == 0) continue;
+      const auto kind =
+          static_cast<dxmt9::core::ChunkHandleKind>(handle.kind);
+      const bool alreadyPresent = std::any_of(
+          coreEntries.begin(), coreEntries.end(),
+          [&](const dxmt9::core::ChunkHandleEntry& existing) {
+            return existing.kind == kind && existing.handle == resolved;
+          });
+      if (alreadyPresent) continue;
       coreEntries.push_back(dxmt9::core::ChunkHandleEntry{
           .kind = kind,
           .handle = resolved,
@@ -2859,7 +2762,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     if (!coreEntries.empty()) {
       if (auto upper = d->dev().upperDevice()) {
         upper->markChunkResources(coreEntries);
-        didBulkMarkResources = true;
       }
     }
   }
@@ -2897,7 +2799,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     // reclaimed/recycled before the deferred replay's GPU use completes. The
     // sync bulk mark plus the wrapper addrefs still cover liveness up to the
     // deferred replay itself.
-    raw.skipDrawResourceMarking = false;
     raw.wow64ClientCall = requiresWow64PointerShadow();
     raw.bridgeCommitStart = bridgeCommitStart;
     raw.hasPresent = importedChunkHasPresentRecord(importedChunk);
@@ -2947,7 +2848,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   // dxmt9::d3d9::offloadCommitReplayEnabled() was off above (the offload
   // branch returns early), so no present-ordinal wait ran for this chunk;
   // any Present record in it must keep the inline seqId-based boundary.
-  return replayImportedChunk(d, importedChunk, didBulkMarkResources,
+  return replayImportedChunk(d, importedChunk,
                              bridgeCommitStart, commitChunkStageStart,
                              /*pacedByPresentOrdinal=*/false);
 }
