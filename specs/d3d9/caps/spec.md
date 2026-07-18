@@ -17,23 +17,23 @@ are implementation guidance for the normative rules in
 |---|---|---|
 | `DeviceType` | D3DDEVTYPE_HAL | Always hardware |
 | `AdapterOrdinal` | adapter index | 0 for primary |
-| `Caps` | D3DCAPS_READ_SCANLINE | Minimal base |
-| `Caps2` | D3DCAPS2_CANAUTOGENMIPMAP \| D3DCAPS2_DYNAMICTEXTURES | |
-| `Caps3` | D3DCAPS3_ALPHA_FULLSCREEN_FLIP_OR_DISCARD \| D3DCAPS3_LINEAR_TO_SRGB_PRESENTATION | |
-| `PresentationIntervals` | D3DPRESENT_INTERVAL_ONE \| D3DPRESENT_INTERVAL_IMMEDIATE \| D3DPRESENT_INTERVAL_TWO | |
+| `Caps` | 0 | Scanline reads are not advertised |
+| `Caps2` | FULLSCREENGAMMA \| CANAUTOGENMIPMAP \| DYNAMICTEXTURES (`0x60020000`) | |
+| `Caps3` | ALPHA_FULLSCREEN_FLIP_OR_DISCARD \| COPY_TO_VIDMEM \| COPY_TO_SYSTEMMEM (`0x320`) | |
+| `PresentationIntervals` | D3DPRESENT_INTERVAL_ONE \| D3DPRESENT_INTERVAL_IMMEDIATE (`0x80000001`) | |
 
 ## Rasterizer
 
 | Field | Value | Notes |
 |---|---|---|
-| `RasterCaps` | DITHER \| ZTEST \| FOGRANGE \| FOGTABLE \| FOGVERTEX \| MIPMAPLODBIAS \| ZBIAS \| DEPTHBIAS \| WFOG \| ZFOG \| ANISOTROPY \| COLORPERSPECTIVE | |
+| `RasterCaps` | ZTEST \| FOGRANGE \| FOGTABLE \| FOGVERTEX \| MIPMAPLODBIAS \| DEPTHBIAS \| SLOPESCALEDEPTHBIAS \| WFOG \| ZFOG \| ANISOTROPY \| COLORPERSPECTIVE \| SCISSORTEST (`0x07332190`) | DITHER is intentionally absent while `D3DRS_DITHERENABLE` is shadow-only; MULTISAMPLE_TOGGLE is also absent |
 | `ZCmpCaps` | All 8 D3DPCMPCAPS_* | All compare functions |
 | `AlphaCmpCaps` | All 8 D3DPCMPCAPS_* | Alpha test always emulated in shader |
 | `ShadeCaps` | D3DPSHADECAPS_COLORGOURAUDRGB \| D3DPSHADECAPS_SPECULARGOURAUDRGB \| D3DPSHADECAPS_ALPHAGOURAUDBLEND \| D3DPSHADECAPS_FOGGOURAUD | |
 | `TextureCaps` | ALPHA \| ALPHAPALETTE \| CUBEMAP \| CUBEMAP_POW2 \| MIPMAP \| MIPCUBEMAP \| MIPVOLUMEMAP \| PERSPECTIVE \| POW2 \| PROJECTED \| VOLUMEMAP \| VOLUMEMAP_POW2 | **Not** SQUAREONLY; non-square textures are supported |
 | `LinePatternCaps` | 0 | Line patterns not supported |
-| `MaxAnisotropy` | 16 | Or query `[device maxAnisotropy]` |
-| `MaxUserClipPlanes` | 6 | Hardware clip distances |
+| `MaxAnisotropy` | `limits.maxAnisotropy` | Backend-device limit |
+| `MaxUserClipPlanes` | 8 | dxmt9 public cap; the core clip-plane storage uses the same limit |
 | `MaxVertexW` | 1e10f | |
 | `GuardBandLeft/Right/Top/Bottom` | +/-8192.0f | |
 | `ExtentsAdjust` | 0.0f | |
@@ -43,11 +43,10 @@ are implementation guidance for the normative rules in
 
 | Field | Value |
 |---|---|
-| `SrcBlendCaps` | All D3DPBLENDCAPS_* (16 values) |
-| `DestBlendCaps` | All D3DPBLENDCAPS_* (16 values) |
-| `AlphaBlendCaps` | SRCALPHA \| INVSRCALPHA \| DESTALPHA \| INVDESTALPHA \| SRCALPHASAT \| BOTHSRCALPHA \| BOTHINVSRCALPHA \| BLENDFACTOR |
-| `TextureBlendCaps` | All D3DTEXBLENDCAPS_* |
-| `TextureAddressCaps` | WRAP \| MIRROR \| CLAMP \| BORDER \| INDEPENDENTUV \| MIRRORONCE |
+| `SrcBlendCaps` | `0x00003fff` |
+| `DestBlendCaps` | `0x000027ff` |
+| `TextureBlendCaps` | `0x03feffff` |
+| `TextureAddressCaps` | WRAP \| MIRROR \| CLAMP \| BORDER \| INDEPENDENTUV (`0x1f`) |
 | `VolumeTextureAddressCaps` | Same as TextureAddressCaps |
 | `LineCaps` | ALPHACMP \| BLEND \| FOG \| TEXTURE \| ZTEST |
 
@@ -58,7 +57,7 @@ are implementation guidance for the normative rules in
 | `VertexShaderVersion` | D3DVS_VERSION(3,0) | vs_1_1 through vs_3_0 all supported |
 | `PixelShaderVersion` | D3DPS_VERSION(3,0) | ps_1_1 through ps_3_0 all supported |
 | `MaxVertexShaderConst` | 256 | c0-c255 |
-| `PixelShader1xMaxValue` | 8.0f | Max value clamped in ps_1_x |
+| `PixelShader1xMaxValue` | 1024.0f | Value reported by `makeDefaultCaps()` |
 
 ### D3DPSHADERCAPS2_0 (PS 2.0 extended caps)
 
@@ -86,10 +85,10 @@ are implementation guidance for the normative rules in
 | `MaxTextureWidth` | 16384 | Query `[device maxTextureSize]`; min report 8192 |
 | `MaxTextureHeight` | 16384 | |
 | `MaxVolumeExtent` | 2048 | 3D texture max dimension |
-| `MaxTextureRepeat` | 8192 | Max texture coordinate |
-| `MaxTextureAspectRatio` | 0 | 0 = no restriction |
+| `MaxTextureRepeat` | 32768 | Max texture coordinate |
+| `MaxTextureAspectRatio` | 16384 | |
 | `MaxTextureLODBias` | 16.0f | |
-| `MaxSimultaneousTextures` | 16 | Stages 0-15 |
+| `MaxSimultaneousTextures` | 8 | Fixed-function texture blend stages; the 16 pixel-shader sampler slots are a separate limit |
 | `MaxActiveLights` | 8 | Fixed-function lights |
 
 ## Render Targets
@@ -103,22 +102,22 @@ are implementation guidance for the normative rules in
 
 | Field | Value | Notes |
 |---|---|---|
-| `MaxStreams` | 16 | Stream sources 0-15 |
-| `MaxStreamStride` | 255 | Bytes per vertex element |
-| `MaxPrimitiveCount` | 16777215 | 2^24 - 1 |
+| `MaxStreams` | `kMaxStreams` (16) | Stream sources 0-15 |
+| `MaxStreamStride` | 1024 | Bytes per vertex element |
+| `MaxPrimitiveCount` | 5592405 | `0x555555` |
 | `MaxVertexIndex` | 16777215 | |
 | `MaxVertexBlendMatrices` | 4 | D3DVBF_3WEIGHTS |
-| `MaxVertexBlendMatrixIndex` | 255 | Indexed vertex blend |
+| `MaxVertexBlendMatrixIndex` | 0 | Indexed matrix-palette range is not advertised |
 | `FVFCaps` | D3DFVFCAPS_PSIZE \| (8 << D3DFVFCAPS_TEXCOORDCOUNTMASK) | Point size + 8 tex coord sets |
-| `VertexProcessingCaps` | TEXGEN \| MATERIALSOURCE7 \| DIRECTIONALLIGHTS \| POSITIONALLIGHTS \| LOCALVIEWER \| TWEENING | |
+| `VertexProcessingCaps` | TEXGEN \| MATERIALSOURCE7 \| DIRECTIONALLIGHTS \| POSITIONALLIGHTS \| LOCALVIEWER \| TEXGEN_SPHEREMAP (`0x13b`) | TWEENING is not advertised |
 
 ## Misc
 
 | Field | Value | Notes |
 |---|---|---|
-| `DevCaps` | EXECUTESYSTEMMEMORY \| TLVERTEXSYSTEMMEMORY \| TLVERTEXVIDEOMEMORY \| TEXTURESYSTEMMEMORY \| TEXTUREVIDEOMEMORY \| DRAWPRIMTLVERTEX \| CANRENDERAFTERFLIP \| HWRASTERIZATION \| HWTRANSFORMANDLIGHT \| PUREDEVICE \| QUINTICRTPATCHES \| RTPATCHES | |
-| `DevCaps2` | D3DDEVCAPS2_STREAMOFFSET \| D3DDEVCAPS2_DMAPNPATCH \| D3DDEVCAPS2_ADAPTIVETESSRTPATCH \| D3DDEVCAPS2_ADAPTIVETESSNPATCH \| D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES \| D3DDEVCAPS2_PRESAMPLEDDMAPNPATCH \| D3DDEVCAPS2_VERTEXELEMENTSCANSHARESTREAMOFFSET | |
-| `MaxPointSize` | 256.0f | |
+| `DevCaps` | EXECUTESYSTEMMEMORY \| EXECUTEVIDEOMEMORY \| TLVERTEXSYSTEMMEMORY \| TLVERTEXVIDEOMEMORY \| TEXTURESYSTEMMEMORY \| TEXTUREVIDEOMEMORY \| DRAWPRIMTLVERTEX \| CANRENDERAFTERFLIP \| DRAWPRIMITIVES2 \| DRAWPRIMITIVES2EX \| HWRASTERIZATION \| HWTRANSFORMANDLIGHT \| PUREDEVICE (`0x0019aff0`) | Patch/N-patch capability bits are not advertised |
+| `DevCaps2` | STREAMOFFSET \| CAN_STRETCHRECT_FROM_TEXTURES \| VERTEXELEMENTSCANSHARESTREAMOFFSET (`0x51`) | Displacement-map and adaptive-tessellation bits are not advertised |
+| `MaxPointSize` | 64.0f | Also used as the `D3DRS_POINTSIZE_MAX` initial value |
 | `MasterAdapterOrdinal` | 0 | |
 | `AdapterOrdinalInGroup` | 0 | |
 | `NumberOfAdaptersInGroup` | 1 | |

@@ -33,13 +33,13 @@ Severity legend (used uniformly across the file):
 | 🚫 | E_NOTIMPL / D3DERR_INVALIDCALL (honest failure) |
 | ❌ | silently dropped / undefined / dead-code |
 
-## Current status summary (2026-05-30)
+## Current status summary (2026-07-18)
 
 | Area | Current status |
 |---|---|
 | Silent actionable D3D9 coverage gaps | **None in the current silent-coverage track.** Known formerly-silent gaps are implemented, tested, accepted as no-op/shadow-only, or explicitly unsupported. |
 | Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
-| Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops, sampler border color, mip LOD bias, and max mip level are closed. |
+| Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops and initial getter values, sampler border color, mip LOD bias, and max mip level are closed. The complete non-dead render-state plus public TSS/sampler initial-value matrix is pinned by `dxmt9-state-draw-transform-spec`; the PE `test_texture_stage_states` scaffold now preserves the upstream initial-value checks instead of testing only Set/Get round-trips. |
 | Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the current fixed-function WVP path and limited programmable VS subset, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, `GetFrontBufferData`, `ComposeRects`, and convolution kernel. |
 | Remaining no-op/default stub surface | `SetDialogBoxMode`, `Set/GetClipStatus` clip-accumulation, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetNPatchMode`, `DeletePatch`, GPU thread priority, resource residency, and swapchain present stats use Wine-compatible no-op/default contracts rather than a real backend feature. |
 | Remaining validation work | Broader conformance Wine-run sweeps remain ongoing; the `ProcessVertices` M4x4 subset passed targeted PE singleton validation, while the expanded programmable scaffold and the P8/A8P8 fixed-function + ps_2_0 sampler readback scaffold, including cube `samplerCUBE` and volume `sampler3D` coverage, are build-covered. The latest stable app-local `visual_mvp_software_vp_policy` singleton reaches D3D with the ABI handshake OK and passes the expanded SWVP draw sections. Focused P8/A8P8 visual rerun is pending after the pre-transformed FFP half-pixel fix because the current Sikarugir conformance prefix fails the winemetal ABI/unixlib attach path before D3D9 loads; native P8/A8P8 expansion, matching UpdateTexture destination-palette re-expansion, mixed FFP-VS/programmable-PS texture orientation, and real Metal programmable P8/A8P8 draw readback gates pass. |
@@ -120,6 +120,9 @@ a `file:line` anchor checked against the live tree.
 | COM silent-`S_OK` stub gates — SetNPatchMode/GetNPatchMode, DeletePatch, Set/GetClipStatus (closed 2026-05-24) | D.* | `6f190b9`; conformance gates in `d3d9_device_misc.cpp` pin the documented no-op/INVALIDCALL contracts (compiles in the win32 PE build; Wine-run validation deferred). |
 | Shader dst modifiers `_SATURATE`, `_PARTIALPRECISION`, and `_MSAMPCENTROID` | A.6 | `_SATURATE` clamps destination values, `_PARTIALPRECISION` lowers through half precision, and `_MSAMPCENTROID` marks matching PS inputs as `[[centroid_perspective]]`; gate `shader_transform_spec.cpp:testD3DBCDestModifierPartialPrecisionLowering`, `testPs30CentroidInputModifierLowersToMslInterpolation`, and `test_visual_process_vertices_xyzhw_policy` |
 | `D3DRS_COLORVERTEX` FFP material-source gate | B.1 | `src/d3d9/core_draw.cpp:2169-2170`; gate `ffp_key_determinism_spec.cpp` |
+| D3D9 initial state defaults | B.1/B.2/B.3 | `DeviceState::reset()` now uses `FOGVERTEXMODE=NONE`, `FOGSTART=0.0f`, and full-width stencil masks; device construction/reset derives `ZENABLE` from `EnableAutoDepthStencil`; getter fallbacks expose FILLMODE, TEXTUREFACTOR, point/tessellation, and TSS ARG0 defaults without expanding hot draw snapshots. Full native matrix: `state_draw_transform_spec:testInitialD3D9StateMatrix`; PE TSS defaults: `test_texture_stage_states`. |
+| Missing NORMAL FFP lighting contract | B.1/B.5 | FFP MSL emits a zero lighting normal when the declaration has no NORMAL, including POSITIONT and no-layout fallback paths, so all light dot products are zero as required; gate `core_ffp_state_key_spec:testFixedFunctionDeclarationMissingInputsEmitD3DDefaults`. |
+| DITHER capability consistency | C.7 | `RasterCaps` no longer advertises `D3DPRASTERCAPS_DITHER` while `D3DRS_DITHERENABLE` remains shadow-only; `core_format_caps_spec` pins the R-CAPS-1 contract. |
 
 ### Remaining actionable gaps (verified still open)
 
@@ -568,8 +571,8 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 
 | RS name | Code | defined | PE-shadow | chunk | backend-read | test | Notes |
 |---|---|---|---|---|---|---|---|
-| ZENABLE | 7 | ✅ `core::RS_Z_ENABLE` (core_constants.hpp:385) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:231` (depthEnable) | ✅ ffp_key_determinism_spec / state_draw_transform_spec | Default 1 (core_state.cpp:165) |
-| FILLMODE | 8 | ✅ `kRsFillMode` (core_state.cpp:345) — file-static, no core_constants alias | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:542` (wireframe check) | ⚠️ no direct backend-key spec | Used by encoder triangleFillMode |
+| ZENABLE | 7 | ✅ `core::RS_Z_ENABLE` | ✅ | ⚠️ | ✅ depth key / encoder | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Initial FALSE without auto depth-stencil, TRUE with it |
+| FILLMODE | 8 | ✅ `core::RS_FILL_MODE` | ✅ | ⚠️ | ✅ encoder triangleFillMode | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Initial SOLID (3) |
 | SHADEMODE | 9 | ⚠️ inline literal `9u /*RS_SHADEMODE*/` (core_state.cpp:133) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default Gouraud (2). Shadowed/readable; Metal lacks per-primitive flat shading without code-gen change. |
 | (10 dead) | 10 | n/a | n/a | n/a | n/a | n/a | D3D9 unused |
 | (11 dead) | 11 | n/a | n/a | n/a | n/a | n/a | |
@@ -587,7 +590,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | ZFUNC | 23 | ✅ `core::RS_Z_FUNC` (core_constants.hpp:379) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:234` | ✅ state_draw_transform_spec | |
 | ALPHAREF | 24 | ✅ `core::RS_ALPHA_REF` (core_constants.hpp:354) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:191`, `dxmt9_pipeline_cache.cpp:716` | ⚠️ implicit via ffp key | Wire 0..255, FS receives /255.0f normalized |
 | ALPHAFUNC | 25 | ✅ `core::RS_ALPHA_FUNC` (core_constants.hpp:353) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:178` | ✅ ffp_key_determinism_spec:86 | |
-| DITHERENABLE | 26 | ⚠️ `kRsDitherEnable` (core_state.cpp:348) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default FALSE; Metal has no per-encoder dither toggle |
+| DITHERENABLE | 26 | ⚠️ `kRsDitherEnable` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec initial matrix + round-trip policy | Default FALSE; `RasterCaps` deliberately clears DITHER so this no-op is not advertised as implemented |
 | ALPHABLENDENABLE | 27 | ✅ `core::RS_ALPHABLEND_ENABLE` (core_constants.hpp:386) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:143` | ✅ blend_op_family_spec | |
 | FOGENABLE | 28 | ✅ `core::RS_FOG_ENABLE` (core_constants.hpp:355) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:179` | ⚠️ via ffp key | |
 | SPECULARENABLE | 29 | ✅ `core::RS_SPECULAR_ENABLE` (core_constants.hpp:347) | ✅ | ⚠️ | ✅ `core_draw.cpp:2152` (FFP key.specularEnabled) | ✅ ffp_key_determinism_spec:66 | |
@@ -597,7 +600,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | (33 dead) | 33 | n/a | n/a | n/a | n/a | n/a | |
 | FOGCOLOR | 34 | ✅ `core::RS_FOG_COLOR` (core_constants.hpp:356) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:189` | ⚠️ ffp_key | |
 | FOGTABLEMODE | 35 | ✅ `core::RS_FOG_TABLE_MODE` (core_constants.hpp:349) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:181` | ✅ ffp_key_determinism_spec:72 | |
-| FOGSTART | 36 | ✅ `core::RS_FOG_START` (core_constants.hpp:357) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:143,193` | ⚠️ | |
+| FOGSTART | 36 | ✅ `core::RS_FOG_START` | ✅ | ⚠️ | ✅ fog uniforms | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Default 0.0f |
 | FOGEND | 37 | ✅ `core::RS_FOG_END` (core_constants.hpp:358) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:145,195` | ⚠️ | |
 | FOGDENSITY | 38 | ✅ `core::RS_FOG_DENSITY` (core_constants.hpp:359) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:147,197` | ⚠️ | |
 | (39..47 dead) | 39-47 | n/a | n/a | n/a | n/a | n/a | nine unused slots |
@@ -611,9 +614,9 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | STENCILPASS | 55 | ✅ `core::RS_STENCIL_PASS` (core_constants.hpp:397) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:244` | ⚠️ | |
 | STENCILFUNC | 56 | ✅ `core::RS_STENCIL_FUNC` (core_constants.hpp:394) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:238` | ⚠️ | |
 | STENCILREF | 57 | ✅ `core::RS_STENCIL_REF` (core_constants.hpp:398) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:270` (`computeStencilRef`) | ✅ stencil_ref_spec (b8d31a9) | wired in b8d31a9 |
-| STENCILMASK | 58 | ✅ `core::RS_STENCIL_MASK` (core_constants.hpp:399) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:245` | ⚠️ | |
-| STENCILWRITEMASK | 59 | ✅ `core::RS_STENCIL_WRITEMASK` (core_constants.hpp:400) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:246` | ⚠️ | |
-| TEXTUREFACTOR | 60 | ✅ `core::RS_TEXTURE_FACTOR` (core_constants.hpp:408) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:172`, `chunk_replay.cpp:138` | ⚠️ | Uniform fed via draw uniforms |
+| STENCILMASK | 58 | ✅ `core::RS_STENCIL_MASK` | ✅ | ⚠️ | ✅ depth/stencil key | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Default 0xffffffff |
+| STENCILWRITEMASK | 59 | ✅ `core::RS_STENCIL_WRITEMASK` | ✅ | ⚠️ | ✅ depth/stencil key | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Default 0xffffffff |
+| TEXTUREFACTOR | 60 | ✅ `core::RS_TEXTURE_FACTOR` | ✅ | ⚠️ | ✅ FFP PS uniform | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix | Default opaque white (0xffffffff) |
 | (61..127 dead) | 61-127 | n/a | n/a | n/a | n/a | n/a | 67 unused slots |
 | WRAP0 | 128 | ⚠️ `kRsWrap0` (core_state.cpp:349) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | Shadowed/readable; no UV cylindrical-wrap lowering in Metal sampler path |
 | WRAP1 | 129 | ⚠️ `kRsWrap1` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
@@ -627,7 +630,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | LIGHTING | 137 | ✅ `core::RS_LIGHTING` (core_constants.hpp:346) | ✅ | ⚠️ | ✅ `core_draw.cpp:1916,2150` (FFP key.lightingEnabled) | ✅ ffp_key_determinism_spec:65 | |
 | (138 dead) | 138 | n/a | n/a | n/a | n/a | n/a | |
 | AMBIENT | 139 | ✅ `core::RS_AMBIENT` (core_constants.hpp:360) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:108` (uniform) | ⚠️ | |
-| FOGVERTEXMODE | 140 | ✅ `core::RS_FOG_FROM_VERTEX` (core_constants.hpp:350) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:148,185`, `core_draw.cpp:2181` | ✅ ffp_key_determinism_spec:73 | |
+| FOGVERTEXMODE | 140 | ✅ `core::RS_FOG_FROM_VERTEX` | ✅ | ⚠️ | ✅ fog resolution/key | ✅ state_draw_transform_spec:testInitialD3D9StateMatrix + ffp_key_determinism_spec | Default D3DFOG_NONE |
 | COLORVERTEX | 141 | ⚠️ `kRsColorVertex` (core_state.cpp:358) | ✅ | ⚠️ | ✅ `core_draw.cpp:makeFfpVertexKey` gates color material sources | ✅ ffp_key_determinism_spec; state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; FALSE forces FFP material sources to material constants |
 | LOCALVIEWER | 142 | ✅ `core::RS_LOCAL_VIEWER` | ✅ | ⚠️ | ✅ FFP specular and camera-space reflection texcoord generation select per-vertex or infinite-viewer formulas | ✅ core_ffp_state_key_spec:testFfpVertexCoordinateAndLightingContracts + ffp_key_determinism_spec | Default TRUE |
 | NORMALIZENORMALS | 143 | ✅ `core::RS_NORMALIZE_NORMALS` | ✅ | ⚠️ | ✅ transformed camera normal is normalized only for `TRUE`; lighting and generated normal/reflection texcoords share the result | ✅ core_ffp_state_key_spec:testFfpVertexCoordinateAndLightingContracts + ffp_key_determinism_spec | Default FALSE |
@@ -642,10 +645,10 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | CLIPPLANEENABLE | 152 | ✅ `core::RS_CLIP_PLANE_ENABLE` | ✅ | ⚠️ | ✅ drives clip-distance output while `D3DRS_CLIPPING=TRUE`; suppressed when clipping is disabled | ✅ ffp_key_determinism_spec + state_draw_transform_spec:testClippingFalseSuppressesUserClipPlanes | |
 | (153 dead) | 153 | n/a | n/a | n/a | n/a | n/a | |
 | POINTSIZE | 154 | ✅ `core::RS_POINTSIZE` | ✅ | ⚠️ | ✅ FFP and programmable VS without PSIZE/oPts use the uniform default | ✅ core_ffp_state_key_spec + core_shader_translator_spec + shader-runner FFP point readback | |
-| POINTSIZE_MIN | 155 | ✅ `core::RS_POINTSIZE_MIN` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ core_ffp_state_key_spec + core_shader_translator_spec | |
+| POINTSIZE_MIN | 155 | ✅ `core::RS_POINTSIZE_MIN` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ initial-state matrix + core_ffp_state_key_spec + core_shader_translator_spec | Default 1.0f |
 | POINTSPRITEENABLE | 156 | ✅ `core::RS_POINT_SPRITE_ENABLE` (core_constants.hpp:369) | ✅ | ⚠️ | ✅ `core_draw.cpp:2209,2253` (FFP key.pointSpriteEnabled), `ffp_shaders.cpp:736,812` | ⚠️ ef3ec91 (P1-4) | |
 | POINTSCALEENABLE | 157 | ✅ `core::RS_POINT_SCALE_ENABLE` (core_constants.hpp:370) | ✅ | ⚠️ | ✅ `core_draw.cpp:2212` (key.pointScaleEnabled) | ⚠️ ef3ec91 (P1-4) | |
-| POINTSCALE_A | 158 | ✅ `core::RS_POINTSCALE_A` (core_constants.hpp:371) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:161` (uniform) | ⚠️ ef3ec91 | |
+| POINTSCALE_A | 158 | ✅ `core::RS_POINTSCALE_A` | ✅ | ⚠️ | ✅ point uniform | ✅ initial-state matrix + core_ffp_state_key_spec | Default 1.0f |
 | POINTSCALE_B | 159 | ✅ `core::RS_POINTSCALE_B` (core_constants.hpp:372) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:163` | ⚠️ ef3ec91 | |
 | POINTSCALE_C | 160 | ✅ `core::RS_POINTSCALE_C` (core_constants.hpp:373) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:165` | ⚠️ ef3ec91 | |
 | MULTISAMPLEANTIALIAS | 161 | ⚠️ inline literal `161u` (core_state.cpp:134) | ✅ | ⚠️ | ❌ not consumed (Metal MSAA is per-attachment) | ❌ | Stateblock + default only |
@@ -653,7 +656,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | PATCHEDGESTYLE | 163 | ⚠️ `kRsPatchEdgeStyle` (core_state.cpp:362) | ✅ | ⚠️ | ❌ not consumed (no N-patch) | 🚫 | D3D9 N-patch — explicitly deferred |
 | (164 dead) | 164 | n/a | n/a | n/a | n/a | n/a | |
 | DEBUGMONITORTOKEN | 165 | ❌ not defined | ✅ shadow generic | ⚠️ | ❌ | ❌ | DEBUG-time only; no D3D9 behavior on retail |
-| POINTSIZE_MAX | 166 | ✅ `core::RS_POINTSIZE_MAX` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ core_ffp_state_key_spec + core_shader_translator_spec | |
+| POINTSIZE_MAX | 166 | ✅ `core::RS_POINTSIZE_MAX` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ initial-state matrix + core_ffp_state_key_spec + core_shader_translator_spec | Default `caps.MaxPointSize` (64.0f) |
 | INDEXEDVERTEXBLENDENABLE | 167 | ✅ `core::RS_INDEXED_VERTEX_BLEND_ENABLE` (core_constants.hpp:375); also `kRsIndexedVertexBlendEnable` alias | ✅ | ⚠️ | ✅ `core_draw.cpp:2203` (key.indexedVertexBlend) | ✅ ffp_key_determinism_spec:76,226 | |
 | COLORWRITEENABLE | 168 | ✅ `core::RS_COLOR_WRITE_ENABLE` (core_constants.hpp:384) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:162` | ⚠️ implicit via blend key | |
 | (169 dead) | 169 | n/a | n/a | n/a | n/a | n/a | |
@@ -720,8 +723,8 @@ Each entry below is replicated across stage 0..7 (8 stages × table). Backend-re
 | BUMPENVLOFFSET | 23 | ✅ `core::TSS_BUMPENVLOFFSET` (core_constants.hpp:423) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:210` | ⚠️ ebde43e | |
 | TEXTURETRANSFORMFLAGS | 24 | ✅ `core::TSS_TEXTURE_TRANSFORM_FLAGS` (core_constants.hpp:424) | ✅ | ⚠️ | ✅ `dxmt9_draw_encoder.mm:82` | ✅ ffp_key_determinism_spec:238, state_draw_transform_spec:620 | |
 | (25 dead) | 25 | n/a | n/a | n/a | n/a | n/a | |
-| COLORARG0 | 26 | ✅ `core::TSS_COLOR_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ ffp_triadic_msl_spec + GPU readbacks | Closed 2026-05-24; default `D3DTA_CURRENT` |
-| ALPHAARG0 | 27 | ✅ `core::TSS_ALPHA_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ ffp_triadic_msl_spec + GPU readbacks | Closed 2026-05-24; default `D3DTA_CURRENT` |
+| COLORARG0 | 26 | ✅ `core::TSS_COLOR_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ initial-state matrix + PE defaults + ffp_triadic_msl_spec + GPU readbacks | Default `D3DTA_CURRENT` |
+| ALPHAARG0 | 27 | ✅ `core::TSS_ALPHA_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ initial-state matrix + PE defaults + ffp_triadic_msl_spec + GPU readbacks | Default `D3DTA_CURRENT` |
 | RESULTARG | 28 | ✅ `core::TSS_RESULT_ARG` (core_constants.hpp:420) | ✅ | ⚠️ | ⚠️ pipeline-key bucketed (`ffp_key_determinism_spec:161` lists it) but no encoder branch on the value | ⚠️ | |
 | (29..31 dead) | 29-31 | n/a | n/a | n/a | n/a | n/a | |
 | CONSTANT | 32 | ✅ `core::TSS_CONSTANT` (core_constants.hpp:425) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:201` (uniform), `chunk_replay.cpp:143` | ⚠️ | |
@@ -1049,13 +1052,13 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 | DeviceType | NO (caller sets) | `DeviceType::Hal` (struct default) | OK | OK | not in `makeDefaultCaps`; comes from the Factory bootstrap and conformance asserts `D3DDEVTYPE_HAL`. |
 | AdapterOrdinal | NO | `0` (D9CCaps zero-init in `fillCCaps`) | warn | OK | tests check `caps.AdapterOrdinal` is `D3DADAPTER_DEFAULT (0)`. Acceptable on single-adapter Macs. |
 | Caps | OK | `0x00000000` (no `D3DCAPS_READ_SCANLINE`) | OK | NO | dxmt9 declines scanline-read. |
-| Caps2 | OK | `0x60020000` (CANMANAGERESOURCE | CANSHARERESOURCE | DYNAMICTEXTURES) | OK | NO | |
-| Caps3 | OK | `0x320` (COPY_TO_VIDMEM | COPY_TO_SYSTEMMEM | LINEAR_TO_SRGB_PRESENTATION) | OK | NO | |
+| Caps2 | OK | `0x60020000` (FULLSCREENGAMMA \| CANAUTOGENMIPMAP \| DYNAMICTEXTURES) | OK | NO | |
+| Caps3 | OK | `0x320` (ALPHA_FULLSCREEN_FLIP_OR_DISCARD \| COPY_TO_VIDMEM \| COPY_TO_SYSTEMMEM) | OK | NO | |
 | PresentationIntervals | OK | `0x80000001` (IMMEDIATE | ONE) | OK | NO | matches the `core_present.cpp` validator's TWO/THREE/FOUR acceptance only at validation level. |
 | CursorCaps | OK | `0x3` (COLOR | LOWRES) | OK | NO | |
 | DevCaps | OK | `0x0019aff0` | OK | NO | |
 | PrimitiveMiscCaps | OK | `0x002ecff2` | OK | OK | tested in `d3d9_conformance_device.c` cap-presence checks. |
-| RasterCaps | OK | `0x07332191` | OK | NO | |
+| RasterCaps | OK | `0x07332190` | OK | OK | DITHER deliberately clear under R-CAPS-8 while DITHERENABLE is shadow-only. |
 | ZCmpCaps | OK | `0xff` (all 8 comparison ops) | OK | NO | |
 | SrcBlendCaps | OK | `0x3fff` (full DX9 blend factor set) | OK | NO | |
 | DestBlendCaps | OK | `0x27ff` | OK | NO | |
@@ -1065,7 +1068,7 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 | TextureFilterCaps | OK | `0x07030700` | OK | NO | |
 | CubeTextureFilterCaps | OK | `0x07030700` | OK | NO | |
 | VolumeTextureFilterCaps | OK | `0x03030300` | OK | NO | |
-| TextureAddressCaps | OK | `0x1f` (WRAP/MIRROR/CLAMP/BORDER/MIRRORONCE) | OK | NO | |
+| TextureAddressCaps | OK | `0x1f` (WRAP/MIRROR/CLAMP/BORDER/INDEPENDENTUV) | OK | NO | MIRRORONCE (`0x20`) is not advertised. |
 | VolumeTextureAddressCaps | OK | `0x1f` | OK | NO | |
 | LineCaps | OK | `0x1f` | OK | OK | tested via `caps.LineCaps`. |
 | MaxTextureWidth | OK | `min(16384, limits.maxTextureSize)` | OK | OK | tested as >= 1. |
@@ -1084,7 +1087,7 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 | MaxSimultaneousTextures | OK | `8` (kMaxRenderTargets-ish const) | OK | OK | |
 | VertexProcessingCaps | OK | `0x0000013b` | OK | NO | |
 | MaxActiveLights | OK | `kMaxLights` | OK | OK | tested. |
-| MaxUserClipPlanes | default | `6` | OK | OK | tested. |
+| MaxUserClipPlanes | OK | `8` | OK | OK | Explicitly assigned by `makeDefaultCaps`; matches core clip-plane storage. |
 | MaxVertexBlendMatrices | default | `4` | OK | NO | |
 | MaxVertexBlendMatrixIndex | OK | `0` (writes the same value as default) | OK | NO | |
 | MaxPointSize | OK | `64.0f` | OK | NO | |
@@ -1096,7 +1099,7 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 | MaxVertexShaderConst | OK | `kMaxVertexConstants` (256) | OK | OK | tested via SetVertexShaderConstantF bounds check. |
 | PixelShaderVersion | OK | `0xffff0300` (ps_3_0) | OK | OK | tested. |
 | PixelShader1xMaxValue | OK | `1024.0f` | OK | NO | |
-| DevCaps2 | OK | `0x51` (STREAMOFFSET | VERTEXELEMENTSCANSHARESTREAMOFFSET | PRESAMPLEDDMAPNPATCH) | OK | NO | |
+| DevCaps2 | OK | `0x51` (STREAMOFFSET \| CAN_STRETCHRECT_FROM_TEXTURES \| VERTEXELEMENTSCANSHARESTREAMOFFSET) | OK | NO | No displacement-map or adaptive-tessellation bits. |
 | MaxNpatchTessellationLevel | NO | `0.0f` (D9CCaps zero-init, never set) | warn | NO | dxmt9 has no n-patch path; acceptable zero. |
 | Reserved5 | NO | `0` (zero-init) | OK | NO | reserved field — D3D9 ignores. |
 | MasterAdapterOrdinal | NO | `0` (struct default, never overridden) | OK | NO | acceptable on single-adapter Macs. |

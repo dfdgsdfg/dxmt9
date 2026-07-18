@@ -146,14 +146,14 @@ void DeviceState::reset() {
   renderStates.set(RS_SPECULAR_ENABLE, 0);
   renderStates.set(RS_NORMALIZE_NORMALS, 0);
   renderStates.set(RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None));
-  renderStates.set(RS_FOG_FROM_VERTEX, 1);
+  renderStates.set(RS_FOG_FROM_VERTEX, static_cast<u32>(FogMode::None));
   renderStates.set(RS_RANGE_FOG, 0);
   renderStates.set(RS_ALPHA_TEST_ENABLE, 0);
   renderStates.set(RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always));
   renderStates.set(RS_ALPHA_REF, 0);
   renderStates.set(RS_FOG_ENABLE, 0);
   renderStates.set(RS_FOG_COLOR, 0);
-  renderStates.set(RS_FOG_START, std::bit_cast<u32>(1.0f));
+  renderStates.set(RS_FOG_START, std::bit_cast<u32>(0.0f));
   renderStates.set(RS_FOG_END, std::bit_cast<u32>(1.0f));
   renderStates.set(RS_FOG_DENSITY, std::bit_cast<u32>(1.0f));
   renderStates.set(RS_AMBIENT, 0);
@@ -190,15 +190,15 @@ void DeviceState::reset() {
   renderStates.set(RS_STENCIL_ZFAIL, static_cast<u32>(StencilOp::Keep));
   renderStates.set(RS_STENCIL_PASS, static_cast<u32>(StencilOp::Keep));
   renderStates.set(RS_STENCIL_REF, 0);
-  renderStates.set(RS_STENCIL_MASK, 0xffu);
-  renderStates.set(RS_STENCIL_WRITEMASK, 0xffu);
+  renderStates.set(RS_STENCIL_MASK, 0xffffffffu);
+  renderStates.set(RS_STENCIL_WRITEMASK, 0xffffffffu);
   renderStates.set(RS_STENCIL_CCW_FUNC, static_cast<u32>(CompareFunc::Always));
   renderStates.set(RS_STENCIL_CCW_FAIL, static_cast<u32>(StencilOp::Keep));
   renderStates.set(RS_STENCIL_CCW_ZFAIL, static_cast<u32>(StencilOp::Keep));
   renderStates.set(RS_STENCIL_CCW_PASS, static_cast<u32>(StencilOp::Keep));
   renderStates.set(RS_STENCIL_CCW_REF, 0);
-  renderStates.set(RS_STENCIL_CCW_MASK, 0xffu);
-  renderStates.set(RS_STENCIL_CCW_WRITEMASK, 0xffu);
+  renderStates.set(RS_STENCIL_CCW_MASK, 0xffffffffu);
+  renderStates.set(RS_STENCIL_CCW_WRITEMASK, 0xffffffffu);
 
   for (size_t stageIndex = 0; stageIndex < textureStageStates.size();
        ++stageIndex) {
@@ -816,7 +816,33 @@ u32 Device::getRenderState(u32 key) const {
       it != state_.renderStates.end()) {
     return it->second;
   }
-  return 0;
+
+  // D3D9 initial-state values that are intentionally not materialized in
+  // DeviceState::renderStates. Keeping these as getter fallbacks avoids
+  // expanding every hot draw snapshot with values whose backend consumers
+  // already use the same defaults.
+  switch (key) {
+  case RS_FILL_MODE:
+    return 3u;  // D3DFILL_SOLID.
+  case RS_TEXTURE_FACTOR:
+    return 0xffffffffu;
+  case RS_POINTSIZE:
+  case RS_POINTSIZE_MIN:
+  case RS_POINTSCALE_A:
+    return std::bit_cast<u32>(1.0f);
+  case RS_POINTSIZE_MAX:
+    return std::bit_cast<u32>(caps_.maxPointSize);
+  case kRsPositionDegree:
+    return 3u;  // D3DDEGREE_CUBIC.
+  case kRsNormalDegree:
+    return 1u;  // D3DDEGREE_LINEAR.
+  case kRsMinTessellationLevel:
+  case kRsMaxTessellationLevel:
+  case kRsAdaptiveTessZ:
+    return std::bit_cast<u32>(1.0f);
+  default:
+    return 0;
+  }
 }
 
 f32 Device::getRenderStateFloat(u32 key, f32 defaultValue) const {
@@ -844,7 +870,28 @@ u32 Device::getTextureStageState(u32 stage, u32 key) const {
   if (auto it = map.find(key); it != map.end()) {
     return it->second;
   }
-  return 0;
+
+  switch (key) {
+  case TSS_COLOR_OP:
+    return static_cast<u32>(stage == 0 ? TextureOp::Modulate
+                                       : TextureOp::Disable);
+  case TSS_COLOR_ARG1:
+  case TSS_ALPHA_ARG1:
+    return 2u;  // D3DTA_TEXTURE.
+  case TSS_COLOR_ARG2:
+  case TSS_ALPHA_ARG2:
+  case TSS_COLOR_ARG0:
+  case TSS_ALPHA_ARG0:
+  case TSS_RESULT_ARG:
+    return 1u;  // D3DTA_CURRENT.
+  case TSS_ALPHA_OP:
+    return static_cast<u32>(stage == 0 ? TextureOp::SelectArg1
+                                       : TextureOp::Disable);
+  case TSS_TEXCOORD_INDEX:
+    return stage;
+  default:
+    return 0;
+  }
 }
 
 HResult Device::setSamplerState(u32 sampler, u32 key, u32 value) {

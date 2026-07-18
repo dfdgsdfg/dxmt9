@@ -667,7 +667,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.secondaryColor = "
           << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
-    out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    // D3D9 lighting contract: a vertex without NORMAL contributes a zero
+    // normal dot product. POSITIONT declarations cannot carry an FFP normal.
+    out << "  float3 dxmt9_lightingNormal = float3(0.0f);\n";
     // Point/Spot lighting (D3D9 §B.5) references dxmt9_cameraPosition;
     // pre-transformed vertices have no transformable camera-space
     // position, so we emit a zero stand-in. D3D9 apps that ship XYZRHW
@@ -714,7 +716,8 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     if (layout->hasNormal) {
       out << "  float3 inNormal = dxmt9_load_f32x3(stream0, base + " << layout->normalOffset << "u);\n";
     } else {
-      out << "  float3 inNormal = float3(0.0f, 0.0f, 1.0f);\n";
+      // D3DRS_LIGHTING specifies dot(N, L) == 0 when NORMAL is absent.
+      out << "  float3 inNormal = float3(0.0f);\n";
     }
     out << "  float4 dxmt9_cameraPosition;\n";
     out << "  dxmt9_cameraPosition.x = dot(float4(ffpVs.ffpWorldView[0].x, ffpVs.ffpWorldView[1].x,\n";
@@ -848,7 +851,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "  float dxmt9_cameraNormalLength = length(dxmt9_cameraNormal);\n";
     out << "  float3 dxmt9_cameraUnitNormal = dxmt9_cameraNormalLength > 1.0e-8f"
            " ? dxmt9_cameraNormal / dxmt9_cameraNormalLength"
-           " : float3(0.0f, 0.0f, 1.0f);\n";
+           " : float3(0.0f);\n";
     out << "  out.position = clip;\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
@@ -912,7 +915,7 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.secondaryColor = "
           << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
-    out << "  float3 dxmt9_lightingNormal = float3(0.0f, 0.0f, 1.0f);\n";
+    out << "  float3 dxmt9_lightingNormal = float3(0.0f);\n";
     // Fallback (no vertex layout) path: emit a zero camera position so
     // Point/Spot lighting (D3D9 §B.5) compiles even when no real
     // geometry stream is bound.

@@ -601,7 +601,10 @@ DeviceCaps makeDefaultCaps(const BackendLimits &limits) {
   constexpr u32 kCaps3 = 0x00000020u | 0x00000100u | 0x00000200u;
   constexpr u32 kCursorCaps = 0x00000001u | 0x00000002u;
   constexpr u32 kPrimitiveMiscCaps = 0x002ecff2u;
-  constexpr u32 kRasterCaps = 0x07332191u;
+  // D3DRS_DITHERENABLE is accepted as a shadow-only compatibility state;
+  // do not advertise D3DPRASTERCAPS_DITHER until a real output dither path
+  // exists (R-CAPS-1, R-CAPS-8).
+  constexpr u32 kRasterCaps = 0x07332190u;
   constexpr u32 kCmpCaps = 0x000000ffu;
   constexpr u32 kShadeCaps =
       0x00000008u | 0x00000200u | 0x00004000u | 0x00080000u;

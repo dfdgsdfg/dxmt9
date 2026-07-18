@@ -413,7 +413,7 @@ void testVertexKeySensitiveToPerLightType() {
 // and the canonical builders. We do NOT compare a brace-init key against
 // a builder output here -- the builder picks up `DeviceState::reset()`
 // defaults (e.g. `RS_DIFFUSE_MATERIAL_SOURCE = 1`, `RS_FOG_FROM_VERTEX =
-// 1`, `Light::type = Directional` on every entry) that a minimal
+// D3DFOG_NONE`, `Light::type = Directional` on every entry) that a minimal
 // brace-init would not mirror; that lockstep is the brace-init author's
 // responsibility, not the builder's. The invariant guarded here is just
 // "two structurally-equal keys are operator==-equal across N rounds."

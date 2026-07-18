@@ -1081,6 +1081,176 @@ void testAcceptedRenderStateRoundTripPolicies() {
   }
 }
 
+// Wine D3D9 behavioral oracles:
+//   dlls/d3d9/tests/stateblock.c:render_state_default_data_init
+//   dlls/d3d9/tests/device.c:test_texture_stage_states
+// This is the complete non-dead D3D9 initial render-state matrix plus every
+// public texture-stage and sampler default. Point size is driver-dependent;
+// dxmt9 exposes the same 1.0f value its FFP/programmable fallback consumes.
+void testInitialD3D9StateMatrix() {
+  auto backend = std::make_shared<dxmt9::core::spec::RecordingBackend>();
+  BackendLimits limits{};
+  limits.maxColorAttachments = kMaxRenderTargets;
+  Factory factory(limits, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 32;
+  params.backBufferHeight = 32;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  params.deviceWindow = Handle{0x5153};
+  params.enableAutoDepthStencil = false;
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "initial-state matrix device creation");
+
+  constexpr u32 f0 = std::bit_cast<u32>(0.0f);
+  constexpr u32 f1 = std::bit_cast<u32>(1.0f);
+  const auto renderDefaults = std::to_array<std::pair<u32, u32>>({
+      {RS_Z_ENABLE, 0u},
+      {RS_FILL_MODE, 3u},                         // D3DFILL_SOLID.
+      {9u, 2u},                                   // SHADEMODE = GOURAUD.
+      {RS_Z_WRITE_ENABLE, 1u},
+      {RS_ALPHA_TEST_ENABLE, 0u},
+      {16u, 1u},                                  // LASTPIXEL.
+      {RS_SRC_BLEND, static_cast<u32>(BlendFactor::One)},
+      {RS_DEST_BLEND, static_cast<u32>(BlendFactor::Zero)},
+      {RS_CULL_MODE, static_cast<u32>(CullMode::Ccw)},
+      {RS_Z_FUNC, static_cast<u32>(CompareFunc::LessEqual)},
+      {RS_ALPHA_REF, 0u},
+      {RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always)},
+      {26u, 0u},                                  // DITHERENABLE.
+      {RS_ALPHABLEND_ENABLE, 0u},
+      {RS_FOG_ENABLE, 0u},
+      {RS_SPECULAR_ENABLE, 0u},
+      {RS_FOG_COLOR, 0u},
+      {RS_FOG_TABLE_MODE, static_cast<u32>(FogMode::None)},
+      {RS_FOG_START, f0},
+      {RS_FOG_END, f1},
+      {RS_FOG_DENSITY, f1},
+      {RS_RANGE_FOG, 0u},
+      {RS_STENCIL_ENABLE, 0u},
+      {RS_STENCIL_FAIL, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_ZFAIL, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_PASS, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_FUNC, static_cast<u32>(CompareFunc::Always)},
+      {RS_STENCIL_REF, 0u},
+      {RS_STENCIL_MASK, 0xffffffffu},
+      {RS_STENCIL_WRITEMASK, 0xffffffffu},
+      {RS_TEXTURE_FACTOR, 0xffffffffu},
+      {RS_WRAP0, 0u}, {RS_WRAP1, 0u}, {RS_WRAP2, 0u}, {RS_WRAP3, 0u},
+      {RS_WRAP4, 0u}, {RS_WRAP5, 0u}, {RS_WRAP6, 0u}, {RS_WRAP7, 0u},
+      {RS_CLIPPING, 1u},
+      {RS_LIGHTING, 1u},
+      {RS_AMBIENT, 0u},
+      {RS_FOG_FROM_VERTEX, static_cast<u32>(FogMode::None)},
+      {141u, 1u},                                 // COLORVERTEX.
+      {RS_LOCAL_VIEWER, 1u},
+      {RS_NORMALIZE_NORMALS, 0u},
+      {RS_DIFFUSE_MATERIAL_SOURCE, 1u},           // D3DMCS_COLOR1.
+      {RS_SPECULAR_MATERIAL_SOURCE, 2u},          // D3DMCS_COLOR2.
+      {RS_AMBIENT_MATERIAL_SOURCE, 0u},           // D3DMCS_MATERIAL.
+      {RS_EMISSIVE_MATERIAL_SOURCE, 0u},
+      {RS_VERTEX_BLEND, 0u},
+      {RS_CLIP_PLANE_ENABLE, 0u},
+      {RS_POINTSIZE, f1},
+      {RS_POINTSIZE_MIN, f1},
+      {RS_POINT_SPRITE_ENABLE, 0u},
+      {RS_POINT_SCALE_ENABLE, 0u},
+      {RS_POINTSCALE_A, f1},
+      {RS_POINTSCALE_B, f0},
+      {RS_POINTSCALE_C, f0},
+      {161u, 1u},                                 // MULTISAMPLEANTIALIAS.
+      {162u, 0xffffffffu},                        // MULTISAMPLEMASK.
+      {163u, 0u},                                 // PATCHEDGESTYLE = DISCRETE.
+      {RS_POINTSIZE_MAX, std::bit_cast<u32>(device->caps().maxPointSize)},
+      {RS_INDEXED_VERTEX_BLEND_ENABLE, 0u},
+      {RS_COLOR_WRITE_ENABLE, 0x0fu},
+      {170u, f0},                                 // TWEENFACTOR.
+      {RS_BLEND_OP, static_cast<u32>(BlendOp::Add)},
+      {172u, 3u},                                 // POSITIONDEGREE = CUBIC.
+      {173u, 1u},                                 // NORMALDEGREE = LINEAR.
+      {RS_SCISSOR_TEST_ENABLE, 0u},
+      {RS_SLOPE_SCALE_DEPTH_BIAS, f0},
+      {176u, 0u},                                 // ANTIALIASEDLINEENABLE.
+      {178u, f1},                                 // MINTESSELLATIONLEVEL.
+      {179u, f1},                                 // MAXTESSELLATIONLEVEL.
+      {180u, f0},                                 // ADAPTIVETESS_X.
+      {RS_ADAPTIVETESS_Y, f0},
+      {182u, f1},                                 // ADAPTIVETESS_Z.
+      {183u, f0},                                 // ADAPTIVETESS_W.
+      {184u, 0u},                                 // ENABLEADAPTIVETESSELLATION.
+      {RS_TWO_SIDED_STENCIL_MODE, 0u},
+      {RS_STENCIL_CCW_FAIL, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_CCW_ZFAIL, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_CCW_PASS, static_cast<u32>(StencilOp::Keep)},
+      {RS_STENCIL_CCW_FUNC, static_cast<u32>(CompareFunc::Always)},
+      {RS_COLOR_WRITE_ENABLE1, 0x0fu},
+      {RS_COLOR_WRITE_ENABLE2, 0x0fu},
+      {RS_COLOR_WRITE_ENABLE3, 0x0fu},
+      {RS_BLEND_FACTOR, 0xffffffffu},
+      {RS_SRGB_WRITE_ENABLE, 0u},
+      {RS_DEPTH_BIAS, f0},
+      {RS_WRAP8, 0u}, {RS_WRAP9, 0u}, {RS_WRAP10, 0u}, {RS_WRAP11, 0u},
+      {RS_WRAP12, 0u}, {RS_WRAP13, 0u}, {RS_WRAP14, 0u}, {RS_WRAP15, 0u},
+      {RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u},
+      {RS_SRC_BLEND_ALPHA, static_cast<u32>(BlendFactor::One)},
+      {RS_DEST_BLEND_ALPHA, static_cast<u32>(BlendFactor::Zero)},
+      {RS_BLEND_OP_ALPHA, static_cast<u32>(BlendOp::Add)},
+  });
+  for (const auto& [state, expected] : renderDefaults) {
+    checkEq(device->getRenderState(state), expected,
+            std::string("initial render-state matrix value, state=") +
+                std::to_string(state));
+  }
+
+  for (u32 stage = 0; stage < kMaxTextureStages; ++stage) {
+    const auto tssDefaults = std::to_array<std::pair<u32, u32>>({
+        {TSS_COLOR_OP, static_cast<u32>(stage == 0 ? TextureOp::Modulate
+                                                   : TextureOp::Disable)},
+        {TSS_COLOR_ARG1, 2u}, {TSS_COLOR_ARG2, 1u},
+        {TSS_ALPHA_OP, static_cast<u32>(stage == 0 ? TextureOp::SelectArg1
+                                                   : TextureOp::Disable)},
+        {TSS_ALPHA_ARG1, 2u}, {TSS_ALPHA_ARG2, 1u},
+        {TSS_BUMPENVMAT00, 0u}, {TSS_BUMPENVMAT01, 0u},
+        {TSS_BUMPENVMAT10, 0u}, {TSS_BUMPENVMAT11, 0u},
+        {TSS_TEXCOORD_INDEX, stage},
+        {TSS_BUMPENVLSCALE, 0u}, {TSS_BUMPENVLOFFSET, 0u},
+        {TSS_TEXTURE_TRANSFORM_FLAGS, 0u},
+        {TSS_COLOR_ARG0, 1u}, {TSS_ALPHA_ARG0, 1u},
+        {TSS_RESULT_ARG, 1u}, {TSS_CONSTANT, 0u},
+    });
+    for (const auto& [state, expected] : tssDefaults) {
+      checkEq(device->getTextureStageState(stage, state), expected,
+              std::string("initial texture-stage-state matrix value, stage=") +
+                  std::to_string(stage) + ", state=" + std::to_string(state));
+    }
+  }
+
+  const auto samplerDefaults = std::to_array<std::pair<u32, u32>>({
+      {SAMP_ADDRESS_U, 1u}, {SAMP_ADDRESS_V, 1u}, {SAMP_ADDRESS_W, 1u},
+      {SAMP_BORDER_COLOR, 0u},
+      {SAMP_MAG_FILTER, 1u}, {SAMP_MIN_FILTER, 1u}, {SAMP_MIP_FILTER, 0u},
+      {SAMP_MIPMAP_LOD_BIAS, f0}, {SAMP_MAX_MIP_LEVEL, 0u},
+      {SAMP_MAX_ANISOTROPY, 1u}, {SAMP_SRGB_TEXTURE, 0u},
+      {SAMP_ELEMENT_INDEX, 0u}, {SAMP_DMAP_OFFSET, 0u},
+  });
+  for (u32 sampler = 0; sampler < kMaxSamplers; ++sampler) {
+    for (const auto& [state, expected] : samplerDefaults) {
+      checkEq(device->getSamplerState(sampler, state), expected,
+              std::string("initial sampler-state matrix value, sampler=") +
+                  std::to_string(sampler) + ", state=" + std::to_string(state));
+    }
+  }
+
+  params.deviceWindow = Handle{0x5154};
+  params.enableAutoDepthStencil = true;
+  params.autoDepthStencilFormat = Format::D24S8;
+  auto depthDevice = factory.createDevice(0, params);
+  check(depthDevice != nullptr, "auto-depth initial-state device creation");
+  checkEq(depthDevice->getRenderState(RS_Z_ENABLE), 1u,
+          "ZENABLE defaults TRUE when auto depth-stencil is created");
+}
+
 void testClipPlaneTransformPayloadAndMaskBounds() {
   DeviceState state;
   state.reset();
@@ -3049,6 +3219,7 @@ int main() {
   testClipPlaneLimitsAtCoreBoundary();
   testWrapRenderStateRoundTrip();
   testAcceptedRenderStateRoundTripPolicies();
+  testInitialD3D9StateMatrix();
   testClipPlaneTransformPayloadAndMaskBounds();
   testClippingFalseSuppressesUserClipPlanes();
   testConstantsAndShaderRefs();

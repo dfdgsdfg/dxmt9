@@ -48,3 +48,8 @@ well-formed sample counts return `D3DERR_NOTAVAILABLE` and handle
 `pQualityLevels` according to Wine-test-observed behaviour. Caps must not
 advertise a sample count that the backend cannot allocate for the requested
 format/windowed combination.
+
+**R-CAPS-8** `D3DPRASTERCAPS_DITHER` must remain clear while
+`D3DRS_DITHERENABLE` is accepted only as shadow state. The capability bit may be
+advertised only after the render backend implements observable output
+dithering.

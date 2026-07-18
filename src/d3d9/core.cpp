@@ -134,6 +134,8 @@ Device::Device(AdapterInfo adapter, BackendLimits limits,
       presentParameters_(normalizePresentParameters(adapter_, params)), behaviorFlags_(behaviorFlags),
       extendedDevice_(extendedDevice) {
   state_.reset();
+  state_.renderStates.set(RS_Z_ENABLE,
+                          presentParameters_.enableAutoDepthStencil ? 1u : 0u);
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};
@@ -285,6 +287,8 @@ HResult Device::resetValidated(const PresentParameters& params) {
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
   invalidateDefaultPoolResources();
   state_.reset();
+  state_.renderStates.set(RS_Z_ENABLE,
+                          presentParameters_.enableAutoDepthStencil ? 1u : 0u);
   const u32 width = std::max(1u, presentParameters_.backBufferWidth);
   const u32 height = std::max(1u, presentParameters_.backBufferHeight);
   state_.viewport = {0, 0, width, height, 0.0f, 1.0f};

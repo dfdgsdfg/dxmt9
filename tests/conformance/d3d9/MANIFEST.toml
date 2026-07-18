@@ -31,7 +31,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the factory validation group."
 
 [[case.evidence]]
@@ -350,7 +350,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the present-parameter validation group."
 
 [[case.evidence]]
@@ -597,7 +597,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the Ex create/reset validation group."
 
 [[case.evidence]]
@@ -1725,7 +1725,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the private-data resource wrapper group."
 
 [[case.evidence]]
@@ -2716,7 +2716,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the Ex shared-handle policy group."
 
 [[case.evidence]]
@@ -2795,7 +2795,7 @@ status = "failing"
 lane = "app-local"
 arch = "x64"
 status = "failing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "First device-backed app-local run reached the provider with failures in the creation-failure out-pointer group."
 
 [[case.evidence]]
@@ -3042,7 +3042,7 @@ status = "partial"
 lane = "app-local"
 arch = "x64"
 status = "passing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "Focused x64 app-local export runtime evidence passes; builtin and x86 evidence remain unrecorded."
 
 [[case]]
@@ -3066,7 +3066,7 @@ status = "partial"
 lane = "app-local"
 arch = "x64"
 status = "passing"
-source = "specs/gap.md:170"
+source = "specs/tests/gap.md:36"
 summary = "Focused x64 app-local auxiliary runtime evidence passes; QI/AddRef/Release/Begin/Instruction/End exercised. Builtin and x86 lanes scaffolded via shared executable, evidence collection pending."
 
 [[case]]

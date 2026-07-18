@@ -468,8 +468,11 @@ void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
   key.texCoordGen[0] = 0u;
   const auto source = dxmt9::ffp::makeFfpVertexSource(
       key, dxmt9::drawshader::makeShaderSourceContext(desc));
-  checkContains(source, "float3 inNormal = float3(0.0f, 0.0f, 1.0f);",
-                "missing NORMAL defaults to +Z normal");
+  checkContains(source, "float3 inNormal = float3(0.0f);",
+                "missing NORMAL produces zero D3D9 lighting dot products");
+  checkContains(source,
+                "dxmt9_cameraNormal / dxmt9_cameraNormalLength : float3(0.0f);",
+                "zero or missing NORMAL stays zero when normalization is enabled");
   checkContains(source, "out.color = float4(1.0);",
                 "missing COLOR0 defaults to white diffuse");
   checkContains(source, "out.secondaryColor = float4(0.0);",

@@ -84,6 +84,10 @@ void testFormatAndCaps() {
                                     kD3DPCMPCAPS_GREATEREQUAL |
                                     kD3DPCMPCAPS_ALWAYS;
   const auto &caps0 = factory.caps(0);
+  // R-CAPS-8: accepted shadow state is not equivalent to backend support.
+  constexpr u32 kD3DPRASTERCAPS_DITHER = 0x00000001u;
+  check((caps0.rasterCaps & kD3DPRASTERCAPS_DITHER) == 0u,
+        "RasterCaps must not advertise dithering while DITHERENABLE is shadow-only");
   check(caps0.alphaCmpCaps != 0u,
         "AlphaCmpCaps must be non-zero (zero GUID-equivalent for legacy apps)");
   check((caps0.alphaCmpCaps & kAlphaCmpRequired) == kAlphaCmpRequired,

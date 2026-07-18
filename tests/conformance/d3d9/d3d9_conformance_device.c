@@ -1486,6 +1486,28 @@ void test_texture_stage_states(const struct d3d9_api *api)
     {
         D3DTEXTURESTAGESTATETYPE state;
         DWORD value;
+    } default_cases[] =
+    {
+        {D3DTSS_COLORARG1, D3DTA_TEXTURE},
+        {D3DTSS_COLORARG2, D3DTA_CURRENT},
+        {D3DTSS_ALPHAARG1, D3DTA_TEXTURE},
+        {D3DTSS_ALPHAARG2, D3DTA_CURRENT},
+        {D3DTSS_BUMPENVMAT00, 0},
+        {D3DTSS_BUMPENVMAT01, 0},
+        {D3DTSS_BUMPENVMAT10, 0},
+        {D3DTSS_BUMPENVMAT11, 0},
+        {D3DTSS_BUMPENVLSCALE, 0},
+        {D3DTSS_BUMPENVLOFFSET, 0},
+        {D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE},
+        {D3DTSS_COLORARG0, D3DTA_CURRENT},
+        {D3DTSS_ALPHAARG0, D3DTA_CURRENT},
+        {D3DTSS_RESULTARG, D3DTA_CURRENT},
+        {D3DTSS_CONSTANT, 0},
+    };
+    static const struct
+    {
+        D3DTEXTURESTAGESTATETYPE state;
+        DWORD value;
     } cases[] =
     {
         {D3DTSS_COLOROP, D3DTOP_MODULATE},
@@ -1505,7 +1527,7 @@ void test_texture_stage_states(const struct d3d9_api *api)
     DWORD value;
     HWND window;
     HRESULT hr;
-    UINT i;
+    UINT i, stage;
 
     d3d9 = api->create9(D3D_SDK_VERSION);
     if (!d3d9)
@@ -1525,6 +1547,32 @@ void test_texture_stage_states(const struct d3d9_api *api)
 
     memset(&caps, 0, sizeof(caps));
     CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    /* Preserve the upstream oracle's initial-state coverage. The prior local
+     * scaffold only tested Set/Get round-trips and therefore missed absent
+     * COLORARG0 / ALPHAARG0 defaults. */
+    for (stage = 0; stage < caps.MaxTextureBlendStages; ++stage)
+    {
+        value = 0xdeadbeef;
+        CHECK_HR(IDirect3DDevice9_GetTextureStageState(device, stage,
+                D3DTSS_COLOROP, &value), D3D_OK);
+        CHECK_TRUE(value == (stage ? D3DTOP_DISABLE : D3DTOP_MODULATE));
+        value = 0xdeadbeef;
+        CHECK_HR(IDirect3DDevice9_GetTextureStageState(device, stage,
+                D3DTSS_ALPHAOP, &value), D3D_OK);
+        CHECK_TRUE(value == (stage ? D3DTOP_DISABLE : D3DTOP_SELECTARG1));
+        value = 0xdeadbeef;
+        CHECK_HR(IDirect3DDevice9_GetTextureStageState(device, stage,
+                D3DTSS_TEXCOORDINDEX, &value), D3D_OK);
+        CHECK_TRUE(value == stage);
+        for (i = 0; i < ARRAY_SIZE(default_cases); ++i)
+        {
+            value = 0xdeadbeef;
+            CHECK_HR(IDirect3DDevice9_GetTextureStageState(device, stage,
+                    default_cases[i].state, &value), D3D_OK);
+            CHECK_TRUE(value == default_cases[i].value);
+        }
+    }
 
     for (i = 0; i < ARRAY_SIZE(cases); ++i)
     {
