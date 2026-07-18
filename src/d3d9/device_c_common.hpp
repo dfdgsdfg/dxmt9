@@ -10,6 +10,7 @@
 // The header itself is intentionally not split — all three areas share the
 // devicec namespace and the D9C* wrapper structs declared below.
 
+#include "device_c_chunk_v2_registry.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
@@ -151,6 +152,7 @@ struct D9CDevice {
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
+  dxmt9::d3d9::WireObjectRegistry wireObjects;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
@@ -185,6 +187,7 @@ struct D9CSwapChain {
 struct D9CTexture {
   std::shared_ptr<dxmt9::core::Texture> obj;
   D9CDevice* device;
+  D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
   std::unordered_map<uint32_t, dxmt9::d3d9::devicec::ShadowLock> wow64Locks;
   std::unordered_set<uint32_t> lockedLevels;
@@ -195,7 +198,18 @@ struct D9CTexture {
   std::array<uint32_t, 256> p8Palette{};
 
   D9CTexture(std::shared_ptr<dxmt9::core::Texture> o, D9CDevice* d)
-      : obj(std::move(o)), device(d) {}
+      : obj(std::move(o)), device(d) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_TEXTURE, this);
+    }
+  }
+
+  ~D9CTexture() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresource);
@@ -203,6 +217,7 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;
   D9CDevice* device = nullptr;
+  D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
   D9CBufferDesc desc{};
@@ -214,11 +229,24 @@ struct D9CBuffer {
 
   explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o,
                      D9CDevice* d = nullptr)
-      : obj(std::move(o)), device(d) {}
+      : obj(std::move(o)), device(d) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_BUFFER, this);
+    }
+  }
+
+  ~D9CBuffer() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 struct D9CSurface {
   std::shared_ptr<dxmt9::core::Surface> obj;
+  D9CDevice* device{nullptr};
+  D9CWireObjectIdentity wireIdentity{};
   D9CTexture* ownerTex{nullptr};
   uint32_t ownerLevel = 0;
   std::atomic<uint32_t> refs{1};
@@ -228,26 +256,88 @@ struct D9CSurface {
 
   explicit D9CSurface(std::shared_ptr<dxmt9::core::Surface> o,
                       D9CTexture* owner = nullptr,
-                      uint32_t level = 0)
-      : obj(std::move(o)), ownerTex(owner), ownerLevel(level) {}
+                      uint32_t level = 0,
+                      D9CDevice* d = nullptr)
+      : obj(std::move(o)),
+        device(d ? d : owner ? owner->device : nullptr),
+        ownerTex(owner),
+        ownerLevel(level) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_SURFACE, this);
+    }
+  }
+
+  ~D9CSurface() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 struct D9CShader {
   dxmt9::core::ShaderRef ref;
   std::vector<uint32_t> bytecodeWords;
+  D9CDevice* device = nullptr;
+  D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
+
+  explicit D9CShader(D9CDevice* d = nullptr) : device(d) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_SHADER, this);
+    }
+  }
+
+  ~D9CShader() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 struct D9CVertexDecl {
   std::vector<dxmt9::core::VertexElement> elements;
   std::vector<D9CVertexElement> raw;
+  D9CDevice* device = nullptr;
+  D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
+
+  explicit D9CVertexDecl(D9CDevice* d = nullptr) : device(d) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, this);
+    }
+  }
+
+  ~D9CVertexDecl() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 struct D9CQuery {
   std::shared_ptr<dxmt9::core::Query> obj;
-  D9CDevice* device;
+  D9CDevice* device{nullptr};
+  D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
+
+  D9CQuery() = default;
+
+  D9CQuery(std::shared_ptr<dxmt9::core::Query> o, D9CDevice* d)
+      : obj(std::move(o)), device(d) {
+    if (device) {
+      wireIdentity = device->wireObjects.insert(
+          D9C_CHUNK_HANDLE_KIND_QUERY, this);
+    }
+  }
+
+  ~D9CQuery() {
+    if (device && wireIdentity.objectId != 0u) {
+      device->wireObjects.erase(wireIdentity, this);
+    }
+  }
 };
 
 struct D9CStateBlock {

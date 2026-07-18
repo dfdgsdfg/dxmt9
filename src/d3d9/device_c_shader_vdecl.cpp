@@ -33,7 +33,7 @@ extern "C" D9CShader* dxmt9c_device_create_vertex_shader(D9CDevice* d, const uin
   ref.bytecode = std::move(shaderBytecode);
   maybeDumpShaderBytecode("shader", bytecode, wordCount, ref.hash);
 
-  auto* shader = new D9CShader;
+  auto* shader = new D9CShader{d};
   shader->ref = std::move(ref);
   shader->bytecodeWords.assign(bytecode, bytecode + wordCount);
   return shader;
@@ -44,9 +44,9 @@ extern "C" D9CShader* dxmt9c_device_create_pixel_shader(D9CDevice* d, const uint
   return dxmt9c_device_create_vertex_shader(d, bytecode);
 }
 
-extern "C" D9CVertexDecl* dxmt9c_device_create_vertex_declaration(D9CDevice*,
+extern "C" D9CVertexDecl* dxmt9c_device_create_vertex_declaration(D9CDevice* d,
                                                                   const D9CVertexElement* elems) {
-  auto* decl = new D9CVertexDecl;
+  auto* decl = new D9CVertexDecl{d};
   for (const D9CVertexElement* element = elems;
        !(element->stream == 0xff && element->type == 17);
        ++element) {

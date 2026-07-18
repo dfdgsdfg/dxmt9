@@ -161,7 +161,7 @@ extern "C" D9CSurface* dxmt9c_swapchain_get_back_buffer(D9CSwapChain* s, uint32_
   if (!surface) {
     return nullptr;
   }
-  return new D9CSurface{surface};
+  return new D9CSurface{surface, nullptr, 0u, s->owner};
 }
 
 extern "C" D9CSurface* dxmt9c_swapchain_get_depth_stencil(D9CSwapChain* s) {
@@ -169,7 +169,7 @@ extern "C" D9CSurface* dxmt9c_swapchain_get_depth_stencil(D9CSwapChain* s) {
   if (!surface) {
     return nullptr;
   }
-  return new D9CSurface{surface};
+  return new D9CSurface{surface, nullptr, 0u, s->owner};
 }
 
 extern "C" int32_t dxmt9c_swapchain_get_present_params(D9CSwapChain* s, D9CPresentParams* out) {

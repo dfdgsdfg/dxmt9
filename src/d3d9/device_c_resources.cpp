@@ -634,7 +634,7 @@ extern "C" D9CSurface* dxmt9c_device_create_render_target(D9CDevice* d, uint32_t
   if (!surf) {
     return nullptr;
   }
-  auto* out = new D9CSurface{surf};
+  auto* out = new D9CSurface{surf, nullptr, 0u, d};
   out->sharedOpened = static_cast<bool>(sharedSource);
   if (sharedHandle && *sharedHandle == 0u) {
     std::lock_guard lock(gSharedResourceMutex);
@@ -675,7 +675,7 @@ extern "C" D9CSurface* dxmt9c_device_create_depth_stencil(D9CDevice* d, uint32_t
   if (!surf) {
     return nullptr;
   }
-  auto* out = new D9CSurface{surf};
+  auto* out = new D9CSurface{surf, nullptr, 0u, d};
   out->sharedOpened = static_cast<bool>(sharedSource);
   if (sharedHandle && *sharedHandle == 0u) {
     std::lock_guard lock(gSharedResourceMutex);
@@ -715,7 +715,7 @@ extern "C" D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice* d, uint
   if (!surf) {
     return nullptr;
   }
-  auto* out = new D9CSurface{surf};
+  auto* out = new D9CSurface{surf, nullptr, 0u, d};
   out->sharedOpened = static_cast<bool>(sharedSource);
   if (sharedHandle && *sharedHandle == 0u) {
     std::lock_guard lock(gSharedResourceMutex);

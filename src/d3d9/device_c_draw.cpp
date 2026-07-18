@@ -144,7 +144,7 @@ extern "C" D9CSurface* dxmt9c_device_get_render_target(D9CDevice* d, uint32_t id
   }
   if (d->renderTargetExplicit[idx]) {
     auto surface = d->renderTargets[idx];
-    return surface ? new D9CSurface{surface} : nullptr;
+    return surface ? new D9CSurface{surface, nullptr, 0u, d} : nullptr;
   }
 
   auto swapChain = d->iface->GetSwapChain(0);
@@ -155,7 +155,7 @@ extern "C" D9CSurface* dxmt9c_device_get_render_target(D9CDevice* d, uint32_t id
   if (!surface) {
     return nullptr;
   }
-  return new D9CSurface{surface};
+  return new D9CSurface{surface, nullptr, 0u, d};
 }
 
 extern "C" int32_t dxmt9c_device_set_depth_stencil(D9CDevice* d, D9CSurface* surf) {
@@ -171,7 +171,7 @@ extern "C" D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice* d) {
   if (!surface) {
     return nullptr;
   }
-  return new D9CSurface{surface};
+  return new D9CSurface{surface, nullptr, 0u, d};
 }
 
 extern "C" int32_t dxmt9c_device_draw_primitive(D9CDevice* d, uint32_t type,
