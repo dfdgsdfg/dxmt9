@@ -1487,6 +1487,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       // (spec.md §11.4). Re-alias `vsConsts`/`ffpVs` references off
       // the argbuf so downstream emission continues to read by name.
       out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
+      out << "                     uint iid [[instance_id]],\n";
       out << "                     constant ArgbufLayout& abuf [[buffer("
           << kArgbufHybridBindSlot << ")]],\n";
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
@@ -1497,6 +1498,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "  constant FfpVsConsts& ffpVs = *abuf.ffpVs;\n";
     } else {
       out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]],\n";
+      out << "                     uint iid [[instance_id]],\n";
       out << "                     constant VsConsts& vsConsts [[buffer(0)]],\n";
       out << "                     device const uchar* stream0 [[buffer(1)]],\n";
       emitExtraVertexStreamParameters(out, inputLayout);
@@ -1659,7 +1661,12 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           continue;
         }
         out << "  const uint stride" << stream << " = " << inputLayout->streamStrides[stream] << "u;\n";
-        out << "  const uint base" << stream << " = uint(vertexIndex) * stride" << stream << ";\n";
+        out << "  const uint element" << stream
+            << " = drawVolatile.streamInstanceDivisors[" << stream
+            << "] != 0u ? iid / drawVolatile.streamInstanceDivisors["
+            << stream << "] : uint(vertexIndex);\n";
+        out << "  const uint base" << stream << " = element" << stream
+            << " * stride" << stream << ";\n";
       }
       for (size_t i = 0; i < inputLayout->inputs.size(); ++i) {
         const auto& binding = inputLayout->inputs[i];
@@ -2564,7 +2571,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   }
   const u32 colorOutputCount = pixelColorOutputCount(module);
   const bool writesDepth = pixelWritesDepth(module);
-  const bool usesFragmentOutStruct = colorOutputCount > 1u || writesDepth;
+  // D3DRS_MULTISAMPLEMASK is per draw, so every fragment variant returns a
+  // sample-mask semantic alongside its color/depth outputs.
+  const bool usesFragmentOutStruct = true;
   // H228 — the alpha-test tail is a SINGLE shader variant: always emitted
   // (unless the DXMT_DISABLE_ALPHA_TEST debug strip removes it) and evaluated
   // from the per-draw FsVolatile immediate at fragment buffer 5 instead of
@@ -2593,7 +2602,19 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     if (writesDepth) {
       out << "  float depth [[depth(any)]];\n";
     }
+    out << "  uint sampleMask [[sample_mask]];\n";
     out << "};\n";
+    out << "inline FSOut dxmt9_make_fs_out(float4 color, uint sampleMask) {\n";
+    out << "  FSOut result;\n";
+    for (u32 i = 0; i < colorOutputCount; ++i) {
+      out << "  result.color" << i << " = color;\n";
+    }
+    if (writesDepth) {
+      out << "  result.depth = 0.0f;\n";
+    }
+    out << "  result.sampleMask = sampleMask;\n";
+    out << "  return result;\n";
+    out << "}\n";
   }
 
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): per-sampler mip LOD bias is applied
@@ -2623,9 +2644,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   // (struct declared in the shared prelude; slot 5 mirrors the vertex
   // DrawVolatile lane and stays direct in every argbuf mode).
   auto emitFsVolatileParameter = [&] {
-    if (emitAlphaTestTail) {
-      out << ",\n                     constant FsVolatile& fsVolatile [[buffer(5)]]";
-    }
+    out << ",\n                     constant FsVolatile& fsVolatile [[buffer(5)]]";
   };
   if (textured) {
     if (fragmentArgbufResourceArray) {
@@ -2732,6 +2751,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       if (writesDepth) {
         out << "  result.depth = in.position.z;\n";
       }
+      out << "  result.sampleMask = fsVolatile.sampleMask;\n";
       out << "  return result;\n";
     } else {
       out << "  return " << valueExpr << ";\n";
@@ -3046,7 +3066,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
     }
     if (instruction.opcode == kDXMT9_INTERNAL_CALL_RET) {
       if (callReturnStack.empty()) {
-        out << "  return color;\n";
+        out << "  return dxmt9_make_fs_out(color, fsVolatile.sampleMask);\n";
       } else {
         out << "  " << callReturnStack.back() << " = true;\n";
       }
@@ -3088,7 +3108,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           out << "  }\n";
         }
       } else {
-        out << "  return color;\n";
+        out << "  return dxmt9_make_fs_out(color, fsVolatile.sampleMask);\n";
       }
       continue;
     }
@@ -3819,6 +3839,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
 		    if (writesDepth) {
 		      out << "  result.depth = outDepth;\n";
 		    }
+		    out << "  result.sampleMask = fsVolatile.sampleMask;\n";
 		    out << "  return result;\n";
 		  } else {
 	    out << "  return color;\n";

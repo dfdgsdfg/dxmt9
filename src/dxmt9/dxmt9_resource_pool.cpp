@@ -310,6 +310,34 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
   return handle;
 }
 
+bool Pool::exportSharedBuffer(core::BufferHandle handle,
+                              SharedBufferBacking& out) const {
+  return bufferArena_.inspect(handle.value, [&](const BufferRecord& record) {
+    out.buffer = record.buffer;
+    out.contents = record.contents;
+  });
+}
+
+core::BufferHandle Pool::importSharedBuffer(const core::BufferDesc& desc,
+                                             const SharedBufferBacking& backing) {
+  if (!backing.buffer) {
+    return {};
+  }
+  BufferRecord record;
+  record.desc = desc;
+  record.buffer = backing.buffer;
+  record.contents = backing.contents;
+  record.shadow.resize(static_cast<std::size_t>(desc.size));
+  const auto handle = bufferArena_.insert(std::move(record));
+  if (auto* stored = bufferArena_.find(handle.value); stored && stored->buffer) {
+    stored->buffer.setLabel(labels::makeLabelStringFmt(
+        "pool_shared_buf_h0x%llx_len%llu",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned long long>(desc.size)));
+  }
+  return handle;
+}
+
 core::TextureHandle Pool::createTexture(WMT::Device device,
                                           const core::BackendLimits& limits,
                                           const core::TextureDesc& desc) {
@@ -440,6 +468,39 @@ core::TextureHandle Pool::createTexture(WMT::Device device,
   return handle;
 }
 
+bool Pool::exportSharedTexture(core::TextureHandle handle,
+                               SharedTextureBacking& out) const {
+  return textureArena_.inspect(handle.value, [&](const TextureRecord& record) {
+    out.texture = record.texture;
+    out.shaderReadTexture = record.shaderReadTexture;
+    out.srgbShaderReadTexture = record.srgbShaderReadTexture;
+    out.needsStagingBlit = record.needsStagingBlit;
+    out.isManagedDiscrete = record.isManagedDiscrete;
+  });
+}
+
+core::TextureHandle Pool::importSharedTexture(const core::TextureDesc& desc,
+                                               const SharedTextureBacking& backing) {
+  if (!backing.texture) {
+    return {};
+  }
+  TextureRecord record;
+  record.desc = desc;
+  record.texture = backing.texture;
+  record.shaderReadTexture = backing.shaderReadTexture;
+  record.srgbShaderReadTexture = backing.srgbShaderReadTexture;
+  record.needsStagingBlit = backing.needsStagingBlit;
+  record.isManagedDiscrete = backing.isManagedDiscrete;
+  const auto handle = textureArena_.insert(std::move(record));
+  if (auto* stored = textureArena_.find(handle.value); stored && stored->texture) {
+    stored->texture.setLabel(labels::makeLabelStringFmt(
+        "pool_shared_tex_h0x%llx_fmt%u",
+        static_cast<unsigned long long>(handle.value),
+        static_cast<unsigned>(desc.format)));
+  }
+  return handle;
+}
+
 core::SurfaceHandle Pool::createSurface(WMT::Device device,
                                           const core::BackendLimits& limits,
                                           const core::SurfaceDesc& desc) {
@@ -521,6 +582,30 @@ core::SurfaceHandle Pool::createSurface(WMT::Device device,
     }
   }
   traceSurfaceCreate(handle, desc, stored && stored->texture);
+  return handle;
+}
+
+bool Pool::exportSharedSurface(core::SurfaceHandle handle,
+                               SharedSurfaceBacking& out) const {
+  return surfaceArena_.inspect(handle.value, [&](const SurfaceRecord& record) {
+    out.texture = record.texture;
+    out.srgbTexture = record.srgbTexture;
+    out.resolveTexture = record.resolveTexture;
+  });
+}
+
+core::SurfaceHandle Pool::importSharedSurface(const core::SurfaceDesc& desc,
+                                               const SharedSurfaceBacking& backing) {
+  if (!backing.texture && desc.format != core::Format::NullRt) {
+    return {};
+  }
+  SurfaceRecord record;
+  record.desc = desc;
+  record.texture = backing.texture;
+  record.srgbTexture = backing.srgbTexture;
+  record.resolveTexture = backing.resolveTexture;
+  const auto handle = surfaceArena_.insert(std::move(record));
+  traceSurfaceCreate(handle, desc, static_cast<bool>(backing.texture));
   return handle;
 }
 

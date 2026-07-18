@@ -217,6 +217,9 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
                                 u32 stride) override {
     return device_->setStreamSource(stream, std::move(buffer), offset, stride);
   }
+  core::HResult SetStreamSourceFreq(u32 stream, u32 frequency) override {
+    return device_->setStreamSourceFreq(stream, frequency);
+  }
   core::HResult SetIndices(std::shared_ptr<core::Buffer> buffer, core::IndexType indexType) override {
     return device_->setIndices(std::move(buffer), indexType);
   }

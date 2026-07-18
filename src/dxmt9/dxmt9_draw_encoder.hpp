@@ -132,7 +132,9 @@ struct EncodeDrawRecorder {
   void (*drawPrimitives)(void* userdata,
                          WMTPrimitiveType primitiveType,
                          std::uint64_t vertexStart,
-                         std::uint64_t vertexCount) = nullptr;
+                         std::uint64_t vertexCount,
+                         std::uint32_t instanceCount,
+                         std::uint32_t baseInstance) = nullptr;
   void (*drawIndexedPrimitives)(void* userdata,
                                 WMTPrimitiveType primitiveType,
                                 WMTIndexType indexType,
@@ -375,6 +377,7 @@ struct FsVolatileBindShadowSlot {
   bool valid = false;
   std::uint32_t alphaTest = 0;
   float alphaRef = 0.0f;
+  std::uint32_t sampleMask = 0xffffffffu;
 };
 
 struct TextureSamplerBindShadow {

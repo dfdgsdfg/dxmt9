@@ -352,6 +352,11 @@ BridgeClass classifyBridgeClass(unsigned int code) {
   case BridgeOpcode::dxmt9c_device_create_volume_texture:
   case BridgeOpcode::dxmt9c_device_create_vertex_buffer:
   case BridgeOpcode::dxmt9c_device_create_index_buffer:
+  case BridgeOpcode::dxmt9c_device_create_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_cube_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_volume_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_vertex_buffer_shared:
+  case BridgeOpcode::dxmt9c_device_create_index_buffer_shared:
   case BridgeOpcode::dxmt9c_device_create_render_target:
   case BridgeOpcode::dxmt9c_device_create_depth_stencil:
   case BridgeOpcode::dxmt9c_device_create_offscreen_surface:
@@ -472,6 +477,11 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
   case BridgeOpcode::dxmt9c_device_create_volume_texture:
   case BridgeOpcode::dxmt9c_device_create_vertex_buffer:
   case BridgeOpcode::dxmt9c_device_create_index_buffer:
+  case BridgeOpcode::dxmt9c_device_create_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_cube_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_volume_texture_shared:
+  case BridgeOpcode::dxmt9c_device_create_vertex_buffer_shared:
+  case BridgeOpcode::dxmt9c_device_create_index_buffer_shared:
   case BridgeOpcode::dxmt9c_device_create_render_target:
   case BridgeOpcode::dxmt9c_device_create_depth_stencil:
   case BridgeOpcode::dxmt9c_device_create_offscreen_surface:

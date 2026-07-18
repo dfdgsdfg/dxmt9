@@ -196,7 +196,7 @@ void testUnboundEnabledStageStillEmitsCombiner() {
                 "unbound enabled FFP stage still resolves ALPHAARG1");
   checkContains(src, "color = current;",
                 "unbound enabled FFP stage writes the combiner result");
-  checkContains(src, "return color;",
+  checkContains(src, "return dxmt9_make_ffp_fs_out(color, fsVolatile.sampleMask);",
                 "unbound enabled FFP stage returns the combiner result");
   checkNotContains(src, "[[texture(0)]]",
                    "unbound enabled FFP stage must not declare texture params");

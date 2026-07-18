@@ -151,6 +151,16 @@ not under test; the contract is "no D3D9-visible side effect today" and any
 intentional future divergence must add a corresponding
 `R-CORE-WSI-6.x` requirement and a Wine-oracle case before shipping.
 
+**R-CORE-WSI-6.3** (`GetFrontBufferData` synchronous copy)
+`IDirect3DDevice9::GetFrontBufferData` must delegate to the selected swap chain,
+and the swap-chain method must validate a `D3DPOOL_SYSTEMMEM` destination in
+`D3DFMT_A8R8G8B8`. The operation copies the swap chain's most recently rendered
+present-source image synchronously through `GetRenderTargetData`; a multisampled
+backbuffer is first resolved to a temporary single-sample render target. On
+macOS this is a D3D9 swap-chain front-image approximation: it does not capture
+WindowServer composition, occluding windows, or the full desktop outside the
+swap-chain image.
+
 Note: behavior **classification D (no framebufferOnly branch in the D3D9 API
 surface; the toggle is a pure present-side optimisation)** applies. The
 historical comment thread in `dxmt9_presenter.cpp:226-235` referring to

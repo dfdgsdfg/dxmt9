@@ -2117,14 +2117,18 @@ void recordedDrawPrimitives(EncodeContext& ctx,
                             WMT::RenderCommandEncoder& encoder,
                             WMTPrimitiveType primitiveType,
                             u64 vertexStart,
-                            u64 vertexCount) {
+                            u64 vertexCount,
+                            u32 instanceCount,
+                            u32 baseInstance) {
   if (auto* recorder = ctx.drawRecorder;
       recorder && recorder->drawPrimitives) {
     recorder->drawPrimitives(recorder->userdata, primitiveType,
-                             vertexStart, vertexCount);
+                             vertexStart, vertexCount, instanceCount,
+                             baseInstance);
   }
   if (!suppressRecordedMetalCalls(ctx)) {
-    encoder.drawPrimitives(primitiveType, vertexStart, vertexCount);
+    encoder.drawPrimitives(primitiveType, vertexStart, vertexCount,
+                           instanceCount, baseInstance);
   }
 }
 
@@ -10432,6 +10436,7 @@ bool encodeDraw(EncodeContext& ctx,
                   paramOverride->startIndex,
                   paramOverride->indexType,
                   paramOverride->indexed,
+                  paramOverride->instanceCount,
                   drawParamVertexBytes(*paramOverride, paramPayloadArena),
                   drawParamIndexBytes(*paramOverride, paramPayloadArena)}
       : ParamView{debug ? debug->primitiveType : core::PrimitiveType::TriangleList,
@@ -10441,6 +10446,7 @@ bool encodeDraw(EncodeContext& ctx,
                   debug ? debug->startIndex : 0u,
                   debug ? debug->indexType : IndexType::UInt16,
                   false,
+                  1u,
                   {},
                   {}};
   const bool traceEncode = debug::shouldTraceEncode(hot, seqId) ||
@@ -12924,22 +12930,27 @@ bool encodeDraw(EncodeContext& ctx,
   // without the tail (debug strip / tile / fragmentless): binding bytes to an
   // unreferenced fragment slot is a Metal no-op.
   {
-    const state::FsVolatile fsVolatile =
-        (paramBindingOverride && paramBindingOverride->alphaTestStateValid)
-            ? state::makeFsVolatile(paramBindingOverride->alphaTestEnable,
-                                    paramBindingOverride->alphaTestFunc,
-                                    paramBindingOverride->alphaTestRef)
-            : state::buildFsVolatile(drawState);
+    state::FsVolatile fsVolatile = state::buildFsVolatile(drawState);
+    if (paramBindingOverride && paramBindingOverride->alphaTestStateValid) {
+      const auto alpha = state::makeFsVolatile(
+          paramBindingOverride->alphaTestEnable,
+          paramBindingOverride->alphaTestFunc,
+          paramBindingOverride->alphaTestRef, fsVolatile.sampleMask);
+      fsVolatile.alphaTest = alpha.alphaTest;
+      fsVolatile.alphaRef = alpha.alphaRef;
+    }
     bool skipFsVolatilePush = false;
     if (textureSamplerShadow) {
       auto& shadowSlot = textureSamplerShadow->fsVolatile;
       skipFsVolatilePush = shadowSlot.valid &&
                            shadowSlot.alphaTest == fsVolatile.alphaTest &&
-                           shadowSlot.alphaRef == fsVolatile.alphaRef;
+                           shadowSlot.alphaRef == fsVolatile.alphaRef &&
+                           shadowSlot.sampleMask == fsVolatile.sampleMask;
       if (!skipFsVolatilePush) {
         shadowSlot.valid = true;
         shadowSlot.alphaTest = fsVolatile.alphaTest;
         shadowSlot.alphaRef = fsVolatile.alphaRef;
+        shadowSlot.sampleMask = fsVolatile.sampleMask;
       }
     }
     if (!skipFsVolatilePush) {
@@ -13073,6 +13084,10 @@ bool encodeDraw(EncodeContext& ctx,
                                                  expandedVertices);
         if (expansionComplete) {
           for (const auto& streamBinding : bindingPacket.extraStreams) {
+            if ((hot.streamFrequencies[streamBinding.stream] &
+                 core::kStreamSourceInstanceData) != 0) {
+              continue;
+            }
             std::vector<u8> expandedStream;
             const auto sourceBytes = resolveStreamBytes(streamBinding.stream);
             if (!expandIndexedStreamToFlatVertexBytes(
@@ -13180,8 +13195,9 @@ bool encodeDraw(EncodeContext& ctx,
       drawVertexBaseIndex = 0;
     }
     auto pushDrawVolatile = [&] {
-      const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
-                                                  drawVertexStreamStride);
+      const DrawVolatile vol = buildDrawVolatile(
+          drawVertexBaseIndex, drawVertexStreamOffset,
+          drawVertexStreamStride, hot.streamFrequencies);
       recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
       perf::countUniformVolatilePush();
       if (encoderBreakdown) {
@@ -13291,7 +13307,8 @@ bool encodeDraw(EncodeContext& ctx,
         {
           PerfScope metalScope(
               issueSplit ? perf::countEncodeDrawIssueMetalCpuTime : nullptr);
-          recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+          recordedDrawPrimitives(ctx, encoder, primitiveType, 0,
+                                 (uint64_t)vertexCount, pv.instanceCount, 0);
         }
         if (visibilityScout) {
           PerfScope visibilityScope(
@@ -14315,7 +14332,8 @@ bool encodeDraw(EncodeContext& ctx,
               recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
                                             metalIndexType,
                                             static_cast<u64>(chunkPrimitives) * 3u,
-                                            indexBuffer, chunkIndexOffset, 1,
+                                            indexBuffer, chunkIndexOffset,
+                                            pv.instanceCount,
                                             metalBaseVertex, 0);
             }
             if (visibilityScout) {
@@ -14356,7 +14374,8 @@ bool encodeDraw(EncodeContext& ctx,
             recordedDrawIndexedPrimitives(ctx, encoder, primitiveType,
                                           metalIndexType,
                                           (uint64_t)vertexCount, indexBuffer,
-                                          indexBufferOffset, 1, metalBaseVertex, 0);
+                                          indexBufferOffset, pv.instanceCount,
+                                          metalBaseVertex, 0);
           }
           if (visibilityScout) {
             PerfScope visibilityScope(
@@ -14422,8 +14441,9 @@ bool encodeDraw(EncodeContext& ctx,
                  pv.userVertexData.size(),
                  pv.userIndexData.size());
   {
-    const DrawVolatile vol = buildDrawVolatile(drawVertexBaseIndex, drawVertexStreamOffset,
-                                                drawVertexStreamStride);
+    const DrawVolatile vol = buildDrawVolatile(
+        drawVertexBaseIndex, drawVertexStreamOffset,
+        drawVertexStreamStride, hot.streamFrequencies);
     recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
     perf::countUniformVolatilePush();
     if (encoderBreakdown) {
@@ -14451,7 +14471,8 @@ bool encodeDraw(EncodeContext& ctx,
     {
       PerfScope metalScope(
           issueSplit ? perf::countEncodeDrawIssueMetalCpuTime : nullptr);
-      recordedDrawPrimitives(ctx, encoder, primitiveType, 0, (uint64_t)vertexCount);
+      recordedDrawPrimitives(ctx, encoder, primitiveType, 0,
+                             (uint64_t)vertexCount, pv.instanceCount, 0);
     }
     if (visibilityScout) {
       PerfScope visibilityScope(

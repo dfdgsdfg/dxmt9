@@ -490,15 +490,29 @@ bool anySamplerLodBiasNonzero(core::FlatDrawStateView state) {
 
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride) {
+  return buildDrawVolatile(vertexBaseIndex, vertexStreamOffset,
+                           vertexStreamStride, {});
+}
+
+DrawVolatile buildDrawVolatile(
+    i32 vertexBaseIndex, u32 vertexStreamOffset, u32 vertexStreamStride,
+    const std::array<u32, core::kMaxStreams>& streamFrequencies) {
   DrawVolatile out;
   out.vertexBaseIndex = vertexBaseIndex;
   out.vertexStreamOffset = vertexStreamOffset;
   out.vertexStreamStride = vertexStreamStride;
+  for (u32 stream = 1; stream < core::kMaxStreams; ++stream) {
+    const u32 frequency = streamFrequencies[stream];
+    if ((frequency & core::kStreamSourceInstanceData) != 0) {
+      out.streamInstanceDivisors[stream] =
+          std::max(frequency & core::kStreamSourceFrequencyMask, 1u);
+    }
+  }
   return out;
 }
 
 FsVolatile makeFsVolatile(u32 alphaTestEnable, u32 alphaTestFunc,
-                          u32 alphaTestRefRaw) {
+                          u32 alphaTestRefRaw, u32 sampleMask) {
   // H228 — mirrors fillFfpPsConsts exactly: DXMT_DISABLE_ALPHA_TEST forces
   // the runtime state off (the debug strip also removes the generated tail),
   // alphaRef is the raw D3DRS_ALPHAREF byte scaled by 1/255, and the func
@@ -506,21 +520,26 @@ FsVolatile makeFsVolatile(u32 alphaTestEnable, u32 alphaTestFunc,
   // funcs as pass, byte-identical to the historical ffpPs.alphaTestFunc
   // switch). alphaTest folds enable+func: 0 = off, else the D3DCMPFUNC.
   FsVolatile out;
-  if (debug::disableAlphaTest() || alphaTestEnable == 0u) {
-    return out;
+  out.sampleMask = sampleMask;
+  if (!debug::disableAlphaTest() && alphaTestEnable != 0u) {
+    out.alphaTest = alphaTestFunc;
+    out.alphaRef = static_cast<f32>(alphaTestRefRaw) / 255.0f;
   }
-  out.alphaTest = alphaTestFunc;
-  out.alphaRef = static_cast<f32>(alphaTestRefRaw) / 255.0f;
   return out;
 }
 
 FsVolatile buildFsVolatile(core::FlatDrawStateView state) {
   const auto& rs = state.hot->renderStates;
+  const u32 sampleMask = state.hot->colorAttachments[0].sampleCount > 1u
+                             ? core::flatStateOr(
+                                   rs, core::RS_MULTISAMPLE_MASK, 0xffffffffu)
+                             : 0xffffffffu;
   return makeFsVolatile(
       fragmentAlphaTestEnabled(rs) ? 1u : 0u,
       core::flatStateOr(rs, RS_ALPHA_FUNC,
                         static_cast<u32>(CompareFunc::Always)),
-      core::flatStateOr(rs, RS_ALPHA_REF, 0u));
+      core::flatStateOr(rs, RS_ALPHA_REF, 0u),
+      sampleMask);
 }
 
 pipeline::DepthStencilKey makeDepthStencilKey(core::FlatDrawStateView state) {

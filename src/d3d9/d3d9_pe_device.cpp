@@ -518,15 +518,12 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // The width/height == 1x1 narrowing for 2D textures is enforced at the
 // call site (validate* doesn't see W/H).
 //
-// DEFAULT-pool shared-handle contract (Wine d3d9 d3d9_device_CreateTexture
-// / CreateCubeTexture / CreateVolumeTexture, commit
-// 6e073d28dee3af7f4c965daec94644e0f9f92727): on an extended (D3D9Ex) device,
-// a non-NULL pSharedHandle in D3DPOOL_DEFAULT logs a FIXME and then *proceeds
-// to create the resource normally* — the handle is ignored, not rejected.
-// dxmt9 mirrors that observable HRESULT (S_OK + a real DEFAULT-pool resource)
-// even though cross-process sharing is not wired; an actual shared backing
-// would need an IOSurface / MTLSharedTexture winemetal bridge. The earlier
-// placeholder returned E_NOTIMPL here, which diverges from the oracle.
+// DEFAULT-pool shared-handle contract: Wine establishes that an Ex device
+// proceeds rather than returning the old E_NOTIMPL placeholder. dxmt9 now
+// forwards the in/out value to the unix provider: zero creates a process-local
+// shared token, a known token opens the same Metal backing, and an unknown
+// nonzero value retains Wine's permissive create behavior. Cross-process
+// Win32-handle transport still requires IOSurface / MTLSharedTextureHandle.
 [[nodiscard]] static HRESULT validateSharedHandleForTexture(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -540,20 +537,20 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
         return S_OK;
     }
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
-    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    // Extended + DEFAULT: provider handles create/open-existing semantics.
     return S_OK;
 }
 
 // VB/IB shared-handle contract (Wine d3d9 d3d9_device_CreateVertexBuffer /
 // CreateIndexBuffer): non-extended -> E_NOTIMPL; extended + non-DEFAULT pool
-// -> D3DERR_NOTAVAILABLE; extended + DEFAULT -> FIXME then proceed normally.
+// -> D3DERR_NOTAVAILABLE; extended + DEFAULT -> provider shared path.
 [[nodiscard]] static HRESULT validateSharedHandleForBuffer(bool extended,
                                              HANDLE* sharedHandle,
                                              D3DPOOL pool) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
     if (pool != D3DPOOL_DEFAULT) return D3DERR_NOTAVAILABLE;
-    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    // Extended + DEFAULT: provider handles create/open-existing semantics.
     return S_OK;
 }
 
@@ -561,7 +558,7 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
 // d3d9_device_CreateOffscreenPlainSurface):
 //   - SYSTEMMEM -> S_OK; user pointer aliased
 //   - SCRATCH   -> D3DERR_INVALIDCALL
-//   - DEFAULT   -> FIXME then proceed normally (handle ignored)
+//   - DEFAULT   -> provider shared path
 [[nodiscard]] static HRESULT validateSharedHandleForSurface(bool extended,
                                               HANDLE* sharedHandle,
                                               D3DPOOL pool,
@@ -574,18 +571,18 @@ static bool isValidPresentationIntervalRaw(UINT interval) {
     }
     if (pool == D3DPOOL_SCRATCH) return D3DERR_INVALIDCALL;
     if (pool != D3DPOOL_DEFAULT) return D3DERR_INVALIDCALL;
-    // Extended + DEFAULT: Wine proceeds (handle ignored). Create normally.
+    // Extended + DEFAULT: provider handles create/open-existing semantics.
     return S_OK;
 }
 
 // Render-target / depth-stencil surfaces are DEFAULT-pool only. Wine d3d9
 // d3d9_device_CreateRenderTarget / CreateDepthStencilSurface: non-extended
-// -> E_NOTIMPL; extended -> FIXME then proceed normally (handle ignored).
+// -> E_NOTIMPL; extended -> provider shared path.
 [[nodiscard]] static HRESULT validateSharedHandleForDefaultSurface(bool extended,
                                                      HANDLE* sharedHandle) {
     if (!sharedHandle) return S_OK;
     if (!extended) return E_NOTIMPL;
-    // Extended: Wine proceeds (handle ignored). Create normally.
+    // Extended: provider handles create/open-existing semantics.
     return S_OK;
 }
 
@@ -5116,7 +5113,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if ((streamFreq_[0] & D3DSTREAMSOURCE_INDEXEDDATA) == 0u) {
             return 1u;
         }
-        const UINT count = streamFreq_[0] & 0x00ffffffu;
+        const UINT count = streamFreq_[0] & 0x3fffffffu;
         return count ? count : 1u;
     }
 
@@ -5129,7 +5126,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             if ((streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) == 0u) {
                 continue;
             }
-            const UINT divider = std::max<UINT>(streamFreq_[stream] & 0x00ffffffu, 1u);
+            const UINT divider = std::max<UINT>(streamFreq_[stream] & 0x3fffffffu, 1u);
             const UINT element = instance / divider;
             const std::uint64_t offset =
                 static_cast<std::uint64_t>(streamOff_[stream]) +
@@ -10782,10 +10779,15 @@ public:
         dxmt9DeviceDebugLog("device_create_texture device=%p size=%ux%u levels=%u usage=0x%x fmt=%u pool=%u user=%p",
                             this, w, h, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool,
                             userPtr);
-        D9CTexture* t = dxmt9c_device_create_texture(dev_, w, h, levels,
+        uint64_t sharedValue = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sharedValue : nullptr;
+        D9CTexture* t = dxmt9c_device_create_texture_shared(dev_, w, h, levels,
                                                       usage, (uint32_t)fmt,
-                                                      (uint32_t)pool);
+                                                      (uint32_t)pool,
+                                                      providerShared);
         if (!t) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeTexture(t, this, this, userPtr, userPitch);
         // Wine base_vidmem_accounting_policy expects a strictly-decreasing
         // budget on non-Ex devices; ex_vidmem_accounting_policy expects
@@ -10814,10 +10816,15 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_volume_texture device=%p size=%ux%ux%u levels=%u usage=0x%x fmt=%u pool=%u",
                             this, w, h, d, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
-        D9CTexture* t = dxmt9c_device_create_volume_texture(dev_, w, h, d, levels,
+        uint64_t sharedValue = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sharedValue : nullptr;
+        D9CTexture* t = dxmt9c_device_create_volume_texture_shared(dev_, w, h, d, levels,
                                                              usage, (uint32_t)fmt,
-                                                             (uint32_t)pool);
+                                                             (uint32_t)pool,
+                                                             providerShared);
         if (!t) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeVolumeTexture(t, this, this);
         dxmt9DeviceDebugLog("device_create_volume_texture -> texture=%p", *ppTex);
         return S_OK;
@@ -10838,10 +10845,15 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_cube_texture device=%p size=%u levels=%u usage=0x%x fmt=%u pool=%u",
                             this, size, levels, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
-        D9CTexture* t = dxmt9c_device_create_cube_texture(dev_, size, levels,
+        uint64_t sharedValue = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sharedValue : nullptr;
+        D9CTexture* t = dxmt9c_device_create_cube_texture_shared(dev_, size, levels,
                                                            usage, (uint32_t)fmt,
-                                                           (uint32_t)pool);
+                                                           (uint32_t)pool,
+                                                           providerShared);
         if (!t) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppTex = CreatePeCubeTexture(t, this, this);
         dxmt9DeviceDebugLog("device_create_cube_texture -> texture=%p", *ppTex);
         return S_OK;
@@ -10861,9 +10873,14 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_vertex_buffer device=%p len=%u usage=0x%x fvf=0x%x pool=%u",
                             this, len, (unsigned)usage, (unsigned)fvf, (unsigned)pool);
-        D9CBuffer* b = dxmt9c_device_create_vertex_buffer(dev_, len, usage,
-                                                           fvf, (uint32_t)pool);
+        uint64_t sharedValue = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sharedValue : nullptr;
+        D9CBuffer* b = dxmt9c_device_create_vertex_buffer_shared(dev_, len, usage,
+                                                           fvf, (uint32_t)pool,
+                                                           providerShared);
         if (!b) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppBuf = CreatePeVertexBuffer(b, this, this);
         dxmt9DeviceDebugLog("device_create_vertex_buffer -> buffer=%p", *ppBuf);
         return S_OK;
@@ -10883,10 +10900,15 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_index_buffer device=%p len=%u usage=0x%x fmt=%u pool=%u",
                             this, len, (unsigned)usage, (unsigned)fmt, (unsigned)pool);
-        D9CBuffer* b = dxmt9c_device_create_index_buffer(dev_, len, usage,
+        uint64_t sharedValue = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sharedValue : nullptr;
+        D9CBuffer* b = dxmt9c_device_create_index_buffer_shared(dev_, len, usage,
                                                           (uint32_t)fmt,
-                                                          (uint32_t)pool);
+                                                          (uint32_t)pool,
+                                                          providerShared);
         if (!b) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sharedValue;
         *ppBuf = CreatePeIndexBuffer(b, this, this);
         dxmt9DeviceDebugLog("device_create_index_buffer -> buffer=%p", *ppBuf);
         return S_OK;
@@ -10936,11 +10958,14 @@ public:
             }
         }
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared = extended_ && psh ? &sh : nullptr;
         D9CSurface* s = dxmt9c_device_create_render_target(dev_, w, h,
                                                             (uint32_t)fmt,
                                                             (uint32_t)ms, msQual,
-                                                            lockable ? 1u : 0u, &sh);
+                                                            lockable ? 1u : 0u,
+                                                            providerShared);
         if (!s) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
         dxmt9DeviceDebugLog("device_create_render_target -> surface=%p", *ppS);
         return S_OK;
@@ -10969,12 +10994,15 @@ public:
         if (FAILED(sharedHr)) return sharedHr;
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface device=%p size=%ux%u fmt=%u ms=%u msQual=%u discard=%u",
                             this, w, h, (unsigned)fmt, (unsigned)ms, (unsigned)msQual, (unsigned)discard);
-        uint64_t sh = 0;
+        uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared = extended_ && psh ? &sh : nullptr;
         D9CSurface* s = dxmt9c_device_create_depth_stencil(dev_, w, h,
                                                             (uint32_t)fmt,
                                                             (uint32_t)ms, msQual,
-                                                            discard ? 1u : 0u, &sh);
+                                                            discard ? 1u : 0u,
+                                                            providerShared);
         if (!s) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this);
         dxmt9DeviceDebugLog("device_create_depth_stencil_surface -> surface=%p", *ppS);
         return S_OK;
@@ -11171,7 +11199,13 @@ public:
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) noexcept override {
         dxmt9DeviceDebugLog("device_get_front_buffer_data device=%p sc=%u surface=%p",
                             this, sc, surface);
-        return D3DERR_INVALIDCALL;
+        if (!surface) return D3DERR_INVALIDCALL;
+        IDirect3DSwapChain9* swapchain = nullptr;
+        const HRESULT swapHr = GetSwapChain(sc, &swapchain);
+        if (FAILED(swapHr) || !swapchain) return swapHr;
+        const HRESULT hr = swapchain->GetFrontBufferData(surface);
+        swapchain->Release();
+        return hr;
     }
 
     HRESULT STDMETHODCALLTYPE StretchRect(IDirect3DSurface9* src,
@@ -11342,10 +11376,14 @@ public:
         dxmt9DeviceDebugLog("device_create_offscreen_surface device=%p size=%ux%u fmt=%u pool=%u user=%p",
                             this, w, h, (unsigned)fmt, (unsigned)pool, userPtr);
         uint64_t sh = psh ? (uint64_t)(uintptr_t)*psh : 0;
+        uint64_t* providerShared =
+            extended_ && psh && pool == D3DPOOL_DEFAULT ? &sh : nullptr;
         D9CSurface* s = dxmt9c_device_create_offscreen_surface(dev_, w, h,
                                                                 (uint32_t)fmt,
-                                                                (uint32_t)pool, &sh);
+                                                                (uint32_t)pool,
+                                                                providerShared);
         if (!s) return D3DERR_INVALIDCALL;
+        if (providerShared) *psh = (HANDLE)(uintptr_t)sh;
         *ppS = CreatePeSurface(s, this, nullptr, this, true, userPtr, userPitch);
         dxmt9DeviceDebugLog("device_create_offscreen_surface -> surface=%p", *ppS);
         return S_OK;
@@ -12885,9 +12923,11 @@ public:
         if (stream >= 16) return D3DERR_INVALIDCALL;
         // D3D9 SetStreamSourceFreq encoding (D3DSTREAMSOURCE_* in
         // d3d9types.h):
-        //   - low 24 bits: divider value
-        //   - bit 0x40000000 (INDEXEDDATA): per-instance source stream
-        //   - bit 0x80000000 (INSTANCEDATA): the index source stream
+        //   - low 30 bits: frequency / divider value
+        //   - bit 0x40000000 (INDEXEDDATA): stream 0 supplies the draw's
+        //     instance count
+        //   - bit 0x80000000 (INSTANCEDATA): a non-zero stream advances by
+        //     instance_id / divider
         // Rules (Wine wined3d_device_set_stream_source_freq, matched by
         // test_stream_source_frequency_state):
         //   - Stream 0 may not carry INSTANCEDATA (it cannot be the

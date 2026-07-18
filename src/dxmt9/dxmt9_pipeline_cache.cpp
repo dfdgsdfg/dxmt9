@@ -1840,6 +1840,12 @@ TileFfpSelection classifyTileFfpForPass(core::FlatDrawStateView state, bool supp
   }
   const auto& key = *shader.pixelShader.pixelKey;
   const auto& rs = state.hot->renderStates;
+  if (state.hot->colorAttachments[0].sampleCount > 1u &&
+      core::flatStateOr(rs, core::RS_MULTISAMPLE_MASK, 0xffffffffu) !=
+          0xffffffffu) {
+    return TileFfpSelection{TileFfpDecision::Portable,
+                            TileFfpFallbackReason::UnsupportedState};
+  }
   // RS_ALPHA_REF holds a 0..255 D3D9 byte. Normalize so the precision
   // boundary check uses the same float space as the shader.
   const u32 alphaRefRaw = core::flatStateOr(rs, core::RS_ALPHA_REF, 0u);

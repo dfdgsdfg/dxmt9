@@ -338,6 +338,30 @@ std::shared_ptr<Texture> Device::createTexture(const TextureDesc &desc) {
   return texture;
 }
 
+std::shared_ptr<Texture> Device::openSharedTexture(
+    const std::shared_ptr<Texture>& source) {
+  if (!source || !source->valid()) {
+    return {};
+  }
+  if (source->device().get() == this) {
+    return source;
+  }
+  if (!upperDevice_ || !source->backend_) {
+    return {};
+  }
+  dxmt9::SharedTextureBacking backing;
+  if (!source->backend_->exportSharedTexture(source->handle(), backing)) {
+    return {};
+  }
+  const auto handle = upperDevice_->importSharedTexture(source->desc(), backing);
+  if (!handle) {
+    return {};
+  }
+  auto texture = std::make_shared<Texture>(shared_from_this(), handle, source->desc());
+  registerTexture(texture);
+  return texture;
+}
+
 void Device::registerTexture(const std::shared_ptr<Texture> &texture) {
   textures_.push_back(texture);
 }

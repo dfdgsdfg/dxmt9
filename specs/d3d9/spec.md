@@ -402,6 +402,14 @@ index buffer or UP index payload; expanding indexed geometry into a transient
 non-indexed vertex stream is an opt-in diagnostic path under
 `DXMT_FORCE_EXPAND_INDEXED=1`, not a default draw policy.
 
+Bound draw state also carries all 16 stream-frequency values. Stream 0
+`INDEXEDDATA` derives `DrawParam::instanceCount`; each `INSTANCEDATA` stream is
+lowered to a `DrawVolatile` divisor consumed with Metal `instance_id`. Fragment
+volatile state carries `D3DRS_MULTISAMPLEMASK`, and both programmable and FFP
+fragment outputs publish it through `[[sample_mask]]`. These values are draw
+semantics, not PSO identity, so compact draw runs may vary them without forcing
+a pipeline rebuild.
+
 State and draw packet normalization are pure transforms over value data. A typical
 path is:
 
@@ -529,7 +537,10 @@ silently ignoring the handle.
 | Ex `CreateOffscreenPlainSurface()` / `CreateOffscreenPlainSurfaceEx()` with `D3DPOOL_SYSTEMMEM` and caller memory | Create a user-memory surface; `LockRect()` returns the caller pointer and pitch. |
 | Ex vertex/index buffers with `D3DPOOL_SYSTEMMEM` and caller memory | Return Windows D3D9-compatible resource-class failure, currently `D3DERR_NOTAVAILABLE`. |
 | Ex cube textures, volume textures, `D3DPOOL_SCRATCH`, or unsupported pools with caller memory | Return `D3DERR_INVALIDCALL` unless the Wine behavioural oracle documents a stricter resource-specific code. |
-| Ex default-pool cross-process sharing | Return `E_NOTIMPL` until real shared-handle interop exists. |
+| Ex default-pool create with `*pSharedHandle == NULL` | Create the resource, allocate a 32-bit opaque dxmt9 token, retain the source resource in the unix provider registry, and return the token. |
+| Ex default-pool open with a dxmt9 token | Require the same creation method and exact description, then import the retained Metal buffer/texture/surface backing into the destination device's pool under a new local pool handle. |
+| Ex default-pool open with an unknown nonzero handle | Preserve Wine-compatible legacy creation behavior for now; this is not cross-process sharing. |
+| Ex default-pool cross-process sharing | Not implemented. A real Win32-handle plus IOSurface or `MTLSharedTextureHandle` transport is still required. |
 
 ### 4.2 Reset Rebinding
 
@@ -705,9 +716,9 @@ flowchart TD
 | `SetGPUThreadPriority()` | No-op, returns `D3D_OK` |
 | `SetConvolutionMonoKernel()` | `E_NOTIMPL` |
 | `ComposeRects()` | `E_NOTIMPL` |
-| `CreateRenderTargetEx()` | Rejects invalid `Usage`, then follows shared-handle policy and delegates to `CreateRenderTarget()` |
+| `CreateRenderTargetEx()` | Rejects invalid `Usage`, then follows the same-process shared-backing policy and delegates to `CreateRenderTarget()` |
 | `CreateOffscreenPlainSurfaceEx()` | Wine-test-observed Windows D3D9 user-memory/shared-handle policy from section 4.1; if the path is otherwise unsupported, return a validated Windows D3D9-compatible failure and never silently ignore `pSharedHandle` |
-| `CreateDepthStencilSurfaceEx()` | Rejects invalid `Usage`, then follows shared-handle policy and delegates to `CreateDepthStencilSurface()` |
+| `CreateDepthStencilSurfaceEx()` | Rejects invalid `Usage`, then follows the same-process shared-backing policy and delegates to `CreateDepthStencilSurface()` |
 
 `IDirect3DSwapChain9Ex::GetLastPresentCount()` and `GetPresentStatistics()` may
 remain Windows D3D9-compatible stubs that return `D3D_OK` and zero their output

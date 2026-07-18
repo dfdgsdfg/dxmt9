@@ -299,8 +299,9 @@ test('dxmt9-core-d3d9-device-validation-spec', core_d3d9_device_validation_spec,
 # validateSharedHandleForBuffer / validateSharedHandleForSurface /
 # validateSharedHandleForDefaultSurface) — d3d9_pe_device.cpp is a
 # Windows-only TU so the helpers are mirrored here at value level.
-# Guards the extended + D3DPOOL_DEFAULT contract (S_OK, handle ignored)
-# against regressing back to the former placeholder E_NOTIMPL.
+# Guards the extended + D3DPOOL_DEFAULT validation contract before the
+# provider performs same-process token create/open handling, and prevents a
+# regression to the former blanket E_NOTIMPL placeholder.
 core_d3d9_shared_handle_spec = executable(
   'dxmt9-core-d3d9-shared-handle-spec',
   'core_d3d9_shared_handle_spec.cpp',

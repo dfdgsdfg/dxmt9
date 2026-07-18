@@ -1376,6 +1376,27 @@ DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_vertex_buffer(D9CDevice*, uint3
 DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_index_buffer(D9CDevice*, uint32_t length,
                                                uint32_t usage, uint32_t fmt,
                                                uint32_t pool);
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_texture_shared(D9CDevice*, uint32_t w, uint32_t h,
+                                                 uint32_t levels, uint32_t usage,
+                                                 uint32_t fmt, uint32_t pool,
+                                                 uint64_t* sharedHandle);
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_cube_texture_shared(D9CDevice*, uint32_t size,
+                                                      uint32_t levels, uint32_t usage,
+                                                      uint32_t fmt, uint32_t pool,
+                                                      uint64_t* sharedHandle);
+DXMT9_NODISCARD D9CTexture* dxmt9c_device_create_volume_texture_shared(D9CDevice*, uint32_t w, uint32_t h,
+                                                        uint32_t d, uint32_t levels,
+                                                        uint32_t usage, uint32_t fmt,
+                                                        uint32_t pool,
+                                                        uint64_t* sharedHandle);
+DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_vertex_buffer_shared(D9CDevice*, uint32_t length,
+                                                       uint32_t usage, uint32_t fvf,
+                                                       uint32_t pool,
+                                                       uint64_t* sharedHandle);
+DXMT9_NODISCARD D9CBuffer*  dxmt9c_device_create_index_buffer_shared(D9CDevice*, uint32_t length,
+                                                      uint32_t usage, uint32_t fmt,
+                                                      uint32_t pool,
+                                                      uint64_t* sharedHandle);
 DXMT9_NODISCARD D9CSurface* dxmt9c_device_create_render_target(D9CDevice*, uint32_t w, uint32_t h,
                                                 uint32_t fmt, uint32_t msType,
                                                 uint32_t msQuality, uint32_t lockable,

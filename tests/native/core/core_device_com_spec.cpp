@@ -156,6 +156,58 @@ void testComWrappersEx() {
     checkEq(dxmt9c_stateblock_release(recordedStateBlock), 0u, "release recorded c state block");
     checkEq(dxmt9c_stateblock_release(cStateBlock), 0u, "release c state block");
 
+    uint64_t sharedTextureHandle = 0;
+    auto* sharedTexture = dxmt9c_device_create_texture_shared(
+        &cDevice, 8, 8, 1, 0,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 0,
+        &sharedTextureHandle);
+    check(sharedTexture != nullptr, "create c shared texture");
+    check(sharedTextureHandle != 0u, "shared texture returns opaque handle");
+    auto* openedTexture = dxmt9c_device_create_texture_shared(
+        &cDevice, 8, 8, 1, 0,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 0,
+        &sharedTextureHandle);
+    check(openedTexture != nullptr, "open c shared texture");
+    check(openedTexture->obj == sharedTexture->obj,
+          "same-device shared texture aliases core resource");
+    auto* mismatchedTexture = dxmt9c_device_create_texture_shared(
+        &cDevice, 16, 8, 1, 0,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8), 0,
+        &sharedTextureHandle);
+    check(mismatchedTexture == nullptr, "shared texture rejects dimension mismatch");
+    checkEq(dxmt9c_texture_release(openedTexture), 0u, "release opened shared texture");
+    checkEq(dxmt9c_texture_release(sharedTexture), 0u, "release shared texture creator");
+
+    uint64_t sharedBufferHandle = 0;
+    auto* sharedBuffer = dxmt9c_device_create_vertex_buffer_shared(
+        &cDevice, 64, 0, 0, 0, &sharedBufferHandle);
+    check(sharedBuffer != nullptr, "create c shared vertex buffer");
+    check(sharedBufferHandle != 0u, "shared buffer returns opaque handle");
+    auto* openedBuffer = dxmt9c_device_create_vertex_buffer_shared(
+        &cDevice, 64, 0, 0, 0, &sharedBufferHandle);
+    check(openedBuffer != nullptr, "open c shared vertex buffer");
+    check(openedBuffer->obj == sharedBuffer->obj,
+          "same-device shared buffer aliases core resource");
+    checkEq(dxmt9c_buffer_release(openedBuffer), 0u, "release opened shared buffer");
+    checkEq(dxmt9c_buffer_release(sharedBuffer), 0u, "release shared buffer creator");
+
+    uint64_t sharedSurfaceHandle = 0;
+    auto* sharedSurface = dxmt9c_device_create_render_target(
+        &cDevice, 8, 8,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8),
+        0, 0, 0, &sharedSurfaceHandle);
+    check(sharedSurface != nullptr, "create c shared render target");
+    check(sharedSurfaceHandle != 0u, "shared surface returns opaque handle");
+    auto* openedSurface = dxmt9c_device_create_render_target(
+        &cDevice, 8, 8,
+        dxmt9::d3d9::devicec::fmtToD3D(Format::A8R8G8B8),
+        0, 0, 0, &sharedSurfaceHandle);
+    check(openedSurface != nullptr, "open c shared render target");
+    check(openedSurface->obj == sharedSurface->obj,
+          "same-device shared surface aliases core resource");
+    checkEq(dxmt9c_surface_release(openedSurface), 0u, "release opened shared surface");
+    checkEq(dxmt9c_surface_release(sharedSurface), 0u, "release shared surface creator");
+
     auto* dxt5Texture = dxmt9c_device_create_texture(
         &cDevice, 16, 16, 1, 0, dxmt9::d3d9::devicec::fmtToD3D(Format::DXT5), 1);
     check(dxt5Texture != nullptr, "create c dxt5 texture");

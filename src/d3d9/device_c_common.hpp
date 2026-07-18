@@ -190,6 +190,7 @@ struct D9CTexture {
   std::unordered_set<uint32_t> lockedLevels;
   uint32_t d3dFormat = 0;
   bool palettized = false;
+  bool sharedOpened = false;
   std::vector<std::vector<uint8_t>> p8Levels;
   std::array<uint32_t, 256> p8Palette{};
 
@@ -206,6 +207,7 @@ struct D9CBuffer {
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
   D9CBufferDesc desc{};
   bool lastLockReadOnly = false;
+  bool sharedOpened = false;
   uint32_t lastLockOffset = 0;
   uint32_t lastLockSize = 0;
   uint32_t lastLockFlags = 0;
@@ -222,6 +224,7 @@ struct D9CSurface {
   std::atomic<uint32_t> refs{1};
   dxmt9::d3d9::devicec::ShadowLock wow64Lock;
   bool locked = false;
+  bool sharedOpened = false;
 
   explicit D9CSurface(std::shared_ptr<dxmt9::core::Surface> o,
                       D9CTexture* owner = nullptr,

@@ -561,15 +561,17 @@ public:
   }
 
   void
-  drawPrimitives(WMTPrimitiveType primitive_type, uint32_t vertex_start, uint32_t vertex_count) {
+  drawPrimitives(WMTPrimitiveType primitive_type, uint32_t vertex_start,
+                 uint32_t vertex_count, uint32_t instance_count = 1,
+                 uint32_t base_instance = 0) {
     struct wmtcmd_render_draw cmd;
     cmd.type = WMTRenderCommandDraw;
     cmd.next.set(nullptr);
     cmd.primitive_type = primitive_type;
     cmd.vertex_start = vertex_start;
     cmd.vertex_count = vertex_count;
-    cmd.base_instance = 0;
-    cmd.instance_count = 1;
+    cmd.base_instance = base_instance;
+    cmd.instance_count = instance_count;
     MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)&cmd);
   }
 

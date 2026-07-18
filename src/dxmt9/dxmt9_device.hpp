@@ -107,6 +107,15 @@ class Device {
                                                        const core::SurfaceDesc&) {
     return {};
   }
+  virtual bool exportSharedBuffer(core::BufferHandle, SharedBufferBacking&) { return false; }
+  virtual core::BufferHandle importSharedBuffer(const core::BufferDesc&,
+                                                 const SharedBufferBacking&) { return {}; }
+  virtual bool exportSharedTexture(core::TextureHandle, SharedTextureBacking&) { return false; }
+  virtual core::TextureHandle importSharedTexture(const core::TextureDesc&,
+                                                   const SharedTextureBacking&) { return {}; }
+  virtual bool exportSharedSurface(core::SurfaceHandle, SharedSurfaceBacking&) { return false; }
+  virtual core::SurfaceHandle importSharedSurface(const core::SurfaceDesc&,
+                                                   const SharedSurfaceBacking&) { return {}; }
   virtual void destroyBuffer(core::BufferHandle) {}
   virtual void destroyTexture(core::TextureHandle) {}
   virtual void destroySurface(core::SurfaceHandle) {}

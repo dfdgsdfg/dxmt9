@@ -1734,6 +1734,14 @@ PrimitiveType canonicalPrimitiveType(PrimitiveType primitiveType) {
              : primitiveType;
 }
 
+u32 drawInstanceCountFromState(const DeviceState& state) noexcept {
+  const u32 frequency = state.streamFrequencies[0];
+  if ((frequency & kStreamSourceIndexedData) == 0) {
+    return 1;
+  }
+  return std::max(frequency & kStreamSourceFrequencyMask, 1u);
+}
+
 VertexDeclSnapshot makeVertexDeclSnapshotFromState(const DeviceState &state) {
   VertexDeclSnapshot decl = state.vertexDecl;
   decl.streams.fill({});
@@ -2052,6 +2060,7 @@ DrawDesc makeDrawDescFromState(const DeviceState &state,
   desc.indexType = args.indexType;
   desc.indexBuffer = state.indexBuffer ? state.indexBuffer->handle() : Handle{};
   desc.vertexDecl = shaderLayout.vertexDecl;
+  desc.streamFrequencies = state.streamFrequencies;
   desc.rs.values = state.renderStates;
   for (size_t i = 0; i < kMaxTextures; ++i) {
     desc.textures[i].handle =
@@ -2096,6 +2105,7 @@ FlatDrawStateKey makeFlatDrawStateKey(const DrawDesc &desc) {
     key.streamBuffers[i] = stream.buffer ? stream.buffer->handle() : Handle{};
     key.streamOffsets[i] = stream.offset;
     key.streamStrides[i] = stream.stride;
+    key.streamFrequencies[i] = desc.streamFrequencies[i];
     if (key.streamBuffers[i]) {
       key.streamMask |= 1u << i;
     }
@@ -2162,6 +2172,7 @@ FlatDrawStateRecord makeFlatDrawStateRecord(const DrawDesc &desc) {
   record.streamBuffers = record.key.streamBuffers;
   record.streamOffsets = record.key.streamOffsets;
   record.streamStrides = record.key.streamStrides;
+  record.streamFrequencies = record.key.streamFrequencies;
   record.streamMask = record.key.streamMask;
   record.indexBuffer = record.key.indexBuffer;
   record.textures = record.key.textures;
@@ -2243,6 +2254,7 @@ FlatDrawStateKey makeFlatDrawStateKeyFromState(
           state.streamBuffers[i] ? state.streamBuffers[i]->handle() : Handle{};
       key.streamOffsets[i] = state.streamOffsets[i];
       key.streamStrides[i] = state.streamStrides[i];
+      key.streamFrequencies[i] = state.streamFrequencies[i];
       if (key.streamBuffers[i]) {
         key.streamMask |= 1u << i;
       }
@@ -2378,6 +2390,7 @@ void refreshFlatDrawStateRecordFromState(
     record.streamBuffers = record.key.streamBuffers;
     record.streamOffsets = record.key.streamOffsets;
     record.streamStrides = record.key.streamStrides;
+    record.streamFrequencies = record.key.streamFrequencies;
     record.streamMask = record.key.streamMask;
     record.indexBuffer = record.key.indexBuffer;
     record.textures = record.key.textures;
@@ -3846,6 +3859,7 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws,
 
   for (std::size_t i = 0; i < normalized.size(); ++i) {
     auto &draw = normalized[i];
+    draw.instanceCount = drawInstanceCountFromState(state_);
     const auto originalType = draw.primitiveType;
     draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
     if (originalType != PrimitiveType::TriangleFan) {
@@ -3885,6 +3899,7 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount,
   draw.startVertex = startVertex;
   draw.indexType = state_.indexType;
   draw.indexed = false;
+  draw.instanceCount = drawInstanceCountFromState(state_);
   if (type == PrimitiveType::TriangleFan) {
     draw.indexed = true;
     draw.baseVertexIndex = static_cast<i32>(startVertex);
@@ -3921,6 +3936,7 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount,
   draw.startIndex = startIndex;
   draw.indexType = indexType;
   draw.indexed = true;
+  draw.instanceCount = drawInstanceCountFromState(state_);
   if (type == PrimitiveType::TriangleFan) {
     if (!state_.indexBuffer) {
       return D3DERR_INVALIDCALL;

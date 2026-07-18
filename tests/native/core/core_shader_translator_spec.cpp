@@ -55,7 +55,7 @@ void testShaderThunk() {
   const auto pixelHandle = dxmt9_winemetal_compile_shader(&pixelRequest);
   check(pixelHandle != 0, "pixel shader thunk");
   const auto pixelSource = shaderSourceToString(pixelHandle);
-  checkContains(pixelSource, "fragment float4 dxmt9_fs", "pixel shader source");
+  checkContains(pixelSource, "fragment FSOut dxmt9_fs", "pixel shader source");
   checkContains(pixelSource, "def c0", "pixel shader decode comment");
   checkContains(pixelSource, "float4 r[1];",
                 "pixel shader trims temp array to max-written register");

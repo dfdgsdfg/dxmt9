@@ -115,6 +115,7 @@ void DeviceState::reset() {
   streamBuffers.fill(nullptr);
   streamOffsets.fill(0);
   streamStrides.fill(0);
+  streamFrequencies.fill(1);
   indexBuffer.reset();
   indexType = IndexType::UInt16;
   vertexDecl = {};
@@ -641,10 +642,12 @@ void StateBlock::capture(const DeviceState &state) {
   for (size_t i = 0; i < snapshot_.streamBuffers.size(); ++i) {
     if (baseline_.streamBuffers[i] != recorded.streamBuffers[i] ||
         baseline_.streamOffsets[i] != recorded.streamOffsets[i] ||
-        baseline_.streamStrides[i] != recorded.streamStrides[i]) {
+        baseline_.streamStrides[i] != recorded.streamStrides[i] ||
+        baseline_.streamFrequencies[i] != recorded.streamFrequencies[i]) {
       snapshot_.streamBuffers[i] = state.streamBuffers[i];
       snapshot_.streamOffsets[i] = state.streamOffsets[i];
       snapshot_.streamStrides[i] = state.streamStrides[i];
+      snapshot_.streamFrequencies[i] = state.streamFrequencies[i];
     }
   }
   if (baseline_.indexBuffer != recorded.indexBuffer ||
@@ -742,10 +745,12 @@ void StateBlock::apply(Device &device) const {
   for (size_t i = 0; i < state.streamBuffers.size(); ++i) {
     if (baseline_.streamBuffers[i] != snapshot_.streamBuffers[i] ||
         baseline_.streamOffsets[i] != snapshot_.streamOffsets[i] ||
-        baseline_.streamStrides[i] != snapshot_.streamStrides[i]) {
+        baseline_.streamStrides[i] != snapshot_.streamStrides[i] ||
+        baseline_.streamFrequencies[i] != snapshot_.streamFrequencies[i]) {
       state.streamBuffers[i] = snapshot_.streamBuffers[i];
       state.streamOffsets[i] = snapshot_.streamOffsets[i];
       state.streamStrides[i] = snapshot_.streamStrides[i];
+      state.streamFrequencies[i] = snapshot_.streamFrequencies[i];
     }
   }
   if (baseline_.indexBuffer != snapshot_.indexBuffer ||
@@ -984,6 +989,24 @@ HResult Device::setStreamSource(u32 stream, std::shared_ptr<Buffer> buffer,
   state_.streamBuffers[stream] = std::move(buffer);
   state_.streamOffsets[stream] = offset;
   state_.streamStrides[stream] = stride;
+  invalidateDrawStateCache(DrawStateInvalidationStream);
+  return D3D_OK;
+}
+
+HResult Device::setStreamSourceFreq(u32 stream, u32 frequency) {
+  if (stream >= kMaxStreams) {
+    return D3DERR_INVALIDCALL;
+  }
+  const bool indexedData = (frequency & kStreamSourceIndexedData) != 0;
+  const bool instanceData = (frequency & kStreamSourceInstanceData) != 0;
+  if ((indexedData && instanceData) || (stream == 0 && instanceData) ||
+      (!indexedData && !instanceData && frequency == 0)) {
+    return D3DERR_INVALIDCALL;
+  }
+  if (state_.streamFrequencies[stream] == frequency) {
+    return D3D_OK;
+  }
+  state_.streamFrequencies[stream] = frequency;
   invalidateDrawStateCache(DrawStateInvalidationStream);
   return D3D_OK;
 }

@@ -345,6 +345,7 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "  uint vertexStreamOffset;\n";
   out << "  uint vertexStreamStride;\n";
   out << "  uint _pad;\n";
+  out << "  uint streamInstanceDivisors[16];\n";
   out << "};\n";
   // H228 — per-draw fragment alpha-test immediate (host struct
   // dxmt9::state::FsVolatile, setFragmentBytes at fragment buffer 5). The
@@ -353,6 +354,8 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "struct FsVolatile {\n";
   out << "  uint alphaTest;\n";
   out << "  float alphaRef;\n";
+  out << "  uint sampleMask;\n";
+  out << "  uint _pad;\n";
   out << "};\n";
   out << "struct VSOut {\n";
   out << "  float4 position [[position]];\n";

@@ -108,15 +108,16 @@ struct FfpPsConsts {
 static_assert(sizeof(FfpPsConsts) == 384,
               "FfpPsConsts layout must match MSL prelude declaration");
 
-// Per-draw push constants. Padded to 16 B so Metal setVertexBytes
-// requirements (4 B alignment minimum, 16 B convention for uniforms) hold.
+// Per-draw push constants. Stream divisors are zero for per-vertex streams and
+// non-zero for D3DSTREAMSOURCE_INSTANCEDATA streams.
 struct DrawVolatile {
   i32 vertexBaseIndex = 0;
   u32 vertexStreamOffset = 0;
   u32 vertexStreamStride = 0;
   u32 _pad = 0;
+  std::array<u32, core::kMaxStreams> streamInstanceDivisors{};
 };
-static_assert(sizeof(DrawVolatile) == 16,
+static_assert(sizeof(DrawVolatile) == 80,
               "DrawVolatile layout must match MSL prelude declaration");
 
 // H228 — per-draw fragment immediate carrying the alpha-test state. Bound via
@@ -130,10 +131,12 @@ static_assert(sizeof(DrawVolatile) == 16,
 struct FsVolatile {
   u32 alphaTest = 0;   // 0 = alpha test off, else D3DCMPFUNC (1..8)
   f32 alphaRef = 0.0f; // RS_ALPHA_REF DWORD / 255.0f (matches fillFfpPsConsts)
+  u32 sampleMask = 0xffffffffu;
+  u32 _pad = 0;
 
   friend constexpr bool operator==(const FsVolatile&, const FsVolatile&) = default;
 };
-static_assert(sizeof(FsVolatile) == 8,
+static_assert(sizeof(FsVolatile) == 16,
               "FsVolatile layout must match the MSL struct bound at fragment buffer 5");
 
 // Per-sampler mip LOD bias (D3DSAMP_MIPMAPLODBIAS, gap_d3d9 B.3). Metal's
@@ -202,6 +205,9 @@ bool fragmentFogCouldApply(const core::RenderStateSnapshot& renderStates);
 
 DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
                                u32 vertexStreamStride);
+DrawVolatile buildDrawVolatile(
+    i32 vertexBaseIndex, u32 vertexStreamOffset, u32 vertexStreamStride,
+    const std::array<u32, core::kMaxStreams>& streamFrequencies);
 
 // H228 — single-source conversion from raw D3DRS alpha-test values to the
 // per-draw fragment immediate. Both the flat-state path (canonical/base
@@ -210,7 +216,8 @@ DrawVolatile buildDrawVolatile(i32 vertexBaseIndex, u32 vertexStreamOffset,
 // DXMT_DISABLE_ALPHA_TEST composition can never drift from the FfpPsConsts
 // upload semantics in fillFfpPsConsts.
 FsVolatile makeFsVolatile(u32 alphaTestEnable, u32 alphaTestFunc,
-                          u32 alphaTestRefRaw);
+                          u32 alphaTestRefRaw,
+                          u32 sampleMask = 0xffffffffu);
 FsVolatile buildFsVolatile(core::FlatDrawStateView state);
 
 // Compose a depth/stencil cache key from flat render-state storage.

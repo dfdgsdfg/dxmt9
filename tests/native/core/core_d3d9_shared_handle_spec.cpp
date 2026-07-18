@@ -29,16 +29,16 @@
 //       SYSTEMMEM + != 1 mip         -> D3DERR_INVALIDCALL
 //       SYSTEMMEM (cube/volume)      -> D3DERR_INVALIDCALL (no alias scope)
 //       SCRATCH / other non-DEFAULT  -> D3DERR_INVALIDCALL
-//       DEFAULT                      -> S_OK   (FIXME; handle ignored, created)
+//       DEFAULT                      -> S_OK   (provider create/open path)
 //     Vertex/Index buffer:
 //       non-DEFAULT pool             -> D3DERR_NOTAVAILABLE
-//       DEFAULT                      -> S_OK   (FIXME; handle ignored, created)
+//       DEFAULT                      -> S_OK   (provider create/open path)
 //     Offscreen plain surface:
 //       SYSTEMMEM                    -> S_OK   (caller memory aliased)
 //       SCRATCH / other non-DEFAULT  -> D3DERR_INVALIDCALL
-//       DEFAULT                      -> S_OK   (FIXME; handle ignored, created)
+//       DEFAULT                      -> S_OK   (provider create/open path)
 //     Render target / depth stencil (DEFAULT-pool only):
-//       extended                     -> S_OK   (FIXME; handle ignored, created)
+//       extended                     -> S_OK   (provider create/open path)
 //
 // PE conformance oracle functions (read, not modified) that encode these
 // expectations:
@@ -47,9 +47,9 @@
 //       test_ex_shared_handle_policy  (Ex: SYSTEMMEM/SCRATCH cases)
 //
 // The crucial regression this spec guards: the extended + D3DPOOL_DEFAULT
-// path must return S_OK (Wine proceeds, ignoring the handle), NOT the former
-// placeholder E_NOTIMPL.  Cross-process sharing is still not wired; only the
-// observable HRESULT parity is asserted here.
+// path must return S_OK, NOT the former placeholder E_NOTIMPL. The provider
+// create/open behavior is exercised separately by core_device_com_spec;
+// this value-level test only asserts PE validator HRESULT parity.
 
 #include "core_spec_fixtures.hpp"
 
@@ -96,7 +96,7 @@ int32_t mirrorTexture(bool extended, bool hasHandle, uint32_t pool,
     return kD3D_OK;
   }
   if (pool != kPoolDefault) return kD3DERR_INVALIDCALL;
-  return kD3D_OK;  // extended + DEFAULT: Wine proceeds (handle ignored).
+  return kD3D_OK;  // extended + DEFAULT: provider shared path is allowed.
 }
 
 // Mirrors validateSharedHandleForBuffer().
@@ -104,7 +104,7 @@ int32_t mirrorBuffer(bool extended, bool hasHandle, uint32_t pool) {
   if (!hasHandle) return kD3D_OK;
   if (!extended) return kE_NOTIMPL;
   if (pool != kPoolDefault) return kD3DERR_NOTAVAILABLE;
-  return kD3D_OK;  // extended + DEFAULT: Wine proceeds (handle ignored).
+  return kD3D_OK;  // extended + DEFAULT: provider shared path is allowed.
 }
 
 // Mirrors validateSharedHandleForSurface().  allowSystemMemUserMemory is true
@@ -119,14 +119,14 @@ int32_t mirrorSurface(bool extended, bool hasHandle, uint32_t pool,
   }
   if (pool == kPoolScratch) return kD3DERR_INVALIDCALL;
   if (pool != kPoolDefault) return kD3DERR_INVALIDCALL;
-  return kD3D_OK;  // extended + DEFAULT: Wine proceeds (handle ignored).
+  return kD3D_OK;  // extended + DEFAULT: provider shared path is allowed.
 }
 
 // Mirrors validateSharedHandleForDefaultSurface() (RT / DS are DEFAULT-only).
 int32_t mirrorDefaultSurface(bool extended, bool hasHandle) {
   if (!hasHandle) return kD3D_OK;
   if (!extended) return kE_NOTIMPL;
-  return kD3D_OK;  // extended: Wine proceeds (handle ignored).
+  return kD3D_OK;  // extended: provider shared path is allowed.
 }
 
 // ---------------------------------------------------------------------------
@@ -194,18 +194,18 @@ void testExtendedTextureScratchAndOther() {
 
 void testExtendedDefaultPoolProceeds() {
   // THE regression guard: extended + DEFAULT + handle must be S_OK (Wine
-  // logs a FIXME then creates the resource, ignoring the handle), NOT the
-  // former placeholder E_NOTIMPL.
+  // proceeds to provider create/open handling, NOT the former placeholder
+  // E_NOTIMPL.
   checkEq(mirrorTexture(true, kHandle, kPoolDefault, 1u, true), kD3D_OK,
-          "Ex texture DEFAULT + handle -> S_OK (handle ignored, created)");
+          "Ex texture DEFAULT + handle -> S_OK (provider shared path)");
   checkEq(mirrorTexture(true, kHandle, kPoolDefault, 1u, false), kD3D_OK,
-          "Ex cube/volume DEFAULT + handle -> S_OK (handle ignored, created)");
+          "Ex cube/volume DEFAULT + handle -> S_OK (provider shared path)");
   checkEq(mirrorBuffer(true, kHandle, kPoolDefault), kD3D_OK,
-          "Ex vertex/index buffer DEFAULT + handle -> S_OK (handle ignored)");
+          "Ex vertex/index buffer DEFAULT + handle -> S_OK (provider shared path)");
   checkEq(mirrorSurface(true, kHandle, kPoolDefault, true), kD3D_OK,
-          "Ex offscreen surface DEFAULT + handle -> S_OK (handle ignored)");
+          "Ex offscreen surface DEFAULT + handle -> S_OK (provider shared path)");
   checkEq(mirrorDefaultSurface(true, kHandle), kD3D_OK,
-          "Ex render target / depth stencil + handle -> S_OK (handle ignored)");
+          "Ex render target / depth stencil + handle -> S_OK (provider shared path)");
   // And confirm none of the DEFAULT cases is E_NOTIMPL anymore.
   check(mirrorTexture(true, kHandle, kPoolDefault, 1u, true) != kE_NOTIMPL,
         "Ex texture DEFAULT must not be E_NOTIMPL");

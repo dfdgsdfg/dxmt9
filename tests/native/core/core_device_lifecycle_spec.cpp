@@ -1572,6 +1572,55 @@ void testRasterStatusEstimateAdvancesMonotonicallyModuloDisplayHeight() {
   check(neutral.inVBlank, "raster InVBlank neutral on zero display height");
 }
 
+void testStreamSourceFrequencyReachesCoreDrawSubmission() {
+  auto backend = std::make_shared<RecordingBackend>();
+  Factory factory({}, backend);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 64;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "instancing device creation");
+  checkEq(device->state().streamFrequencies[0], 1u,
+          "stream0 frequency defaults to one");
+  checkEq(device->state().streamFrequencies[1], 1u,
+          "stream1 frequency defaults to one");
+  checkEq(device->setStreamSourceFreq(kMaxStreams, 1u), D3DERR_INVALIDCALL,
+          "out-of-range stream frequency rejected");
+  checkEq(device->setStreamSourceFreq(0, 0u), D3DERR_INVALIDCALL,
+          "zero unflagged frequency rejected");
+  checkEq(device->setStreamSourceFreq(
+              0, kStreamSourceInstanceData | 1u),
+          D3DERR_INVALIDCALL,
+          "stream0 instance-data frequency rejected");
+  checkEq(device->setStreamSourceFreq(
+              1, kStreamSourceIndexedData | kStreamSourceInstanceData | 1u),
+          D3DERR_INVALIDCALL,
+          "mutually exclusive stream frequency flags rejected");
+
+  checkEq(device->setStreamSourceFreq(
+              0, kStreamSourceIndexedData | 3u),
+          D3D_OK, "stream0 instance count accepted");
+  checkEq(device->setStreamSourceFreq(
+              1, kStreamSourceInstanceData | 2u),
+          D3D_OK, "stream1 instance divisor accepted");
+  checkEq(device->drawPrimitive(PrimitiveType::TriangleList, 1u, 0u),
+          D3D_OK, "instanced core draw submitted");
+  checkEq(backend->draws.size(), std::size_t{1},
+          "instanced core draw count");
+  const auto& draw = backend->draws.front();
+  checkEq(draw.param.instanceCount, 3u,
+          "stream0 frequency becomes draw instance count");
+  checkEq(draw.hot.streamFrequencies[1],
+          kStreamSourceInstanceData | 2u,
+          "stream1 divisor survives canonical draw snapshot");
+  checkEq(draw.hot.key.streamFrequencies[1],
+          kStreamSourceInstanceData | 2u,
+          "stream1 divisor participates in draw-run key");
+}
+
 }  // namespace
 
 int main() {
@@ -1588,6 +1637,7 @@ int main() {
     testResetRestartsExperimentCaptureFrameCounter();
     testExperimentCaptureWriteFailureEmitsSkipSidecar();
     testRasterStatusEstimateAdvancesMonotonicallyModuloDisplayHeight();
+    testStreamSourceFrequencyReachesCoreDrawSubmission();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

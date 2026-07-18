@@ -182,6 +182,33 @@ class DeviceImpl final : public Device {
     std::lock_guard lock(queue_.mutex_);
     return queue_.pool().createSurfaceForTexture(handle, level, desc);
   }
+  bool exportSharedBuffer(core::BufferHandle handle, SharedBufferBacking& out) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().exportSharedBuffer(handle, out);
+  }
+  core::BufferHandle importSharedBuffer(const core::BufferDesc& desc,
+                                        const SharedBufferBacking& backing) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().importSharedBuffer(desc, backing);
+  }
+  bool exportSharedTexture(core::TextureHandle handle, SharedTextureBacking& out) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().exportSharedTexture(handle, out);
+  }
+  core::TextureHandle importSharedTexture(const core::TextureDesc& desc,
+                                          const SharedTextureBacking& backing) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().importSharedTexture(desc, backing);
+  }
+  bool exportSharedSurface(core::SurfaceHandle handle, SharedSurfaceBacking& out) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().exportSharedSurface(handle, out);
+  }
+  core::SurfaceHandle importSharedSurface(const core::SurfaceDesc& desc,
+                                          const SharedSurfaceBacking& backing) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().importSharedSurface(desc, backing);
+  }
   void destroyBuffer(core::BufferHandle handle) override {
     std::lock_guard lock(queue_.mutex_);
     queue_.pool().markBufferDestroyAndGc(handle.value, queue_.completedSeqId_);

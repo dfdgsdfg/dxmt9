@@ -1050,6 +1050,16 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << shaders::makeShaderPrelude(preludeOptions);
   }
   emitFfpTextureOpHelper(out);
+  out << "struct FfpFsOut {\n";
+  out << "  float4 color [[color(0)]];\n";
+  out << "  uint sampleMask [[sample_mask]];\n";
+  out << "};\n";
+  out << "inline FfpFsOut dxmt9_make_ffp_fs_out(float4 color, uint sampleMask) {\n";
+  out << "  FfpFsOut result;\n";
+  out << "  result.color = color;\n";
+  out << "  result.sampleMask = sampleMask;\n";
+  out << "  return result;\n";
+  out << "}\n";
   // D3DSAMP_MIPMAPLODBIAS (gap_d3d9 B.3): per-sampler mip LOD bias is applied
   // at sample time via `texture.sample(..., bias(b))`; Metal samplers carry no
   // LOD-bias field. The bias rides a dedicated fragment uniform bound at slot 4
@@ -1086,9 +1096,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   // (struct declared in the shared prelude; fragment buffer 5 mirrors the
   // vertex DrawVolatile lane and stays direct in every argbuf mode).
   const auto emitFsVolatileParam = [&]() {
-    if (emitAlphaTest) {
-      out << ", constant FsVolatile& fsVolatile [[buffer(5)]]";
-    }
+    out << ", constant FsVolatile& fsVolatile [[buffer(5)]]";
   };
   if (hasTextureParams) {
     if (argbufResourceArray) {
@@ -1098,7 +1106,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // re-binds `tex<stage>` / `samp<stage>` off the argbuf so the FFP
       // sample sites (which reference tex<stage>.sample(samp<stage>, ...))
       // are byte-identical to the direct lane.
-      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+      out << "fragment FfpFsOut dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
           << shaders::kArgbufHybridBindSlot << ")]]";
       emitPointCoordParam();
@@ -1118,7 +1126,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
             << "];\n";
       }
     } else if (argbufHybrid) {
-      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+      out << "fragment FfpFsOut dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
           << shaders::kArgbufHybridBindSlot << ")]]";
       emitPointCoordParam();
@@ -1139,7 +1147,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
     } else {
-      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+      out << "fragment FfpFsOut dxmt9_fs(VSOut in [[stage_in]], "
              "constant PsConsts& psConsts [[buffer(0)]], "
              "constant FfpPsConsts& ffpPs [[buffer(3)]]";
       emitPointCoordParam();
@@ -1161,7 +1169,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  (void)psConsts;\n";
   } else {
     if (argbufHybrid) {
-      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+      out << "fragment FfpFsOut dxmt9_fs(VSOut in [[stage_in]], "
              "constant ArgbufLayout& abuf [[buffer("
           << shaders::kArgbufHybridBindSlot << ")]]";
       emitPointCoordParam();
@@ -1170,7 +1178,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  constant PsConsts& psConsts = *abuf.psConsts;\n";
       out << "  constant FfpPsConsts& ffpPs = *abuf.ffpPs;\n";
     } else {
-      out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], "
+      out << "fragment FfpFsOut dxmt9_fs(VSOut in [[stage_in]], "
              "constant PsConsts& psConsts [[buffer(0)]], "
              "constant FfpPsConsts& ffpPs [[buffer(3)]]";
       emitPointCoordParam();
@@ -1187,7 +1195,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   }
   if (shaders::vsoutProbePositionOnlyEnabled() ||
       ::dxmt9::debug::forceFragmentShaderColor()) {
-    out << "  return float4(1.0f, 0.0f, 1.0f, 1.0f);\n";
+    out << "  return dxmt9_make_ffp_fs_out(float4(1.0f, 0.0f, 1.0f, 1.0f), fsVolatile.sampleMask);\n";
     out << "}\n";
     out << "// ffp pixel hash " << key.hash << "\n";
     return out.str();
@@ -1226,10 +1234,10 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
   if (hasEnabledStages) {
     if (debugFfpUv) {
       if (key.pointSpriteEnable) {
-        out << "  return float4(dxmt9_pointCoord.x, dxmt9_pointCoord.y, 0.0, 1.0);\n";
+        out << "  return dxmt9_make_ffp_fs_out(float4(dxmt9_pointCoord.x, dxmt9_pointCoord.y, 0.0, 1.0), fsVolatile.sampleMask);\n";
       } else {
-        out << "  return float4(fract(dxmt9_select_texcoord(in, 0u).x), "
-               "fract(dxmt9_select_texcoord(in, 0u).y), 0.0, 1.0);\n";
+        out << "  return dxmt9_make_ffp_fs_out(float4(fract(dxmt9_select_texcoord(in, 0u).x), "
+               "fract(dxmt9_select_texcoord(in, 0u).y), 0.0, 1.0), fsVolatile.sampleMask);\n";
       }
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
@@ -1246,7 +1254,9 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // + a TEXTURE0 transform). conf-d3d9-intent-probe regression coverage:
       // `texcoord-index-matrix`.
       const u32 coordIndex = static_cast<u32>(stage);
-      out << "  return " << sampleExpr(stage, sampleCoord(coordIndex)) << ";\n";
+      out << "  return dxmt9_make_ffp_fs_out("
+          << sampleExpr(stage, sampleCoord(coordIndex))
+          << ", fsVolatile.sampleMask);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -1258,7 +1268,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       // `out.texcoord<stage>`.
       const u32 coordIndex = static_cast<u32>(stage);
       out << "  float alpha = " << sampleExpr(stage, sampleCoord(coordIndex)) << ".a;\n";
-      out << "  return float4(alpha, alpha, alpha, 1.0);\n";
+      out << "  return dxmt9_make_ffp_fs_out(float4(alpha, alpha, alpha, 1.0), fsVolatile.sampleMask);\n";
       out << "}\n";
       out << "// ffp pixel hash " << key.hash << "\n";
       return out.str();
@@ -1392,7 +1402,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
     out << "  color = dxmt9_apply_fog(color, ffpPs, fogDepth, "
         << stageInFloatRead(context, "fogFactor") << ");\n";
   }
-  out << "  return color;\n";
+  out << "  return dxmt9_make_ffp_fs_out(color, fsVolatile.sampleMask);\n";
   out << "}\n";
   out << "// ffp pixel hash " << key.hash << "\n";
   return out.str();

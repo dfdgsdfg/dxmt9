@@ -3,10 +3,13 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 
 using namespace dxmt9::d3d9::devicec;
 
@@ -24,6 +27,84 @@ constexpr uint32_t kD3DUsageAutoGenMipmap = 0x00000400u;
 constexpr uint32_t kD3DFmtA8R8G8B8 = 21u;
 constexpr uint32_t kD3DFmtA8P8 = 40u;
 constexpr uint32_t kD3DFmtP8 = 41u;
+
+// D3D9Ex shared handles are public Win32 HANDLE values. Until the unix bridge
+// grows an IOSurface / MTLSharedTextureHandle transport, keep a process-wide
+// registry whose entries retain the source core resource and whose imports
+// clone the same Metal backing into the destination device's resource pool.
+// Values stay within 32 bits so WoW64 and x64 observe the same token.
+constexpr uint64_t kDxmtSharedHandlePrefix = 0xd9000000ull;
+constexpr uint64_t kDxmtSharedHandleMask = 0xff000000ull;
+std::atomic<uint32_t> gNextSharedHandle{1u};
+std::mutex gSharedResourceMutex;
+
+struct SharedTextureSignature {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t depth = 0;
+  uint32_t levels = 0;
+  uint32_t usage = 0;
+  uint32_t format = 0;
+  uint32_t pool = 0;
+  uint32_t type = 0;
+  bool operator==(const SharedTextureSignature&) const = default;
+};
+
+struct SharedBufferSignature {
+  uint32_t length = 0;
+  uint32_t usage = 0;
+  uint32_t formatOrFvf = 0;
+  uint32_t pool = 0;
+  uint32_t type = 0;
+  bool operator==(const SharedBufferSignature&) const = default;
+};
+
+struct SharedSurfaceSignature {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t format = 0;
+  uint32_t multiSampleType = 0;
+  uint32_t multiSampleQuality = 0;
+  uint32_t flags = 0;
+  uint32_t pool = 0;
+  uint32_t type = 0;
+  bool operator==(const SharedSurfaceSignature&) const = default;
+};
+
+struct SharedTextureEntry {
+  SharedTextureSignature signature;
+  std::shared_ptr<dxmt9::core::Texture> resource;
+};
+
+struct SharedBufferEntry {
+  SharedBufferSignature signature;
+  std::shared_ptr<dxmt9::core::Buffer> resource;
+};
+
+struct SharedSurfaceEntry {
+  SharedSurfaceSignature signature;
+  std::shared_ptr<dxmt9::core::Surface> resource;
+};
+
+std::unordered_map<uint64_t, SharedTextureEntry> gSharedTextures;
+std::unordered_map<uint64_t, SharedBufferEntry> gSharedBuffers;
+std::unordered_map<uint64_t, SharedSurfaceEntry> gSharedSurfaces;
+
+bool isDxmtSharedHandle(uint64_t handle) {
+  return handle <= 0xffffffffull &&
+         (handle & kDxmtSharedHandleMask) == kDxmtSharedHandlePrefix;
+}
+
+uint64_t allocateSharedHandleLocked() {
+  for (;;) {
+    const uint64_t sequence = gNextSharedHandle.fetch_add(1u, std::memory_order_relaxed) & 0x00ffffffu;
+    const uint64_t handle = kDxmtSharedHandlePrefix | (sequence == 0u ? 1u : sequence);
+    if (!gSharedTextures.contains(handle) && !gSharedBuffers.contains(handle) &&
+        !gSharedSurfaces.contains(handle)) {
+      return handle;
+    }
+  }
+}
 
 uint64_t traceBufferHandleFilter() {
   static const uint64_t filter = [] {
@@ -255,6 +336,13 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
                                                     uint32_t levels, uint32_t usage,
                                                     uint32_t fmt, uint32_t pool) {
+  return dxmt9c_device_create_texture_shared(d, w, h, levels, usage, fmt, pool, nullptr);
+}
+
+extern "C" D9CTexture* dxmt9c_device_create_texture_shared(D9CDevice* d, uint32_t w, uint32_t h,
+                                                           uint32_t levels, uint32_t usage,
+                                                           uint32_t fmt, uint32_t pool,
+                                                           uint64_t* sharedHandle) {
   dxmt9DebugLog("device_create_texture begin device=%p size=%ux%u levels=%u usage=0x%x fmt=%u(%s) pool=%u",
                 static_cast<void*>(d), w, h, levels, usage, fmt,
                 dxmt9::core::formatName(fmtFromD3D(fmt)).c_str(), pool);
@@ -266,12 +354,29 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::TwoD;
+  const SharedTextureSignature sharedSignature{
+      w, h, 1u, desc.levels, usage, fmt, pool,
+      static_cast<uint32_t>(desc.type)};
   if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
     dxmt9DebugLog("device_create_texture rejected compressed alignment size=%ux%u fmt=%u(%s)",
                   w, h, fmt, dxmt9::core::formatName(desc.format).c_str());
     return nullptr;
   }
-  auto tex = d->iface->CreateTexture(desc);
+  std::shared_ptr<dxmt9::core::Texture> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedTextures.find(*sharedHandle);
+    if (entry != gSharedTextures.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto tex = sharedSource ? d->dev().openSharedTexture(sharedSource)
+                          : d->iface->CreateTexture(desc);
   if (!tex) {
     dxmt9DebugLog("device_create_texture failed device=%p", static_cast<void*>(d));
     return nullptr;
@@ -280,13 +385,27 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, ui
                 static_cast<void*>(tex.get()), tex->levelCount());
   auto* out = new D9CTexture{tex, d};
   out->d3dFormat = fmt;
+  out->sharedOpened = static_cast<bool>(sharedSource);
   initPalettizedTexture(out, fmt);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedTextures.emplace(handle, SharedTextureEntry{sharedSignature, tex});
+    *sharedHandle = handle;
+  }
   return out;
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t size,
                                                          uint32_t levels, uint32_t usage,
                                                          uint32_t fmt, uint32_t pool) {
+  return dxmt9c_device_create_cube_texture_shared(d, size, levels, usage, fmt, pool, nullptr);
+}
+
+extern "C" D9CTexture* dxmt9c_device_create_cube_texture_shared(D9CDevice* d, uint32_t size,
+                                                                uint32_t levels, uint32_t usage,
+                                                                uint32_t fmt, uint32_t pool,
+                                                                uint64_t* sharedHandle) {
   dxmt9::core::TextureDesc desc;
   desc.width = size;
   desc.height = size;
@@ -295,16 +414,40 @@ extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* d, uint32_t 
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Cube;
+  const SharedTextureSignature sharedSignature{
+      size, size, 1u, desc.levels, usage, fmt, pool,
+      static_cast<uint32_t>(desc.type)};
   if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
     return nullptr;
   }
-  auto tex = d->iface->CreateTexture(desc);
+  std::shared_ptr<dxmt9::core::Texture> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedTextures.find(*sharedHandle);
+    if (entry != gSharedTextures.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto tex = sharedSource ? d->dev().openSharedTexture(sharedSource)
+                          : d->iface->CreateTexture(desc);
   if (!tex) {
     return nullptr;
   }
   auto* out = new D9CTexture{tex, d};
   out->d3dFormat = fmt;
+  out->sharedOpened = static_cast<bool>(sharedSource);
   initPalettizedTexture(out, fmt);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedTextures.emplace(handle, SharedTextureEntry{sharedSignature, tex});
+    *sharedHandle = handle;
+  }
   return out;
 }
 
@@ -312,6 +455,13 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
                                                            uint32_t depth, uint32_t levels,
                                                            uint32_t usage, uint32_t fmt,
                                                            uint32_t pool) {
+  return dxmt9c_device_create_volume_texture_shared(
+      d, w, h, depth, levels, usage, fmt, pool, nullptr);
+}
+
+extern "C" D9CTexture* dxmt9c_device_create_volume_texture_shared(
+    D9CDevice* d, uint32_t w, uint32_t h, uint32_t depth, uint32_t levels,
+    uint32_t usage, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
   dxmt9::core::TextureDesc desc;
   desc.width = w;
   desc.height = h;
@@ -321,26 +471,72 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* d, uint32_
   desc.pool = poolFromD3D(pool);
   desc.usage = usageFromD3D(usage);
   desc.type = dxmt9::core::TextureType::Volume;
+  const SharedTextureSignature sharedSignature{
+      w, h, depth, desc.levels, usage, fmt, pool,
+      static_cast<uint32_t>(desc.type)};
   if (invalidCompressedTextureDimensions(desc.format, desc.width, desc.height)) {
     return nullptr;
   }
-  auto tex = d->iface->CreateTexture(desc);
+  std::shared_ptr<dxmt9::core::Texture> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedTextures.find(*sharedHandle);
+    if (entry != gSharedTextures.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto tex = sharedSource ? d->dev().openSharedTexture(sharedSource)
+                          : d->iface->CreateTexture(desc);
   if (!tex) {
     return nullptr;
   }
   auto* out = new D9CTexture{tex, d};
   out->d3dFormat = fmt;
+  out->sharedOpened = static_cast<bool>(sharedSource);
   initPalettizedTexture(out, fmt);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedTextures.emplace(handle, SharedTextureEntry{sharedSignature, tex});
+    *sharedHandle = handle;
+  }
   return out;
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* d, uint32_t len,
                                                          uint32_t usage, uint32_t fvf,
                                                          uint32_t pool) {
+  return dxmt9c_device_create_vertex_buffer_shared(d, len, usage, fvf, pool, nullptr);
+}
+
+extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer_shared(D9CDevice* d, uint32_t len,
+                                                                uint32_t usage, uint32_t fvf,
+                                                                uint32_t pool,
+                                                                uint64_t* sharedHandle) {
   dxmt9::core::BufferDesc desc{len, poolFromD3D(pool),
                                static_cast<uint32_t>(usageFromD3D(usage) |
                                                      dxmt9::core::UsageVertexBuffer)};
-  auto buf = d->iface->CreateBuffer(desc);
+  const SharedBufferSignature sharedSignature{len, usage, fvf, pool, 1u};
+  std::shared_ptr<dxmt9::core::Buffer> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedBuffers.find(*sharedHandle);
+    if (entry != gSharedBuffers.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto buf = sharedSource ? d->dev().openSharedBuffer(sharedSource)
+                          : d->iface->CreateBuffer(desc);
   if (!buf) {
     return nullptr;
   }
@@ -350,16 +546,45 @@ extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* d, uint32_t 
   out->desc.pool = pool;
   out->desc.fvf = fvf;
   out->desc.format = 0;
+  out->sharedOpened = static_cast<bool>(sharedSource);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedBuffers.emplace(handle, SharedBufferEntry{sharedSignature, buf});
+    *sharedHandle = handle;
+  }
   return out;
 }
 
 extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* d, uint32_t len,
                                                         uint32_t usage, uint32_t fmt,
                                                         uint32_t pool) {
+  return dxmt9c_device_create_index_buffer_shared(d, len, usage, fmt, pool, nullptr);
+}
+
+extern "C" D9CBuffer* dxmt9c_device_create_index_buffer_shared(D9CDevice* d, uint32_t len,
+                                                               uint32_t usage, uint32_t fmt,
+                                                               uint32_t pool,
+                                                               uint64_t* sharedHandle) {
   dxmt9::core::BufferDesc desc{len, poolFromD3D(pool),
                                static_cast<uint32_t>(usageFromD3D(usage) |
                                                      dxmt9::core::UsageIndexBuffer)};
-  auto buf = d->iface->CreateBuffer(desc);
+  const SharedBufferSignature sharedSignature{len, usage, fmt, pool, 2u};
+  std::shared_ptr<dxmt9::core::Buffer> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedBuffers.find(*sharedHandle);
+    if (entry != gSharedBuffers.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto buf = sharedSource ? d->dev().openSharedBuffer(sharedSource)
+                          : d->iface->CreateBuffer(desc);
   if (!buf) {
     return nullptr;
   }
@@ -369,54 +594,136 @@ extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* d, uint32_t l
   out->desc.pool = pool;
   out->desc.fvf = 0;
   out->desc.format = fmt;
+  out->sharedOpened = static_cast<bool>(sharedSource);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedBuffers.emplace(handle, SharedBufferEntry{sharedSignature, buf});
+    *sharedHandle = handle;
+  }
   return out;
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_render_target(D9CDevice* d, uint32_t w, uint32_t h,
                                                           uint32_t fmt, uint32_t msType,
-                                                          uint32_t, uint32_t, uint64_t*) {
+                                                          uint32_t msQuality, uint32_t lockable,
+                                                          uint64_t* sharedHandle) {
   dxmt9::core::SurfaceDesc desc;
   desc.width = w;
   desc.height = h;
   desc.format = fmtFromD3D(fmt);
   desc.renderTarget = true;
   desc.multiSampleType = msTypeFromD3D(msType);
-  auto surf = d->iface->CreateSurface(desc);
+  const SharedSurfaceSignature sharedSignature{
+      w, h, fmt, msType, msQuality, lockable, 0u, 1u};
+  std::shared_ptr<dxmt9::core::Surface> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedSurfaces.find(*sharedHandle);
+    if (entry != gSharedSurfaces.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto surf = sharedSource ? d->dev().openSharedSurface(sharedSource)
+                           : d->iface->CreateSurface(desc);
   if (!surf) {
     return nullptr;
   }
-  return new D9CSurface{surf};
+  auto* out = new D9CSurface{surf};
+  out->sharedOpened = static_cast<bool>(sharedSource);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedSurfaces.emplace(handle, SharedSurfaceEntry{sharedSignature, surf});
+    *sharedHandle = handle;
+  }
+  return out;
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_depth_stencil(D9CDevice* d, uint32_t w, uint32_t h,
                                                           uint32_t fmt, uint32_t msType,
-                                                          uint32_t, uint32_t, uint64_t*) {
+                                                          uint32_t msQuality, uint32_t discard,
+                                                          uint64_t* sharedHandle) {
   dxmt9::core::SurfaceDesc desc;
   desc.width = w;
   desc.height = h;
   desc.format = fmtFromD3D(fmt);
   desc.depthStencil = true;
   desc.multiSampleType = msTypeFromD3D(msType);
-  auto surf = d->iface->CreateSurface(desc);
+  const SharedSurfaceSignature sharedSignature{
+      w, h, fmt, msType, msQuality, discard, 0u, 2u};
+  std::shared_ptr<dxmt9::core::Surface> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedSurfaces.find(*sharedHandle);
+    if (entry != gSharedSurfaces.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto surf = sharedSource ? d->dev().openSharedSurface(sharedSource)
+                           : d->iface->CreateSurface(desc);
   if (!surf) {
     return nullptr;
   }
-  return new D9CSurface{surf};
+  auto* out = new D9CSurface{surf};
+  out->sharedOpened = static_cast<bool>(sharedSource);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedSurfaces.emplace(handle, SharedSurfaceEntry{sharedSignature, surf});
+    *sharedHandle = handle;
+  }
+  return out;
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_offscreen_surface(D9CDevice* d, uint32_t w,
                                                               uint32_t h, uint32_t fmt,
-                                                              uint32_t pool, uint64_t*) {
+                                                              uint32_t pool,
+                                                              uint64_t* sharedHandle) {
   dxmt9::core::SurfaceDesc desc;
   desc.width = w;
   desc.height = h;
   desc.format = fmtFromD3D(fmt);
   desc.pool = poolFromD3D(pool);
-  auto surf = d->iface->CreateSurface(desc);
+  const SharedSurfaceSignature sharedSignature{
+      w, h, fmt, 0u, 0u, 0u, pool, 3u};
+  std::shared_ptr<dxmt9::core::Surface> sharedSource;
+  if (sharedHandle && *sharedHandle != 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const auto entry = gSharedSurfaces.find(*sharedHandle);
+    if (entry != gSharedSurfaces.end()) {
+      if (entry->second.signature != sharedSignature) {
+        return nullptr;
+      }
+      sharedSource = entry->second.resource;
+    } else if (isDxmtSharedHandle(*sharedHandle)) {
+      return nullptr;
+    }
+  }
+  auto surf = sharedSource ? d->dev().openSharedSurface(sharedSource)
+                           : d->iface->CreateSurface(desc);
   if (!surf) {
     return nullptr;
   }
-  return new D9CSurface{surf};
+  auto* out = new D9CSurface{surf};
+  out->sharedOpened = static_cast<bool>(sharedSource);
+  if (sharedHandle && *sharedHandle == 0u) {
+    std::lock_guard lock(gSharedResourceMutex);
+    const uint64_t handle = allocateSharedHandleLocked();
+    gSharedSurfaces.emplace(handle, SharedSurfaceEntry{sharedSignature, surf});
+    *sharedHandle = handle;
+  }
+  return out;
 }
 
 extern "C" void dxmt9c_texture_addref(D9CTexture* t) {

@@ -122,6 +122,10 @@ void testAllStateBlockRestoresTextureSamplerTssAndRenderTargets() {
   checkEq(device->setRenderTarget(0, rt0), D3D_OK, "set snapshot RT0");
   checkEq(device->setRenderTarget(2, rt2), D3D_OK, "set snapshot RT2");
   checkEq(device->setDepthStencilSurface(depth), D3D_OK, "set snapshot DS");
+  checkEq(device->setStreamSourceFreq(0, kStreamSourceIndexedData | 3u),
+          D3D_OK, "set snapshot stream0 instance count");
+  checkEq(device->setStreamSourceFreq(1, kStreamSourceInstanceData | 2u),
+          D3D_OK, "set snapshot stream1 instance divisor");
 
   auto block = device->createStateBlock(StateBlockType::All);
   check(block != nullptr, "all stateblock capture");
@@ -140,6 +144,10 @@ void testAllStateBlockRestoresTextureSamplerTssAndRenderTargets() {
   checkEq(device->setRenderTarget(0, replacementRt), D3D_OK, "mutate RT0");
   checkEq(device->setRenderTarget(2, nullptr), D3D_OK, "mutate RT2");
   checkEq(device->setDepthStencilSurface(replacementDepth), D3D_OK, "mutate DS");
+  checkEq(device->setStreamSourceFreq(0, 1u), D3D_OK,
+          "mutate stream0 instance count");
+  checkEq(device->setStreamSourceFreq(1, 1u), D3D_OK,
+          "mutate stream1 instance divisor");
 
   checkEq(device->applyStateBlock(*block), D3D_OK, "apply all stateblock");
   const auto& state = device->state();
@@ -160,6 +168,10 @@ void testAllStateBlockRestoresTextureSamplerTssAndRenderTargets() {
           "all stateblock restores sparse RT2 handle/level/sample payload");
   checkEq(state.depthStencil, attachmentOf(depth),
           "all stateblock restores depth-stencil payload");
+  checkEq(state.streamFrequencies[0], kStreamSourceIndexedData | 3u,
+          "all stateblock restores stream0 instance count");
+  checkEq(state.streamFrequencies[1], kStreamSourceInstanceData | 2u,
+          "all stateblock restores stream1 instance divisor");
 }
 
 void testRecordedDeltaStateBlockAppliesOnlyChangedResourcePayloads() {

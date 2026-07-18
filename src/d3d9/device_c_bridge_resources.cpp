@@ -6,9 +6,19 @@ extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* arg0, uint32_t w,
   return dxmt9p_device_create_texture(arg0, w, h, levels, usage, fmt, pool);
 }
 
+extern "C" D9CTexture* dxmt9c_device_create_texture_shared(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_create_texture_shared(arg0, w, h, levels, usage, fmt, pool, sharedHandle);
+}
+
 extern "C" D9CTexture* dxmt9c_device_create_cube_texture(D9CDevice* arg0, uint32_t size, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_cube_texture(arg0, size, levels, usage, fmt, pool);
+}
+
+extern "C" D9CTexture* dxmt9c_device_create_cube_texture_shared(D9CDevice* arg0, uint32_t size, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_create_cube_texture_shared(arg0, size, levels, usage, fmt, pool, sharedHandle);
 }
 
 extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t d, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
@@ -16,14 +26,29 @@ extern "C" D9CTexture* dxmt9c_device_create_volume_texture(D9CDevice* arg0, uint
   return dxmt9p_device_create_volume_texture(arg0, w, h, d, levels, usage, fmt, pool);
 }
 
+extern "C" D9CTexture* dxmt9c_device_create_volume_texture_shared(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t d, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_create_volume_texture_shared(arg0, w, h, d, levels, usage, fmt, pool, sharedHandle);
+}
+
 extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fvf, uint32_t pool) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_vertex_buffer(arg0, length, usage, fvf, pool);
 }
 
+extern "C" D9CBuffer* dxmt9c_device_create_vertex_buffer_shared(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fvf, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_create_vertex_buffer_shared(arg0, length, usage, fvf, pool, sharedHandle);
+}
+
 extern "C" D9CBuffer* dxmt9c_device_create_index_buffer(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fmt, uint32_t pool) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_create_index_buffer(arg0, length, usage, fmt, pool);
+}
+
+extern "C" D9CBuffer* dxmt9c_device_create_index_buffer_shared(D9CDevice* arg0, uint32_t length, uint32_t usage, uint32_t fmt, uint32_t pool, uint64_t* sharedHandle) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_create_index_buffer_shared(arg0, length, usage, fmt, pool, sharedHandle);
 }
 
 extern "C" D9CSurface* dxmt9c_device_create_render_target(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t fmt, uint32_t msType, uint32_t msQuality, uint32_t lockable, uint64_t* sharedHandle) {

@@ -53,3 +53,9 @@ format/windowed combination.
 `D3DRS_DITHERENABLE` is accepted only as shadow state. The capability bit may be
 advertised only after the render backend implements observable output
 dithering.
+
+**R-CAPS-9** `CursorCaps` must remain zero while `SetCursorProperties()`,
+`SetCursorPosition()`, and `ShowCursor()` provide validation and PE shadow state
+without a presenter-owned cursor-render path or WindowServer cursor integration.
+`D3DCURSORCAPS_COLOR` and `D3DCURSORCAPS_LOWRES` may be advertised only after the
+corresponding cursor behavior is observable.

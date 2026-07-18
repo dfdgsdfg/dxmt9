@@ -642,6 +642,7 @@ struct FlatDrawStateKey {
   std::array<Handle, kMaxStreams> streamBuffers{};
   std::array<u32, kMaxStreams> streamOffsets{};
   std::array<u32, kMaxStreams> streamStrides{};
+  std::array<u32, kMaxStreams> streamFrequencies{};
   u32 streamMask = 0;
   Handle indexBuffer{};
   u32 vertexElementCount = 0;
@@ -681,6 +682,7 @@ struct FlatDrawStateRecord {
   std::array<Handle, kMaxStreams> streamBuffers{};
   std::array<u32, kMaxStreams> streamOffsets{};
   std::array<u32, kMaxStreams> streamStrides{};
+  std::array<u32, kMaxStreams> streamFrequencies{};
   u32 streamMask = 0;
   Handle indexBuffer{};
   std::array<Handle, kMaxTextures> textures{};
@@ -1041,6 +1043,7 @@ struct DrawParam {
   u32 startIndex = 0;
   IndexType indexType = IndexType::UInt16;
   bool indexed = false;                    // true when using drawIndexedPrimitive
+  u32 instanceCount = 1;
   DrawPayloadRange userVertexRange{};      // draw-run payload slice, if present
   DrawPayloadRange userIndexRange{};       // draw-run payload slice, if present
   DrawPayloadRange bindingOverrideRange{}; // DrawBindingOverride payload slice
@@ -1603,6 +1606,11 @@ struct DrawDesc {
   Handle indexBuffer{};
   IndexType indexType = IndexType::UInt16;
   VertexDeclSnapshot vertexDecl{};
+  std::array<u32, kMaxStreams> streamFrequencies = [] {
+    std::array<u32, kMaxStreams> frequencies{};
+    frequencies.fill(1);
+    return frequencies;
+  }();
   ShaderRef vertexShader{};
   ShaderRef pixelShader{};
   VertexShaderConstants vsConst{};
@@ -1862,6 +1870,11 @@ struct DeviceState {
   std::array<std::shared_ptr<Buffer>, kMaxStreams> streamBuffers{};
   std::array<u32, kMaxStreams> streamOffsets{};
   std::array<u32, kMaxStreams> streamStrides{};
+  std::array<u32, kMaxStreams> streamFrequencies = [] {
+    std::array<u32, kMaxStreams> frequencies{};
+    frequencies.fill(1);
+    return frequencies;
+  }();
   std::shared_ptr<Buffer> indexBuffer;
   IndexType indexType = IndexType::UInt16;
   VertexDeclSnapshot vertexDecl{};
@@ -1897,6 +1910,8 @@ class Buffer {
   std::span<const u8> bytes() const noexcept { return storage_; }
 
  private:
+  friend class Device;
+
   std::weak_ptr<Device> owner_;
   std::shared_ptr<dxmt9::Device> backend_;
   BufferHandle handle_{};
@@ -1934,6 +1949,8 @@ class Texture : public std::enable_shared_from_this<Texture> {
   void invalidate();
 
  private:
+  friend class Device;
+
   struct LevelStorage {
     u32 width = 0;
     u32 height = 0;
@@ -2011,6 +2028,8 @@ class Surface : public std::enable_shared_from_this<Surface> {
   void invalidate();
 
  private:
+  friend class Device;
+
   std::weak_ptr<Device> owner_;
   std::shared_ptr<dxmt9::Device> backend_;
   std::weak_ptr<Texture> textureContainer_;
@@ -2160,6 +2179,9 @@ class Device : public std::enable_shared_from_this<Device> {
   [[nodiscard]] std::shared_ptr<Buffer> createBuffer(const BufferDesc& desc);
   [[nodiscard]] std::shared_ptr<Texture> createTexture(const TextureDesc& desc);
   [[nodiscard]] std::shared_ptr<Surface> createSurface(const SurfaceDesc& desc);
+  [[nodiscard]] std::shared_ptr<Buffer> openSharedBuffer(const std::shared_ptr<Buffer>& source);
+  [[nodiscard]] std::shared_ptr<Texture> openSharedTexture(const std::shared_ptr<Texture>& source);
+  [[nodiscard]] std::shared_ptr<Surface> openSharedSurface(const std::shared_ptr<Surface>& source);
   [[nodiscard]] std::shared_ptr<Query> createQuery(QueryType type);
   [[nodiscard]] std::shared_ptr<StateBlock> createStateBlock(StateBlockType type = StateBlockType::All) const;
   [[nodiscard]] std::shared_ptr<SwapChain> createAdditionalSwapChain(const PresentParameters& params);
@@ -2208,6 +2230,7 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult setMaterial(const Material& material);
   HResult setTexture(u32 stage, std::shared_ptr<Texture> texture);
   HResult setStreamSource(u32 stream, std::shared_ptr<Buffer> buffer, u32 offset, u32 stride);
+  HResult setStreamSourceFreq(u32 stream, u32 frequency);
   HResult setIndices(std::shared_ptr<Buffer> buffer, IndexType indexType = IndexType::UInt16);
   HResult setFVF(u32 fvf);
   HResult setVertexDeclaration(std::vector<VertexElement> elements);

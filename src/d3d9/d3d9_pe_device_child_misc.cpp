@@ -523,8 +523,48 @@ public:
                                  (uint64_t)(uintptr_t)wnd, dirty, flags));
   }
   HRESULT STDMETHODCALLTYPE
-  GetFrontBufferData(IDirect3DSurface9 *) noexcept override {
-    return D3DERR_INVALIDCALL;
+  GetFrontBufferData(IDirect3DSurface9 *destination) noexcept override {
+    if (!destination || !device_)
+      return D3DERR_INVALIDCALL;
+
+    D3DSURFACE_DESC destinationDesc{};
+    if (FAILED(destination->GetDesc(&destinationDesc)) ||
+        destinationDesc.Pool != D3DPOOL_SYSTEMMEM ||
+        destinationDesc.Format != D3DFMT_A8R8G8B8)
+      return D3DERR_INVALIDCALL;
+
+    IDirect3DSurface9 *backBuffer = nullptr;
+    HRESULT hr = GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
+    if (FAILED(hr) || !backBuffer)
+      return hr;
+
+    D3DSURFACE_DESC backBufferDesc{};
+    hr = backBuffer->GetDesc(&backBufferDesc);
+    if (FAILED(hr)) {
+      backBuffer->Release();
+      return hr;
+    }
+
+    IDirect3DSurface9 *readbackSource = backBuffer;
+    IDirect3DSurface9 *resolved = nullptr;
+    if (backBufferDesc.MultiSampleType != D3DMULTISAMPLE_NONE) {
+      hr = device_->CreateRenderTarget(
+          backBufferDesc.Width, backBufferDesc.Height,
+          backBufferDesc.Format, D3DMULTISAMPLE_NONE, 0, FALSE,
+          &resolved, nullptr);
+      if (SUCCEEDED(hr))
+        hr = device_->StretchRect(backBuffer, nullptr, resolved, nullptr,
+                                  D3DTEXF_NONE);
+      if (SUCCEEDED(hr))
+        readbackSource = resolved;
+    }
+    if (SUCCEEDED(hr))
+      hr = device_->GetRenderTargetData(readbackSource, destination);
+
+    if (resolved)
+      resolved->Release();
+    backBuffer->Release();
+    return hr;
   }
   // Cache lookup shared by the swapchain-level and device-level
   // GetBackBuffer paths so the same idx always reports the same COM

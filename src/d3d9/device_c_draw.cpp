@@ -101,10 +101,7 @@ extern "C" int32_t dxmt9c_device_set_stream_source(D9CDevice* d, uint32_t stream
 
 extern "C" int32_t dxmt9c_device_set_stream_source_freq(D9CDevice* d, uint32_t stream,
                                                         uint32_t freq) {
-  (void)d;
-  (void)stream;
-  (void)freq;
-  return dxmt9::core::D3D_OK;
+  return d->iface->SetStreamSourceFreq(stream, freq);
 }
 
 extern "C" int32_t dxmt9c_device_set_indices(D9CDevice* d, D9CBuffer* buf) {

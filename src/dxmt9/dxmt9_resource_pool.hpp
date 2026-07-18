@@ -47,6 +47,33 @@
 #include <utility>
 #include <vector>
 
+namespace dxmt9 {
+
+// Same-process D3D9Ex shared-resource backing. These records retain the
+// concrete Metal allocations while each importing device receives its own
+// pool handle. Cross-process handle transport is intentionally kept out of
+// this layer; the PE/provider bridge owns the public opaque-handle policy.
+struct SharedBufferBacking {
+  WMT::Reference<WMT::Buffer> buffer;
+  void* contents = nullptr;
+};
+
+struct SharedTextureBacking {
+  WMT::Reference<WMT::Texture> texture;
+  WMT::Reference<WMT::Texture> shaderReadTexture;
+  WMT::Reference<WMT::Texture> srgbShaderReadTexture;
+  bool needsStagingBlit = false;
+  bool isManagedDiscrete = false;
+};
+
+struct SharedSurfaceBacking {
+  WMT::Reference<WMT::Texture> texture;
+  WMT::Reference<WMT::Texture> srgbTexture;
+  WMT::Reference<WMT::Texture> resolveTexture;
+};
+
+}  // namespace dxmt9
+
 namespace dxmt9::resources {
 
 using u8 = std::uint8_t;
@@ -520,19 +547,28 @@ struct Pool {
   // Allocate a new buffer record (shared-mode WMT buffer + shadow).
   // Pool::Scratch / Pool::SystemMem skip the WMT allocation.
   core::BufferHandle createBuffer(WMT::Device device, const core::BufferDesc& desc);
+  bool exportSharedBuffer(core::BufferHandle handle, SharedBufferBacking& out) const;
+  core::BufferHandle importSharedBuffer(const core::BufferDesc& desc,
+                                        const SharedBufferBacking& backing);
 
   // Allocate a new texture record. WMT texture is created for non-system
   // pools; pixel format + storage mode derived from the device limits.
   core::TextureHandle createTexture(WMT::Device device,
-                                     const core::BackendLimits& limits,
-                                     const core::TextureDesc& desc);
+                                    const core::BackendLimits& limits,
+                                    const core::TextureDesc& desc);
+  bool exportSharedTexture(core::TextureHandle handle, SharedTextureBacking& out) const;
+  core::TextureHandle importSharedTexture(const core::TextureDesc& desc,
+                                          const SharedTextureBacking& backing);
 
   // Allocate a new surface record (render target / depth-stencil attachment).
   // For MSAA surfaces (sampleCount > 1), also allocates a matching resolve
   // texture.
   core::SurfaceHandle createSurface(WMT::Device device,
-                                      const core::BackendLimits& limits,
-                                      const core::SurfaceDesc& desc);
+                                    const core::BackendLimits& limits,
+                                    const core::SurfaceDesc& desc);
+  bool exportSharedSurface(core::SurfaceHandle handle, SharedSurfaceBacking& out) const;
+  core::SurfaceHandle importSharedSurface(const core::SurfaceDesc& desc,
+                                          const SharedSurfaceBacking& backing);
 
   // Create a surface record that aliases an existing texture's mip level.
   // If the surface covers the full level-0 of the parent, it references the

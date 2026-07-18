@@ -68,7 +68,7 @@ struct RecordedCommand {
   obj_handle_t bufferHandle = 0;
   std::uint64_t offset = 0;
   std::uint8_t index = 0;
-  std::array<std::uint8_t, 64> bytes{};
+  std::array<std::uint8_t, 128> bytes{};
   std::uint64_t length = 0;
   WMTPrimitiveType primitiveType = WMTPrimitiveTypePoint;
   WMTIndexType indexType = WMTIndexTypeUInt16;
@@ -308,13 +308,17 @@ void recordSetFragmentBytes(void* userdata,
 void recordDrawPrimitives(void* userdata,
                           WMTPrimitiveType primitiveType,
                           std::uint64_t vertexStart,
-                          std::uint64_t vertexCount) {
+                          std::uint64_t vertexCount,
+                          std::uint32_t instanceCount,
+                          std::uint32_t baseInstance) {
   auto* capture = static_cast<Capture*>(userdata);
   RecordedCommand command{};
   command.kind = RecordedKind::DrawPrimitives;
   command.primitiveType = primitiveType;
   command.start = vertexStart;
   command.count = vertexCount;
+  command.instanceCount = instanceCount;
+  command.baseInstance = baseInstance;
   capture->commands.push_back(command);
 }
 
@@ -621,6 +625,10 @@ void assertDrawPrimitivesCommand(const RecordedCommand& command,
           "drawPrimitives primitive type");
   checkEq(command.start, vertexStart, "drawPrimitives vertex start");
   checkEq(command.count, vertexCount, "drawPrimitives vertex count");
+  checkEq(command.instanceCount, std::uint32_t{1},
+          "drawPrimitives instance count");
+  checkEq(command.baseInstance, std::uint32_t{0},
+          "drawPrimitives base instance");
 }
 
 const RecordedCommand& firstVertexBufferBind(Capture& capture,
@@ -1192,12 +1200,14 @@ void testFsVolatileAlphaTestImmediatePushShadowAndOverride() {
   constexpr obj_handle_t kBoundVertex = 0x5600005600005fcull;
   auto state = makeProgrammableState(28u);
   state.hot.streamBuffers[0] = harness.createBoundBuffer(kBoundVertex, 8192u);
+  state.hot.colorAttachments[0].sampleCount = 4u;
   setSortedRenderStates(state, {
       dxmt9::core::FlatStateEntry{dxmt9::core::RS_ALPHA_TEST_ENABLE, 1u},
       dxmt9::core::FlatStateEntry{dxmt9::core::RS_ALPHA_REF, 0x80u},
       dxmt9::core::FlatStateEntry{
           dxmt9::core::RS_ALPHA_FUNC,
           static_cast<u32>(dxmt9::core::CompareFunc::GreaterEqual)},
+      dxmt9::core::FlatStateEntry{dxmt9::core::RS_MULTISAMPLE_MASK, 0x5u},
   });
 
   dxmt9::core::DrawParam param{};
@@ -1239,6 +1249,13 @@ void testFsVolatileAlphaTestImmediatePushShadowAndOverride() {
           "FsVolatile carries the alpha func when alpha test is enabled");
   checkNear(fromState.alphaRef, 128.0f / 255.0f, 1.0e-6f,
             "FsVolatile alphaRef uses the fillFfpPsConsts 1/255 conversion");
+  checkEq(fromState.sampleMask, std::uint32_t{0x5u},
+          "FsVolatile carries the per-draw multisample mask");
+  auto singleSampleState = state;
+  singleSampleState.hot.colorAttachments[0].sampleCount = 1u;
+  checkEq(dxmt9::state::buildFsVolatile(singleSampleState.view()).sampleMask,
+          std::uint32_t{0xffffffffu},
+          "single-sample target forces the effective sample mask to all ones");
 
   // Same values + live shadow => the second draw skips the push.
   runEncodeDraw(harness, recorder, state, param, preUploaded, {},
@@ -1268,6 +1285,8 @@ void testFsVolatileAlphaTestImmediatePushShadowAndOverride() {
           "alpha-off override pushes alphaTest=0 despite alpha-on shared state");
   checkNear(fromOverride.alphaRef, 0.0f, 1.0e-6f,
             "alpha-off override zeroes the immediate ref");
+  checkEq(fromOverride.sampleMask, std::uint32_t{0x5u},
+          "alpha override preserves the shared sample mask");
 }
 
 void testNonIndexedDrawIgnoresStaleIndexIntent() {
@@ -1501,6 +1520,8 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
   state.hot.streamOffsets[0] = 32u;
   state.hot.streamOffsets[1] = 144u;
   state.hot.streamStrides[1] = 16u;
+  state.hot.streamFrequencies[1] =
+      dxmt9::core::kStreamSourceInstanceData | 2u;
   state.shaderLayout.vertexDecl.elements = {
       dxmt9::core::VertexElement{0, 0, kD3DDeclTypeFloat3,
                                  kD3DDeclMethodDefault,
@@ -1518,6 +1539,7 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
   param.startVertex = 3u;
   param.indexType = IndexType::UInt16;
   param.indexed = false;
+  param.instanceCount = 4u;
 
   PreUploadedDrawData preUploaded{};
   runEncodeDraw(harness, recorder, state, param, preUploaded, arena);
@@ -1538,8 +1560,8 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
   check(stream1.kind == RecordedKind::SetVertexBuffer,
         "second command binds stream1");
   checkEq(stream1.bufferHandle, kStream1, "stream1 buffer source");
-  checkEq(stream1.offset, std::uint64_t{192},
-          "stream1 offset folds non-indexed start vertex");
+  checkEq(stream1.offset, std::uint64_t{144},
+          "instanced stream1 offset does not fold non-indexed start vertex");
   checkEq(static_cast<unsigned>(stream1.index), 6u,
           "stream1 binds to generated extra Metal slot");
 
@@ -1557,12 +1579,18 @@ void testProgrammableVsBindsExtraBoundStreamBeforeDraw() {
   checkEq(vol.vertexStreamStride, std::uint32_t{12},
           "multi-stream DrawVolatile stream stride");
   checkEq(vol._pad, std::uint32_t{0}, "multi-stream DrawVolatile pad");
+  checkEq(vol.streamInstanceDivisors[1], std::uint32_t{2},
+          "multi-stream DrawVolatile carries stream1 instance divisor");
 
-  assertDrawPrimitivesCommand(
-      commandAt(capture, 3, "missing multi-stream drawPrimitives"),
-      WMTPrimitiveTypeTriangle,
-      0u,
-      6u);
+  const auto& draw =
+      commandAt(capture, 3, "missing multi-stream drawPrimitives");
+  check(draw.kind == RecordedKind::DrawPrimitives,
+        "multi-stream draw uses drawPrimitives");
+  checkEq(draw.count, std::uint64_t{6}, "multi-stream vertex count");
+  checkEq(draw.instanceCount, std::uint32_t{4},
+          "multi-stream Metal draw preserves instance count");
+  checkEq(draw.baseInstance, std::uint32_t{0},
+          "multi-stream Metal draw starts at instance zero");
 }
 
 void testProgrammableVsSkipsMissingExtraStreamWithoutStaleBind() {

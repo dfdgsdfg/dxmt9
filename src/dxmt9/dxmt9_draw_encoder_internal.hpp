@@ -237,6 +237,7 @@ struct ParamView {
   u32 startIndex;
   core::IndexType indexType;
   bool indexed;
+  u32 instanceCount;
   std::span<const u8> userVertexData;
   std::span<const u8> userIndexData;
 };
@@ -848,7 +849,9 @@ inline ProgrammableVsExtraStreamBindingList makeProgrammableVsExtraStreamBinding
 
     const u32 stride = ffp::computeVertexDeclStreamStride(vertexDecl, stream);
     u64 offset = hot.streamOffsets[stream];
-    if (!pv.indexed && stride != 0u) {
+    const bool instanced =
+        (hot.streamFrequencies[stream] & core::kStreamSourceInstanceData) != 0;
+    if (!pv.indexed && !instanced && stride != 0u) {
       offset += static_cast<u64>(pv.startVertex) * static_cast<u64>(stride);
     }
     bindings.push_back(ProgrammableVsExtraStreamBinding{

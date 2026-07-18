@@ -599,7 +599,10 @@ DeviceCaps makeDefaultCaps(const BackendLimits &limits) {
   constexpr u32 kCaps = 0x00000000u;
   constexpr u32 kCaps2 = 0x20000u | 0x40000000u | 0x20000000u;
   constexpr u32 kCaps3 = 0x00000020u | 0x00000100u | 0x00000200u;
-  constexpr u32 kCursorCaps = 0x00000001u | 0x00000002u;
+  // R-CAPS-9: cursor methods currently preserve D3D9-visible PE state only.
+  // Do not advertise a hardware color cursor until a real presenter or
+  // WindowServer cursor path consumes that state.
+  constexpr u32 kCursorCaps = 0u;
   constexpr u32 kPrimitiveMiscCaps = 0x002ecff2u;
   // D3DRS_DITHERENABLE is accepted as a shadow-only compatibility state;
   // do not advertise D3DPRASTERCAPS_DITHER until a real output dither path

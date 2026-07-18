@@ -70,6 +70,30 @@ std::shared_ptr<Buffer> Device::createBuffer(const BufferDesc &desc) {
   return buffer;
 }
 
+std::shared_ptr<Buffer> Device::openSharedBuffer(
+    const std::shared_ptr<Buffer>& source) {
+  if (!source || !source->valid()) {
+    return {};
+  }
+  if (source->device().get() == this) {
+    return source;
+  }
+  if (!upperDevice_ || !source->backend_) {
+    return {};
+  }
+  dxmt9::SharedBufferBacking backing;
+  if (!source->backend_->exportSharedBuffer(source->handle(), backing)) {
+    return {};
+  }
+  const auto handle = upperDevice_->importSharedBuffer(source->desc(), backing);
+  if (!handle) {
+    return {};
+  }
+  auto buffer = std::make_shared<Buffer>(shared_from_this(), handle, source->desc());
+  registerBuffer(buffer);
+  return buffer;
+}
+
 void Device::registerBuffer(const std::shared_ptr<Buffer> &buffer) {
   buffers_.push_back(buffer);
 }

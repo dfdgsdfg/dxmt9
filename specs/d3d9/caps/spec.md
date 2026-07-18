@@ -21,6 +21,7 @@ are implementation guidance for the normative rules in
 | `Caps2` | FULLSCREENGAMMA \| CANAUTOGENMIPMAP \| DYNAMICTEXTURES (`0x60020000`) | |
 | `Caps3` | ALPHA_FULLSCREEN_FLIP_OR_DISCARD \| COPY_TO_VIDMEM \| COPY_TO_SYSTEMMEM (`0x320`) | |
 | `PresentationIntervals` | D3DPRESENT_INTERVAL_ONE \| D3DPRESENT_INTERVAL_IMMEDIATE (`0x80000001`) | |
+| `CursorCaps` | 0 | Color/low-resolution cursor support is not advertised while device cursor methods are PE shadow-only |
 
 ## Rasterizer
 

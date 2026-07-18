@@ -130,6 +130,7 @@ class IDirect3DDevice9 : public IUnknown {
   virtual core::HResult SetTexture(u32 stage, std::shared_ptr<core::Texture> texture) = 0;
   virtual core::HResult SetStreamSource(u32 stream, std::shared_ptr<core::Buffer> buffer, u32 offset,
                                         u32 stride) = 0;
+  virtual core::HResult SetStreamSourceFreq(u32 stream, u32 frequency) = 0;
   virtual core::HResult SetIndices(std::shared_ptr<core::Buffer> buffer,
                                    core::IndexType indexType = core::IndexType::UInt16) = 0;
   virtual core::HResult SetFVF(u32 fvf) = 0;

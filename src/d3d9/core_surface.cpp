@@ -174,6 +174,31 @@ std::shared_ptr<Surface> Device::createSurface(const SurfaceDesc &desc) {
   return surface;
 }
 
+std::shared_ptr<Surface> Device::openSharedSurface(
+    const std::shared_ptr<Surface>& source) {
+  if (!source || !source->valid()) {
+    return {};
+  }
+  if (source->deviceContainer().get() == this) {
+    return source;
+  }
+  if (!upperDevice_ || !source->backend_ ||
+      source->containerKind() != Surface::ContainerKind::Device) {
+    return {};
+  }
+  dxmt9::SharedSurfaceBacking backing;
+  if (!source->backend_->exportSharedSurface(source->handle(), backing)) {
+    return {};
+  }
+  const auto handle = upperDevice_->importSharedSurface(source->desc(), backing);
+  if (!handle) {
+    return {};
+  }
+  auto surface = std::make_shared<Surface>(shared_from_this(), handle, source->desc());
+  registerSurface(surface);
+  return surface;
+}
+
 void Device::registerSurface(const std::shared_ptr<Surface> &surface) {
   surfaces_.push_back(surface);
 }

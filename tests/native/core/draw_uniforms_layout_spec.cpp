@@ -17,6 +17,7 @@
 namespace {
 
 using dxmt9::state::DrawVolatile;
+using dxmt9::state::FsVolatile;
 using dxmt9::state::FfpPsConsts;
 using dxmt9::state::FfpVsConsts;
 using dxmt9::state::PsConsts;
@@ -28,7 +29,8 @@ static_assert(sizeof(VsConsts) == 4416, "VsConsts size pinned for MSL prelude pa
 static_assert(sizeof(PsConsts) == 3904, "PsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpVsConsts) == 2632, "FfpVsConsts size pinned for MSL prelude parity");
 static_assert(sizeof(FfpPsConsts) == 384, "FfpPsConsts size pinned for MSL prelude parity");
-static_assert(sizeof(DrawVolatile) == 16, "DrawVolatile size pinned for MSL prelude parity");
+static_assert(sizeof(DrawVolatile) == 80, "DrawVolatile size pinned for MSL prelude parity");
+static_assert(sizeof(FsVolatile) == 16, "FsVolatile size pinned for MSL prelude parity");
 
 // --- R-BACK-12.16: per-field byte offsets -----------------------------------
 
@@ -100,12 +102,16 @@ static_assert(offsetof(FfpPsConsts, bumpEnvMat) == 176);
 static_assert(offsetof(FfpPsConsts, bumpEnvLum) == 304);
 static_assert(offsetof(FfpPsConsts, fogColor) == 368);
 
-// DrawVolatile: i32 | u32 | u32 | u32 _pad — 16 B push-constant footprint
-// for setVertexBytes.
+// DrawVolatile: 16 B scalar header plus 16 u32 stream instance divisors.
 static_assert(offsetof(DrawVolatile, vertexBaseIndex) == 0);
 static_assert(offsetof(DrawVolatile, vertexStreamOffset) == 4);
 static_assert(offsetof(DrawVolatile, vertexStreamStride) == 8);
 static_assert(offsetof(DrawVolatile, _pad) == 12);
+static_assert(offsetof(DrawVolatile, streamInstanceDivisors) == 16);
+static_assert(offsetof(FsVolatile, alphaTest) == 0);
+static_assert(offsetof(FsVolatile, alphaRef) == 4);
+static_assert(offsetof(FsVolatile, sampleMask) == 8);
+static_assert(offsetof(FsVolatile, _pad) == 12);
 
 // --- R-BACK-12.16: MSL prelude string parity --------------------------------
 
@@ -201,6 +207,9 @@ void checkMslPreludeContainsStructDecls() {
   requireSubstring(prelude, "uint vertexStreamOffset", "DrawVolatile.vertexStreamOffset");
   requireSubstring(prelude, "uint vertexStreamStride", "DrawVolatile.vertexStreamStride");
   requireSubstring(prelude, "uint _pad", "DrawVolatile._pad");
+  requireSubstring(prelude, "uint streamInstanceDivisors[16]",
+                   "DrawVolatile.streamInstanceDivisors");
+  requireSubstring(prelude, "uint sampleMask", "FsVolatile.sampleMask");
 }
 
 }  // namespace

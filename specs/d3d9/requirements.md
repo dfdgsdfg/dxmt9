@@ -307,8 +307,7 @@ the required size when the caller buffer is too small, AddRef stored
 unchanged when the GUID is not found.
 
 **R-CORE-4.11** Shared-handle and user-memory parameters must follow Windows
-D3D9-compatible behaviour validated by Wine D3D9 tests even when resource
-sharing is not implemented. A non-null
+D3D9-compatible behaviour validated by Wine D3D9 tests. A non-null
 `pSharedHandle` on a device created from `Direct3DCreate9()` returns
 `E_NOTIMPL`. On Ex-capable devices, unsupported shared resources must fail with
 the Windows D3D9-compatible error for the resource class and pool rather than
@@ -323,6 +322,16 @@ Windows D3D9-compatible pitch. `CreateOffscreenPlainSurface()` with
 model. Invalid level counts, scratch pool, cube/volume textures, and
 vertex/index buffers must return the Windows D3D9-compatible
 `D3DERR_INVALIDCALL` or `D3DERR_NOTAVAILABLE` for that resource class.
+
+**R-CORE-4.13** For Ex `D3DPOOL_DEFAULT` resources, a null input value through
+a non-null `pSharedHandle` creates an opaque dxmt9 shared-resource token and
+writes it back to the caller. Passing that token to the same resource creation
+method with an identical resource description must open the same Metal backing,
+including from another D3D9Ex device in the same Wine process. Resource-class or
+description mismatches must fail with `D3DERR_INVALIDCALL`; an importing device
+must receive its own pool handle so resource lookup and deferred destruction
+remain device-local. Cross-process transport requires a real Win32-handle to
+IOSurface or `MTLSharedTextureHandle` bridge and remains a separate requirement.
 
 ---
 
@@ -365,6 +374,22 @@ default production path and use the active index buffer or copied UP index paylo
 Expansion into a non-indexed transient vertex stream is permitted only for explicit
 diagnostics under `DXMT_FORCE_EXPAND_INDEXED=1` or required primitive conversion
 such as `D3DPT_TRIANGLEFAN` decomposition.
+
+**R-CORE-5.11** `SetStreamSourceFreq()` state must reach ordinary bound draws,
+not only software-vertex-processing fallbacks. Stream 0
+`D3DSTREAMSOURCE_INDEXEDDATA | N` selects `N` draw instances. A stream using
+`D3DSTREAMSOURCE_INSTANCEDATA | D` advances once per `D` instances, using
+`instance_id / D` for its vertex-element address. Frequency state must survive
+state-block capture/apply and compact PE/unix draw recording, and the Metal draw
+must use the resulting instance count.
+
+**R-CORE-5.12** `D3DRS_MULTISAMPLEMASK` defaults to `0xffffffff` and, for a
+maskable multisampled render target, must be applied per draw by both
+programmable and fixed-function pixel shaders through the Metal fragment
+`[[sample_mask]]` output. Single-sample targets use an all-ones effective mask.
+Per-draw alpha-test overrides must not overwrite the sample mask. A tile
+fixed-function path that cannot emit the same mask must route the draw through
+the portable fragment path.
 
 ---
 

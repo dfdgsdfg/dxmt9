@@ -88,6 +88,11 @@ void testFormatAndCaps() {
   constexpr u32 kD3DPRASTERCAPS_DITHER = 0x00000001u;
   check((caps0.rasterCaps & kD3DPRASTERCAPS_DITHER) == 0u,
         "RasterCaps must not advertise dithering while DITHERENABLE is shadow-only");
+  // R-CAPS-9: SetCursorProperties/SetCursorPosition/ShowCursor do not have a
+  // presenter or WindowServer consumer yet, so hardware cursor caps must stay
+  // clear even though PE validation and shadow state remain available.
+  checkEq(caps0.cursorCaps, 0u,
+          "CursorCaps must stay clear while cursor behavior is shadow-only");
   check(caps0.alphaCmpCaps != 0u,
         "AlphaCmpCaps must be non-zero (zero GUID-equivalent for legacy apps)");
   check((caps0.alphaCmpCaps & kAlphaCmpRequired) == kAlphaCmpRequired,
@@ -98,6 +103,8 @@ void testFormatAndCaps() {
   // the canonical source for D3DCAPS9::AlphaCmpCaps.
   D9CCaps cCaps{};
   dxmt9::d3d9::devicec::fillCCaps(caps0, &cCaps);
+  checkEq(cCaps.cursorCaps, 0u,
+          "fillCCaps must preserve the shadow-only cursor capability policy");
   checkEq(cCaps.alphaCmpCaps, caps0.alphaCmpCaps,
           "fillCCaps must mirror core::DeviceCaps::alphaCmpCaps into the "
           "dedicated D9CCaps::alphaCmpCaps slot (specs/d3d9/gap_d3d9.md §C.7 fix)");

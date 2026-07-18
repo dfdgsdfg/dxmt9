@@ -71,10 +71,10 @@ The corpus is weaker for draw input variation:
 - Programmable declaration-to-declaration transition now has a readback probe
   that changes the `NORMAL` offset/stride between sequential draws.
 - `SetStreamSourceFreq` is API-state covered by
-  `test_stream_source_frequency_state`, but the core draw API and
-  `shader_runner_dxmt9` do not expose instanced draw semantics, so
-  programmable instancing remains explicitly tracked as unsupported/incomplete
-  in `specs/gap.md`.
+  `test_stream_source_frequency_state` and native-verified through core draw
+  submission, Metal instance arguments, and generated MSL addressing. The
+  remaining gap is a shader-runner or PE pixel/readback probe because those
+  harnesses do not yet expose instanced stream setup.
 
 ### 1.3 D3D9 conformance and experiments
 
@@ -98,7 +98,7 @@ oracle, at least one shader-runner or conformance readback probe.
 | Index source | Native bound/UP/preuploaded index coverage plus shader-runner bound-index and indexed-UP programmable readback | Closed for bound and UP GPU-visible paths; preuploaded user-data selection is command-recorder evidence because shader-runner has no preuploaded command | Add readback only if a preuploaded shader-runner command is introduced |
 | Vertex source | Native bound/UP/preuploaded vertex coverage plus indexed-UP programmable readback | Closed for bound and UP GPU-visible paths; preuploaded vertex selection is command-recorder evidence | Add readback only if a preuploaded shader-runner command is introduced |
 | Multi-stream | Native stream slot/offset coverage plus color-only and textured readback probes; missing extra stream has recorder coverage | Closed for current stable pixel oracles | A missing-stream pixel oracle remains conditional because undefined/default attribute behaviour is not a stable visual contract here |
-| Instancing | PE API-state validation via `test_stream_source_frequency_state`; provider call is currently a core no-op | Explicitly unsupported/incomplete rather than a test-only gap | Track in `specs/gap.md` until `SetStreamSourceFreq` reaches canonical draw state and runtime readback can distinguish per-instance data |
+| Instancing | PE API-state validation via `test_stream_source_frequency_state`; native tests pin provider-to-core state, state-block restore, draw instance count, per-stream divisors, Metal draw arguments, and `instance_id / divisor` shader addressing | Runtime visual evidence is still missing | Add a shader-runner or PE conformance readback that distinguishes multiple instances and a non-1 instance-data divisor |
 | Argbuf mode | Binding/source-contract tests, recorder coverage for indexed and multi-stream programmable draws with argbuf enabled, and default-vs-Stage1 indexed VS-constant readback | Closed for constants/direct resource lanes in the current default matrix | Add resource-array opt-in readback crossed with indexed programmable draw if that lane becomes default or per-corpus toggles are added |
 | State transition | State snapshot tests, isolated draw tests, FFP->prog, prog->FFP, prog decl A->B readback probes, and native missing-stream stale-bind coverage | Closed for deterministic evidence currently available | Add visual missing-stream case only if shader-runner gains a stable negative oracle |
 | FFP/prog boundary | 3DMark05 heuristic regression test plus negative native tests for mixed shader paths, FFP-decodable programmable declarations, and FVF/decl transition stale-layout prevention | Closed for the known 3DMark05/bloom regression class | Add new negative tests when another FFP-only encoder branch is found |
@@ -249,9 +249,10 @@ draw surface:
 - Argbuf constants are readback-validated against the Stage1 direct fallback for
   an indexed programmable draw; texture/sampler resource-array cross-product is
   not part of the default matrix and remains conditional on that opt-in lane.
-- Instancing is not claimed as complete runtime coverage. It is explicitly
-  tracked as unsupported/incomplete in `specs/gap.md` because the provider call
-  is a core no-op and draw metadata does not yet carry instance semantics.
+- Instancing semantics are implemented and native-verified from provider state
+  through Metal draw arguments and shader addressing. Pixel/readback evidence
+  remains a test-coverage gap until the shader-runner DSL or PE conformance
+  harness can bind stream-frequency state for a multi-instance draw.
 
 ---
 
@@ -362,10 +363,10 @@ meson test -C build-x86_64-builtin \
   programmable declaration A -> declaration B sequencing by changing the
   `NORMAL` offset from 16 to 20 between draws. The second draw would read the
   red guard component if the first declaration layout leaked.
-- `SetStreamSourceFreq` is intentionally not claimed as programmable draw
-  coverage: PE state validation exists, but `dxmt9c_device_set_stream_source_freq`
-  is a core no-op and `Device::drawPrimitive*` has no instance metadata. This
-  is tracked in `specs/gap.md`.
+- `SetStreamSourceFreq` programmable draws have native coverage for canonical
+  state, state blocks, Metal instance count, stream divisors, and generated MSL
+  `instance_id` addressing. Runtime pixel/readback coverage remains deferred
+  until the shader-runner or PE harness exposes instanced stream setup.
 - Focused validation command:
 
 ```sh

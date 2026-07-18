@@ -91,6 +91,11 @@
 #undef dxmt9c_device_create_volume_texture
 #undef dxmt9c_device_create_vertex_buffer
 #undef dxmt9c_device_create_index_buffer
+#undef dxmt9c_device_create_texture_shared
+#undef dxmt9c_device_create_cube_texture_shared
+#undef dxmt9c_device_create_volume_texture_shared
+#undef dxmt9c_device_create_vertex_buffer_shared
+#undef dxmt9c_device_create_index_buffer_shared
 #undef dxmt9c_device_create_render_target
 #undef dxmt9c_device_create_depth_stencil
 #undef dxmt9c_device_create_offscreen_surface

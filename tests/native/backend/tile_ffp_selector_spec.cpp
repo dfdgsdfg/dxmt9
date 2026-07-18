@@ -165,6 +165,34 @@ void testVertexBlendFfpFallsBackToPortableFragmentPath() {
           "FFP vertex blending reports unsupported_state for tile path");
 }
 
+void testSampleMaskFallsBackToPortableFragmentPath() {
+  auto fixture = makeFfpFixture(FogMode::None, /*alphaTest=*/false);
+  fixture.hot.renderStates.entries[0] = {RS_MULTISAMPLE_MASK, 0x5u};
+  fixture.hot.renderStates.count = 1u;
+  fixture.hot.colorAttachments[0].sampleCount = 4u;
+
+  const auto sel =
+      dxmt9::pipeline::selectTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+  checkEq(static_cast<int>(sel.decision),
+          static_cast<int>(dxmt9::pipeline::TileFfpDecision::Portable),
+          "nontrivial sample mask stays on the portable fragment path");
+  checkEq(static_cast<int>(sel.reason),
+          static_cast<int>(dxmt9::pipeline::TileFfpFallbackReason::UnsupportedState),
+          "nontrivial sample mask reports unsupported_state for tile path");
+}
+
+void testSampleMaskIsIgnoredForSingleSampleTarget() {
+  auto fixture = makeFfpFixture(FogMode::None, /*alphaTest=*/false);
+  fixture.hot.renderStates.entries[0] = {RS_MULTISAMPLE_MASK, 0u};
+  fixture.hot.renderStates.count = 1u;
+
+  const auto sel =
+      dxmt9::pipeline::selectTileFfpForPass(fixture.view(), /*supportsApple3=*/true);
+  checkEq(static_cast<int>(sel.decision),
+          static_cast<int>(dxmt9::pipeline::TileFfpDecision::Tile),
+          "single-sample target ignores the multisample mask");
+}
+
 void testFogModeExpFallbackPrecision() {
   auto fixture = makeFfpFixture(FogMode::Exp, /*alphaTest=*/false);
   const auto sel =
@@ -295,6 +323,8 @@ int main() {
     testProgrammablePixelShaderIsNotFfp();
     testTexturedFfpFallsBackToPortableFragmentPath();
     testVertexBlendFfpFallsBackToPortableFragmentPath();
+    testSampleMaskFallsBackToPortableFragmentPath();
+    testSampleMaskIsIgnoredForSingleSampleTarget();
     testFogModeExpFallbackPrecision();
     testFogModeExp2FallbackPrecision();
     testFogModeLinearStaysEligible();

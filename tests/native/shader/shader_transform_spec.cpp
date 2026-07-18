@@ -1977,10 +1977,14 @@ void testTranslatedAlphaTestDebugStripOmitsTailDiscard() {
                 "translated PS emits the FsVolatile runtime alpha-test guard");
   checkContains(normal, "discard_fragment()",
                 "translated PS emits the alpha-test discard tail");
+  checkContains(normal, "uint sampleMask [[sample_mask]]",
+                "translated PS returns the D3D9 sample mask semantic");
 
   const auto stripped = translatePixelWithAlphaTestStrip(makePs20ColorInputBytecode());
-  checkNotContains(stripped, "fsVolatile",
-                   "alpha-test debug strip removes translated PS FsVolatile guard and param");
+  checkNotContains(stripped, "fsVolatile.alphaTest",
+                   "alpha-test debug strip removes translated PS alpha-test guard");
+  checkContains(stripped, "fsVolatile.sampleMask",
+                "alpha-test debug strip preserves translated PS sample-mask output");
   checkNotContains(stripped, "discard_fragment()",
                    "alpha-test debug strip removes translated PS alpha-test discard");
 }
@@ -2007,6 +2011,8 @@ void testFfpAlphaTestDebugStripOmitsDiscard() {
                 "FFP PS emits the FsVolatile alpha-test function switch");
   checkContains(normal, "discard_fragment()",
                 "FFP PS emits alpha-test discard");
+  checkContains(normal, "uint sampleMask [[sample_mask]]",
+                "FFP PS returns the D3D9 sample mask semantic");
   checkNotContains(normal, "ffpPs.alphaTestFunc",
                    "FFP PS no longer reads alpha-test state from ffpPs");
 
@@ -2019,8 +2025,10 @@ void testFfpAlphaTestDebugStripOmitsDiscard() {
 
   context.stripAlphaTestForDebug = true;
   const auto stripped = dxmt9::ffp::makeFfpPixelSource(key, context);
-  checkNotContains(stripped, "fsVolatile",
-                   "alpha-test debug strip removes FFP FsVolatile guard and param");
+  checkNotContains(stripped, "fsVolatile.alphaTest",
+                   "alpha-test debug strip removes FFP alpha-test guard");
+  checkContains(stripped, "fsVolatile.sampleMask",
+                "alpha-test debug strip preserves FFP sample-mask output");
   checkNotContains(stripped, "discard_fragment()",
                    "alpha-test debug strip removes FFP alpha-test discard");
 }
@@ -2484,6 +2492,11 @@ void testVs30MultiStreamVertexDeclarationLoads() {
                 "stream1 gets its own direct VS buffer slot");
   checkContains(source, "const uint stride1 = 20u",
                 "stream1 declared stride is preserved at the shader boundary");
+  checkContains(source, "uint iid [[instance_id]]",
+                "programmable vertex entry exposes Metal instance_id");
+  checkContains(source,
+                "drawVolatile.streamInstanceDivisors[1] != 0u ? iid / drawVolatile.streamInstanceDivisors[1] : uint(vertexIndex)",
+                "stream1 selects per-instance or per-vertex element indexing at draw time");
   checkContains(source, "dxmt9_load_f32x3(stream0, base + 0u)",
                 "POSITION remains loaded from stream0");
   checkContains(source, "dxmt9_load_i16x4_snorm(stream1, base1 + 0u)",
