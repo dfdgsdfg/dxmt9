@@ -88,6 +88,33 @@ std::array<f32, 4> colorToArray(const core::ColorRGBA& color) {
   return {color.r, color.g, color.b, color.a};
 }
 
+std::array<f32, 3> transformRowVector(const core::Matrix4x4& matrix,
+                                      const std::array<f32, 3>& value,
+                                      f32 w) {
+  std::array<f32, 3> out{};
+  for (std::size_t col = 0; col < out.size(); ++col) {
+    out[col] = value[0] * matrix.m[col] +
+               value[1] * matrix.m[4 + col] +
+               value[2] * matrix.m[8 + col] +
+               w * matrix.m[12 + col];
+  }
+  return out;
+}
+
+std::array<f32, 3> transformLightDirection(
+    const core::Matrix4x4& view,
+    const std::array<f32, 3>& direction) {
+  auto out = transformRowVector(view, direction, 0.0f);
+  const f32 length = std::sqrt(out[0] * out[0] + out[1] * out[1] +
+                               out[2] * out[2]);
+  if (length > 1.0e-8f) {
+    for (auto& component : out) {
+      component /= length;
+    }
+  }
+  return out;
+}
+
 template <typename T, std::size_t Count>
 void copyArrayPrefixToUpload(std::span<std::byte> dst,
                              std::size_t offset,
@@ -239,17 +266,21 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
   out.materialPower = {payload.material.power, 0.0f, 0.0f, 0.0f};
   for (std::size_t i = 0; i < core::kMaxLights; ++i) {
     const auto& light = payload.lights[i];
+    const auto lightDirection =
+        transformLightDirection(payload.ffpView, light.direction);
+    const auto lightPosition =
+        transformRowVector(payload.ffpView, light.position, 1.0f);
     out.lightDiffuse[i] = colorToArray(light.diffuse);
     out.lightSpecular[i] = colorToArray(light.specular);
     out.lightAmbient[i] = colorToArray(light.ambient);
-    out.lightDirection[i] = {light.direction[0], light.direction[1],
-                             light.direction[2], 0.0f};
+    out.lightDirection[i] = {lightDirection[0], lightDirection[1],
+                             lightDirection[2], 0.0f};
     // D3D9 §B.5: position/range/atten/falloff/theta/phi for Point/Spot.
     // For Directional lights the shader skips these fields entirely
     // (see emitLightingBlock branch on key.lightType[i]); we still emit
     // a defined value so the uniform layout is fully initialized.
-    out.lightPosition[i] = {light.position[0], light.position[1],
-                            light.position[2], light.range};
+    out.lightPosition[i] = {lightPosition[0], lightPosition[1],
+                            lightPosition[2], light.range};
     out.lightAttenuation[i] = {light.attenuation0, light.attenuation1,
                                light.attenuation2, light.falloff};
     // Precompute the spot half-angle cosines. D3D9 stores theta/phi as
@@ -266,6 +297,10 @@ FfpVsConsts buildFfpVsConsts(core::FlatDrawStateView state) {
       for (std::size_t col = 0; col < 4; ++col) {
         out.ffpBlendWorldViewProj[matrix][row][col] =
             payload.ffpBlendWorldViewProj[matrix].m[row * 4 + col];
+        out.ffpBlendWorldView[matrix][row][col] =
+            payload.ffpBlendWorldView[matrix].m[row * 4 + col];
+        out.ffpBlendNormalMatrix[matrix][row][col] =
+            payload.ffpBlendNormalMatrix[matrix].m[row * 4 + col];
       }
     }
   }

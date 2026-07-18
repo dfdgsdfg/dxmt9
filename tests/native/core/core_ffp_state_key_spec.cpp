@@ -57,6 +57,7 @@ void testFfpKeys() {
   const auto vertexKey = makeFfpVertexKey(state);
   check(vertexKey.lightingEnabled, "vertex key lighting");
   check(vertexKey.specularEnabled, "vertex key specular");
+  check(vertexKey.localViewer, "vertex key LOCALVIEWER defaults true");
   check(vertexKey.lightEnabled[0], "vertex key light enable");
   checkEq(vertexKey.lightType[0], static_cast<u32>(LightType::Point), "vertex key light type");
   checkEq(vertexKey.texCoordGen[0], 4u, "vertex key texcoord");
@@ -72,6 +73,14 @@ void testFfpKeys() {
         "indexed vertex blend follows render state 167");
   check(indexedBlendKey != vertexKey,
         "indexed vertex blend participates in FFP vertex key");
+
+  auto infiniteViewerState = state;
+  infiniteViewerState.renderStates[RS_LOCAL_VIEWER] = 0u;
+  const auto infiniteViewerKey = makeFfpVertexKey(infiniteViewerState);
+  check(!infiniteViewerKey.localViewer,
+        "vertex key preserves LOCALVIEWER=false");
+  check(infiniteViewerKey != vertexKey,
+        "LOCALVIEWER participates in FFP vertex key");
 
   const auto pixelKey = makeFfpPixelKey(state);
   check(pixelKey.alphaTestEnable, "pixel key alpha test");
@@ -163,13 +172,13 @@ void testVisualDerivedFfpCoverage() {
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
   checkContains(normalSource, "dxmt9_load_f32x3(stream0, base + 12u)",
                 "generated normal source loads FVF normal");
-  checkContains(normalSource, "float4(dxmt9_cameraNormal, 1.0f)",
-                "generated normal source writes camera-space normal texcoord");
+  checkContains(normalSource, "float4(dxmt9_lightingNormal, 1.0f)",
+                "generated normal source observes NORMALIZENORMALS");
   generatedTexcoordKey.texCoordGen[0] = 0x00030000u;
   const auto reflectionSource =
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
-  checkContains(reflectionSource, "reflect(-dxmt9_eye0, dxmt9_cameraUnitNormal)",
-                "generated reflection source uses camera-space normal");
+  checkContains(reflectionSource, "reflect(-dxmt9_eye0, dxmt9_lightingNormal)",
+                "generated reflection source uses the effective camera-space normal");
   generatedTexcoordKey.texCoordGen[0] = 0x00040000u;
   const auto sphereSource =
       dxmt9::ffp::makeFfpVertexSource(generatedTexcoordKey, generatedContext);
@@ -339,6 +348,103 @@ void testPointAndSpotLightingMslContract() {
                 "mixed source emits Directional ladder for slot 2");
 }
 
+void testFfpVertexCoordinateAndLightingContracts() {
+  DrawDesc xyzDesc{};
+  xyzDesc.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyz | dxmt9::ffp::kFvfNormal;
+  const auto xyzContext =
+      dxmt9::drawshader::makeShaderSourceContext(xyzDesc);
+
+  FfpVertexKey baselineKey{};
+  const auto xyzSource =
+      dxmt9::ffp::makeFfpVertexSource(baselineKey, xyzContext);
+  checkNotContains(xyzSource, "identityWvp",
+                   "ordinary XYZ never guesses identity-WVP screen space");
+  checkNotContains(xyzSource, "pixelSpacePosition",
+                   "ordinary XYZ never guesses large coordinates are pixels");
+  checkNotContains(xyzSource, "float2 ndc = float2(((inPosition.x",
+                   "ordinary XYZ always takes the WorldViewProjection path");
+  checkContains(xyzSource, "clip.x = dot(float4(ffpVs.ffpWorldViewProj",
+                "ordinary XYZ is transformed by WorldViewProjection");
+
+  DrawDesc positionTDesc{};
+  positionTDesc.vertexDecl.fvf = dxmt9::ffp::kFvfXyzrhw;
+  const auto positionTSource = dxmt9::ffp::makeFfpVertexSource(
+      baselineKey,
+      dxmt9::drawshader::makeShaderSourceContext(positionTDesc));
+  checkContains(positionTSource,
+                "float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x)",
+                "POSITIONT remains the explicit screen-space path");
+
+  FfpVertexKey lightingKey{};
+  lightingKey.lightingEnabled = true;
+  lightingKey.specularEnabled = true;
+  lightingKey.lightEnabled[0] = true;
+  lightingKey.lightType[0] = static_cast<u32>(LightType::Directional);
+  const auto rawNormalSource =
+      dxmt9::ffp::makeFfpVertexSource(lightingKey, xyzContext);
+  checkContains(rawNormalSource,
+                "float3 dxmt9_lightingNormal = dxmt9_cameraNormal;",
+                "NORMALIZENORMALS=false preserves transformed normal length");
+  checkContains(rawNormalSource,
+                "float3 dxmt9_eyeVec = -dxmt9_cameraPosition.xyz;",
+                "LOCALVIEWER=true uses the per-vertex eye vector");
+
+  auto normalizedKey = lightingKey;
+  normalizedKey.normalizeNormals = true;
+  const auto normalizedSource =
+      dxmt9::ffp::makeFfpVertexSource(normalizedKey, xyzContext);
+  checkContains(normalizedSource,
+                "float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;",
+                "NORMALIZENORMALS=true normalizes the transformed normal");
+
+  auto infiniteViewerKey = lightingKey;
+  infiniteViewerKey.localViewer = false;
+  const auto infiniteViewerSource =
+      dxmt9::ffp::makeFfpVertexSource(infiniteViewerKey, xyzContext);
+  checkContains(infiniteViewerSource,
+                "float3 dxmt9_eyeVec = float3(0.0f, 0.0f, -1.0f);",
+                "LOCALVIEWER=false uses the infinite-viewer vector");
+  checkNotContains(infiniteViewerSource,
+                   "float3 dxmt9_eyeVec = -dxmt9_cameraPosition.xyz;",
+                   "LOCALVIEWER=false does not use camera position");
+
+  auto reflectionKey = lightingKey;
+  reflectionKey.specularEnabled = false;
+  reflectionKey.texCoordGen[0] = 0x00030000u;
+  const auto localReflectionSource =
+      dxmt9::ffp::makeFfpVertexSource(reflectionKey, xyzContext);
+  checkContains(localReflectionSource,
+                "float3 dxmt9_eye0 = normalize(-dxmt9_cameraPosition.xyz);",
+                "LOCALVIEWER=true reflection uses vertex-to-eye direction");
+  reflectionKey.localViewer = false;
+  const auto orthogonalReflectionSource =
+      dxmt9::ffp::makeFfpVertexSource(reflectionKey, xyzContext);
+  checkContains(orthogonalReflectionSource,
+                "float3 dxmt9_eye0 = float3(0.0f, 0.0f, 1.0f);",
+                "LOCALVIEWER=false reflection uses the infinite viewpoint");
+  checkNotContains(orthogonalReflectionSource,
+                   "normalize(-dxmt9_cameraPosition.xyz)",
+                   "LOCALVIEWER=false reflection is camera-position independent");
+
+  DrawDesc blendDesc{};
+  blendDesc.vertexDecl.fvf =
+      dxmt9::ffp::kFvfXyzB2 | dxmt9::ffp::kFvfNormal;
+  FfpVertexKey blendKey{};
+  blendKey.vertexBlend = 2u;
+  const auto blendSource = dxmt9::ffp::makeFfpVertexSource(
+      blendKey, dxmt9::drawshader::makeShaderSourceContext(blendDesc));
+  checkContains(blendSource, "ffpVs.ffpBlendWorldView[blendMatrix0]",
+                "vertex blend transforms camera-space positions per matrix");
+  checkContains(blendSource, "ffpVs.ffpBlendNormalMatrix[blendMatrix0]",
+                "vertex blend transforms normals per matrix");
+  checkContains(blendSource,
+                "dxmt9_cameraPosition = blendedCameraPosition;",
+                "vertex blend feeds lighting and fog camera position");
+  checkContains(blendSource, "dxmt9_cameraNormal = blendedCameraNormal;",
+                "vertex blend feeds lighting and generated texcoord normal");
+}
+
 void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
   // behavioral oracle: Wine visual.c:fixed_function_decl_test
   DrawDesc desc{};
@@ -502,6 +608,7 @@ int main() {
     testFfpKeys();
     testVisualDerivedFfpCoverage();
     testPointAndSpotLightingMslContract();
+    testFfpVertexCoordinateAndLightingContracts();
     testFixedFunctionDeclarationMissingInputsEmitD3DDefaults();
     testVisualPortCoverage();
   } catch (const TestFailure& error) {

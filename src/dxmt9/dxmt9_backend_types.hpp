@@ -392,11 +392,14 @@ inline void materializeDrawUniformPayload(
   materializeDrawUniformStageConstants(
       pixelRecord.constants, pixelConstantsBytes, payload.psConst);
   payload.worldViewProj = fixedRecord.payload.worldViewProj;
+  payload.ffpView = fixedRecord.payload.ffpView;
   payload.ffpWorldView = fixedRecord.payload.ffpWorldView;
   payload.ffpNormalMatrix = fixedRecord.payload.ffpNormalMatrix;
   payload.material = fixedRecord.payload.material;
   payload.lights = fixedRecord.payload.lights;
   payload.ffpBlendWorldViewProj = fixedRecord.payload.ffpBlendWorldViewProj;
+  payload.ffpBlendWorldView = fixedRecord.payload.ffpBlendWorldView;
+  payload.ffpBlendNormalMatrix = fixedRecord.payload.ffpBlendNormalMatrix;
   payload.textureTransforms = fixedRecord.payload.textureTransforms;
   payload.clipPlaneMask = fixedRecord.payload.clipPlaneMask;
   payload.clipPlanes = fixedRecord.payload.clipPlanes;

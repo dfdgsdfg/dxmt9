@@ -1514,7 +1514,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         << "u; ++i) { outTexcoord[i] = float4(0.0f, 0.0f, 0.0f, 1.0f); }\n";
     out << "  float4 ignoredTexcoord = float4(0.0f);\n";
     out << "  float outFogFactor = 1.0f;\n";
-    out << "  float outPointSize = 1.0f;\n";
+    // D3D9 applies D3DRS_POINTSIZE when the programmable VS does not
+    // write oPts. A shader write replaces this seed, and both paths share
+    // the mandatory POINTSIZE_MIN/MAX post-transform clamp below.
+    out << "  float outPointSize = ffpVs.pointSize;\n";
     if (::dxmt9::debug::forceFullscreenVertexShader()) {
       out << "  out.position = outPosition;\n";
       if (shaders::vsoutEmitColor(context.vsOutLayout)) {
@@ -1535,7 +1538,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
             << ";\n";
       }
       if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
-        out << "  out.pointSize = outPointSize;\n";
+        out << "  out.pointSize = clamp(outPointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
       }
       if (context.clipPlaneMask != 0) {
         // Translated D3D-bytecode VS path that did not write any clip
@@ -2507,7 +2510,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           << ";\n";
     }
     if (shaders::vsoutEmitPointSize(context.vsOutLayout)) {
-      out << "  out.pointSize = outPointSize;\n";
+      out << "  out.pointSize = clamp(outPointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);\n";
     }
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (context.clipPlaneMask != 0) {

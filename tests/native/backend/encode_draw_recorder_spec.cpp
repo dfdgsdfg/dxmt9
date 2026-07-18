@@ -829,6 +829,24 @@ void testBaseStateRecorderCapturesRasterTextureSamplerOrdering() {
       WMTPrimitiveTypeTriangle,
       0u,
       3u);
+
+  Capture clampCapture;
+  auto clampRecorder = makeRecorder(clampCapture);
+  clampRecorder.suppressBaseStateLookup = true;
+  clampRecorder.renderPipelineState.handle = kPipeline;
+  clampRecorder.depthStencilState.handle = kDepthState;
+  clampRecorder.fragmentSamplerState.handle = kSampler;
+  state.hot.renderStates.entries[2] = dxmt9::core::FlatStateEntry{
+      dxmt9::core::RS_CLIPPING,
+      0u};
+  state.hot.renderStates.count = 3u;
+  runEncodeDraw(harness, clampRecorder, state, param, preUploaded, {},
+                /*skipBaseStateBind=*/false);
+  const auto& clampRaster =
+      commandAt(clampCapture, 4, "missing unclipped rasterizer bind");
+  checkEq(static_cast<unsigned>(clampRaster.depthClipMode),
+          static_cast<unsigned>(WMTDepthClipModeClamp),
+          "D3DRS_CLIPPING=false maps to Metal depth clamp");
 }
 
 void testBlendFactorBindsMetalBlendColor() {

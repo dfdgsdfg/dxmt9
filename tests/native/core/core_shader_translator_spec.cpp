@@ -286,6 +286,11 @@ void testVertexShaderOutputSemanticTranslation() {
   checkContains(source, "outPosition = vsConsts.vsFloatConst[0]", "vs_3_0 dcl_position o0 maps to Metal position");
   checkContains(source, "outTexcoord[0] = vsConsts.vsFloatConst[1]", "vs_3_0 dcl_texcoord0 o1 maps by semantic index");
   checkContains(source, "outSecondaryColor = vsConsts.vsFloatConst[1]", "vs_3_0 dcl_color1 o2 maps to secondary color");
+  checkContains(source, "float outPointSize = ffpVs.pointSize;",
+                "programmable VS without oPts starts from D3DRS_POINTSIZE");
+  checkContains(source,
+                "out.pointSize = clamp(outPointSize, ffpVs.pointSizeMin, ffpVs.pointSizeMax);",
+                "programmable VS point size is clamped by render-state bounds");
   check(source.find("outTexcoord[1] = vsConsts.vsFloatConst[1]") == std::string::npos,
         "vs_3_0 output mapping ignores raw o-register index for texcoord semantic");
   if (getenvFlag("DXMT_DEBUG_FLIP_VERTEX_Y")) {

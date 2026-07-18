@@ -186,15 +186,19 @@ shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& 
     return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
   }
 
+  shaders::VSOutLayout layout = shaders::fullVSOutLayout();
   if (context.pixelShader.kind == ShaderRef::Kind::Bytecode) {
-    return shaders::applyVSOutProbeOverrides(
-        translator::collectTranslatedFragmentVaryingLiveness(context.pixelShader, context));
+    layout = translator::collectTranslatedFragmentVaryingLiveness(
+        context.pixelShader, context);
+  } else if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel &&
+             context.pixelShader.pixelKey.has_value()) {
+    layout = ffpPixelVaryingLiveness(context);
   }
-  if (context.pixelShader.kind == ShaderRef::Kind::FixedFunctionPixel &&
-      context.pixelShader.pixelKey.has_value()) {
-    return shaders::applyVSOutProbeOverrides(ffpPixelVaryingLiveness(context));
-  }
-  return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
+  // point_size is consumed by rasterization rather than the fragment shader.
+  // It must survive fragment-input liveness trimming so a programmable VS
+  // with no oPts write can still receive D3DRS_POINTSIZE.
+  layout.pointSize = true;
+  return shaders::applyVSOutProbeOverrides(layout);
 }
 
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,

@@ -154,12 +154,12 @@ constexpr auto kFlatRenderStatePreservedKeys = std::to_array<u32>({
     RS_WRAP5,
     RS_WRAP6,
     RS_WRAP7,
-    136u,  // D3DRS_CLIPPING.
+    RS_CLIPPING,
     RS_LIGHTING,
     RS_AMBIENT,
     RS_FOG_FROM_VERTEX,
     141u,  // D3DRS_COLORVERTEX.
-    142u,  // D3DRS_LOCALVIEWER.
+    RS_LOCAL_VIEWER,
     RS_NORMALIZE_NORMALS,
     RS_DIFFUSE_MATERIAL_SOURCE,
     RS_SPECULAR_MATERIAL_SOURCE,
@@ -964,6 +964,7 @@ void hashDrawUniformNonConstantComponents(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashWorldViewProjCpuTime));
       hashes.worldViewProjHash = hashTrivial(payload.worldViewProj);
     }
+    hashes.ffpViewHash = hashTrivial(payload.ffpView);
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashFfpWorldViewCpuTime));
@@ -992,6 +993,10 @@ void hashDrawUniformNonConstantComponents(
       hashes.ffpBlendWorldViewProjHash =
           hashBlendWorldViewProj(payload.ffpBlendWorldViewProj);
     }
+    hashes.ffpBlendWorldViewHash =
+        hashBlendWorldViewProj(payload.ffpBlendWorldView);
+    hashes.ffpBlendNormalMatrixHash =
+        hashBlendWorldViewProj(payload.ffpBlendNormalMatrix);
     {
       PerfScope fieldScope(recorder(
           dxmt9::perf::countD3D9SnapshotUniformBuildNonConstHashTextureTransformsCpuTime));
@@ -1012,11 +1017,14 @@ void copyDrawUniformNonConstantHashes(
     DrawUniformPayloadHashes &dst,
     const DrawUniformPayloadHashes &src) noexcept {
   dst.worldViewProjHash = src.worldViewProjHash;
+  dst.ffpViewHash = src.ffpViewHash;
   dst.ffpWorldViewHash = src.ffpWorldViewHash;
   dst.ffpNormalMatrixHash = src.ffpNormalMatrixHash;
   dst.materialHash = src.materialHash;
   dst.lightHashes = src.lightHashes;
   dst.ffpBlendWorldViewProjHash = src.ffpBlendWorldViewProjHash;
+  dst.ffpBlendWorldViewHash = src.ffpBlendWorldViewHash;
+  dst.ffpBlendNormalMatrixHash = src.ffpBlendNormalMatrixHash;
   dst.textureTransformsHash = src.textureTransformsHash;
   dst.nonIdentityTextureTransformStageMask =
       src.nonIdentityTextureTransformStageMask;
@@ -1036,6 +1044,7 @@ u64 combineDrawUniformPayloadHashes(const DrawUniformPayloadHashes &hashes,
   u64 hash = hashCombine(kFnvOffset, hashes.vertexConstantsHash);
   hash = hashCombine(hash, hashes.pixelConstantsHash);
   hash = hashCombine(hash, hashes.worldViewProjHash);
+  hash = hashCombine(hash, hashes.ffpViewHash);
   hash = hashCombine(hash, hashes.ffpWorldViewHash);
   hash = hashCombine(hash, hashes.ffpNormalMatrixHash);
   hash = hashCombine(hash, hashes.materialHash);
@@ -1043,6 +1052,8 @@ u64 combineDrawUniformPayloadHashes(const DrawUniformPayloadHashes &hashes,
     hash = hashCombine(hash, lightHash);
   }
   hash = hashCombine(hash, hashes.ffpBlendWorldViewProjHash);
+  hash = hashCombine(hash, hashes.ffpBlendWorldViewHash);
+  hash = hashCombine(hash, hashes.ffpBlendNormalMatrixHash);
   hash = hashCombine(hash, hashes.textureTransformsHash);
   hash = hashCombine(hash, clipPlaneMask);
   hash = hashCombine(hash, hashes.clipPlanesHash);
@@ -1052,6 +1063,7 @@ u64 combineDrawUniformPayloadHashes(const DrawUniformPayloadHashes &hashes,
 u64 combineDrawUniformFixedPayloadHash(
     const DrawUniformPayloadHashes &hashes, u32 clipPlaneMask) {
   u64 hash = hashCombine(kFnvOffset, hashes.worldViewProjHash);
+  hash = hashCombine(hash, hashes.ffpViewHash);
   hash = hashCombine(hash, hashes.ffpWorldViewHash);
   hash = hashCombine(hash, hashes.ffpNormalMatrixHash);
   hash = hashCombine(hash, hashes.materialHash);
@@ -1059,6 +1071,8 @@ u64 combineDrawUniformFixedPayloadHash(
     hash = hashCombine(hash, lightHash);
   }
   hash = hashCombine(hash, hashes.ffpBlendWorldViewProjHash);
+  hash = hashCombine(hash, hashes.ffpBlendWorldViewHash);
+  hash = hashCombine(hash, hashes.ffpBlendNormalMatrixHash);
   hash = hashCombine(hash, hashes.textureTransformsHash);
   hash = hashCombine(hash, clipPlaneMask);
   hash = hashCombine(hash, hashes.clipPlanesHash);
@@ -1567,6 +1581,7 @@ u64 hashFfpVertexKey(const FfpVertexKey &key) {
   hash = hashCombine(hash, static_cast<u64>(key.lightingEnabled));
   hash = hashCombine(hash, static_cast<u64>(key.specularEnabled));
   hash = hashCombine(hash, static_cast<u64>(key.normalizeNormals));
+  hash = hashCombine(hash, static_cast<u64>(key.localViewer));
   hash = hashCombine(hash, static_cast<u64>(key.colorVertexEnabled));
   for (bool enabled : key.lightEnabled) {
     hash = hashCombine(hash, static_cast<u64>(enabled));
@@ -1753,6 +1768,10 @@ void refreshShaderLayoutExtraStreamStrides(DrawShaderLayoutContext &shaderLayout
 }
 
 u32 clipPlaneMaskFromState(const DeviceState &state) {
+  if (state.renderStates.contains(RS_CLIPPING) &&
+      state.renderStates.at(RS_CLIPPING) == 0u) {
+    return 0u;
+  }
   return state.renderStates.contains(RS_CLIP_PLANE_ENABLE)
              ? state.renderStates.at(RS_CLIP_PLANE_ENABLE)
              : 0u;
@@ -1815,14 +1834,24 @@ Matrix4x4 makeNormalMatrixFromWorldView(const Matrix4x4 &worldView) {
   return transposeMatrix(inverse);
 }
 
-std::array<Matrix4x4, 4> makeBlendWorldViewProjFromState(const DeviceState &state) {
-  std::array<Matrix4x4, 4> transforms{};
+struct FfpBlendTransforms {
+  std::array<Matrix4x4, 4> worldViewProj{};
+  std::array<Matrix4x4, 4> worldView{};
+  std::array<Matrix4x4, 4> normalMatrix{};
+};
+
+FfpBlendTransforms makeBlendTransformsFromState(const DeviceState &state) {
+  FfpBlendTransforms transforms{};
   const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
   const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
-  for (size_t i = 0; i < transforms.size(); ++i) {
+  for (size_t i = 0; i < transforms.worldView.size(); ++i) {
     const Matrix4x4 world =
         lookupTransform(state, XFORM_WORLD_BASE + static_cast<u32>(i));
-    transforms[i] = multiplyMatrix(multiplyMatrix(world, view), proj);
+    transforms.worldView[i] = multiplyMatrix(world, view);
+    transforms.normalMatrix[i] =
+        makeNormalMatrixFromWorldView(transforms.worldView[i]);
+    transforms.worldViewProj[i] =
+        multiplyMatrix(transforms.worldView[i], proj);
   }
   return transforms;
 }
@@ -1891,10 +1920,14 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
   {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildFfpMatrixCpuTime));
+    payload.ffpView = lookupTransform(state, XFORM_VIEW);
     payload.ffpWorldView = makeWorldViewFromState(state);
     payload.ffpNormalMatrix = makeNormalMatrixFromWorldView(payload.ffpWorldView);
     payload.worldViewProj = makeWorldViewProjFromState(state);
-    payload.ffpBlendWorldViewProj = makeBlendWorldViewProjFromState(state);
+    const auto blendTransforms = makeBlendTransformsFromState(state);
+    payload.ffpBlendWorldViewProj = blendTransforms.worldViewProj;
+    payload.ffpBlendWorldView = blendTransforms.worldView;
+    payload.ffpBlendNormalMatrix = blendTransforms.normalMatrix;
   }
   {
     PerfScope scope(recorder(
@@ -2038,7 +2071,14 @@ DrawDesc makeDrawDescFromState(const DeviceState &state,
   desc.viewport = makeViewportScissorFromState(state);
   desc.clipPlaneMask = shaderLayout.clipPlaneMask;
   desc.worldViewProj = uniforms.worldViewProj;
+  desc.ffpView = uniforms.ffpView;
+  desc.ffpWorldView = uniforms.ffpWorldView;
+  desc.ffpNormalMatrix = uniforms.ffpNormalMatrix;
+  desc.material = uniforms.material;
+  desc.lights = uniforms.lights;
   desc.ffpBlendWorldViewProj = uniforms.ffpBlendWorldViewProj;
+  desc.ffpBlendWorldView = uniforms.ffpBlendWorldView;
+  desc.ffpBlendNormalMatrix = uniforms.ffpBlendNormalMatrix;
   desc.textureTransforms = uniforms.textureTransforms;
   desc.clipPlanes = uniforms.clipPlanes;
   desc.vertexShader = shaderLayout.vertexShader;
@@ -2443,11 +2483,14 @@ DrawUniformPayload makeDrawUniformPayload(const DrawDesc &desc) {
   payload.vsConst = desc.vsConst;
   payload.psConst = desc.psConst;
   payload.worldViewProj = desc.worldViewProj;
+  payload.ffpView = desc.ffpView;
   payload.ffpWorldView = desc.ffpWorldView;
   payload.ffpNormalMatrix = desc.ffpNormalMatrix;
   payload.material = desc.material;
   payload.lights = desc.lights;
   payload.ffpBlendWorldViewProj = desc.ffpBlendWorldViewProj;
+  payload.ffpBlendWorldView = desc.ffpBlendWorldView;
+  payload.ffpBlendNormalMatrix = desc.ffpBlendNormalMatrix;
   payload.textureTransforms = desc.textureTransforms;
   payload.clipPlaneMask = desc.clipPlaneMask;
   payload.clipPlanes = desc.clipPlanes;
@@ -4007,6 +4050,8 @@ FfpVertexKey makeFfpVertexKey(const DeviceState &state) {
                         state.renderStates.at(RS_SPECULAR_ENABLE) != 0;
   key.normalizeNormals = state.renderStates.contains(RS_NORMALIZE_NORMALS) &&
                          state.renderStates.at(RS_NORMALIZE_NORMALS) != 0;
+  key.localViewer = !state.renderStates.contains(RS_LOCAL_VIEWER) ||
+                    state.renderStates.at(RS_LOCAL_VIEWER) != 0;
   key.colorVertexEnabled = !state.renderStates.contains(141u /*RS_COLORVERTEX*/) ||
                            state.renderStates.at(141u /*RS_COLORVERTEX*/) != 0;
   for (size_t i = 0; i < kMaxLights; ++i) {

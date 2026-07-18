@@ -2922,13 +2922,14 @@ void drawDxmt9FfpFlatNormalQuad(Device& device, u32 width, u32 height) {
   }
 }
 
-void setupDirectionalLight(Device& device, const Material& material) {
+void setupDirectionalLight(Device& device, const Material& material,
+                           float directionZ = -1.0f) {
   Light light{};
   light.type = LightType::Directional;
   light.diffuse = {1.0f, 1.0f, 1.0f, 1.0f};
   light.specular = {1.0f, 1.0f, 1.0f, 1.0f};
   light.ambient = {0.0f, 0.0f, 0.0f, 1.0f};
-  light.direction = {0.0f, 0.0f, -1.0f};
+  light.direction = {0.0f, 0.0f, directionZ};
   if (device.setMaterial(material) != D3D_OK ||
       device.setLight(0, light) != D3D_OK ||
       device.lightEnable(0, true) != D3D_OK ||
@@ -3029,7 +3030,10 @@ void drawDxmt9FfpSpecularDirectionalQuad(Device& device, u32 width, u32 height) 
   material.diffuse = {0.0f, 0.0f, 0.0f, 1.0f};
   material.specular = {0.0f, 0.0f, 1.0f, 1.0f};
   material.power = 1.0f;
-  setupDirectionalLight(device, material);
+  // Match Wine visual.c:test_specular_lighting's orthogonal-viewer case:
+  // geometry is at +Z with a -Z normal, and the light rays travel +Z so
+  // both L and the infinite-viewer vector point toward -Z.
+  setupDirectionalLight(device, material, 1.0f);
   if (device.setRenderState(RS_DIFFUSE_MATERIAL_SOURCE, 0) != D3D_OK ||
       device.setRenderState(RS_SPECULAR_MATERIAL_SOURCE, 0) != D3D_OK) {
     fail("dxmt9 FFP specular material source setup failed");
@@ -3037,14 +3041,17 @@ void drawDxmt9FfpSpecularDirectionalQuad(Device& device, u32 width, u32 height) 
   if (device.setRenderState(RS_SPECULAR_ENABLE, 1) != D3D_OK) {
     fail("dxmt9 FFP specular render-state setup failed");
   }
+  if (device.setRenderState(RS_LOCAL_VIEWER, 0) != D3D_OK) {
+    fail("dxmt9 FFP orthogonal specular viewer setup failed");
+  }
 
   const std::array<GeneratedNormalVertex, 6> quad{
-      GeneratedNormalVertex{-1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
-      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
-      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
-      GeneratedNormalVertex{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
-      GeneratedNormalVertex{1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
-      GeneratedNormalVertex{-1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 1.0f},
+      GeneratedNormalVertex{-1.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
+      GeneratedNormalVertex{1.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
+      GeneratedNormalVertex{1.0f, -1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
+      GeneratedNormalVertex{-1.0f, -1.0f, 1.0f, 0.0f, 0.0f, -1.0f},
   };
   const auto* bytes = reinterpret_cast<const u8*>(quad.data());
   if (device.drawPrimitiveUP(PrimitiveType::TriangleList, 2,

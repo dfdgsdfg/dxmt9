@@ -818,15 +818,49 @@ void testTransformMultiplicationOrderAndBlendSlots() {
       0.0f, 0.0f, 510.0f, 4760.0f,
       0.0f, 0.0f, 0.0f, 40.0f,
   };
+  Matrix4x4 expectedWorldView{};
+  expectedWorldView.m = {
+      2.0f, 10.0f, 0.0f, 0.0f,
+      0.0f, 3.0f, 18.0f, 0.0f,
+      0.0f, 0.0f, 4.0f, 28.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
+  Matrix4x4 expectedBlendWorld1View{};
+  expectedBlendWorld1View.m = {
+      11.0f, 55.0f, 0.0f, 0.0f,
+      0.0f, 13.0f, 78.0f, 0.0f,
+      0.0f, 0.0f, 17.0f, 119.0f,
+      0.0f, 0.0f, 0.0f, 1.0f,
+  };
 
   checkMatrixNear(desc.worldViewProj, expectedWorldViewProj,
                   "world-view-projection multiply order");
+  checkMatrixNear(desc.ffpView, view,
+                  "FFP light transform preserves the View matrix");
   checkMatrixNear(desc.ffpBlendWorldViewProj[0], expectedWorldViewProj,
                   "blend slot 0 uses WORLD0 * VIEW * PROJECTION");
   checkMatrixNear(desc.ffpBlendWorldViewProj[1], expectedBlendWorld1ViewProj,
                   "blend slot 1 uses WORLD1 * VIEW * PROJECTION");
   checkMatrixNear(desc.ffpBlendWorldViewProj[2], expectedViewProj,
                   "unset blend slot uses identity WORLD2");
+  checkMatrixNear(desc.ffpBlendWorldView[0], expectedWorldView,
+                  "blend slot 0 carries WORLD0 * VIEW for lighting and fog");
+  checkMatrixNear(desc.ffpBlendWorldView[1], expectedBlendWorld1View,
+                  "blend slot 1 carries WORLD1 * VIEW for lighting and fog");
+  checkMatrixNear(desc.ffpBlendWorldView[2], view,
+                  "unset blend slot carries identity WORLD2 * VIEW");
+  checkNear(desc.ffpBlendNormalMatrix[0].m[0], 0.5f,
+            "blend slot 0 inverse-transpose normal X scale");
+  checkNear(desc.ffpBlendNormalMatrix[0].m[5], 1.0f / 3.0f,
+            "blend slot 0 inverse-transpose normal Y scale");
+  checkNear(desc.ffpBlendNormalMatrix[0].m[10], 0.25f,
+            "blend slot 0 inverse-transpose normal Z scale");
+  checkNear(desc.ffpBlendNormalMatrix[1].m[0], 1.0f / 11.0f,
+            "blend slot 1 inverse-transpose normal X scale");
+  checkNear(desc.ffpBlendNormalMatrix[1].m[5], 1.0f / 13.0f,
+            "blend slot 1 inverse-transpose normal Y scale");
+  checkNear(desc.ffpBlendNormalMatrix[1].m[10], 1.0f / 17.0f,
+            "blend slot 1 inverse-transpose normal Z scale");
 }
 
 void testExtendedWorldMatrixTransformRoundTrip() {
@@ -1152,6 +1186,33 @@ void testClipPlaneTransformPayloadAndMaskBounds() {
                 expectedPlane[component],
                 "programmable uniforms preserve clip-space plane coefficients");
     }
+  }
+}
+
+void testClippingFalseSuppressesUserClipPlanes() {
+  DeviceState state;
+  state.reset();
+  state.renderStates[RS_CLIPPING] = 0u;
+  state.renderStates[RS_CLIP_PLANE_ENABLE] = 0x3fu;
+  state.clipPlanes[0] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+  const auto desc = makeDrawDescFromState(state, {});
+  const auto uniforms = makeDrawUniformPayload(desc);
+  const auto canonical = makeCanonicalDrawStateFromState(state, {});
+
+  checkEq(desc.clipPlaneMask, 0u,
+          "CLIPPING=false suppresses draw user clip planes");
+  checkEq(uniforms.clipPlaneMask, 0u,
+          "CLIPPING=false suppresses uniform user clip planes");
+  checkEq(canonical.shaderLayout.clipPlaneMask, 0u,
+          "CLIPPING=false removes clip-distance shader output");
+  checkEq(canonical.hot.clipPlaneMask, 0u,
+          "CLIPPING=false removes the hot clip-plane mask");
+  checkEq(flatStateOr(canonical.hot.renderStates, RS_CLIPPING, 1u), 0u,
+          "CLIPPING=false remains available to Metal raster state");
+  for (const auto& plane : uniforms.clipPlanes) {
+    checkEq(plane, ClipPlane{},
+            "CLIPPING=false clears every user clip-plane coefficient");
   }
 }
 
@@ -2989,6 +3050,7 @@ int main() {
   testWrapRenderStateRoundTrip();
   testAcceptedRenderStateRoundTripPolicies();
   testClipPlaneTransformPayloadAndMaskBounds();
+  testClippingFalseSuppressesUserClipPlanes();
   testConstantsAndShaderRefs();
   testShaderConstantUsageAwareHashesIgnoreUnusedConstants();
   testIndexedFloatConstantHashKeepsFullFloatButTrimsIntBoolTail();

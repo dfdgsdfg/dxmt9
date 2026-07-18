@@ -217,10 +217,21 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key,
          << materialSourceExpr(key.colorMaterialMode[2], "materialDiffuse") << ";\n";
   shader << "  float4 dxmt9_materialSpecular = "
          << materialSourceExpr(key.colorMaterialMode[3], "materialSpecular") << ";\n";
-  shader << "  float3 dxmt9_litNormal = normalize(dxmt9_lightingNormal);\n";
+  shader << "  float3 dxmt9_litNormal = dxmt9_lightingNormal;\n";
   shader << "  float3 dxmt9_diffuseAccum = dxmt9_materialEmissive.rgb + "
             "dxmt9_materialAmbient.rgb * ffpVs.globalAmbient.rgb;\n";
   shader << "  float3 dxmt9_specularAccum = float3(0.0f);\n";
+  if (key.specularEnabled) {
+    if (key.localViewer) {
+      shader << "  float3 dxmt9_eyeVec = -dxmt9_cameraPosition.xyz;\n";
+      shader << "  float dxmt9_eyeLen = length(dxmt9_eyeVec);\n";
+      shader << "  dxmt9_eyeVec = dxmt9_eyeLen > 1.0e-8f"
+                " ? dxmt9_eyeVec / dxmt9_eyeLen"
+                " : float3(0.0f, 0.0f, -1.0f);\n";
+    } else {
+      shader << "  float3 dxmt9_eyeVec = float3(0.0f, 0.0f, -1.0f);\n";
+    }
+  }
   for (u32 i = 0; i < kMaxLights; ++i) {
     if (!key.lightEnabled[i]) {
       continue;
@@ -251,7 +262,7 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key,
              << i << "].rgb * dxmt9_ndotl" << i << ";\n";
       if (key.specularEnabled) {
         shader << "  float3 dxmt9_halfVec" << i
-               << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
+               << " = normalize(dxmt9_lightVec" << i << " + dxmt9_eyeVec);\n";
         shader << "  float dxmt9_specFactor" << i
                << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
                << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
@@ -323,10 +334,8 @@ void emitLightingBlock(std::ostringstream& shader, const FfpVertexKey& key,
              << " * ffpVs.lightDiffuse[" << i << "].rgb * dxmt9_ndotl" << i
              << " * dxmt9_attenuation" << i << ";\n";
       if (key.specularEnabled) {
-        // Half-vector uses local-eye approximation matching the
-        // directional path (eye = +Z in camera space).
         shader << "  float3 dxmt9_halfVec" << i
-               << " = normalize(dxmt9_lightVec" << i << " + float3(0.0f, 0.0f, 1.0f));\n";
+               << " = normalize(dxmt9_lightVec" << i << " + dxmt9_eyeVec);\n";
         shader << "  float dxmt9_specFactor" << i
                << " = dxmt9_ndotl" << i << " > 0.0f ? pow(max(dot(dxmt9_litNormal, dxmt9_halfVec"
                << i << "), 0.0f), max(ffpVs.materialPower.x, 1.0f)) : 0.0f;\n";
@@ -550,19 +559,23 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       if (texCoordGen == kTciCameraSpacePosition && !(layout && layout->preTransformed)) {
         shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_cameraPosition.xyz, 1.0f);\n";
       } else if (texCoordGen == kTciCameraSpaceNormal && !(layout && layout->preTransformed)) {
-        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_cameraNormal, 1.0f);\n";
+        shader << "  dxmt9_texcoord" << stage << " = float4(dxmt9_lightingNormal, 1.0f);\n";
       } else if (texCoordGen == kTciCameraSpaceReflection && !(layout && layout->preTransformed)) {
-        shader << "  float3 dxmt9_eye" << stage << " = normalize(-dxmt9_cameraPosition.xyz);\n";
-        shader << "  if (all(fabs(dxmt9_cameraPosition.xyz) < float3(1.0e-8f))) "
-               << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
+        if (key.localViewer) {
+          shader << "  float3 dxmt9_eye" << stage << " = normalize(-dxmt9_cameraPosition.xyz);\n";
+          shader << "  if (all(fabs(dxmt9_cameraPosition.xyz) < float3(1.0e-8f))) "
+                 << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
+        } else {
+          shader << "  float3 dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
+        }
         shader << "  dxmt9_texcoord" << stage << " = float4(reflect(-dxmt9_eye" << stage
-               << ", dxmt9_cameraUnitNormal), 1.0f);\n";
+               << ", dxmt9_lightingNormal), 1.0f);\n";
       } else if (texCoordGen == kTciSphereMap && !(layout && layout->preTransformed)) {
         shader << "  float3 dxmt9_eye" << stage << " = normalize(-dxmt9_cameraPosition.xyz);\n";
         shader << "  if (all(fabs(dxmt9_cameraPosition.xyz) < float3(1.0e-8f))) "
                << "dxmt9_eye" << stage << " = float3(0.0f, 0.0f, 1.0f);\n";
         shader << "  float3 dxmt9_reflect" << stage << " = reflect(-dxmt9_eye" << stage
-               << ", dxmt9_cameraUnitNormal);\n";
+               << ", dxmt9_lightingNormal);\n";
         shader << "  float dxmt9_sphereM" << stage
                << " = 2.0f * sqrt(dot(dxmt9_reflect" << stage << ".xy, dxmt9_reflect" << stage
                << ".xy) + (dxmt9_reflect" << stage << ".z + 1.0f) * "
@@ -703,11 +716,6 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     } else {
       out << "  float3 inNormal = float3(0.0f, 0.0f, 1.0f);\n";
     }
-    out << "  float inNormalLength = length(inNormal);\n";
-    out << "  float3 unitNormal = inNormalLength > 1.0e-8f ? inNormal / inNormalLength : float3(0.0f, 0.0f, 1.0f);\n";
-    if (key.normalizeNormals) {
-      out << "  inNormal = unitNormal;\n";
-    }
     out << "  float4 dxmt9_cameraPosition;\n";
     out << "  dxmt9_cameraPosition.x = dot(float4(ffpVs.ffpWorldView[0].x, ffpVs.ffpWorldView[1].x,\n";
     out << "                                      ffpVs.ffpWorldView[2].x, ffpVs.ffpWorldView[3].x), inPosition);\n";
@@ -721,17 +729,13 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "      dot(float3(ffpVs.ffpNormalMatrix[0].x, ffpVs.ffpNormalMatrix[1].x, ffpVs.ffpNormalMatrix[2].x), inNormal),\n";
     out << "      dot(float3(ffpVs.ffpNormalMatrix[0].y, ffpVs.ffpNormalMatrix[1].y, ffpVs.ffpNormalMatrix[2].y), inNormal),\n";
     out << "      dot(float3(ffpVs.ffpNormalMatrix[0].z, ffpVs.ffpNormalMatrix[1].z, ffpVs.ffpNormalMatrix[2].z), inNormal));\n";
-    out << "  float dxmt9_cameraNormalLength = length(dxmt9_cameraNormal);\n";
-    out << "  float3 dxmt9_cameraUnitNormal = dxmt9_cameraNormalLength > 1.0e-8f ? dxmt9_cameraNormal / dxmt9_cameraNormalLength : float3(0.0f, 0.0f, 1.0f);\n";
     const bool emitVertexBlend =
         key.vertexBlend > 0 && key.vertexBlend <= 3 && layout->hasBlendWeight;
     out << "  float4 clip;\n";
     out << "  float4 blendedClip = float4(0.0f);\n";
-    out << "  bool identityWvp = all(ffpVs.ffpWorldViewProj[0] == float4(1.0, 0.0, 0.0, 0.0)) &&\n";
-    out << "                     all(ffpVs.ffpWorldViewProj[1] == float4(0.0, 1.0, 0.0, 0.0)) &&\n";
-    out << "                     all(ffpVs.ffpWorldViewProj[2] == float4(0.0, 0.0, 1.0, 0.0)) &&\n";
-    out << "                     all(ffpVs.ffpWorldViewProj[3] == float4(0.0, 0.0, 0.0, 1.0));\n";
     if (emitVertexBlend) {
+      out << "  float4 blendedCameraPosition = float4(0.0f);\n";
+      out << "  float3 blendedCameraNormal = float3(0.0f);\n";
       out << "  float4 blendWeights = float4(0.0f);\n";
       out << "  uint4 blendMatrixIndices = uint4(0u, 1u, 2u, 3u);\n";
       if (layout->blendWeightComponents == 1) {
@@ -779,19 +783,58 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
             << "][0].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
             << "][1].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix
             << "][2].w, ffpVs.ffpBlendWorldViewProj[blendMatrix" << matrix << "][3].w), inPosition);\n";
+        out << "  float4 blendCameraPosition" << matrix << ";\n";
+        out << "  blendCameraPosition" << matrix
+            << ".x = dot(float4(ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][0].x, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][1].x, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][2].x, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][3].x), inPosition);\n";
+        out << "  blendCameraPosition" << matrix
+            << ".y = dot(float4(ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][0].y, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][1].y, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][2].y, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][3].y), inPosition);\n";
+        out << "  blendCameraPosition" << matrix
+            << ".z = dot(float4(ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][0].z, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][1].z, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][2].z, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][3].z), inPosition);\n";
+        out << "  blendCameraPosition" << matrix
+            << ".w = dot(float4(ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][0].w, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][1].w, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][2].w, ffpVs.ffpBlendWorldView[blendMatrix" << matrix
+            << "][3].w), inPosition);\n";
+        out << "  float3 blendCameraNormal" << matrix << " = float3(\n";
+        out << "      dot(float3(ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][0].x, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][1].x, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][2].x), inNormal),\n";
+        out << "      dot(float3(ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][0].y, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][1].y, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][2].y), inNormal),\n";
+        out << "      dot(float3(ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][0].z, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][1].z, ffpVs.ffpBlendNormalMatrix[blendMatrix" << matrix
+            << "][2].z), inNormal));\n";
         out << "  blendedClip += blendClip" << matrix << " * matrixWeight[" << matrix << "];\n";
+        out << "  blendedCameraPosition += blendCameraPosition" << matrix
+            << " * matrixWeight[" << matrix << "];\n";
+        out << "  blendedCameraNormal += blendCameraNormal" << matrix
+            << " * matrixWeight[" << matrix << "];\n";
       }
     }
     out << "  bool useVertexBlend = " << (emitVertexBlend ? "true" : "false") << ";\n";
-    out << "  bool pixelSpacePosition = !useVertexBlend && identityWvp && "
-           "(fabs(inPosition.x) > 2.0f || fabs(inPosition.y) > 2.0f);\n";
-    out << "  if (pixelSpacePosition) {\n";
-    out << "    float2 viewportSize = max(ffpVs.viewportSize, float2(1.0f));\n";
-    out << "    float2 ndc = float2(((inPosition.x - ffpVs.viewportOrigin.x) / viewportSize.x) * 2.0f - 1.0f,\n";
-    out << "                       1.0f - ((inPosition.y - ffpVs.viewportOrigin.y) / viewportSize.y) * 2.0f);\n";
-    out << "    clip = float4(ndc, inPosition.z, 1.0f);\n";
-    out << "  } else if (useVertexBlend) {\n";
+    out << "  if (useVertexBlend) {\n";
     out << "    clip = blendedClip;\n";
+    if (emitVertexBlend) {
+      out << "    dxmt9_cameraPosition = blendedCameraPosition;\n";
+      out << "    dxmt9_cameraNormal = blendedCameraNormal;\n";
+    }
     out << "  } else {\n";
     out << "    clip.x = dot(float4(ffpVs.ffpWorldViewProj[0].x, ffpVs.ffpWorldViewProj[1].x,\n";
     out << "                           ffpVs.ffpWorldViewProj[2].x, ffpVs.ffpWorldViewProj[3].x), inPosition);\n";
@@ -802,6 +845,10 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
     out << "    clip.w = dot(float4(ffpVs.ffpWorldViewProj[0].w, ffpVs.ffpWorldViewProj[1].w,\n";
     out << "                           ffpVs.ffpWorldViewProj[2].w, ffpVs.ffpWorldViewProj[3].w), inPosition);\n";
     out << "  }\n";
+    out << "  float dxmt9_cameraNormalLength = length(dxmt9_cameraNormal);\n";
+    out << "  float3 dxmt9_cameraUnitNormal = dxmt9_cameraNormalLength > 1.0e-8f"
+           " ? dxmt9_cameraNormal / dxmt9_cameraNormalLength"
+           " : float3(0.0f, 0.0f, 1.0f);\n";
     out << "  out.position = clip;\n";
     out << "  out.position.xy += ffpVs.halfPixelFixup * out.position.w;\n";
     if (shaders::vsoutEmitColor(context.vsOutLayout) && layout->hasDiffuse) {
@@ -822,7 +869,9 @@ std::string makeFfpVertexSource(const FfpVertexKey& key,
       out << "  out.secondaryColor = "
           << vsoutFloat4Write(context, "float4(0.0)") << ";\n";
     }
-    out << "  float3 dxmt9_lightingNormal = dxmt9_cameraUnitNormal;\n";
+    out << "  float3 dxmt9_lightingNormal = "
+        << (key.normalizeNormals ? "dxmt9_cameraUnitNormal" : "dxmt9_cameraNormal")
+        << ";\n";
     emitStageTexcoords(out);
     if (shaders::vsoutEmitFogFactor(context.vsOutLayout)) {
       out << "  float dxmt9_fogDepth = ffpVs.rangeFog != 0u ? length(dxmt9_cameraPosition.xyz) : fabs(dxmt9_cameraPosition.z);\n";

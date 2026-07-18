@@ -152,6 +152,17 @@ void testBuildPerStageUploadBytesCopiesOnlyPlannedPrefix() {
 
 void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   DrawDesc desc{};
+  desc.ffpView.m = {
+      0.0f, 1.0f, 0.0f, 0.0f,
+     -1.0f, 0.0f, 0.0f, 0.0f,
+      0.0f, 0.0f, 1.0f, 0.0f,
+     10.0f, 20.0f, 30.0f, 1.0f,
+  };
+  desc.lights[0].position = {1.0f, 2.0f, 3.0f};
+  desc.lights[0].direction = {1.0f, 0.0f, 0.0f};
+  desc.lights[0].range = 123.0f;
+  desc.ffpBlendWorldView[2].m[7] = 17.0f;
+  desc.ffpBlendNormalMatrix[3].m[9] = 23.0f;
   desc.viewport.viewport = Viewport{12, 34, 320, 240, 0.25f, 0.75f};
   desc.vertexDecl.streams[0].offset = 64;
   desc.vertexDecl.streams[0].stride = 28;
@@ -190,6 +201,22 @@ void testBuildFfpAndVolatileViewportAndRenderStateValues() {
   checkEq(ffpVs.viewportOrigin[1], 34.0f, "viewport origin Y copied");
   checkEq(ffpVs.viewportSize[0], 320.0f, "viewport width copied");
   checkEq(ffpVs.viewportSize[1], 240.0f, "viewport height copied");
+  checkNear(ffpVs.lightPosition[0][0], 8.0f, 1.0e-6f,
+            "world-space light position transformed by View X");
+  checkNear(ffpVs.lightPosition[0][1], 21.0f, 1.0e-6f,
+            "world-space light position transformed by View Y");
+  checkNear(ffpVs.lightPosition[0][2], 33.0f, 1.0e-6f,
+            "world-space light position transformed by View Z");
+  checkNear(ffpVs.lightPosition[0][3], 123.0f, 1.0e-6f,
+            "light range preserved through View transform");
+  checkNear(ffpVs.lightDirection[0][0], 0.0f, 1.0e-6f,
+            "world-space light direction transformed by View X");
+  checkNear(ffpVs.lightDirection[0][1], 1.0f, 1.0e-6f,
+            "world-space light direction transformed by View Y");
+  checkNear(ffpVs.ffpBlendWorldView[2][1][3], 17.0f, 1.0e-6f,
+            "blend WorldView matrix copied to FFP constants");
+  checkNear(ffpVs.ffpBlendNormalMatrix[3][2][1], 23.0f, 1.0e-6f,
+            "blend normal matrix copied to FFP constants");
 
   checkNear(ffpPs.textureFactor[0], 0x40 / 255.0f, 1.0e-6f, "texture factor red extracted");
   checkNear(ffpPs.textureFactor[1], 0x20 / 255.0f, 1.0e-6f, "texture factor green extracted");

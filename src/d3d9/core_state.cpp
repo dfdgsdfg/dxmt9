@@ -25,6 +25,7 @@ u64 hashFfpVertexKeyForState(const FfpVertexKey &key) {
   hash = hashCombineForState(hash, static_cast<u64>(key.lightingEnabled));
   hash = hashCombineForState(hash, static_cast<u64>(key.specularEnabled));
   hash = hashCombineForState(hash, static_cast<u64>(key.normalizeNormals));
+  hash = hashCombineForState(hash, static_cast<u64>(key.localViewer));
   hash = hashCombineForState(hash, static_cast<u64>(key.colorVertexEnabled));
   for (bool enabled : key.lightEnabled) {
     hash = hashCombineForState(hash, static_cast<u64>(enabled));
@@ -368,9 +369,7 @@ constexpr u32 kRsWrap4 = 132;
 constexpr u32 kRsWrap5 = 133;
 constexpr u32 kRsWrap6 = 134;
 constexpr u32 kRsWrap7 = 135;
-constexpr u32 kRsClipping = 136;
 constexpr u32 kRsColorVertex = 141;
-constexpr u32 kRsLocalViewer = 142;
 constexpr u32 kRsMultisampleAntialias = 161;
 constexpr u32 kRsMultisampleMask = 162;
 constexpr u32 kRsPatchEdgeStyle = 163;
@@ -472,7 +471,7 @@ constexpr auto kVertexStateRenderStates = std::to_array<u32>({
     kRsAdaptiveTessZ,
     RS_AMBIENT,
     RS_AMBIENT_MATERIAL_SOURCE,
-    kRsClipping,
+    RS_CLIPPING,
     RS_CLIP_PLANE_ENABLE,
     kRsColorVertex,
     RS_CULL_MODE,
@@ -488,7 +487,7 @@ constexpr auto kVertexStateRenderStates = std::to_array<u32>({
     RS_FOG_FROM_VERTEX,
     kRsIndexedVertexBlendEnable,
     RS_LIGHTING,
-    kRsLocalViewer,
+    RS_LOCAL_VIEWER,
     kRsMaxTessellationLevel,
     kRsMinTessellationLevel,
     kRsMultisampleAntialias,

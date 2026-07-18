@@ -4302,7 +4302,8 @@ struct ActiveEncoderBreakdown {
                       offsetof(FfpVsConsts, lightDiffuse),
                   stats.argbufCbufFfpVsLightChangedBytes);
     addFfpVsGroup(offsetof(FfpVsConsts, ffpBlendWorldViewProj),
-                  sizeof(FfpVsConsts::ffpBlendWorldViewProj),
+                  offsetof(FfpVsConsts, ffpTextureTransforms) -
+                      offsetof(FfpVsConsts, ffpBlendWorldViewProj),
                   stats.argbufCbufFfpVsBlendChangedBytes);
     addFfpVsGroup(offsetof(FfpVsConsts, ffpTextureTransforms),
                   sizeof(FfpVsConsts::ffpTextureTransforms),
@@ -5155,6 +5156,13 @@ WMTTriangleFillMode triangleFillModeFromRenderState(
              : WMTTriangleFillModeFill;
 }
 
+WMTDepthClipMode depthClipModeFromRenderState(
+    const core::FlatRenderStateSet& renderStates) {
+  return core::flatStateOr(renderStates, core::RS_CLIPPING, 1u) != 0u
+             ? WMTDepthClipModeClip
+             : WMTDepthClipModeClamp;
+}
+
 void setRasterizerCullMode(EncodeContext& ctx,
                            WMT::RenderCommandEncoder& encoder,
                            const core::FlatRenderStateSet& renderStates,
@@ -5169,7 +5177,7 @@ void setRasterizerCullMode(EncodeContext& ctx,
   const float slopeScale = std::bit_cast<float>(
       core::flatStateOr(renderStates, core::RS_SLOPE_SCALE_DEPTH_BIAS, 0u));
   recordedSetRasterizerState(ctx, encoder, triangleFillModeFromRenderState(renderStates), cullMode,
-                             WMTDepthClipModeClip, frontFaceWinding(),
+                             depthClipModeFromRenderState(renderStates), frontFaceWinding(),
                              depthBias, slopeScale, 0.0f);
   countRasterizerBind();
 }

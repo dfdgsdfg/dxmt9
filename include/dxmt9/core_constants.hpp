@@ -455,6 +455,7 @@ inline constexpr u32 UsageNoOverwrite = 1u << 9;
 inline constexpr u32 UsageQueryPostPixelShaderBlending = 1u << 10;
 inline constexpr u32 UsageReadOnly = 1u << 11;
 
+inline constexpr u32 RS_CLIPPING = 136;
 inline constexpr u32 RS_LIGHTING = 137;
 inline constexpr u32 RS_SPECULAR_ENABLE = 29;
 inline constexpr u32 RS_NORMALIZE_NORMALS = 143;
@@ -470,6 +471,7 @@ inline constexpr u32 RS_FOG_START = 36;
 inline constexpr u32 RS_FOG_END = 37;
 inline constexpr u32 RS_FOG_DENSITY = 38;
 inline constexpr u32 RS_AMBIENT = 139;
+inline constexpr u32 RS_LOCAL_VIEWER = 142;
 inline constexpr u32 RS_DIFFUSE_MATERIAL_SOURCE = 145;
 inline constexpr u32 RS_SPECULAR_MATERIAL_SOURCE = 146;
 inline constexpr u32 RS_AMBIENT_MATERIAL_SOURCE = 147;
@@ -837,8 +839,7 @@ struct ShaderConstantUsageBounds {
 //   - Sole canonical builder: `dxmt9::core::makeFfpVertexKey(const
 //     DeviceState&)` (declared in `core_snapshots.hpp`, implemented in
 //     `src/d3d9/core_draw.cpp`). The builder reads each render state with
-//     a default of 0 / false when absent so missing entries do not perturb
-//     the key.
+//     D3D9 defaults when absent so missing entries do not perturb the key.
 //   - Hashed by `hashFfpVertexKey()` in `src/d3d9/core_draw.cpp`; the
 //     result is stored in `hash` and is also consumed via
 //     `hashShaderRef()` when this key is wrapped in a `ShaderRef`.
@@ -854,6 +855,7 @@ struct FfpVertexKey {
   bool lightingEnabled = false;
   bool specularEnabled = false;
   bool normalizeNormals = false;
+  bool localViewer = true;
   bool colorVertexEnabled = true;
   std::array<bool, kMaxLights> lightEnabled{};
   std::array<u32, kMaxLights> lightType{};

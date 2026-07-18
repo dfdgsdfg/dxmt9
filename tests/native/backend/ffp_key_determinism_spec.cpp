@@ -65,6 +65,7 @@ DeviceState makeRepresentativeFfpState() {
   state.renderStates[RS_LIGHTING] = 1;
   state.renderStates[RS_SPECULAR_ENABLE] = 1;
   state.renderStates[RS_NORMALIZE_NORMALS] = 1;
+  state.renderStates[RS_LOCAL_VIEWER] = 1;
   state.renderStates[RS_EMISSIVE_MATERIAL_SOURCE] = 3;
   state.renderStates[RS_AMBIENT_MATERIAL_SOURCE] = 2;
   state.renderStates[RS_DIFFUSE_MATERIAL_SOURCE] = 1;
@@ -269,6 +270,12 @@ void testVertexKeySensitiveToVsStatePerturbations() {
   normalize.renderStates[RS_NORMALIZE_NORMALS] = 0u;
   checkNe(makeFfpVertexKey(normalize), baseKey,
           "vertex key insensitive to RS_NORMALIZE_NORMALS toggle");
+
+  // Local-viewer toggle changes the generated specular eye vector.
+  auto localViewer = base;
+  localViewer.renderStates[RS_LOCAL_VIEWER] = 0u;
+  checkNe(makeFfpVertexKey(localViewer), baseKey,
+          "vertex key insensitive to RS_LOCAL_VIEWER toggle");
 }
 
 // Case 7 (P1-4): point-sprite + point-scale enable bits are key bits on

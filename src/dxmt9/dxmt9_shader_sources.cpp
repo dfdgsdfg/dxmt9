@@ -282,6 +282,8 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   // Spot only: x=cos(theta/2), y=cos(phi/2), zw=reserved.
   out << "  float4 lightSpotCone[" << kMaxLights << "];\n";
   out << "  float4 ffpBlendWorldViewProj[4][4];\n";
+  out << "  float4 ffpBlendWorldView[4][4];\n";
+  out << "  float4 ffpBlendNormalMatrix[4][4];\n";
   out << "  float4 ffpTextureTransforms[" << kMaxTextureStages << "][4];\n";
   out << "  float4 clipPlanes[" << kMaxClipPlanes << "];\n";
   out << "  float2 halfPixelFixup;\n";

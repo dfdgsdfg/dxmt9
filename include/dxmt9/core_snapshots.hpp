@@ -720,11 +720,14 @@ struct DrawUniformPayload {
   VertexShaderConstants vsConst{};
   PixelShaderConstants psConst{};
   Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpView{};
   Matrix4x4 ffpWorldView{};
   Matrix4x4 ffpNormalMatrix{};
   Material material{};
   std::array<Light, kMaxLights> lights{};
   std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
+  std::array<Matrix4x4, 4> ffpBlendWorldView{};
+  std::array<Matrix4x4, 4> ffpBlendNormalMatrix{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
@@ -744,11 +747,14 @@ struct DrawUniformPayload {
 
 struct DrawUniformFixedPayload {
   Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpView{};
   Matrix4x4 ffpWorldView{};
   Matrix4x4 ffpNormalMatrix{};
   Material material{};
   std::array<Light, kMaxLights> lights{};
   std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
+  std::array<Matrix4x4, 4> ffpBlendWorldView{};
+  std::array<Matrix4x4, 4> ffpBlendNormalMatrix{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};
@@ -761,11 +767,14 @@ inline DrawUniformFixedPayload
 makeDrawUniformFixedPayload(const DrawUniformPayload& payload) noexcept {
   return DrawUniformFixedPayload{
       .worldViewProj = payload.worldViewProj,
+      .ffpView = payload.ffpView,
       .ffpWorldView = payload.ffpWorldView,
       .ffpNormalMatrix = payload.ffpNormalMatrix,
       .material = payload.material,
       .lights = payload.lights,
       .ffpBlendWorldViewProj = payload.ffpBlendWorldViewProj,
+      .ffpBlendWorldView = payload.ffpBlendWorldView,
+      .ffpBlendNormalMatrix = payload.ffpBlendNormalMatrix,
       .textureTransforms = payload.textureTransforms,
       .clipPlaneMask = payload.clipPlaneMask,
       .clipPlanes = payload.clipPlanes,
@@ -863,11 +872,14 @@ struct DrawUniformPayloadHashes {
   u16 pixelIntConstantCount = 0;
   u16 pixelBoolConstantCount = 0;
   u64 worldViewProjHash = 0;
+  u64 ffpViewHash = 0;
   u64 ffpWorldViewHash = 0;
   u64 ffpNormalMatrixHash = 0;
   u64 materialHash = 0;
   std::array<u64, kMaxLights> lightHashes{};
   u64 ffpBlendWorldViewProjHash = 0;
+  u64 ffpBlendWorldViewHash = 0;
+  u64 ffpBlendNormalMatrixHash = 0;
   u64 textureTransformsHash = 0;
   u32 nonIdentityTextureTransformStageMask = 0;
   u64 clipPlanesHash = 0;
@@ -1601,11 +1613,14 @@ struct DrawDesc {
   RenderTargetSnapshot rts{};
   ViewportScissor viewport{};
   Matrix4x4 worldViewProj{};
+  Matrix4x4 ffpView{};
   Matrix4x4 ffpWorldView{};
   Matrix4x4 ffpNormalMatrix{};
   Material material{};
   std::array<Light, kMaxLights> lights{};
   std::array<Matrix4x4, 4> ffpBlendWorldViewProj{};
+  std::array<Matrix4x4, 4> ffpBlendWorldView{};
+  std::array<Matrix4x4, 4> ffpBlendNormalMatrix{};
   std::array<Matrix4x4, kMaxTextureStages> textureTransforms{};
   u32 clipPlaneMask = 0;
   std::array<ClipPlane, kMaxClipPlanes> clipPlanes{};

@@ -623,14 +623,14 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | WRAP5 | 133 | ⚠️ `kRsWrap5` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
 | WRAP6 | 134 | ⚠️ `kRsWrap6` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
 | WRAP7 | 135 | ⚠️ `kRsWrap7` | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testWrapRenderStateRoundTrip | |
-| CLIPPING | 136 | ⚠️ `kRsClipping` (core_state.cpp:357) | ✅ | ⚠️ | consumed by `ProcessVertices` for `FALSE` depth clamp; transformed SWVP line-list/strip and triangle-list/strip/fan fallback clips against viewport/depth/user planes and drops all-outside primitives; broader clipping edge cases remain deferred | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies + `test_visual_process_vertices_xyzhw_policy` | Default TRUE; no D3D-level draw frustum clip toggle in dxmt9; Metal clips non-SWVP draws |
+| CLIPPING | 136 | ✅ `core::RS_CLIPPING` | ✅ | ⚠️ | normal draws map `FALSE` to Metal depth clamp and suppress user clip-distance output; `ProcessVertices` also applies `FALSE` depth clamp; transformed SWVP line-list/strip and triangle-list/strip/fan fallback clips against viewport/depth/user planes and drops all-outside primitives; broader clipping edge cases remain deferred | ✅ state_draw_transform_spec:testClippingFalseSuppressesUserClipPlanes + encode_draw_recorder_spec + `test_visual_process_vertices_xyzhw_policy` | Default TRUE |
 | LIGHTING | 137 | ✅ `core::RS_LIGHTING` (core_constants.hpp:346) | ✅ | ⚠️ | ✅ `core_draw.cpp:1916,2150` (FFP key.lightingEnabled) | ✅ ffp_key_determinism_spec:65 | |
 | (138 dead) | 138 | n/a | n/a | n/a | n/a | n/a | |
 | AMBIENT | 139 | ✅ `core::RS_AMBIENT` (core_constants.hpp:360) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:108` (uniform) | ⚠️ | |
 | FOGVERTEXMODE | 140 | ✅ `core::RS_FOG_FROM_VERTEX` (core_constants.hpp:350) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:148,185`, `core_draw.cpp:2181` | ✅ ffp_key_determinism_spec:73 | |
 | COLORVERTEX | 141 | ⚠️ `kRsColorVertex` (core_state.cpp:358) | ✅ | ⚠️ | ✅ `core_draw.cpp:makeFfpVertexKey` gates color material sources | ✅ ffp_key_determinism_spec; state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; FALSE forces FFP material sources to material constants |
-| LOCALVIEWER | 142 | ⚠️ `kRsLocalViewer` (core_state.cpp:359) | ✅ | ⚠️ | accepted no-op | ✅ state_draw_transform_spec:testAcceptedRenderStateRoundTripPolicies | Default TRUE; current FFP specular uses existing local-eye approximation |
-| NORMALIZENORMALS | 143 | ✅ `core::RS_NORMALIZE_NORMALS` (core_constants.hpp:348) | ✅ | ⚠️ | ✅ `core_draw.cpp:2154` (FFP key.normalizeNormals) | ✅ ffp_key_determinism_spec:67 | |
+| LOCALVIEWER | 142 | ✅ `core::RS_LOCAL_VIEWER` | ✅ | ⚠️ | ✅ FFP specular and camera-space reflection texcoord generation select per-vertex or infinite-viewer formulas | ✅ core_ffp_state_key_spec:testFfpVertexCoordinateAndLightingContracts + ffp_key_determinism_spec | Default TRUE |
+| NORMALIZENORMALS | 143 | ✅ `core::RS_NORMALIZE_NORMALS` | ✅ | ⚠️ | ✅ transformed camera normal is normalized only for `TRUE`; lighting and generated normal/reflection texcoords share the result | ✅ core_ffp_state_key_spec:testFfpVertexCoordinateAndLightingContracts + ffp_key_determinism_spec | Default FALSE |
 | (144 dead) | 144 | n/a | n/a | n/a | n/a | n/a | |
 | DIFFUSEMATERIALSOURCE | 145 | ✅ `core::RS_DIFFUSE_MATERIAL_SOURCE` (core_constants.hpp:361) | ✅ | ⚠️ | ✅ `core_draw.cpp:2169` (FFP key.colorMaterialMode[2]) | ✅ ffp_key_determinism_spec:70 | |
 | SPECULARMATERIALSOURCE | 146 | ✅ `core::RS_SPECULAR_MATERIAL_SOURCE` (core_constants.hpp:362) | ✅ | ⚠️ | ✅ `core_draw.cpp:2173` (key.colorMaterialMode[3]) | ✅ ffp_key_determinism_spec:71 | |
@@ -638,11 +638,11 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | EMISSIVEMATERIALSOURCE | 148 | ✅ `core::RS_EMISSIVE_MATERIAL_SOURCE` (core_constants.hpp:364) | ✅ | ⚠️ | ✅ `core_draw.cpp:2161` (key.colorMaterialMode[0]) | ✅ ffp_key_determinism_spec:68 | |
 | (149 dead) | 149 | n/a | n/a | n/a | n/a | n/a | |
 | (150 dead) | 150 | n/a | n/a | n/a | n/a | n/a | |
-| VERTEXBLEND | 151 | ✅ `core::RS_VERTEX_BLEND` (core_constants.hpp:365) | ✅ | ⚠️ | ✅ `core_draw.cpp:2199` (FFP key.vertexBlend) | ✅ ffp_key_determinism_spec:75,220 | |
-| CLIPPLANEENABLE | 152 | ✅ `core::RS_CLIP_PLANE_ENABLE` (core_constants.hpp:366) | ✅ | ⚠️ | ✅ `core_draw.cpp:1084,2205` (key.clipPlaneMask) | ✅ ffp_key_determinism_spec:77,232 | |
+| VERTEXBLEND | 151 | ✅ `core::RS_VERTEX_BLEND` | ✅ | ⚠️ | ✅ per-matrix WorldViewProjection, WorldView, and inverse-transpose normal transforms blend clip position, camera position, and camera normal | ✅ state_draw_transform_spec:testTransformMultiplicationOrderAndBlendSlots + core_ffp_state_key_spec + shader-runner vertex-blend corpus | |
+| CLIPPLANEENABLE | 152 | ✅ `core::RS_CLIP_PLANE_ENABLE` | ✅ | ⚠️ | ✅ drives clip-distance output while `D3DRS_CLIPPING=TRUE`; suppressed when clipping is disabled | ✅ ffp_key_determinism_spec + state_draw_transform_spec:testClippingFalseSuppressesUserClipPlanes | |
 | (153 dead) | 153 | n/a | n/a | n/a | n/a | n/a | |
-| POINTSIZE | 154 | ✅ `core::RS_POINTSIZE` (core_constants.hpp:367) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:155` (uniform pointSize) | ⚠️ ef3ec91 wired | |
-| POINTSIZE_MIN | 155 | ✅ `core::RS_POINTSIZE_MIN` (core_constants.hpp:368) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:157` | ⚠️ ef3ec91 | |
+| POINTSIZE | 154 | ✅ `core::RS_POINTSIZE` | ✅ | ⚠️ | ✅ FFP and programmable VS without PSIZE/oPts use the uniform default | ✅ core_ffp_state_key_spec + core_shader_translator_spec + shader-runner FFP point readback | |
+| POINTSIZE_MIN | 155 | ✅ `core::RS_POINTSIZE_MIN` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ core_ffp_state_key_spec + core_shader_translator_spec | |
 | POINTSPRITEENABLE | 156 | ✅ `core::RS_POINT_SPRITE_ENABLE` (core_constants.hpp:369) | ✅ | ⚠️ | ✅ `core_draw.cpp:2209,2253` (FFP key.pointSpriteEnabled), `ffp_shaders.cpp:736,812` | ⚠️ ef3ec91 (P1-4) | |
 | POINTSCALEENABLE | 157 | ✅ `core::RS_POINT_SCALE_ENABLE` (core_constants.hpp:370) | ✅ | ⚠️ | ✅ `core_draw.cpp:2212` (key.pointScaleEnabled) | ⚠️ ef3ec91 (P1-4) | |
 | POINTSCALE_A | 158 | ✅ `core::RS_POINTSCALE_A` (core_constants.hpp:371) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:161` (uniform) | ⚠️ ef3ec91 | |
@@ -653,7 +653,7 @@ Anchors are the **first defining or emitting** line; for opcodes the audit table
 | PATCHEDGESTYLE | 163 | ⚠️ `kRsPatchEdgeStyle` (core_state.cpp:362) | ✅ | ⚠️ | ❌ not consumed (no N-patch) | 🚫 | D3D9 N-patch — explicitly deferred |
 | (164 dead) | 164 | n/a | n/a | n/a | n/a | n/a | |
 | DEBUGMONITORTOKEN | 165 | ❌ not defined | ✅ shadow generic | ⚠️ | ❌ | ❌ | DEBUG-time only; no D3D9 behavior on retail |
-| POINTSIZE_MAX | 166 | ✅ `core::RS_POINTSIZE_MAX` (core_constants.hpp:374) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:159` | ⚠️ ef3ec91 | |
+| POINTSIZE_MAX | 166 | ✅ `core::RS_POINTSIZE_MAX` | ✅ | ⚠️ | ✅ clamps both FFP and programmable VS point output | ✅ core_ffp_state_key_spec + core_shader_translator_spec | |
 | INDEXEDVERTEXBLENDENABLE | 167 | ✅ `core::RS_INDEXED_VERTEX_BLEND_ENABLE` (core_constants.hpp:375); also `kRsIndexedVertexBlendEnable` alias | ✅ | ⚠️ | ✅ `core_draw.cpp:2203` (key.indexedVertexBlend) | ✅ ffp_key_determinism_spec:76,226 | |
 | COLORWRITEENABLE | 168 | ✅ `core::RS_COLOR_WRITE_ENABLE` (core_constants.hpp:384) | ✅ | ⚠️ | ✅ `dxmt9_pipeline_cache.cpp:162` | ⚠️ implicit via blend key | |
 | (169 dead) | 169 | n/a | n/a | n/a | n/a | n/a | |
@@ -780,8 +780,8 @@ D3DLIGHT9 struct fields (`d3d9types.h:1408-1422`):
 | Diffuse | ✅ `diffuse` D9CColorRGBA | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:112` (`lightDiffuse[i]`) | ⚠️ | |
 | Specular | ✅ `specular` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:113` | ⚠️ | |
 | Ambient | ✅ `ambient` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:114` | ⚠️ | |
-| Position | ✅ `position[3]` | ✅ | ✅ | ✅ point/spot branch | ⚠️ | |
-| Direction | ✅ `direction[3]` | ✅ | ✅ | ✅ `dxmt9_draw_state.cpp:115` | ✅ ProcessVertices spot cone readback | |
+| Position | ✅ `position[3]` | ✅ | ✅ | ✅ transformed from D3D world space by View before point/spot evaluation | ✅ backend_key_descriptor_spec | |
+| Direction | ✅ `direction[3]` | ✅ | ✅ | ✅ transformed from D3D world space by View and normalized before directional/spot evaluation | ✅ backend_key_descriptor_spec + ProcessVertices spot cone readback | |
 | Range | ✅ float | ✅ | ✅ | ✅ point/spot branch | ✅ ProcessVertices point range cutoff readback | |
 | Falloff | ✅ | ✅ | ✅ | ✅ spot branch | ✅ ProcessVertices spot falloff readback | |
 | Attenuation0 | ✅ | ✅ | ✅ | ✅ point/spot branch | ✅ ProcessVertices point-light readback | |
