@@ -502,7 +502,6 @@ unix_chunk_injection_probe = executable(
 # R-BACK-2.54 / R-BACK-2.56 command-chunk V2 replay/lifetime scaffolds.
 foreach spec : [
   ['chunk-record-v2-replay', 'chunk_record_v2_replay_spec.cpp'],
-  ['chunk-record-v2-allocation', 'chunk_record_v2_allocation_spec.cpp'],
   ['resource-hazard-v2', 'resource_hazard_v2_spec.cpp'],
 ]
   target = executable(
@@ -515,3 +514,22 @@ foreach spec : [
   test('dxmt9-' + spec[0] + '-spec', target,
        env: dxmt9_native_test_env)
 endforeach
+
+chunk_record_v2_allocation_spec = executable(
+  'dxmt9-chunk-record-v2-allocation-spec',
+  [
+    'chunk_record_v2_allocation_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-chunk-record-v2-allocation-spec',
+     chunk_record_v2_allocation_spec,
+     env: dxmt9_native_test_env)
