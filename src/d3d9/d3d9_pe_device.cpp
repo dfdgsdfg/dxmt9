@@ -10213,7 +10213,9 @@ public:
             const std::uint32_t preferred =
                 mode == Dxmt9PeChunkWireMode::Version2
                     ? D9C_COMMAND_CHUNK_VERSION_V2
-                    : D9C_COMMAND_CHUNK_VERSION;
+                    : mode == Dxmt9PeChunkWireMode::Version1
+                        ? D9C_COMMAND_CHUNK_VERSION
+                        : D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION;
             D9CCommandChunkNegotiation negotiation{};
             negotiation.peSupportedVersions =
                 D9C_COMMAND_CHUNK_CAP_VERSION_1 |

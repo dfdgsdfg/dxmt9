@@ -161,6 +161,17 @@ void testGenerationWrapRetiresSlot() {
 
 void testPerDeviceVersionNegotiation() {
   auto* device = reinterpret_cast<D9CDevice*>(std::uintptr_t{1u});
+  static_assert(D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION ==
+                D9C_COMMAND_CHUNK_VERSION_V2);
+  D9CCommandChunkNegotiation automatic{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION,
+  };
+  check(dxmt9p_device_negotiate_command_chunk(device, &automatic) == 0 &&
+            automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
+        "default auto preference negotiates V2");
+
   D9CCommandChunkNegotiation v1{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
                              D9C_COMMAND_CHUNK_CAP_VERSION_2,
@@ -171,7 +182,7 @@ void testPerDeviceVersionNegotiation() {
                 (D9C_COMMAND_CHUNK_CAP_VERSION_1 |
                  D9C_COMMAND_CHUNK_CAP_VERSION_2) &&
             v1.selectedVersion == D9C_COMMAND_CHUNK_VERSION,
-        "auto/forced V1 preference negotiates immutable V1");
+        "forced V1 preference negotiates immutable V1");
 
   D9CCommandChunkNegotiation v2{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
