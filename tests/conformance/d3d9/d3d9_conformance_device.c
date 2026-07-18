@@ -1817,8 +1817,18 @@ void test_limits(const struct d3d9_api *api)
         CHECK_TRUE(caps.MaxPrimitiveCount >= 1);
         CHECK_TRUE(caps.MaxVertexIndex >= 1);
 
-        CHECK_HR(IDirect3DDevice9_SetTexture(device,
-                caps.MaxSimultaneousTextures, NULL), D3DERR_INVALIDCALL);
+        /* Wine test_limits: all 16 pixel samplers are settable via
+         * SetTexture regardless of MaxSimultaneousTextures (which only
+         * describes FFP blend stages). 3DMark05 GT3 binds its water
+         * reflection at stage 8. */
+        {
+            DWORD stage;
+            for (stage = 0; stage < 16; ++stage)
+            {
+                CHECK_HR(IDirect3DDevice9_SetTexture(device, stage, NULL),
+                        D3D_OK);
+            }
+        }
         CHECK_HR(IDirect3DDevice9_SetTextureStageState(device,
                 caps.MaxTextureBlendStages, D3DTSS_COLOROP, D3DTOP_DISABLE),
                 D3DERR_INVALIDCALL);
@@ -2854,16 +2864,23 @@ void test_get_set_texture(const struct d3d9_api *api)
         IDirect3DBaseTexture9_Release(current);
     }
 
-    if (caps.MaxSimultaneousTextures)
+    /* Wine test_limits: all 16 pixel samplers accept a texture bind and
+     * read back through GetTexture (MaxSimultaneousTextures only caps
+     * the FFP blend stages). */
     {
-        CHECK_HR(IDirect3DDevice9_SetTexture(device,
-                caps.MaxSimultaneousTextures,
-                (IDirect3DBaseTexture9 *)texture), D3DERR_INVALIDCALL);
-        current = (IDirect3DBaseTexture9 *)0xdeadbeef;
-        CHECK_HR(IDirect3DDevice9_GetTexture(device,
-                caps.MaxSimultaneousTextures, &current), D3DERR_INVALIDCALL);
-        CHECK_TRUE(current == (IDirect3DBaseTexture9 *)0xdeadbeef
-                || current == NULL);
+        DWORD stage;
+        for (stage = 8; stage < 16; ++stage)
+        {
+            CHECK_HR(IDirect3DDevice9_SetTexture(device, stage,
+                    (IDirect3DBaseTexture9 *)texture), D3D_OK);
+            current = NULL;
+            CHECK_HR(IDirect3DDevice9_GetTexture(device, stage, &current),
+                    D3D_OK);
+            CHECK_TRUE(current == (IDirect3DBaseTexture9 *)texture);
+            if (current)
+                IDirect3DBaseTexture9_Release(current);
+            CHECK_HR(IDirect3DDevice9_SetTexture(device, stage, NULL), D3D_OK);
+        }
     }
 
     CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);

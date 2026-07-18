@@ -12462,15 +12462,18 @@ public:
     }
 
     /* ── textures ── */
-    // Wine d3d9 texture-stage validation. Valid stages are the FFP
-    // fragment sampler range [0..MaxSimultaneousTextures-1] (=[0..7]
-    // under the caps dxmt9 reports) plus the vertex texture sampler
-    // range D3DVERTEXTEXTURESAMPLER0..D3DVERTEXTEXTURESAMPLER3.
-    // Anything else is D3DERR_INVALIDCALL (see test_get_set_texture
-    // around line 2693: SetTexture(MaxSimultaneousTextures, ...) must
-    // fail and GetTexture must leave the caller's out-pointer
-    // untouched).
-    static constexpr DWORD kFragmentTextureStageCount = 8;
+    // Wine d3d9 texture-stage validation (test_limits: "There are 16
+    // pixel samplers. We should be able to access all of them" —
+    // SetTexture/SetSamplerState succeed for stages 0..15 regardless of
+    // caps.MaxSimultaneousTextures, which only describes the FFP blend
+    // stage count). Valid stages are the ps_2_0+ fragment sampler range
+    // [0..15] plus the vertex texture sampler range
+    // D3DVERTEXTEXTURESAMPLER0..D3DVERTEXTEXTURESAMPLER3. A former
+    // guard capped this at 8 citing a nonexistent test_get_set_texture
+    // assertion; that dropped s8+ bindings (3DMark05 GT3 binds the
+    // water reflection at stage 8) and the translator's unbound-texture
+    // fallback then sampled constant black.
+    static constexpr DWORD kFragmentTextureStageCount = kPeFragmentSamplerSlots;
     static bool fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexcept {
         if (stage < kFragmentTextureStageCount) {
             slot = static_cast<uint32_t>(stage);
@@ -12484,18 +12487,11 @@ public:
         PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Texture);
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
                             this, (unsigned)stage, pTex);
-        // Wine d3d9 test_limits: SetTexture with a stage at or beyond
-        // caps.MaxSimultaneousTextures (8) — but not in the vertex
-        // texture sampler range D3DVERTEXTEXTURESAMPLER0..3 (257..260)
-        // — returns D3DERR_INVALIDCALL. textureBindingSlot accepts
-        // 0..kPeFragmentSamplerSlots-1 (=15) which over-promises the
-        // exposed cap; tighten the front-end guard here so the device
-        // reports the same surface area as makeDefaultCaps advertises.
-        constexpr DWORD kMaxFragmentTextureStage = 8;
-        if (stage >= kMaxFragmentTextureStage &&
-            (stage < D3DVERTEXTEXTURESAMPLER0 || stage > D3DVERTEXTEXTURESAMPLER3)) {
-            return D3DERR_INVALIDCALL;
-        }
+        // Wine d3d9 test_limits: all 16 pixel samplers are settable
+        // (stages 0..15), independent of caps.MaxSimultaneousTextures.
+        // fragmentTextureStageSlot is the single validator: fragment
+        // stages 0..15 and vertex samplers 257..260 map to slots,
+        // anything else is D3DERR_INVALIDCALL.
         uint32_t textureSlot = 0;
         if (!fragmentTextureStageSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
         if (textures_[textureSlot] == pTex) {
