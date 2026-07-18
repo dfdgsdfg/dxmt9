@@ -37,10 +37,11 @@ Severity legend (used uniformly across the file):
 
 | Area | Current status |
 |---|---|
-| Silent actionable D3D9 coverage gaps | **None in the current silent-coverage track.** Known formerly-silent gaps are implemented, tested, accepted as no-op/shadow-only, or explicitly unsupported. |
+| Unclassified silent D3D9 coverage gaps | **None in the current silent-coverage track.** This means known silent fall-throughs have been implemented or classified; it does not mean the full D3D9 feature surface is complete. |
+| Advertised capability mismatch | `CursorCaps` advertises `D3DCURSORCAPS_COLOR | D3DCURSORCAPS_LOWRES`, but device cursor methods maintain PE shadow state only and have no cursor-render or WindowServer integration path. |
 | Shader declaration/modifier coverage | D3DDECLUSAGE values are accepted for programmable VS semantics; non-default D3DDECLMETHOD values safe-reject; `_PARTIALPRECISION` and `_MSAMPCENTROID` are lowered/tested. |
 | Render/TSS/Sampler fixes | Depth bias, MRT color masks, two-sided stencil, COLORVERTEX, WRAP0..15 round-trip/no-op, TSS ARG0 triadic ops and initial getter values, sampler border color, mip LOD bias, and max mip level are closed. The complete non-dead render-state plus public TSS/sampler initial-value matrix is pinned by `dxmt9-state-draw-transform-spec`; the PE `test_texture_stage_states` scaffold now preserves the upstream initial-value checks instead of testing only Set/Get round-trips. |
-| Remaining deferred/unsupported API surface | N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the current fixed-function WVP path and limited programmable VS subset, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, `GetFrontBufferData`, `ComposeRects`, and convolution kernel. |
+| Remaining deferred/unsupported API surface | General programmable instancing through `SetStreamSourceFreq`, N-patch/adaptive tessellation, broad `ProcessVertices`/real SWVP shader execution beyond the covered fixed-function and programmable subsets, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, AA line raster toggle, `GetFrontBufferData`, `ComposeRects`, and convolution kernel. |
 | Remaining no-op/default stub surface | `SetDialogBoxMode`, `Set/GetClipStatus` clip-accumulation, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetNPatchMode`, `DeletePatch`, GPU thread priority, resource residency, and swapchain present stats use Wine-compatible no-op/default contracts rather than a real backend feature. |
 | Remaining validation work | Broader conformance Wine-run sweeps remain ongoing; the `ProcessVertices` M4x4 subset passed targeted PE singleton validation, while the expanded programmable scaffold and the P8/A8P8 fixed-function + ps_2_0 sampler readback scaffold, including cube `samplerCUBE` and volume `sampler3D` coverage, are build-covered. The latest stable app-local `visual_mvp_software_vp_policy` singleton reaches D3D with the ABI handshake OK and passes the expanded SWVP draw sections. Focused P8/A8P8 visual rerun is pending after the pre-transformed FFP half-pixel fix because the current Sikarugir conformance prefix fails the winemetal ABI/unixlib attach path before D3D9 loads; native P8/A8P8 expansion, matching UpdateTexture destination-palette re-expansion, mixed FFP-VS/programmable-PS texture orientation, and real Metal programmable P8/A8P8 draw readback gates pass. |
 
@@ -48,8 +49,9 @@ Severity legend (used uniformly across the file):
 
 | Class | Items | Current behavior |
 |---|---|---|
+| Advertised capability mismatch | `CursorCaps` `COLOR | LOWRES` | The caps promise a color cursor, but `SetCursorProperties`, `SetCursorPosition`, and `ShowCursor` only validate or update PE shadow state. |
 | Explicit unsupported / failure | non-default `D3DDECLMETHOD` 1..6, `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL`, N-patch patch draws, `GetFrontBufferData`, `SetConvolutionMonoKernel`, `ComposeRects`, unsupported vendor depth formats such as `RAWZ`/`NVDB` | Rejects with an explicit HRESULT or safe-reject path; not silently dropped. Ordinary UVs are still supported through `D3DDECLUSAGE_TEXCOORD` + `D3DDECLMETHOD_DEFAULT`. |
-| Deferred partial feature surface | broad `ProcessVertices` / SWVP beyond the covered fixed-function and limited programmable VS paths, palette/P8 direct core storage, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, D3D9 AA-line raster toggle | Implemented where currently needed/tested, but missing broader backend semantics or full D3D9 behavior. |
+| Deferred partial feature surface | general programmable instancing through `SetStreamSourceFreq`, broad `ProcessVertices` / SWVP beyond the covered fixed-function and programmable VS paths, palette/P8 direct core storage, `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET`, per-draw multisample mask, D3D9 AA-line raster toggle | Implemented where currently needed/tested, but missing broader backend semantics or full D3D9 behavior. |
 | Intentional no-op/default contracts | `SetDialogBoxMode`, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetClipStatus` accumulation, `Set/GetNPatchMode`, `DeletePatch`, swapchain Ex present stats, GPU thread priority, resource residency | Wine-compatible benign return/default behavior; documented as no-op/default rather than treated as an actionable silent gap. |
 
 ## Original top-level summary (historical 2026-05-23 roll-up)
@@ -126,14 +128,17 @@ a `file:line` anchor checked against the live tree.
 
 ### Remaining actionable gaps (verified still open)
 
-**None in the current silent-coverage track.** The remaining items are either
-implemented, explicitly accepted as no-op/shadow-only, or documented as
-unsupported/deferred.
+There are no known **unclassified silent fall-throughs** in the current audit
+track. The following items remain real compatibility gaps: advertised behavior
+without a backend implementation, partial feature subsets, explicit unsupported
+paths, or intentional no-op/default contracts.
 
 Current deferred/unsupported surface to keep visible:
 
 | Item | Current decision |
 |---|---|
+| Device cursor and `CursorCaps` | Advertised-capability mismatch. `CursorCaps` exposes `COLOR | LOWRES`, while `SetCursorProperties`, `SetCursorPosition`, and `ShowCursor` have no cursor-render or WindowServer integration path. Either implement the advertised cursor behavior or clear the caps until it exists. |
+| General programmable instancing / `SetStreamSourceFreq` | Partial. PE validation, shadow state, getters, and SWVP expansion cases exist, but `dxmt9c_device_set_stream_source_freq()` is a core no-op and ordinary core draw packets carry no native per-instance metadata. |
 | `D3DDECLMETHOD` 1..6 | Explicit safe-reject. These are declaration **methods** for fixed-function tessellator/N-patch/displacement-map evaluation. `D3DDECLMETHOD_UV` is not ordinary texture coordinate input; ordinary UVs are `D3DDECLUSAGE_TEXCOORD` with `D3DDECLMETHOD_DEFAULT`, which is supported. |
 | `D3DSPR_TEMPFLOAT16`, `D3DSPR_LABEL` | Explicit safe-reject. |
 | N-patch / adaptive tessellation render states and patch draws | Deferred/unsupported: `PATCHEDGESTYLE`, `TWEENFACTOR`, `POSITIONDEGREE`, `NORMALDEGREE`, tessellation levels, `SetNPatchMode`, `DrawRectPatch`, `DrawTriPatch`, `DeletePatch` no-op contract. |
@@ -141,9 +146,12 @@ Current deferred/unsupported surface to keep visible:
 | `D3DSAMP_ELEMENTINDEX`, `D3DSAMP_DMAPOFFSET` | Deferred. Texture-array/displacement-map sampler semantics are not represented in the backend. |
 | `D3DRS_MULTISAMPLEANTIALIAS`, `D3DRS_MULTISAMPLEMASK` | Shadow/default only. MSAA itself is attachment-driven; sample-mask programming is not currently wired. |
 | `D3DRS_ANTIALIASEDLINEENABLE` | Accepted no-op/deferred; Metal has no D3D9-style AA line raster toggle. |
+| Legacy fixed-function raster states | `D3DRS_SHADEMODE=FLAT`, `D3DRS_LASTPIXEL`, and enabled `D3DRS_WRAP0..15` cylindrical wrapping round-trip through state shadowing but do not change raster output. The corresponding unsupported caps remain clear where D3D9 exposes one. |
 | Palette/P8 texture binding | Partial. PE palette methods still round-trip; 2D/cube/volume `D3DFMT_P8` and `D3DFMT_A8P8` texture caps are exposed; 2D/cube/volume locks keep palette-index texels while expanding through the current palette into an A8R8G8B8 backend texture for sampling. Palette changes skip locked subresources and unlock expands those index texels through the latest palette; `UpdateTexture` between matching palettized textures copies index/alpha shadow data and preserves the destination palette before re-expanding the destination backing. PE matching palettized `UpdateTexture` records are committed immediately and then re-expanded through the device-current palette, so CPU-visible ProcessVertices vertex-texture sampling and the following fixed-function/programmable draw observe the copied shadow without waiting for a later chunk boundary. A native Metal integration gate now expands D9C P8/A8P8 shadow texels, including matching UpdateTexture destination-palette re-expansion, and reads them back through a programmable ps_2_0 draw. A PE visual scaffold samples 2D P8 and A8P8 textures through fixed-function texture stage state and ps_2_0 `texld`, plus 1x1 P8/A8P8 cube textures through ps_2_0 `samplerCUBE` and 1x1x4 P8/A8P8 volume textures through ps_2_0 `sampler3D`, then checks the palette-expanded A8R8G8B8 pixels, including A8P8 texel alpha, level-1 `SetLOD` sampling, same-slot palette updates, current-palette index switches while the texture is bound, current-palette-before-bind sampling, SYSTEMMEM-to-DEFAULT palettized `UpdateTexture` destination sampling before and after a destination palette switch, all six cube faces, and four volume slices by render-target readback; `test_visual_process_vertices_xyzhw_policy` also checks P8/A8P8 palette-expanded backing through vertex-texture TEXLDL destination-vertex readback, including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback. `Format::A8P8` / `Format::P8` now map explicitly for metadata, pitch, and D3DFORMAT round-trip; direct core storage remains unsupported so all runtime sampling continues through the A8R8G8B8 backing path. |
 | `GetFrontBufferData` | Explicit `D3DERR_INVALIDCALL` for device and swapchain paths. |
 | `SetConvolutionMonoKernel`, `ComposeRects` | Explicit `E_NOTIMPL`. |
+| D3D9Ex DEFAULT-pool shared resources | HRESULT-compatible creation currently ignores the shared handle. Real cross-process backing/open-existing behavior needs a winemetal ABI plus IOSurface or `MTLSharedTextureHandle` transport. |
+| Factory, reset, and host-display parity | Adapter/fullscreen/resource-type validation and exact HRESULT propagation remain incomplete. `GetAdapterMonitor` returns a stub monitor identity and raster status is a synthetic estimate rather than a WindowServer scanline signal; `D3DCAPS_READ_SCANLINE` remains clear. |
 | Stub/default contracts | `SetDialogBoxMode`, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetClipStatus`, `Set/GetNPatchMode`, `DeletePatch`, SwapChain Ex present stats, GPU thread priority, and resource residency intentionally return Wine-compatible defaults/no-ops where dxmt9 has no backend feature to drive. |
 
 Additional SWVP draw coverage now pins fixed-function
@@ -725,7 +733,7 @@ Each entry below is replicated across stage 0..7 (8 stages × table). Backend-re
 | (25 dead) | 25 | n/a | n/a | n/a | n/a | n/a | |
 | COLORARG0 | 26 | ✅ `core::TSS_COLOR_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ initial-state matrix + PE defaults + ffp_triadic_msl_spec + GPU readbacks | Default `D3DTA_CURRENT` |
 | ALPHAARG0 | 27 | ✅ `core::TSS_ALPHA_ARG0` | ✅ | ⚠️ | ✅ consumed by FFP triadic ops | ✅ initial-state matrix + PE defaults + ffp_triadic_msl_spec + GPU readbacks | Default `D3DTA_CURRENT` |
-| RESULTARG | 28 | ✅ `core::TSS_RESULT_ARG` (core_constants.hpp:420) | ✅ | ⚠️ | ⚠️ pipeline-key bucketed (`ffp_key_determinism_spec:161` lists it) but no encoder branch on the value | ⚠️ | |
+| RESULTARG | 28 | ✅ `core::TSS_RESULT_ARG` (core_constants.hpp:420) | ✅ | ✅ | ✅ FFP shader routes `D3DTA_TEMP` results through the stage TEMP handoff | ✅ `dxmt9_ffp_tss_resultarg_temp_readback.shader_test` | |
 | (29..31 dead) | 29-31 | n/a | n/a | n/a | n/a | n/a | |
 | CONSTANT | 32 | ✅ `core::TSS_CONSTANT` (core_constants.hpp:425) | ✅ | ⚠️ | ✅ `dxmt9_draw_state.cpp:201` (uniform), `chunk_replay.cpp:143` | ⚠️ | |
 
@@ -836,7 +844,7 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 | Category | Total slots | ✅ defined | ✅ backend-read | ✅ tested (named-spec) | ❌ gaps (worst 5) |
 |---|---|---|---|---|---|
 | RS (named D3D9 slots) | 102 | Named/default/shadow coverage now includes depth bias, MRT color-write masks, WRAP0..15, COLORVERTEX, and two-sided stencil | Core rendering states wired into draw_state / pipeline_cache / encoder; accepted no-op states are documented | Covered by ffp_key_determinism, blend_op_family, stencil_ref, state_draw_transform, backend pipeline-key gates | Remaining deferred/no-op: MULTISAMPLEANTIALIAS/MULTISAMPLEMASK, ANTIALIASEDLINEENABLE, N-patch/adaptive tessellation states |
-| TSS | 21 named (1..28 minus 13 dead) | Triadic ARG0 states are defined (`TSS_COLOR_ARG0`, `TSS_ALPHA_ARG0`) | COLOR/ALPHA ops, bump-env uniforms, transform flags, constants, and triadic ARG0 path are consumed | ffp_key_determinism_spec, ffp_triadic_msl_spec, GPU readbacks | RESULTARG remains key-bucketed/limited; BUMPENVMAP has partial per-stage coverage |
+| TSS | 21 named (1..28 minus 13 dead) | Triadic ARG0 states and RESULTARG are defined | COLOR/ALPHA ops, bump-env uniforms, transform flags, constants, triadic ARG0, and RESULTARG TEMP handoff are consumed | ffp_key_determinism_spec, ffp_triadic_msl_spec, RESULTARG GPU readback | BUMPENVMAP retains partial per-stage evidence coverage |
 | SAMP | 13 named | `BORDERCOLOR`, `MIPMAPLODBIAS`, `MAXMIPLEVEL` are defined and consumed | Address/filter/border/aniso/sRGB/lod-bias/max-mip wired | state_draw_transform_spec, backend_key_descriptor_spec, shader_transform_spec/readbacks | Deferred: ELEMENTINDEX, DMAPOFFSET |
 | Transform | 266 unique D3D9 codes (2, 3, 16-23, 256-511) | All 266 mapped via `transformStateFromD3D`; widened to (0..255) by 9980d5c | All read by core_draw + draw_state | Covered by state_draw_transform_spec (VIEW, PROJECTION, WORLD(0,5,254), TEXTURE0) | WORLD(4..253) not individually tested (only 5 and 254 sampled) |
 | D3DLIGHT9 | 13 fields × 8 slots + Type + LightEnable | All fields defined in `D9CLight` | Directional, point, and spot FFP branches consume the relevant fields | Light fields exercised by ffp_key_determinism/lighting gates | No current point/spot implementation gap; residual risk is visual edge coverage |
@@ -847,14 +855,16 @@ LightEnable: ✅ `packet.lightEnableValidMask` + `lightEnableMask` (device_c.h:3
 
 **Current remaining deferred/no-op list, ordered by likely user-visible impact:**
 
-1. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
-2. **Broad `ProcessVertices` / real SWVP execution** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW CPU transform plus matching color/texcoord/PSIZE passthrough is implemented for FVF and simple source/destination declarations, including programmable PSIZE destination output, fixed-function `D3DVBF_3WEIGHTS` `D3DFVF_XYZB4` unindexed and `D3DFVF_XYZB5 | D3DFVF_LASTBETA_UBYTE4` indexed vertex-blend readbacks plus FVF TEX2 mixed `TEXCOORDSIZE1`/`TEXCOORDSIZE3` readbacks for fixed-function and programmable `ProcessVertices`, directional/point (including range/attenuation)/spot fixed-function lighting with cone rejection/falloff plus normalized declaration NORMAL decode into destination diffuse, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, and spot specular into destination specular, simple multistream source declarations including stream 0 `D3DSTREAMSOURCE_INDEXEDDATA` plus non-1 `D3DSTREAMSOURCE_INSTANCEDATA` source addressing and split NORMAL/TANGENT/BINORMAL/BLENDWEIGHT/BLENDINDICES attribute streams, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration slots, PSIZE/TESSFACTOR/FOG/DEPTH/SAMPLE generic slots plus packed D3DCOLOR, raw SHORT2, normalized UBYTE4N, and UDEC3 generic SAMPLE inputs, and FLOAT3/raw integer/normalized NORMAL/TANGENT/BINORMAL plus BLENDWEIGHT/BLENDINDICES inputs for simple programmable shaders; raw integer, normalized, half, D3DCOLOR, UDEC3, and DEC3N TEXCOORD declaration inputs decode into programmable float registers, with readback coverage for `SHORT2`, `SHORT2N`, `USHORT2N`, `FLOAT16_2`, D3DCOLOR, and 4-component `SHORT4`, `SHORT4N`, `USHORT4N`, `FLOAT16_4`, `UBYTE4`, `UBYTE4N`, `UDEC3`, and `DEC3N` into FLOAT4 destination TEXCOORD plus D3DCOLOR and packed SHORT2N/UBYTE4N/FLOAT16_2/UDEC3/DEC3N destination TEXCOORD packing, plus `SHORT4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` NORMAL; `SrcStart`/`DestIndex`, `D3DPV_DONOTCOPYDATA`, and `D3DRS_CLIPPING=FALSE` depth clamp are covered; limited real SWVP draw execution also covers fixed-function FVF plus stream-0 BLENDWEIGHT/BLENDINDICES declaration vertex-blend UP and bound draw, fixed-function stream-0 POSITION/COLOR declaration DrawPrimitiveUP/DrawIndexedPrimitiveUP/bound DrawPrimitive/bound DrawIndexedPrimitive plus fixed-function SHORT4N POSITION/COLOR declaration DrawPrimitiveUP, simple programmable VS FVF, stream-0 POSITION/COLOR declaration UP plus SHORT4N POSITION/COLOR declaration UP, stream-0 POSITION/COLOR/TANGENT declaration fixed-function DrawPrimitiveUP plus programmable DrawPrimitiveUP and bound draw, split stream0 POSITION/COLOR + stream2 TANGENT bound draw/indexed draws, split POSITION/COLOR declaration-stream bound draw plus stream1 INSTANCEDATA color draw and stream0 INDEXEDDATA two-instance, non-1 INSTANCEDATA divider, and fixed-function/programmable line-strip and strip/fan expansion DrawPrimitive/DrawIndexedPrimitive expansions, point, line-list/strip, triangle-strip, and triangle-fan UP/bound/indexed primitive forms, and nonzero `minVertex` / `BaseVertexIndex` indexed ranges by CPU-transforming to XYZRHW UP vertices and bypassing the packet vertex shader, with fixed-function UP non-indexed/indexed (INDEX16/INDEX32 for the simple indexed readback) and bound non-indexed/indexed (INDEX16/INDEX32 for the simple indexed readback) plus programmable VS UP non-indexed/indexed (INDEX16/INDEX32 for the simple indexed readback) and bound non-indexed/indexed (INDEX16/INDEX32 for the simple indexed readback) SWVP draws, including point, line-list/strip, and triangle-list/strip/fan primitive forms, pinned by A8R8G8B8 render-target covered probe-pixel readback, plus bound ps_2_0 constant-color readbacks for FFP and programmable-VS SWVP DrawPrimitiveUP plus bound DrawPrimitive/DrawIndexedPrimitive; limited programmable VS execution covers DCL/DEFI/DEFB/DEF/MOV/basic arithmetic/comparison/DP/MAD/LRP/NRM/RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP/M3x2/M3x3/M3x4/M4x3/M4x4 plus 2D TEXLDL vertex texture sampling with sampler ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL/SetLOD mip-clamp handling, and P8/A8P8 palette-expanded backing, accepts `_PARTIALPRECISION` destination modifiers and `_SATURATE` output clamping, and covers D3DSPSM source modifiers and simple IF/IFC/ELSE/ENDIF over bool constants, DEFB/CONSTBOOL branch selection through SetVertexShaderConstantB, REP/LOOP counts with LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, BREAK/BREAKC, and CALL/CALLNZ/LABEL/RET and SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards while preserving source FLOAT4 POSITION / XYZW w and decoding SHORT4N POSITION declarations on fixed-function and programmable ProcessVertices paths plus fixed-function and programmable SWVP DrawPrimitiveUP readbacks. Remaining texture/sample opcodes beyond 2D TEXLDL vertex texture sampling with sampler ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL/SetLOD mip-clamp handling, and P8/A8P8 palette-expanded backing, remaining lighting edge cases beyond the current range/attenuation/cone/falloff/COLORVERTEX material-source set, broader partial-clipping edge cases beyond transformed point-drop plus line-list/strip and triangle-list/strip/fan clipping, broader multi-instance stream-frequency behavior beyond ProcessVertices' single logical invocation, and exotic generic declaration format/index combinations beyond the current float-vector/SHORT2/UBYTE4N/UDEC3/UBYTE4/D3DCOLOR and nonzero TESSFACTOR/FOG/DEPTH/SAMPLE usage-index readbacks remain deferred.
-3. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
-4. **Palette/P8 sampling breadth** — 2D/cube/volume P8/A8P8 caps are exposed and 2D/cube/volume locks expand through the active palette into an A8R8G8B8 sampling backing, including deferred locked-subresource palette switches on unlock and matching palettized `UpdateTexture` index/alpha shadow copies while preserving the destination palette; Native `dxmt9-core-device-com-spec` directly samples P8/A8P8 palette-expanded backing through `dxmt9c_texture_sample_2d` and checks native cube/volume P8/A8P8 backend expansion uploads; 2D P8/A8P8 fixed-function and ps_2_0 `texld` sampling have PE render-target readback scaffolds, including A8P8 texel alpha, level-1 `SetLOD` sampling, and same-slot palette updates, current-palette index switches while the texture is bound, current-palette-before-bind sampling, and SYSTEMMEM-to-DEFAULT `UpdateTexture` destination sampling, and fixed-function plus programmable VS SWVP `DrawPrimitiveUP` paths sample P8/A8P8 `UpdateTexture` destinations, including re-sampling after a same-slot destination palette update and current palette index switch; fixed-function and programmable VS bound indexed SWVP also sample the switched-palette `UpdateTexture` destination. P8/A8P8 ProcessVertices vertex-texture TEXLDL has destination-vertex readback coverage, including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback; P8/A8P8 cube textures have ps_2_0 `samplerCUBE` readback coverage across all six faces, and P8/A8P8 volume textures have ps_2_0 `sampler3D` readback coverage across four slices; direct core P8/A8P8 storage remains explicitly unsupported.
-5. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
-6. **`D3DRS_ANTIALIASEDLINEENABLE`** — accepted no-op/deferred due Metal rasterizer mismatch.
-7. **`SetConvolutionMonoKernel` / `ComposeRects`** — explicit `E_NOTIMPL`.
-8. **Runtime validation** — tracked GPU probes for RESZ, NULL RT, and MIPMAPLODBIAS are covered; remaining validation work is Wine-run coverage of PE gates.
+1. **Cursor caps and device cursor methods** — `COLOR | LOWRES` is advertised, but the cursor is not rendered or mapped to WindowServer state.
+2. **General programmable instancing** — `SetStreamSourceFreq` state exists on PE, but the core setter is a no-op and ordinary draw packets carry no instance metadata.
+3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
+4. **Broad `ProcessVertices` / real SWVP execution** — the covered fixed-function and programmable subsets are extensive; shader sampling, clipping, lighting, declaration, and multi-instance edge cases remain deferred. See the live `ProcessVertices` row above for the exact implemented subset.
+5. **`D3DRS_MULTISAMPLEMASK`** — default/shadow only; no per-draw Metal sample-mask programming.
+6. **Palette/P8 sampling breadth** — 2D/cube/volume sampling is implemented through palette-expanded A8R8G8B8 backing; direct core P8/A8P8 storage remains unsupported.
+7. **`D3DSAMP_ELEMENTINDEX` / `DMAPOFFSET`** — texture-array/displacement-map semantics deferred.
+8. **`D3DRS_ANTIALIASEDLINEENABLE`** — accepted no-op/deferred due Metal rasterizer mismatch.
+9. **`SetConvolutionMonoKernel` / `ComposeRects`** — explicit `E_NOTIMPL`.
+10. **Runtime validation** — tracked GPU probes for RESZ, NULL RT, and MIPMAPLODBIAS are covered; remaining validation work is Wine-run coverage of PE gates.
 
 ## Methodology
 
@@ -1055,14 +1065,14 @@ initializer carries an acceptable non-zero value; NO = zero-init only (i.e. the 
 | Caps2 | OK | `0x60020000` (FULLSCREENGAMMA \| CANAUTOGENMIPMAP \| DYNAMICTEXTURES) | OK | NO | |
 | Caps3 | OK | `0x320` (ALPHA_FULLSCREEN_FLIP_OR_DISCARD \| COPY_TO_VIDMEM \| COPY_TO_SYSTEMMEM) | OK | NO | |
 | PresentationIntervals | OK | `0x80000001` (IMMEDIATE | ONE) | OK | NO | matches the `core_present.cpp` validator's TWO/THREE/FOUR acceptance only at validation level. |
-| CursorCaps | OK | `0x3` (COLOR | LOWRES) | OK | NO | |
+| CursorCaps | OK | `0x3` (COLOR | LOWRES) | **mismatch** | NO | Advertises a color cursor, but the device cursor methods have no cursor-render or WindowServer integration path. |
 | DevCaps | OK | `0x0019aff0` | OK | NO | |
 | PrimitiveMiscCaps | OK | `0x002ecff2` | OK | OK | tested in `d3d9_conformance_device.c` cap-presence checks. |
 | RasterCaps | OK | `0x07332190` | OK | OK | DITHER deliberately clear under R-CAPS-8 while DITHERENABLE is shadow-only. |
 | ZCmpCaps | OK | `0xff` (all 8 comparison ops) | OK | NO | |
 | SrcBlendCaps | OK | `0x3fff` (full DX9 blend factor set) | OK | NO | |
 | DestBlendCaps | OK | `0x27ff` | OK | NO | |
-| AlphaCmpCaps | OK (named `alphaCmpCaps`) | `0xff` | OK | NO | Note: `fillD3DCaps9` and `fillCCaps` BOTH map `alphaBlendCaps` -> `AlphaCmpCaps` (`d3d9_pe_factory.cpp:264`, `device_c_format_utils.cpp:288`). The DeviceCaps field `alphaCmpCaps` is unused on the public surface — observed inconsistency. |
+| AlphaCmpCaps | OK (named `alphaCmpCaps`) | `0xff` | OK | OK | `fillCCaps` and `fillD3DCaps9` source the dedicated `alphaCmpCaps` field; `core_format_caps_spec` pins the public mask. |
 | ShadeCaps | OK | `0x84208` (COLORGOURAUDRGB | SPECULARGOURAUDRGB | ALPHAGOURAUDBLEND | FOGGOURAUD) | OK | NO | |
 | TextureCaps | OK | `0x0001ec85` | OK | OK | |
 | TextureFilterCaps | OK | `0x07030700` | OK | NO | |
@@ -1137,14 +1147,14 @@ Anchor: `include/dxmt9/core_constants.hpp:751-765` (core), `include/dxmt9/device
 | BackBufferFormat | OK | OK | OK | OK | Unknown defaults to adapter display format (`core_present.cpp:18`). |
 | BackBufferCount | OK | OK | OK | OK | clamped 1..3 (Ex: 1..30), COPY restricts to 1. |
 | MultiSampleType | OK | OK | OK | OK | `msTypeFromD3D` accepts 0/2/4/8 (`device_c_format_utils.cpp:147-156`). |
-| MultiSampleQuality | NO (not on `core::PresentParameters`) | OK (`multiSampleQuality`) | warn | warn | Stored on D9C struct; PE-side ResetEx round-trips it (`d3d9_pe_device.cpp:2000`); not used by core (lost in `ppFromC` at `device_c_format_utils.cpp:247-263`). The reported value is whatever the app set, but it never reaches Metal. |
+| MultiSampleQuality | OK | OK (`multiSampleQuality`) | OK | OK | Copied by `ppFromC`; validation and resource descriptors preserve the selected quality index. Metal sample-count mapping does not expose vendor-specific quality modes. |
 | SwapEffect | OK | OK | OK | OK | validated 1..3 (non-Ex), 1..5 (Ex). `core::PresentParameters::swapEffect` is raw u32. |
 | hDeviceWindow | OK (`deviceWindow` Handle) | OK (`deviceWindow` u64) | OK | OK | |
 | Windowed | OK | OK | OK | OK | `DXMT_FORCE_WINDOWED` env override (`core_present.cpp:12`). |
 | EnableAutoDepthStencil | OK | OK | OK | OK | |
 | AutoDepthStencilFormat | OK | OK | OK | OK | defaults to D24S8. |
-| Flags | NO | OK (`flags`) | warn | warn | Not in core; PE shadow only — `flagsShadow_` in `d3d9_pe_device_child_misc.cpp:435` is OR'd back. dxmt9 does not act on D3DPRESENTFLAG_LOCKABLE_BACKBUFFER etc. |
-| FullScreen_RefreshRateInHz | NO | OK (`fullScreenRefreshRateHz`) | warn | warn | Stored / reported but never used to constrain present cadence. |
+| Flags | OK | OK (`flags`) | partial | warn | Copied by `ppFromC` and reported by the swap chain; individual `D3DPRESENTFLAG_*` backend effects still require per-flag audit. |
+| FullScreen_RefreshRateInHz | OK | OK (`fullScreenRefreshRateHz`) | partial | warn | Copied and reported, but not used to constrain host present cadence. |
 | PresentationInterval | OK (parsed as `PresentInterval` + raw u32) | OK | OK | OK | `core_present.cpp:55-67` validates the raw value; only `Immediate / Default / Two` are honored as semantic, but DEFAULT / ONE / TWO / THREE / FOUR / IMMEDIATE all validate. |
 
 ### C.9 D3DDISPLAYMODE / D3DDISPLAYMODEEX
@@ -1178,20 +1188,20 @@ Anchor: `include/dxmt9/core_constants.hpp:854-864`, `include/dxmt9/device_c.h:80
 | DeviceId | OK | OK | OK | OK | env override `DXMT_ADAPTER_DEVICE_ID`, default `0x0041` (GeForce 6800 PCI id). |
 | SubSysId | OK | OK | OK | warn | hard-coded `0`. |
 | Revision | OK | OK | OK | warn | hard-coded `0`. |
-| DeviceIdentifier | NO (no core field; D9C has the byte slot but is zero-init) | NO | warn | warn | `device_c_factory.cpp:89` `memset(out, 0, ...)` then never writes; GUID stays zero. |
-| WHQLLevel | NO (no core field; D9C has the slot but is never set) | NO | warn | warn | always returns `0` to Windows apps. |
+| DeviceIdentifier | OK | OK | OK | OK | Core derives a stable per-adapter 16-byte identifier from vendor, device, and description; D9C and PE copy it into the public GUID. |
+| WHQLLevel | OK | OK | OK | OK | Explicitly returns `0`; Apple Silicon adapters are not WHQL-certified and D3D9 permits zero. |
 
 ### C.11 D3DRASTER_STATUS
 
-Anchor: `src/d3d9/d3d9_pe_device.cpp:2149-2155`, no core-side model; `tests/conformance/d3d9/d3d9_conformance_device.c:3147-3175`,
+Anchor: `src/d3d9/d3d9_pe_device.cpp:10686`, no core-side model; `tests/conformance/d3d9/d3d9_conformance_device.c:3147-3175`,
 `tests/conformance/d3d9/d3d9_device_misc.cpp:174-175`.
 
 | Field | defined | mapped | runtime-use | test | Notes |
 |---|---|---|---|---|---|
-| InVBlank | NO | NO | NO | OK | `GetRasterStatus` synthesizes a monotonically advancing scanline/vblank estimate because dxmt9 has no real per-line Metal signal. Conformance accepts either `D3D_OK` or `E_FAIL` (`d3d9_device_misc.cpp:175`). |
-| ScanLine | NO | NO | NO | OK | always `0`; never queried from the WindowServer. |
+| InVBlank | synthetic | PE estimate | PE-only | OK | `GetRasterStatus` synthesizes a monotonically advancing scanline/vblank estimate because dxmt9 has no real per-line Metal signal. Conformance accepts either `D3D_OK` or `E_FAIL` (`d3d9_device_misc.cpp:175`). |
+| ScanLine | synthetic | PE estimate | PE-only | OK | `computeRasterStatusEstimate()` advances a synthetic scanline/vblank cycle; it is not queried from the WindowServer. `D3DCAPS_READ_SCANLINE` remains clear. |
 
-(The conformance test treats either error or zeroed status as acceptable, and the swapchain >0 path returns `D3DERR_INVALIDCALL` per the test at `d3d9_conformance_device.c:3175`.)
+(The conformance test accepts either success or failure for the host-dependent status, and the swapchain >0 path returns `D3DERR_INVALIDCALL` per `d3d9_conformance_device.c:3175`.)
 
 ### C.12 Section summary
 
@@ -1214,10 +1224,10 @@ Anchor: `src/d3d9/d3d9_pe_device.cpp:2149-2155`, no core-side model; `tests/conf
 
 Top defects worth flagging:
 
-1. The `core::PresentParameters` struct drops three D3D9 fields entirely (`MultiSampleQuality`, `Flags`, `FullScreen_RefreshRateInHz`). They round-trip via PE shadows, so apps see what they set, but the core / Metal layers cannot act on them. `D3DPRESENTFLAG_LOCKABLE_BACKBUFFER` and friends are silently ignored.
-2. `AlphaCmpCaps` is filled from `alphaBlendCaps` (not `alphaCmpCaps`) in both `fillCCaps` and `fillD3DCaps9` — the dedicated `core::DeviceCaps::alphaCmpCaps` is dead code.
-3. `D3DADAPTER_IDENTIFIER9::DeviceIdentifier` (GUID) and `WHQLLevel` are always zero — neither core nor D9C ever sets them.
-4. `D3DRASTER_STATUS` is unconditionally zero. `IDirect3D9::GetAdapterMonitor` is wired, but no scanline-read code exists. Apps that gate on `InVBlank` will see "never in vblank".
+1. `MultiSampleQuality`, `Flags`, and `FullScreen_RefreshRateInHz` are now represented and copied into `core::PresentParameters`; remaining work is per-flag backend semantics and host refresh-cadence enforcement.
+2. `AlphaCmpCaps` now uses the dedicated `alphaCmpCaps` field in both C and PE caps fills.
+3. `D3DADAPTER_IDENTIFIER9::DeviceIdentifier` now carries a stable derived GUID; `WHQLLevel` is explicitly zero for a non-WHQL Apple adapter.
+4. `D3DRASTER_STATUS` has no real scanline source. The current PE path synthesizes a monotonically advancing scanline/vblank estimate so polling applications do not spin forever; `IDirect3D9::GetAdapterMonitor` still returns a stub monitor identity.
 5. Vendor pseudo-formats have been reclassified since the original audit:
    `INTZ`/`DF16`/`DF24` are depth-as-texture formats, `RESZ` is a write-only
    MSAA-depth resolve command, `NULL` is a colorless render target, `ATOC` is
@@ -1226,7 +1236,7 @@ Top defects worth flagging:
 6. `R8G8B8` (24-bit, code 20) is declared but `FormatClass::Unsupported` with no Metal mapping — Wine's CheckDeviceFormat tests sometimes expect Windows to NOTAVAILABLE this, which matches dxmt9.
 7. `D32_LOCKABLE` (code 84) and `Q16W16V16U16` (code 110) are not represented at all (no `Format::` enum entry, no `fmtFromD3D` case). They were added in DX9b and are rarely used; mention them here for completeness.
 8. `D9CCaps::adapterOrdinal` is zero-init in `fillCCaps` (never explicitly assigned from `adapterIndex`), but the value `0` happens to be correct for the single-adapter case dxmt9 supports today.
-9. `D9CPresentParams.multiSampleQuality` exists in the C ABI struct but `ppFromC` in `device_c_format_utils.cpp:247-263` does not copy it onto `core::PresentParameters` — the round-trip happens entirely inside the PE shadow.
+9. `D9CPresentParams.multiSampleQuality`, `flags`, and `fullScreenRefreshRateHz` are copied by `ppFromC`; capability-specific backend behavior remains separately audited.
 
 ## Methodology
 
@@ -1338,9 +1348,9 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | GetDeviceCaps | ✅ | ✅ | ✅ | ⚠️ | `d3d9_pe_device.cpp:1821` | `dxmt9c_device_get_caps`; `test_limits`, `core_format_caps_spec` |
 | GetDisplayMode | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1848` | via swapchain; `test_device_display_mode_adapter_format` |
 | GetCreationParameters | ✅ | ❌ | ✅ | ❌ | `d3d9_pe_device.cpp:1871` | PE shadow; `test_device_creation_parameters_policy` |
-| SetCursorProperties | ⚠️ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:1882` | validates surface (A8R8G8B8 + POT); no actual cursor render |
-| SetCursorPosition | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:1904` | logs only |
-| ShowCursor | ⚠️ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:1908` | gated on cursorSurfaceSet_; toggles shadow only |
+| SetCursorProperties | ⚠️ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10332` | validates surface (A8R8G8B8 + POT); no actual cursor render despite advertised `CursorCaps` |
+| SetCursorPosition | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10354` | logs only; no WindowServer integration |
+| ShowCursor | ⚠️ | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:10360` | gated on `cursorSurfaceSet_`; toggles shadow only |
 | CreateAdditionalSwapChain | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1920` | `test_additional_swapchain_backbuffer_bounds` |
 | GetSwapChain | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1962` | `dxmt9c_device_get_swap_chain`; `test_swapchain_backbuffer_getter_policy` |
 | GetNumberOfSwapChains | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:1987` | `test_additional_swapchain_backbuffer_bounds` |
@@ -1349,7 +1359,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | GetBackBuffer | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2095` | bounds-check matches Wine; `test_swapchain_backbuffer_getter_policy` |
 | GetRasterStatus | ⚠️ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:4725` | `test_device_raster_status_bounds` |
 | SetDialogBoxMode | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:2156` | logs only, returns S_OK |
-| SetGammaRamp | 🟡 | ❌ | ❌ | ❌ | `d3d9_pe_device.cpp:2160` | logs only |
+| SetGammaRamp | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:10728` | updates PE shadow state and forwards the ramp through D9C for presenter application; `core_d3d9_gamma_ramp_spec` |
 | GetGammaRamp | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:4778` | PE gamma shadow readback plus unix presenter application; `core_d3d9_gamma_ramp_spec` |
 | CreateTexture | ✅ | ✅ | ✅ | ✅ | `d3d9_pe_device.cpp:2170` | T4 (2026-05-08): D3D9Ex SYSTEMMEM 1-mip alias; `test_ex_user_memory_lock_identity`, `core_d3d9_miptree_layout_spec` |
 | CreateVolumeTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2216` | `test_volume_mipmap_level_desc_policy` |
@@ -1361,7 +1371,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | UpdateSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2391` | `test_visual_update_surface_policy`, `test_mipmap_surface_update_lock_policy` |
 | UpdateTexture | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2473` | `test_update_texture_pool_copy_2d`; P8/A8P8 shadow copy in `dxmt9-core-device-com-spec` |
 | GetRenderTargetData | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2504` | `test_get_render_target_data_policy` |
-| GetFrontBufferData | ❌ | ❌ | ⚠️ | ❌ | `d3d9_pe_device.cpp:5776` | always returns `D3DERR_INVALIDCALL`; `test_visual_multisample_get_front_buffer_data_policy` exercises Ex/swapchain path |
+| GetFrontBufferData | ❌ | ❌ | ⚠️ | ❌ | `d3d9_pe_device.cpp:11171` | always returns `D3DERR_INVALIDCALL`; `test_visual_multisample_get_front_buffer_data_policy` exercises Ex/swapchain path |
 | StretchRect | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2543` | `test_visual_blit_format_conversion_policy` |
 | ColorFill | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2573` | `test_visual_colorfill_format_policy` |
 | CreateOffscreenPlainSurface | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:2606` | T4 shared-handle SYSTEMMEM 1-mip alias; `test_visual_offscreen_surface_creation_policy`, `test_ex_user_memory_*` |
@@ -1430,7 +1440,7 @@ Source anchors are absolute paths in this repo. Source files referenced:
 | GetVertexShaderConstantB | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3806` | |
 | SetStreamSource | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3814` | `test_set_stream_source_state`, `test_stream_source_vb_offset_alignment_policy`, `test_stream_source_null_layout_policy`, `test_stream_source_zero_stride_policy` |
 | GetStreamSource | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3845` | `test_set_stream_source_state` |
-| SetStreamSourceFreq | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3857` | `test_stream_source_frequency_state` |
+| SetStreamSourceFreq | ⚠️ | ⚠️ | ✅ | ⚠️ | `d3d9_pe_device.cpp:12879`; `device_c_draw.cpp:102` | PE validation/getter state and SWVP expansion cases exist, but `dxmt9c_device_set_stream_source_freq()` is a core no-op and ordinary programmable core draws have no native instance metadata; state gate `test_stream_source_frequency_state`, visual gap tracked in [the tests gap](../tests/gap.md). |
 | GetStreamSourceFreq | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3887` | `test_stream_source_frequency_state` |
 | SetIndices | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3898` | |
 | GetIndices | ✅ | ✅ | ✅ | ❌ | `d3d9_pe_device.cpp:3905` | |
@@ -1653,16 +1663,19 @@ Historical coverage snapshot:
 - **6%** were partial (`⚠️`) implementations.
 - **10%** were silent stubs (`🟡`) returning S_OK or a benign default without backend coupling.
 - **4%** explicitly returned `E_NOTIMPL` / `D3DERR_INVALIDCALL`.
-- The table is retained for audit history; use the 2026-05-29 current summary and re-audit delta above for live triage.
+- The table is retained for audit history; use the 2026-07-18 current status summary and live-gap table above for triage.
 
 Highest-leverage live gaps:
-1. **`ProcessVertices` breadth** — fixed-function WORLD/VIEW/PROJECTION XYZ→XYZRHW path plus matching color/texcoord/PSIZE passthrough for FVF and simple source/destination declarations is covered by a conformance scaffold, including programmable PSIZE output, directional/point (including range/attenuation)/spot fixed-function lighting with cone rejection/falloff plus normalized declaration NORMAL decode, `D3DRS_COLORVERTEX` `D3DMCS_COLOR1` diffuse, `D3DMCS_COLOR2` specular, `D3DMCS_COLOR1` ambient, and `D3DMCS_COLOR2` emissive material-source lighting, plus spot specular, simple multistream source-declaration cases including stream 0 `D3DSTREAMSOURCE_INDEXEDDATA` plus non-1 `D3DSTREAMSOURCE_INSTANCEDATA` source addressing, split extra-attribute stream readback, sparse TEXCOORD1 and FLOAT1 TEXCOORD7 declaration readbacks, split-stream PSIZE/TESSFACTOR/FOG/DEPTH/SAMPLE generic declaration readbacks plus packed D3DCOLOR, raw SHORT2, normalized UBYTE4N, and UDEC3 generic SAMPLE readbacks, FVF NORMAL/SPECULAR/XYZB programmable input plus fixed-function D3DVBF_3WEIGHTS D3DFVF_XYZB4 unindexed and D3DFVF_XYZB5 LASTBETA_UBYTE4 indexed vertex-blend readbacks and FVF TEX2 mixed TEXCOORDSIZE1/TEXCOORDSIZE3 fixed-function and programmable ProcessVertices readback, raw integer/normalized/half/D3DCOLOR/UDEC3/DEC3N TEXCOORD programmable input decode with `SHORT2`/`SHORT2N`/`USHORT2N`/`FLOAT16_2` and D3DCOLOR TEXCOORD readbacks plus D3DCOLOR and packed SHORT2N/UBYTE4N/FLOAT16_2/UDEC3/DEC3N destination TEXCOORD packing readbacks plus `SHORT4`/`SHORT4N`/`USHORT4N`/`FLOAT16_4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` FLOAT4 destination readbacks, `SHORT4`/`UBYTE4`/`UBYTE4N`/`UDEC3`/`DEC3N` NORMAL programmable input decode, `SrcStart`/`DestIndex`, `D3DPV_DONOTCOPYDATA` handling, and `D3DRS_CLIPPING=FALSE` depth clamp, plus limited vs_1_1 implicit input/output and vs_3_0 M4x4/MOV, MAD/MOV, NRM/DP3/MUL/ADD vector math, SLT/SGE/MIN/MAX/LRP/CND/CMP compare-select math, RCP/RSQ/FRC/ABS/DP2ADD/POW/CRS/SGN/SINCOS/EXP/LOG/LIT/DST/EXPP/LOGP scalar-cross/transcendent math and M3x2 matrix math, `_PARTIALPRECISION`, `_SATURATE` output clamping, D3DSPSM source modifiers, DEFI/CONSTINT REP/LOOP counts, DEFB/CONSTBOOL IF branch selection through SetVertexShaderConstantB, LOOP `aL` initial/step source reads, MOVA per-component address-register source reads, source relative addressing through `a0`/`aL` including INPUT-register relative reads and matrix constant-base reads plus address-register component swizzles, temp and `D3DSPR_OUTPUT` destination relative addressing, BREAK/BREAKC, CALL/CALLNZ/LABEL/RET, SETP/BREAKP predicate plus predicated ordinary/flow-control instruction guards, and simple IF/IFC/ELSE/ENDIF flow-control, NORMAL/TANGENT/BINORMAL/BLENDWEIGHT/BLENDINDICES input arithmetic, including D3DCOLOR BLENDINDICES and normalized UBYTE4N BLENDWEIGHT declaration readbacks, and FLOAT4 POSITION MOV programmable cases for declaration and FVF XYZW source layouts plus fixed-function and programmable SHORT4N POSITION declaration decode and SWVP DrawPrimitiveUP readback. Remaining texture/sample opcodes beyond 2D TEXLDL vertex texture sampling with sampler ADDRESSU/V WRAP/CLAMP/MIRROR/MIRRORONCE/BORDER, BORDERCOLOR, MAXMIPLEVEL/SetLOD mip-clamp handling, and P8/A8P8 palette-expanded backing, remaining lighting edge cases beyond the current range/attenuation/cone/falloff/COLORVERTEX material-source set, broader partial-clipping edge cases beyond transformed point-drop plus line-list/strip and triangle-list/strip/fan clipping, broader multi-instance stream-frequency behavior beyond ProcessVertices' single logical invocation, and exotic generic declaration format/index combinations beyond the current float-vector/SHORT2/UBYTE4N/UDEC3/UBYTE4/D3DCOLOR and nonzero TESSFACTOR/FOG/DEPTH/SAMPLE usage-index readbacks remain deferred.
-2. **Palette/P8 breadth** — 2D/cube/volume P8/A8P8 texture caps and 2D/cube/volume sampler backing are wired through palette expansion, including deferred locked-subresource palette switches and matching palettized `UpdateTexture` index/alpha shadow copies while preserving the destination palette; PE commits matching palettized `UpdateTexture` records immediately and re-expands the destination through the device-current palette so CPU ProcessVertices vertex-texture sampling and following draws observe the copied shadow without waiting for a later chunk boundary. Native `dxmt9-core-device-com-spec` directly samples P8/A8P8 palette-expanded backing through `dxmt9c_texture_sample_2d` and checks native cube/volume P8/A8P8 backend expansion uploads; native `dxmt9-core-device-coverage-spec` now checks D9C P8/A8P8 expansion and matching UpdateTexture destination-palette re-expansion through real Metal programmable ps_2_0 draw/readback. 2D P8/A8P8 fixed-function and ps_2_0 `texld` sampling have PE render-target readback scaffolds, including A8P8 texel alpha, level-1 `SetLOD` sampling, same-slot palette updates, current-palette index switches while the texture is bound, current-palette-before-bind sampling, and SYSTEMMEM-to-DEFAULT `UpdateTexture` destination sampling, and fixed-function plus programmable VS SWVP `DrawPrimitiveUP` paths sample P8/A8P8 `UpdateTexture` destinations, including re-sampling after a same-slot destination palette update and current palette index switch; fixed-function and programmable VS bound indexed SWVP also sample the switched-palette `UpdateTexture` destination. P8/A8P8 ProcessVertices vertex-texture TEXLDL has destination-vertex readback coverage, including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback; P8/A8P8 cube textures have ps_2_0 `samplerCUBE` readback coverage across all six faces, and P8/A8P8 volume textures have ps_2_0 `sampler3D` readback coverage across four slices; direct core P8/A8P8 storage remains explicitly unsupported.
-3. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
-4. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
-5. **`D3DSAMP_ELEMENTINDEX` / `D3DSAMP_DMAPOFFSET`** — texture-array and displacement-map sampler semantics remain deferred.
-6. **`GetFrontBufferData`, `SetConvolutionMonoKernel`, `ComposeRects`** — explicit failure / not-implemented paths.
-7. **Stub/default COM contracts** — `SetDialogBoxMode`, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetClipStatus`, `Set/GetNPatchMode`, `DeletePatch`, SwapChain Ex present stats, GPU thread priority, and resource residency are intentional Wine-compatible default/no-op behavior, not silent missing work.
+
+1. **Cursor caps and device cursor methods** — advertised `COLOR | LOWRES` behavior has no cursor-render or WindowServer implementation.
+2. **General programmable instancing** — PE state exists, but the core `SetStreamSourceFreq` path and ordinary draw-instance metadata are missing.
+3. **`GetFrontBufferData`** — device and swap-chain paths return `D3DERR_INVALIDCALL` instead of copying the front buffer.
+4. **`ProcessVertices` breadth** — the covered fixed-function and programmable subsets are extensive; shader sampling, clipping, lighting, declaration, and multi-instance edge cases remain deferred.
+5. **Per-draw sample mask and legacy line AA** — `D3DRS_MULTISAMPLEMASK` remains shadow/default only; `D3DRS_ANTIALIASEDLINEENABLE` is accepted no-op/deferred.
+6. **D3D9Ex sharing and composition** — DEFAULT-pool shared handles lack cross-process backing; `SetConvolutionMonoKernel` and `ComposeRects` return `E_NOTIMPL`; present statistics are default values.
+7. **Legacy FFP and displacement semantics** — flat shade, last-pixel, cylindrical wrap, `D3DSAMP_ELEMENTINDEX`, and `D3DSAMP_DMAPOFFSET` lack backend behavior.
+8. **N-patch / adaptive tessellation / patch draw path** — unsupported by design; declaration methods safe-reject and patch draws return invalid-call/no-op contracts.
+9. **Stub/default COM contracts** — `SetDialogBoxMode`, `ValidateDevice`, `PreLoad`, non-AUTOGEN `GenerateMipSubLevels`, `AddDirtyBox`, `Set/GetClipStatus`, `Set/GetNPatchMode`, `DeletePatch`, SwapChain Ex present stats, GPU thread priority, and resource residency are intentional Wine-compatible default/no-op behavior, not silent missing work.
 
 ## Methodology
 

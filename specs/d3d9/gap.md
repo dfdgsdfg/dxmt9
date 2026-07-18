@@ -17,7 +17,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 | `GetAdapterIdentifier` | ✅ | `Factory::getAdapterIdentifier()` |
 | `EnumAdapterModes` | ✅ | `Factory::enumAdapterModes()` |
 | `GetAdapterDisplayMode` | ✅ | `Factory::getAdapterDisplayMode()` |
-| `GetAdapterMonitor` | ✅ | `Factory::getAdapterMonitor()` |
+| `GetAdapterMonitor` | ⚠️ | Method surface is wired, but the unix provider returns a stable stub `HMONITOR`; there is no WindowServer monitor identity mapping. |
 | `CheckDeviceType` | ⚠️ | HAL path exists. **PE validation landed 2026-05-24 (`fc242c2`):** invalid adapter / unavailable type / invalid enum / fullscreen display-format HRESULT parity implemented + native-verified (`dxmt9-core-factory-validation-spec`). Remaining: Wine-conformance-run lane/arch breadth. |
 | `CheckDeviceMultiSampleType` | ⚠️ | Factory + Device path exists. **PE validation landed 2026-05-24 (`fc242c2`):** `D3DMULTISAMPLE_NONE`→`D3D_OK`+quality=1, invalid-enum / unknown-msType→`INVALIDCALL` (`pQualityLevels` preserved), unsupported sample-count→`NOTAVAILABLE`; native-verified (`dxmt9-core-factory-validation-spec`). Remaining: Wine-conformance-run breadth. |
 | PE `d3d9.dll` export surface | ⚠️ | The scoped auxiliary set is now implemented with DXVK/D9VK-compatible ordinals: `Direct3DCreate9On12`, `D3DPERF_*`, and `DebugSetMute`. Focused x64 app-local export/auxiliary tests pass. The row remains partial until the broader selected export profile, such as optional `PSGP*` / `DebugSetLevel` compatibility if adopted, is explicitly audited |
@@ -53,7 +53,7 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 | COM: `Direct3DCreate9(sdkVersion)` | ✅ | Returns `nullptr` for wrong SDK version |
 | TLA+ `SeqIdSafety` / `BoundedInflight` / `QueryResolutionSafety` assertions | ✅ | `DXMT_ASSERT` with `// TLA+:` comments |
 | `IDirect3D9Ex` — `Direct3DCreate9Ex`, `GetAdapterModeCountEx`, `EnumAdapterModesEx`, `GetAdapterDisplayModeEx`, `GetAdapterLUID`, `CreateDeviceEx` | ⚠️ | Method surface exists; PE factory/device Ex QI is now gated by creation mode, while display-mode validation, `CreateDeviceEx` mode validation, exact HRESULT propagation, and Wine `d3d9ex.c` coverage remain pending |
-| `IDirect3DDevice9Ex` — `CheckDeviceState`, `ResetEx`, `PresentEx`, `SetMaximumFrameLatency`, `GetMaximumFrameLatency`, `WaitForVBlank`, `CheckResourceResidency`, `GetGPUThreadPriority`, `SetGPUThreadPriority`, `SetConvolutionMonoKernel`, `ComposeRects`, `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx`, `CreateDepthStencilSurfaceEx`, `GetDisplayModeEx` | ⚠️ | Method surface exists; device Ex QI is now gated by parent factory. **T2 (2026-05-08)**: `ResetEx` now mirrors viewport/scissor reset and clears `deviceNotReset_` on success (previously success was ignored); `PresentEx` now gates on `D3DERR_DEVICELOST`. **T4 (2026-05-08)**: shared-handle SYSTEMMEM 1-mip texture and offscreen surface paths land. Still needed: swap-chain Ex exposure, full `CreateOffscreenPlainSurfaceEx` shared-handle path (todo_wine in Wine itself), DEFAULT-pool shared handle, broader Wine `d3d9ex.c` coverage. |
+| `IDirect3DDevice9Ex` — `CheckDeviceState`, `ResetEx`, `PresentEx`, `SetMaximumFrameLatency`, `GetMaximumFrameLatency`, `WaitForVBlank`, `CheckResourceResidency`, `GetGPUThreadPriority`, `SetGPUThreadPriority`, `SetConvolutionMonoKernel`, `ComposeRects`, `CreateRenderTargetEx`, `CreateOffscreenPlainSurfaceEx`, `CreateDepthStencilSurfaceEx`, `GetDisplayModeEx` | ⚠️ | Method surface exists; device and swap-chain Ex QI are gated by extended-device creation. **T2 (2026-05-08)**: `ResetEx` mirrors viewport/scissor reset and clears `deviceNotReset_` on success; `PresentEx` gates on `D3DERR_DEVICELOST`. **T4 (2026-05-08)**: shared-handle SYSTEMMEM 1-mip texture and offscreen surface paths land. Still needed: real DEFAULT-pool cross-process shared backing, full `CreateOffscreenPlainSurfaceEx` shared-handle coverage, convolution/`ComposeRects`, real present statistics, and broader Wine `d3d9ex.c` lane coverage. |
 
 **The D3D9 layer is functionally broad but no longer classified as complete.**
 The review of Wine's D3D9 tests is treated as a Windows D3D9 behavioural-oracle
@@ -71,15 +71,30 @@ coverage" notes above therefore now mean *lane / arch breadth promotion*
 (app-local + x86 lanes; the builtin x64 lane is largely passing) rather
 than a missing scaffold — see the Tests Layer rows. Separately, the
 per-spec-item audit in `gap_d3d9.md` (2026-05-23) surfaced concrete
-implementation gaps that were *not* lane-breadth issues; **those were all
-closed in the 2026-05-24 implementation pass** — `gap_d3d9.md`'s
-"Remaining actionable gaps" is now **None**. See the next subsection.
+implementation gaps that were *not* lane-breadth issues. The 2026-05-24 pass
+closed the then-unclassified silent fall-throughs; it did not make the full
+D3D9 surface complete. Explicit failures, partial implementations, advertised
+capability mismatches, and intentional default/no-op contracts remain tracked
+below and in `gap_d3d9.md`.
 
 ### D3D9 API Coverage Inventory
 
 Per-item inventory lives in [D3D9 API coverage inventory](gap_d3d9.md) (a regenerable
-read-only ripgrep tracker, not a spec). The original **2026-05-23** four-agent
-audit baseline rolled up as (current status follows the table):
+read-only ripgrep tracker, not a spec). Current gaps are summarized first; the
+original **2026-05-23** four-agent audit totals are retained afterward as a
+historical baseline.
+
+Current implementation gaps, ordered by compatibility impact:
+
+| Gap | Classification | Missing behavior |
+|---|---|---|
+| Cursor caps and device cursor methods | advertised-capability mismatch | `CursorCaps` advertises `COLOR | LOWRES`, while cursor properties, position, and visibility remain PE shadow state with no rendered or WindowServer cursor. |
+| `SetStreamSourceFreq` programmable instancing | partial implementation | PE validation and getter state exist, but `dxmt9c_device_set_stream_source_freq()` is a core no-op and ordinary core draws carry no native instance metadata. |
+| `GetFrontBufferData` | explicit unsupported path | Device and swap-chain methods return `D3DERR_INVALIDCALL` instead of copying the front buffer to SYSTEMMEM. |
+| `ProcessVertices` / software vertex processing | partial implementation | The covered fixed-function and programmable subsets work; broader shader sampling, clipping, declaration, lighting, and multi-instance behavior remain deferred. |
+| Legacy raster and sampler state | partial or capability-gated | Per-draw multisample mask, D3D9 line-AA toggle, `D3DSAMP_ELEMENTINDEX`, and `D3DSAMP_DMAPOFFSET` have no backend semantics. |
+| D3D9Ex sharing and composition | explicit/partial implementation | DEFAULT-pool shared handles do not provide cross-process backing; `SetConvolutionMonoKernel` and `ComposeRects` return `E_NOTIMPL`; present statistics are default zero values. |
+| Factory, reset, and display parity | validation/host-integration gap | Adapter/fullscreen/resource-type validation and exact HRESULT parity remain incomplete; monitor identity and raster status are synthetic host approximations. |
 
 | Category | Total rows | ✅ full | ⚠️ partial | ❌ silent gap |
 |---|---:|---:|---:|---:|
@@ -99,11 +114,11 @@ audit baseline rolled up as (current status follows the table):
 | D. COM methods (21 interfaces) | 225 | 176 | 13 | 33 |
 | **Grand total** | **~803** | **~534** | **~46** | **~163** |
 
-**Current status (2026-05-24): `gap_d3d9.md` "Remaining actionable gaps" =
-None.** The 2026-05-24 re-audit found ~13 audited gaps were already implemented
-on `master`, and the implementation pass closed the rest. The high-priority
-findings the audit called out are all resolved (see `gap_d3d9.md`'s Closed
-table for per-item commits + gate test targets):
+**Historical closure status (2026-05-24):** the re-audit found ~13 audited
+silent fall-throughs already implemented on `master`, and the implementation
+pass classified or closed the rest of that audit batch. This statement applies
+only to the historical silent-coverage batch, not to the current implementation
+gaps listed above. The findings closed in that batch were:
 
 | Finding (2026-05-23 audit) | Resolution |
 |---|---|
@@ -117,10 +132,11 @@ table for per-item commits + gate test targets):
 | `D3DCLIPSTATUS9` / `D3DGAMMARAMP` log-only | ✅ GammaRamp real impl; ClipStatus = Wine-matching stub + defined default |
 | `D3DRS_TWOSIDEDSTENCILMODE` / `D3DRS_WRAP0..15` | ✅ implemented (per-face stencil ops / accepted no-op) |
 
-Outstanding work here is **not implementation** but **deferred evidence**:
-GPU-runtime pixel validation (RESZ MSAA→INTZ readback, NULL color-attachment
-omission, MIPMAPLODBIAS mip selection, tile-FFP↔portable equality) and
-conformance Wine-run validation of the new PE gates.
+Outstanding work for the closed findings in this historical table is deferred
+evidence: GPU-runtime pixel validation (RESZ MSAA→INTZ readback, NULL
+color-attachment omission, MIPMAPLODBIAS mip selection, tile-FFP↔portable
+equality) and conformance Wine-run validation of the new PE gates. This does not
+supersede the live implementation gaps above.
 
 **2026-05-25 — why these are still "deferred": the blocker is `shader_runner_dxmt9`
 DSL expressiveness, NOT the dxmt9 implementation** (sub-agent investigation; each
