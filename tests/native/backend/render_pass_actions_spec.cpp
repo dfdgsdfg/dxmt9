@@ -340,6 +340,38 @@ void testColorDontCareStoreOnNextClear() {
           ColorProof::BlockTextureSample,
           "R-BACK-15.8 color proof blocks on later texture sample");
 
+  // Production shape: a render target is SAMPLED through its owning
+  // TEXTURE handle (SurfaceRecord::aliasTexture), which differs from the
+  // attachment SURFACE handle. Without the alias parameter the sample is
+  // invisible to the look-ahead and next-clear wrongly DontCare-stores
+  // (3DMark05 GT3 water reflection flicker). With the alias passed the
+  // sample must block.
+  ChunkSlot aliasSlot;
+  Handle aliasTexture{0x2C009u};
+  appendDrawRunWithColor(aliasSlot, other);
+  appendDrawRunWithColor(aliasSlot, other, aliasTexture);
+  appendClearOnColor(aliasSlot, color);
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              aliasSlot, 0u, color, nullptr, aliasTexture),
+          ColorProof::BlockTextureSample,
+          "R-BACK-15.8 alias-texture sample blocks color next-clear proof");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(aliasSlot, 0u, color),
+          ColorProof::AllowNextClear,
+          "R-BACK-15.8 without alias the sample is a different handle space");
+
+  // Depth twin: a shadow map is sampled through its texture handle while
+  // the look-ahead receives the depth SURFACE handle.
+  ChunkSlot depthAliasSlot;
+  Handle shadowDepth{0x3D00Au};
+  Handle shadowTexture{0x2D00Bu};
+  appendDrawRunWithColor(depthAliasSlot, other);
+  appendDrawRunWithColor(depthAliasSlot, other, shadowTexture);
+  appendClearOnDepth(depthAliasSlot, shadowDepth);
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              depthAliasSlot, 0u, shadowDepth, nullptr, shadowTexture),
+          DepthProof::BlockShadowSample,
+          "R-BACK-15.7 alias-texture sample blocks depth next-clear proof");
+
   ChunkSlot presentSlot;
   appendDrawRunWithColor(presentSlot, color);
   appendPresent(presentSlot, color);

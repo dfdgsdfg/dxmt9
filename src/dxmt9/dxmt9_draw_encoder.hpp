@@ -254,15 +254,22 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
 // (tests/native/backend/render_pass_actions_spec.cpp, R-BACK-15.16) can
 // drive R-BACK-15.7 / 15.9 / 15.15 cases without standing up a Metal
 // device.
+// `attachmentAliasTexture` is the TEXTURE handle backing the attachment
+// surface (SurfaceRecord::aliasTexture). Draws sample render targets
+// through that texture handle, not the surface handle, so the
+// texture-sample Block checks must match against both. Zero disables the
+// alias comparison (fixtures that reuse one handle for both stay valid).
 dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
     core::Handle depthHandle,
-    std::uint32_t* firstTouchCommandDistance = nullptr);
+    std::uint32_t* firstTouchCommandDistance = nullptr,
+    core::Handle attachmentAliasTexture = {});
 dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
-    std::uint32_t* firstTouchCommandDistance = nullptr);
+    std::uint32_t* firstTouchCommandDistance = nullptr,
+    core::Handle attachmentAliasTexture = {});
 
 // Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -282,11 +289,13 @@ dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
     core::Handle colorHandle,
-    std::uint32_t* firstTouchCommandDistance = nullptr);
+    std::uint32_t* firstTouchCommandDistance = nullptr,
+    core::Handle attachmentAliasTexture = {});
 dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
-    std::uint32_t* firstTouchCommandDistance = nullptr);
+    std::uint32_t* firstTouchCommandDistance = nullptr,
+    core::Handle attachmentAliasTexture = {});
 
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is

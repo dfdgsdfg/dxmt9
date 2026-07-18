@@ -9511,7 +9511,8 @@ WMT::Reference<WMT::SamplerState> makeSampler(
 perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
-    std::uint32_t* firstTouchCommandDistance) {
+    std::uint32_t* firstTouchCommandDistance,
+    core::Handle attachmentAliasTexture) {
   using Proof = perf::RenderPassDepthStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -9568,7 +9569,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
             const std::uint32_t mask = next.drawState.hot->textureMask;
             for (std::size_t s = 0; s < textures.size(); ++s) {
               if ((mask & (1u << s)) == 0) continue;
-              if (textures[s] == depthHandle) {
+              if (textures[s] == depthHandle ||
+                  (attachmentAliasTexture &&
+                   textures[s] == attachmentAliasTexture)) {
                 return finish(Proof::BlockShadowSample, logicalDistance);
               }
             }
@@ -9649,7 +9652,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
     core::Handle depthHandle,
-    std::uint32_t* firstTouchCommandDistance) {
+    std::uint32_t* firstTouchCommandDistance,
+    core::Handle attachmentAliasTexture) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -9662,7 +9666,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
   return depthStoreProofForLookahead(
       std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
       depthHandle,
-      firstTouchCommandDistance);
+      firstTouchCommandDistance,
+      attachmentAliasTexture);
 }
 
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -9677,7 +9682,8 @@ bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
 perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
-    std::uint32_t* firstTouchCommandDistance) {
+    std::uint32_t* firstTouchCommandDistance,
+    core::Handle attachmentAliasTexture) {
   using Proof = perf::RenderPassColorStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -9734,7 +9740,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
             const std::uint32_t mask = hot.textureMask;
             for (std::size_t s = 0; s < textures.size(); ++s) {
               if ((mask & (1u << s)) == 0) continue;
-              if (textures[s] == colorHandle) {
+              if (textures[s] == colorHandle ||
+                  (attachmentAliasTexture &&
+                   textures[s] == attachmentAliasTexture)) {
                 return finish(Proof::BlockTextureSample, logicalDistance);
               }
             }
@@ -9794,7 +9802,8 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     const core::ChunkSlot& slot,
     std::size_t startCommandIndex,
     core::Handle colorHandle,
-    std::uint32_t* firstTouchCommandDistance) {
+    std::uint32_t* firstTouchCommandDistance,
+    core::Handle attachmentAliasTexture) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -9807,7 +9816,8 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
   return colorStoreProofForLookahead(
       std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
       colorHandle,
-      firstTouchCommandDistance);
+      firstTouchCommandDistance,
+      attachmentAliasTexture);
 }
 
 bool nextColorOperationIsClear(const core::ChunkSlot& slot,
@@ -9831,7 +9841,8 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
         ? colorStoreProofForLookahead(
               lookaheadSources,
               hot.colorAttachments[0].handle,
-              &summary.colorTouchDistance)
+              &summary.colorTouchDistance,
+              colorSurface->aliasTexture)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (colorSurface->resolveTexture &&
         (summary.color == perf::RenderPassColorStoreProof::AllowNextClear ||
@@ -9846,7 +9857,8 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
         ? depthStoreProofForLookahead(
               lookaheadSources,
               hot.depthStencil.handle,
-              &summary.depthTouchDistance)
+              &summary.depthTouchDistance,
+              depthSurface->aliasTexture)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
     if (depthSurface->resolveTexture &&
         (summary.depth == perf::RenderPassDepthStoreProof::AllowNextClear ||
@@ -9919,7 +9931,9 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
                                                    : WMTLoadActionLoad;
     auto colorStoreProof = !lookaheadSources.empty()
         ? colorStoreProofForLookahead(lookaheadSources,
-                                      hot.colorAttachments[i].handle)
+                                      hot.colorAttachments[i].handle,
+                                      nullptr,
+                                      surface->aliasTexture)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (surface->resolveTexture &&
         (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
@@ -9965,7 +9979,9 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
     auto depthStoreProof = !lookaheadSources.empty()
         ? depthStoreProofForLookahead(lookaheadSources,
-                                      hot.depthStencil.handle)
+                                      hot.depthStencil.handle,
+                                      nullptr,
+                                      depthSurface->aliasTexture)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
     if (hasResolveTarget &&
         (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
