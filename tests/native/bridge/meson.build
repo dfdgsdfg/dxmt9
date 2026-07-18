@@ -214,6 +214,8 @@ pe_chunk_record_v2_value_spec = executable(
   [
     'pe_chunk_record_v2_value_spec.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
   ],
   include_directories: [
     dxmt9_inc,

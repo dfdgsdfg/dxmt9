@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace dxmt9::d3d9::pe {
@@ -130,5 +131,97 @@ class CommandChunkV2Builder {
   ActiveRecord active_{};
   bool sealed_ = false;
 };
+
+template <typename Wire>
+struct SparseBindingV2Input {
+  static_assert(std::is_trivially_copyable_v<Wire>);
+
+  Wire wire{};
+  PeWireObjectRef object{};
+};
+
+struct SparseConstantRangeV2Input {
+  std::uint32_t startRegister = 0u;
+  std::uint32_t registerCount = 0u;
+  std::span<const std::byte> registerBytes{};
+
+  bool present() const noexcept { return registerCount != 0u; }
+};
+
+struct SparseStateV2Input {
+  std::span<const D9CCommandChunkWireRenderStateV2> renderStates{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireTextureBindingV2>> textures{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireStreamBindingV2>> streams{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireShaderBindingV2>> shaders{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireVertexInputV2>> vertexInputs{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireIndexBindingV2>> indexBuffers{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireRenderTargetBindingV2>> renderTargets{};
+  std::span<const SparseBindingV2Input<
+      D9CCommandChunkWireDepthStencilBindingV2>> depthStencils{};
+  std::span<const D9CViewport> viewports{};
+  std::span<const D9CRect> scissors{};
+  std::span<const D9CMaterial> materials{};
+  std::span<const D9CCommandChunkWireClipPlaneV2> clipPlanes{};
+  std::span<const D9CDrawPacketTextureStageState> textureStageStates{};
+  std::span<const D9CDrawPacketSamplerState> samplerStates{};
+  std::span<const D9CDrawPacketTransform> transforms{};
+  std::span<const D9CCommandChunkWireLightV2> lights{};
+  std::span<const D9CCommandChunkWireLightEnableV2> lightEnables{};
+  SparseConstantRangeV2Input vsFloatConstants{};
+  SparseConstantRangeV2Input vsIntConstants{};
+  SparseConstantRangeV2Input vsBoolConstants{};
+  SparseConstantRangeV2Input psFloatConstants{};
+  SparseConstantRangeV2Input psIntConstants{};
+  SparseConstantRangeV2Input psBoolConstants{};
+  std::span<const std::byte> upIndexData{};
+  std::span<const std::byte> upVertexData{};
+};
+
+bool appendSparseRecordV2(CommandChunkV2Builder& builder,
+                          std::uint32_t type,
+                          D9CCommandChunkWireDrawHeaderV2 draw,
+                          const SparseStateV2Input& state) noexcept;
+bool appendApplyStateV2(CommandChunkV2Builder& builder,
+                        std::uint32_t flags,
+                        const SparseStateV2Input& state) noexcept;
+
+bool appendSetConstantsV2(
+    CommandChunkV2Builder& builder, std::uint32_t type,
+    std::uint32_t startRegister, std::uint32_t registerCount,
+    std::span<const std::byte> registerBytes) noexcept;
+bool appendClearV2(CommandChunkV2Builder& builder,
+                   D9CCommandChunkWireClearV2 fixed,
+                   std::span<const D9CRect> rects) noexcept;
+bool appendPresentV2(CommandChunkV2Builder& builder,
+                     const D9CCommandChunkWirePresentV2& fixed) noexcept;
+bool appendStretchRectV2(CommandChunkV2Builder& builder,
+                         D9CCommandChunkWireStretchRectV2 fixed,
+                         const PeWireObjectRef& src,
+                         const PeWireObjectRef& dst) noexcept;
+bool appendColorFillV2(CommandChunkV2Builder& builder,
+                       D9CCommandChunkWireColorFillV2 fixed,
+                       const PeWireObjectRef& surface) noexcept;
+bool appendUpdateTextureV2(CommandChunkV2Builder& builder,
+                           const PeWireObjectRef& src,
+                           const PeWireObjectRef& dst) noexcept;
+bool appendUpdateSurfaceV2(CommandChunkV2Builder& builder,
+                           D9CCommandChunkWireUpdateSurfaceV2 fixed,
+                           const PeWireObjectRef& src,
+                           const PeWireObjectRef& dst) noexcept;
+bool appendQueryIssueV2(CommandChunkV2Builder& builder,
+                        std::uint32_t flags,
+                        const PeWireObjectRef& query) noexcept;
+bool appendReadbackV2(CommandChunkV2Builder& builder,
+                      const PeWireObjectRef& src,
+                      const PeWireObjectRef& dst) noexcept;
+bool appendReszDepthResolveV2(CommandChunkV2Builder& builder,
+                              const PeWireObjectRef& msaaDepth,
+                              const PeWireObjectRef& intzDest) noexcept;
 
 }  // namespace dxmt9::d3d9::pe

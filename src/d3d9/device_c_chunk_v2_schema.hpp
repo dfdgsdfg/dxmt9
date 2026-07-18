@@ -173,7 +173,7 @@ inline constexpr std::array<V2RecordHandleFieldRule, 12>
         {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
          offsetof(D9CCommandChunkWireReszDepthResolveV2,
                   msaaDepthHandleIndex),
-         D9C_CHUNK_HANDLE_KIND_TEXTURE, false},
+         D9C_CHUNK_HANDLE_KIND_SURFACE, false},
         {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
          offsetof(D9CCommandChunkWireReszDepthResolveV2,
                   intzDestHandleIndex),
