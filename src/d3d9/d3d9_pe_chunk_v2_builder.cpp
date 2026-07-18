@@ -1,12 +1,19 @@
 #include "d3d9_pe_chunk_v2_builder.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <unordered_map>
 
 namespace dxmt9::d3d9::pe {
 
 namespace {
+
+std::mutex g_wireObjectCacheMutex;
+std::unordered_map<void*, PeWireObjectRef> g_wireObjectCache;
+std::atomic<std::uint64_t> g_wireIdentityGetterCalls{0u};
 
 bool alignUp(std::size_t value, std::uint32_t alignment, std::size_t& out) {
   if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
@@ -28,6 +35,54 @@ bool identityEqual(const D9CCommandChunkWireHandleEntryV2& entry,
 }
 
 }  // namespace
+
+void noteWireIdentityGetterCall() noexcept {
+  g_wireIdentityGetterCalls.fetch_add(1u, std::memory_order_relaxed);
+}
+
+std::uint64_t wireIdentityGetterCallCount() noexcept {
+  return g_wireIdentityGetterCalls.load(std::memory_order_relaxed);
+}
+
+void publishCachedWireObjectRef(const PeWireObjectRef& object) noexcept {
+  if (!object.object) {
+    return;
+  }
+  try {
+    std::lock_guard lock(g_wireObjectCacheMutex);
+    g_wireObjectCache[object.object] = object;
+  } catch (...) {
+  }
+}
+
+void unpublishCachedWireObjectRef(const PeWireObjectRef& object) noexcept {
+  if (!object.object) {
+    return;
+  }
+  std::lock_guard lock(g_wireObjectCacheMutex);
+  const auto it = g_wireObjectCache.find(object.object);
+  if (it != g_wireObjectCache.end() &&
+      it->second.identity.kind == object.identity.kind &&
+      it->second.identity.generation == object.identity.generation &&
+      it->second.identity.objectId == object.identity.objectId) {
+    g_wireObjectCache.erase(it);
+  }
+}
+
+bool lookupCachedWireObjectRef(void* object, std::uint32_t expectedKind,
+                               PeWireObjectRef& out) noexcept {
+  out = {};
+  if (!object) {
+    return true;
+  }
+  std::lock_guard lock(g_wireObjectCacheMutex);
+  const auto it = g_wireObjectCache.find(object);
+  if (it == g_wireObjectCache.end() || !it->second.valid(expectedKind)) {
+    return false;
+  }
+  out = it->second;
+  return true;
+}
 
 CommandChunkV2Builder::CommandChunkV2Builder(
     const CommandChunkV2BuilderCapacities& capacities) {
@@ -308,6 +363,12 @@ void CommandChunkV2Builder::reset() noexcept {
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
+}
+
+bool CommandChunkV2Builder::referencesObject(void* object) const noexcept {
+  return object &&
+         std::find(handleObjects_.begin(), handleObjects_.end(), object) !=
+             handleObjects_.end();
 }
 
 }  // namespace dxmt9::d3d9::pe

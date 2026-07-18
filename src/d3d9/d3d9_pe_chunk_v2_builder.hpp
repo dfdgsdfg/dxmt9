@@ -22,6 +22,13 @@ struct PeWireObjectRef {
   }
 };
 
+void publishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
+void unpublishCachedWireObjectRef(const PeWireObjectRef& object) noexcept;
+bool lookupCachedWireObjectRef(void* object, std::uint32_t expectedKind,
+                               PeWireObjectRef& out) noexcept;
+void noteWireIdentityGetterCall() noexcept;
+std::uint64_t wireIdentityGetterCallCount() noexcept;
+
 template <typename Object, typename Getter>
 bool cacheWireObjectRef(Object* object, std::uint32_t expectedKind,
                         Getter&& getter, PeWireObjectRef& out) {
@@ -29,6 +36,7 @@ bool cacheWireObjectRef(Object* object, std::uint32_t expectedKind,
   if (!object) {
     return false;
   }
+  noteWireIdentityGetterCall();
   D9CWireObjectIdentity identity{};
   if (getter(object, &identity) < 0 || identity.kind != expectedKind ||
       identity.generation == 0u || identity.objectId == 0u) {
@@ -38,6 +46,7 @@ bool cacheWireObjectRef(Object* object, std::uint32_t expectedKind,
       .identity = identity,
       .object = object,
   };
+  publishCachedWireObjectRef(out);
   return true;
 }
 
@@ -96,6 +105,7 @@ class CommandChunkV2Builder {
   std::size_t handleCount() const noexcept { return handles_.size(); }
   std::size_t payloadBytes() const noexcept { return payload_.size(); }
   std::size_t retainedObjectCount() const noexcept { return retainer_.size(); }
+  bool referencesObject(void* object) const noexcept;
 
   const std::vector<D9CCommandChunkWireRecordHeaderV2>& recordsForTest()
       const noexcept {
@@ -223,5 +233,9 @@ bool appendReadbackV2(CommandChunkV2Builder& builder,
 bool appendReszDepthResolveV2(CommandChunkV2Builder& builder,
                               const PeWireObjectRef& msaaDepth,
                               const PeWireObjectRef& intzDest) noexcept;
+
+bool appendLegacyCommandRecordAsV2(
+    CommandChunkV2Builder& builder,
+    std::span<const std::byte> recordBytes) noexcept;
 
 }  // namespace dxmt9::d3d9::pe

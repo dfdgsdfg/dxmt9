@@ -766,8 +766,9 @@ typedef struct D9CWireObjectIdentity {
 } D9CWireObjectIdentity;
 
 /* One-time per-device PE/unix command-chunk negotiation. The PE fills the
- * first two fields; unix fills the next two. A2 deliberately advertises only
- * V1 until the complete V2 producer/importer/replay matrix is integrated. */
+ * first two fields; unix fills the next two. A forced preference must be
+ * selected exactly or device initialization fails; no device changes grammar
+ * after this exchange. */
 typedef struct D9CCommandChunkNegotiation {
     uint32_t peSupportedVersions;
     uint32_t pePreferredVersion;
@@ -879,6 +880,8 @@ typedef struct D9CCommandChunkWireShaderBindingV2 {
 typedef struct D9CCommandChunkWireVertexInputV2 {
     uint32_t valid;
     uint32_t kind;
+    /* FVF value. Declaration entries carry the effective FVF too so replay
+     * can preserve V1's ordered SetFVF-then-SetVertexDeclaration semantics. */
     uint32_t value;
     uint32_t handleIndex;
 } D9CCommandChunkWireVertexInputV2;

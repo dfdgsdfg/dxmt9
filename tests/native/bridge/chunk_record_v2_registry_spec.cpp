@@ -10,6 +10,9 @@
 #include <string_view>
 #include <thread>
 
+extern "C" int32_t dxmt9p_device_negotiate_command_chunk(
+    D9CDevice*, D9CCommandChunkNegotiation*);
+
 namespace {
 
 struct TestFailure : std::runtime_error {
@@ -156,6 +159,38 @@ void testGenerationWrapRetiresSlot() {
   check(wrapped.retired, "generation wrap retires slot");
 }
 
+void testPerDeviceVersionNegotiation() {
+  auto* device = reinterpret_cast<D9CDevice*>(std::uintptr_t{1u});
+  D9CCommandChunkNegotiation v1{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION,
+  };
+  check(dxmt9p_device_negotiate_command_chunk(device, &v1) == 0 &&
+            v1.unixSupportedVersions ==
+                (D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                 D9C_COMMAND_CHUNK_CAP_VERSION_2) &&
+            v1.selectedVersion == D9C_COMMAND_CHUNK_VERSION,
+        "auto/forced V1 preference negotiates immutable V1");
+
+  D9CCommandChunkNegotiation v2{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
+  };
+  check(dxmt9p_device_negotiate_command_chunk(device, &v2) == 0 &&
+            v2.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
+        "forced V2 preference negotiates V2 without fallback");
+
+  D9CCommandChunkNegotiation unsupported{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
+  };
+  check(dxmt9p_device_negotiate_command_chunk(device, &unsupported) < 0 &&
+            unsupported.selectedVersion == 0u,
+        "unsupported forced V2 fails instead of selecting V1");
+}
+
 }  // namespace
 
 int main() {
@@ -165,6 +200,7 @@ int main() {
     testDuplicateIdentityRetainsEachEntry();
     testCrossDeviceIdentityAndConcurrentErase();
     testGenerationWrapRetiresSlot();
+    testPerDeviceVersionNegotiation();
   } catch (const TestFailure& error) {
     std::cerr << "chunk_record_v2_registry_spec failed: " << error.what()
               << '\n';

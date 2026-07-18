@@ -281,6 +281,7 @@ public:
   }
   ~D3D9VertexBufferImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_buffer_release(b_);
     if (device_)
       device_->Release();
@@ -424,6 +425,7 @@ public:
   }
   ~D3D9IndexBufferImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_buffer_release(b_);
     if (device_)
       device_->Release();

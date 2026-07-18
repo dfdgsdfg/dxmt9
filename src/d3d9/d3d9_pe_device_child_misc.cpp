@@ -70,6 +70,7 @@ public:
         dxmt9c_vdecl_get_wire_identity, wireObject_);
   }
   ~D3D9VertexDeclImpl() {
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_vdecl_release(d_);
     if (device_)
       device_->Release();
@@ -152,6 +153,7 @@ public:
         dxmt9c_query_get_wire_identity, wireObject_);
   }
   ~D3D9QueryImpl() {
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_query_release(q_);
     if (device_)
       device_->Release();

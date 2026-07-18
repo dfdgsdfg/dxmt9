@@ -28,6 +28,7 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9VertexShaderImpl() {
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
       device_->Release();
@@ -99,6 +100,7 @@ public:
         dxmt9c_shader_get_wire_identity, wireObject_);
   }
   ~D3D9PixelShaderImpl() {
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_shader_release(s_);
     if (device_)
       device_->Release();

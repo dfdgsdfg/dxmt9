@@ -93,6 +93,14 @@ struct Counters {
   // R-BACK-2.10 / 2.27 admit + ring heap fallback gauges.
   std::atomic<std::uint64_t> chunkAdmit{0};
   std::atomic<std::uint64_t> chunkReject{0};
+  std::atomic<std::uint64_t> commandChunkV1Chunks{0};
+  std::atomic<std::uint64_t> commandChunkV1Records{0};
+  std::atomic<std::uint64_t> commandChunkV1Bytes{0};
+  std::atomic<std::uint64_t> commandChunkV2Chunks{0};
+  std::atomic<std::uint64_t> commandChunkV2Records{0};
+  std::atomic<std::uint64_t> commandChunkV2Bytes{0};
+  std::atomic<std::uint64_t> commandChunkV2Rejects{0};
+  std::atomic<std::uint64_t> commandChunkV2RegistryResolutions{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};
@@ -2140,6 +2148,14 @@ struct CounterEntry {
 constexpr CounterEntry kCounterTable[] = {
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
+    {"command_chunk_v1_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Chunks, nullptr, nullptr, 0.0},
+    {"command_chunk_v1_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Records, nullptr, nullptr, 0.0},
+    {"command_chunk_v1_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Bytes, nullptr, nullptr, 0.0},
+    {"command_chunk_v2_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Chunks, nullptr, nullptr, 0.0},
+    {"command_chunk_v2_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Records, nullptr, nullptr, 0.0},
+    {"command_chunk_v2_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Bytes, nullptr, nullptr, 0.0},
+    {"command_chunk_v2_rejects", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Rejects, nullptr, nullptr, 0.0},
+    {"command_chunk_v2_registry_resolutions", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2RegistryResolutions, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_bytes", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackBytes, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_argbuf", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountArgbuf, nullptr, nullptr, 0.0},
@@ -4213,6 +4229,26 @@ void countChunkAdmit() {
 
 void countChunkReject() {
   add(counters().chunkReject);
+}
+
+void countCommandChunkWire(std::uint32_t version, std::uint64_t records,
+                           std::uint64_t bytes,
+                           std::uint64_t registryResolutions) {
+  if (!enabled()) return;
+  if (version == 1u) {
+    add(counters().commandChunkV1Chunks);
+    add(counters().commandChunkV1Records, records);
+    add(counters().commandChunkV1Bytes, bytes);
+  } else if (version == 2u) {
+    add(counters().commandChunkV2Chunks);
+    add(counters().commandChunkV2Records, records);
+    add(counters().commandChunkV2Bytes, bytes);
+    add(counters().commandChunkV2RegistryResolutions, registryResolutions);
+  }
+}
+
+void countCommandChunkV2Reject() {
+  add(counters().commandChunkV2Rejects);
 }
 
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {

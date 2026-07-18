@@ -471,6 +471,7 @@ public:
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
     if (dc_)
       DeleteDC(dc_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_surface_release(s_);
     if (container_)
       container_->Release();
@@ -861,6 +862,7 @@ public:
   }
   ~D3D9TextureImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
@@ -1170,6 +1172,7 @@ public:
   }
   ~D3D9CubeTextureImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();
@@ -1555,6 +1558,7 @@ public:
   }
   ~D3D9VolumeTextureImpl() {
     untrackDefaultPoolResource(recorder_, defaultPoolTracked_);
+    dxmt9::d3d9::pe::unpublishCachedWireObjectRef(wireObject_);
     dxmt9c_texture_release(t_);
     if (device_)
       device_->Release();

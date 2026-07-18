@@ -177,14 +177,23 @@ extern "C" int32_t dxmt9c_device_negotiate_command_chunk(
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  negotiation->unixSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1;
+  negotiation->unixSupportedVersions =
+      D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+      D9C_COMMAND_CHUNK_CAP_VERSION_2;
   negotiation->selectedVersion = 0u;
-  if ((negotiation->peSupportedVersions &
-       D9C_COMMAND_CHUNK_CAP_VERSION_1) == 0u) {
+  const auto common = negotiation->peSupportedVersions &
+                      negotiation->unixSupportedVersions;
+  const auto preferredCap =
+      negotiation->pePreferredVersion == D9C_COMMAND_CHUNK_VERSION
+          ? D9C_COMMAND_CHUNK_CAP_VERSION_1
+          : negotiation->pePreferredVersion == D9C_COMMAND_CHUNK_VERSION_V2
+              ? D9C_COMMAND_CHUNK_CAP_VERSION_2
+              : 0u;
+  if (preferredCap == 0u || (common & preferredCap) == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  negotiation->selectedVersion = D9C_COMMAND_CHUNK_VERSION;
+  negotiation->selectedVersion = negotiation->pePreferredVersion;
   return dxmt9::core::D3D_OK;
 }
 

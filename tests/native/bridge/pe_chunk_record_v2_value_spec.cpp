@@ -116,6 +116,15 @@ PeWireObjectRef wireRef(void* object, std::uint32_t kind,
   };
 }
 
+D9CWireHandle legacyWire(void* object) {
+  const auto value = static_cast<std::uint64_t>(
+      reinterpret_cast<std::uintptr_t>(object));
+  return D9CWireHandle{
+      .lo = static_cast<std::uint32_t>(value),
+      .hi = static_cast<std::uint32_t>(value >> 32u),
+  };
+}
+
 void testCachedIdentityBuilderAndSeal() {
   getterCalls = 0u;
   D9CTexture first;
@@ -611,6 +620,75 @@ void testSparseDrawAndApplyProducerMatrix() {
         "noncanonical sparse input rolls back transactionally");
 }
 
+void testLegacyRecordProductionDispatch() {
+  D9CTexture texture;
+  D9CVertexDecl declaration;
+  const auto textureRef = wireRef(
+      &texture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x910000001ull);
+  const auto declarationRef = wireRef(
+      &declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 0x910000002ull);
+  dxmt9::d3d9::pe::publishCachedWireObjectRef(textureRef);
+  dxmt9::d3d9::pe::publishCachedWireObjectRef(declarationRef);
+
+  D9CCommandRecordDrawPrimitive draw{};
+  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  draw.header.size = sizeof(draw);
+  draw.packet.renderStateCount = 1u;
+  draw.packet.renderStates[0] = {7u, 3u};
+  draw.packet.textureMask = 1u;
+  draw.packet.textures[0] = legacyWire(&texture);
+  draw.packet.vdeclValid = 1u;
+  draw.packet.vdeclHandle = legacyWire(&declaration);
+  draw.packet.fvf = 0x112u;
+  draw.packet.primitiveType = 4u;
+  draw.packet.startVertex = 2u;
+  draw.packet.primitiveCount = 1u;
+
+  D9CCommandRecordPresent present{};
+  present.header.type = D9C_COMMAND_RECORD_PRESENT;
+  present.header.size = sizeof(present);
+  present.hwnd = 0x1234u;
+
+  const auto getterCountBefore =
+      dxmt9::d3d9::pe::wireIdentityGetterCallCount();
+  CommandChunkV2Builder builder;
+  check(dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
+            builder, std::as_bytes(std::span(&draw, 1u))) &&
+            dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
+                builder, std::as_bytes(std::span(&present, 1u))),
+        "production dispatch converts legacy semantic records to V2");
+  check(dxmt9::d3d9::pe::wireIdentityGetterCallCount() ==
+            getterCountBefore,
+        "steady-state legacy-to-V2 conversion performs no identity getter");
+
+  const auto sealed = builder.seal();
+  ImportedChunkV2View imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
+      sealed.blob,
+      V2ChunkEnvelope{
+          .version = D9C_COMMAND_CHUNK_VERSION_V2,
+          .recordCount = 2u,
+          .handleCount = 2u,
+      },
+      &imported);
+  check(validation.valid() && imported.records[0].type ==
+                                  D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
+            imported.records[1].type == D9C_COMMAND_RECORD_PRESENT,
+        "converted production records validate with matching V2 envelope");
+  const auto vertexInput = imported.record(0u).section(2u);
+  D9CCommandChunkWireVertexInputV2 decodedVertexInput{};
+  std::memcpy(&decodedVertexInput, vertexInput.payload.data(),
+              sizeof(decodedVertexInput));
+  check(vertexInput.descriptor.kind ==
+            D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT &&
+            decodedVertexInput.value == draw.packet.fvf,
+        "declaration entry preserves ordered V1 FVF plus declaration state");
+
+  builder.reset();
+  dxmt9::d3d9::pe::unpublishCachedWireObjectRef(textureRef);
+  dxmt9::d3d9::pe::unpublishCachedWireObjectRef(declarationRef);
+}
+
 }  // namespace
 
 int main() {
@@ -619,6 +697,7 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
+    testLegacyRecordProductionDispatch();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_v2_value_spec failed: " << error.what()
               << '\n';

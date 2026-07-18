@@ -386,10 +386,7 @@ V2ValidationResult validateSectionElements(
             (value.valid &&
              value.kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF &&
              value.handleIndex !=
-                 D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX) ||
-            (value.valid &&
-             value.kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION &&
-             value.value != 0u)) {
+                 D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX)) {
           return failure(V2ValidationStatus::InvalidSectionSchema, recordIndex,
                          sectionIndex);
         }

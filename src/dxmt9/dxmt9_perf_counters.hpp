@@ -132,6 +132,10 @@ class ScopedD3D9SnapshotUniformBuildContext {
 // exhaustion that R-BACK-2.6/2.13 invariants assume bounded.
 void countChunkAdmit();
 void countChunkReject();
+void countCommandChunkWire(std::uint32_t version, std::uint64_t records,
+                           std::uint64_t bytes,
+                           std::uint64_t registryResolutions = 0u);
+void countCommandChunkV2Reject();
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

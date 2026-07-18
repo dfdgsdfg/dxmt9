@@ -744,6 +744,10 @@ public:
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
                                      pPP->Flags);
+        if (!*ppDevice) {
+            dxmt9FactoryDebugLog("CreateDevice -> command chunk negotiation failed");
+            return D3DERR_NOTAVAILABLE;
+        }
         dxmt9FactoryDebugLog("CreateDevice -> device=%p", *ppDevice);
         return S_OK;
     }
@@ -872,6 +876,10 @@ public:
         *ppDevice = CreateDeviceImpl(dev, this, adapter, deviceType,
                                      behaviorFlags, hwnd, extended_,
                                      pPP->Flags);
+        if (!*ppDevice) {
+            dxmt9FactoryDebugLog("CreateDeviceEx -> command chunk negotiation failed");
+            return D3DERR_NOTAVAILABLE;
+        }
         dxmt9FactoryDebugLog("CreateDeviceEx -> device=%p", *ppDevice);
         return S_OK;
     }

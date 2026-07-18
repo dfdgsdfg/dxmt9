@@ -23,6 +23,7 @@
 #endif
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
+#include "d3d9_pe_chunk_v2_builder.hpp"
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -96,6 +97,31 @@ static bool dxmt9PerfVsConstSetterRangeEnabled() {
 static bool dxmt9PeRecorderChunkLogEnabled() {
     static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_RECORDER_CHUNK_LOG");
     return enabled;
+}
+
+enum class Dxmt9PeChunkWireMode : std::uint32_t {
+    Auto,
+    Version1,
+    Version2,
+};
+
+static Dxmt9PeChunkWireMode dxmt9PeChunkWireMode() {
+    static const Dxmt9PeChunkWireMode mode = [] {
+        const char* value = std::getenv("DXMT9_PE_CHUNK_WIRE_VERSION");
+        if (!value || value[0] == '\0' || std::strcmp(value, "auto") == 0) {
+            return Dxmt9PeChunkWireMode::Auto;
+        }
+        if (std::strcmp(value, "1") == 0) {
+            return Dxmt9PeChunkWireMode::Version1;
+        }
+        if (std::strcmp(value, "2") == 0) {
+            return Dxmt9PeChunkWireMode::Version2;
+        }
+        dxmt9DeviceInfoLog(
+            "unknown DXMT9_PE_CHUNK_WIRE_VERSION='%s'; using auto", value);
+        return Dxmt9PeChunkWireMode::Auto;
+    }();
+    return mode;
 }
 
 // R-BACK-2.52 (Inline Const Delta, opt-in): read once at first use. Off
@@ -3380,6 +3406,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DSurface9* dsSurface_ = nullptr;
     bool dsSurfaceExplicit_ = false;
     PeCommandChunkBuilder commandChunk_{};
+    dxmt9::d3d9::pe::CommandChunkV2Builder commandChunkV2_{};
+    std::vector<std::byte> legacyV2RecordScratch_{};
+    std::uint32_t commandChunkWireVersion_ = D9C_COMMAND_CHUNK_VERSION;
+    bool commandChunkNegotiated_ = false;
+    std::array<std::uint64_t, 3u> commandChunkCommitsByVersion_{};
+    std::array<std::uint64_t, 3u> commandChunkRecordsByVersion_{};
+    std::array<std::uint64_t, 3u> commandChunkBytesByVersion_{};
     PeRecorderStats peRecorderStats_{};
     // DXMT9_PE_STATS_DECIMATION diagnostic accumulators (const_flush,
     // draw_packet scopes). append/const_setter accumulators live next to
@@ -3622,6 +3655,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
 
     void clearPendingCommandChunk() {
         commandChunk_.clear();
+        commandChunkV2_.reset();
     }
 
     void clearPeStateTracking() {
@@ -7857,7 +7891,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     void notePeChunkAppendBoundary(std::int64_t appendReturnNs,
                                    std::uint32_t type) {
         if (!dxmt9PeRecorderStatsEnabled() ||
-            commandChunk_.recordCount() == 0) {
+            (commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2
+                 ? commandChunkV2_.recordCount()
+                 : commandChunk_.recordCount()) == 0) {
             return;
         }
         if (peRecorderCurrentChunkFirstAppendNs_ == 0) {
@@ -8989,14 +9025,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         peRecorderStats_.upIndexBytes += indexBytes;
     }
 
-    HRESULT flushPendingCommandChunk(
-        PeRecorderFlushReason reason = PeRecorderFlushReason::Explicit) {
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        return commandChunk_.flush(
-            reason,
-            [this](PeRecorderFlushReason commitReason,
-                   const D9CCommandChunk& chunk,
-                   const PeCommandChunkCommitInfo& info) {
+    HRESULT commitPendingCommandChunk(PeRecorderFlushReason commitReason,
+                                      const D9CCommandChunk& chunk,
+                                      const PeCommandChunkCommitInfo& info) {
                 auto chunkCadence = claimPeFirstChunkAfterPresent();
                 const std::int64_t entryNs =
                     dxmt9SteadyClockNs(std::chrono::steady_clock::now());
@@ -9029,24 +9060,84 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 }
                 logPeFirstChunkAfterPresent(commitReason, chunkCadence, hr, info);
                 if (SUCCEEDED(hr)) {
+                    const auto version = std::min<std::uint32_t>(
+                        chunk.version,
+                        static_cast<std::uint32_t>(
+                            commandChunkCommitsByVersion_.size() - 1u));
+                    ++commandChunkCommitsByVersion_[version];
+                    commandChunkRecordsByVersion_[version] += info.recordCount;
+                    commandChunkBytesByVersion_[version] += info.wireBytes;
                     recordPeChunkCommit(commitReason, info.recordCount,
                                         info.payloadBytes, info.handleCount,
                                         info.wireBytes, fillGapNs,
                                         activeFillNs, bridgeNs);
                 }
                 return hr;
-            });
+    }
+
+    HRESULT flushPendingCommandChunk(
+        PeRecorderFlushReason reason = PeRecorderFlushReason::Explicit) {
+        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        if (!commandChunkNegotiated_) {
+            return D3DERR_NOTAVAILABLE;
+        }
+        if (commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION) {
+            return commandChunk_.flush(
+                reason,
+                [this](PeRecorderFlushReason commitReason,
+                       const D9CCommandChunk& chunk,
+                       const PeCommandChunkCommitInfo& info) {
+                    return commitPendingCommandChunk(commitReason, chunk, info);
+                });
+        }
+        if (commandChunkV2_.recordCount() == 0u) {
+            return S_OK;
+        }
+        const auto payloadBytes = commandChunkV2_.payloadBytes();
+        const auto sealed = commandChunkV2_.seal();
+        if (!sealed.valid() || sealed.blob.size() > 0xffffffffull) {
+            return D3DERR_INVALIDCALL;
+        }
+        D9CCommandChunk chunk{};
+        chunk.version = D9C_COMMAND_CHUNK_VERSION_V2;
+        chunk.recordCount = sealed.recordCount;
+        chunk.recordBytes = static_cast<std::uint32_t>(sealed.blob.size());
+        chunk.records = toWireHandle(sealed.blob.data());
+        chunk.handleCount = sealed.handleCount;
+        const PeCommandChunkCommitInfo info{
+            .recordCount = sealed.recordCount,
+            .payloadBytes = static_cast<std::uint32_t>(std::min<std::size_t>(
+                payloadBytes, std::numeric_limits<std::uint32_t>::max())),
+            .handleCount = sealed.handleCount,
+            .wireBytes = chunk.recordBytes,
+        };
+        const HRESULT hr = commitPendingCommandChunk(reason, chunk, info);
+        if (SUCCEEDED(hr)) {
+            commandChunkV2_.reset();
+        }
+        return hr;
     }
 
     template<typename WriteFn>
     HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
+        if (!commandChunkNegotiated_ || bytes == 0u || bytes > 0xffffffffull) {
+            return commandChunkNegotiated_ ? D3DERR_INVALIDCALL
+                                           : D3DERR_NOTAVAILABLE;
+        }
         const auto maxRecords = maxPendingCommandRecords();
         const auto maxBytes = maxPendingCommandBytes();
-        const auto recordCountBefore = commandChunk_.recordCount();
-        const auto payloadBytesBefore = commandChunk_.payloadSize();
-        const bool willFlushBeforeAppend =
-            commandChunk_.shouldFlushBeforeAppend(bytes, maxRecords, maxBytes);
+        const bool useV2 =
+            commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2;
+        const auto recordCountBefore = useV2
+            ? commandChunkV2_.recordCount()
+            : commandChunk_.recordCount();
+        const auto payloadBytesBefore = useV2
+            ? commandChunkV2_.payloadBytes()
+            : commandChunk_.payloadSize();
+        const bool willFlushBeforeAppend = recordCountBefore != 0u &&
+            (recordCountBefore >= maxRecords ||
+             payloadBytesBefore + bytes > maxBytes);
         const std::uint32_t appendedRecordCount =
             willFlushBeforeAppend ? 1u : recordCountBefore + 1u;
         const auto appendedPayloadBytes =
@@ -9058,19 +9149,46 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const auto appendEntryNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
         recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
-        const HRESULT hr = commandChunk_.appendRecordDirect(
-            type, bytes, maxRecords, maxBytes,
-            std::forward<WriteFn>(write),
-            [this](const D9CCommandChunkWireRecordHeader& wireRecord,
-                   const std::uint8_t* payload,
-                   WireHandleEntryList& extraHandles,
-                   std::size_t firstHandle) {
-                return collectAppendTimeExtraWireHandles(
-                    wireRecord, payload, extraHandles, firstHandle);
-            },
-            [this](PeRecorderFlushReason flushReason) {
-                return flushPendingCommandChunk(flushReason);
-            });
+        HRESULT hr = S_OK;
+        if (useV2) {
+            if (willFlushBeforeAppend) {
+                hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
+            }
+            if (SUCCEEDED(hr)) {
+                try {
+                    legacyV2RecordScratch_.resize(bytes);
+                } catch (...) {
+                    hr = E_OUTOFMEMORY;
+                }
+            }
+            if (SUCCEEDED(hr)) {
+                write(reinterpret_cast<std::uint8_t*>(
+                    legacyV2RecordScratch_.data()));
+                if (!dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
+                        commandChunkV2_, legacyV2RecordScratch_)) {
+                    hr = D3DERR_INVALIDCALL;
+                }
+            }
+            if (SUCCEEDED(hr) &&
+                (commandChunkV2_.recordCount() >= maxRecords ||
+                 commandChunkV2_.payloadBytes() >= maxBytes)) {
+                hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
+            }
+        } else {
+            hr = commandChunk_.appendRecordDirect(
+                type, bytes, maxRecords, maxBytes,
+                std::forward<WriteFn>(write),
+                [this](const D9CCommandChunkWireRecordHeader& wireRecord,
+                       const std::uint8_t* payload,
+                       WireHandleEntryList& extraHandles,
+                       std::size_t firstHandle) {
+                    return collectAppendTimeExtraWireHandles(
+                        wireRecord, payload, extraHandles, firstHandle);
+                },
+                [this](PeRecorderFlushReason flushReason) {
+                    return flushPendingCommandChunk(flushReason);
+                });
+        }
         const auto appendReturnNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());
         if (appendReturnNs > appendEntryNs) {
@@ -9114,6 +9232,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!data || bytes == 0 || bytes > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
+        }
+        if (commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2) {
+            return appendCommandRecord(data, bytes);
         }
         if (commandChunk_.shouldFlushBeforeAppend(
                 bytes, maxPendingCommandRecords(), maxPendingCommandBytes())) {
@@ -9929,9 +10050,14 @@ public:
             return S_OK;
         }
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        const auto wire = static_cast<std::uint64_t>(
-            reinterpret_cast<std::uintptr_t>(buffer));
-        if (!commandChunk_.referencesWireHandle(D9C_CHUNK_HANDLE_KIND_BUFFER, wire)) {
+        const bool referenced =
+            commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2
+                ? commandChunkV2_.referencesObject(buffer)
+                : commandChunk_.referencesWireHandle(
+                      D9C_CHUNK_HANDLE_KIND_BUFFER,
+                      static_cast<std::uint64_t>(
+                          reinterpret_cast<std::uintptr_t>(buffer)));
+        if (!referenced) {
             return S_OK;
         }
         return flushPeRecorder(PeRecorderFlushReason::Child);
@@ -10066,6 +10192,44 @@ public:
         for (UINT& freq : streamFreq_) {
             freq = 1;
         }
+        if (dev_) {
+            const auto mode = dxmt9PeChunkWireMode();
+            const std::uint32_t preferred =
+                mode == Dxmt9PeChunkWireMode::Version2
+                    ? D9C_COMMAND_CHUNK_VERSION_V2
+                    : D9C_COMMAND_CHUNK_VERSION;
+            D9CCommandChunkNegotiation negotiation{};
+            negotiation.peSupportedVersions =
+                D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                D9C_COMMAND_CHUNK_CAP_VERSION_2;
+            negotiation.pePreferredVersion = preferred;
+            const HRESULT negotiationHr =
+                hr32(dxmt9c_device_negotiate_command_chunk(
+                    dev_, &negotiation));
+            const bool forcedSelectionMatched =
+                mode == Dxmt9PeChunkWireMode::Auto ||
+                negotiation.selectedVersion == preferred;
+            commandChunkNegotiated_ = SUCCEEDED(negotiationHr) &&
+                forcedSelectionMatched &&
+                (negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION ||
+                 negotiation.selectedVersion ==
+                     D9C_COMMAND_CHUNK_VERSION_V2);
+            if (commandChunkNegotiated_) {
+                commandChunkWireVersion_ = negotiation.selectedVersion;
+                dxmt9DeviceInfoLog(
+                    "command chunk negotiation selected v%u pe_caps=0x%x unix_caps=0x%x mode=%s",
+                    commandChunkWireVersion_, negotiation.peSupportedVersions,
+                    negotiation.unixSupportedVersions,
+                    mode == Dxmt9PeChunkWireMode::Version2 ? "2" :
+                    mode == Dxmt9PeChunkWireMode::Version1 ? "1" : "auto");
+            } else {
+                dxmt9DeviceInfoLog(
+                    "command chunk negotiation failed hr=0x%08x preferred=v%u selected=v%u unix_caps=0x%x",
+                    static_cast<unsigned>(negotiationHr), preferred,
+                    negotiation.selectedVersion,
+                    negotiation.unixSupportedVersions);
+            }
+        }
         // T2: Initialize viewport/scissor PE shadow from the implicit
         // swapchain's back-buffer rect so GetViewport/GetScissorRect
         // round-trip correctly before any Set call (Wine conformance:
@@ -10090,8 +10254,23 @@ public:
                             adapter_, (unsigned)deviceType_, (unsigned)behaviorFlags_, window, extended_ ? 1u : 0u);
     }
 
+    bool commandChunkReady() const noexcept {
+        return commandChunkNegotiated_;
+    }
+
     ~D3D9DeviceImpl() {
         (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
+        dxmt9DeviceInfoLog(
+            "command chunk totals selected=v%u v1_chunks=%llu v1_records=%llu v1_bytes=%llu v2_chunks=%llu v2_records=%llu v2_bytes=%llu identity_getter_calls=%llu",
+            commandChunkWireVersion_,
+            static_cast<unsigned long long>(commandChunkCommitsByVersion_[1]),
+            static_cast<unsigned long long>(commandChunkRecordsByVersion_[1]),
+            static_cast<unsigned long long>(commandChunkBytesByVersion_[1]),
+            static_cast<unsigned long long>(commandChunkCommitsByVersion_[2]),
+            static_cast<unsigned long long>(commandChunkRecordsByVersion_[2]),
+            static_cast<unsigned long long>(commandChunkBytesByVersion_[2]),
+            static_cast<unsigned long long>(
+                dxmt9::d3d9::pe::wireIdentityGetterCallCount()));
         logVsConstSetterRangePerf("destructor");
         logPeRecorderStats("destructor", true);
         logPeStatsDecimation();
@@ -14695,7 +14874,12 @@ IDirect3DDevice9Ex* CreateDeviceImpl(D9CDevice* dev, IDirect3D9Ex* pFactory,
                                      DWORD behaviorFlags,
                                      HWND window, bool extended,
                                      DWORD implicitSwapchainFlags) {
-    return new D3D9DeviceImpl(dev, pFactory, adapter, deviceType,
-                              behaviorFlags, window, extended,
-                              implicitSwapchainFlags);
+    auto* device = new D3D9DeviceImpl(
+        dev, pFactory, adapter, deviceType, behaviorFlags, window, extended,
+        implicitSwapchainFlags);
+    if (!device->commandChunkReady()) {
+        delete device;
+        return nullptr;
+    }
+    return device;
 }
