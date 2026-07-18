@@ -74,6 +74,11 @@ extern "C" uint32_t dxmt9c_texture_release(D9CTexture* arg0) {
   return dxmt9p_texture_release(arg0);
 }
 
+extern "C" int32_t dxmt9c_texture_get_wire_identity(
+    D9CTexture* arg0, D9CWireObjectIdentity* out) {
+  return dxmt9p_texture_get_wire_identity(arg0, out);
+}
+
 extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* arg0, uint32_t level, D9CLockedRect* out, const D9CRect* arg3, uint32_t flags) {
   return dxmt9p_texture_lock_rect(arg0, level, out, arg3, flags);
 }
@@ -122,6 +127,11 @@ extern "C" uint32_t dxmt9c_buffer_release(D9CBuffer* arg0) {
   return dxmt9p_buffer_release(arg0);
 }
 
+extern "C" int32_t dxmt9c_buffer_get_wire_identity(
+    D9CBuffer* arg0, D9CWireObjectIdentity* out) {
+  return dxmt9p_buffer_get_wire_identity(arg0, out);
+}
+
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* arg0, uint32_t offset, uint32_t size, void** data, uint32_t flags) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_buffer_lock(arg0, offset, size, data, flags);
@@ -141,6 +151,11 @@ extern "C" void dxmt9c_surface_addref(D9CSurface* arg0) {
 
 extern "C" uint32_t dxmt9c_surface_release(D9CSurface* arg0) {
   return dxmt9p_surface_release(arg0);
+}
+
+extern "C" int32_t dxmt9c_surface_get_wire_identity(
+    D9CSurface* arg0, D9CWireObjectIdentity* out) {
+  return dxmt9p_surface_get_wire_identity(arg0, out);
 }
 
 extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* arg0, D9CLockedRect* arg1, const D9CRect* arg2, uint32_t flags) {

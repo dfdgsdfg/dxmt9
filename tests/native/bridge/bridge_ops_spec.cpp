@@ -45,11 +45,42 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 151u,
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 158u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
           "bridge opcode count matches enum span");
+}
+
+void testCommandChunkV2BridgeOpsAreGenerated() {
+  const auto first = opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_factory_create);
+  const auto count = dxmt9::bridge::kBridgeOpcodeCount;
+  const auto inRange = [first](dxmt9::bridge::BridgeOpcode value) {
+    const auto encoded = opcode(value);
+    return encoded >= first && encoded < first + count;
+  };
+
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_device_negotiate_command_chunk),
+        "V2 negotiation opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_texture_get_wire_identity),
+        "texture identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_surface_get_wire_identity),
+        "surface identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_buffer_get_wire_identity),
+        "buffer identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_shader_get_wire_identity),
+        "shader identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_vdecl_get_wire_identity),
+        "vertex declaration identity opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_query_get_wire_identity),
+        "query identity opcode is generated");
 }
 
 void testDodChunkBridgeOpsStaySingleCallShape() {
@@ -120,6 +151,7 @@ int main() {
   try {
     testBridgeOpcodeCountMatchesEnumSpan();
     testDodChunkBridgeOpsStaySingleCallShape();
+    testCommandChunkV2BridgeOpsAreGenerated();
     testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive();
     testBridgeAbiHashIsNonZeroAndStable();
   } catch (const TestFailure& e) {

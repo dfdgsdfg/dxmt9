@@ -700,6 +700,305 @@ enum {
     D9C_CHUNK_HANDLE_KIND_QUERY = 5,
 };
 
+/* Pointer-free command chunk wire V2 (R-BACK-2.54 / R-BACK-2.55).
+ *
+ * V1 above remains an immutable compatibility ABI. V2 keeps the same outer
+ * table/table/arena organization, but gives every type a V2 suffix so a layout
+ * change cannot silently reinterpret a V1 blob. All offsets are byte offsets
+ * from the start of the chunk blob or record payload as documented by the
+ * field. The supported PE and unix targets are little-endian; C++ consumers
+ * pin that assumption in device_c_chunk_v2_schema.hpp.
+ *
+ * Resource identity is never a D9C* address in V2. Payload fields contain an
+ * absolute uint32_t index into D9CCommandChunkWireHandleEntryV2[], and the
+ * indexed entry carries the device-local object ID plus generation. Null uses
+ * D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX and consumes no table entry. */
+#define D9C_COMMAND_CHUNK_VERSION_V2 2u
+#define D9C_COMMAND_CHUNK_WIRE_VERSION_V2 2u
+#define D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE 48u
+#define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE 32u
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE 16u
+#define D9C_COMMAND_CHUNK_WIRE_SECTION_DESC_V2_SIZE 16u
+#define D9C_COMMAND_CHUNK_WIRE_DRAW_HEADER_V2_SIZE 56u
+#define D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX 0xffffffffu
+#define D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE 0u
+#define D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT 0x00000001u
+#define D9C_COMMAND_CHUNK_CAP_VERSION_1 0x00000001u
+#define D9C_COMMAND_CHUNK_CAP_VERSION_2 0x00000002u
+#define D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION 1u
+
+typedef struct D9CCommandChunkWireHeaderV2 {
+    uint32_t version;
+    uint32_t headerSize;
+    uint32_t recordHeaderSize;
+    uint32_t handleEntrySize;
+    uint32_t recordTableOffset;
+    uint32_t recordCount;
+    uint32_t handleTableOffset;
+    uint32_t handleCount;
+    uint32_t payloadArenaOffset;
+    uint32_t payloadArenaSize;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} D9CCommandChunkWireHeaderV2;
+
+typedef struct D9CCommandChunkWireRecordHeaderV2 {
+    uint32_t type;
+    uint32_t flags;
+    uint32_t payloadOffset;
+    uint32_t payloadSize;
+    uint32_t firstHandle;
+    uint32_t handleCount;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} D9CCommandChunkWireRecordHeaderV2;
+
+typedef struct D9CCommandChunkWireHandleEntryV2 {
+    uint32_t kind;
+    uint32_t generation;
+    uint64_t objectId;
+} D9CCommandChunkWireHandleEntryV2;
+
+typedef struct D9CWireObjectIdentity {
+    uint32_t kind;
+    uint32_t generation;
+    uint64_t objectId;
+} D9CWireObjectIdentity;
+
+/* One-time per-device PE/unix command-chunk negotiation. The PE fills the
+ * first two fields; unix fills the next two. A2 deliberately advertises only
+ * V1 until the complete V2 producer/importer/replay matrix is integrated. */
+typedef struct D9CCommandChunkNegotiation {
+    uint32_t peSupportedVersions;
+    uint32_t pePreferredVersion;
+    uint32_t unixSupportedVersions;
+    uint32_t selectedVersion;
+    uint32_t reserved0;
+    uint32_t reserved1;
+    uint32_t reserved2;
+    uint32_t reserved3;
+} D9CCommandChunkNegotiation;
+
+typedef struct D9CCommandChunkWireSectionDescV2 {
+    uint16_t kind;
+    uint16_t elementSize;
+    uint32_t count;
+    uint32_t payloadOffset;
+    uint32_t byteSize;
+} D9CCommandChunkWireSectionDescV2;
+
+/* Fixed prefix shared by DrawPrimitive, DrawIndexedPrimitive, both UP draw
+ * forms, and APPLY_STATE. Fields unused by the selected opcode must be zero.
+ * sectionTableOffset and sectionPayloadOffset are relative to the start of
+ * this record payload. */
+typedef struct D9CCommandChunkWireDrawHeaderV2 {
+    uint32_t flags;
+    uint32_t primitiveType;
+    int32_t baseVertex;
+    uint32_t minVertex;
+    uint32_t numVertices;
+    uint32_t startVertex;
+    uint32_t startIndex;
+    uint32_t primitiveCount;
+    uint32_t stride;
+    uint32_t indexFormat;
+    uint32_t sectionCount;
+    uint32_t sectionTableOffset;
+    uint32_t sectionPayloadOffset;
+    uint32_t reserved0;
+} D9CCommandChunkWireDrawHeaderV2;
+
+enum {
+    D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE = 1,
+    D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE = 2,
+    D9C_COMMAND_CHUNK_V2_SECTION_STREAM = 3,
+    D9C_COMMAND_CHUNK_V2_SECTION_SHADER = 4,
+    D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT = 5,
+    D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER = 6,
+    D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET = 7,
+    D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL = 8,
+    D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT = 9,
+    D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR = 10,
+    D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL = 11,
+    D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE = 12,
+    D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE = 13,
+    D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE = 14,
+    D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM = 15,
+    D9C_COMMAND_CHUNK_V2_SECTION_LIGHT = 16,
+    D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE = 17,
+    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F = 18,
+    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I = 19,
+    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B = 20,
+    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F = 21,
+    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I = 22,
+    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B = 23,
+    D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA = 24,
+    D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA = 25,
+    D9C_COMMAND_CHUNK_V2_SECTION_COUNT = 25,
+};
+
+enum {
+    D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX = 0,
+    D9C_COMMAND_CHUNK_V2_SHADER_STAGE_PIXEL = 1,
+};
+
+enum {
+    D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF = 0,
+    D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION = 1,
+};
+
+typedef struct D9CCommandChunkWireRenderStateV2 {
+    uint32_t state;
+    uint32_t value;
+} D9CCommandChunkWireRenderStateV2;
+
+typedef struct D9CCommandChunkWireTextureBindingV2 {
+    uint32_t slot;
+    uint32_t valid;
+    uint32_t handleIndex;
+    uint32_t reserved0;
+} D9CCommandChunkWireTextureBindingV2;
+
+typedef struct D9CCommandChunkWireStreamBindingV2 {
+    uint32_t slot;
+    uint32_t valid;
+    uint32_t handleIndex;
+    uint32_t offset;
+    uint32_t stride;
+    uint32_t frequency;
+    uint32_t reserved0;
+} D9CCommandChunkWireStreamBindingV2;
+
+typedef struct D9CCommandChunkWireShaderBindingV2 {
+    uint32_t stage;
+    uint32_t valid;
+    uint32_t handleIndex;
+    uint32_t reserved0;
+} D9CCommandChunkWireShaderBindingV2;
+
+typedef struct D9CCommandChunkWireVertexInputV2 {
+    uint32_t valid;
+    uint32_t kind;
+    uint32_t value;
+    uint32_t handleIndex;
+} D9CCommandChunkWireVertexInputV2;
+
+typedef struct D9CCommandChunkWireIndexBindingV2 {
+    uint32_t valid;
+    uint32_t handleIndex;
+} D9CCommandChunkWireIndexBindingV2;
+
+typedef struct D9CCommandChunkWireRenderTargetBindingV2 {
+    uint32_t slot;
+    uint32_t valid;
+    uint32_t handleIndex;
+    uint32_t reserved0;
+} D9CCommandChunkWireRenderTargetBindingV2;
+
+typedef struct D9CCommandChunkWireDepthStencilBindingV2 {
+    uint32_t valid;
+    uint32_t handleIndex;
+} D9CCommandChunkWireDepthStencilBindingV2;
+
+typedef struct D9CCommandChunkWireClipPlaneV2 {
+    uint32_t slot;
+    uint32_t reserved0;
+    float values[4];
+} D9CCommandChunkWireClipPlaneV2;
+
+typedef struct D9CCommandChunkWireLightV2 {
+    uint32_t slot;
+    uint32_t reserved0;
+    D9CLight light;
+} D9CCommandChunkWireLightV2;
+
+typedef struct D9CCommandChunkWireLightEnableV2 {
+    uint32_t slot;
+    uint32_t enabled;
+} D9CCommandChunkWireLightEnableV2;
+
+/* Constant section payloads begin with this range header, followed by
+ * count*elementSize register bytes. The enclosing section kind selects
+ * VS/PS and float/int/bool. */
+typedef struct D9CCommandChunkWireConstantRangeV2 {
+    uint32_t startRegister;
+    uint32_t registerCount;
+} D9CCommandChunkWireConstantRangeV2;
+
+/* Fixed non-draw V2 payloads. Variable arrays or bytes follow at the
+ * record-relative offsets carried by the fixed payload. */
+typedef struct D9CCommandChunkWireSetConstV2 {
+    uint32_t startRegister;
+    uint32_t registerCount;
+} D9CCommandChunkWireSetConstV2;
+
+typedef struct D9CCommandChunkWireClearV2 {
+    uint32_t flags;
+    uint32_t colorARGB;
+    float z;
+    uint32_t stencil;
+    uint32_t rectCount;
+    uint32_t rectOffset;
+} D9CCommandChunkWireClearV2;
+
+typedef struct D9CCommandChunkWirePresentV2 {
+    uint64_t hwnd;
+    uint32_t flags;
+    uint32_t hasSrc;
+    uint32_t hasDst;
+    uint32_t reserved0;
+    D9CRect src;
+    D9CRect dst;
+} D9CCommandChunkWirePresentV2;
+
+typedef struct D9CCommandChunkWireStretchRectV2 {
+    uint32_t srcHandleIndex;
+    uint32_t dstHandleIndex;
+    uint32_t hasSrcRect;
+    uint32_t hasDstRect;
+    uint32_t filter;
+    uint32_t reserved0;
+    D9CRect srcRect;
+    D9CRect dstRect;
+} D9CCommandChunkWireStretchRectV2;
+
+typedef struct D9CCommandChunkWireColorFillV2 {
+    uint32_t surfaceHandleIndex;
+    uint32_t colorARGB;
+    uint32_t hasRect;
+    uint32_t reserved0;
+    D9CRect rect;
+} D9CCommandChunkWireColorFillV2;
+
+typedef struct D9CCommandChunkWireUpdateTextureV2 {
+    uint32_t srcHandleIndex;
+    uint32_t dstHandleIndex;
+} D9CCommandChunkWireUpdateTextureV2;
+
+typedef struct D9CCommandChunkWireUpdateSurfaceV2 {
+    uint32_t srcHandleIndex;
+    uint32_t dstHandleIndex;
+    uint32_t hasSrcRect;
+    uint32_t hasDstPoint;
+    D9CRect srcRect;
+    D9CRect dstPoint;
+} D9CCommandChunkWireUpdateSurfaceV2;
+
+typedef struct D9CCommandChunkWireQueryIssueV2 {
+    uint32_t queryHandleIndex;
+    uint32_t flags;
+} D9CCommandChunkWireQueryIssueV2;
+
+typedef struct D9CCommandChunkWireReadbackV2 {
+    uint32_t srcHandleIndex;
+    uint32_t dstHandleIndex;
+} D9CCommandChunkWireReadbackV2;
+
+typedef struct D9CCommandChunkWireReszDepthResolveV2 {
+    uint32_t msaaDepthHandleIndex;
+    uint32_t intzDestHandleIndex;
+} D9CCommandChunkWireReszDepthResolveV2;
+
 typedef struct D9CChunkHandleEntry {
     uint32_t kind;
     uint32_t reserved;
@@ -1243,6 +1542,9 @@ DXMT9_NODISCARD int32_t dxmt9c_factory_create_device2(D9CFactory*, uint32_t adap
 void     dxmt9c_device_addref(D9CDevice*);
 uint32_t dxmt9c_device_release(D9CDevice*);
 
+DXMT9_NODISCARD int32_t dxmt9c_device_negotiate_command_chunk(
+    D9CDevice*, D9CCommandChunkNegotiation*);
+
 DXMT9_NODISCARD int32_t  dxmt9c_device_get_caps(D9CDevice*, D9CCaps* out);
 DXMT9_NODISCARD int32_t  dxmt9c_device_test_cooperative_level(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_check_device_state(D9CDevice*, uint64_t destWindow);
@@ -1443,6 +1745,8 @@ DXMT9_NODISCARD int32_t  dxmt9c_swapchain_get_present_params(D9CSwapChain*, D9CP
 
 void     dxmt9c_texture_addref(D9CTexture*);
 uint32_t dxmt9c_texture_release(D9CTexture*);
+DXMT9_NODISCARD int32_t dxmt9c_texture_get_wire_identity(
+    D9CTexture*, D9CWireObjectIdentity* out);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_lock_rect(D9CTexture*, uint32_t level, D9CLockedRect* out,
                                    const D9CRect*, uint32_t flags);
 DXMT9_NODISCARD int32_t  dxmt9c_texture_unlock_rect(D9CTexture*, uint32_t level);
@@ -1461,6 +1765,8 @@ DXMT9_NODISCARD int32_t  dxmt9c_texture_set_palette(D9CTexture*,
 
 void     dxmt9c_buffer_addref(D9CBuffer*);
 uint32_t dxmt9c_buffer_release(D9CBuffer*);
+DXMT9_NODISCARD int32_t dxmt9c_buffer_get_wire_identity(
+    D9CBuffer*, D9CWireObjectIdentity* out);
 DXMT9_NODISCARD int32_t  dxmt9c_buffer_lock(D9CBuffer*, uint32_t offset, uint32_t size,
                              void** data, uint32_t flags);
 DXMT9_NODISCARD int32_t  dxmt9c_buffer_unlock(D9CBuffer*);
@@ -1470,6 +1776,8 @@ DXMT9_NODISCARD int32_t  dxmt9c_buffer_get_desc(D9CBuffer*, D9CBufferDesc*);
 
 void     dxmt9c_surface_addref(D9CSurface*);
 uint32_t dxmt9c_surface_release(D9CSurface*);
+DXMT9_NODISCARD int32_t dxmt9c_surface_get_wire_identity(
+    D9CSurface*, D9CWireObjectIdentity* out);
 DXMT9_NODISCARD int32_t  dxmt9c_surface_lock_rect(D9CSurface*, D9CLockedRect*, const D9CRect*, uint32_t flags);
 DXMT9_NODISCARD int32_t  dxmt9c_surface_unlock_rect(D9CSurface*);
 DXMT9_NODISCARD int32_t  dxmt9c_surface_get_desc(D9CSurface*, D9CSurfaceDesc*);
@@ -1479,17 +1787,23 @@ DXMT9_NODISCARD D9CTexture* dxmt9c_surface_get_container_texture(D9CSurface*);
 
 void     dxmt9c_shader_addref(D9CShader*);
 uint32_t dxmt9c_shader_release(D9CShader*);
+DXMT9_NODISCARD int32_t dxmt9c_shader_get_wire_identity(
+    D9CShader*, D9CWireObjectIdentity* out);
 DXMT9_NODISCARD int32_t  dxmt9c_shader_get_bytecode(D9CShader*, void* data, uint32_t* size);
 
 /* ── vertex declaration ──────────────────────────────────────────────────── */
 
 void     dxmt9c_vdecl_addref(D9CVertexDecl*);
 uint32_t dxmt9c_vdecl_release(D9CVertexDecl*);
+DXMT9_NODISCARD int32_t dxmt9c_vdecl_get_wire_identity(
+    D9CVertexDecl*, D9CWireObjectIdentity* out);
 
 /* ── query ───────────────────────────────────────────────────────────────── */
 
 void     dxmt9c_query_addref(D9CQuery*);
 uint32_t dxmt9c_query_release(D9CQuery*);
+DXMT9_NODISCARD int32_t dxmt9c_query_get_wire_identity(
+    D9CQuery*, D9CWireObjectIdentity* out);
 DXMT9_NODISCARD int32_t  dxmt9c_query_issue(D9CQuery*, uint32_t flags);
 DXMT9_NODISCARD int32_t  dxmt9c_query_get_data(D9CQuery*, void* data, uint32_t size, uint32_t flags);
 uint32_t dxmt9c_query_get_data_size(D9CQuery*);

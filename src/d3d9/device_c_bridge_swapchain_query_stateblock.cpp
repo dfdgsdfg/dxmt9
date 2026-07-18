@@ -76,6 +76,11 @@ extern "C" uint32_t dxmt9c_query_release(D9CQuery* arg0) {
   return dxmt9p_query_release(arg0);
 }
 
+extern "C" int32_t dxmt9c_query_get_wire_identity(
+    D9CQuery* arg0, D9CWireObjectIdentity* out) {
+  return dxmt9p_query_get_wire_identity(arg0, out);
+}
+
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* arg0, uint32_t flags) {
   return dxmt9p_query_issue(arg0, flags);
 }

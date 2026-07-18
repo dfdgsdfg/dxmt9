@@ -11,6 +11,12 @@ extern "C" uint32_t dxmt9c_device_release(D9CDevice* arg0) {
   return dxmt9p_device_release(arg0);
 }
 
+extern "C" int32_t dxmt9c_device_negotiate_command_chunk(
+    D9CDevice* arg0, D9CCommandChunkNegotiation* arg1) {
+  dxmt9::d3d9::drainDeferredReplay(arg0);
+  return dxmt9p_device_negotiate_command_chunk(arg0, arg1);
+}
+
 extern "C" int32_t dxmt9c_device_get_caps(D9CDevice* arg0, D9CCaps* out) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_get_caps(arg0, out);

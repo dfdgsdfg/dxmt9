@@ -498,3 +498,20 @@ unix_chunk_injection_probe = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
+
+# R-BACK-2.54 / R-BACK-2.56 command-chunk V2 replay/lifetime scaffolds.
+foreach spec : [
+  ['chunk-record-v2-replay', 'chunk_record_v2_replay_spec.cpp'],
+  ['chunk-record-v2-allocation', 'chunk_record_v2_allocation_spec.cpp'],
+  ['resource-hazard-v2', 'resource_hazard_v2_spec.cpp'],
+]
+  target = executable(
+    'dxmt9-' + spec[0] + '-spec',
+    spec[1],
+    include_directories: dxmt9_inc,
+    dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+    link_args: dxmt9_test_link_args,
+  )
+  test('dxmt9-' + spec[0] + '-spec', target,
+       env: dxmt9_native_test_env)
+endforeach

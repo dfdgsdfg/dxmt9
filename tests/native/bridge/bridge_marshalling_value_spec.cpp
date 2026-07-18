@@ -715,6 +715,41 @@ void testDecodeOpaqueRejectsMissingArgumentBlock() {
   check(!capture.seen, "null opaque args do not produce a capture");
 }
 
+void testCommandChunkV2GeneratedArgumentLayouts() {
+  checkPodArgShape<
+      dxmt9::bridge::Args_dxmt9c_device_negotiate_command_chunk>(
+      "native V2 negotiation args", 24u, 8u);
+  checkPodArgShape<
+      dxmt9::bridge::Args32_dxmt9c_device_negotiate_command_chunk>(
+      "wow64 V2 negotiation args", 12u, 4u);
+  checkPodArgShape<
+      dxmt9::bridge::Args_dxmt9c_texture_get_wire_identity>(
+      "native V2 texture identity args", 24u, 8u);
+  checkPodArgShape<
+      dxmt9::bridge::Args32_dxmt9c_texture_get_wire_identity>(
+      "wow64 V2 texture identity args", 12u, 4u);
+
+  D9CCommandChunkNegotiation negotiation{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
+                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
+  };
+  dxmt9::bridge::Args_dxmt9c_device_negotiate_command_chunk args{};
+  args.arg0 = reinterpret_cast<D9CDevice*>(std::uintptr_t{0x12340000u});
+  args.arg1 = &negotiation;
+  checkSamePtr(args.arg1, &negotiation,
+               "native V2 negotiation preserves POD pointer");
+
+  dxmt9::bridge::Args32_dxmt9c_texture_get_wire_identity wow64{};
+  wow64.arg0 = 0x01020304u;
+  wow64.out = 0x00abc000u;
+  checkSamePtr(dxmt9::util::marshal::wow64::decodePtr<
+                   D9CWireObjectIdentity*>(wow64.out),
+               reinterpret_cast<D9CWireObjectIdentity*>(
+                   std::uintptr_t{0x00abc000u}),
+               "wow64 V2 identity decodes output pointer value");
+}
+
 }  // namespace
 
 static_assert(std::is_standard_layout_v<
@@ -737,6 +772,7 @@ static_assert(offsetof(dxmt9::bridge::Args32_dxmt9c_device_commit_chunk, ret) ==
 int main() {
   try {
     testGeneratedArgumentStructLayouts();
+    testCommandChunkV2GeneratedArgumentLayouts();
     testDecodeOpaqueRejectsMissingArgumentBlock();
     testCommitChunkArgsPreservePointerAndWireValues();
     testRepresentativeGeneratedStateArgsPreserveValues();

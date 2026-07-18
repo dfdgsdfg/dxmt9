@@ -15,6 +15,11 @@ dxmt9_frontend_core_srcs = files(
 
 dxmt9_frontend_provider_srcs = files(
   'device_c_chunk_replay.cpp',
+  'device_c_chunk_v2_draw.cpp',
+  'device_c_chunk_v2_hazard.cpp',
+  'device_c_chunk_v2_nondraw.cpp',
+  'device_c_chunk_v2_registry.cpp',
+  'device_c_chunk_v2_validate.cpp',
   'device_c_draw.cpp',
   'device_c_factory.cpp',
   'device_c_format_utils.cpp',
@@ -39,6 +44,9 @@ dxmt9_frontend_bridge_srcs = files(
 )
 
 dxmt9_pe_core_srcs = files(
+  'd3d9_pe_chunk_v2_builder.cpp',
+  'd3d9_pe_chunk_v2_draw.cpp',
+  'd3d9_pe_chunk_v2_nondraw.cpp',
   'd3d9_pe_factory.cpp',
   'd3d9_pe_device.cpp',
   'd3d9_pe_device_child_buffer.cpp',
