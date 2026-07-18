@@ -2569,8 +2569,16 @@ void retainV2Wrapper(std::uint32_t kind, void* object) noexcept {
 class DeviceReplaySinkV2 final : public dxmt9::d3d9::NonDrawReplaySinkV2,
                                  public dxmt9::d3d9::SparseReplaySinkV2 {
 public:
-  DeviceReplaySinkV2(D9CDevice* device, bool pacedByPresentOrdinal)
-      : device_(device), pacedByPresentOrdinal_(pacedByPresentOrdinal) {}
+  DeviceReplaySinkV2(
+      D9CDevice* device, bool pacedByPresentOrdinal,
+      std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions)
+      : device_(device),
+        pacedByPresentOrdinal_(pacedByPresentOrdinal),
+        pendingDrawSubmissions_(pendingDrawSubmissions) {}
+
+  void setBatchCurrentDraw(bool value) noexcept {
+    batchCurrentDraw_ = value;
+  }
 
   std::int32_t setConstants(
       std::uint32_t type, const D9CCommandChunkWireSetConstV2& fixed,
@@ -2851,28 +2859,42 @@ public:
   }
 
   std::int32_t draw(const dxmt9::d3d9::SparseDrawCallV2& call) override {
-    const auto primitiveType =
-        static_cast<std::uint32_t>(call.param.primitiveType) + 1u;
     if (!call.payload.userIndexData.empty()) {
-      return dxmt9c_device_draw_indexed_primitive_up(
-          device_, primitiveType, call.minVertex, call.numVertices,
-          call.param.primitiveCount, call.payload.userIndexData.data(),
-          call.indexFormat, call.payload.userVertexData.data(), call.stride);
+      return device_->dev().drawIndexedPrimitiveUP(
+          call.param.primitiveType, call.param.primitiveCount,
+          call.payload.userVertexData, call.payload.userIndexData,
+          call.param.indexType, call.stride);
     }
     if (!call.payload.userVertexData.empty()) {
-      return dxmt9c_device_draw_primitive_up(
-          device_, primitiveType, call.param.primitiveCount,
-          call.payload.userVertexData.data(), call.stride);
+      return device_->dev().drawPrimitiveUP(
+          call.param.primitiveType, call.param.primitiveCount,
+          call.payload.userVertexData, call.stride);
     }
-    if (call.param.indexed) {
-      return dxmt9c_device_draw_indexed_primitive(
-          device_, primitiveType, call.param.baseVertexIndex, call.minVertex,
-          call.numVertices, call.param.startIndex,
-          call.param.primitiveCount);
+    auto draw = call.param;
+    if (draw.indexed) {
+      draw.indexType = device_->dev().state().indexType;
     }
-    return dxmt9c_device_draw_primitive(
-        device_, primitiveType, call.param.startVertex,
-        call.param.primitiveCount);
+    if (batchCurrentDraw_ && pendingDrawSubmissions_) {
+      const std::size_t previousIndex = pendingDrawSubmissions_->size();
+      auto& submission = pendingDrawSubmissions_->emplace_back();
+      const auto* previous =
+          previousIndex == 0u
+              ? nullptr
+              : &(*pendingDrawSubmissions_)[previousIndex - 1u];
+      const auto hr = device_->dev().snapshotDrawSubmissionFromCurrentState(
+          draw, submission, previous);
+      if (failed(hr)) {
+        pendingDrawSubmissions_->pop_back();
+      }
+      return hr;
+    }
+    if (draw.indexed) {
+      return device_->dev().drawIndexedPrimitive(
+          draw.primitiveType, draw.primitiveCount, 0,
+          draw.baseVertexIndex, draw.startIndex, draw.indexType);
+    }
+    return device_->dev().drawPrimitive(
+        draw.primitiveType, draw.primitiveCount, draw.startVertex);
   }
 
 private:
@@ -2906,7 +2928,22 @@ private:
 
   D9CDevice* device_ = nullptr;
   bool pacedByPresentOrdinal_ = false;
+  std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions_ = nullptr;
+  bool batchCurrentDraw_ = false;
 };
+
+bool v2RecordCanBatchDraw(
+    D9CDevice* device,
+    const dxmt9::d3d9::ImportedRecordV2View& record) noexcept {
+  if (!device || device->stateBlockRecording ||
+      (record.header.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
+       record.header.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)) {
+    return false;
+  }
+  return static_cast<dxmt9::core::PrimitiveType>(
+             record.drawHeader.primitiveType - 1u) !=
+         dxmt9::core::PrimitiveType::TriangleFan;
+}
 
 int32_t replayResolvedV2Chunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
@@ -2931,17 +2968,41 @@ int32_t replayResolvedV2Chunk(
       .wire = imported,
       .objects = raw.resolvedObjects,
   };
-  DeviceReplaySinkV2 sink(device, pacedByPresentOrdinal);
+  auto& replayScratch = replayScratchArena();
+  ScopedReplayScratchUse replayScratchUse(replayScratch);
+  auto& pendingDrawSubmissions = replayScratch.submissions;
+  pendingDrawSubmissions.reserve(
+      std::min<std::uint32_t>(raw.recordCount, 256u));
+  const auto flushPendingDrawSubmissions = [&]() {
+    if (pendingDrawSubmissions.empty()) {
+      return;
+    }
+    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
+        static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
+    device->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
+    pendingDrawSubmissions.clear();
+  };
+  DeviceReplaySinkV2 sink(
+      device, pacedByPresentOrdinal, &pendingDrawSubmissions);
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
     const auto record = resolved.record(index);
+    const bool batchableDraw = v2RecordCanBatchDraw(device, record.wire);
+    sink.setBatchCurrentDraw(batchableDraw);
+    if (!batchableDraw &&
+        !commitChunkRecordAllowsPendingDrawBatchThrough(
+            record.wire.header.type)) {
+      flushPendingDrawSubmissions();
+    }
     const auto hr = dxmt9::d3d9::isSparseRecordV2(record.wire.header.type)
                         ? dxmt9::d3d9::replaySparseRecordV2(record, sink)
                         : dxmt9::d3d9::replayNonDrawRecordV2(record, sink);
     if (failed(hr)) {
+      flushPendingDrawSubmissions();
       return commitChunkFail("v2-replay", static_cast<std::uint32_t>(index),
                              record.wire.header.type, hr);
     }
   }
+  flushPendingDrawSubmissions();
   dxmt9::perf::countChunkAdmit();
   return dxmt9::core::D3D_OK;
 }
