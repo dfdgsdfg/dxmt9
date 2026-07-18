@@ -97,4 +97,12 @@ V2ValidationResult validateCommandChunkV2(
     std::span<const std::byte> blob, const V2ChunkEnvelope& envelope,
     ImportedChunkV2View* out = nullptr) noexcept;
 
+// Rebuilds the span-only imported view in constant time after the exact,
+// immutable blob has already passed validateCommandChunkV2(). This performs
+// only the bounds/alignment checks needed to construct safe spans; it is not
+// a substitute for transactional admission validation.
+bool importPrevalidatedCommandChunkV2(
+    std::span<const std::byte> blob, const V2ChunkEnvelope& envelope,
+    ImportedChunkV2View& out) noexcept;
+
 }  // namespace dxmt9::d3d9

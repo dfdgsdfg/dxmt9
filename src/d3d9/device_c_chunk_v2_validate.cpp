@@ -1012,4 +1012,60 @@ V2ValidationResult validateCommandChunkV2(
   return validateCommandChunkV2(blob, envelope, out, scratch);
 }
 
+bool importPrevalidatedCommandChunkV2(
+    std::span<const std::byte> blob, const V2ChunkEnvelope& envelope,
+    ImportedChunkV2View& out) noexcept {
+  out = {};
+  D9CCommandChunkWireHeaderV2 header{};
+  if (!load(blob, 0u, header) ||
+      envelope.version != D9C_COMMAND_CHUNK_VERSION_V2 ||
+      header.version != envelope.version ||
+      header.recordCount != envelope.recordCount ||
+      header.handleCount != envelope.handleCount ||
+      header.recordHeaderSize != sizeof(D9CCommandChunkWireRecordHeaderV2) ||
+      header.handleEntrySize != sizeof(D9CCommandChunkWireHandleEntryV2)) {
+    return false;
+  }
+
+  std::uint64_t recordBytes = 0u;
+  std::uint64_t handleBytes = 0u;
+  if (!checkedMul(header.recordCount, header.recordHeaderSize, recordBytes) ||
+      !checkedMul(header.handleCount, header.handleEntrySize, handleBytes) ||
+      !rangeValid(blob.size(), header.recordTableOffset, recordBytes) ||
+      !rangeValid(blob.size(), header.handleTableOffset, handleBytes) ||
+      !rangeValid(blob.size(), header.payloadArenaOffset,
+                  header.payloadArenaSize) ||
+      (header.recordCount != 0u &&
+       !pointerAligned(blob.data(), header.recordTableOffset,
+                       alignof(D9CCommandChunkWireRecordHeaderV2))) ||
+      (header.handleCount != 0u &&
+       !pointerAligned(blob.data(), header.handleTableOffset,
+                       alignof(D9CCommandChunkWireHandleEntryV2)))) {
+    return false;
+  }
+
+  out = ImportedChunkV2View{
+      .header = header,
+      .records =
+          header.recordCount == 0u
+              ? std::span<const D9CCommandChunkWireRecordHeaderV2>{}
+              : std::span<const D9CCommandChunkWireRecordHeaderV2>{
+                    reinterpret_cast<
+                        const D9CCommandChunkWireRecordHeaderV2*>(
+                        blob.data() + header.recordTableOffset),
+                    header.recordCount},
+      .handles =
+          header.handleCount == 0u
+              ? std::span<const D9CCommandChunkWireHandleEntryV2>{}
+              : std::span<const D9CCommandChunkWireHandleEntryV2>{
+                    reinterpret_cast<
+                        const D9CCommandChunkWireHandleEntryV2*>(
+                        blob.data() + header.handleTableOffset),
+                    header.handleCount},
+      .payloadArena =
+          blob.subspan(header.payloadArenaOffset, header.payloadArenaSize),
+  };
+  return true;
+}
+
 }  // namespace dxmt9::d3d9

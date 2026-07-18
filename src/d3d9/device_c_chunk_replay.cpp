@@ -2920,13 +2920,11 @@ int32_t replayResolvedV2Chunk(
       .recordCount = raw.recordCount,
       .handleCount = raw.handleCount,
   };
-  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
-      bytes, envelope, &imported);
-  if (!validation.valid() ||
+  if (!raw.preflightValidated ||
+      !dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+          bytes, envelope, imported) ||
       raw.resolvedObjects.size() != imported.handles.size()) {
-    return commitChunkFail("v2-replay-validation",
-                           validation.failedRecordIndex,
-                           static_cast<std::uint32_t>(validation.status));
+    return commitChunkFail("v2-replay-preflight-view");
   }
 
   dxmt9::d3d9::ResolvedChunkV2View resolved{
@@ -3115,14 +3113,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     const auto ownedBytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
         raw.recordBlob.size());
-    const auto validation = dxmt9::d3d9::validateCommandChunkV2(
-        ownedBytes, envelope, &imported);
-    if (!validation.valid()) {
+    if (!raw.preflightValidated ||
+        !dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+            ownedBytes, envelope, imported)) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
       dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-owned-validation",
-                             validation.failedRecordIndex,
-                             static_cast<std::uint32_t>(validation.status));
+      return commitChunkFail("v2-owned-preflight-view");
     }
     markResolvedV2Resources(d, raw, imported);
     dxmt9::perf::countCommandChunkWire(

@@ -21,6 +21,7 @@ using dxmt9::d3d9::ImportedChunkV2View;
 using dxmt9::d3d9::V2ChunkEnvelope;
 using dxmt9::d3d9::V2ValidationScratch;
 using dxmt9::d3d9::V2ValidationStatus;
+using dxmt9::d3d9::importPrevalidatedCommandChunkV2;
 using dxmt9::d3d9::validateCommandChunkV2;
 
 struct TestFailure : std::runtime_error {
@@ -522,6 +523,42 @@ void testFailedValidationDoesNotPublishViewOrAllocatePerRecord() {
         "failed whole-chunk validation publishes no partial view");
 }
 
+void testPrevalidatedViewReconstruction() {
+  D9CCommandChunkWirePresentV2 present{};
+  const RecordSpec spec{
+      .type = D9C_COMMAND_RECORD_PRESENT,
+      .payload = bytesOf(present),
+  };
+  const auto fixture = makeChunk(spec);
+  ImportedChunkV2View validated;
+  ImportedChunkV2View reconstructed;
+  check(fixture.validate(&validated).valid(),
+        "prevalidated-view fixture validates");
+  check(importPrevalidatedCommandChunkV2(
+            fixture.bytes, fixture.envelope, reconstructed),
+        "validated immutable blob reconstructs a view");
+  check(reconstructed.records.data() == validated.records.data() &&
+            reconstructed.records.size() == validated.records.size() &&
+            reconstructed.handles.data() == validated.handles.data() &&
+            reconstructed.handles.size() == validated.handles.size() &&
+            reconstructed.payloadArena.data() == validated.payloadArena.data() &&
+            reconstructed.payloadArena.size() == validated.payloadArena.size(),
+        "reconstructed view aliases the same validated wire ranges");
+
+  auto wrongEnvelope = fixture.envelope;
+  ++wrongEnvelope.recordCount;
+  check(!importPrevalidatedCommandChunkV2(
+            fixture.bytes, wrongEnvelope, reconstructed) &&
+            reconstructed.empty(),
+        "outer count drift cannot reconstruct a prevalidated view");
+  check(!importPrevalidatedCommandChunkV2(
+            std::span<const std::byte>(fixture.bytes).first(
+                fixture.bytes.size() - 1u),
+            fixture.envelope, reconstructed) &&
+            reconstructed.empty(),
+        "truncated storage cannot reconstruct a prevalidated view");
+}
+
 struct RejectObservers {
   std::uint32_t registryRetains = 0u;
   std::uint32_t stateMutations = 0u;
@@ -724,6 +761,7 @@ int main() {
     testSparseSectionRejects();
     testConstantUpAndPaddingRejects();
     testFailedValidationDoesNotPublishViewOrAllocatePerRecord();
+    testPrevalidatedViewReconstruction();
     testTableAndSeededMalformedPropertyCorpus();
   } catch (const TestFailure& error) {
     std::cerr << "chunk_record_v2_validation_spec failed: " << error.what()
