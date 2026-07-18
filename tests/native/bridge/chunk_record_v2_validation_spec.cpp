@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -520,6 +522,197 @@ void testFailedValidationDoesNotPublishViewOrAllocatePerRecord() {
         "failed whole-chunk validation publishes no partial view");
 }
 
+struct RejectObservers {
+  std::uint32_t registryRetains = 0u;
+  std::uint32_t stateMutations = 0u;
+  std::uint32_t submissions = 0u;
+  std::uint32_t queryCallbacks = 0u;
+  std::uint32_t refcountChanges = 0u;
+
+  bool untouched() const noexcept {
+    return registryRetains == 0u && stateMutations == 0u &&
+           submissions == 0u && queryCallbacks == 0u &&
+           refcountChanges == 0u;
+  }
+};
+
+struct MutationCase {
+  std::string_view name;
+  V2ValidationStatus status;
+  std::function<void(ChunkFixture&)> mutate;
+};
+
+void expectRejectedWithoutSideEffects(const ChunkFixture& fixture,
+                                      const MutationCase& mutation,
+                                      std::uint32_t seed,
+                                      std::uint32_t ordinal) {
+  RejectObservers observers;
+  ImportedChunkV2View view;
+  const auto result = fixture.validate(&view);
+  if (result.valid()) {
+    ++observers.registryRetains;
+    ++observers.stateMutations;
+    ++observers.submissions;
+    ++observers.queryCallbacks;
+    ++observers.refcountChanges;
+  }
+  if (result.status != mutation.status || !observers.untouched() ||
+      !view.records.empty() || !view.handles.empty() ||
+      !view.payloadArena.empty()) {
+    throw TestFailure(
+        "mutation reject mismatch: seed=" + std::to_string(seed) +
+        " ordinal=" + std::to_string(ordinal) +
+        " case=" + std::string(mutation.name) +
+        " expected=" +
+        std::to_string(static_cast<std::uint32_t>(mutation.status)) +
+        " actual=" +
+        std::to_string(static_cast<std::uint32_t>(result.status)));
+  }
+}
+
+void testTableAndSeededMalformedPropertyCorpus() {
+  const D9CCommandChunkWireTextureBindingV2 texture{
+      .slot = 2u,
+      .valid = 1u,
+      .handleIndex = 0u,
+      .reserved0 = 0u,
+  };
+  const SectionSpec textureSection{
+      .kind = D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+      .count = 1u,
+      .bytes = bytesOf(texture),
+  };
+  const RecordSpec spec{
+      .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      .payload = makeDrawPayload(directDrawHeader(),
+                                 std::span(&textureSection, 1u)),
+      .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x700000001ull)},
+  };
+  const auto valid = makeChunk(spec);
+  check(valid.validate().valid(), "property corpus base chunk validates");
+
+  const auto drawAt = [](ChunkFixture& fixture)
+      -> D9CCommandChunkWireDrawHeaderV2& {
+    return at<D9CCommandChunkWireDrawHeaderV2>(
+        fixture.bytes,
+        fixture.header().payloadArenaOffset + fixture.record(0u).payloadOffset);
+  };
+  const auto descAt = [](ChunkFixture& fixture)
+      -> D9CCommandChunkWireSectionDescV2& {
+    return at<D9CCommandChunkWireSectionDescV2>(
+        fixture.bytes,
+        fixture.header().payloadArenaOffset + fixture.record(0u).payloadOffset +
+            sizeof(D9CCommandChunkWireDrawHeaderV2));
+  };
+  const auto textureAt = [](ChunkFixture& fixture)
+      -> D9CCommandChunkWireTextureBindingV2& {
+    const auto payloadStart = fixture.header().payloadArenaOffset +
+                              fixture.record(0u).payloadOffset;
+    const auto offset = at<D9CCommandChunkWireSectionDescV2>(
+                            fixture.bytes,
+                            payloadStart +
+                                sizeof(D9CCommandChunkWireDrawHeaderV2))
+                            .payloadOffset;
+    return at<D9CCommandChunkWireTextureBindingV2>(fixture.bytes,
+                                                   payloadStart + offset);
+  };
+
+  const std::array<MutationCase, 34> mutations = {{
+      {"outer-version", V2ValidationStatus::OuterVersionMismatch,
+       [](ChunkFixture& value) { value.envelope.version = 1u; }},
+      {"outer-record-count", V2ValidationStatus::OuterCountMismatch,
+       [](ChunkFixture& value) { ++value.envelope.recordCount; }},
+      {"outer-handle-count", V2ValidationStatus::OuterCountMismatch,
+       [](ChunkFixture& value) { ++value.envelope.handleCount; }},
+      {"wire-version", V2ValidationStatus::OuterVersionMismatch,
+       [](ChunkFixture& value) { value.header().version = 1u; }},
+      {"header-size", V2ValidationStatus::InvalidHeader,
+       [](ChunkFixture& value) { ++value.header().headerSize; }},
+      {"record-header-size", V2ValidationStatus::InvalidHeader,
+       [](ChunkFixture& value) { ++value.header().recordHeaderSize; }},
+      {"handle-entry-size", V2ValidationStatus::InvalidHeader,
+       [](ChunkFixture& value) { ++value.header().handleEntrySize; }},
+      {"record-table-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+       [](ChunkFixture& value) { value.header().recordTableOffset += 4u; }},
+      {"record-count-overflow", V2ValidationStatus::NonCanonicalChunkLayout,
+       [](ChunkFixture& value) {
+         value.header().recordCount = std::numeric_limits<std::uint32_t>::max();
+         value.envelope.recordCount = value.header().recordCount;
+       }},
+      {"handle-table-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+       [](ChunkFixture& value) { value.header().handleTableOffset += 4u; }},
+      {"payload-arena-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+       [](ChunkFixture& value) { value.header().payloadArenaOffset += 4u; }},
+      {"payload-arena-tail", V2ValidationStatus::NonCanonicalChunkLayout,
+       [](ChunkFixture& value) { ++value.header().payloadArenaSize; }},
+      {"header-reserved-0", V2ValidationStatus::NonZeroReserved,
+       [](ChunkFixture& value) { value.header().reserved0 = 1u; }},
+      {"header-reserved-1", V2ValidationStatus::NonZeroReserved,
+       [](ChunkFixture& value) { value.header().reserved1 = 1u; }},
+      {"record-type", V2ValidationStatus::InvalidRecordType,
+       [](ChunkFixture& value) { value.record(0u).type = 0u; }},
+      {"record-flags", V2ValidationStatus::InvalidRecordFlags,
+       [](ChunkFixture& value) { value.record(0u).flags = 1u; }},
+      {"record-payload-offset", V2ValidationStatus::NonCanonicalPayloadLayout,
+       [](ChunkFixture& value) { value.record(0u).payloadOffset = 4u; }},
+      {"record-payload-size", V2ValidationStatus::InvalidSectionRange,
+       [](ChunkFixture& value) { --value.record(0u).payloadSize; }},
+      {"record-first-handle", V2ValidationStatus::NonCanonicalHandleSlice,
+       [](ChunkFixture& value) { value.record(0u).firstHandle = 1u; }},
+      {"record-handle-count", V2ValidationStatus::InvalidHandleReference,
+       [](ChunkFixture& value) { value.record(0u).handleCount = 0u; }},
+      {"record-reserved-0", V2ValidationStatus::NonZeroReserved,
+       [](ChunkFixture& value) { value.record(0u).reserved0 = 1u; }},
+      {"record-reserved-1", V2ValidationStatus::NonZeroReserved,
+       [](ChunkFixture& value) { value.record(0u).reserved1 = 1u; }},
+      {"handle-kind", V2ValidationStatus::InvalidHandleEntry,
+       [](ChunkFixture& value) {
+         value.handle(0u).kind = D9C_CHUNK_HANDLE_KIND_QUERY + 1u;
+       }},
+      {"handle-generation", V2ValidationStatus::InvalidHandleEntry,
+       [](ChunkFixture& value) { value.handle(0u).generation = 0u; }},
+      {"handle-object-id", V2ValidationStatus::InvalidHandleEntry,
+       [](ChunkFixture& value) { value.handle(0u).objectId = 0u; }},
+      {"draw-reserved", V2ValidationStatus::InvalidDrawHeader,
+       [drawAt](ChunkFixture& value) { drawAt(value).reserved0 = 1u; }},
+      {"section-table-offset", V2ValidationStatus::InvalidSectionTable,
+       [drawAt](ChunkFixture& value) { ++drawAt(value).sectionTableOffset; }},
+      {"section-payload-offset", V2ValidationStatus::InvalidSectionTable,
+       [drawAt](ChunkFixture& value) { drawAt(value).sectionPayloadOffset += 4u; }},
+      {"descriptor-kind", V2ValidationStatus::InvalidSectionOrder,
+       [descAt](ChunkFixture& value) { descAt(value).kind = 0u; }},
+      {"descriptor-element-size", V2ValidationStatus::InvalidSectionSchema,
+       [descAt](ChunkFixture& value) { ++descAt(value).elementSize; }},
+      {"descriptor-count", V2ValidationStatus::InvalidSectionSchema,
+       [descAt](ChunkFixture& value) { descAt(value).count = 0u; }},
+      {"descriptor-offset", V2ValidationStatus::InvalidSectionRange,
+       [descAt](ChunkFixture& value) { descAt(value).payloadOffset += 4u; }},
+      {"texture-valid", V2ValidationStatus::InvalidSectionSchema,
+       [textureAt](ChunkFixture& value) { textureAt(value).valid = 2u; }},
+      {"texture-index", V2ValidationStatus::InvalidHandleReference,
+       [textureAt](ChunkFixture& value) { textureAt(value).handleIndex = 1u; }},
+  }};
+
+  constexpr std::uint32_t seed = 0xc2f34a91u;
+  std::uint32_t ordinal = 0u;
+  for (const auto& mutation : mutations) {
+    auto fixture = valid;
+    mutation.mutate(fixture);
+    expectRejectedWithoutSideEffects(fixture, mutation, seed, ordinal++);
+  }
+
+  std::uint32_t random = seed;
+  for (std::uint32_t i = 0u; i < 256u; ++i) {
+    random ^= random << 13u;
+    random ^= random >> 17u;
+    random ^= random << 5u;
+    const auto& mutation = mutations[random % mutations.size()];
+    auto fixture = valid;
+    mutation.mutate(fixture);
+    expectRejectedWithoutSideEffects(fixture, mutation, seed, ordinal++);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -531,6 +724,7 @@ int main() {
     testSparseSectionRejects();
     testConstantUpAndPaddingRejects();
     testFailedValidationDoesNotPublishViewOrAllocatePerRecord();
+    testTableAndSeededMalformedPropertyCorpus();
   } catch (const TestFailure& error) {
     std::cerr << "chunk_record_v2_validation_spec failed: " << error.what()
               << '\n';
