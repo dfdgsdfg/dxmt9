@@ -9516,7 +9516,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance,
-    core::Handle attachmentAliasTexture) {
+    core::Handle attachmentAliasTexture,
+    RenderPassStoreProofActivePass activePass) {
   using Proof = perf::RenderPassDepthStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -9538,6 +9539,12 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
   }
   using Kind = core::MetalCommandKind;
   bool sawPresent = false;
+  bool withinActivePass = activePass.hot != nullptr &&
+                          activePass.allowSameAttachmentContinuation;
+  const auto activePassKey =
+      activePass.hot ? makeAttachmentKey(*activePass.hot) : AttachmentKey{};
+  const auto activePassWriteHazard =
+      activePass.hot ? makeAttachmentHazard(*activePass.hot) : HazardProbe{};
   std::size_t logicalDistance = 0;
   for (const auto& source : sources) {
     if (!source.slot) {
@@ -9551,6 +9558,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     for (std::size_t i = firstCommandIndex; i < commandEndIndex; ++i) {
       ++logicalDistance;
       const auto next = slot.commandAt(i);
+      if (next.kind != Kind::DrawRun) {
+        withinActivePass = false;
+      }
       switch (next.kind) {
         case Kind::Clear:
           if (next.clear && next.clear->depthStencil.handle == depthHandle) {
@@ -9561,6 +9571,31 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
           break;
         case Kind::DrawRun:
           if (next.drawState.hot) {
+            const auto& hot = *next.drawState.hot;
+            const auto samplesDepth = [&]() {
+              const auto& textures = hot.textures;
+              const std::uint32_t mask = hot.textureMask;
+              for (std::size_t s = 0; s < textures.size(); ++s) {
+                if ((mask & (1u << s)) == 0) continue;
+                if (textures[s] == depthHandle ||
+                    (attachmentAliasTexture &&
+                     textures[s] == attachmentAliasTexture)) {
+                  return true;
+                }
+              }
+              return false;
+            };
+            if (withinActivePass) {
+              const bool sameAttachments = makeAttachmentKey(hot) == activePassKey;
+              const bool exactHazard = activePassWriteHazard.exactOverlaps(
+                  makeDrawReadHazard(next.drawState));
+              if (sameAttachments && !exactHazard && !samplesDepth()) {
+                // This record extends the encoder whose Store action we are
+                // deciding. It is not a live-out depth use.
+                break;
+              }
+              withinActivePass = false;
+            }
             if (next.drawState.hot->depthStencil.handle == depthHandle) {
               // Depth is read by a subsequent draw — must Store.
               return finish(Proof::BlockDrawDepth, logicalDistance);
@@ -9569,15 +9604,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
             // active texture bindings and bail if any matches the depth
             // handle (the depth surface is sampled as a texture by this
             // later draw, so its tile contents must be preserved).
-            const auto& textures = next.drawState.hot->textures;
-            const std::uint32_t mask = next.drawState.hot->textureMask;
-            for (std::size_t s = 0; s < textures.size(); ++s) {
-              if ((mask & (1u << s)) == 0) continue;
-              if (textures[s] == depthHandle ||
-                  (attachmentAliasTexture &&
-                   textures[s] == attachmentAliasTexture)) {
-                return finish(Proof::BlockShadowSample, logicalDistance);
-              }
+            if (samplesDepth()) {
+              return finish(Proof::BlockShadowSample, logicalDistance);
             }
           }
           break;
@@ -9657,7 +9685,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::size_t startCommandIndex,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance,
-    core::Handle attachmentAliasTexture) {
+    core::Handle attachmentAliasTexture,
+    RenderPassStoreProofActivePass activePass) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -9671,7 +9700,8 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
       depthHandle,
       firstTouchCommandDistance,
-      attachmentAliasTexture);
+      attachmentAliasTexture,
+      activePass);
 }
 
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -9687,7 +9717,8 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance,
-    core::Handle attachmentAliasTexture) {
+    core::Handle attachmentAliasTexture,
+    RenderPassStoreProofActivePass activePass) {
   using Proof = perf::RenderPassColorStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -9709,6 +9740,12 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
   }
   using Kind = core::MetalCommandKind;
   bool sawPresent = false;
+  bool withinActivePass = activePass.hot != nullptr &&
+                          activePass.allowSameAttachmentContinuation;
+  const auto activePassKey =
+      activePass.hot ? makeAttachmentKey(*activePass.hot) : AttachmentKey{};
+  const auto activePassWriteHazard =
+      activePass.hot ? makeAttachmentHazard(*activePass.hot) : HazardProbe{};
   std::size_t logicalDistance = 0;
   for (const auto& source : sources) {
     if (!source.slot) {
@@ -9722,6 +9759,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     for (std::size_t i = firstCommandIndex; i < commandEndIndex; ++i) {
       ++logicalDistance;
       const auto next = slot.commandAt(i);
+      if (next.kind != Kind::DrawRun) {
+        withinActivePass = false;
+      }
       switch (next.kind) {
         case Kind::Clear:
           if (next.clear && next.clear->clearColor) {
@@ -9735,20 +9775,37 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
         case Kind::DrawRun:
           if (next.drawState.hot) {
             const auto& hot = *next.drawState.hot;
+            const auto samplesColor = [&]() {
+              const auto& textures = hot.textures;
+              const std::uint32_t mask = hot.textureMask;
+              for (std::size_t s = 0; s < textures.size(); ++s) {
+                if ((mask & (1u << s)) == 0) continue;
+                if (textures[s] == colorHandle ||
+                    (attachmentAliasTexture &&
+                     textures[s] == attachmentAliasTexture)) {
+                  return true;
+                }
+              }
+              return false;
+            };
+            if (withinActivePass) {
+              const bool sameAttachments = makeAttachmentKey(hot) == activePassKey;
+              const bool exactHazard = activePassWriteHazard.exactOverlaps(
+                  makeDrawReadHazard(next.drawState));
+              if (sameAttachments && !exactHazard && !samplesColor()) {
+                // Same-pass draws consume neither system memory nor a later
+                // Load, so they cannot block a following next-clear proof.
+                break;
+              }
+              withinActivePass = false;
+            }
             for (const auto& attachment : hot.colorAttachments) {
               if (attachment.handle == colorHandle) {
                 return finish(Proof::BlockDrawTarget, logicalDistance);
               }
             }
-            const auto& textures = hot.textures;
-            const std::uint32_t mask = hot.textureMask;
-            for (std::size_t s = 0; s < textures.size(); ++s) {
-              if ((mask & (1u << s)) == 0) continue;
-              if (textures[s] == colorHandle ||
-                  (attachmentAliasTexture &&
-                   textures[s] == attachmentAliasTexture)) {
-                return finish(Proof::BlockTextureSample, logicalDistance);
-              }
+            if (samplesColor()) {
+              return finish(Proof::BlockTextureSample, logicalDistance);
             }
           }
           break;
@@ -9807,7 +9864,8 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::size_t startCommandIndex,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance,
-    core::Handle attachmentAliasTexture) {
+    core::Handle attachmentAliasTexture,
+    RenderPassStoreProofActivePass activePass) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -9821,7 +9879,8 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       std::span<const RenderPassStoreProofLookaheadSource>(&source, 1u),
       colorHandle,
       firstTouchCommandDistance,
-      attachmentAliasTexture);
+      attachmentAliasTexture,
+      activePass);
 }
 
 bool nextColorOperationIsClear(const core::ChunkSlot& slot,
@@ -9834,7 +9893,8 @@ bool nextColorOperationIsClear(const core::ChunkSlot& slot,
 RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
     EncodeContext& ctx,
     std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
-    const core::FlatDrawStateRecord& hot) {
+    const core::FlatDrawStateRecord& hot,
+    RenderPassStoreProofActivePass activePass) {
   RenderPassStoreProofSummary summary{};
   auto* colorSurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   const bool colorIncluded =
@@ -9846,7 +9906,8 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
               lookaheadSources,
               hot.colorAttachments[0].handle,
               &summary.colorTouchDistance,
-              colorSurface->aliasTexture)
+              colorSurface->aliasTexture,
+              activePass)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (colorSurface->resolveTexture &&
         (summary.color == perf::RenderPassColorStoreProof::AllowNextClear ||
@@ -9862,7 +9923,8 @@ RenderPassStoreProofSummary renderPassStoreProofSummaryForLookahead(
               lookaheadSources,
               hot.depthStencil.handle,
               &summary.depthTouchDistance,
-              depthSurface->aliasTexture)
+              depthSurface->aliasTexture,
+              activePass)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
     if (depthSurface->resolveTexture &&
         (summary.depth == perf::RenderPassDepthStoreProof::AllowNextClear ||
@@ -9879,6 +9941,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     core::FlatDrawStateView drawState,
     const std::optional<ClearDesc>& clear,
     std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources,
+    RenderPassStoreProofActivePass activePass,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
     WMT::Buffer visibilityBuffer,
     RenderPassActionSummary* actionSummary) {
@@ -9937,7 +10000,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
         ? colorStoreProofForLookahead(lookaheadSources,
                                       hot.colorAttachments[i].handle,
                                       nullptr,
-                                      surface->aliasTexture)
+                                      surface->aliasTexture,
+                                      activePass)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (surface->resolveTexture &&
         (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
@@ -9983,9 +10047,10 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
     auto depthStoreProof = !lookaheadSources.empty()
         ? depthStoreProofForLookahead(lookaheadSources,
-                                      hot.depthStencil.handle,
-                                      nullptr,
-                                      depthSurface->aliasTexture)
+            hot.depthStencil.handle,
+            nullptr,
+            depthSurface->aliasTexture,
+            activePass)
         : perf::RenderPassDepthStoreProof::BlockNoLookahead;
     if (hasResolveTarget &&
         (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
@@ -10238,7 +10303,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   }
   return beginRenderPassWithStoreProofLookahead(
       ctx, commandBuffer, drawState, clear, lookaheadSources,
-      sampleBufferAttachments, visibilityBuffer, actionSummary);
+      RenderPassStoreProofActivePass{}, sampleBufferAttachments,
+      visibilityBuffer, actionSummary);
 }
 
 std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
@@ -13501,9 +13567,11 @@ bool encodeDraw(EncodeContext& ctx,
           reverseTriangleProbeScopeMatches &&
           applyProbeCacheOptCandidateSafetyEligible;
       const bool stableOriginalIndexBufferForCandidate =
-          pv.userIndexData.empty() && indexBufferRecord &&
-          indexBufferRecord->buffer &&
-          !indexSnapshot;
+          isStableIndexCacheSource(
+              pv.userIndexData.empty(),
+              indexBufferRecord != nullptr,
+              indexBufferRecord && static_cast<bool>(indexBufferRecord->buffer),
+              indexSnapshot);
       const bool reverseTriangleClassEligibleNoSpan =
           indexedTriangleClassMatches(
               debug::probeReverseIndexedTrianglesClassFilter(),
@@ -13532,6 +13600,8 @@ bool encodeDraw(EncodeContext& ctx,
           productionCacheOptCandidatePreEligible;
       resources::ReorderedIndexBufferCacheKey cacheOptReorderKey{};
       if (stableOriginalIndexBufferForCandidate) {
+        cacheOptReorderKey.sourceRevision =
+            indexSnapshot ? indexSnapshot->contentRevision : 0u;
         cacheOptReorderKey.startIndex = originalIndexReuseStartIndex;
         cacheOptReorderKey.indexCount = vertexCount;
         cacheOptReorderKey.indexType = pv.indexType;
@@ -15222,10 +15292,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const std::span<const RenderPassStoreProofLookaheadSource>
         storeProofLookaheadSources(storeProofLookaheadStorage.data(),
                                    storeProofLookaheadCount);
+    // Portable passes can extend across consecutive compatible DrawRun
+    // records. Let the store proof skip that same-pass prefix so it reasons
+    // about the first use after the encoder actually closes. Tile-FFP can
+    // resplit on a later eligibility change, so it keeps the conservative
+    // one-record proof until that path has an equivalent suffix classifier.
+    const auto tileFfpSelection =
+        dxmt9::pipeline::selectTileFfpForPass(drawState,
+                                               ctx.pool.supportsApple3());
+    const RenderPassStoreProofActivePass storeProofActivePass{
+        .hot = drawState.hot,
+        .allowSameAttachmentContinuation =
+            tileFfpSelection.decision !=
+            dxmt9::pipeline::TileFfpDecision::Tile,
+    };
     RenderPassActionSummary renderPassActions{};
     activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
         ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
-        sampleAttachment.span(), visibilityBuffer, &renderPassActions);
+        storeProofActivePass, sampleAttachment.span(), visibilityBuffer,
+        &renderPassActions);
     traceRenderPassProgress(activeRenderEncoder
                                 ? "after-begin-render-pass-ok"
                                 : "after-begin-render-pass-null",
@@ -15236,7 +15321,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     if (hasActiveRender) {
       const auto storeProof = renderPassStoreProofSummaryForLookahead(
-          ctx, storeProofLookaheadSources, *drawState.hot);
+          ctx, storeProofLookaheadSources, *drawState.hot,
+          storeProofActivePass);
       renderPassFrameTracker.noteStart(
           makeRenderPassFrameKey(*drawState.hot),
           estimateRenderPassAttachmentFootprintBytes(ctx, *drawState.hot),
@@ -15269,9 +15355,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // fallback. R-BACK-13.5: gpu_family is recorded but only via the
     // dedicated tileFfpFallbackGpuFamily counter, not the pass count.
     {
-      const auto selection =
-          dxmt9::pipeline::selectTileFfpForPass(drawState, ctx.pool.supportsApple3());
-      activePassUsesTileFfp = selection.decision == dxmt9::pipeline::TileFfpDecision::Tile;
+      const auto& selection = tileFfpSelection;
+      activePassUsesTileFfp =
+          selection.decision == dxmt9::pipeline::TileFfpDecision::Tile;
       if (activePassUsesTileFfp) {
         perf::countTileFfpPass();
       } else {

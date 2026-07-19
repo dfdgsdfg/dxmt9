@@ -163,9 +163,11 @@ thread is the sole writer and reader.
 
 ## 4. Live-Out Proof Look-Ahead
 
-For `R-BACK-15.7` / `R-BACK-15.8`, at `flushRender` time the encode
-thread inspects the remaining records in the current chunk to decide
-whether the attachment about to be unbound is live-out.
+For `R-BACK-15.7` / `R-BACK-15.8`, the encode thread inspects the records
+after the pass-opening draw to decide whether the attachment about to be
+unbound is live-out. An implementation may evaluate this when the pass opens
+or at `flushRender`, but a pass-open proof must first skip the DrawRun prefix
+that the encoder will keep inside that same Metal render pass.
 
 ```mermaid
 flowchart TD
@@ -212,6 +214,24 @@ A simpler-and-conservative shortcut for depth/stencil:
 This shortcut is `R-BACK-15.7` minus the "next op is a copy" branch; it
 catches the most common SFIV pattern (per-pass scene depth, cleared at
 next pass start) without requiring a copy-record walk.
+
+### 4.3 Same-pass DrawRun prefix
+
+A DrawRun that follows the pass-opening DrawRun is not a live-out use when all
+of the following hold:
+
+- its complete color/depth/sample attachment key matches the pass-opening key;
+- its read set has no exact overlap with the active attachment write set; and
+- the selected encoder route cannot require a mid-pass split.
+
+The proof skips such records and continues to the first operation after the
+logical pass. A texture sample of the attachment or its texture alias remains
+a live read and forces `Store`. Attachment changes and helper operations end
+the same-pass prefix. The tile-FFP route stays conservative because a later
+eligibility transition can split an otherwise matching attachment sequence.
+This distinction prevents ordinary same-pass DrawRuns from hiding a following
+Clear and turning every pass into a false `BlockDrawTarget` /
+`BlockDrawDepth` result.
 
 ---
 

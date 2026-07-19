@@ -235,6 +235,16 @@ struct RenderPassStoreProofLookaheadSource {
   std::size_t commandEndIndex = std::numeric_limits<std::size_t>::max();
 };
 
+// Optional context for pass-opening store proofs. Consecutive DrawRun records
+// with the same attachment key are still part of the encoder being opened, so
+// they are not a later use that requires a tile Store. The encoder supplies
+// this context only when the portable path guarantees that such draws can
+// remain in one pass; public fixtures and conservative callers may omit it.
+struct RenderPassStoreProofActivePass {
+  const core::FlatDrawStateRecord* hot = nullptr;
+  bool allowSameAttachmentContinuation = false;
+};
+
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     EncodeContext& ctx,
     WMT::CommandBuffer& commandBuffer,
@@ -266,12 +276,14 @@ dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::size_t startCommandIndex,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
-    core::Handle attachmentAliasTexture = {});
+    core::Handle attachmentAliasTexture = {},
+    RenderPassStoreProofActivePass activePass = {});
 dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
-    core::Handle attachmentAliasTexture = {});
+    core::Handle attachmentAliasTexture = {},
+    RenderPassStoreProofActivePass activePass = {});
 
 // Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -292,12 +304,14 @@ dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::size_t startCommandIndex,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
-    core::Handle attachmentAliasTexture = {});
+    core::Handle attachmentAliasTexture = {},
+    RenderPassStoreProofActivePass activePass = {});
 dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
-    core::Handle attachmentAliasTexture = {});
+    core::Handle attachmentAliasTexture = {},
+    RenderPassStoreProofActivePass activePass = {});
 
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is

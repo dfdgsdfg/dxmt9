@@ -2099,6 +2099,55 @@ void testOpaqueDepthIndexOrderOptimizationPredicateIsStrict() {
         "clip planes reject opaque-depth index-order optimization");
 }
 
+void testVersionedIndexSnapshotIsStableCacheSource() {
+  using dxmt9::core::DrawBufferBindingSnapshot;
+
+  check(dxmt9::encoders::isStableIndexCacheSource(
+            /*userIndexDataEmpty=*/true,
+            /*sourceRecordExists=*/true,
+            /*sourceRecordHasBuffer=*/true,
+            /*snapshot=*/nullptr),
+        "non-versioned bound index buffer is a stable cache source");
+
+  DrawBufferBindingSnapshot snapshot{
+      .metalHandle = 0x7001u,
+      .contentsAddress = 0x8000u,
+      .byteSize = 4096u,
+      .contentRevision = 9u,
+  };
+  check(dxmt9::encoders::isStableIndexCacheSource(
+            /*userIndexDataEmpty=*/true,
+            /*sourceRecordExists=*/true,
+            /*sourceRecordHasBuffer=*/false,
+            &snapshot),
+        "versioned snapshot pins an immutable cache source revision");
+
+  check(!dxmt9::encoders::isStableIndexCacheSource(
+             /*userIndexDataEmpty=*/false,
+             /*sourceRecordExists=*/true,
+             /*sourceRecordHasBuffer=*/true,
+             &snapshot),
+        "UP index data never aliases the logical-buffer cache");
+
+  auto missingBytes = snapshot;
+  missingBytes.contentsAddress = 0u;
+  check(!dxmt9::encoders::isStableIndexCacheSource(
+             /*userIndexDataEmpty=*/true,
+             /*sourceRecordExists=*/true,
+             /*sourceRecordHasBuffer=*/true,
+             &missingBytes),
+        "versioned snapshot without readable bytes cannot build a candidate");
+
+  auto missingRevision = snapshot;
+  missingRevision.contentRevision = 0u;
+  check(!dxmt9::encoders::isStableIndexCacheSource(
+             /*userIndexDataEmpty=*/true,
+             /*sourceRecordExists=*/true,
+             /*sourceRecordHasBuffer=*/true,
+             &missingRevision),
+        "versioned snapshot without revision cannot key derived bytes");
+}
+
 void testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes() {
   constexpr std::size_t kStream0Base = 24u;
   constexpr std::size_t kStream0Stride = 12u;
@@ -2976,6 +3025,7 @@ int main() {
     testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
     testScreenBlendIndexOrderOptimizationPredicateIsStrict();
     testOpaqueDepthIndexOrderOptimizationPredicateIsStrict();
+    testVersionedIndexSnapshotIsStableCacheSource();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();
     testProgrammableDrawFvfAndDeclTransitionsDoNotReuseLayout();

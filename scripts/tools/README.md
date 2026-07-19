@@ -103,6 +103,15 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   add depth-only/textured/color route verdicts without per-draw indexed probe
   logging. Pass `--indexed-probe-draws <3dmark05-perf-indexed-probe-draws.csv>`
   only when that CSV contains draw rows and per-draw route detail is needed.
+- `summarize_gt2_present_gpu_latency.py` — join phase-aligned GT2
+  `metal-application`, `metal-gpu-intervals`, `metal-driver-intervals`, and
+  `core-animation-commits` xctrace exports. It partitions each Core Animation
+  present request to its target present command-buffer GPU start into current
+  frame predecessor work, prior-present tail, all dxmt9 GPU activity,
+  external-only GPU activity, global GPU idle, and driver/submission CPU time.
+  Use it to decide whether a long present interval is queued application GPU
+  work or an actual publication, driver-scheduling, compositor, or drawable
+  bubble before changing command-buffer streaming.
 - `summarize_xctrace_cpu_threads.py` — parse xctrace `time-profile` plus
   optional `time-sample` / `thread-info` XML and summarize target-process
   thread state, top sampled stacks, xctrace `tid`, main-thread status, and

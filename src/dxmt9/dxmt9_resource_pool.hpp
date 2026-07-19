@@ -508,8 +508,10 @@ struct Pool {
   // Look up or create immutable Metal index buffers containing reordered index
   // bytes derived from a stable source buffer. Entries are keyed by source
   // buffer content revision + draw span and are retained on the source
-  // BufferRecord. Caller holds the queue mutex; stale entries are pruned only
-  // when their last use has completed.
+  // BufferRecord. A zero key revision resolves to the record's current
+  // revision; a draw-binding snapshot passes its explicit historical revision.
+  // Caller holds the queue mutex; stale entries are pruned only when their
+  // last use has completed.
   //
   // findReorderedIndexBuffer is hit-only; it never builds candidate bytes or
   // allocates a Metal buffer.

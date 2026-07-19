@@ -5,13 +5,22 @@ title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-19
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
 
 ## Current Result
+
+The latest post-policy stack combines V2 MANAGED backing versioning, the
+restored version-aware opaque-depth index cache, direct constant-buffer
+binding, and the pass-aware Store proof. Two full runs complete normally with
+zero GPU errors at `8.122-8.178` sampled FPS (median `8.150`), wall p50
+`105.276-106.883ms`, wall p95 `160.758-163.473ms`, and GPU-CB p50
+`23.248-23.319ms`. The older three-run table below remains the promotion
+baseline for MANAGED versioning plus the incremental snapshot index; the later
+sections record each post-promotion addition and its isolated evidence.
 
 Three completed current-runtime runs used the V2-only command wire with
 MANAGED buffer backing versioning and the default incremental shader-constant
@@ -82,12 +91,15 @@ layer therefore has little remaining direct leverage.
 The encode lane instead spends about `115.5ms/present` end to end. Its largest
 serialized components are drawable acquisition (`72.7ms/present`) and draw
 encoding (`36.9ms/present`), including argument-buffer setup
-(`15.6ms/present`). Two opt-in scouts separate local CPU cost from the current
-wall-time owner:
+(`15.6ms/present`). The acquisition counter identifies the CPU wait site, not
+its upstream owner: the phase-aligned partition below attributes that wait to
+the already-queued predecessor GPU chain rather than compositor cadence or
+drawable-pool bookkeeping. Two opt-in scouts separate local CPU cost from the
+current wall-time owner:
 
 | Scout | Local effect | Sampled FPS | Verdict |
 |---|---|---:|---|
-| `DXMT9_ARGBUF_DIRECT_CBUF=1` | draw encode `37.6 -> 25.6ms/present`; argbuf setup becomes zero; drawable acquire rises `72.7 -> 87.5ms/present` | `7.699` | Large local encode win, but `-1.45%` FPS; do not promote. |
+| `DXMT9_ARGBUF_DIRECT_CBUF=1` | draw encode `37.6 -> 25.6ms/present`; argbuf setup becomes zero; drawable acquire rises `72.7 -> 87.5ms/present` | `7.699` | Historical pre-latency-policy result; the current-policy remeasurement below supersedes its FPS verdict. |
 | `DXMT9_PRESENT_PREACQUIRE=1` | `522/523` pre-acquire hits; encode lane remains `116.7ms/present` | `7.792` | `-0.26%` versus the default median; moving acquire to a worker does not shorten the critical path. |
 
 A 20-second Metal System Trace covers seq `197..341` and joins all
@@ -188,31 +200,101 @@ same pure resolver, so offload does not change the policy. The public
 maximum-frame-latency value remains four; the scheduler is allowed to keep
 fewer than that maximum incomplete.
 
-This also explains both negative scouts. Direct constant-buffer binding reaches
-the same saturated pool sooner, converting most of the draw-encode reduction
-into a longer acquire wait. Pre-acquire moves the wait to another thread but
-cannot make the `N-2` completion release the pool earlier. The GT1 residual is
-different: its current acquire wait was about `0.1ms/present`, while its
-remaining wall was attributed to the app's Rosetta guest CPU and Wine thunking
+#### Latency-One GPU Partition and Current-Stack Remeasurement
+
+The latency-one System Trace was reprocessed with
+`scripts/tools/summarize_gt2_present_gpu_latency.py`. It joins `148/149`
+CoreAnimation present requests to the target present command buffer, uses
+unions rather than adding overlapping Vertex/Fragment channels, and identifies
+exactly three current-frame predecessor command buffers for every phase-complete
+row.
+
+| Request → present-CB GPU-start component | mean | p50 | p95 |
+|---|---:|---:|---:|
+| total interval | `92.976ms` | `94.899ms` | `121.572ms` |
+| current-frame predecessor sub-CB busy | `83.763ms` | `84.938ms` | `98.473ms` |
+| prior-present CB tail | `11.925ms` | `13.663ms` | `22.952ms` |
+| all dxmt9 application GPU active | `92.610ms` | `94.765ms` | `120.291ms` |
+| external-only GPU active | `0.108ms` | `0.012ms` | `0.711ms` |
+| global GPU idle | `0.258ms` | `0.113ms` | `1.502ms` |
+| Metal driver command-buffer CPU interval | `0.296ms` | `0.266ms` | `0.486ms` |
+
+The prior-present tail and current-frame predecessor views overlap and are not
+additive. The additive result is application GPU active + external-only active
++ global idle: dxmt9 GPU work occupies `99.61%` of the request interval. The
+CA request occurs only `0.389ms` after command-buffer submission ends at p50,
+while GPU submission mapping precedes target GPU start by about `95ms` at p50.
+This is resident queued GPU work, not a missing enqueue, driver CPU interval,
+compositor cadence, or drawable-acquire bubble. Advancing publication cannot
+remove more than the roughly `0.26ms` mean global-idle remainder in this phase.
+
+Removing the old four-frame drawable saturation also changes the direct-cbuf
+result. Two current-policy control runs produce `7.794-7.843` FPS (median
+`7.819`); two direct-cbuf runs produce `7.925-8.021` FPS (median `7.973`,
+`+1.98%`) while draw-encode CPU falls by about one third. This is a modest
+current-policy gain, not yet a cross-workload default-promotion proof.
+
+The V2 MANAGED backing work exposed a separate regression in the already
+default opaque-depth index-cache lane: every draw now carries a concrete
+`DrawBufferBindingSnapshot`, but the old stability gate accepted only draws
+without that snapshot. Consequently the new-policy controls showed zero cache
+activity. Keying the reordered result by the snapshot's explicit
+`contentRevision`, while keeping the backing pinned by its draw sequence,
+restores the version-safe path. The GT2 index-only run reaches `8.014` FPS with
+`192,403` hits; the direct-cbuf stack reaches `8.163` FPS with `195,468` hits
+and only `37` reordered buffers created. The previously captured Xcode proof
+establishes that this exact locality mechanism reduces target-row VS
+invocations by `14.12%`; a fresh GT2 Xcode counter capture remains desirable,
+but the current runtime evidence proves that V2 no longer disables the lane.
+
+Finally, the render-pass Store proof was found to treat later DrawRuns inside
+the same Metal pass as live-out reads. The corrected portable-path proof skips
+only same-attachment, exact-hazard-free DrawRuns; texture aliases, attachment
+changes, helper operations, and tile-FFP stay conservative. Two full GT2 runs
+are visually normal with zero GPU errors and produce:
+
+| Metric | Before correction | Corrected range | Change |
+|---|---:|---:|---:|
+| depth next-clear proofs / run | `14` | `3,720-3,748` | proof now reaches the logical pass boundary |
+| color next-clear proofs / run | `0` | `13` | small; most color live-out remains sampled/presented |
+| tile preservation / present | `229.65MiB` | `121.15MiB` | `-47.25%` |
+| sampled FPS | `8.163` | `8.122-8.178` (median `8.150`) | neutral (`-0.16%` median) |
+
+The stable traffic reduction without a throughput response rejects
+attachment Store bandwidth as the current first-order average-FPS owner.
+Residual color proofs are dominated by texture sampling (`~72%`), while the
+remaining request interval is still almost entirely earlier application GPU
+execution. The next GPU work should therefore target vertex/tiler volume beyond
+the restored opaque-depth cache, not more producer streaming. Pre-acquire also
+remains a relocation-only result: it moves the wait to another thread but
+cannot shorten the predecessor GPU chain.
+
+The GT1 residual is different: its current acquire wait was about
+`0.1ms/present`, while its remaining wall was attributed to the app's Rosetta
+guest CPU and Wine thunking
 ([GT1 frame sampling](present-pacing/present-pacing-frame-sampling-current.39.md),
 [GT1 producer attribution](present-pacing/present-pacing-postcache-resample.199.md)).
 
-GPU work is still a secondary optimization axis. The normal-run median is
-about `28.3ms` of GPU command-buffer time, `17.76` passes, and `232.6MiB` of
-tile preservation per present. In the aligned trace, Metal stage attribution
-is `93.53%` vertex and the largest groups are opaque-depth indexed (`65.15%`)
-and alpha-blend indexed (`22.64%`). These stage sums are attribution totals,
-not additive frame-wall time, but they prioritize vertex volume and
-RT/clear-driven pass traffic over fragment shading.
+The phase-aligned result promotes GPU execution to the primary residual axis.
+The earlier normal-run median was about `28.3ms` of GPU command-buffer time,
+`17.76` passes, and `232.6MiB` of tile preservation per present. In the aligned
+trace, Metal stage attribution is `93.53%` vertex and the largest groups are
+opaque-depth indexed (`65.15%`) and alpha-blend indexed (`22.64%`). These stage
+sums are attribution totals, not additive frame-wall time, but they prioritize
+vertex volume and RT/clear-driven pass traffic over fragment shading.
 
 The practical order after the Immediate-default policy is:
 
-1. Reduce the remaining current-frame request-to-GPU interval by reducing GPU
-   vertex volume and RT/clear pass preservation without adding
-   command-buffer or tile-flush churn.
-2. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
+1. Reduce current-frame vertex/tiler volume beyond the restored opaque-depth
+   index-cache path. Require an Xcode VS-invocation/hidden-write counter gate;
+   the request partition leaves almost no idle scheduling bubble to optimize.
+2. Treat the remaining `121MiB/present` tile preservation as a secondary axis.
+   Color is mostly blocked by real texture sampling/presentation, so any next
+   reduction needs a cross-pass lifetime or coalescing proof rather than a
+   broader DontCare heuristic.
+3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
-3. Treat acquire relocation and compositor-cadence tuning as diagnostics, not
+4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not
    throughput candidates, unless a new trace shows the `~0.2ms` retirement
    tail or physical display cadence has become the binding stage.
 

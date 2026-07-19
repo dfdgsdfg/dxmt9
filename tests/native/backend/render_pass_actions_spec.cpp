@@ -391,6 +391,64 @@ void testColorDontCareStoreOnNextClear() {
           "R-BACK-15.8 color dead-at-end broadening is opt-in only");
 }
 
+void testSamePassDrawPrefixDoesNotBlockNextClear() {
+  // The production look-ahead starts after the DrawRun that opens a Metal
+  // encoder. Later compatible DrawRun records extend that same encoder; they
+  // are not live-out attachment uses and must not hide the first operation
+  // after the pass, which is the Clear below.
+  Handle color{0xC017u};
+  ChunkSlot colorSlot;
+  appendDrawRunWithColor(colorSlot, color);
+  appendDrawRunWithColor(colorSlot, color);
+  appendClearOnColor(colorSlot, color);
+  const dxmt9::encoders::RenderPassStoreProofActivePass colorPass{
+      .hot = &colorSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = true,
+  };
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              colorSlot, 0u, color, nullptr, {}, colorPass),
+          ColorProof::AllowNextClear,
+          "R-BACK-15.8 same-pass color draw prefix reaches next clear");
+  const dxmt9::encoders::RenderPassStoreProofActivePass conservativeColorPass{
+      .hot = &colorSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = false,
+  };
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              colorSlot, 0u, color, nullptr, {}, conservativeColorPass),
+          ColorProof::BlockDrawTarget,
+          "R-BACK-15.8 conservative path still blocks same-target draw");
+
+  Handle depth{0xD017u};
+  ChunkSlot depthSlot;
+  appendDrawRunWithDepth(depthSlot, depth);
+  appendDrawRunWithDepth(depthSlot, depth);
+  appendClearOnDepth(depthSlot, depth);
+  const dxmt9::encoders::RenderPassStoreProofActivePass depthPass{
+      .hot = &depthSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = true,
+  };
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              depthSlot, 0u, depth, nullptr, {}, depthPass),
+          DepthProof::AllowNextClear,
+          "R-BACK-15.7 same-pass depth draw prefix reaches next clear");
+
+  // A sampled attachment is a true live read even when the target key is
+  // unchanged, so the same-pass prefix optimization must stay defensive.
+  Handle aliasTexture{0x2C017u};
+  ChunkSlot sampledSlot;
+  appendDrawRunWithColor(sampledSlot, color);
+  appendDrawRunWithColor(sampledSlot, color, aliasTexture);
+  appendClearOnColor(sampledSlot, color);
+  const dxmt9::encoders::RenderPassStoreProofActivePass sampledPass{
+      .hot = &sampledSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = true,
+  };
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              sampledSlot, 0u, color, nullptr, aliasTexture, sampledPass),
+          ColorProof::BlockDrawTarget,
+          "R-BACK-15.8 same-key attachment sample remains Store");
+}
+
 void testDepthForcedStoreOnNextRead() {
   // R-BACK-15.15 / defensive Store: if the next record after our DrawRun
   // is itself a DrawRun that re-binds the same depth handle (live-out
@@ -956,6 +1014,7 @@ int main() {
     testClearPrecedesDontCare();
     testDepthDontCareStoreOnNextClear();
     testColorDontCareStoreOnNextClear();
+    testSamePassDrawPrefixDoesNotBlockNextClear();
     testDepthForcedStoreOnNextRead();
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();

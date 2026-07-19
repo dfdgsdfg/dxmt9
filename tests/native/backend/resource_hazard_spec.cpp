@@ -422,6 +422,9 @@ void testReorderedIndexRejectedCacheTracksSourceRevision() {
             source.value, key, /*seqId=*/5u, /*completedSeqId=*/0u),
         "reordered-index cache records rejected gain-gate result");
 
+  const auto sourceRevisionBeforeUpload =
+      resourcePool.findBuffer(source.value)->contentRevision;
+
   auto rejected = resourcePool.findReorderedIndexBuffer(
       source.value, key, /*seqId=*/6u, /*completedSeqId=*/0u);
   check(rejected.hit, "reordered-index cache hits rejected key");
@@ -440,6 +443,13 @@ void testReorderedIndexRejectedCacheTracksSourceRevision() {
       source.value, key, /*seqId=*/7u, /*completedSeqId=*/0u);
   check(!invalidated.hit,
         "source content revision invalidates rejected reordered-index key");
+
+  auto historicalKey = key;
+  historicalKey.sourceRevision = sourceRevisionBeforeUpload;
+  auto historical = resourcePool.findReorderedIndexBuffer(
+      source.value, historicalKey, /*seqId=*/7u, /*completedSeqId=*/0u);
+  check(historical.hit && historical.rejected,
+        "explicit snapshot revision retains the queued historical verdict");
 
   check(resourcePool.rememberRejectedReorderedIndexBuffer(
             source.value, key, /*seqId=*/8u, /*completedSeqId=*/0u),

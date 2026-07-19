@@ -1084,7 +1084,9 @@ ReorderedIndexBufferLookup Pool::findReorderedIndexBuffer(
   }
 
   bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
-    key.sourceRevision = record.contentRevision;
+    if (key.sourceRevision == 0) {
+      key.sourceRevision = record.contentRevision;
+    }
 
     auto& entries = record.reorderedIndexCache;
     entries.erase(
@@ -1121,7 +1123,9 @@ bool Pool::rememberRejectedReorderedIndexBuffer(
   }
 
   bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
-    key.sourceRevision = record.contentRevision;
+    if (key.sourceRevision == 0) {
+      key.sourceRevision = record.contentRevision;
+    }
 
     auto& entries = record.reorderedIndexCache;
     entries.erase(
@@ -1198,7 +1202,9 @@ ReorderedIndexBufferLookup Pool::getOrCreateReorderedIndexBuffer(
   }
 
   bufferArena_.update(sourceHandle, [&](BufferRecord& record) {
-    key.sourceRevision = record.contentRevision;
+    if (key.sourceRevision == 0) {
+      key.sourceRevision = record.contentRevision;
+    }
 
     auto& entries = record.reorderedIndexCache;
     entries.erase(

@@ -956,6 +956,26 @@ inline bool shouldOptimizeOpaqueDepthIndexOrder(
   }
 }
 
+// A versioned MANAGED/DYNAMIC index binding is just as immutable for one
+// submitted draw as a non-versioned BufferRecord: the snapshot pins its
+// concrete backing until seqId completion and carries the exact content
+// revision used to key derived reordered buffers. Require CPU-visible bytes
+// because a cache miss must build the reordered candidate from that snapshot.
+inline bool isStableIndexCacheSource(
+    bool userIndexDataEmpty,
+    bool sourceRecordExists,
+    bool sourceRecordHasBuffer,
+    const core::DrawBufferBindingSnapshot* snapshot) noexcept {
+  if (!userIndexDataEmpty || !sourceRecordExists) {
+    return false;
+  }
+  if (!snapshot) {
+    return sourceRecordHasBuffer;
+  }
+  return snapshot->valid() && snapshot->contentsAddress != 0u &&
+         snapshot->byteSize != 0u && snapshot->contentRevision != 0u;
+}
+
 template <std::size_t MaxEntries>
 inline bool shouldOptimizeScreenBlendIndexOrder(
     const core::FlatStateSet<MaxEntries>& renderStates) {
