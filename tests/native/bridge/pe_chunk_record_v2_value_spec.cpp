@@ -1,4 +1,6 @@
 #include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_const_shadow.hpp"
+#include "d3d9_pe_draw_packet.hpp"
 #include "device_c_chunk_v2_validate.hpp"
 
 #include <algorithm>
@@ -116,9 +118,7 @@ PeWireObjectRef wireRef(void* object, std::uint32_t kind,
   };
 }
 
-D9CWireHandle legacyWire(void* object) {
-  const auto value = static_cast<std::uint64_t>(
-      reinterpret_cast<std::uintptr_t>(object));
+D9CWireHandle wireHandle(std::uint64_t value) {
   return D9CWireHandle{
       .lo = static_cast<std::uint32_t>(value),
       .hi = static_cast<std::uint32_t>(value >> 32u),
@@ -620,73 +620,88 @@ void testSparseDrawAndApplyProducerMatrix() {
         "noncanonical sparse input rolls back transactionally");
 }
 
-void testLegacyRecordProductionDispatch() {
-  D9CTexture texture;
-  D9CVertexDecl declaration;
-  const auto textureRef = wireRef(
-      &texture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x910000001ull);
-  const auto declarationRef = wireRef(
-      &declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 0x910000002ull);
-  dxmt9::d3d9::pe::publishCachedWireObjectRef(textureRef);
-  dxmt9::d3d9::pe::publishCachedWireObjectRef(declarationRef);
+void testPeStateStagingFeedsV2Producer() {
+  constexpr std::uint64_t kStream0 = 0x2122232425262728ull;
+  constexpr std::uint64_t kStream1 = 0x3132333435363738ull;
+  constexpr std::uint64_t kRt0 = 0x7172737475767778ull;
+  constexpr std::uint64_t kRt3 = 0x8182838485868788ull;
 
-  D9CCommandRecordDrawPrimitive draw{};
-  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-  draw.header.size = sizeof(draw);
-  draw.packet.renderStateCount = 1u;
-  draw.packet.renderStates[0] = {7u, 3u};
-  draw.packet.textureMask = 1u;
-  draw.packet.textures[0] = legacyWire(&texture);
-  draw.packet.vdeclValid = 1u;
-  draw.packet.vdeclHandle = legacyWire(&declaration);
-  draw.packet.fvf = 0x112u;
-  draw.packet.primitiveType = 4u;
-  draw.packet.startVertex = 2u;
-  draw.packet.primitiveCount = 1u;
+  D9CDrawPrimitivePacket packet{};
+  dxmt9::d3d9::pe::PeRtWireHandles rtHandles{};
+  rtHandles[0] = wireHandle(kRt0);
+  rtHandles[3] = wireHandle(kRt3);
+  dxmt9::d3d9::pe::populateDrawPacketAttachmentDelta(
+      packet, (1u << 0u) | (1u << 1u) | (1u << 3u), rtHandles, true,
+      D9CWireHandle{});
+  check(packet.rtMask == ((1u << 0u) | (1u << 1u) | (1u << 3u)) &&
+            packet.rtHandles[0].lo == wireHandle(kRt0).lo &&
+            packet.rtHandles[1].lo == 0u && packet.dsValid == 1u,
+        "attachment staging preserves slots and explicit nulls");
 
-  D9CCommandRecordPresent present{};
-  present.header.type = D9C_COMMAND_RECORD_PRESENT;
-  present.header.size = sizeof(present);
-  present.hwnd = 0x1234u;
+  dxmt9::d3d9::pe::PeStreamSources streams{};
+  streams[0] = D9CDrawPacketStreamSource{
+      .buffer = wireHandle(kStream0), .offset = 4u, .stride = 24u};
+  streams[1] = D9CDrawPacketStreamSource{
+      .buffer = wireHandle(kStream1), .offset = 8u, .stride = 32u};
+  dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(packet, streams, 0u);
+  check((packet.streamSourceMask & 3u) == 3u &&
+            packet.streamSources[0].offset == 4u &&
+            packet.streamSources[1].stride == 32u,
+        "first staged draw checkpoints its stream dependencies");
 
-  const auto getterCountBefore =
-      dxmt9::d3d9::pe::wireIdentityGetterCallCount();
+  D9CDrawPrimitivePacket repeated{};
+  dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(
+      repeated, streams, (1u << 0u) | (1u << 1u));
+  check(repeated.streamSourceMask == 0u,
+        "retained streams stay absent from later staged draws");
+
+  D9CDrawIndexedPrimitivePacket indexed{};
+  indexed.ibHandle = wireHandle(kStream0);
+  dxmt9::d3d9::pe::populateDrawPacketIndexDependency(indexed, false);
+  check(indexed.ibValid == 1u,
+        "first indexed draw checkpoints its index dependency");
+  D9CDrawIndexedPrimitivePacket indexedRepeated{};
+  indexedRepeated.ibHandle = wireHandle(kStream0);
+  dxmt9::d3d9::pe::populateDrawPacketIndexDependency(indexedRepeated, true);
+  check(indexedRepeated.ibValid == 0u,
+        "retained index dependency stays absent from later draws");
+}
+
+void testConstShadowFeedsV2ConstantSections() {
+  const std::array<float, 8> values{
+      1.0f, -2.0f, 3.0f, -4.0f, 5.0f, -6.0f, 7.0f, -8.0f};
+  ConstShadow shadow;
+  touchConstShadow(shadow, 4u, 2u, values.data(), sizeof(float) * 4u);
+  check(shadow.dirty() && shadow.dirtyStart == 4u && shadow.dirtyEnd == 6u,
+        "constant shadow tracks the merged dirty range");
+
+  D9CDrawPacketConstDeltaSection section{};
+  std::array<std::uint8_t, 64> payload{};
+  std::uint32_t payloadBytes = 0u;
+  check(foldConstShadowIntoDeltaSection(
+            shadow, D9C_DRAW_PACKET_CONST_DELTA_VS_F, sizeof(float) * 4u,
+            section, payload.data(), payload.size(), payloadBytes) &&
+            section.valid == 1u && section.startRegister == 4u &&
+            section.registerCount == 2u && payloadBytes == sizeof(values) &&
+            std::memcmp(payload.data(), values.data(), sizeof(values)) == 0,
+        "constant staging produces the exact V2 section range and bytes");
+  check(!shadow.dirty(), "successful fold clears the staged dirty range");
+
   CommandChunkV2Builder builder;
-  check(dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
-            builder, std::as_bytes(std::span(&draw, 1u))) &&
-            dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
-                builder, std::as_bytes(std::span(&present, 1u))),
-        "production dispatch converts legacy semantic records to V2");
-  check(dxmt9::d3d9::pe::wireIdentityGetterCallCount() ==
-            getterCountBefore,
-        "steady-state legacy-to-V2 conversion performs no identity getter");
-
-  const auto sealed = builder.seal();
-  ImportedChunkV2View imported;
-  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
-      sealed.blob,
-      V2ChunkEnvelope{
-          .version = D9C_COMMAND_CHUNK_VERSION_V2,
-          .recordCount = 2u,
-          .handleCount = 2u,
+  SparseStateV2Input state{
+      .vsFloatConstants = {
+          section.startRegister,
+          section.registerCount,
+          std::as_bytes(std::span(values)),
       },
-      &imported);
-  check(validation.valid() && imported.records[0].type ==
-                                  D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
-            imported.records[1].type == D9C_COMMAND_RECORD_PRESENT,
-        "converted production records validate with matching V2 envelope");
-  const auto vertexInput = imported.record(0u).section(2u);
-  D9CCommandChunkWireVertexInputV2 decodedVertexInput{};
-  std::memcpy(&decodedVertexInput, vertexInput.payload.data(),
-              sizeof(decodedVertexInput));
-  check(vertexInput.descriptor.kind ==
-            D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT &&
-            decodedVertexInput.value == draw.packet.fvf,
-        "declaration entry preserves ordered V1 FVF plus declaration state");
-
-  builder.reset();
-  dxmt9::d3d9::pe::unpublishCachedWireObjectRef(textureRef);
-  dxmt9::d3d9::pe::unpublishCachedWireObjectRef(declarationRef);
+  };
+  D9CCommandChunkWireDrawHeaderV2 draw{
+      .primitiveType = 4u,
+      .primitiveCount = 1u,
+  };
+  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+            builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, state),
+        "staged constant range appends through the direct V2 producer");
 }
 
 }  // namespace
@@ -697,7 +712,8 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
-    testLegacyRecordProductionDispatch();
+    testPeStateStagingFeedsV2Producer();
+    testConstShadowFeedsV2ConstantSections();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_v2_value_spec failed: " << error.what()
               << '\n';

@@ -63,19 +63,42 @@
 // equality at every Draw / Clear / StretchRect / ColorFill /
 // UpdateTexture / UpdateSurface / Readback / Present boundary.
 
-#include "chunk_record_import_spec_fixtures.hpp"
+#include "device_c_record_utils.hpp"
 
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
-using namespace dxmt9::d3d9::devicec::spec;
+using dxmt9::d3d9::devicec::packetHasNoStateDelta;
+
+struct TestFailure : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+[[noreturn]] void fail(std::string message) {
+    throw TestFailure(std::move(message));
+}
+
+void check(bool condition, std::string_view message) {
+    if (!condition) {
+        fail(std::string(message));
+    }
+}
+
+template <typename A, typename B>
+void checkEq(const A& left, const B& right, std::string_view message) {
+    if (!(left == right)) {
+        fail(std::string(message));
+    }
+}
 
 constexpr uint32_t kMaxRs = D9C_DRAW_PACKET_MAX_RENDER_STATES;
 constexpr uint32_t kMaxTex = D9C_DRAW_PACKET_MAX_TEXTURES;
@@ -662,10 +685,9 @@ void applyStepToShadow(PeShadow& s, const Step& st) {
 // emitSnapshot helpers above already cover that — we just call them
 // with the canonical draw-field triple.
 //
-// After APPLY_STATE, the PE side appends the standalone barrier record
-// itself. Its byte layout has NO state-snapshot fields, so it is
-// bit-identical between delta and full-snapshot modes; we serialize it
-// twice (once per lane) and assert byte-equality as a regression guard.
+// After APPLY_STATE, the PE side appends the standalone typed V2 payload.
+// Its byte layout has no state-snapshot fields, so it is bit-identical
+// between delta and full-snapshot modes.
 // =====================================================================
 constexpr uint32_t kPointListPrim = 1u;  // D3DPT_POINTLIST.
 
@@ -673,11 +695,7 @@ std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
     std::vector<uint8_t> bytes;
     switch (st.barrier) {
         case BarrierKind::Clear: {
-            // Mirrors d3d9_pe_device.cpp::Clear() — no rect array attached
-            // here because we drive count=0 / rectCount=0 in all scenarios.
-            D9CCommandRecordClear rec{};
-            rec.header.type = D9C_COMMAND_RECORD_CLEAR;
-            rec.header.size = sizeof(rec);
+            D9CCommandChunkWireClearV2 rec{};
             rec.flags = st.flags;
             rec.colorARGB = st.colorARGB;
             rec.z = st.zValue;
@@ -689,11 +707,9 @@ std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
             return bytes;
         }
         case BarrierKind::StretchRect: {
-            D9CCommandRecordStretchRect rec{};
-            rec.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
-            rec.header.size = sizeof(rec);
-            rec.srcWire = st.srcWire;
-            rec.dstWire = st.dstWire;
+            D9CCommandChunkWireStretchRectV2 rec{};
+            rec.srcHandleIndex = 0u;
+            rec.dstHandleIndex = 1u;
             rec.hasSrcRect = st.hasSrc;
             rec.hasDstRect = st.hasDst;
             rec.filter = st.filterValue;
@@ -704,10 +720,8 @@ std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
             return bytes;
         }
         case BarrierKind::ColorFill: {
-            D9CCommandRecordColorFill rec{};
-            rec.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
-            rec.header.size = sizeof(rec);
-            rec.surfaceWire = st.srcWire;
+            D9CCommandChunkWireColorFillV2 rec{};
+            rec.surfaceHandleIndex = 0u;
             rec.colorARGB = st.colorARGB;
             rec.hasRect = st.hasSrc;
             rec.rect = st.srcRect;
@@ -716,21 +730,15 @@ std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
             return bytes;
         }
         case BarrierKind::UpdateTexture: {
-            D9CCommandRecordUpdateTexture rec{};
-            rec.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
-            rec.header.size = sizeof(rec);
-            rec.srcWire = st.srcWire;
-            rec.dstWire = st.dstWire;
+            D9CCommandChunkWireUpdateTextureV2 rec{0u, 1u};
             bytes.resize(sizeof(rec));
             std::memcpy(bytes.data(), &rec, sizeof(rec));
             return bytes;
         }
         case BarrierKind::UpdateSurface: {
-            D9CCommandRecordUpdateSurface rec{};
-            rec.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
-            rec.header.size = sizeof(rec);
-            rec.srcWire = st.srcWire;
-            rec.dstWire = st.dstWire;
+            D9CCommandChunkWireUpdateSurfaceV2 rec{};
+            rec.srcHandleIndex = 0u;
+            rec.dstHandleIndex = 1u;
             rec.hasSrcRect = st.hasSrc;
             rec.hasDstPoint = st.hasDst;
             rec.srcRect = st.srcRect;
@@ -740,19 +748,13 @@ std::vector<uint8_t> serializeBarrierRecord(const Step& st) {
             return bytes;
         }
         case BarrierKind::Readback: {
-            D9CCommandRecordReadback rec{};
-            rec.header.type = D9C_COMMAND_RECORD_READBACK;
-            rec.header.size = sizeof(rec);
-            rec.srcWire = st.srcWire;
-            rec.dstWire = st.dstWire;
+            D9CCommandChunkWireReadbackV2 rec{0u, 1u};
             bytes.resize(sizeof(rec));
             std::memcpy(bytes.data(), &rec, sizeof(rec));
             return bytes;
         }
         case BarrierKind::Present: {
-            D9CCommandRecordPresent rec{};
-            rec.header.type = D9C_COMMAND_RECORD_PRESENT;
-            rec.header.size = sizeof(rec);
+            D9CCommandChunkWirePresentV2 rec{};
             rec.hwnd = st.srcWire;
             rec.flags = st.flags;
             rec.hasSrc = st.hasSrc;

@@ -68,14 +68,15 @@ release_default = "not-linked"
 requirements = ["R-TEST-0.6", "R-TEST-0.10", "R-TEST-7.4"]
 meson_targets = [
   "dxmt9-bridge-marshalling-value-spec",
-  "dxmt9-chunk-record-import-spec",
-  "dxmt9-pe-chunk-record-value-spec",
+  "dxmt9-chunk-record-v2-validation-spec",
+  "dxmt9-pe-chunk-record-v2-value-spec",
 ]
 evidence = [
   "tests/native/bridge/bridge_marshalling_value_spec.cpp",
-  "tests/native/bridge/pe_chunk_record_value_spec.cpp",
+  "tests/native/bridge/chunk_record_v2_validation_spec.cpp",
+  "tests/native/bridge/pe_chunk_record_v2_value_spec.cpp",
 ]
-next = ["Keep packet assertions before and after every bridge boundary."]
+next = ["Keep typed V2 assertions before and after every bridge boundary."]
 
 [[harness]]
 id = "shader-runner"

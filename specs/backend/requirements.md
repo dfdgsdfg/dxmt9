@@ -504,10 +504,11 @@ rows) and an on/off replay-equivalence spec following the
 **R-BACK-2.53** *(Retired V1 compatibility contract.)* Production PE and unix
 code must not advertise, negotiate, produce, import, or replay wire version 1.
 Any outer chunk version other than V2 must be rejected before validation,
-retention, state mutation, or queue submission. Immutable V1 envelope utilities
-may remain only as migration fixtures. Shared `D9CCommandRecord*` semantic value
-structs may remain temporarily as PE-local staging inputs only when they are
-converted directly into V2 and never serialized as a V1 chunk.
+retention, state mutation, or queue submission. V1 envelope/record fixtures
+must not be compiled as active conformance evidence. Shared
+`D9CCommandRecord*` semantic value structs may remain temporarily as PE-local
+staging inputs only when they are converted directly into V2 and never
+serialized as a V1 chunk.
 
 **R-BACK-2.54** *(V2 stable handle-index ABI.)* Wire version 2 must replace all
 payload-embedded server-wrapper addresses with `uint32_t` handle-table indices.

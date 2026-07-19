@@ -94,42 +94,6 @@ public:
         }
     }
 
-    void retainWireHandle(const D9CCommandChunkWireHandleEntry& handle,
-                          Acquired& acquired) {
-        const auto ptr = static_cast<std::uintptr_t>(handle.opaqueHandle);
-        switch (handle.kind) {
-        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
-            retainTexture(reinterpret_cast<D9CTexture*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SURFACE:
-            retainSurface(reinterpret_cast<D9CSurface*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_BUFFER:
-            retainBuffer(reinterpret_cast<D9CBuffer*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_SHADER:
-            retainShader(reinterpret_cast<D9CShader*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-            retainVdecl(reinterpret_cast<D9CVertexDecl*>(ptr), acquired);
-            break;
-        case D9C_CHUNK_HANDLE_KIND_QUERY:
-            retainQuery(reinterpret_cast<D9CQuery*>(ptr), acquired);
-            break;
-        default:
-            break;
-        }
-    }
-
-    void retainWireHandles(
-        const D9CCommandChunkWireHandleEntry* handles,
-        std::size_t handleCount,
-        Acquired& acquired) {
-        for (std::size_t i = 0; i < handleCount; ++i) {
-            retainWireHandle(handles[i], acquired);
-        }
-    }
-
     void rollback(const Acquired& acquired) {
         while (entries_.size() > acquired.checkpoint) {
             release(entries_.back());

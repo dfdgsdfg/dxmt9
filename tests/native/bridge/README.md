@@ -1,26 +1,26 @@
 # tests/native/bridge
 
-Wine PE/unix wire-format and replay specs. All exercise the chunk
-record + bridge ABI without a live Wine runtime — POD construction +
-deterministic dispatch only.
+Wine PE/unix V2 wire-format and bridge specs. All run without a live Wine
+runtime using pointer-free POD construction and deterministic dispatch.
 
 | Spec | Covers (R-* anchor) |
 |------|---------------------|
-| `chunk_record_spec.cpp` | POD layout / size / alignment of `CommandRecord*` types (`R-ARCH-3.*`) |
-| `chunk_record_validation_spec.cpp` | Wire chunk parse, bounds, schema status, handle extraction (`R-CORE-11.*`) |
-| `chunk_record_replay_spec.cpp` | Record categorization + draw-run scan + dispatch by `ImportedRecordReplayCategory` (`R-CORE-11.*`) |
-| `chunk_record_hazard_spec.cpp` | Hazard FSM + ordering decisions + resource hazard derivation (`R-BACK-2.14-2.27`) |
-| `chunk_record_import_spec.cpp` | End-to-end import + truncated tail + multi-record iteration + run-param conversion (`R-VERIF-7.1`) |
+| `chunk_record_v2_layout_spec.cpp` | V2 POD layout / size / alignment and schema completeness (`R-BACK-2.54`) |
+| `chunk_record_v2_registry_spec.cpp` | Stable object identity, generation reuse, and V2-only negotiation (`R-BACK-2.54`) |
+| `chunk_record_v2_validation_spec.cpp` | V2 bounds, canonical sections/handles, and side-effect-free malformed rejection (`R-BACK-2.54`–`R-BACK-2.55`) |
+| `pe_chunk_record_v2_value_spec.cpp` | Direct V2 producers, PE state staging, retention, and seal/preflight (`R-BACK-2.52`, `R-BACK-2.55`) |
+| `pe_full_snapshot_equivalence_spec.cpp` | Delta/full-snapshot semantic equivalence using typed V2 barrier payloads (`R-BACK-2.55`) |
 | `bridge_ops_spec.cpp` | Generated bridge opcode table parity + DOD chunk op placement (`R-BACK-2.10`, `R-VERIF-7.3`) |
+| `bridge_marshalling_value_spec.cpp` | Native/WoW64 argument blocks and V2 blob marshalling (`R-VERIF-7.3`) |
 | `wmt_setbytes_dispatch_spec.cpp` | `setVertexBytes` / `setFragmentBytes` discriminator via fake unix-call thunk (`R-BACK-12.3`) |
 
-Shared fixture: `chunk_record_import_spec_fixtures.hpp` (harness, record
-builders, byte helpers, hazard fixtures).
+Retired V1 record/blob fixtures are not part of this suite. V2 specs keep
+their focused typed fixture builders local to the owning spec.
 
 ## Running
 
 ```sh
-meson test -C build-x86_64-builtin dxmt9-chunk-record-import-spec
+meson test -C build-x86_64-builtin dxmt9-chunk-record-v2-validation-spec
 ```
 
 ## Conventions
@@ -28,7 +28,6 @@ meson test -C build-x86_64-builtin dxmt9-chunk-record-import-spec
 - Spec files: `<area>_spec.cpp` (snake_case).
 - Test target name: `dxmt9-<name>` (kebab — `bridge` prefix omitted because
   test names already begin with `chunk-record-` / `bridge-` / `wmt-`).
-- New chunk-record specs include `chunk_record_import_spec_fixtures.hpp` and
-  follow the existing `RecordingBackend` / `makeXxxRecord` helper API.
-- Tests must run without Metal — the bridge layer is PE/unix-only and these
-  specs exercise pure POD wire validation.
+- New chunk-record specs construct typed V2 headers, sections, handles, and
+  payloads; do not reintroduce V1 envelopes as comparison fixtures.
+- Tests must run without Metal; these specs exercise pure POD wire behavior.

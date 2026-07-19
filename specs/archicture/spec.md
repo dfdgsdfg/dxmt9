@@ -687,7 +687,7 @@ The license policy is conservative by design:
 |---|---|
 | `R-ARCH-1.*` DXMT ownership | `specs/backend/spec.md`, command queue tests, import tests, gap row for merge readiness |
 | `R-ARCH-2.*` DOD layout | `dxmt9-state-draw-transform-spec`, chunk/import specs, backend key/pipeline specs |
-| `R-ARCH-3.*` boundaries | `dxmt9-chunk-record-import-spec`, resource hazard spec, TLA+ queue/resource models |
+| `R-ARCH-3.*` boundaries | `dxmt9-chunk-record-v2-validation-spec`, `dxmt9-chunk-record-v2-replay-spec`, `dxmt9-resource-hazard-v2-spec`, TLA+ queue/resource models |
 | `R-ARCH-4.*` provenance | specs review, conformance manifest provenance, license review before imports |
 | `R-ARCH-5.*` verification | `specs/verification/`, `specs/tests/`, `specs/benchmarks/`, `specs/archicture/gap.md` |
 | `R-ARCH-6.*` concurrency | `CommandQueue.tla`, `QueueLifecycleRefinement.tla`, `PresentFrameLatency.tla`, `ResourceLifetime.tla`, `EncoderLifecycle.tla` (exact handle sets + Bloom-as-diagnostic-only invariants), `QuerySeqId.tla`, `ConcurrentProgressSignals.tla` (pacing independence liveness), queue observer tests, wait/perf counters |

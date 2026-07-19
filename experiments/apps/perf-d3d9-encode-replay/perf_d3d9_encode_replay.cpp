@@ -11,8 +11,8 @@
 //
 // Approach A from docs/research/boundary-benchmarks.md section (c): the
 // disk-based chunk serialization called out in Approach B does not exist
-// today (chunk_record_import_spec / chunk_record_replay_spec construct
-// chunks in memory, not from a file format), so this probe instead
+// today (the V2 validation/replay specs construct chunks in memory, not from
+// a file format), so this probe instead
 // guarantees iteration determinism by replaying an identical record
 // stream from inside a single process.
 //

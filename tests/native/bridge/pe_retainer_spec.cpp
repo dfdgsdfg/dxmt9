@@ -87,16 +87,10 @@ int main() {
     return 1;
   }
 
-  const D9CCommandChunkWireHandleEntry queryHandle{
-      .kind = D9C_CHUNK_HANDLE_KIND_QUERY,
-      .generation = D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE,
-      .opaqueHandle = reinterpret_cast<std::uintptr_t>(&first),
-      .reserved0 = 0u,
-      .reserved1 = 0u,
-  };
-  auto wireAcquire = retainer.beginAcquire();
-  retainer.retainWireHandles(&queryHandle, 1u, wireAcquire);
-  if (!check(first.refs == 2u, "wire-table retain de-duplicates query")) {
+  auto objectAcquire = retainer.beginAcquire();
+  retainer.retainWireObject(D9C_CHUNK_HANDLE_KIND_QUERY, &first,
+                            objectAcquire);
+  if (!check(first.refs == 2u, "typed V2 retain de-duplicates query")) {
     return 1;
   }
 

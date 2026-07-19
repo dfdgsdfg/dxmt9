@@ -1,70 +1,5 @@
 # Wine/PE bridge chunk-record, ops-dispatch, and setBytes wiring specs.
 
-chunk_record_spec = executable(
-  'dxmt9-chunk-record-spec',
-  'chunk_record_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-chunk-record-spec', chunk_record_spec)
-
-chunk_record_validation_spec = executable(
-  'dxmt9-chunk-record-validation-spec',
-  'chunk_record_validation_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-chunk-record-validation-spec', chunk_record_validation_spec,
-     env: dxmt9_native_test_env)
-
-chunk_record_hazard_spec = executable(
-  'dxmt9-chunk-record-hazard-spec',
-  'chunk_record_hazard_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-chunk-record-hazard-spec', chunk_record_hazard_spec,
-     env: dxmt9_native_test_env)
-
-chunk_record_replay_spec = executable(
-  'dxmt9-chunk-record-replay-spec',
-  'chunk_record_replay_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-chunk-record-replay-spec', chunk_record_replay_spec,
-     env: dxmt9_native_test_env)
-
-chunk_record_import_spec = executable(
-  'dxmt9-chunk-record-import-spec',
-  'chunk_record_import_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-chunk-record-import-spec', chunk_record_import_spec,
-     env: dxmt9_native_test_env)
-
-pe_chunk_record_value_spec = executable(
-  'dxmt9-pe-chunk-record-value-spec',
-  'pe_chunk_record_value_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-pe-chunk-record-value-spec', pe_chunk_record_value_spec,
-     env: dxmt9_native_test_env)
-
 pe_retainer_spec = executable(
   'dxmt9-pe-retainer-spec',
   'pe_retainer_spec.cpp',
@@ -92,22 +27,6 @@ pe_full_snapshot_equivalence_spec = executable(
 
 test('dxmt9-pe-full-snapshot-equivalence-spec',
      pe_full_snapshot_equivalence_spec,
-     env: dxmt9_native_test_env)
-
-# R-BACK-2.52 T3: on/off replay-equivalence spec for the opt-in inline
-# const-delta wire mode (DXMT9_PE_INLINE_CONST_DELTA). Follows the
-# pe_full_snapshot_equivalence_spec pattern -- hand-constructed wire records,
-# no PE recorder, no live D9CDevice/Metal backend.
-pe_inline_const_delta_equivalence_spec = executable(
-  'dxmt9-pe-inline-const-delta-equivalence-spec',
-  'pe_inline_const_delta_equivalence_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-pe-inline-const-delta-equivalence-spec',
-     pe_inline_const_delta_equivalence_spec,
      env: dxmt9_native_test_env)
 
 bridge_ops_spec = executable(
@@ -207,25 +126,6 @@ foreach spec : [
   test('dxmt9-' + spec[0] + '-spec', target,
        env: dxmt9_native_test_env)
 endforeach
-
-chunk_record_v1_v2_equivalence_spec = executable(
-  'dxmt9-chunk-record-v1-v2-equivalence-spec',
-  [
-    'chunk_record_v1_v2_equivalence_spec.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
-  ],
-  include_directories: [
-    dxmt9_inc,
-    include_directories('../../../src/d3d9'),
-  ],
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-test('dxmt9-chunk-record-v1-v2-equivalence-spec',
-     chunk_record_v1_v2_equivalence_spec,
-     env: dxmt9_native_test_env)
 
 pe_chunk_record_v2_value_spec = executable(
   'dxmt9-pe-chunk-record-v2-value-spec',

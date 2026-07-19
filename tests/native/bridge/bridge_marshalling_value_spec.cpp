@@ -146,163 +146,121 @@ struct WireBlobFixture {
 };
 
 std::vector<std::uint8_t> makeConstRecordPayload() {
-  D9CCommandRecordSetConst record{};
-  record.header.type = D9C_COMMAND_RECORD_SET_VS_CONST_F;
-  record.header.size =
-      static_cast<std::uint32_t>(sizeof(record) + sizeof(float) * kConstPayload.size());
-  record.start = 240u;
-  record.count = 2u;
-
+  const D9CCommandChunkWireSetConstV2 fixed{240u, 2u};
   std::vector<std::uint8_t> payload;
-  appendObject(payload, record);
-  appendBytes(payload, kConstPayload.data(), sizeof(float) * kConstPayload.size());
+  appendObject(payload, fixed);
+  appendBytes(payload, kConstPayload.data(), sizeof(kConstPayload));
   return payload;
 }
 
-D9CCommandRecordDrawPrimitive makeDrawRecordPayload() {
-  D9CCommandRecordDrawPrimitive record{};
-  record.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-  record.header.size = static_cast<std::uint32_t>(sizeof(record));
-  record.packet.primitiveType = 4u;
-  record.packet.startVertex = 0x1234u;
-  record.packet.primitiveCount = 0x56u;
-  record.packet.textureMask = 1u << 3u;
-  record.packet.textures[3] =
-      D9CWireHandle{0x00c0ffeeu, 0x00000001u};
-  record.packet.tssCount = 1u;
-  record.packet.tss[0] = D9CDrawPacketTextureStageState{
-      7u,
-      24u,
-      0xaabbccddu,
+std::vector<std::uint8_t> makeDrawRecordPayload() {
+  const D9CCommandChunkWireDrawHeaderV2 draw{
+      .primitiveType = 4u,
+      .startVertex = 0x1234u,
+      .primitiveCount = 0x56u,
+      .sectionCount = 1u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeaderV2) +
+                              sizeof(D9CCommandChunkWireSectionDescV2),
   };
-  record.packet.samplerStateCount = 1u;
-  record.packet.samplerStates[0] = D9CDrawPacketSamplerState{
-      15u,
-      6u,
-      0x10203040u,
+  const D9CCommandChunkWireTextureBindingV2 texture{
+      .slot = 3u,
+      .valid = 1u,
+      .handleIndex = 0u,
   };
-  return record;
-}
-
-D9CCommandRecordPresent makePresentRecordPayload() {
-  D9CCommandRecordPresent record{};
-  record.header.type = D9C_COMMAND_RECORD_PRESENT;
-  record.header.size = static_cast<std::uint32_t>(sizeof(record));
-  record.hwnd = 0x1122334455667788ull;
-  record.flags = 0x01020304u;
-  record.hasSrc = 1u;
-  record.hasDst = 1u;
-  record.src = D9CRect{1, 2, 640, 480};
-  record.dst = D9CRect{10, 20, 650, 500};
-  return record;
+  const D9CCommandChunkWireSectionDescV2 section{
+      .kind = D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+      .elementSize = sizeof(texture),
+      .count = 1u,
+      .payloadOffset = draw.sectionPayloadOffset,
+      .byteSize = sizeof(texture),
+  };
+  std::vector<std::uint8_t> payload;
+  appendObject(payload, draw);
+  appendObject(payload, section);
+  appendObject(payload, texture);
+  return payload;
 }
 
 WireBlobFixture makeWireBlobFixture() {
   WireBlobFixture fixture;
-
   const auto constPayload = makeConstRecordPayload();
   const auto drawPayload = makeDrawRecordPayload();
-  const auto presentPayload = makePresentRecordPayload();
-
-  std::vector<std::uint8_t> arena;
-  fixture.constPayloadOffset = 0u;
-  appendBytes(arena, constPayload.data(), constPayload.size());
-  fixture.constPayloadSize = static_cast<std::uint32_t>(constPayload.size());
-  arena.resize(arena.size() + 8u, 0xcdu);
-
-  fixture.drawPayloadOffset = static_cast<std::uint32_t>(arena.size());
-  appendObject(arena, drawPayload);
-  arena.resize(arena.size() + 8u, 0xefu);
-
-  fixture.presentPayloadOffset = static_cast<std::uint32_t>(arena.size());
-  appendObject(arena, presentPayload);
-
-  std::vector<D9CCommandChunkWireRecordHeader> records{
-      D9CCommandChunkWireRecordHeader{
-          D9C_COMMAND_RECORD_PRESENT,
-          D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
-          fixture.presentPayloadOffset,
-          static_cast<std::uint32_t>(sizeof(presentPayload)),
-          2u,
-          1u,
-          0u,
-          0u,
-      },
-      D9CCommandChunkWireRecordHeader{
-          D9C_COMMAND_RECORD_SET_VS_CONST_F,
-          D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
-          fixture.constPayloadOffset,
-          fixture.constPayloadSize,
-          0u,
-          0u,
-          0u,
-          0u,
-      },
-      D9CCommandChunkWireRecordHeader{
-          D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-          D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE,
-          fixture.drawPayloadOffset,
-          static_cast<std::uint32_t>(sizeof(drawPayload)),
-          0u,
-          2u,
-          0u,
-          0u,
-      },
+  const D9CCommandChunkWirePresentV2 present{
+      .hwnd = 0x1122334455667788ull,
+      .flags = 0x01020304u,
+      .hasSrc = 1u,
+      .hasDst = 1u,
+      .src = D9CRect{1, 2, 640, 480},
+      .dst = D9CRect{10, 20, 650, 500},
   };
 
-  std::vector<D9CCommandChunkWireHandleEntry> handles{
-      D9CCommandChunkWireHandleEntry{
-          D9C_CHUNK_HANDLE_KIND_BUFFER,
-          0x10u,
-          0x000000010000beefull,
-          0u,
-          0u,
+  std::vector<std::uint8_t> arena;
+  fixture.constPayloadOffset = static_cast<std::uint32_t>(arena.size());
+  appendBytes(arena, constPayload.data(), constPayload.size());
+  fixture.constPayloadSize = static_cast<std::uint32_t>(constPayload.size());
+  fixture.drawPayloadOffset = static_cast<std::uint32_t>(arena.size());
+  appendBytes(arena, drawPayload.data(), drawPayload.size());
+  fixture.presentPayloadOffset = static_cast<std::uint32_t>(arena.size());
+  appendObject(arena, present);
+
+  const std::array records{
+      D9CCommandChunkWireRecordHeaderV2{
+          D9C_COMMAND_RECORD_SET_VS_CONST_F,
+          D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+          fixture.constPayloadOffset,
+          fixture.constPayloadSize,
+          0u, 0u, 0u, 0u,
       },
-      D9CCommandChunkWireHandleEntry{
+      D9CCommandChunkWireRecordHeaderV2{
+          D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+          D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+          fixture.drawPayloadOffset,
+          static_cast<std::uint32_t>(drawPayload.size()),
+          0u, 1u, 0u, 0u,
+      },
+      D9CCommandChunkWireRecordHeaderV2{
+          D9C_COMMAND_RECORD_PRESENT,
+          D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+          fixture.presentPayloadOffset,
+          static_cast<std::uint32_t>(sizeof(present)),
+          1u, 0u, 0u, 0u,
+      },
+  };
+  const std::array handles{
+      D9CCommandChunkWireHandleEntryV2{
           D9C_CHUNK_HANDLE_KIND_TEXTURE,
           0x11u,
           0x000000020000cafeull,
-          0u,
-          0u,
-      },
-      D9CCommandChunkWireHandleEntry{
-          D9C_CHUNK_HANDLE_KIND_SURFACE,
-          0x12u,
-          0x000000030000d00dull,
-          0u,
-          0u,
       },
   };
 
-  fixture.recordTableOffset =
-      static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireHeader));
-  const auto recordTableBytes =
-      static_cast<std::uint32_t>(records.size() * sizeof(records[0]));
-  fixture.handleTableOffset = fixture.recordTableOffset + recordTableBytes;
-  const auto handleTableBytes =
-      static_cast<std::uint32_t>(handles.size() * sizeof(handles[0]));
-  fixture.payloadArenaOffset = fixture.handleTableOffset + handleTableBytes + 16u;
-
-  D9CCommandChunkWireHeader header{};
-  header.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
-  header.headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE;
-  header.recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE;
-  header.handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE;
-  header.recordTableOffset = fixture.recordTableOffset;
-  header.recordCount = static_cast<std::uint32_t>(records.size());
-  header.handleTableOffset = fixture.handleTableOffset;
-  header.handleCount = static_cast<std::uint32_t>(handles.size());
-  header.payloadArenaOffset = fixture.payloadArenaOffset;
-  header.payloadArenaSize = static_cast<std::uint32_t>(arena.size());
+  fixture.recordTableOffset = sizeof(D9CCommandChunkWireHeaderV2);
+  fixture.handleTableOffset = fixture.recordTableOffset + sizeof(records);
+  fixture.payloadArenaOffset = static_cast<std::uint32_t>(
+      alignUp(fixture.handleTableOffset + sizeof(handles), 8u));
+  const D9CCommandChunkWireHeaderV2 header{
+      D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
+      D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
+      D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
+      D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
+      fixture.recordTableOffset,
+      static_cast<std::uint32_t>(records.size()),
+      fixture.handleTableOffset,
+      static_cast<std::uint32_t>(handles.size()),
+      fixture.payloadArenaOffset,
+      static_cast<std::uint32_t>(arena.size()),
+      0u, 0u,
+  };
 
   fixture.blob.resize(fixture.payloadArenaOffset + arena.size());
   writeObject(fixture.blob, 0u, header);
-  std::memcpy(fixture.blob.data() + fixture.recordTableOffset, records.data(),
-              recordTableBytes);
-  std::memcpy(fixture.blob.data() + fixture.handleTableOffset, handles.data(),
-              handleTableBytes);
-  std::memcpy(fixture.blob.data() + fixture.payloadArenaOffset, arena.data(),
-              arena.size());
+  std::memcpy(fixture.blob.data() + fixture.recordTableOffset,
+              records.data(), sizeof(records));
+  std::memcpy(fixture.blob.data() + fixture.handleTableOffset,
+              handles.data(), sizeof(handles));
+  std::memcpy(fixture.blob.data() + fixture.payloadArenaOffset,
+              arena.data(), arena.size());
   return fixture;
 }
 
@@ -315,13 +273,11 @@ struct CommitChunkCapture {
 NTSTATUS captureCommitChunk(void* opaque,
                             std::int32_t returnedStatus,
                             CommitChunkCapture& capture) {
-  auto* args =
-      dxmt9::util::marshal::decodeOpaque<
-          dxmt9::bridge::Args_dxmt9c_device_commit_chunk>(opaque);
+  auto* args = dxmt9::util::marshal::decodeOpaque<
+      dxmt9::bridge::Args_dxmt9c_device_commit_chunk>(opaque);
   if (!args) {
     return DXMT9_STATUS_INVALID_PARAMETER;
   }
-
   capture.seen = true;
   capture.device = args->arg0;
   capture.chunk = args->arg1;
@@ -401,152 +357,53 @@ void testGeneratedArgumentStructLayouts() {
 
 void testCommitChunkArgsPreservePointerAndWireValues() {
   auto fixture = makeWireBlobFixture();
-  const D9CDevice* device = fakeDevice();
-
   D9CCommandChunk chunk{};
-  chunk.version = D9C_COMMAND_CHUNK_VERSION;
+  chunk.version = D9C_COMMAND_CHUNK_VERSION_V2;
   chunk.recordCount = 3u;
   chunk.recordBytes = static_cast<std::uint32_t>(fixture.blob.size());
   chunk.records = toWireHandle(fixture.blob.data());
-  chunk.handleCount = 3u;
-  chunk.handles = D9CWireHandle{};
+  chunk.handleCount = 1u;
 
   dxmt9::bridge::Args_dxmt9c_device_commit_chunk args{};
-  args.arg0 = const_cast<D9CDevice*>(device);
+  args.arg0 = fakeDevice();
   args.arg1 = &chunk;
-
-  constexpr std::int32_t kReturnedStatus = 0x13572468;
   CommitChunkCapture capture;
-  const NTSTATUS unixStatus = captureCommitChunk(&args, kReturnedStatus, capture);
+  checkEq(captureCommitChunk(&args, 0x13572468, capture),
+          DXMT9_STATUS_SUCCESS, "commit chunk args decode");
+  check(capture.seen, "commit chunk capture is populated");
+  checkSamePtr(capture.device, fakeDevice(), "commit device pointer survives");
+  checkSamePtr(capture.chunk, &chunk, "commit chunk pointer survives");
+  checkEq(args.ret, 0x13572468, "commit status survives");
+  checkEq(capture.chunk->version, D9C_COMMAND_CHUNK_VERSION_V2,
+          "commit advertises only V2");
+  checkSamePtr(wireHandlePtr(capture.chunk->records), fixture.blob.data(),
+               "commit preserves V2 blob pointer");
+  checkEq(wireHandleValue(capture.chunk->handles), 0ull,
+          "retired external handle pointer stays empty");
 
-  checkEq(unixStatus, DXMT9_STATUS_SUCCESS,
-          "commit chunk generated-style sink returns unix-call success");
-  check(capture.seen, "commit chunk generated-style sink decoded args");
-  checkSamePtr(capture.device, device, "commit chunk preserves device pointer");
-  checkSamePtr(capture.chunk, &chunk, "commit chunk preserves chunk pointer");
-  checkEq(args.ret, kReturnedStatus,
-          "commit chunk HRESULT/status returns through generated args");
-
-  const auto* decodedChunk = capture.chunk;
-  checkEq(decodedChunk->version, D9C_COMMAND_CHUNK_VERSION,
-          "commit chunk preserves D9CCommandChunk version");
-  checkEq(decodedChunk->recordCount, 3u,
-          "commit chunk preserves record count");
-  checkEq(decodedChunk->recordBytes,
-          static_cast<std::uint32_t>(fixture.blob.size()),
-          "commit chunk preserves record byte length");
-  checkSamePtr(wireHandlePtr(decodedChunk->records), fixture.blob.data(),
-               "commit chunk preserves record blob pointer");
-  checkEq(decodedChunk->handleCount, 3u,
-          "commit chunk preserves handle count");
-  checkEq(wireHandleValue(decodedChunk->handles), 0ull,
-          "commit chunk preserves empty legacy handle pointer");
-
-  const auto header =
-      readObject<D9CCommandChunkWireHeader>(fixture.blob, 0u);
+  const auto header = readObject<D9CCommandChunkWireHeaderV2>(fixture.blob, 0u);
+  checkEq(header.version, D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
+          "fixture uses the V2 wire version");
   checkEq(header.recordTableOffset, fixture.recordTableOffset,
-          "wire header preserves record table offset");
-  checkEq(header.recordCount, 3u,
-          "wire header preserves generated record table count");
-  checkEq(header.handleTableOffset, fixture.handleTableOffset,
-          "wire header preserves handle table offset");
-  checkEq(header.handleCount, 3u,
-          "wire header preserves handle table count");
-  checkEq(header.payloadArenaOffset, fixture.payloadArenaOffset,
-          "wire header preserves payload arena offset");
-
-  const auto firstRecord = readObject<D9CCommandChunkWireRecordHeader>(
-      fixture.blob, fixture.recordTableOffset);
-  const auto secondRecord = readObject<D9CCommandChunkWireRecordHeader>(
+          "V2 record table offset survives marshalling");
+  const auto draw = readObject<D9CCommandChunkWireRecordHeaderV2>(
       fixture.blob,
-      fixture.recordTableOffset + sizeof(D9CCommandChunkWireRecordHeader));
-  const auto thirdRecord = readObject<D9CCommandChunkWireRecordHeader>(
-      fixture.blob,
-      fixture.recordTableOffset + sizeof(D9CCommandChunkWireRecordHeader) * 2u);
-
-  checkEq(firstRecord.type, static_cast<std::uint32_t>(D9C_COMMAND_RECORD_PRESENT),
-          "wire record table keeps first ordering record");
-  checkEq(firstRecord.payloadOffset, fixture.presentPayloadOffset,
-          "wire record table keeps first payload offset");
-  checkEq(firstRecord.firstHandle, 2u,
-          "wire first record keeps handle range start");
-  checkEq(firstRecord.handleCount, 1u,
-          "wire first record keeps handle range count");
-  checkEq(secondRecord.type,
-          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_SET_VS_CONST_F),
-          "wire record table keeps second constant record");
-  checkEq(secondRecord.payloadOffset, fixture.constPayloadOffset,
-          "wire second record may point before first payload");
-  checkEq(thirdRecord.type,
-          static_cast<std::uint32_t>(D9C_COMMAND_RECORD_DRAW_PRIMITIVE),
-          "wire record table keeps third draw record");
-  checkEq(thirdRecord.payloadOffset, fixture.drawPayloadOffset,
-          "wire third record preserves draw payload offset");
-  checkEq(thirdRecord.firstHandle, 0u,
-          "wire third record keeps handle range start");
-  checkEq(thirdRecord.handleCount, 2u,
-          "wire third record keeps handle range count");
-
-  const auto firstHandle = readObject<D9CCommandChunkWireHandleEntry>(
+      fixture.recordTableOffset + sizeof(D9CCommandChunkWireRecordHeaderV2));
+  checkEq(draw.type, static_cast<std::uint32_t>(D9C_COMMAND_RECORD_DRAW_PRIMITIVE),
+          "V2 draw record survives marshalling");
+  checkEq(draw.handleCount, 1u, "V2 draw handle slice survives marshalling");
+  const auto handle = readObject<D9CCommandChunkWireHandleEntryV2>(
       fixture.blob, fixture.handleTableOffset);
-  const auto secondHandle = readObject<D9CCommandChunkWireHandleEntry>(
-      fixture.blob,
-      fixture.handleTableOffset + sizeof(D9CCommandChunkWireHandleEntry));
-  const auto thirdHandle = readObject<D9CCommandChunkWireHandleEntry>(
-      fixture.blob,
-      fixture.handleTableOffset + sizeof(D9CCommandChunkWireHandleEntry) * 2u);
-
-  checkEq(firstHandle.kind, static_cast<std::uint32_t>(D9C_CHUNK_HANDLE_KIND_BUFFER),
-          "wire handle table preserves first handle kind");
-  checkEq(firstHandle.generation, 0x10u,
-          "wire handle table preserves first handle generation");
-  checkEq(firstHandle.opaqueHandle, 0x000000010000beefull,
-          "wire handle table preserves first opaque handle");
-  checkEq(secondHandle.kind,
-          static_cast<std::uint32_t>(D9C_CHUNK_HANDLE_KIND_TEXTURE),
-          "wire handle table preserves second handle kind");
-  checkEq(secondHandle.opaqueHandle, 0x000000020000cafeull,
-          "wire handle table preserves second opaque handle");
-  checkEq(thirdHandle.kind, static_cast<std::uint32_t>(D9C_CHUNK_HANDLE_KIND_SURFACE),
-          "wire handle table preserves third handle kind");
-  checkEq(thirdHandle.opaqueHandle, 0x000000030000d00dull,
-          "wire handle table preserves third opaque handle");
-
-  const auto decodedDraw = readObject<D9CCommandRecordDrawPrimitive>(
-      fixture.blob, fixture.payloadArenaOffset + fixture.drawPayloadOffset);
-  checkEq(decodedDraw.packet.startVertex, 0x1234u,
-          "commit chunk draw payload preserves start vertex");
-  checkEq(decodedDraw.packet.primitiveCount, 0x56u,
-          "commit chunk draw payload preserves primitive count");
-  checkEq(decodedDraw.packet.tssCount, 1u,
-          "commit chunk draw payload preserves TSS count");
-  checkEq(decodedDraw.packet.tss[0].stage, 7u,
-          "commit chunk draw payload preserves TSS stage");
-  checkEq(decodedDraw.packet.tss[0].type, 24u,
-          "commit chunk draw payload preserves TSS type");
-  checkEq(decodedDraw.packet.tss[0].value, 0xaabbccddu,
-          "commit chunk draw payload preserves TSS value");
-  checkEq(decodedDraw.packet.samplerStateCount, 1u,
-          "commit chunk draw payload preserves sampler count");
-  checkEq(decodedDraw.packet.samplerStates[0].sampler, 15u,
-          "commit chunk draw payload preserves sampler slot");
-  checkEq(decodedDraw.packet.samplerStates[0].type, 6u,
-          "commit chunk draw payload preserves sampler type");
-  checkEq(decodedDraw.packet.samplerStates[0].value, 0x10203040u,
-          "commit chunk draw payload preserves sampler value");
-
-  const auto decodedConst = readObject<D9CCommandRecordSetConst>(
+  checkEq(handle.objectId, 0x000000020000cafeull,
+          "V2 stable object identity survives marshalling");
+  const auto fixed = readObject<D9CCommandChunkWireSetConstV2>(
       fixture.blob, fixture.payloadArenaOffset + fixture.constPayloadOffset);
-  checkEq(decodedConst.start, 240u,
-          "commit chunk const payload preserves start register");
-  checkEq(decodedConst.count, 2u,
-          "commit chunk const payload preserves vector count");
-  const auto constBytesOffset = fixture.payloadArenaOffset +
-                                fixture.constPayloadOffset +
-                                sizeof(D9CCommandRecordSetConst);
-  check(std::memcmp(fixture.blob.data() + constBytesOffset,
-                    kConstPayload.data(), sizeof(float) * kConstPayload.size()) == 0,
-        "commit chunk const payload preserves exact float bytes");
+  checkEq(fixed.startRegister, 240u, "V2 const start survives marshalling");
+  const auto dataOffset = fixture.payloadArenaOffset +
+                          fixture.constPayloadOffset + sizeof(fixed);
+  check(std::memcmp(fixture.blob.data() + dataOffset, kConstPayload.data(),
+                    sizeof(kConstPayload)) == 0,
+        "V2 const bytes survive marshalling");
 }
 
 void testRepresentativeGeneratedStateArgsPreserveValues() {
@@ -730,8 +587,7 @@ void testCommandChunkV2GeneratedArgumentLayouts() {
       "wow64 V2 texture identity args", 12u, 4u);
 
   D9CCommandChunkNegotiation negotiation{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
-                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_2,
       .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
   };
   dxmt9::bridge::Args_dxmt9c_device_negotiate_command_chunk args{};

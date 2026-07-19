@@ -340,12 +340,9 @@ void testSparseDrawWireSizeReduction() {
   };
   const auto singleStateBytes = sealedSize(fixture, singleState);
   const auto noStateBytes = sealedSize(fixture, {});
-  const auto v1Bytes = sizeof(D9CCommandRecordDrawPrimitive);
-  check(singleStateBytes != 0u && singleStateBytes < v1Bytes,
-        "single-state V2 sparse draw is smaller than the V1 fixed record");
-  check(noStateBytes != 0u && noStateBytes < v1Bytes &&
+  check(singleStateBytes != 0u && noStateBytes != 0u &&
             noStateBytes < singleStateBytes,
-        "no-state V2 sparse draw is smaller than both V1 and state delta");
+        "sparse V2 state adds bytes only when a section is present");
 }
 
 }  // namespace

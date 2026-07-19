@@ -872,12 +872,13 @@ Hot-path allocation policy:
 
 Wire V1 was retired from production after V2 promotion. PE and unix advertise
 only V2, the PE recorder always emits V2, and commit/offload replay rejects any
-outer version other than V2. `D9CCommandChunkWireHeader` and related structs in
-`include/dxmt9/device_c.h` remain temporarily as immutable migration fixtures
-for validation tests. The shared `D9CCommandRecord*` semantic value structs are
-also temporary PE-local staging inputs to `appendLegacyCommandRecordAsV2`; the
-adapter emits V2 directly and never constructs a V1 wire chunk. None of these
-declarations form a supported runtime ABI.
+outer version other than V2. The native V1 envelope/import/replay/parity fixture
+corpus was removed on 2026-07-19; layout, malformed-input, hazard, replay,
+marshalling, and allocation evidence now uses typed V2 fixtures. The shared
+`D9CCommandRecord*` semantic value structs remain temporarily as PE-local
+staging inputs to `appendLegacyCommandRecordAsV2`; the adapter emits V2 directly
+and never constructs a V1 wire chunk. These declarations are not a supported
+runtime ABI or positive-path fixture grammar.
 
 V1 had a sound bounds-checkable outer shape, but its
 resource representation is transitional: payload fields and
@@ -886,7 +887,8 @@ wrapper address cast to `uint64_t`. This violated the pointer-free target in
 `R-BACK-2.21` and is why it cannot remain as a fallback.
 
 The historical hardened V1 importer applied these invariants before dispatching
-any record; migration tests retain them as conversion oracles:
+any record. They are retained here as design history, not as an active fixture
+or conformance contract:
 
 - Record handle slices are canonical and contiguous: record N starts where
   record N-1 ends, including zero-length slices, and the final slice consumes the

@@ -34,7 +34,7 @@ flowchart LR
 
 | ID | Boundary | Tests / probes today | Counters surfaced | Missing |
 |----|---|---|---|---|
-| **B1** | PE → CommandRecorder | `chunk_record_spec`, `chunk_record_validation_spec` (native unit) | `submit_draw_cpu_ms` (only when whole-stack run) | CPU-only chunk-build benchmark; no isolation today |
+| **B1** | PE → CommandRecorder | `chunk_record_v2_layout_spec`, `chunk_record_v2_validation_spec`, `chunk_record_micro_spec` (native) | V2 build/seal/preflight nanoseconds from the microbenchmark; `submit_draw_cpu_ms` in whole-stack runs | No PE-side bridge-crossing timing |
 | **B2** | PE → unix bridge | `bridge_ops_spec` (opcode count only) | `chunk_admit`, `chunk_reject`, `ring_arena_heap_fallback_*` | **No bridge-ABI throughput probe** |
 | **B3** | unix CommandQueue | `CommandQueue.tla` (model), queue observer assertions | `command_buffers`, `sub_command_buffers`, `chunk_subcb_count_max`, encoder split classes | **No encode-only probe** (always coupled with GPU) |
 | **B4** | encode thread → Metal CB | `EncoderLifecycle.tla`, `render_pass_actions_spec`, the 4 `dxmt9-perf-*` probes (mode-coupled) | render-pass action histograms, `bind_*`, hazard exact/Bloom, `encode_*_cpu_ms` family | Encode throughput in isolation; sub-CB chain sensitivity workload |
@@ -94,7 +94,9 @@ GPU completion timing**.
 - **Boundary:** B3 (queue tracker) + B4 (encoder).
 - **Counters:** `encode_chunk_cpu_ms`, `encode_draw_cpu_ms` family, `command_buffers`, `sub_command_buffers`. **No** `present_acquire_wait` (no Present record).
 - **Detects:** encode-thread CPU regressions, sub-CB chain policy effects in isolation.
-- **Implementation:** ~3 days. Pre-recording requires a serialization path for `core::ChunkSlot` which is partially in `chunk_record_import_spec` already.
+- **Implementation:** ~3 days. V2 validation and replay operate on in-memory
+  blobs; a stable disk sidecar/serialization path is still required for
+  pre-recorded replay.
 
 ### (e) Sub-CB chain sensitivity — `perf-d3d9-chain-parametric.sh` 🟢 HIGH
 
@@ -217,10 +219,9 @@ into 3 batches (probes / harness / docs).
    range gate (L3) at first commit, or land the probe first and add
    gates after a baseline run? Recommendation: probe + observable
    counters first, gates after empirical baselines.
-2. Is the chunk-replay serialization in `chunk_record_import_spec`
-   sufficient for (c) to pre-record a chunk to disk and replay? Or
-   does it need a new sidecar format? Investigate before committing
-   to the 3-day estimate.
+2. Should (c) persist the canonical V2 blob directly, or define a sidecar
+   format with explicit ABI/version metadata? Investigate before committing to
+   the 3-day estimate.
 3. For (b) bridge-ABI probe, should it also exercise the `commit_chunk`
    error path (malformed payload) or only the success path? Either is
    useful; success path is the regression sentinel.

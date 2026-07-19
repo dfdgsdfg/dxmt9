@@ -14,7 +14,6 @@
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../../src/dxmt9/dxmt9_compat.hpp"
 #include "../../../src/dxmt9/dxmt9_queue.hpp"
-#include "device_c_record_utils.hpp"
 #include "dxmt9/core.hpp"
 
 namespace {
@@ -22,7 +21,6 @@ namespace {
 using namespace dxmt9::core;
 using namespace dxmt9::core::fixture;
 
-namespace devicec = dxmt9::d3d9::devicec;
 namespace metalcompat = dxmt9::core::metalcompat;
 namespace metalqueue = dxmt9::core::metalqueue;
 
@@ -46,133 +44,6 @@ void checkEq(const A &left, const B &right, std::string_view message) {
     fail(std::string(message));
   }
 }
-
-template <typename T>
-void appendRecord(std::vector<std::uint8_t> &bytes, const T &record) {
-  const auto *begin = reinterpret_cast<const std::uint8_t *>(&record);
-  bytes.insert(bytes.end(), begin, begin + sizeof(T));
-}
-
-D9CWireHandle wireHandle(std::uint64_t value) {
-  return D9CWireHandle{
-      .lo = static_cast<std::uint32_t>(value),
-      .hi = static_cast<std::uint32_t>(value >> 32),
-  };
-}
-
-D9CCommandRecordDrawPrimitive makeHazardDrawRecord(std::uint64_t renderTarget,
-                                                   std::uint64_t texture,
-                                                   std::uint64_t vertexBuffer,
-                                                   std::uint32_t startVertex) {
-  D9CCommandRecordDrawPrimitive draw{};
-  draw.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-  draw.header.size = sizeof(draw);
-  draw.packet.primitiveType = 4u;
-  draw.packet.primitiveCount = 1u;
-  draw.packet.startVertex = startVertex;
-  draw.packet.textureMask = 0x1u;
-  draw.packet.textures[0] = wireHandle(texture);
-  draw.packet.streamSourceMask = 0x1u;
-  draw.packet.streamSources[0].buffer = wireHandle(vertexBuffer);
-  draw.packet.streamSources[0].stride = 16u;
-  draw.packet.rtMask = 0x1u;
-  draw.packet.rtHandles[0] = wireHandle(renderTarget);
-  return draw;
-}
-
-D9CCommandRecordClear makeClearRecord() {
-  D9CCommandRecordClear clear{};
-  clear.header.type = D9C_COMMAND_RECORD_CLEAR;
-  clear.header.size = sizeof(clear);
-  clear.rectOffset = sizeof(D9CCommandRecordClear);
-  clear.flags = 1u;
-  clear.colorARGB = 0xff203040u;
-  clear.z = 1.0f;
-  return clear;
-}
-
-D9CCommandRecordStretchRect makeStretchRecord(std::uint64_t source,
-                                              std::uint64_t destination) {
-  D9CCommandRecordStretchRect stretch{};
-  stretch.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
-  stretch.header.size = sizeof(stretch);
-  stretch.srcWire = source;
-  stretch.dstWire = destination;
-  return stretch;
-}
-
-D9CCommandRecordReadback makeReadbackRecord(std::uint64_t source,
-                                            std::uint64_t destination) {
-  D9CCommandRecordReadback readback{};
-  readback.header.type = D9C_COMMAND_RECORD_READBACK;
-  readback.header.size = sizeof(readback);
-  readback.srcWire = source;
-  readback.dstWire = destination;
-  return readback;
-}
-
-D9CCommandRecordPresent makePresentRecord() {
-  D9CCommandRecordPresent present{};
-  present.header.type = D9C_COMMAND_RECORD_PRESENT;
-  present.header.size = sizeof(present);
-  return present;
-}
-
-bool containsHandle(const std::vector<D9CChunkHandleEntry> &entries,
-                    std::uint32_t kind, std::uint64_t handle) {
-  for (const auto &entry : entries) {
-    if (entry.kind == kind && entry.handle == handle) {
-      return true;
-    }
-  }
-  return false;
-}
-
-struct ImportedReplayObservation {
-  std::uint32_t recordIndex = 0;
-  std::uint32_t recordType = 0;
-  devicec::ImportedRecordReplayCategory category =
-      devicec::ImportedRecordReplayCategory::Unknown;
-  devicec::ImportedReplayOrderingAction action =
-      devicec::ImportedReplayOrderingAction::InvalidRecord;
-  bool hazardBoundary = false;
-  bool barrierBoundary = false;
-  bool synchronousReadBoundary = false;
-};
-
-struct ImportedReplayObserver {
-  std::vector<ImportedReplayObservation> observations;
-  devicec::ImportedChunkHandleSet retainedHandles{};
-
-  void observe(const devicec::ImportedChunkView &chunk) {
-    devicec::ImportedReplayHazardState hazardState{};
-    std::uint32_t offset = 0;
-    std::uint32_t index = 0;
-
-    while (auto record = devicec::nextImportedRecord(chunk, offset, index)) {
-      check(record->valid(), "imported observer sees only valid records");
-      devicec::collectImportedRecordResourceHandles(*record, retainedHandles);
-
-      const auto decision =
-          devicec::evaluateImportedReplayOrdering(*record, hazardState);
-      observations.push_back(ImportedReplayObservation{
-          .recordIndex = record->index,
-          .recordType = record->header.type,
-          .category = decision.replayInfo.category,
-          .action = decision.action,
-          .hazardBoundary = decision.hazardBoundary(),
-          .barrierBoundary = decision.barrierBoundary(),
-          .synchronousReadBoundary =
-              decision.replayInfo.synchronousReadBoundary,
-      });
-
-      hazardState =
-          devicec::nextImportedReplayHazardState(hazardState, decision);
-      offset = record->nextOffset();
-      index = record->nextIndex();
-    }
-  }
-};
 
 CanonicalDrawState makeCanonicalDrawStateForTest(const DrawDesc &desc) {
   auto hot = makeFlatDrawStateRecord(desc);
@@ -346,85 +217,6 @@ ChunkSlotCapacitySnapshot capacitySnapshot(const ChunkSlot &slot) {
       .drawPayloadArena = slot.drawPayloadArena.capacity(),
       .drawRunRecords = slot.drawRunRecords.capacity(),
   };
-}
-
-void testImportedReplayObserverRetainsHandlesAndBoundariesInOrder() {
-  const auto firstDraw = makeHazardDrawRecord(0x3000u, 0x1000u, 0x2000u, 0u);
-  const auto disjointDraw = makeHazardDrawRecord(0x3008u, 0x1008u, 0x2008u, 3u);
-  const auto overlappingDraw =
-      makeHazardDrawRecord(0x3000u, 0x1010u, 0x2010u, 6u);
-  const auto clear = makeClearRecord();
-  const auto stretch = makeStretchRecord(0x4000u, 0x4008u);
-  const auto readback = makeReadbackRecord(0x5000u, 0x5008u);
-  const auto present = makePresentRecord();
-
-  std::vector<std::uint8_t> bytes;
-  appendRecord(bytes, firstDraw);
-  appendRecord(bytes, disjointDraw);
-  appendRecord(bytes, overlappingDraw);
-  appendRecord(bytes, clear);
-  appendRecord(bytes, stretch);
-  appendRecord(bytes, readback);
-  appendRecord(bytes, present);
-
-  const auto chunk = devicec::makeImportedChunkView(
-      bytes.data(), static_cast<std::uint32_t>(bytes.size()), 7u);
-  ImportedReplayObserver observer;
-  observer.observe(chunk);
-
-  checkEq(observer.observations.size(), std::size_t{7},
-          "imported observer records every replay record");
-  for (std::size_t i = 0; i < observer.observations.size(); ++i) {
-    checkEq(observer.observations[i].recordIndex, static_cast<std::uint32_t>(i),
-            "imported observer preserves record-table order");
-  }
-
-  using Category = devicec::ImportedRecordReplayCategory;
-  using Action = devicec::ImportedReplayOrderingAction;
-  const std::array<Category, 7> categories{
-      Category::Draw,    Category::Draw,      Category::Draw,
-      Category::Clear,   Category::SurfaceOp, Category::Readback,
-      Category::Present,
-  };
-  const std::array<Action, 7> actions{
-      Action::Continue,        Action::Continue,
-      Action::HazardBoundary,  Action::BarrierBoundary,
-      Action::BarrierBoundary, Action::SynchronousReadBoundary,
-      Action::BarrierBoundary,
-  };
-  for (std::size_t i = 0; i < categories.size(); ++i) {
-    checkEq(observer.observations[i].category, categories[i],
-            "imported observer records replay category");
-    checkEq(observer.observations[i].action, actions[i],
-            "imported observer records ordering action");
-  }
-  check(observer.observations[2].hazardBoundary,
-        "overlapping draw is reported as a hazard boundary");
-  check(observer.observations[3].barrierBoundary,
-        "clear is reported as a barrier boundary");
-  check(observer.observations[5].barrierBoundary,
-        "readback is also reported as a barrier boundary");
-  check(observer.observations[5].synchronousReadBoundary,
-        "readback keeps its synchronous-read marker");
-
-  const auto retained =
-      devicec::makeImportedChunkHandleEntries(observer.retainedHandles);
-  checkEq(retained.size(), std::size_t{12},
-          "imported observer retains every unique resource handle");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1000u),
-        "retained handles include first draw texture");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x1010u),
-        "retained handles include hazard draw texture");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2008u),
-        "retained handles include disjoint stream buffer");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_BUFFER, 0x2010u),
-        "retained handles include hazard stream buffer");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x3000u),
-        "retained handles dedupe the overlapping render target");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x4008u),
-        "retained handles include stretch destination");
-  check(containsHandle(retained, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x5008u),
-        "retained handles include readback destination");
 }
 
 void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
@@ -1235,7 +1027,6 @@ void testDrawRunSubmissionAcceptedPreviousStateChain() {
 
 int main() {
   try {
-    testImportedReplayObserverRetainsHandlesAndBoundariesInOrder();
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotDrawRunBatchKeepsPerDrawUniformPayloads();
