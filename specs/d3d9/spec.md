@@ -390,6 +390,15 @@ The resulting effective state is exposed to the backend as `FlatDrawStateView`
 plus draw parameters before encoding. The queue stores large uniform data in a
 draw-uniform payload arena and records `{index, generation, hash}` handles on
 draw-run records, so hot PSO/resource decisions do not carry full constant arrays.
+The production snapshot cache maintains a per-stage, per-register content index
+for the shader constant files. Effective `Set*ShaderConstantF/I/B` ranges mark
+only their changed register interval; a snapshot synchronizes those intervals
+and hashes the shader-visible prefix. State-block/reset/unknown mutable-state
+paths invalidate the index and lazily rebuild it from the authoritative
+`DeviceState`. Because the leaves are content-derived, an A→B→A value sequence
+recovers the original identity and preserves uniform-payload deduplication.
+Generation stamps remain invalidation witnesses, not payload identity. Payload
+lookup still validates the exact register counts and bytes before reuse.
 No D3D9 COM objects are referenced across the bridge - only opaque backend handles.
 `fixture::DrawDesc` is retained for tests/offline transforms only and is not a
 production backend input.

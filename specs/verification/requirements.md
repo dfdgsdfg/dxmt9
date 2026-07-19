@@ -133,6 +133,15 @@ exclusive and single-use, `take` from the queue's slot is single-use,
 and `waitDrawable()` eventually returns under fair fulfilment.
 Coverage is provided by `tla/DrawableToken.tla`.
 
+**R-VERIF-3.7** The formal spec must prove the backing-version lifetime
+contract for a logical MANAGED buffer: a draw stamps the exact concrete
+backing captured by its packet; writable upload selects only a backing whose
+last-use sequence has completed or allocates a fresh backing; the logical
+last-use watermark covers every concrete backing watermark and never decreases;
+and logical destruction cannot release any backing still referenced by queued
+or in-flight GPU work. Coverage is provided by
+`tla/BufferBackingVersioning.tla`.
+
 ---
 
 ## 4. Encoder Lifecycle

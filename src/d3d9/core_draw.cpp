@@ -706,12 +706,187 @@ struct DrawUniformPayloadHashOptions {
   const ShaderConstantUsageBounds *pixelUsage = nullptr;
   const DrawUniformPayloadHashes *reusableNonConstantHashes = nullptr;
   const DrawUniformPayloadHashes *reusableShaderConstantHashes = nullptr;
+  detail::ShaderConstantHashIndex<kMaxVertexConstants>
+      *vertexConstantHashIndex = nullptr;
+  detail::ShaderConstantHashIndex<kMaxPixelConstants>
+      *pixelConstantHashIndex = nullptr;
+  u64 vertexConstantGeneration = 0;
+  u64 pixelConstantGeneration = 0;
   bool reuseVertexConstantsHash = false;
   bool reusePixelConstantsHash = false;
   bool vertexUsageFromBytecode = false;
   bool pixelUsageFromBytecode = false;
   bool recordSnapshotPerf = false;
 };
+
+template <std::size_t TreeSize>
+u64 shaderConstantFenwickPrefix(
+    const std::array<u64, TreeSize> &tree, std::size_t count) {
+  count = std::min<std::size_t>(count, TreeSize - 1u);
+  u64 hash = 0;
+  for (auto index = count; index != 0; index -= index & (~index + 1u)) {
+    hash ^= tree[index];
+  }
+  return hash;
+}
+
+template <std::size_t TreeSize>
+void setShaderConstantFenwickValue(
+    std::array<u64, TreeSize> &tree, std::size_t index, u64 value) {
+  if (index >= TreeSize - 1u) {
+    return;
+  }
+  const auto previous =
+      shaderConstantFenwickPrefix(tree, index + 1u) ^
+      shaderConstantFenwickPrefix(tree, index);
+  const auto delta = previous ^ value;
+  for (auto cursor = index + 1u; cursor < TreeSize;
+       cursor += cursor & (~cursor + 1u)) {
+    tree[cursor] ^= delta;
+  }
+}
+
+template <typename T>
+u64 hashShaderConstantRegister(const T &value, std::size_t index, u64 domain) {
+  u64 hash = hashCombine(kFnvOffset, domain);
+  hash = hashCombine(hash, static_cast<u64>(index));
+  hash = hashCombine(hash, hashTrivial(value));
+  return hash;
+}
+
+void clearShaderConstantHashDirtyRange(
+    detail::ShaderConstantHashDirtyRange &range) {
+  range = {};
+}
+
+template <typename Values, std::size_t TreeSize>
+std::uint64_t syncShaderConstantHashDirtyRange(
+    std::array<u64, TreeSize> &tree, const Values &values,
+    detail::ShaderConstantHashDirtyRange &range, u64 domain) {
+  if (!range.dirty) {
+    return 0;
+  }
+  const auto begin =
+      std::min<std::size_t>(range.begin, values.size());
+  const auto end = std::min<std::size_t>(range.end, values.size());
+  for (auto index = begin; index < end; ++index) {
+    setShaderConstantFenwickValue(
+        tree, index,
+        hashShaderConstantRegister(values[index], index, domain));
+  }
+  clearShaderConstantHashDirtyRange(range);
+  return static_cast<std::uint64_t>(end - begin) * sizeof(values[0]);
+}
+
+template <std::size_t FloatCount>
+std::uint64_t syncShaderConstantHashIndex(
+    detail::ShaderConstantHashIndex<FloatCount> &index,
+    const ShaderConstantSnapshot<FloatCount> &constants, u64 generation) {
+  constexpr u64 kFloatDomain = 0x494e4348464c4f41ull;
+  constexpr u64 kIntDomain = 0x494e4348494e5420ull;
+  constexpr u64 kBoolDomain = 0x494e4348424f4f4cull;
+  const bool hasDirtyRange = index.floatDirty.dirty || index.intDirty.dirty ||
+                             index.boolDirty.dirty;
+  if (!index.valid ||
+      (index.generation != generation && !hasDirtyRange)) {
+    index.floatTree.fill(0);
+    index.intTree.fill(0);
+    index.boolTree.fill(0);
+    for (std::size_t i = 0; i < constants.float4.size(); ++i) {
+      setShaderConstantFenwickValue(
+          index.floatTree, i,
+          hashShaderConstantRegister(constants.float4[i], i, kFloatDomain));
+    }
+    for (std::size_t i = 0; i < constants.int4.size(); ++i) {
+      setShaderConstantFenwickValue(
+          index.intTree, i,
+          hashShaderConstantRegister(constants.int4[i], i, kIntDomain));
+    }
+    for (std::size_t i = 0; i < constants.bools.size(); ++i) {
+      setShaderConstantFenwickValue(
+          index.boolTree, i,
+          hashShaderConstantRegister(constants.bools[i], i, kBoolDomain));
+    }
+    clearShaderConstantHashDirtyRange(index.floatDirty);
+    clearShaderConstantHashDirtyRange(index.intDirty);
+    clearShaderConstantHashDirtyRange(index.boolDirty);
+    index.generation = generation;
+    index.valid = true;
+    return sizeof(constants.float4) + sizeof(constants.int4) +
+           sizeof(constants.bools);
+  }
+
+  std::uint64_t bytes = 0;
+  bytes += syncShaderConstantHashDirtyRange(
+      index.floatTree, constants.float4, index.floatDirty, kFloatDomain);
+  bytes += syncShaderConstantHashDirtyRange(
+      index.intTree, constants.int4, index.intDirty, kIntDomain);
+  bytes += syncShaderConstantHashDirtyRange(
+      index.boolTree, constants.bools, index.boolDirty, kBoolDomain);
+  index.generation = generation;
+  index.valid = true;
+  return bytes;
+}
+
+template <std::size_t FloatCount>
+ShaderConstantHashResult hashShaderConstantsIncrementallyForUsage(
+    detail::ShaderConstantHashIndex<FloatCount> &index,
+    const ShaderConstantSnapshot<FloatCount> &constants, u64 generation,
+    const ShaderConstantUsageBounds *usage) {
+  const auto bytes = syncShaderConstantHashIndex(index, constants, generation);
+  const bool full =
+      !usage || usage->unknown || usage->indexedFloat || usage->indexedInt ||
+      usage->indexedBool;
+  const bool indexedFloatOnly =
+      usage && !usage->unknown && usage->indexedFloat && !usage->indexedInt &&
+      !usage->indexedBool;
+  const auto floatCount = static_cast<u16>(
+      full ? FloatCount : std::min<std::size_t>(usage->floatCount, FloatCount));
+  const auto intCount = static_cast<u16>(
+      full && !indexedFloatOnly
+          ? kMaxIntegerConstants
+          : std::min<std::size_t>(usage ? usage->intCount : 0u,
+                                  kMaxIntegerConstants));
+  const auto boolCount = static_cast<u16>(
+      full && !indexedFloatOnly
+          ? kMaxBoolConstants
+          : std::min<std::size_t>(usage ? usage->boolCount : 0u,
+                                  kMaxBoolConstants));
+
+  u64 flags = full ? 1u : 0u;
+  flags |= !usage ? 1u << 1u : 0u;
+  flags |= usage && usage->unknown ? 1u << 2u : 0u;
+  flags |= usage && usage->indexedFloat ? 1u << 3u : 0u;
+  flags |= usage && usage->indexedInt ? 1u << 4u : 0u;
+  flags |= usage && usage->indexedBool ? 1u << 5u : 0u;
+
+  constexpr u64 kIncrementalHashDomain = 0x494e435348434f4eull;
+  u64 hash = hashCombine(kFnvOffset, kIncrementalHashDomain);
+  hash = hashCombine(hash, static_cast<u64>(FloatCount));
+  hash = hashCombine(hash, static_cast<u64>(floatCount));
+  hash = hashCombine(hash,
+                     shaderConstantFenwickPrefix(index.floatTree, floatCount));
+  hash = hashCombine(hash, static_cast<u64>(intCount));
+  hash = hashCombine(hash,
+                     shaderConstantFenwickPrefix(index.intTree, intCount));
+  hash = hashCombine(hash, static_cast<u64>(boolCount));
+  hash = hashCombine(hash,
+                     shaderConstantFenwickPrefix(index.boolTree, boolCount));
+  hash = hashCombine(hash, flags);
+  return ShaderConstantHashResult{
+      .hash = hash,
+      .bytes = bytes,
+      .floatCount = floatCount,
+      .intCount = intCount,
+      .boolCount = boolCount,
+      .full = full,
+      .noUsage = !usage,
+      .unknown = usage ? usage->unknown : false,
+      .indexedFloat = usage ? usage->indexedFloat : false,
+      .indexedInt = usage ? usage->indexedInt : false,
+      .indexedBool = usage ? usage->indexedBool : false,
+  };
+}
 
 template <typename T, std::size_t Count>
 u64 hashArrayPrefix(const std::array<T, Count> &values, std::size_t count) {
@@ -852,8 +1027,11 @@ void hashDrawUniformShaderConstantSnapshots(
   } else {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashCpuTime));
-    const auto result = hashShaderConstantsForUsage(vsConst,
-                                                    options.vertexUsage);
+    const auto result = options.vertexConstantHashIndex
+        ? hashShaderConstantsIncrementallyForUsage(
+              *options.vertexConstantHashIndex, vsConst,
+              options.vertexConstantGeneration, options.vertexUsage)
+        : hashShaderConstantsForUsage(vsConst, options.vertexUsage);
     hashes.vertexConstantsHash = result.hash;
     hashes.vertexConstantsBytes = result.bytes;
     hashes.vertexFloatConstantCount = result.floatCount;
@@ -905,8 +1083,11 @@ void hashDrawUniformShaderConstantSnapshots(
   } else {
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashCpuTime));
-    const auto result = hashShaderConstantsForUsage(psConst,
-                                                    options.pixelUsage);
+    const auto result = options.pixelConstantHashIndex
+        ? hashShaderConstantsIncrementallyForUsage(
+              *options.pixelConstantHashIndex, psConst,
+              options.pixelConstantGeneration, options.pixelUsage)
+        : hashShaderConstantsForUsage(psConst, options.pixelUsage);
     hashes.pixelConstantsHash = result.hash;
     hashes.pixelConstantsBytes = result.bytes;
     hashes.pixelFloatConstantCount = result.floatCount;
@@ -1712,7 +1893,7 @@ u64 hashShaderRef(const ShaderRef &ref) {
   return hash;
 }
 
-} // namespace
+}  // namespace
 
 std::vector<u32> decomposeTriangleFanIndices(std::span<const u32> indices) {
   std::vector<u32> out;
@@ -1906,7 +2087,13 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
     const DrawUniformPayloadHashes *reusableNonConstantHashes = nullptr,
     const DrawUniformPayloadHashes *reusableShaderConstantHashes = nullptr,
     bool reuseVertexConstantsHash = false,
-    bool reusePixelConstantsHash = false) {
+    bool reusePixelConstantsHash = false,
+    u64 vertexConstantGeneration = 0,
+    u64 pixelConstantGeneration = 0,
+    detail::ShaderConstantHashIndex<kMaxVertexConstants>
+        *vertexConstantHashIndex = nullptr,
+    detail::ShaderConstantHashIndex<kMaxPixelConstants>
+        *pixelConstantHashIndex = nullptr) {
   const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
@@ -1962,6 +2149,10 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
         .pixelUsage = shaderLayout ? &shaderLayout->pixelConstantUsage : nullptr,
         .reusableNonConstantHashes = reusableNonConstantHashes,
         .reusableShaderConstantHashes = reusableShaderConstantHashes,
+        .vertexConstantHashIndex = vertexConstantHashIndex,
+        .pixelConstantHashIndex = pixelConstantHashIndex,
+        .vertexConstantGeneration = vertexConstantGeneration,
+        .pixelConstantGeneration = pixelConstantGeneration,
         .reuseVertexConstantsHash = reuseVertexConstantsHash,
         .reusePixelConstantsHash = reusePixelConstantsHash,
         .vertexUsageFromBytecode =
@@ -1995,7 +2186,13 @@ void refreshDrawUniformPayloadShaderConstantsFromState(
     const DrawShaderLayoutContext &shaderLayout,
     bool recordSnapshotPerf = false,
     bool reuseVertexConstants = false,
-    bool reusePixelConstants = false) {
+    bool reusePixelConstants = false,
+    u64 vertexConstantGeneration = 0,
+    u64 pixelConstantGeneration = 0,
+    detail::ShaderConstantHashIndex<kMaxVertexConstants>
+        *vertexConstantHashIndex = nullptr,
+    detail::ShaderConstantHashIndex<kMaxPixelConstants>
+        *pixelConstantHashIndex = nullptr) {
   const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
@@ -2020,6 +2217,10 @@ void refreshDrawUniformPayloadShaderConstantsFromState(
         .vertexUsage = &shaderLayout.vertexConstantUsage,
         .pixelUsage = &shaderLayout.pixelConstantUsage,
         .reusableShaderConstantHashes = &componentHashes,
+        .vertexConstantHashIndex = vertexConstantHashIndex,
+        .pixelConstantHashIndex = pixelConstantHashIndex,
+        .vertexConstantGeneration = vertexConstantGeneration,
+        .pixelConstantGeneration = pixelConstantGeneration,
         .reuseVertexConstantsHash = reuseVertexConstants,
         .reusePixelConstantsHash = reusePixelConstants,
         .vertexUsageFromBytecode =
@@ -2958,20 +3159,149 @@ void Device::invalidateDrawUniformCache() noexcept {
   bumpGeneration(drawUniformGeneration_);
 }
 
+namespace {
+
+template <std::size_t FloatCount>
+void invalidateShaderConstantHashIndex(
+    detail::ShaderConstantHashIndex<FloatCount> &index) noexcept {
+  index.valid = false;
+  index.generation = 0;
+  index.floatDirty = {};
+  index.intDirty = {};
+  index.boolDirty = {};
+}
+
+void markShaderConstantHashDirtyRange(
+    detail::ShaderConstantHashDirtyRange &range,
+    u32 start, u32 count, std::size_t limit) noexcept {
+  if (count == 0 || start >= limit) {
+    return;
+  }
+  const auto begin = static_cast<u16>(start);
+  const auto end = static_cast<u16>(std::min<std::uint64_t>(
+      static_cast<std::uint64_t>(start) + count, limit));
+  if (!range.dirty) {
+    range.begin = begin;
+    range.end = end;
+    range.dirty = true;
+    return;
+  }
+  range.begin = std::min(range.begin, begin);
+  range.end = std::max(range.end, end);
+}
+
+template <std::size_t FloatCount>
+bool markShaderConstantHashIndexDirty(
+    detail::ShaderConstantHashIndex<FloatCount> &index,
+    detail::ShaderConstantRegisterClass registerClass,
+    u32 start, u32 count) noexcept {
+  std::size_t limit = 0;
+  detail::ShaderConstantHashDirtyRange *range = nullptr;
+  switch (registerClass) {
+    case detail::ShaderConstantRegisterClass::Float:
+      limit = FloatCount;
+      range = &index.floatDirty;
+      break;
+    case detail::ShaderConstantRegisterClass::Int:
+      limit = kMaxIntegerConstants;
+      range = &index.intDirty;
+      break;
+    case detail::ShaderConstantRegisterClass::Bool:
+      limit = kMaxBoolConstants;
+      range = &index.boolDirty;
+      break;
+  }
+  if (!range || count == 0 || start >= limit) {
+    return false;
+  }
+  markShaderConstantHashDirtyRange(*range, start, count, limit);
+  return true;
+}
+
+} // namespace
+
 void Device::invalidateDrawShaderConstantsCache() noexcept {
   bumpGeneration(drawUniformGeneration_);
   bumpGeneration(drawVertexShaderConstantGeneration_);
   bumpGeneration(drawPixelShaderConstantGeneration_);
+  invalidateShaderConstantHashIndex(drawVertexShaderConstantHashIndex_);
+  invalidateShaderConstantHashIndex(drawPixelShaderConstantHashIndex_);
 }
 
 void Device::invalidateDrawVertexShaderConstantsCache() noexcept {
   bumpGeneration(drawUniformGeneration_);
   bumpGeneration(drawVertexShaderConstantGeneration_);
+  invalidateShaderConstantHashIndex(drawVertexShaderConstantHashIndex_);
 }
 
 void Device::invalidateDrawPixelShaderConstantsCache() noexcept {
   bumpGeneration(drawUniformGeneration_);
   bumpGeneration(drawPixelShaderConstantGeneration_);
+  invalidateShaderConstantHashIndex(drawPixelShaderConstantHashIndex_);
+}
+
+void Device::invalidateDrawVertexShaderConstantsCacheRange(
+    detail::ShaderConstantRegisterClass registerClass,
+    u32 start, u32 count) noexcept {
+  if (!markShaderConstantHashIndexDirty(
+          drawVertexShaderConstantHashIndex_, registerClass, start, count)) {
+    return;
+  }
+  bumpGeneration(drawUniformGeneration_);
+  bumpGeneration(drawVertexShaderConstantGeneration_);
+}
+
+void Device::invalidateDrawPixelShaderConstantsCacheRange(
+    detail::ShaderConstantRegisterClass registerClass,
+    u32 start, u32 count) noexcept {
+  if (!markShaderConstantHashIndexDirty(
+          drawPixelShaderConstantHashIndex_, registerClass, start, count)) {
+    return;
+  }
+  bumpGeneration(drawUniformGeneration_);
+  bumpGeneration(drawPixelShaderConstantGeneration_);
+}
+
+DeviceState &Device::mutableVertexShaderFloatConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawVertexShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Float, start, count);
+  return state_;
+}
+
+DeviceState &Device::mutableVertexShaderIntConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawVertexShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Int, start, count);
+  return state_;
+}
+
+DeviceState &Device::mutableVertexShaderBoolConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawVertexShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Bool, start, count);
+  return state_;
+}
+
+DeviceState &Device::mutablePixelShaderFloatConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawPixelShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Float, start, count);
+  return state_;
+}
+
+DeviceState &Device::mutablePixelShaderIntConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawPixelShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Int, start, count);
+  return state_;
+}
+
+DeviceState &Device::mutablePixelShaderBoolConstantsState(
+    u32 start, u32 count) noexcept {
+  invalidateDrawPixelShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass::Bool, start, count);
+  return state_;
 }
 
 void Device::invalidateDrawUniformNonConstantCache() noexcept {
@@ -3010,6 +3340,12 @@ const Device::CachedBaseDrawState &
 Device::cachedBaseDrawState(bool includeIndexBuffer) {
   auto &cache =
       includeIndexBuffer ? drawStateCacheWithIndex_ : drawStateCacheNoIndex_;
+  const auto vertexConstantGeneration =
+      drawVertexShaderConstantGeneration_;
+  const auto pixelConstantGeneration =
+      drawPixelShaderConstantGeneration_;
+  auto *vertexConstantHashIndex = &drawVertexShaderConstantHashIndex_;
+  auto *pixelConstantHashIndex = &drawPixelShaderConstantHashIndex_;
   const auto refreshUniforms = [&]() {
     const bool reuseVertexConstants =
         cache.vertexShaderConstantGeneration ==
@@ -3023,7 +3359,9 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
       refreshDrawUniformPayloadShaderConstantsFromState(
           state_, cache.uniforms, cache.uniformHashes, cache.shaderLayout,
           /*recordSnapshotPerf=*/true, reuseVertexConstants,
-          reusePixelConstants);
+          reusePixelConstants, vertexConstantGeneration,
+          pixelConstantGeneration, vertexConstantHashIndex,
+          pixelConstantHashIndex);
     }
     {
       PerfScope uniformHashScope(
@@ -3106,7 +3444,9 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
           baseState, cache.shaderLayout.clipPlaneMask, &uniformHashes,
           /*recordSnapshotPerf=*/true, &cache.shaderLayout,
           /*reusableNonConstantHashes=*/nullptr, reusableShaderConstantHashes,
-          reuseVertexConstantsHash, reusePixelConstantsHash);
+          reuseVertexConstantsHash, reusePixelConstantsHash,
+          vertexConstantGeneration, pixelConstantGeneration,
+          vertexConstantHashIndex, pixelConstantHashIndex);
       cache.uniformHashes = uniformHashes;
       cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);
       cache.uniformPayloadHash = cache.uniforms.hash;
@@ -3142,6 +3482,12 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
 const Device::CachedBaseDrawState &
 Device::cachedBaseDrawStateForSubmissionBatch() {
   auto &cache = drawStateCacheBindingAgnostic_;
+  const auto vertexConstantGeneration =
+      drawVertexShaderConstantGeneration_;
+  const auto pixelConstantGeneration =
+      drawPixelShaderConstantGeneration_;
+  auto *vertexConstantHashIndex = &drawVertexShaderConstantHashIndex_;
+  auto *pixelConstantHashIndex = &drawPixelShaderConstantHashIndex_;
   const auto refreshBindingLayout = [&]() {
     refreshShaderLayoutExtraStreamStrides(cache.shaderLayout, state_);
   };
@@ -3163,7 +3509,9 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
               /*recordSnapshotPerf=*/true, &cache.shaderLayout,
               cache.uniformFixedPayloadValid ? &cache.uniformHashes : nullptr,
               &cache.uniformHashes, reuseVertexConstants,
-              reusePixelConstants);
+              reusePixelConstants, vertexConstantGeneration,
+              pixelConstantGeneration, vertexConstantHashIndex,
+              pixelConstantHashIndex);
         }
         cache.uniformHashes = uniformHashes;
       } else {
@@ -3173,7 +3521,9 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
           refreshDrawUniformPayloadShaderConstantsFromState(
               state_, cache.uniforms, cache.uniformHashes, cache.shaderLayout,
               /*recordSnapshotPerf=*/true, reuseVertexConstants,
-              reusePixelConstants);
+              reusePixelConstants, vertexConstantGeneration,
+              pixelConstantGeneration, vertexConstantHashIndex,
+              pixelConstantHashIndex);
         }
       }
       cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);
@@ -3405,7 +3755,9 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
         refreshDrawUniformPayloadShaderConstantsFromState(
             state_, cache.uniforms, uniformHashes, cache.shaderLayout,
             /*recordSnapshotPerf=*/true, reuseVertexConstantsHash,
-            reusePixelConstantsHash);
+            reusePixelConstantsHash, vertexConstantGeneration,
+            pixelConstantGeneration, vertexConstantHashIndex,
+            pixelConstantHashIndex);
         cache.uniformHashes = uniformHashes;
       } else {
         PerfScope uniformBuildScope(
@@ -3419,7 +3771,9 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
             state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
             /*recordSnapshotPerf=*/true, &cache.shaderLayout,
             reusableNonConstantHashes, reusableShaderConstantHashes,
-            reuseVertexConstantsHash, reusePixelConstantsHash);
+            reuseVertexConstantsHash, reusePixelConstantsHash,
+            vertexConstantGeneration, pixelConstantGeneration,
+            vertexConstantHashIndex, pixelConstantHashIndex);
         cache.uniformHashes = uniformHashes;
       }
       cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);

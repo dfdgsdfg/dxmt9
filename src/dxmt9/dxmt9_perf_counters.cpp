@@ -1735,6 +1735,11 @@ struct Counters {
   std::atomic<std::uint64_t> mapBufferNoOverwrite{0};
   std::atomic<std::uint64_t> mapBufferReadOnly{0};
   std::atomic<std::uint64_t> mapBufferPlain{0};
+  std::atomic<std::uint64_t> managedBufferUploads{0};
+  std::atomic<std::uint64_t> managedBufferUploadBytes{0};
+  std::atomic<std::uint64_t> managedBufferBackingInPlace{0};
+  std::atomic<std::uint64_t> managedBufferBackingReuse{0};
+  std::atomic<std::uint64_t> managedBufferBackingFresh{0};
   std::atomic<std::uint64_t> presentBoundaryApplied{0};
   std::atomic<std::uint64_t> presentBoundarySkipped{0};
   std::atomic<std::uint64_t> presentBoundaryDeferred{0};
@@ -4021,6 +4026,11 @@ constexpr CounterEntry kCounterTable[] = {
     {"map_buffer_nooverwrite", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferNoOverwrite, nullptr, nullptr, 0.0},
     {"map_buffer_readonly", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferReadOnly, nullptr, nullptr, 0.0},
     {"map_buffer_plain", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferPlain, nullptr, nullptr, 0.0},
+    {"managed_buffer_uploads", CounterEntry::Kind::UnsignedCount, &Counters::managedBufferUploads, nullptr, nullptr, 0.0},
+    {"managed_buffer_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::managedBufferUploadBytes, nullptr, nullptr, 0.0},
+    {"managed_buffer_backing_in_place", CounterEntry::Kind::UnsignedCount, &Counters::managedBufferBackingInPlace, nullptr, nullptr, 0.0},
+    {"managed_buffer_backing_reuse", CounterEntry::Kind::UnsignedCount, &Counters::managedBufferBackingReuse, nullptr, nullptr, 0.0},
+    {"managed_buffer_backing_fresh", CounterEntry::Kind::UnsignedCount, &Counters::managedBufferBackingFresh, nullptr, nullptr, 0.0},
     {"present_boundary_applied", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryApplied, nullptr, nullptr, 0.0},
     {"present_boundary_skipped", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundarySkipped, nullptr, nullptr, 0.0},
     {"present_boundary_deferred", CounterEntry::Kind::UnsignedCount, &Counters::presentBoundaryDeferred, nullptr, nullptr, 0.0},
@@ -8892,6 +8902,23 @@ void countMapBufferWait(std::uint64_t totalNanoseconds,
   if (noOverwrite) add(c.mapBufferNoOverwrite);
   if (readOnly) add(c.mapBufferReadOnly);
   if (!discard && !noOverwrite) add(c.mapBufferPlain);
+}
+
+void countManagedBufferUpload(std::uint64_t bytes) {
+  add(counters().managedBufferUploads);
+  add(counters().managedBufferUploadBytes, bytes);
+}
+
+void countManagedBufferBackingInPlace() {
+  add(counters().managedBufferBackingInPlace);
+}
+
+void countManagedBufferBackingReuse() {
+  add(counters().managedBufferBackingReuse);
+}
+
+void countManagedBufferBackingFresh() {
+  add(counters().managedBufferBackingFresh);
 }
 
 void countPresentBoundaryApplied() {

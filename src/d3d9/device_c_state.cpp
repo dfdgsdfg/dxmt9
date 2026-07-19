@@ -378,7 +378,8 @@ extern "C" int32_t dxmt9c_device_set_vs_const_i(D9CDevice* d, uint32_t s, const 
   if (effectiveCount == 0u || intConstantsMatch(current, s, data, effectiveCount)) {
     return dxmt9::core::D3D_OK;
   }
-  auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+  auto& consts =
+      d->dev().mutableVertexShaderIntConstantsState(s, effectiveCount).vsConst;
   writeIntConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
@@ -390,7 +391,8 @@ extern "C" int32_t dxmt9c_device_set_ps_const_i(D9CDevice* d, uint32_t s, const 
   if (effectiveCount == 0u || intConstantsMatch(current, s, data, effectiveCount)) {
     return dxmt9::core::D3D_OK;
   }
-  auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+  auto& consts =
+      d->dev().mutablePixelShaderIntConstantsState(s, effectiveCount).psConst;
   writeIntConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
@@ -402,7 +404,8 @@ extern "C" int32_t dxmt9c_device_set_vs_const_b(D9CDevice* d, uint32_t s,
   if (effectiveCount == 0u || boolConstantsMatch(current, s, data, effectiveCount)) {
     return dxmt9::core::D3D_OK;
   }
-  auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+  auto& consts =
+      d->dev().mutableVertexShaderBoolConstantsState(s, effectiveCount).vsConst;
   writeBoolConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }
@@ -414,7 +417,8 @@ extern "C" int32_t dxmt9c_device_set_ps_const_b(D9CDevice* d, uint32_t s,
   if (effectiveCount == 0u || boolConstantsMatch(current, s, data, effectiveCount)) {
     return dxmt9::core::D3D_OK;
   }
-  auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+  auto& consts =
+      d->dev().mutablePixelShaderBoolConstantsState(s, effectiveCount).psConst;
   writeBoolConstants(consts, s, data, effectiveCount);
   return dxmt9::core::D3D_OK;
 }

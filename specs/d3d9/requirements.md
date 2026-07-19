@@ -714,3 +714,11 @@ inputs and outputs. Tests must be able to exercise them with synthetic
 `DeviceState` values, draw arguments, shader bytecode, backend capability
 descriptors, and expected packet/IR/MSL/resource-reference outputs without
 creating a real D3D9 device, loading `winemetal.so`, or submitting work to Metal.
+
+**R-CORE-11.19** The production draw-snapshot cache must derive vertex and pixel
+shader constant identity from the effective constant contents and the
+shader-visible register ranges. Effective range writes may update an incremental
+index, while broad or unknown state mutation must invalidate that index and force
+a rebuild before reuse. Equal contents and usage must recover the same identity
+after an A→B→A sequence; generation-only identity is insufficient. A hash match
+must not bypass the authoritative payload shape and byte comparison.

@@ -27,6 +27,7 @@ precise and machine-checkable.
 | `archicture/spec.md` §6 / `backend/spec.md` §2.2 | `tla/QueueLifecycleRefinement.tla` | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` |
 | `backend/spec.md` §3 | `tla/EncoderLifecycle.tla` | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers |
 | `backend/spec.md` §5 / §7 | `tla/ResourceLifetime.tla` | `src/dxmt9/dxmt9_resource_pool.*` |
+| `backend/spec.md` §5 / R-BACK-5.11 | `tla/BufferBackingVersioning.tla` | `src/dxmt9/dxmt9_resource_pool.*`, draw binding snapshots in `src/dxmt9/dxmt9_command_queue.cpp` |
 | `backend/spec.md` §8 / §8.1 | `tla/PresentFrameLatency.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` |
 | `backend/spec.md` §6.5 (pacing independence) | `tla/ConcurrentProgressSignals.tla` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` |
 | `backend/spec.md` §8.2 (drawable token handoff) | `tla/DrawableToken.tla` | `src/dxmt9/dxmt9_presenter.*` (PresentDrawableToken), `src/dxmt9/dxmt9_command_queue.*` (stash/take) |
@@ -63,6 +64,8 @@ specs/verification/
     ├── PresentIdAba.cfg
     ├── ResourceLifetime.tla  Deferred GPU resource destruction
     ├── ResourceLifetime.cfg
+    ├── BufferBackingVersioning.tla  MANAGED concrete-backing reuse lifetime
+    ├── BufferBackingVersioning.cfg
     ├── EncoderLifecycle.tla  MTLCommandEncoder state machine
     ├── EncoderLifecycle.cfg
     ├── QuerySeqId.tla     D3D9 query seq-ID fence
@@ -173,6 +176,8 @@ exercise all structural behaviors while keeping the state space tractable.
 | PresentIdAba | `Slots` / `Entities` / `MAX_GEN` / `MAX_OPS` | `{s1,s2}` / `{p1,p2}` / 3 / 6 | unbounded slots, generation domain = 2^24 (`HandleArena::kGenerationBits`) |
 | ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
 | ResourceLifetime | `MAX_SEQID` | 5 | unbounded |
+| BufferBackingVersioning | `Backings` | `{b1,b2,b3}` | grow-only per-buffer backing ring |
+| BufferBackingVersioning | `MAX_SEQID` | 3 | unbounded |
 | EncoderLifecycle | `RenderTargets` | `{rt1,rt2}` | dynamic |
 | EncoderLifecycle | `MAX_OPS` | 8 | unbounded |
 | QuerySeqId | `MAX_QUERIES` | 3 | dynamic |
@@ -241,6 +246,7 @@ or reviewing a TLA+ module.
 | `WireHandleGeneration.tla` | PE → unix cross-side generation-stamp gate on `D9CCommandChunkWireHandleEntryV2` | `src/d3d9/d3d9_pe_chunk_v2_builder.*`, `src/d3d9/device_c_chunk_v2_registry.cpp`, `src/dxmt9/dxmt9_resource_pool.hpp` (`HandleArena`, `kGenerationBits=24`), `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `StampedMatchesArenaOnAdmit`, `NoForwardInconsistency` | `EventuallyDecided`, `EventuallyRejectStale` | `tests/native/bridge/chunk_record_v2_registry_spec.cpp`, `tests/native/bridge/chunk_record_v2_validation_spec.cpp`, `tests/native/bridge/chunk_record_v2_layout_spec.cpp` |
 | `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_v2_registry_spec.cpp` (generation reuse/reject path); _(gap: no dedicated `HandleArena` slot-reuse spec)_ |
 | `ResourceLifetime.tla` | Deferred GPU resource destruction; `lastUsedSeqId ≤ completedSeqId` before free | `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `NoUseAfterFree` | `DestroyPendingEventuallyFreed` | `tests/native/backend/resource_hazard_spec.cpp`, `tests/native/core/resource_format_boundary_spec.cpp` |
+| `BufferBackingVersioning.tla` | MANAGED CPU-shadow upload selects a safe concrete backing and draw packets pin it by sequence | `BufferRecord::renameRing`, `Pool::uploadBufferData`, `Pool::snapshotBufferBinding`, `Pool::markBufferSnapshotUse` | `TypeOK`, `ActiveBackingAllocated`, `LogicalWatermarkCoversEveryBacking`, `NoUploadOverwriteInFlight`, `NoBackingFreedInFlight`, `DestroyPendingCannotFreeEarly` | `DestroyPendingEventuallyFreed` | `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/core/core_device_com_spec.cpp` |
 | `EncoderLifecycle.tla` | `MTLCommandEncoder` mutual exclusion + exact hazard sets + Bloom-as-diagnostic | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers | `TypeOK`, `KindSwitchThroughIdle`, `RenderTargetConsistency`, `ExactHazardBlocksMerge`, `BloomNeverForcesSplit` | `ActiveEncoderEventuallyEnds` | `tests/native/backend/resource_hazard_v2_spec.cpp` |
 | `QuerySeqId.tla` | D3D9 query seq-ID fence; `D3DGETDATA_FLUSH` deadlock freedom | `src/d3d9/core.cpp`, `src/d3d9/core_query.cpp` | `TypeOK`, `QueryResolutionSafety`, `SeqIdMonotone` | `QueriesEventuallyResolve`, `NoDeadlockOnFlushSpin` | `tests/conformance/d3d9/d3d9_queries.cpp`, `tests/native/core/core_device_lifecycle_spec.cpp` |
 

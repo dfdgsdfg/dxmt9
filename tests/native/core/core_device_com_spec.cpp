@@ -3,6 +3,7 @@
 #include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -142,6 +143,7 @@ void testComWrappersEx() {
   {
     device->AddRef();
     D9CDevice cDevice(device);
+
     check(dxmt9c_device_create_state_block(&cDevice, 0) == nullptr, "reject invalid state block type");
     auto* cStateBlock = dxmt9c_device_create_state_block(&cDevice, 1);
     check(cStateBlock != nullptr, "create c state block");
@@ -1303,6 +1305,17 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
     device->AddRef();
     D9CDevice cDevice(device);
 
+    ShaderRef vertexShader{};
+    vertexShader.kind = ShaderRef::Kind::Bytecode;
+    vertexShader.hash = 0x1020304050607080ull;
+    checkEq(device->coreDevice().setVertexShader(vertexShader), D3D_OK,
+            "bind unknown-usage VS for full constant hash coverage");
+    ShaderRef pixelShader{};
+    pixelShader.kind = ShaderRef::Kind::Bytecode;
+    pixelShader.hash = 0x8070605040302010ull;
+    checkEq(device->coreDevice().setPixelShader(pixelShader), D3D_OK,
+            "bind unknown-usage PS for full constant hash coverage");
+
     const std::array<float, 4> vsFloat{1.0f, 2.0f, 3.0f, 4.0f};
     checkEq(dxmt9c_device_set_vs_const_f(&cDevice, 3u, vsFloat.data(), 1u),
             D3D_OK, "initial VS float const set");
@@ -1337,6 +1350,9 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
     checkEq(third.uniformPayload().vertexConstantsHash,
             first.uniformPayload().vertexConstantsHash,
             "changed PS const keeps cached VS constant hash");
+    check(third.uniformPayload().pixelConstantsHash !=
+              first.uniformPayload().pixelConstantsHash,
+          "effective PS const write changes the content hash");
 
     checkEq(dxmt9c_device_set_ps_const_i(&cDevice, 2u, psInt.data(), 1u),
             D3D_OK, "redundant PS int const set");
@@ -1360,6 +1376,9 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
     checkEq(fifth.uniformPayload().pixelConstantsHash,
             third.uniformPayload().pixelConstantsHash,
             "changed VS const keeps cached PS constant hash");
+    check(fifth.uniformPayload().vertexConstantsHash !=
+              third.uniformPayload().vertexConstantsHash,
+          "effective VS const write changes the content hash");
 
     checkEq(dxmt9c_device_set_vs_const_b(&cDevice, 4u, vsBool.data(), 2u),
             D3D_OK, "redundant VS bool const set");
@@ -1369,6 +1388,35 @@ void testRedundantShaderConstSetKeepsUniformSnapshotReusable() {
             D3D_OK, "sixth draw submission snapshot");
     check(!sixth.uniforms.has_value(),
           "redundant VS bool const set does not invalidate uniform snapshot");
+
+    const std::array<uint32_t, 2> restoredVsBool{0u, 0u};
+    checkEq(dxmt9c_device_set_vs_const_b(
+                &cDevice, 4u, restoredVsBool.data(), restoredVsBool.size()),
+            D3D_OK, "restore VS bool constants to prior contents");
+    DrawRunSubmission seventh{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, seventh, &sixth),
+            D3D_OK, "seventh draw submission snapshot");
+    check(seventh.uniforms.has_value(),
+          "effective VS bool restore refreshes uniforms");
+    checkEq(seventh.uniformPayload().vsConst, third.uniformPayload().vsConst,
+            "VS constant contents return to the prior snapshot");
+    checkEq(seventh.uniformPayload().vertexConstantsHash,
+            third.uniformPayload().vertexConstantsHash,
+            "incremental content hash recovers across A-B-A contents");
+
+    auto& broadVsConstants =
+        device->coreDevice().mutableVertexShaderConstantsState().vsConst;
+    broadVsConstants.bools[4] = true;
+    DrawRunSubmission eighth{};
+    checkEq(device->coreDevice().snapshotDrawSubmissionFromCurrentState(
+                draw, eighth, &seventh),
+            D3D_OK, "eighth draw submission snapshot");
+    check(eighth.uniforms.has_value(),
+          "broad VS constant mutation refreshes uniforms");
+    check(eighth.uniformPayload().vertexConstantsHash !=
+              seventh.uniformPayload().vertexConstantsHash,
+          "broad mutation lazily rebuilds the content index");
   }
   checkEq(device->Release(), 0u, "redundant shader const device release");
   checkEq(d3d->Release(), 0u, "redundant shader const factory release");
@@ -1441,6 +1489,62 @@ void testZeroSizeBufferLockUsesTailRange() {
   }
   checkEq(device->Release(), 0u, "zero-size lock device release");
   checkEq(d3d->Release(), 0u, "zero-size lock factory release");
+}
+
+void testManagedPartialBufferLockUploadsFullCpuShadow() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for MANAGED partial buffer lock");
+
+  PresentParameters params{};
+  params.backBufferWidth = 320;
+  params.backBufferHeight = 240;
+  params.windowed = true;
+
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for MANAGED partial buffer lock");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    // D3DPOOL_MANAGED == 1. R-BACK-5.11 keeps the complete CPU shadow
+    // authoritative even when a writable lock exposes only a subrange.
+    auto* buffer = dxmt9c_device_create_vertex_buffer(&cDevice, 8, 0, 0, 1u);
+    check(buffer != nullptr, "create MANAGED partial-lock buffer");
+
+    void* data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 8, &data, 0), D3D_OK,
+            "initial MANAGED full lock");
+    const std::array<uint8_t, 8> initial{0, 1, 2, 3, 4, 5, 6, 7};
+    std::memcpy(data, initial.data(), initial.size());
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "initial MANAGED full unlock");
+
+    data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 2, 3, &data, 0), D3D_OK,
+            "MANAGED partial lock");
+    const std::array<uint8_t, 3> patch{0xa2, 0xa3, 0xa4};
+    std::memcpy(data, patch.data(), patch.size());
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "MANAGED partial unlock");
+
+    checkEq(backend->bufferUploads.size(), size_t{2},
+            "MANAGED partial unlock uploads once");
+    const auto& upload = backend->bufferUploads.back().second;
+    const std::array<uint8_t, 8> expected{0, 1, 0xa2, 0xa3,
+                                           0xa4, 5, 6, 7};
+    checkEq(upload.size(), expected.size(),
+            "MANAGED partial unlock uploads the full buffer extent");
+    check(std::equal(upload.begin(), upload.end(), expected.begin()),
+          "MANAGED partial unlock preserves bytes outside the lock range");
+
+    checkEq(dxmt9c_buffer_release(buffer), 0u,
+            "MANAGED partial-lock buffer release");
+  }
+  checkEq(device->Release(), 0u, "MANAGED partial-lock device release");
+  checkEq(d3d->Release(), 0u, "MANAGED partial-lock factory release");
 }
 
 void testPeBufferReadonlyCacheRangeAndGeneration() {
@@ -1517,6 +1621,7 @@ int main() {
     testRedundantShaderConstSetKeepsUniformSnapshotReusable();
     testDrawRunSubmissionCarrierFootprintCounters();
     testZeroSizeBufferLockUsesTailRange();
+    testManagedPartialBufferLockUploadsFullCpuShadow();
     testPeBufferReadonlyCacheRangeAndGeneration();
     testPeDecimatedScopeStats();
   } catch (const TestFailure& error) {

@@ -312,12 +312,13 @@ heap_pooling_spec = executable(
 
 test('dxmt9-heap-pooling-spec', heap_pooling_spec)
 
-# R-BACK-5.8 — D3DUSAGE_DYNAMIC rename ring fresh-allocate fallback.
-# CPU-only spec: drives Pool::createBuffer + Pool::finalizeBufferMap on
-# a synthetic NULL device so the ring's structural shape (entry count,
-# active index, lastUsedSeqId watermarks) is exercised without a real
-# Metal allocation. Live shared-mode behavior is covered by the runtime
-# integration suite. dxmt9_winemetal_dep is needed because BufferRecord
+# R-BACK-5.8 / 5.11 — DYNAMIC DISCARD and MANAGED writable-upload backing
+# versioning. CPU-only spec: drives Pool create/map/upload on a synthetic NULL
+# device so ring shape and sequence watermarks are exercised without a real
+# Metal allocation. It also pins MANAGED no-wait maps, upload-time rotation,
+# full-shadow copy, sequence-gated reuse, and aggregate destroy lifetime.
+# Live shared-mode behavior is covered by the runtime integration suite.
+# dxmt9_winemetal_dep is needed because BufferRecord
 # and BufferRenameRingEntry hold WMT::Reference<Buffer> destructors
 # that link against winemetal's NSObject_release; the spec only
 # constructs default-initialized references (handle == 0) so no actual

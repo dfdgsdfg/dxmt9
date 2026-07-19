@@ -79,8 +79,8 @@ def collect_source_files() -> list[Path]:
 LINE_COMMENT_RE = re.compile(r"//.*$", re.MULTILINE)
 
 
-def find_callsites(name: str, files: list[Path]) -> list[Path]:
-    """Return every file under src/ (excluding self-TU) that references `name`.
+def collect_callsite_counts(names: list[str], files: list[Path]) -> dict[str, int]:
+    """Count source files that reference each declared counter name.
 
     Matches both direct calls (`name(...)`) and function-pointer passes
     (`PerfScope scope(perf::name);`) since the latter is a real callsite
@@ -90,18 +90,23 @@ def find_callsites(name: str, files: list[Path]) -> list[Path]:
     used to ...` does not count as wired. Block comments are rare in
     dxmt9 sources and the false-positive risk from leaving them in is
     bounded by the meson test running on every change.
+    Read each source file once. The former declaration-major scan reopened and
+    decoded every file for every counter, which made this audit exceed Meson's
+    30-second test timeout as the counter surface grew.
     """
-    pattern = re.compile(r"\b" + re.escape(name) + r"\b")
-    hits: list[Path] = []
+    counts = {name: 0 for name in names}
+    pattern = re.compile(
+        r"\b(?:" + "|".join(re.escape(name) for name in names) + r")\b"
+    )
     for path in files:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         stripped = LINE_COMMENT_RE.sub("", text)
-        if pattern.search(stripped):
-            hits.append(path)
-    return hits
+        for name in set(pattern.findall(stripped)):
+            counts[name] += 1
+    return counts
 
 
 def main() -> int:
@@ -116,14 +121,9 @@ def main() -> int:
 
     source_files = collect_source_files()
 
-    unwired: list[str] = []
-    total_callsites = 0
-    for name in declarations:
-        sites = find_callsites(name, source_files)
-        if not sites:
-            unwired.append(name)
-        else:
-            total_callsites += len(sites)
+    callsite_counts = collect_callsite_counts(declarations, source_files)
+    unwired = [name for name in declarations if callsite_counts[name] == 0]
+    total_callsites = sum(callsite_counts.values())
 
     if unwired:
         print(

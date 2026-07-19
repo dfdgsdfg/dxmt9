@@ -80,11 +80,11 @@ using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
-// R-BACK-5.8 — per-buffer-handle rename ring entry. DYNAMIC + DEFAULT
-// buffers can carry a small inline ring of `MTLStorageModeShared`
-// allocations for `D3DLOCK_DISCARD` renaming. Draw submissions snapshot the
-// concrete Metal buffer backing so already-recorded work does not observe a
-// later DISCARD rotation of the same logical BufferHandle.
+// R-BACK-5.8 / 5.11 — per-buffer-handle backing-version entry. DYNAMIC +
+// DEFAULT buffers rotate these Shared allocations on D3DLOCK_DISCARD;
+// MANAGED buffers rotate them on writable unlock/upload. Draw submissions
+// snapshot the concrete Metal buffer backing so already-recorded work does
+// not observe a later rotation of the same logical BufferHandle.
 struct BufferRenameRingEntry {
   WMT::Reference<WMT::Buffer> buffer;
   void* contents = nullptr;  // shared-mode CPU pointer
@@ -141,16 +141,22 @@ struct BufferRecord {
   // sees the final use.
   bool isHeapBacked = false;
   WMT::Heap heap{};
-  // R-BACK-5.8 — DYNAMIC + DEFAULT rename-ring state. `isDynamicRename`
-  // is set at create time when the storage policy can use the rename
-  // ring (`Pool::Default` + `UsageDynamic`). `renameRing` always carries
-  // at least the create-time allocation; `renameActiveIndex` points at
-  // the entry currently mirrored into `buffer`/`contents`. Runtime
-  // rotation is safe only when draw bindings snapshot concrete ring entries.
+  // R-BACK-5.8 / 5.11 — Shared-buffer backing-version state.
+  // `isDynamicRename` selects DEFAULT+DYNAMIC DISCARD rotation;
+  // `isManagedVersioned` selects MANAGED writable-unlock rotation.
+  // `renameRing` always carries at least the create-time allocation for
+  // either policy, and `renameActiveIndex` points at the entry mirrored into
+  // `buffer` / `contents`. Runtime rotation is safe only when draw bindings
+  // snapshot concrete ring entries.
   bool isDynamicRename = false;
+  bool isManagedVersioned = false;
   u32 renameActiveIndex = 0;
   std::vector<BufferRenameRingEntry> renameRing;
   std::vector<ReorderedIndexBufferCacheEntry> reorderedIndexCache;
+
+  bool hasVersionedBacking() const noexcept {
+    return isDynamicRename || isManagedVersioned;
+  }
 };
 
 struct TextureRecord {
@@ -489,10 +495,15 @@ struct Pool {
     heapManager_.purgeAll();
   }
 
-  // Record a CPU-visible write to a buffer (updates shadow + mirrors to
-  // `contents` if the buffer is shared-mode). Returns true if the handle
-  // resolved. Caller holds the pool's mutex.
-  bool uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount);
+  // Record a CPU-visible write to a buffer. MANAGED writes rotate to an idle
+  // or fresh Shared Metal backing before the full CPU shadow is copied;
+  // other pools mirror into the active `contents` directly. Returns true if
+  // the handle resolved. Caller holds the pool's mutex.
+  bool uploadBufferData(WMT::Device device,
+                        u64 handleValue,
+                        const std::uint8_t* bytes,
+                        std::size_t byteCount,
+                        u64 completedSeqId);
 
   // Look up or create immutable Metal index buffers containing reordered index
   // bytes derived from a stable source buffer. Entries are keyed by source
@@ -524,7 +535,8 @@ struct Pool {
 
   // Returns the seqId the CPU should wait on before this buffer is safe
   // to CPU-map, given `flags`. Returns 0 if the caller may proceed
-  // immediately (UsageNoOverwrite, missing handle, or the buffer is idle).
+  // immediately (UsageNoOverwrite, MANAGED, missing handle, or the buffer is
+  // idle).
   // UsageDiscard skips the wait for DYNAMIC + DEFAULT buffers when dynamic
   // renaming is enabled because draw payloads snapshot the concrete backing.
   // Pure storage-side query; does not consult queue state — the caller
@@ -538,7 +550,9 @@ struct Pool {
   //
   // R-BACK-5.8 — when the record is `isDynamicRename` and `flags` carries
   // `UsageDiscard`, this rotates the per-handle rename ring before returning
-  // the CPU pointer. Non-DYNAMIC paths ignore `device` and `completedSeqId`.
+  // the CPU pointer. MANAGED rotation is deliberately deferred to writable
+  // unlock/upload (R-BACK-5.11), so mapping never mutates an in-flight
+  // MANAGED backing.
   void* finalizeBufferMap(WMT::Device device,
                           core::BufferHandle handle,
                           u32 flags,

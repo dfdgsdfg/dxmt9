@@ -230,6 +230,10 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
   // create-time allocation always lands in the ring's first slot.
   record.isDynamicRename =
       desc.pool == core::Pool::Default && (desc.usage & core::UsageDynamic) != 0u;
+  // R-BACK-5.11 — MANAGED locks write the CPU-authoritative Buffer shadow and
+  // never wait for an in-flight Metal allocation. Writable unlock rotates the
+  // Shared backing before copying the full shadow.
+  record.isManagedVersioned = desc.pool == core::Pool::Managed;
   if (desc.pool != core::Pool::SystemMem && desc.pool != core::Pool::Scratch) {
     WMTBufferInfo info{};
     info.length = desc.size;
@@ -282,13 +286,11 @@ core::BufferHandle Pool::createBuffer(WMT::Device device, const core::BufferDesc
       }
       record.contents = info.memory.ptr;  // shared mode: contents ptr returned in info
     }
-    // R-BACK-5.8 — seed the rename ring with the create-time allocation.
-    // Subsequent DISCARD locks rotate within or grow this ring instead
-    // of blocking on the GPU. We always seed (even when newBuffer
-    // returned NULL_OBJECT_HANDLE in test environments) so the
-    // book-keeping shape stays uniform — `finalizeBufferMap` falls
-    // back to the shadow pointer when contents is null.
-    if (record.isDynamicRename) {
+    // R-BACK-5.8 / 5.11 — seed the version ring with the create-time
+    // allocation. We always seed (even when newBuffer returned
+    // NULL_OBJECT_HANDLE in test environments) so the bookkeeping shape
+    // stays uniform.
+    if (record.hasVersionedBacking()) {
       BufferRenameRingEntry entry;
       entry.buffer = record.buffer;
       entry.contents = record.contents;
@@ -328,6 +330,15 @@ core::BufferHandle Pool::importSharedBuffer(const core::BufferDesc& desc,
   record.buffer = backing.buffer;
   record.contents = backing.contents;
   record.shadow.resize(static_cast<std::size_t>(desc.size));
+  record.isDynamicRename =
+      desc.pool == core::Pool::Default && (desc.usage & core::UsageDynamic) != 0u;
+  record.isManagedVersioned = desc.pool == core::Pool::Managed;
+  if (record.hasVersionedBacking()) {
+    BufferRenameRingEntry entry;
+    entry.buffer = record.buffer;
+    entry.contents = record.contents;
+    record.renameRing.push_back(std::move(entry));
+  }
   const auto handle = bufferArena_.insert(std::move(record));
   if (auto* stored = bufferArena_.find(handle.value); stored && stored->buffer) {
     stored->buffer.setLabel(labels::makeLabelStringFmt(
@@ -948,6 +959,13 @@ void Pool::markBufferUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   bufferArena_.update(handle.value, [seqId](BufferRecord& rec) {
     rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
+    if (rec.hasVersionedBacking() &&
+        rec.renameActiveIndex < rec.renameRing.size()) {
+      auto& active = rec.renameRing[rec.renameActiveIndex];
+      active.lastUsedSeqId = std::max(active.lastUsedSeqId, seqId);
+      // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
+      DXMT_ASSERT(active.lastUsedSeqId <= rec.lastUsedSeqId);
+    }
   });
 }
 
@@ -957,12 +975,14 @@ void Pool::markBufferSnapshotUse(core::Handle handle,
   if (!handle || !snapshot.valid()) return;
   bufferArena_.update(handle.value, [seqId, snapshot](BufferRecord& rec) {
     rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId);
-    if (!rec.isDynamicRename) {
+    if (!rec.hasVersionedBacking()) {
       return;
     }
     for (auto& entry : rec.renameRing) {
       if (entry.buffer && entry.buffer.handle == snapshot.metalHandle) {
         entry.lastUsedSeqId = std::max(entry.lastUsedSeqId, seqId);
+        // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
+        DXMT_ASSERT(entry.lastUsedSeqId <= rec.lastUsedSeqId);
         return;
       }
     }
@@ -974,7 +994,7 @@ Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
   core::DrawBufferBindingSnapshot snapshot{};
   if (!handle) return snapshot;
   bufferArena_.inspect(handle.value, [&snapshot](const BufferRecord& rec) {
-    if (!rec.isDynamicRename || !rec.buffer) {
+    if (!rec.hasVersionedBacking() || !rec.buffer) {
       return;
     }
     snapshot.metalHandle = rec.buffer.handle;
@@ -1051,18 +1071,6 @@ void Pool::markDepthResolveResources(const core::DepthResolveDesc& desc, u64 seq
   // resolve target). Mirrors markStretchResources / markReadbackResources.
   markSurfaceUse(desc.msaaDepth, seqId);
   markSurfaceUse(desc.intzDest, seqId);
-}
-
-bool Pool::uploadBufferData(u64 handleValue, const std::uint8_t* bytes, std::size_t byteCount) {
-  return bufferArena_.update(handleValue, [&](BufferRecord& record) {
-    ++record.contentRevision;
-    record.shadow.assign(bytes, bytes + byteCount);
-    if (!record.buffer || byteCount == 0 || !record.contents) {
-      return;
-    }
-    const std::size_t copySize = std::min(byteCount, static_cast<std::size_t>(record.desc.size));
-    std::memcpy(record.contents, bytes, copySize);
-  });
 }
 
 ReorderedIndexBufferLookup Pool::findReorderedIndexBuffer(
@@ -1269,8 +1277,11 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
   }
   const bool discard = (flags & core::UsageDiscard) != 0;
   u64 waitSeqId = 0;
-  bufferArena_.inspect(handle.value, [flags, discard, &waitSeqId](const BufferRecord& record) {
-    if ((flags & core::UsageReadOnly) != 0 && record.desc.pool == core::Pool::Managed) {
+  bufferArena_.inspect(handle.value, [discard, &waitSeqId](const BufferRecord& record) {
+    // R-BACK-5.11 — the core Buffer's CPU shadow is authoritative for every
+    // MANAGED lock. Read-only locks only inspect it; writable locks publish it
+    // into an idle/fresh backing at unlock, so neither needs a GPU wait here.
+    if (record.isManagedVersioned) {
       return;
     }
     // Draw submissions snapshot the concrete Metal backing for dynamic
@@ -1284,33 +1295,28 @@ u64 Pool::mapWaitSeqId(core::BufferHandle handle, u32 flags) const noexcept {
   return waitSeqId;
 }
 
-// R-BACK-5.8 — rotate a DYNAMIC + DEFAULT buffer's rename ring on
-// `D3DLOCK_DISCARD`. Walk the ring for an idle entry, or append a fresh Shared
-// allocation instead of blocking on prior GPU completion. Mirrors the active
-// entry into `record.buffer / contents / lastUsedSeqId` for the existing bind
-// paths. Caller already serialized on the pool mutex and confirmed
-// `record->isDynamicRename`.
+// R-BACK-5.8 / 5.11 — select an idle Shared backing or append a fresh
+// allocation instead of blocking on prior GPU completion. The logical
+// record's lastUsedSeqId is an aggregate destruction watermark and must remain
+// monotonic; each ring entry owns the concrete backing reuse watermark.
 namespace {
-void rotateDynamicRename(WMT::Device device,
-                         BufferRecord& record,
-                         u64 completedSeqId) {
-  // Stamp the active entry's last-used seqId before rotating away from
-  // it — `record.lastUsedSeqId` carries the watermark from
-  // markBufferUse / markDrawResources, but the ring entry needs its
-  // own copy so a future rename can tell whether this allocation has
-  // drained.
-  if (record.renameActiveIndex < record.renameRing.size()) {
-    record.renameRing[record.renameActiveIndex].lastUsedSeqId =
-        std::max(record.renameRing[record.renameActiveIndex].lastUsedSeqId,
-                 record.lastUsedSeqId);
-  }
+enum class BufferBackingSelection {
+  ActiveIdle,
+  ReusedIdle,
+  Fresh,
+};
+
+BufferBackingSelection rotateBufferBacking(WMT::Device device,
+                                            BufferRecord& record,
+                                            u64 completedSeqId) {
+  DXMT_ASSERT(record.hasVersionedBacking());
+  DXMT_ASSERT(record.renameActiveIndex < record.renameRing.size());
   // Fast path: the active slot is itself idle. The DISCARD only needs
   // a fresh write surface, not a different allocation — return without
   // touching the ring shape. Zero-fill happens in finalizeBufferMap.
   if (record.renameActiveIndex < record.renameRing.size() &&
       record.renameRing[record.renameActiveIndex].lastUsedSeqId <= completedSeqId) {
-    record.lastUsedSeqId = record.renameRing[record.renameActiveIndex].lastUsedSeqId;
-    return;
+    return BufferBackingSelection::ActiveIdle;
   }
   // Look for any other idle entry to rotate into.
   for (std::size_t i = 0; i < record.renameRing.size(); ++i) {
@@ -1318,15 +1324,13 @@ void rotateDynamicRename(WMT::Device device,
       continue;
     }
     if (record.renameRing[i].lastUsedSeqId <= completedSeqId) {
+      // TLA+: BufferBackingVersioning.NoUploadOverwriteInFlight.
+      DXMT_ASSERT(record.renameRing[i].lastUsedSeqId <= completedSeqId);
       record.renameActiveIndex = static_cast<u32>(i);
       auto& entry = record.renameRing[i];
       record.buffer = entry.buffer;
       record.contents = entry.contents;
-      // The new active slot becomes idle until the next bind stamps it
-      // again; reset the per-record watermark so later marks don't
-      // carry forward stale data from the previous active member.
-      record.lastUsedSeqId = entry.lastUsedSeqId;
-      return;
+      return BufferBackingSelection::ReusedIdle;
     }
   }
   // No idle entry anywhere — fresh-allocate per R-BACK-5.8. Do NOT
@@ -1349,9 +1353,52 @@ void rotateDynamicRename(WMT::Device device,
   auto& active = record.renameRing.back();
   record.buffer = active.buffer;
   record.contents = active.contents;
-  record.lastUsedSeqId = 0;
+  return BufferBackingSelection::Fresh;
 }
 }  // namespace
+
+bool Pool::uploadBufferData(WMT::Device device,
+                            u64 handleValue,
+                            const std::uint8_t* bytes,
+                            std::size_t byteCount,
+                            u64 completedSeqId) {
+  return bufferArena_.update(handleValue, [&](BufferRecord& record) {
+    if (record.isManagedVersioned && !record.renameRing.empty()) {
+      const auto selection =
+          rotateBufferBacking(device, record, completedSeqId);
+      // TLA+: BufferBackingVersioning.NoUploadOverwriteInFlight.
+      DXMT_ASSERT(record.renameActiveIndex < record.renameRing.size());
+      DXMT_ASSERT(record.renameRing[record.renameActiveIndex].lastUsedSeqId <=
+                  completedSeqId);
+      perf::countManagedBufferUpload(static_cast<u64>(byteCount));
+      switch (selection) {
+        case BufferBackingSelection::ActiveIdle:
+          perf::countManagedBufferBackingInPlace();
+          break;
+        case BufferBackingSelection::ReusedIdle:
+          perf::countManagedBufferBackingReuse();
+          break;
+        case BufferBackingSelection::Fresh:
+          perf::countManagedBufferBackingFresh();
+          break;
+      }
+    }
+
+    ++record.contentRevision;
+    const std::size_t copySize =
+        std::min(byteCount, static_cast<std::size_t>(record.desc.size));
+    if (record.shadow.size() != static_cast<std::size_t>(record.desc.size)) {
+      record.shadow.resize(static_cast<std::size_t>(record.desc.size));
+    }
+    if (copySize != 0) {
+      std::memcpy(record.shadow.data(), bytes, copySize);
+    }
+    if (copySize == 0 || !record.contents) {
+      return;
+    }
+    std::memcpy(record.contents, bytes, copySize);
+  });
+}
 
 void* Pool::finalizeBufferMap(WMT::Device device,
                               core::BufferHandle handle,
@@ -1364,9 +1411,12 @@ void* Pool::finalizeBufferMap(WMT::Device device,
     if ((flags & core::UsageDiscard) != 0 && record.isDynamicRename &&
         dynamicBufferRenameEnabled() &&
         !record.renameRing.empty()) {
-      rotateDynamicRename(device, record, completedSeqId);
+      rotateBufferBacking(device, record, completedSeqId);
     }
-    if ((flags & core::UsageDiscard) != 0) {
+    // MANAGED DISCARD still operates on the CPU-authoritative core shadow.
+    // Touching the live Metal contents here would corrupt an in-flight draw;
+    // its fresh/idle backing is selected only when writable unlock uploads.
+    if ((flags & core::UsageDiscard) != 0 && !record.isManagedVersioned) {
       ++record.contentRevision;
       std::fill(record.shadow.begin(), record.shadow.end(), 0);
       if (record.contents) {

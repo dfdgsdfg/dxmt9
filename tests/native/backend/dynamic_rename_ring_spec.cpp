@@ -1,9 +1,8 @@
-// R-BACK-5.8 — D3DUSAGE_DYNAMIC rename ring behavior.
+// R-BACK-5.8 / 5.11 — DYNAMIC rename + MANAGED backing-version behavior.
 //
-// This is a CPU-only spec for the per-buffer-handle rename ring carried
-// on `BufferRecord` when a buffer is created as `D3DPOOL_DEFAULT` +
-// `D3DUSAGE_DYNAMIC`. Draw submissions now snapshot the concrete Metal backing
-// for dynamic buffers, so default DISCARD can rotate the ring instead of
+// This is a CPU-only spec for the per-buffer-handle backing ring carried on
+// `BufferRecord`. Draw submissions snapshot the concrete Metal backing so
+// DEFAULT+DYNAMIC DISCARD and MANAGED writable unlock can rotate without
 // waiting for the logical BufferHandle to drain. This spec exercises:
 //
 //   * Create-time tagging (`isDynamicRename`) and ring seeding with the
@@ -13,6 +12,10 @@
 //   * D3DLOCK_DISCARD growing the ring with a fresh allocation when no
 //     idle entry exists rather than blocking on prior GPU completion.
 //   * Ring capacity never shrinks during a session.
+//   * MANAGED maps never wait, rotation happens at upload rather than map,
+//     and the complete CPU shadow is copied into the selected backing.
+//   * Logical destruction keeps the aggregate sequence watermark while
+//     backing entries use their own watermarks for reuse.
 //
 // The spec runs without a Metal device — `WMT::Device{NULL_OBJECT_HANDLE}`
 // makes `MTLDevice_newBuffer` return NULL_OBJECT_HANDLE, so the ring's
@@ -26,6 +29,7 @@
 // MTLStorageModeShared), already enforced at create time in
 // `Pool::createBuffer`.
 
+#include <array>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -33,6 +37,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
@@ -76,6 +81,14 @@ dxmt9::core::BufferDesc staticBufferDesc(std::uint64_t size = 64u) {
   desc.size = size;
   desc.pool = dxmt9::core::Pool::Default;
   desc.usage = 0u;  // no UsageDynamic
+  return desc;
+}
+
+dxmt9::core::BufferDesc managedBufferDesc(std::uint64_t size = 64u) {
+  dxmt9::core::BufferDesc desc{};
+  desc.size = size;
+  desc.pool = dxmt9::core::Pool::Managed;
+  desc.usage = 0u;
   return desc;
 }
 
@@ -161,8 +174,8 @@ void testDiscardWithInflightUseGrowsTheRing() {
           "rotated-out entry retains its last-used watermark");
   checkEq(record->renameRing[1].lastUsedSeqId, std::uint64_t{0u},
           "freshly appended entry starts idle (lastUsedSeqId == 0)");
-  checkEq(record->lastUsedSeqId, std::uint64_t{0u},
-          "active record watermark resets when rotating to a fresh entry");
+  checkEq(record->lastUsedSeqId, std::uint64_t{5u},
+          "logical record keeps its aggregate destruction watermark");
 }
 
 void testDiscardReusesIdleEntryAcrossRing() {
@@ -268,6 +281,172 @@ void testConcreteSnapshotMarkProtectsRotatedBacking() {
           "snapshot mark also advances the logical buffer watermark");
 }
 
+void testManagedCreateSeedsVersionRing() {
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, managedBufferDesc());
+  auto* record = resourcePool.findBuffer(handle.value);
+  check(record != nullptr, "MANAGED create returns a record");
+  check(record->isManagedVersioned,
+        "MANAGED buffer selects writable-unlock backing versioning");
+  check(!record->isDynamicRename,
+        "MANAGED versioning is distinct from DEFAULT+DYNAMIC DISCARD");
+  checkEq(record->renameRing.size(), std::size_t{1u},
+          "MANAGED buffer seeds the create-time backing version");
+}
+
+void testManagedWritableMapNeverWaitsButDefaultPlainDoes() {
+  using namespace dxmt9::core;
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto managed = resourcePool.createBuffer(dev, managedBufferDesc());
+  resourcePool.markBufferUse(managed, /*seqId=*/9u);
+  checkEq(resourcePool.mapWaitSeqId(managed, /*flags=*/0u), std::uint64_t{0u},
+          "writable MANAGED plain map reads CPU shadow without waiting");
+  checkEq(resourcePool.mapWaitSeqId(managed, UsageReadOnly), std::uint64_t{0u},
+          "read-only MANAGED map also reads CPU shadow without waiting");
+  checkEq(resourcePool.mapWaitSeqId(managed, UsageDiscard), std::uint64_t{0u},
+          "MANAGED DISCARD map does not wait for the live Metal backing");
+
+  const auto plain = resourcePool.createBuffer(dev, staticBufferDesc());
+  resourcePool.markBufferUse(plain, /*seqId=*/7u);
+  checkEq(resourcePool.mapWaitSeqId(plain, /*flags=*/0u), std::uint64_t{7u},
+          "non-versioned DEFAULT plain map retains the sequence wait contract");
+}
+
+void testManagedUploadRotatesAfterMapAndCopiesFullShadow() {
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, managedBufferDesc(16u));
+  auto* record = resourcePool.findBuffer(handle.value);
+  check(record != nullptr, "MANAGED upload test record exists");
+
+  std::array<std::uint8_t, 16> oldBacking{};
+  oldBacking.fill(0x44u);
+  std::array<std::uint8_t, 16> idleBacking{};
+  idleBacking.fill(0xccu);
+  record->renameRing[0].contents = oldBacking.data();
+  record->contents = oldBacking.data();
+  record->renameRing.emplace_back();
+  record->renameRing[1].contents = idleBacking.data();
+
+  resourcePool.markBufferUse(handle, /*seqId=*/5u);
+  resourcePool.finalizeBufferMap(dev, handle, /*flags=*/0u,
+                                 /*completedSeqId=*/4u);
+  checkEq(record->renameActiveIndex, 0u,
+          "MANAGED map itself does not rotate the backing");
+
+  const std::array<std::uint8_t, 16> fullShadow{
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+  check(resourcePool.uploadBufferData(dev, handle.value,
+                                      fullShadow.data(), fullShadow.size(),
+                                      /*completedSeqId=*/4u),
+        "MANAGED writable unlock upload resolves the buffer");
+  checkEq(record->renameActiveIndex, 1u,
+          "upload rotates away from the in-flight backing");
+  check(oldBacking == std::array<std::uint8_t, 16>{
+                          0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
+                          0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44},
+        "upload never overwrites the in-flight old backing");
+  check(idleBacking == fullShadow,
+        "upload copies the complete CPU shadow into the selected backing");
+  check(record->shadow ==
+            std::vector<std::uint8_t>(fullShadow.begin(), fullShadow.end()),
+        "pool shadow retains the complete uploaded buffer contents");
+  checkEq(record->lastUsedSeqId, std::uint64_t{5u},
+          "rotation does not lower the logical destruction watermark");
+}
+
+void testManagedUploadGrowsThenReusesOnlyCompletedBacking() {
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, managedBufferDesc(4u));
+  const std::array<std::uint8_t, 4> bytes{1, 2, 3, 4};
+
+  resourcePool.markBufferUse(handle, /*seqId=*/5u);
+  check(resourcePool.uploadBufferData(dev, handle.value, bytes.data(), bytes.size(),
+                                      /*completedSeqId=*/4u),
+        "MANAGED upload grows when the sole backing is in flight");
+  auto* record = resourcePool.findBuffer(handle.value);
+  checkEq(record->renameRing.size(), std::size_t{2u},
+          "no-idle MANAGED upload appends a fresh backing");
+  checkEq(record->renameActiveIndex, 1u,
+          "fresh MANAGED backing becomes active");
+  checkEq(record->renameRing[0].lastUsedSeqId, std::uint64_t{5u},
+          "retired backing keeps the sequence that references it");
+
+  resourcePool.markBufferUse(handle, /*seqId=*/7u);
+  check(resourcePool.uploadBufferData(dev, handle.value, bytes.data(), bytes.size(),
+                                      /*completedSeqId=*/5u),
+        "later MANAGED upload resolves the existing buffer");
+  checkEq(record->renameRing.size(), std::size_t{2u},
+          "completed old backing is reused instead of growing again");
+  checkEq(record->renameActiveIndex, 0u,
+          "reuse selects the backing whose sequence reached completion");
+  checkEq(record->renameRing[1].lastUsedSeqId, std::uint64_t{7u},
+          "still-in-flight backing is not selected for overwrite");
+}
+
+void testManagedDiscardMapDoesNotOverwriteInflightBacking() {
+  using namespace dxmt9::core;
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, managedBufferDesc(8u));
+  auto* record = resourcePool.findBuffer(handle.value);
+  std::array<std::uint8_t, 8> liveBacking{};
+  liveBacking.fill(0xa5u);
+  record->renameRing[0].contents = liveBacking.data();
+  record->contents = liveBacking.data();
+  resourcePool.markBufferUse(handle, /*seqId=*/3u);
+
+  resourcePool.finalizeBufferMap(dev, handle, UsageDiscard,
+                                 /*completedSeqId=*/0u);
+  std::array<std::uint8_t, 8> expected{};
+  expected.fill(0xa5u);
+  check(liveBacking == expected,
+        "MANAGED DISCARD map leaves the in-flight Metal contents untouched");
+}
+
+void testManagedSnapshotMarksConcreteBackingAndPinsDestroy() {
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, managedBufferDesc());
+  auto* record = resourcePool.findBuffer(handle.value);
+  SyntheticBufferHandleGuard handleGuard{record};
+  constexpr obj_handle_t metalHandle = 0x9abcu;
+  record->buffer.handle = metalHandle;
+  record->renameRing[0].buffer.handle = metalHandle;
+
+  const auto snapshot = resourcePool.snapshotBufferBinding(handle);
+  checkEq(snapshot.metalHandle, metalHandle,
+          "MANAGED draw snapshot captures the concrete active backing");
+  resourcePool.markBufferSnapshotUse(handle, snapshot, /*seqId=*/11u);
+  checkEq(record->renameRing[0].lastUsedSeqId, std::uint64_t{11u},
+          "MANAGED snapshot stamps the matching backing watermark");
+  checkEq(record->lastUsedSeqId, std::uint64_t{11u},
+          "MANAGED snapshot advances the logical destruction watermark");
+
+  // Clear the synthetic handles before testing arena reclamation so
+  // WMT::Reference destruction never forwards them to NSObject_release.
+  record->buffer.handle = NULL_OBJECT_HANDLE;
+  record->renameRing[0].buffer.handle = NULL_OBJECT_HANDLE;
+  check(resourcePool.markBufferDestroyAndGc(handle.value,
+                                             /*completedSeqId=*/10u),
+        "destroy-pending MANAGED buffer is found");
+  check(resourcePool.findBuffer(handle.value) != nullptr,
+        "logical record and all backing references survive before seq 11");
+  resourcePool.reclaimCompleted(/*completedSeqId=*/11u);
+  check(resourcePool.findBuffer(handle.value) == nullptr,
+        "logical record is reclaimed only after its snapshot sequence completes");
+  handleGuard.record = nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +459,12 @@ int main() {
     testRingNeverShrinksOnSubsequentDiscards();
     testNonDiscardLockSkipsRotation();
     testConcreteSnapshotMarkProtectsRotatedBacking();
+    testManagedCreateSeedsVersionRing();
+    testManagedWritableMapNeverWaitsButDefaultPlainDoes();
+    testManagedUploadRotatesAfterMapAndCopiesFullShadow();
+    testManagedUploadGrowsThenReusesOnlyCompletedBacking();
+    testManagedDiscardMapDoesNotOverwriteInflightBacking();
+    testManagedSnapshotMarksConcreteBackingAndPinsDestroy();
   } catch (const TestFailure& e) {
     std::cerr << "dynamic_rename_ring_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

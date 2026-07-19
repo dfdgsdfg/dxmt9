@@ -5,7 +5,7 @@ title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
 updated: 2026-07-19
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -46,7 +46,7 @@ run-to-run FPS range.
 | Workload | Sampled average FPS | Wall p50 / p95 | GPU CB p50 / p95 | GPU errors |
 |---|---:|---:|---:|---:|
 | [3DMark05 GT1](overview-3dmark05-gt1.md) | `21.009` (`20.919-21.189`) | `43.188 / 64.966ms` | `4.684 / 21.749ms` | `0` |
-| [3DMark05 GT2](overview-3dmark05-gt2.md) | `7.428` (`7.392-7.435`) | `101.918 / 337.659ms` | `18.947 / 27.043ms` | `0` |
+| [3DMark05 GT2](overview-3dmark05-gt2.md) | `7.868` (`7.841-7.889`) | `113.041 / 166.424ms` | `24.514 / 40.755ms` | `0` |
 | [3DMark05 GT3](overview-3dmark05-gt3.md) | `27.858` (`27.809-27.998`) | `29.094 / 85.705ms` | `11.275 / 13.661ms` | `0` |
 | [SFIV Benchmark](overview-sfiv.md) | `44.668` (`44.415-44.922`) | `16.751 / 49.728ms` | `2.725 / 8.005ms` | `0` |
 
@@ -56,6 +56,18 @@ and replaced by the successful `r3-retry1` run. SFIV also has a separate
 260.6-second stability sample (`42.684` sampled FPS, GPU CB p50/p95
 `3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
 median.
+
+GT2 is the one row newer than the original `153cacb14f2f` baseline: MANAGED
+buffer backing versioning removes `42.4ms/present` of writable-map sequence
+wait, and the default range-incremental shader-constant content index reduces
+snapshot CPU `15.8%` (`12.164 -> 10.248ms/present`) while preserving payload
+deduplication. Together they improve the earlier `current-v2` median by
+`5.92%`. Phase-aligned tracing and two negative presenter/argbuf scouts still
+place the residual critical path at drawable/present backpressure: direct
+constant-buffer binding cuts draw encode by `32%` and pre-acquire hits
+`522/523`, but neither reduces the roughly `116ms/present` encode-lane total or
+improves FPS. Publication-to-dequeue is only about `0.003ms/present`, so more
+bulk chunk streaming is not the next lever.
 
 ### V1 and Historical Comparison Boundary
 

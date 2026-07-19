@@ -463,7 +463,9 @@ int32_t setShaderFloatConst(D9CDevice* d, uint32_t start, const float* data, uin
         floatConstantsMatch(current, start, data, effectiveCount)) {
       return dxmt9::core::D3D_OK;
     }
-    auto& consts = d->dev().mutablePixelShaderConstantsState().psConst;
+    auto& consts =
+        d->dev().mutablePixelShaderFloatConstantsState(start, effectiveCount)
+            .psConst;
     writeFloatConstants(consts, start, data, effectiveCount);
   } else {
     const auto& current = d->dev().state().vsConst;
@@ -472,7 +474,9 @@ int32_t setShaderFloatConst(D9CDevice* d, uint32_t start, const float* data, uin
         floatConstantsMatch(current, start, data, effectiveCount)) {
       return dxmt9::core::D3D_OK;
     }
-    auto& consts = d->dev().mutableVertexShaderConstantsState().vsConst;
+    auto& consts =
+        d->dev().mutableVertexShaderFloatConstantsState(start, effectiveCount)
+            .vsConst;
     writeFloatConstants(consts, start, data, effectiveCount);
   }
   return dxmt9::core::D3D_OK;

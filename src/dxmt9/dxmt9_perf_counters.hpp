@@ -1157,6 +1157,11 @@ void countMapBufferWait(std::uint64_t totalNanoseconds,
                         std::uint64_t sequenceNanoseconds,
                         std::uint32_t flags,
                         bool waited);
+// R-BACK-5.11 — MANAGED buffer CPU-shadow upload/backing-version outcomes.
+void countManagedBufferUpload(std::uint64_t bytes);
+void countManagedBufferBackingInPlace();
+void countManagedBufferBackingReuse();
+void countManagedBufferBackingFresh();
 void countPresentBoundaryApplied();
 void countPresentBoundarySkipped();
 void countPresentBoundaryDeferred();

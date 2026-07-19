@@ -2135,6 +2135,34 @@ class SwapChain : public std::enable_shared_from_this<SwapChain> {
   PresentId presentId_{};
 };
 
+namespace detail {
+
+struct ShaderConstantHashDirtyRange {
+  u16 begin = 0;
+  u16 end = 0;
+  bool dirty = false;
+};
+
+template <std::size_t FloatCount>
+struct ShaderConstantHashIndex {
+  std::array<u64, FloatCount + 1u> floatTree{};
+  std::array<u64, kMaxIntegerConstants + 1u> intTree{};
+  std::array<u64, kMaxBoolConstants + 1u> boolTree{};
+  ShaderConstantHashDirtyRange floatDirty{};
+  ShaderConstantHashDirtyRange intDirty{};
+  ShaderConstantHashDirtyRange boolDirty{};
+  u64 generation = 0;
+  bool valid = false;
+};
+
+enum class ShaderConstantRegisterClass : u8 {
+  Float,
+  Int,
+  Bool,
+};
+
+}  // namespace detail
+
 class Device : public std::enable_shared_from_this<Device> {
  public:
   Device(AdapterInfo adapter, BackendLimits limits,
@@ -2169,6 +2197,18 @@ class Device : public std::enable_shared_from_this<Device> {
     invalidateDrawPixelShaderConstantsCache();
     return state_;
   }
+  DeviceState& mutableVertexShaderFloatConstantsState(u32 start,
+                                                       u32 count) noexcept;
+  DeviceState& mutableVertexShaderIntConstantsState(u32 start,
+                                                     u32 count) noexcept;
+  DeviceState& mutableVertexShaderBoolConstantsState(u32 start,
+                                                      u32 count) noexcept;
+  DeviceState& mutablePixelShaderFloatConstantsState(u32 start,
+                                                      u32 count) noexcept;
+  DeviceState& mutablePixelShaderIntConstantsState(u32 start,
+                                                    u32 count) noexcept;
+  DeviceState& mutablePixelShaderBoolConstantsState(u32 start,
+                                                     u32 count) noexcept;
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
   // Transitional accessor — returns the cached upper-device ptr, which
   // exposes both resource-ops + submit/present now (via the dxmt9::Device
@@ -2398,6 +2438,12 @@ class Device : public std::enable_shared_from_this<Device> {
   void invalidateDrawShaderConstantsCache() noexcept;
   void invalidateDrawVertexShaderConstantsCache() noexcept;
   void invalidateDrawPixelShaderConstantsCache() noexcept;
+  void invalidateDrawVertexShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass registerClass,
+      u32 start, u32 count) noexcept;
+  void invalidateDrawPixelShaderConstantsCacheRange(
+      detail::ShaderConstantRegisterClass registerClass,
+      u32 start, u32 count) noexcept;
   void invalidateDrawUniformNonConstantCache() noexcept;
   void invalidateDrawFlatStateSetCache(u32 reasonMask) noexcept;
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
@@ -2433,6 +2479,10 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 drawRenderStateFlatGeneration_ = 1;
   u64 drawTextureStageStateFlatGeneration_ = 1;
   u64 drawSamplerStateFlatGeneration_ = 1;
+  detail::ShaderConstantHashIndex<kMaxVertexConstants>
+      drawVertexShaderConstantHashIndex_{};
+  detail::ShaderConstantHashIndex<kMaxPixelConstants>
+      drawPixelShaderConstantHashIndex_{};
   u32 drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   CachedBaseDrawState drawStateCacheWithIndex_{};
   CachedBaseDrawState drawStateCacheNoIndex_{};

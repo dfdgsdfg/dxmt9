@@ -673,7 +673,9 @@ current buffer allocation. The backend may assume the caller will not overwrite
 in-flight regions. No synchronization against the GPU is required.
 
 **R-BACK-5.5** `mapBuffer` with neither `DISCARD` nor `NOOVERWRITE` must wait until
-the GPU has completed all commands that read from the buffer before returning.
+the GPU has completed all commands that read from the buffer before returning,
+except for `D3DPOOL_MANAGED` buffers covered by the CPU-shadow/versioned-backing
+contract in R-BACK-5.11.
 
 **R-BACK-5.6** `destroyBuffer()` and `destroyTexture()` must not free the underlying
 Metal object until all in-flight GPU commands that reference it have completed.
@@ -714,6 +716,20 @@ ceiling. Heap exhaustion must trigger allocation of a new heap rather than
 falling back to direct allocation, so subsequent residency cost stays bounded.
 Heap reclamation is deferred until all heap-backed textures are freed (same
 DXMT-style sequence-ID gate as direct allocations).
+
+**R-BACK-5.11** A writable `D3DPOOL_MANAGED` buffer lock must return immediately
+from the buffer's CPU-authoritative shadow without waiting for an in-flight Metal
+backing. Writable unlock/upload must copy the complete CPU shadow, including
+bytes outside a partial lock range, into the active backing when it is idle or
+otherwise rotate to another idle `MTLStorageModeShared` backing. If no backing is
+idle, upload must allocate a fresh backing rather than wait for GPU completion.
+Every draw that references a versioned MANAGED buffer must snapshot the concrete
+Metal buffer handle and CPU-visible contents associated with that draw. Each
+backing has its own last-used sequence watermark and must not be overwritten or
+reused until that sequence is at or below the completed watermark. The logical
+buffer retains a monotonic aggregate last-used watermark so destruction cannot
+release any version still referenced by queued or in-flight work. Read-only
+locks do not rotate or upload a backing.
 
 ---
 

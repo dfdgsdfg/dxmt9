@@ -224,7 +224,8 @@ class DeviceImpl final : public Device {
   void unmapBuffer(core::BufferHandle) override {}
   void uploadBufferData(core::BufferHandle handle, std::span<const std::uint8_t> bytes) override {
     std::lock_guard lock(queue_.mutex_);
-    queue_.pool().uploadBufferData(handle.value, bytes.data(), bytes.size());
+    queue_.pool().uploadBufferData(wmt_device_, handle.value, bytes.data(),
+                                   bytes.size(), queue_.completedSeqId_);
   }
   void* mapBuffer(core::BufferHandle handle, std::uint32_t flags) override {
     return queue_.mapBuffer(handle, flags);

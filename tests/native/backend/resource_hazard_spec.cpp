@@ -431,7 +431,9 @@ void testReorderedIndexRejectedCacheTracksSourceRevision() {
           "rejected reordered-index entry has no byte payload");
 
   const std::uint8_t bytes[] = {0, 1, 2, 3};
-  check(resourcePool.uploadBufferData(source.value, bytes, sizeof(bytes)),
+  check(resourcePool.uploadBufferData(WMT::Device{NULL_OBJECT_HANDLE},
+                                      source.value, bytes, sizeof(bytes),
+                                      /*completedSeqId=*/0u),
         "source index buffer upload advances content revision");
 
   auto invalidated = resourcePool.findReorderedIndexBuffer(
