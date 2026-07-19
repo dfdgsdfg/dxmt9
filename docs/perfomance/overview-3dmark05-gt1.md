@@ -4,9 +4,9 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-12
-source: docs/perfomance/index.md
-related: docs/perfomance/log.md; docs/perfomance/overview.md
+updated: 2026-07-19
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719
+related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
 # 3DMark05 GT1 Performance — Investigation Map
@@ -26,6 +26,40 @@ experiment target?**
 
 Target workload: `app-d3d9-3dmark05`, GT1 path under
 `DXMT_EXPERIMENT_PROFILE=perf`.
+
+## Current Measured Baseline
+
+Three completed current-runtime runs on 2026-07-19 used the V2-only command
+wire, `-gt1 -nosplash -nosysteminfo -noscreens`, no Metal frame capture,
+frame sampling, frontmost supervision, and the engine-default offload plus
+opaque-depth index-cache policy. All three captures are visually normal and
+all GPU error counters are zero.
+
+| Metric | Run median | Run range |
+|---|---:|---:|
+| sampled average FPS | `21.009` | `20.919-21.189` |
+| sampled frames | `2,297` | `2,289-2,316` |
+| sampled wall time | `109.332s` | `109.302-109.422s` |
+| wall p50 | `43.188ms` | `42.930-43.611ms` |
+| wall p95 | `64.966ms` | `64.669-65.303ms` |
+| GPU CB p50 | `4.684ms` | `4.624-4.697ms` |
+| GPU CB p95 | `21.749ms` | `20.498-22.634ms` |
+| encoded presents | `2,298` | `2,290-2,317` |
+
+This supersedes the older `~16-17` sampled-FPS calibration as the current
+whole-run reference. The narrow `1.3%` max/min FPS spread is small enough to
+use this baseline for future A/B gates without first increasing the repeat
+count.
+
+### V1 Comparison Status
+
+There is no completed, frame-sampled, same-build V1 GT1 reference. The earlier
+`1,800 -> 2,220-2,293` presents/120s result is a cumulative engine-default
+comparison with other policy changes, not an isolated V1/V2 wire A/B. The five
+`command-chunk-v2-final2` promotion pairs are GT3 artifacts and belong in the
+[GT3 baseline](overview-3dmark05-gt3.md). Treat `21.009` sampled FPS as the
+first current V2-only GT1 baseline rather than assigning its full improvement
+to the command wire.
 
 The investigation currently separates three concerns that used to be easy to
 mix together:
@@ -142,6 +176,9 @@ docs/perfomance/
   index.md                             # root entry point
   overview.md                          # general dxmt9 performance model
   overview-3dmark05-gt1.md             # this cross-domain GT1 map
+  overview-3dmark05-gt2.md             # GT2 measured baseline
+  overview-3dmark05-gt3.md             # GT3 measured baseline + V1/V2 history
+  overview-sfiv.md                     # SFIV D3D9Ex map and baseline
   log.md                               # shared root maintenance log
   <domain>/index.md                    # domain landing
   <domain>/overview.md                 # current compact conclusion

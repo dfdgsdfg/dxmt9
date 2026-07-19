@@ -4,23 +4,23 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-12
-source: docs/perfomance/index.md
-related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-07-19
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
+related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
 # DXMT9 Performance Bottleneck Model
 
 > Root navigation: [index](index.md). Shared log: [log](log.md).
 
-Date: 2026-07-12
+Date: 2026-07-19
 
 Scope:
 
 - macOS Wine D3D9 path using dxmt9 PE `d3d9.dll`, PE `winemetal.dll`,
   and unix `winemetal.so`.
 - General dxmt9 performance model, not a title-specific investigation.
-- Current backend structure: chunked D3D9 command recording, an engine-default
+- Current backend structure: V2-only chunked D3D9 command recording, an engine-default
   commit-replay offload worker (`DXMT9_OFFLOAD_COMMIT_REPLAY`, ON since
   2026-07-10 — wire validation/import/handle-marking stay synchronous on the
   app thread while record replay and queue publish run on a device-owned
@@ -28,6 +28,46 @@ Scope:
   encoding, sub-command-buffer chaining, and present-frame pacing.
 - This document keeps the existing directory spelling, `docs/perfomance/`,
   to match the current repository path.
+
+## Current Multi-Workload Baseline
+
+The 2026-07-19 baseline was measured from `153cacb14f2f` on a 16 GB MacBook
+Air with an Apple M1 8-core GPU, macOS 26.5.2, and the Sikarugir-CX 24.0.7
+Wine runtime. The runtime was built and staged from the x86_64 unix-provider,
+x64 PE, and x86 PE build directories. Runs used the `perf` profile, no Metal
+frame capture, frame sampling, the engine-default commit-replay offload and
+opaque-depth index-cache policy, and zero concurrent GPU benchmarks.
+
+`sampled_avg_fps` is positive frame-sample count divided by sampled wall time.
+It is not a 3DMark UI score. Values are the median of three completed runs for
+GT1/GT2/GT3 and two duration-matched runs for SFIV; parentheses show the
+run-to-run FPS range.
+
+| Workload | Sampled average FPS | Wall p50 / p95 | GPU CB p50 / p95 | GPU errors |
+|---|---:|---:|---:|---:|
+| [3DMark05 GT1](overview-3dmark05-gt1.md) | `21.009` (`20.919-21.189`) | `43.188 / 64.966ms` | `4.684 / 21.749ms` | `0` |
+| [3DMark05 GT2](overview-3dmark05-gt2.md) | `7.428` (`7.392-7.435`) | `101.918 / 337.659ms` | `18.947 / 27.043ms` | `0` |
+| [3DMark05 GT3](overview-3dmark05-gt3.md) | `27.858` (`27.809-27.998`) | `29.094 / 85.705ms` | `11.275 / 13.661ms` | `0` |
+| [SFIV Benchmark](overview-sfiv.md) | `44.668` (`44.415-44.922`) | `16.751 / 49.728ms` | `2.725 / 8.005ms` | `0` |
+
+All four successful-run captures show the expected rendered scenes and effects.
+The failed GT3 `r3` launch ended early with `missing_capture`; it is excluded
+and replaced by the successful `r3-retry1` run. SFIV also has a separate
+260.6-second stability sample (`42.684` sampled FPS, GPU CB p50/p95
+`3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
+median.
+
+### V1 and Historical Comparison Boundary
+
+V1 is no longer runnable at current HEAD, so comparisons use preserved
+artifacts and must retain their original scope.
+
+| Workload | Available comparison | Readout |
+|---|---|---|
+| GT1 | No completed frame-sampled same-build V1/V2 pair | No defensible wire-only delta. The older `1,800 -> 2,220-2,293` presents/120s comparison includes other engine-default changes. |
+| GT2 | Only incomplete/timed-out V1-era diagnostic runs | No defensible V1/V2 performance delta. The current V2-only baseline is the first completed frame-sampled reference. |
+| GT3 | Five same-build V1/V2 promotion pairs plus one exact-window pair | The five-pair median showed V2 process throughput `-1.1%` and offload replay CPU/present `-30.8%`, passing the no-worse-than-`-3%` gate. The exact pair measured `+5.46%` throughput. Historical captures contain the then-open quadrant artifact, so they are performance evidence only; current captures are whole-run sanity evidence and the targeted 66-68-second heuristic remains the visual gate. |
+| SFIV | Duration-matched V1-era and current V2-only runs, but not a single-change A/B | Presents improved `1,500 -> 5,610` (`+274%`), GPU CB p50 `110.117 -> 2.725ms` (`-97.5%`), and p95 `126.235 -> 8.005ms` (`-93.7%`). This is a cumulative renderer improvement; a 2026-07-14 pre-V2 run had already reached `40.34` presents/s and `3.167/8.932ms`, so the gain must not be attributed to command-chunk V2 alone. |
 
 ## Bound Legend
 
