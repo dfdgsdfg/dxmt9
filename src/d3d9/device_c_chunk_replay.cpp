@@ -1609,9 +1609,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       if (hasPresent) {
         ++d->presentOrdinal;
         if (auto upper = d->dev().upperDevice()) {
+          const auto& presentParameters = d->dev().presentParameters();
           upper->waitPresentOrdinalBoundary(
               d->presentOrdinal,
-              d->dev().presentParameters().backBufferCount);
+              presentParameters.backBufferCount,
+              presentParameters.presentationInterval !=
+                  dxmt9::core::PresentInterval::Immediate);
         }
       }
       countDurationSince(bridgeCommitStart,

@@ -773,6 +773,15 @@ and destination size. These counters must make a valid 1280x720 SFIV source
 distinguishable from missing source, missing texture, resolve, or invalid-size
 present failures before present-policy tuning is considered.
 
+**R-BACK-6.10** When an Immediate present still uses the engine-default maximum
+frame latency, the backend scheduler must apply an effective one-frame
+present-completion boundary. This stricter scheduling bound must not change the
+public maximum-frame-latency value. Synchronized presents must retain the normal
+default, and a non-default application or environment override must remain
+authoritative. The inline queue-sequence boundary and commit-replay
+present-ordinal boundary must resolve the same effective latency for the same
+present.
+
 ---
 
 ## 7. Thread Safety

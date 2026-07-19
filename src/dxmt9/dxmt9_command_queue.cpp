@@ -3521,18 +3521,20 @@ void CommandQueue::drainDeferredPresentBoundary() {
 // present_ordinal_boundary_spec.cpp); this method only owns the mutex +
 // condition-variable mechanics around them.
 //
-// R-BACK-2.51(h) cap-honoring clause: `backBufferCount` is folded into the
-// effective latency via the same cappedFrameLatency() /
-// capFrameLatencyToBackBuffers() helpers presentBoundaryLatency() uses for
-// the inline seqId-based boundary, so DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS
-// applies identically regardless of which boundary mechanism paces a given
-// present.
+// R-BACK-2.51(h) / R-BACK-6.10: `backBufferCount` and
+// `displaySyncEnabled` are folded into the effective latency via the same
+// resolvedPresentFrameLatency() helper presentBoundaryLatency() uses for the
+// inline seqId-based boundary. The optional back-buffer cap and the
+// Immediate-present low-latency default therefore apply identically regardless
+// of which boundary mechanism paces a given present.
 void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
                                               std::uint32_t maxFrameLatency,
-                                              std::uint32_t backBufferCount) {
+                                              std::uint32_t backBufferCount,
+                                              bool displaySyncEnabled) {
   const BoundaryPolicy policy = resolveBoundaryPolicyFromEnv();
-  const std::uint32_t effectiveLatency = cappedFrameLatency(
-      maxFrameLatency, backBufferCount, capFrameLatencyToBackBuffers());
+  const std::uint32_t effectiveLatency = resolvedPresentFrameLatency(
+      maxFrameLatency, backBufferCount, displaySyncEnabled,
+      capFrameLatencyToBackBuffers());
   std::unique_lock lock(mutex_);
   const PresentOrdinalWaitPlan plan = planPresentOrdinalWait(
       policy, presentOrdinal, effectiveLatency, presentOrdinalGate_.deferredTarget);

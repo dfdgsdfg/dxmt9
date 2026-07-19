@@ -5,7 +5,7 @@ title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
 updated: 2026-07-19
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -62,12 +62,17 @@ buffer backing versioning removes `42.4ms/present` of writable-map sequence
 wait, and the default range-incremental shader-constant content index reduces
 snapshot CPU `15.8%` (`12.164 -> 10.248ms/present`) while preserving payload
 deduplication. Together they improve the earlier `current-v2` median by
-`5.92%`. Phase-aligned tracing and two negative presenter/argbuf scouts still
-place the residual critical path at drawable/present backpressure: direct
-constant-buffer binding cuts draw encode by `32%` and pre-acquire hits
-`522/523`, but neither reduces the roughly `116ms/present` encode-lane total or
-improves FPS. Publication-to-dequeue is only about `0.003ms/present`, so more
-bulk chunk streaming is not the next lever.
+`5.92%`. Phase-aligned tracing places the former drawable stall in queued-GPU
+run-ahead: request-to-first-GPU-work is p50 `235.871ms`, while GPU-end to
+completion is only `0.205ms`. An Immediate one-frame completion boundary
+eliminates drawable waits (`146 -> 0`) and cuts CPU-present-to-display
+`307.194 -> 155.734ms` without moving GT2 or GT1 throughput beyond `1%`.
+The engine now applies that stricter boundary when an Immediate present still
+uses the default maximum of four; synchronized and explicit non-default values
+retain their windows. Publication-to-dequeue remains only about
+`0.003ms/present`, so more bulk chunk streaming is not the next lever; the GT2
+throughput frontier remains current-frame GPU vertex/pass work and residual
+CPU snapshot/encode cost.
 
 ### V1 and Historical Comparison Boundary
 

@@ -7,9 +7,10 @@
 // offload row: no direct test previously existed for the abort mechanics).
 //
 // R-BACK-2.51: also covers dxmt9::backBufferLatencyCap /
-// dxmt9::cappedFrameLatency (the DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS math
-// CommandQueue::waitPresentOrdinalBoundary now applies before planning the
-// wait, mirroring presentBoundaryLatency()'s cap on the inline boundary) and
+// dxmt9::cappedFrameLatency / dxmt9::resolvedPresentFrameLatency (the
+// DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS math and Immediate-present default
+// CommandQueue::waitPresentOrdinalBoundary applies before planning the wait,
+// mirroring presentBoundaryLatency() on the inline boundary) and
 // dxmt9::resolvePresentBoundaryAction (the per-present truth table
 // CommandQueue::submitPresent uses to decide whether a given present's
 // core::SwapDesc::pacedByPresentOrdinal flag means it should skip the inline
@@ -171,6 +172,43 @@ void testCappedFrameLatencyHonorsEnabledBit() {
         "cap enabled never raises a smaller maxFrameLatency up to the cap");
   check(cappedFrameLatency(0, 0, /*capEnabled=*/true) == 0,
         "cap enabled with maxFrameLatency=0 stays 0 (min() floor, not the cap)");
+}
+
+void testImmediateDefaultFrameLatencyResolution() {
+  using dxmt9::effectivePresentFrameLatency;
+  using dxmt9::core::kDefaultFrameLatency;
+  check(effectivePresentFrameLatency(kDefaultFrameLatency,
+                                     /*displaySyncEnabled=*/false) == 1,
+        "Immediate present with engine-default maximum resolves to one frame");
+  check(effectivePresentFrameLatency(kDefaultFrameLatency,
+                                     /*displaySyncEnabled=*/true) ==
+            kDefaultFrameLatency,
+        "synchronized present retains the engine-default maximum");
+  check(effectivePresentFrameLatency(2, /*displaySyncEnabled=*/false) == 2,
+        "non-default Immediate maximum remains an explicit wider window");
+  check(effectivePresentFrameLatency(1, /*displaySyncEnabled=*/false) == 1,
+        "explicit one-frame Immediate maximum remains one");
+}
+
+void testResolvedPresentFrameLatencyComposition() {
+  using dxmt9::resolvedPresentFrameLatency;
+  using dxmt9::core::kDefaultFrameLatency;
+  check(resolvedPresentFrameLatency(
+            kDefaultFrameLatency, 1, /*displaySyncEnabled=*/false,
+            /*capEnabled=*/false) == 1,
+        "Immediate default resolves to one without the back-buffer cap");
+  check(resolvedPresentFrameLatency(
+            kDefaultFrameLatency, 1, /*displaySyncEnabled=*/false,
+            /*capEnabled=*/true) == 1,
+        "back-buffer cap never raises the Immediate one-frame default");
+  check(resolvedPresentFrameLatency(
+            kDefaultFrameLatency, 1, /*displaySyncEnabled=*/true,
+            /*capEnabled=*/true) == 2,
+        "synchronized default still composes with the one-backbuffer cap");
+  check(resolvedPresentFrameLatency(
+            3, 1, /*displaySyncEnabled=*/false,
+            /*capEnabled=*/true) == 2,
+        "non-default Immediate window still composes with the back-buffer cap");
 }
 
 // --- Per-present boundary action (R-BACK-2.51(g) truth table) --------
@@ -375,6 +413,8 @@ int main() {
     testPlannerDeferredUint64MaxSaturates();
     testBackBufferLatencyCapMath();
     testCappedFrameLatencyHonorsEnabledBit();
+    testImmediateDefaultFrameLatencyResolution();
+    testResolvedPresentFrameLatencyComposition();
     testResolvePresentBoundaryActionPacedAlwaysSkipsRegardlessOfPolicy();
     testResolvePresentBoundaryActionUnpacedFollowsPolicy();
     testResolvePresentBoundaryActionUnpacedIndependentOfGlobalOffloadState();

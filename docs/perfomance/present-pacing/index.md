@@ -4,20 +4,21 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-07-12
-source: docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-07-19
+source: docs/perfomance/overview-3dmark05-gt2.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H231` - GT2 bimodality root-caused: presents-at-kill was a hang-run counter-flush artifact; frame-sampled scene-fps shows GT2 fixed ~68s timeline at ~7.3-7.7fps across ring32/128 x carrier on/off — every queue-side lever is <=~4%, the wall is outside the queue.
+Latest tracked row: `H232` - phase-aligned GT2 traces locate the 307ms CPU-to-display backlog in queued-GPU run-ahead, not compositor retirement; an Immediate effective latency of one halves the backlog and eliminates drawable waits with throughput inside noise.
 
 ## Start Here
 
 - [Current overview](overview.md) - latest conclusion and active gates only.
 - [Historical log](log.md) - long-form chronology moved from the old domain root.
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
+- [Root 3DMark05 GT2 map](../overview-3dmark05-gt2.md)
 
 ## Recent Leaf Documents
 

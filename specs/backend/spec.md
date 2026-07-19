@@ -1620,6 +1620,25 @@ work. It becomes signaled only after the Metal command buffer carrying the prese
 completed. This mirrors the useful part of upstream DXMT's `CommandQueue` frame
 latency fence while keeping drawable and layer ownership inside the presenter.
 
+For `D3DPRESENT_INTERVAL_IMMEDIATE`, an untouched engine-default maximum of
+four resolves to an effective present boundary of one. The API-visible maximum
+remains four: the scheduler is enforcing a stricter bound within that maximum,
+not rewriting D3D9Ex state. Synchronized presents retain four, while a
+non-default application setting or `DXMT9_MAX_FRAME_LATENCY` value selects its
+own window. `resolvedPresentFrameLatency()` composes this rule with the optional
+back-buffer cap and is shared by both the inline seqId boundary and the
+commit-replay present-ordinal boundary.
+
+The policy is based on phase-aligned 3DMark05 GT2 evidence. With the default
+four-frame window, present request to first GPU work was p50 `235.871ms`, the
+present command buffer's GPU envelope was `35.103ms`, and GPU-end to completion
+was only `0.205ms`. Resolving Immediate presents to one frame reduced
+request-to-completion `274.788 -> 125.048ms`, app-present-to-display
+`307.194 -> 155.734ms`, and CoreAnimation drawable waits `146 -> 0`, while
+frame-sampled GT2 and GT1 throughput remained within `1%`. The invariant is
+therefore completion-owned run-ahead control; drawable acquisition location or
+the early CoreAnimation presented handler must not substitute for it.
+
 ---
 
 ## 9. Dependency Tracking

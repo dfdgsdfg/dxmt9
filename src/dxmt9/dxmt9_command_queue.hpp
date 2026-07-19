@@ -111,9 +111,37 @@ inline std::uint32_t cappedFrameLatency(std::uint32_t maxFrameLatency,
   return std::min(maxFrameLatency, backBufferLatencyCap(backBufferCount));
 }
 
+// Immediate presents do not need a multi-frame producer runway to cover a
+// display interval. When the application is still using the engine's default
+// maximum, keep only one present-bearing frame incomplete. This is a stricter
+// scheduling bound within the advertised maximum, not a change to the D3D9Ex
+// maximum-frame-latency value. A non-default application/env value remains an
+// explicit scheduling window, and synchronized presents retain the
+// normal default.
+inline std::uint32_t effectivePresentFrameLatency(
+    std::uint32_t maxFrameLatency, bool displaySyncEnabled) {
+  if (!displaySyncEnabled &&
+      maxFrameLatency == core::kDefaultFrameLatency) {
+    return 1u;
+  }
+  return maxFrameLatency;
+}
+
+// Pure composition shared by both present-boundary implementations. Keeping
+// the Immediate-default rule and optional back-buffer cap in one helper makes
+// the seqId and present-ordinal paths order-isomorphic for the same present.
+inline std::uint32_t resolvedPresentFrameLatency(
+    std::uint32_t maxFrameLatency, std::uint32_t backBufferCount,
+    bool displaySyncEnabled, bool capEnabled) {
+  return cappedFrameLatency(
+      effectivePresentFrameLatency(maxFrameLatency, displaySyncEnabled),
+      backBufferCount, capEnabled);
+}
+
 inline std::uint32_t presentBoundaryLatency(const core::SwapDesc& desc) {
-  return cappedFrameLatency(desc.maxFrameLatency, desc.backBufferCount,
-                            capFrameLatencyToBackBuffers());
+  return resolvedPresentFrameLatency(
+      desc.maxFrameLatency, desc.backBufferCount, desc.displaySyncEnabled,
+      capFrameLatencyToBackBuffers());
 }
 
 // R-BACK-2.51(g) — per-present decision for which present-boundary branch
@@ -366,11 +394,12 @@ class CommandQueue {
   // once per present-bearing commit; the specific present this wait paces
   // skips submitPresent's own inline boundary via
   // core::SwapDesc::pacedByPresentOrdinal (R-BACK-2.51(g)), set only by that
-  // same chunk-replay path. `backBufferCount` is capped against
-  // `maxFrameLatency` the same way presentBoundaryLatency() caps the inline
-  // boundary (R-BACK-2.51(h) cap-honoring clause; see cappedFrameLatency()).
+  // same chunk-replay path. `backBufferCount` and `displaySyncEnabled` resolve
+  // the effective latency the same way presentBoundaryLatency() resolves the
+  // inline boundary (R-BACK-2.51(h), R-BACK-6.10; see
+  // resolvedPresentFrameLatency()).
   void waitPresentOrdinalBoundary(std::uint64_t presentOrdinal, std::uint32_t maxFrameLatency,
-                                  std::uint32_t backBufferCount);
+                                  std::uint32_t backBufferCount, bool displaySyncEnabled);
   // Sticky abort for waitPresentOrdinalBoundary waiters. Set once by
   // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) when
   // a deferred commit-replay failure means presentOrdinalGate_.completedOrdinal

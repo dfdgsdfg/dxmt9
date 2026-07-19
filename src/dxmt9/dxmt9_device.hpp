@@ -190,16 +190,17 @@ class Device {
   // Commit-replay offload present-ordinal boundary. `ordinal` counts
   // present-bearing commits 1,2,3... from the caller's own tracking (not a
   // queue seqId); paced through CommandQueue::waitPresentOrdinalBoundary
-  // using this device's maxFrameLatency, capped by the second parameter
-  // (the committing chunk's swapchain backBufferCount) the same way the
-  // inline seqId-based boundary's presentBoundaryLatency() honors
-  // DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS (R-BACK-2.51). src/d3d9's
+  // using this device's maxFrameLatency, the committing swapchain's
+  // backBufferCount, and whether the present is synchronized, the same way
+  // the inline seqId-based boundary's presentBoundaryLatency() resolves the
+  // optional back-buffer cap and Immediate low-latency default
+  // (R-BACK-2.51, R-BACK-6.10). src/d3d9's
   // offload path calls this once per present-bearing commit
   // (dxmt9c_device_commit_chunk). See core::SwapDesc::pacedByPresentOrdinal
   // for the separate per-present flag that controls whether
   // submitPresent()'s own inline boundary is skipped for the specific
   // present this ordinal wait paces.
-  virtual void waitPresentOrdinalBoundary(std::uint64_t, std::uint32_t) {}
+  virtual void waitPresentOrdinalBoundary(std::uint64_t, std::uint32_t, bool) {}
   // Sticky release valve for waitPresentOrdinalBoundary waiters. Called by
   // ReplayOffloadWorker's fail-stop path (device_c_replay_offload.cpp) once
   // a deferred commit-replay failure means no further present ordinal can
