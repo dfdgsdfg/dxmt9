@@ -3721,6 +3721,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return explicitMask;
     }
 
+    dxmt9::d3d9::pe::PeStreamSources currentDrawStreamSources() const {
+        dxmt9::d3d9::pe::PeStreamSources sources{};
+        for (DWORD slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            sources[slot].buffer = toWireHandle(rawVBuf(streamSrc_[slot]));
+            sources[slot].offset = streamOff_[slot];
+            sources[slot].stride = streamStr_[slot];
+        }
+        return sources;
+    }
+
     std::uint64_t currentVertexShaderHash() const noexcept {
         return D3D9PeVertexShaderHash(vs_);
     }
@@ -9293,6 +9303,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!buildDrawPrimitivePacket(type, startVertex, count, record.packet)) {
             return D3DERR_INVALIDCALL;
         }
+        const auto streamSources = currentDrawStreamSources();
         HRESULT hr;
         if (inlineConstDelta) {
             // R-BACK-2.52(b): fold the pending const shadows into
@@ -9308,7 +9319,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 d9c_command_record_draw_primitive_total_size(&record.packet);
             hr = appendCommandRecordDirect(
                 record.header.type, record.header.size,
-                [this, &record, payloadBytes](std::uint8_t* dst) {
+                [this, &record, &streamSources, payloadBytes](std::uint8_t* dst) {
+                    populatePendingChunkDrawStreamDependencies(
+                        record.packet, streamSources);
                     std::memcpy(dst, &record, sizeof(record));
                     if (payloadBytes != 0) {
                         std::memcpy(dst + sizeof(record),
@@ -9318,7 +9331,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 });
         } else {
             record.header.size = sizeof(record);
-            hr = appendCommandRecord(&record, sizeof(record));
+            hr = appendCommandRecordDirect(
+                record.header.type, record.header.size,
+                [this, &record, &streamSources](std::uint8_t* dst) {
+                    populatePendingChunkDrawStreamDependencies(
+                        record.packet, streamSources);
+                    std::memcpy(dst, &record, sizeof(record));
+                });
         }
         return hr;
     }
@@ -9344,18 +9363,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!buildDrawPrimitivePacket(type, 0, count, record.packet.state)) {
             return D3DERR_INVALIDCALL;
         }
+        const auto streamSources = currentDrawStreamSources();
         record.packet.baseVertex = baseVertex;
         record.packet.minVertex = minVertex;
         record.packet.numVertices = numVertices;
         record.packet.startIndex = startIndex;
         record.packet.primitiveCount = count;
-        // Indexed draw packets are the only recorder packet type that can
-        // carry an index-buffer delta. A prior non-indexed draw may clear
-        // general pending state without ever submitting the current IB, so
-        // key this on the last IB handle actually emitted into the command
-        // stream, not only on SetIndices' pending bit.
+        // Preserve the semantic IB delta. The append-time dependency
+        // checkpoint below additionally emits an unchanged IB when the new
+        // chunk has not retained it yet.
         record.packet.ibHandle = toWireHandle(rawIBuf(indexBuf_));
-        const std::uint64_t ibWireValue = d9cWireHandleValue(record.packet.ibHandle);
+        const std::uint64_t ibWireValue =
+            d9cWireHandleValue(record.packet.ibHandle);
         record.packet.ibValid =
             (peState_.pendingIb || !submittedIndexBufferKnown_ ||
              submittedIndexBufferWireValue_ != ibWireValue) ? 1u : 0u;
@@ -9373,7 +9392,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     &record.packet.state);
             hr = appendCommandRecordDirect(
                 record.header.type, record.header.size,
-                [this, &record, payloadBytes](std::uint8_t* dst) {
+                [this, &record, &streamSources, payloadBytes](std::uint8_t* dst) {
+                    populatePendingChunkDrawStreamDependencies(
+                        record.packet.state, streamSources);
+                    populatePendingChunkDrawIndexDependency(record.packet);
                     std::memcpy(dst, &record, sizeof(record));
                     if (payloadBytes != 0) {
                         std::memcpy(dst + sizeof(record),
@@ -9383,7 +9405,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 });
         } else {
             record.header.size = sizeof(record);
-            hr = appendCommandRecord(&record, sizeof(record));
+            hr = appendCommandRecordDirect(
+                record.header.type, record.header.size,
+                [this, &record, &streamSources](std::uint8_t* dst) {
+                    populatePendingChunkDrawStreamDependencies(
+                        record.packet.state, streamSources);
+                    populatePendingChunkDrawIndexDependency(record.packet);
+                    std::memcpy(dst, &record, sizeof(record));
+                });
         }
         if (SUCCEEDED(hr)) {
             if (record.packet.ibValid != 0) {
@@ -9393,6 +9422,42 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             peState_.pendingIb = false;
         }
         return hr;
+    }
+
+    bool pendingChunkReferencesBuffer(D9CWireHandle handle) const {
+        const std::uint64_t value = d9cWireHandleValue(handle);
+        if (value == 0u) {
+            return false;
+        }
+        return commandChunkWireVersion_ == D9C_COMMAND_CHUNK_VERSION_V2
+            ? commandChunkV2_.referencesObject(reinterpret_cast<void*>(
+                  static_cast<std::uintptr_t>(value)))
+            : commandChunk_.referencesWireHandle(
+                  D9C_CHUNK_HANDLE_KIND_BUFFER, value);
+    }
+
+    void populatePendingChunkDrawStreamDependencies(
+        D9CDrawPrimitivePacket& packet,
+        const dxmt9::d3d9::pe::PeStreamSources& streamSources) const {
+        std::uint32_t retainedStreamMask = 0u;
+        for (DWORD slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            if (pendingChunkReferencesBuffer(streamSources[slot].buffer)) {
+                retainedStreamMask |= 1u << slot;
+            }
+        }
+        // CapacityPre has already sealed the old chunk before the writer is
+        // called. Therefore this deterministic transform checkpoints only
+        // streams absent from the actual destination chunk. The serialized
+        // packet remains the sole source of retention semantics
+        // (R-CORE-11.17), while later draws can still coalesce.
+        dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(
+            packet, streamSources, retainedStreamMask);
+    }
+
+    void populatePendingChunkDrawIndexDependency(
+        D9CDrawIndexedPrimitivePacket& packet) const {
+        dxmt9::d3d9::pe::populateDrawPacketIndexDependency(
+            packet, pendingChunkReferencesBuffer(packet.ibHandle));
     }
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,

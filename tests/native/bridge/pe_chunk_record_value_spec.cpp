@@ -380,6 +380,67 @@ void testPeAttachmentSnapshotBuilderPreservesExplicitNulls() {
   checkWire(packet.dsHandle, kDs, "PE snapshot builder DS handle");
 }
 
+void testPeDrawStreamDependencyCheckpointPreservesCoalescing() {
+  using dxmt9::d3d9::pe::PeStreamSources;
+  using dxmt9::d3d9::pe::populateDrawPacketStreamDependencies;
+
+  PeStreamSources bound{};
+  bound[0] = D9CDrawPacketStreamSource{
+      .buffer = wireHandle(kStream0), .offset = 4u, .stride = 24u};
+  bound[1] = D9CDrawPacketStreamSource{
+      .buffer = wireHandle(kStream15), .offset = 8u, .stride = 32u};
+
+  D9CDrawPrimitivePacket firstDraw{};
+  populateDrawPacketStreamDependencies(firstDraw, bound, 0u);
+  checkEq(firstDraw.streamSourceMask, (1u << 0u) | (1u << 1u),
+          "first chunk draw checkpoints every unretained bound stream");
+  checkWire(firstDraw.streamSources[0].buffer, kStream0,
+            "stream checkpoint carries slot 0 buffer");
+  checkEq(firstDraw.streamSources[0].offset, 4u,
+          "stream checkpoint carries slot 0 offset");
+  checkEq(firstDraw.streamSources[1].stride, 32u,
+          "stream checkpoint carries slot 1 stride");
+
+  D9CDrawPrimitivePacket repeatedDraw{};
+  populateDrawPacketStreamDependencies(
+      repeatedDraw, bound, (1u << 0u) | (1u << 1u));
+  checkEq(repeatedDraw.streamSourceMask, 0u,
+          "later draw omits streams already retained by serialized packets");
+  check(packetHasNoStateDelta(repeatedDraw),
+        "retained stream dependencies do not break later draw coalescing");
+
+  D9CDrawPrimitivePacket pendingDetach{};
+  pendingDetach.streamSourceMask = 1u << 0u;
+  populateDrawPacketStreamDependencies(
+      pendingDetach, PeStreamSources{}, 1u << 0u);
+  checkEq(pendingDetach.streamSourceMask, 1u << 0u,
+          "dependency checkpoint preserves an explicit null detach delta");
+  checkWire(pendingDetach.streamSources[0].buffer, 0u,
+            "explicit null detach remains null");
+}
+
+void testPeDrawIndexDependencyCheckpointPreservesCoalescing() {
+  using dxmt9::d3d9::pe::populateDrawPacketIndexDependency;
+
+  D9CDrawIndexedPrimitivePacket firstDraw{};
+  firstDraw.ibHandle = wireHandle(kStream0);
+  populateDrawPacketIndexDependency(firstDraw, false);
+  checkEq(firstDraw.ibValid, 1u,
+          "first indexed draw checkpoints an unretained index buffer");
+
+  D9CDrawIndexedPrimitivePacket repeatedDraw{};
+  repeatedDraw.ibHandle = wireHandle(kStream0);
+  populateDrawPacketIndexDependency(repeatedDraw, true);
+  checkEq(repeatedDraw.ibValid, 0u,
+          "later indexed draw omits an already retained index buffer");
+
+  D9CDrawIndexedPrimitivePacket pendingDetach{};
+  pendingDetach.ibValid = 1u;
+  populateDrawPacketIndexDependency(pendingDetach, false);
+  checkEq(pendingDetach.ibValid, 1u,
+          "dependency checkpoint preserves an explicit null IB detach");
+}
+
 void testRichDrawRecordPreservesPacketValuesAndHandles() {
   const auto draw = makeRichDrawRecord();
   checkValidRecordBytes(recordBytes(draw), D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
@@ -814,6 +875,8 @@ int main() {
   try {
     testPeAttachmentDeltaBuilderPreservesExplicitNullsAndSlots();
     testPeAttachmentSnapshotBuilderPreservesExplicitNulls();
+    testPeDrawStreamDependencyCheckpointPreservesCoalescing();
+    testPeDrawIndexDependencyCheckpointPreservesCoalescing();
     testRichDrawRecordPreservesPacketValuesAndHandles();
     testMaxTextureStageAndSamplerDeltaPacketBoundaries();
     testSetConstTailBytesRecordOrderAndWireHandleRange();

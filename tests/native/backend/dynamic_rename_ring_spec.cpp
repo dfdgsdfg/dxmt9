@@ -79,6 +79,20 @@ dxmt9::core::BufferDesc staticBufferDesc(std::uint64_t size = 64u) {
   return desc;
 }
 
+struct SyntheticBufferHandleGuard {
+  dxmt9::resources::BufferRecord* record = nullptr;
+
+  ~SyntheticBufferHandleGuard() {
+    if (!record) {
+      return;
+    }
+    record->buffer.handle = NULL_OBJECT_HANDLE;
+    for (auto& entry : record->renameRing) {
+      entry.buffer.handle = NULL_OBJECT_HANDLE;
+    }
+  }
+};
+
 void testDynamicCreateSeedsRingWithSingleEntry() {
   using namespace dxmt9::resources;
   dxmt9::resources::Pool resourcePool;
@@ -222,6 +236,38 @@ void testNonDiscardLockSkipsRotation() {
           "non-DISCARD lock must not rotate the active slot");
 }
 
+void testConcreteSnapshotMarkProtectsRotatedBacking() {
+  using namespace dxmt9::resources;
+  dxmt9::resources::Pool resourcePool;
+  WMT::Device dev{NULL_OBJECT_HANDLE};
+  const auto handle = resourcePool.createBuffer(dev, dynamicBufferDesc());
+  auto* record = resourcePool.findBuffer(handle.value);
+  check(record != nullptr, "dynamic buffer is reachable");
+  checkEq(record->renameRing.size(), std::size_t{1u},
+          "dynamic buffer seeds one rename entry");
+
+  // A NULL device cannot allocate real Metal buffers. Add a second empty ring
+  // entry, then install synthetic non-owning handles so the production
+  // snapshot matcher can distinguish them. The guard clears the handles
+  // before their destructors can release them.
+  record->renameRing.emplace_back();
+  SyntheticBufferHandleGuard handleGuard{record};
+  constexpr obj_handle_t firstMetalHandle = 0x1234u;
+  constexpr obj_handle_t secondMetalHandle = 0x5678u;
+  record->renameRing[0].buffer.handle = firstMetalHandle;
+  record->renameRing[1].buffer.handle = secondMetalHandle;
+  dxmt9::core::DrawBufferBindingSnapshot snapshot{};
+  snapshot.metalHandle = secondMetalHandle;
+
+  resourcePool.markBufferSnapshotUse(handle, snapshot, /*seqId=*/7u);
+  checkEq(record->renameRing[0].lastUsedSeqId, std::uint64_t{0u},
+          "snapshot mark does not stamp a different rename entry");
+  checkEq(record->renameRing[1].lastUsedSeqId, std::uint64_t{7u},
+          "snapshot mark stamps the matching concrete ring entry");
+  checkEq(record->lastUsedSeqId, std::uint64_t{7u},
+          "snapshot mark also advances the logical buffer watermark");
+}
+
 }  // namespace
 
 int main() {
@@ -233,6 +279,7 @@ int main() {
     testDiscardReusesIdleEntryAcrossRing();
     testRingNeverShrinksOnSubsequentDiscards();
     testNonDiscardLockSkipsRotation();
+    testConcreteSnapshotMarkProtectsRotatedBacking();
   } catch (const TestFailure& e) {
     std::cerr << "dynamic_rename_ring_spec failed: " << e.what() << '\n';
     return EXIT_FAILURE;

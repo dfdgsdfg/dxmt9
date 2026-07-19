@@ -2404,6 +2404,14 @@ void markDrawBindingOverrideResources(
       std::memcpy(&binding, payload.bindingOverrideData.data(), sizeof(binding));
       markDrawBindingOverrideResource(pool, binding, seqId);
     }
+  }
+}
+
+void markDrawBindingSnapshotResources(
+    resources::Pool& pool,
+    std::span<const core::DrawParamPayloadView> payloads,
+    std::uint64_t seqId) {
+  for (const auto& payload : payloads) {
     if (payload.bindingSnapshotData.size() == sizeof(core::DrawBindingSnapshot)) {
       core::DrawBindingSnapshot snapshot{};
       if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
@@ -3015,8 +3023,14 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
   {
     PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+    const std::uint64_t seqId = seqIdForMark(*this, 0);
+    // Chunk handle tables retain the logical BufferHandle once per chunk, but
+    // a DYNAMIC + DISCARD buffer can rotate through several concrete Metal
+    // backings inside that chunk. Always stamp the per-draw snapshot backing
+    // before replay reaches a later DISCARD, even when logical per-draw
+    // marking is suppressed by the chunk importer.
+    markDrawBindingSnapshotResources(pool_, effectivePayloads, seqId);
     if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-      const std::uint64_t seqId = seqIdForMark(*this, 0);
       pool_.markDrawResources(state.hot, seqId);
       markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
     }
@@ -3102,17 +3116,20 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
+      const std::uint64_t seqId = seqIdForMark(queue, 0);
       if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-        const std::uint64_t seqId = seqIdForMark(queue, 0);
         pool.markDrawResources(batch.front().materializedState().hot, seqId);
-        for (auto& submission : batch) {
-          std::span<const core::DrawParamPayloadView> payloads{};
-          if (!submission.payload.userVertexData.empty() ||
-              !submission.payload.userIndexData.empty() ||
-              !submission.payload.bindingOverrideData.empty() ||
-              !submission.payload.bindingSnapshotData.empty()) {
-            payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-          }
+      }
+      for (auto& submission : batch) {
+        std::span<const core::DrawParamPayloadView> payloads{};
+        if (!submission.payload.userVertexData.empty() ||
+            !submission.payload.userIndexData.empty() ||
+            !submission.payload.bindingOverrideData.empty() ||
+            !submission.payload.bindingSnapshotData.empty()) {
+          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
+        }
+        markDrawBindingSnapshotResources(pool, payloads, seqId);
+        if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
           markDrawBindingOverrideResources(pool, payloads, seqId);
         }
       }
