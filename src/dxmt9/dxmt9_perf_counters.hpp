@@ -318,55 +318,10 @@ enum CommitChunkDrawDeltaBits : std::uint32_t {
   CommitChunkDrawDeltaLightEnable = 1u << 16,
   CommitChunkDrawDeltaIndexBuffer = 1u << 17,
 };
-void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask);
 void countDrawPacketActualChange(std::uint32_t declaredMask,
                                  std::uint32_t actualMask);
-void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
-                                            std::uint32_t offsetChanges,
-                                            std::uint32_t strideChanges);
-void countCommitChunkDrawIndexBufferHandleDelta();
-void countCommitChunkDrawRunScan(std::uint32_t stop,
-                                 std::uint32_t recordCount,
-                                 std::uint32_t stopRecordType,
-                                 std::uint64_t stopRecordPayloadBytes = 0,
-                                 std::uint32_t stopRecordConstCount = 0);
-void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask);
-void countCommitChunkDrawRunBindingOverride(bool streamOverride,
-                                            bool indexBufferOverride,
-                                            bool alphaTestOverride,
-                                            std::size_t bytes);
-void countCommitChunkDrawBatchConstUploadPassthrough();
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
 void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkDrawRunScanCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkDrawRunBuildCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkDrawRunSubmitCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkDrawRunFinalBindCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkQueueDrawSubmissionSnapshotCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkIndexBindCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushBeforeRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushDrawRunCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushDrawFallbackCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushFailureCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushEndCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPendingFlushBeforeRecord(std::uint64_t records);
-void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records);
-void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records);
-void countCommitChunkReplayPendingFlushFailure(std::uint64_t records);
-void countCommitChunkReplayPendingFlushEnd(std::uint64_t records);
-void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayApplyStateRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayClearRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayPresentRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplaySurfaceRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayQueryRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayOtherRecordCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
 void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
                                            std::uint64_t bytes);
@@ -1082,24 +1037,18 @@ void countRenderPassColorStoreProof(RenderPassColorStoreProof proof);
 void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
-// R-VERIF / V1 boundary B2 — wall-clock latency of one commit_chunk()
+// R-VERIF / command-chunk boundary B2 — wall-clock latency of one
+// commit_chunk()
 // round trip (PE -> unix import/replay/queue submit -> return). Sampled
 // at dxmt9c_device_commit_chunk in device_c_chunk_replay.cpp. This excludes
 // asynchronous encode and GPU work after the call returns, but includes
 // importer validation, handle/resource marking, record replay, and queued
 // draw submission construction.
 void countBridgeCommitLatencyNs(std::uint64_t nanoseconds);
-void countCommitChunkImportCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds);
-void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds);
-// Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY): CPU cost of
-// building/retaining/pushing a RawCommandChunk in dxmt9c_device_commit_chunk
-// (raw enqueue), and CPU cost of the deferred replayRawChunk() call on the
-// ReplayOffloadWorker thread (offload replay). See
+// Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY): CPU cost of the
+// deferred replayRawChunk() call on the ReplayOffloadWorker thread. See
 // device_c_replay_offload.{hpp,cpp} and the commit-chunk offload branch in
 // device_c_chunk_replay.cpp.
-void countCommitChunkRawEnqueueCpuTime(std::uint64_t nanoseconds);
 void countOffloadReplayCpuTime(std::uint64_t nanoseconds);
 // ReplayOffloadQueue::depth() sampled just before each push(), mirroring
 // countEncodeDequeueReadyDepth's "depth before pop" convention.

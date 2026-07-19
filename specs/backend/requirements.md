@@ -465,10 +465,11 @@ mechanics), `dxmt9-present-boundary-policy-spec`
 (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. Clauses (g)
 and (h) close the two boundary-pacing gaps that previously blocked promoting
 this flag to an engine default; the third blocker — offload-forced crashes in
-`dxmt9-imported-apply-state-value-spec` / `dxmt9-resource-hazard-spec` that
-looked like a replay-worker resource-retention defect — was root-caused as a
-test-harness drain gap, not a production race (`cad446ce`, regression-pinned
-by the `-offload` spec variants). With all three resolved, the engine default
+the former V1 imported-record harnesses that looked like a replay-worker
+resource-retention defect — was root-caused as a test-harness drain gap, not a
+production race (`cad446ce`). Those V1 runtime harnesses were retired with the
+V1 producer/importer; current offload coverage is V2-only. With all three
+resolved, the engine default
 flipped to ON on 2026-07-10 (`d45af067`) — see the `specs/backend/gap.md`
 "Commit-replay offload" row.
 
@@ -500,20 +501,13 @@ the PE record byte-pinning specs (off-path unchanged plus new inline-section
 rows) and an on/off replay-equivalence spec following the
 `pe_full_snapshot_equivalence_spec` pattern.
 
-**R-BACK-2.53** *(V1 compatibility hardening.)* While wire version 1 remains
-accepted, its integer-encoded server-wrapper references must be treated as a
-compatibility exception to `R-BACK-2.21`, never as the target ABI. The PE
-recorder and unix importer must derive the same deduplicated set of direct,
-non-null payload references for every record, including shaders, vertex
-declarations, and queries; record handle ranges must be canonical contiguous
-slices and match those references exactly. V1 full-state snapshots must encode
-all texture and stream slots, including explicit nulls, so snapshot replay can
-unbind prior state. V1 bulk marking must not suppress normal per-draw marking,
-because effective unix state may reference resources absent from a sparse V1
-delta.
-The generated bridge ABI generation tag must change whenever this V1 record
-grammar or ownership contract changes, even if the outer C function prototype
-is unchanged, so mixed PE/unix binaries fail the attach handshake.
+**R-BACK-2.53** *(Retired V1 compatibility contract.)* Production PE and unix
+code must not advertise, negotiate, produce, import, or replay wire version 1.
+Any outer chunk version other than V2 must be rejected before validation,
+retention, state mutation, or queue submission. Immutable V1 envelope utilities
+may remain only as migration fixtures. Shared `D9CCommandRecord*` semantic value
+structs may remain temporarily as PE-local staging inputs only when they are
+converted directly into V2 and never serialized as a V1 chunk.
 
 **R-BACK-2.54** *(V2 stable handle-index ABI.)* Wire version 2 must replace all
 payload-embedded server-wrapper addresses with `uint32_t` handle-table indices.

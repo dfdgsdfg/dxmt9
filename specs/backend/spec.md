@@ -150,10 +150,8 @@ graph LR
 
 **PE CommandChunk** holds:
 - A compact command header array and POD payload arena
-- V2 production default: stable object-ID/generation table entries for buffers, textures,
+- V2 production grammar: stable object-ID/generation table entries for buffers, textures,
   surfaces, shaders, vertex declarations, and queries
-- V1 diagnostic compatibility: integer-encoded unix wrapper addresses retained
-  by the PE recorder; this is a forced fallback, not an acceptable new schema
 - No raw pointer-typed fields, COM pointers, ObjC pointers, lambdas, or owning
   C++ containers in the wire image
 - Command-count and byte-size fields used to bound tail latency
@@ -572,7 +570,7 @@ The observable contract is `R-BACK-2.51`. The mechanics:
 - `submitPresent` suppresses its inline seqId-based boundary only for the
   specific present that the app thread just paced through
   `waitPresentOrdinalBoundary`: `dxmt9c_device_commit_chunk`'s offload branch
-  calls `replayImportedChunk(..., pacedByPresentOrdinal=true)` for the raw
+  calls `replayResolvedV2Chunk(..., pacedByPresentOrdinal=true)` for the raw
   chunk the worker later replays, and only that Present record's
   `dxmt9c_device_present` call marks the next `core::Device::presentEx()`
   call's `SwapDesc::pacedByPresentOrdinal`
@@ -592,8 +590,8 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   commits, releases retained wrappers of abandoned chunks, and aborts pending
   ordinal waits). The historical per-record synchronous HRESULT
   short-circuit of `commit_chunk` does not hold in offload mode.
-- With the flag explicitly set to `0` (the opt-out) the entire path is
-  byte-identical to the inline replay.
+- With the flag explicitly set to `0` (the opt-out), the same admitted V2
+  representation is replayed inline instead of being queued to the worker.
 
 All three former promotion blockers are resolved. The two boundary-pacing
 gaps (global-only inline-boundary suppression; ordinal wait ignoring
@@ -870,18 +868,25 @@ Hot-path allocation policy:
   objects, but steady-state replay of imported records must not allocate from the
   system heap.
 
-#### 2.4.1 Current V1 Compatibility Contract
+#### 2.4.1 Retired V1 Contract
 
-Wire V1 is implemented by `D9CCommandChunkWireHeader` and related structs in
-`include/dxmt9/device_c.h`. It has a sound bounds-checkable outer shape, but its
+Wire V1 was retired from production after V2 promotion. PE and unix advertise
+only V2, the PE recorder always emits V2, and commit/offload replay rejects any
+outer version other than V2. `D9CCommandChunkWireHeader` and related structs in
+`include/dxmt9/device_c.h` remain temporarily as immutable migration fixtures
+for validation tests. The shared `D9CCommandRecord*` semantic value structs are
+also temporary PE-local staging inputs to `appendLegacyCommandRecordAsV2`; the
+adapter emits V2 directly and never constructs a V1 wire chunk. None of these
+declarations form a supported runtime ABI.
+
+V1 had a sound bounds-checkable outer shape, but its
 resource representation is transitional: payload fields and
 `D9CCommandChunkWireHandleEntry::opaqueHandle` contain a server-side `D9C*`
-wrapper address cast to `uint64_t`. The PE recorder AddRefs those wrappers until
-commit, and offloaded replay AddRefs them again while its unix-owned blob copy is
-queued. This exception violates the pointer-free target in `R-BACK-2.21` and must
-not be copied into V2.
+wrapper address cast to `uint64_t`. This violated the pointer-free target in
+`R-BACK-2.21` and is why it cannot remain as a fallback.
 
-The hardened V1 importer applies these invariants before dispatching any record:
+The historical hardened V1 importer applied these invariants before dispatching
+any record; migration tests retain them as conversion oracles:
 
 - Record handle slices are canonical and contiguous: record N starts where
   record N-1 ends, including zero-length slices, and the final slice consumes the
@@ -902,7 +907,7 @@ The hardened V1 importer applies these invariants before dispatching any record:
   per-draw resource marking remains enabled because the effective unix state
   can contain bindings not repeated by a sparse V1 delta.
 
-The PE pending-command retainer is one capacity-preserving flat entry arena.
+The retired PE pending-command retainer was one capacity-preserving flat entry arena.
 Each record starts with a checkpoint; failure releases and removes only the
 checkpoint suffix. Query, shader, declaration, surface, texture, and buffer
 wrappers use the same exact deduplication path. Unix commit/replay uses a
@@ -912,7 +917,7 @@ capacity survives calls. These changes close the known per-record container
 churn, but do not by themselves prove the complete no-system-allocation target
 in `R-BACK-2.27`.
 
-Because the generated bridge hash canonicalizes function prototypes rather
+Historically, because the generated bridge hash canonicalizes function prototypes rather
 than nested record layouts, every incompatible V1 record-grammar change also
 bumps `ABI_HASH_VERSION_TAG`. The exact-slice/Query contract uses bridge ABI
 generation `dxmt9-bridge-abi-v3`, preventing an older PE recorder from attaching
@@ -999,11 +1004,10 @@ Import is transactional and ordered:
    or submit queue work.
 
 V2 is selected only after PE/unix capability negotiation and the generated
-bridge ABI-hash handshake agree. An importer may support V1 and V2 during
-migration, but one chunk has one version and one payload grammar; there is no
-mixed V1/V2 record mode. Production `auto` selects V2 after the registry,
-producer, importer, native parity tests, PE x64/x86 builds, and runtime bridge-op
-gates passed. V1 remains available only as an explicit diagnostic fallback.
+bridge ABI-hash handshake agree. Production supports exactly V2: there is no
+fallback grammar and no mixed-version record mode. The registry, producer,
+importer, native parity tests, PE x64/x86 builds, and runtime bridge-op gates
+passed before V1 retirement.
 
 ### 2.5 Draw-Run Batch Compatibility
 

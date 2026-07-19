@@ -408,13 +408,11 @@ void testEquivalenceDrawPrimitiveUPSection() {
 // =====================================================================
 // Case B: rejection. A section that exceeds its register-file cap, or a
 // declared header.size too small for the section payload it claims, must
-// fail chunk import with the same malformed-packet status class every
-// other packet-shape violation uses -- and must never reach any apply
-// call. dxmt9c_device_commit_chunk (device_c_chunk_replay.cpp) maps any
-// non-Valid validateImportedWireChunk() status to commitChunkFail("validation",
-// ...), whose default HRESULT is D3DERR_INVALIDCALL, and gates the WHOLE
-// chunk on that validation before replayImportedChunk ever runs -- so no
-// record (including any preceding valid draws) is replayed on a violation.
+// fail the retired-wire migration validator with the same malformed-packet
+// status class every other packet-shape violation uses. Migration/conversion
+// callers must validate the complete fixture before applying any record, so
+// no preceding valid draw is partially applied on a violation. Production
+// commit admission is V2-only and does not execute this legacy grammar.
 // =====================================================================
 
 void testRejectionSectionExceedsRegisterCap() {

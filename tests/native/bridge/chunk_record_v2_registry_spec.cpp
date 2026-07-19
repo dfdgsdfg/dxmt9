@@ -164,25 +164,24 @@ void testPerDeviceVersionNegotiation() {
   static_assert(D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION ==
                 D9C_COMMAND_CHUNK_VERSION_V2);
   D9CCommandChunkNegotiation automatic{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
-                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_2,
       .pePreferredVersion = D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION,
   };
   check(dxmt9p_device_negotiate_command_chunk(device, &automatic) == 0 &&
+            automatic.unixSupportedVersions ==
+                D9C_COMMAND_CHUNK_CAP_VERSION_2 &&
             automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
-        "default auto preference negotiates V2");
+        "V2-only peers negotiate V2");
 
   D9CCommandChunkNegotiation v1{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
                              D9C_COMMAND_CHUNK_CAP_VERSION_2,
       .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION,
   };
-  check(dxmt9p_device_negotiate_command_chunk(device, &v1) == 0 &&
-            v1.unixSupportedVersions ==
-                (D9C_COMMAND_CHUNK_CAP_VERSION_1 |
-                 D9C_COMMAND_CHUNK_CAP_VERSION_2) &&
-            v1.selectedVersion == D9C_COMMAND_CHUNK_VERSION,
-        "forced V1 preference negotiates immutable V1");
+  check(dxmt9p_device_negotiate_command_chunk(device, &v1) < 0 &&
+            v1.unixSupportedVersions == D9C_COMMAND_CHUNK_CAP_VERSION_2 &&
+            v1.selectedVersion == 0u,
+        "retired V1 preference is rejected");
 
   D9CCommandChunkNegotiation v2{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
@@ -191,7 +190,7 @@ void testPerDeviceVersionNegotiation() {
   };
   check(dxmt9p_device_negotiate_command_chunk(device, &v2) == 0 &&
             v2.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
-        "forced V2 preference negotiates V2 without fallback");
+        "V2 preference negotiates V2 without fallback");
 
   D9CCommandChunkNegotiation unsupported{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1,

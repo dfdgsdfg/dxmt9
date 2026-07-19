@@ -21,10 +21,9 @@ struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
-// Wrapper pointer retained across the offload queue boundary (see
-// retainWrappersForOffload / releaseRetainedWrappers in
-// device_c_chunk_replay.cpp). `kind` is a D9C_CHUNK_HANDLE_KIND_* value;
-// Query wrappers participate in the same validated wire handle table.
+// Wrapper pointer retained across the V2 offload queue boundary. `kind` is a
+// D9C_CHUNK_HANDLE_KIND_* value; Query wrappers participate in the same
+// validated wire handle table.
 struct RetainedWireHandle {
   uint32_t kind = 0;
   void* ptr = nullptr;
@@ -32,25 +31,17 @@ struct RetainedWireHandle {
 
 struct RawCommandChunk {
   std::vector<dxmt9::core::u8> recordBlob;
-  uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION;
+  uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION_V2;
   uint32_t recordCount = 0;
   uint32_t recordBytes = 0;
   uint32_t handleCount = 0;
   bool preflightValidated = false;
   bool hasPresent = false;
-  // Wow64 pointer-decode semantics are carried by a thread_local
-  // (g_wow64ClientCallDepth) on the committing app thread. The deferred
-  // replay must reproduce that context on the worker or wireValuePtr's
-  // final reinterpret_cast fallback treats unregistered 32-bit tokens as
-  // raw pointers (garbage vtable -> jump to 0, which wedges Wine's
-  // signal handling on a non-Wine thread).
-  bool wow64ClientCall = false;
   // V2 objects are resolved and retained synchronously before enqueue.
   // The worker consumes these pointers directly and never looks a stable
   // registry ID up after the app-thread commit returns.
   std::vector<void*> resolvedObjects;
   std::vector<RetainedWireHandle> retainedWrappers;
-  std::chrono::steady_clock::time_point bridgeCommitStart{};
 };
 
 bool prepareV2OffloadChunk(
@@ -255,23 +246,13 @@ class ReplayOffloadWorker {
   std::atomic<bool> failed_{false};
 };
 
-// Rebuilds an ImportedWireChunkView over chunk.recordBlob, replays it via
-// the same file-local machinery dxmt9c_device_commit_chunk uses, and
-// releases chunk.retainedWrappers (success or failure). Implemented in
-// device_c_chunk_replay.cpp because it needs that TU's file-local
-// replayImportedChunk / makeImportedWireChunkBlobView / commitChunkFail.
+// Replays a prevalidated, resolved V2 chunk and releases its retained wrappers
+// on both success and failure.
 int32_t replayRawChunk(D9CDevice* d, RawCommandChunk& chunk);
 
-// Releases every wrapper addref'd by retainWrappersForOffload() for this
-// chunk (dxmt9c_texture_release / dxmt9c_surface_release / etc., dispatched
-// by RetainedWireHandle::kind) and clears retainedWrappers. Given
-// namespace-level (not file-local) linkage -- unlike its sibling
-// retainWrappersForOffload(), which never leaves device_c_chunk_replay.cpp
-// -- specifically so it can be called from device_c_replay_offload.cpp's
-// ReplayOffloadWorker: both the commit-branch push() failure path
-// (device_c_chunk_replay.cpp) and the worker's fail-stop/teardown drain
-// (device_c_replay_offload.cpp) need to release a chunk's wrappers without
-// ever having replayed it. Defined in device_c_chunk_replay.cpp.
+// Releases every wrapper retained during V2 admission and clears the list.
+// Namespace linkage allows both the commit push-failure path and the offload
+// worker's fail-stop drain to call it.
 void releaseRetainedWrappers(RawCommandChunk& chunk);
 
 }  // namespace dxmt9::d3d9

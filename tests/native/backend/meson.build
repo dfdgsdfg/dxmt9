@@ -184,32 +184,6 @@ resource_hazard_spec = executable(
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
 
-# Offload-forced regression pin (R-BACK-2.51): reuses the same binary with
-# DXMT9_OFFLOAD_COMMIT_REPLAY=1 forced on, pinning the fix for the
-# D9CDevice-teardown-vs-ReplayOffloadWorker heap corruption (see
-# commitWireChunk()'s comment in imported_apply_state_value_spec.cpp and the
-# per-call comments in this file). Before that fix this binary reliably
-# SIGABRT'd/SIGTRAP'd with heap corruption instead of failing an assertion.
-test('dxmt9-resource-hazard-spec-offload', resource_hazard_spec,
-     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
-
-imported_apply_state_value_spec = executable(
-  'dxmt9-imported-apply-state-value-spec',
-  'imported_apply_state_value_spec.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
-  link_args: dxmt9_test_link_args,
-)
-
-test('dxmt9-imported-apply-state-value-spec',
-     imported_apply_state_value_spec)
-
-# Offload-forced regression pin (R-BACK-2.51): see the comment on
-# dxmt9-resource-hazard-spec-offload above.
-test('dxmt9-imported-apply-state-value-spec-offload',
-     imported_apply_state_value_spec,
-     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
-
 render_pass_actions_spec = executable(
   'dxmt9-render-pass-actions-spec',
   'render_pass_actions_spec.cpp',
@@ -470,34 +444,6 @@ present_ordinal_boundary_spec = executable(
 
 test('dxmt9-present-ordinal-boundary-spec', present_ordinal_boundary_spec,
      env: dxmt9_native_test_env)
-
-# Z1 audit item #2 — unix-side chunk-injection probe.
-# Constructs a wire-format chunk in memory and feeds it directly into
-# dxmt9c_device_commit_chunk(), bypassing PE D3D9 + the WINE_UNIX_CALL
-# bridge. Isolates B3 (CommandQueue) + B4 (encode thread) from B1 (PE
-# recorder) and B2 (PE→unix bridge). Soft-assertion only; real numbers
-# scrape from the cumulative `[dxmt9-perf]` line emitted at exit when
-# DXMT_PERF_COUNTERS=1.
-#
-# NOT registered as a meson test() yet — `commit_chunk` from the
-# native context trips an ASan halt-on-error in the current build
-# (probe loops succeed without ASan; meson runs default to
-# halt_on_error=1, which surfaces a Metal-side issue that needs
-# triage). The binary still builds; run manually with:
-#   DYLD_LIBRARY_PATH=...  \
-#   DXMT_PERF_COUNTERS=1 UNIX_CHUNK_INJECT_ITERATIONS=N \
-#   ./build-x86_64-builtin/tests/native/backend/dxmt9-unix-chunk-injection-probe
-# until the ASan finding is debugged. The probe is the sole consumer
-# of dxmt9c_device_commit_chunk from a native (non-Wine) main(), so
-# its failure pattern is itself a useful triage handle for the queue
-# code that currently runs only via the bridge.
-unix_chunk_injection_probe = executable(
-  'dxmt9-unix-chunk-injection-probe',
-  'dxmt9_unix_chunk_injection_probe.cpp',
-  include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
-  link_args: dxmt9_test_link_args,
-)
 
 # R-BACK-2.54 / R-BACK-2.56 command-chunk V2 replay/lifetime scaffolds.
 foreach spec : [

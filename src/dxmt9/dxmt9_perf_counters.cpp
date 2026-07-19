@@ -93,6 +93,8 @@ struct Counters {
   // R-BACK-2.10 / 2.27 admit + ring heap fallback gauges.
   std::atomic<std::uint64_t> chunkAdmit{0};
   std::atomic<std::uint64_t> chunkReject{0};
+  // Retired schema fields kept at zero so existing perf-result parsers retain
+  // a stable column set across the V1 removal.
   std::atomic<std::uint64_t> commandChunkV1Chunks{0};
   std::atomic<std::uint64_t> commandChunkV1Records{0};
   std::atomic<std::uint64_t> commandChunkV1Bytes{0};
@@ -413,6 +415,9 @@ struct Counters {
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
   std::atomic<std::uint64_t> hazardBloomFalsePositive{0};
+  // Historical V1 importer/replay detail columns remain in the JSON schema
+  // at zero for result-parser compatibility. Fields in this block that still
+  // have a count* entry are shared by the V2 replay path.
   std::atomic<std::uint64_t> commitChunkDrawRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawIndexed{0};
   std::atomic<std::uint64_t> commitChunkDrawNoDelta{0};
@@ -1492,12 +1497,13 @@ struct Counters {
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuMaxNs{0};
-  // V1 boundary B2 — commit_chunk bridge-call latency
+  // Command-chunk boundary B2 — commit_chunk bridge-call latency
   // (countBridgeCommitLatencyNs). This is broader than the bridge ABI
   // crossing: it includes unix-side import/replay/queue-submit work, but
   // excludes asynchronous encode and GPU work after commit_chunk returns.
   std::atomic<std::uint64_t> bridgeCommitLatencyNs{0};
   std::atomic<std::uint64_t> bridgeCommitLatencyMaxNs{0};
+  // Retired V1 importer phase columns kept at zero for stable perf output.
   std::atomic<std::uint64_t> commitChunkImportCpuNs{0};
   std::atomic<std::uint64_t> commitChunkImportCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkHandleCpuNs{0};
@@ -1506,7 +1512,8 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkReplayCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuNs{0};
   std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuMaxNs{0};
-  // Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY).
+  // The raw-enqueue V1 phase columns are retired; the V2 offload counters
+  // beginning at offloadReplayCpuNs remain live.
   std::atomic<std::uint64_t> commitChunkRawEnqueueCpuNs{0};
   std::atomic<std::uint64_t> commitChunkRawEnqueueCpuMaxNs{0};
   std::atomic<std::uint64_t> offloadReplayCpuNs{0};
@@ -4235,11 +4242,7 @@ void countCommandChunkWire(std::uint32_t version, std::uint64_t records,
                            std::uint64_t bytes,
                            std::uint64_t registryResolutions) {
   if (!enabled()) return;
-  if (version == 1u) {
-    add(counters().commandChunkV1Chunks);
-    add(counters().commandChunkV1Records, records);
-    add(counters().commandChunkV1Bytes, bytes);
-  } else if (version == 2u) {
+  if (version == 2u) {
     add(counters().commandChunkV2Chunks);
     add(counters().commandChunkV2Records, records);
     add(counters().commandChunkV2Bytes, bytes);
@@ -5003,43 +5006,6 @@ void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
   }
 }
 
-void countCommitChunkDrawReplay(bool indexed, std::uint32_t deltaMask) {
-  auto& c = counters();
-  add(c.commitChunkDrawRecords);
-  if (indexed) {
-    add(c.commitChunkDrawIndexed);
-  }
-  if (deltaMask == 0) {
-    add(c.commitChunkDrawNoDelta);
-    return;
-  }
-
-  add(c.commitChunkDrawStateDelta);
-  auto addIf = [&](std::uint32_t bit, std::atomic<std::uint64_t>& counter) {
-    if ((deltaMask & bit) != 0) {
-      add(counter);
-    }
-  };
-  addIf(CommitChunkDrawDeltaRenderState, c.commitChunkDrawDeltaRenderState);
-  addIf(CommitChunkDrawDeltaTexture, c.commitChunkDrawDeltaTexture);
-  addIf(CommitChunkDrawDeltaStream, c.commitChunkDrawDeltaStream);
-  addIf(CommitChunkDrawDeltaFvf, c.commitChunkDrawDeltaFvf);
-  addIf(CommitChunkDrawDeltaShader, c.commitChunkDrawDeltaShader);
-  addIf(CommitChunkDrawDeltaVertexDecl, c.commitChunkDrawDeltaVertexDecl);
-  addIf(CommitChunkDrawDeltaRenderTarget, c.commitChunkDrawDeltaRenderTarget);
-  addIf(CommitChunkDrawDeltaDepthStencil, c.commitChunkDrawDeltaDepthStencil);
-  addIf(CommitChunkDrawDeltaViewport, c.commitChunkDrawDeltaViewport);
-  addIf(CommitChunkDrawDeltaScissor, c.commitChunkDrawDeltaScissor);
-  addIf(CommitChunkDrawDeltaTextureStageState, c.commitChunkDrawDeltaTextureStageState);
-  addIf(CommitChunkDrawDeltaSamplerState, c.commitChunkDrawDeltaSamplerState);
-  addIf(CommitChunkDrawDeltaMaterial, c.commitChunkDrawDeltaMaterial);
-  addIf(CommitChunkDrawDeltaClipPlane, c.commitChunkDrawDeltaClipPlane);
-  addIf(CommitChunkDrawDeltaTransform, c.commitChunkDrawDeltaTransform);
-  addIf(CommitChunkDrawDeltaLight, c.commitChunkDrawDeltaLight);
-  addIf(CommitChunkDrawDeltaLightEnable, c.commitChunkDrawDeltaLightEnable);
-  addIf(CommitChunkDrawDeltaIndexBuffer, c.commitChunkDrawDeltaIndexBuffer);
-}
-
 void countDrawPacketActualChange(std::uint32_t declaredMask,
                                  std::uint32_t actualMask) {
   auto& c = counters();
@@ -5133,226 +5099,6 @@ void countDrawPacketActualChange(std::uint32_t declaredMask,
   addRedundantClass(clipMask, c.drawPacketRedundantClip);
 }
 
-void countCommitChunkDrawStreamDeltaDetails(std::uint32_t handleChanges,
-                                            std::uint32_t offsetChanges,
-                                            std::uint32_t strideChanges) {
-  auto& c = counters();
-  add(c.commitChunkDrawDeltaStreamHandle, handleChanges);
-  add(c.commitChunkDrawDeltaStreamOffset, offsetChanges);
-  add(c.commitChunkDrawDeltaStreamStride, strideChanges);
-}
-
-void countCommitChunkDrawIndexBufferHandleDelta() {
-  add(counters().commitChunkDrawDeltaIndexBufferHandle);
-}
-
-void countCommitChunkDrawRunScan(std::uint32_t stop,
-                                 std::uint32_t recordCount,
-                                 std::uint32_t stopRecordType,
-                                 std::uint64_t stopRecordPayloadBytes,
-                                 std::uint32_t stopRecordConstCount) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunScans);
-  if (recordCount >= 2u) {
-    add(c.commitChunkDrawRunSubmits);
-    add(c.commitChunkDrawRunRecords, recordCount);
-    return;
-  }
-
-  // Mirrors ImportedDrawRunScanStop without exposing device_c headers here.
-  switch (stop) {
-  case 1:
-    add(c.commitChunkDrawRunBreakFirstDelta);
-    break;
-  case 2:
-    add(c.commitChunkDrawRunBreakEnd);
-    break;
-  case 3:
-    add(c.commitChunkDrawRunBreakInvalid);
-    break;
-  case 4:
-  case 6:
-    add(c.commitChunkDrawRunBreakType);
-    switch (stopRecordType) {
-    case 3:
-    case 4:
-      add(c.commitChunkDrawRunBreakTypeDrawUp);
-      break;
-    case 14:
-    case 15:
-    case 16:
-    case 17:
-    case 18:
-    case 19:
-      add(c.commitChunkDrawRunBreakTypeConstantUpload);
-      add(c.commitChunkDrawRunBreakTypeConstantUploadBytes, stopRecordPayloadBytes);
-      add(c.commitChunkDrawRunBreakTypeConstantUploadRegisters, stopRecordConstCount);
-      switch (stopRecordType) {
-      case 14:
-        add(c.commitChunkDrawRunBreakTypeConstVsF);
-        add(c.commitChunkDrawRunBreakTypeConstVsFBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstVsFRegisters, stopRecordConstCount);
-        break;
-      case 15:
-        add(c.commitChunkDrawRunBreakTypeConstVsI);
-        add(c.commitChunkDrawRunBreakTypeConstVsIBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstVsIRegisters, stopRecordConstCount);
-        break;
-      case 16:
-        add(c.commitChunkDrawRunBreakTypeConstVsB);
-        add(c.commitChunkDrawRunBreakTypeConstVsBBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstVsBRegisters, stopRecordConstCount);
-        break;
-      case 17:
-        add(c.commitChunkDrawRunBreakTypeConstPsF);
-        add(c.commitChunkDrawRunBreakTypeConstPsFBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstPsFRegisters, stopRecordConstCount);
-        break;
-      case 18:
-        add(c.commitChunkDrawRunBreakTypeConstPsI);
-        add(c.commitChunkDrawRunBreakTypeConstPsIBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstPsIRegisters, stopRecordConstCount);
-        break;
-      case 19:
-        add(c.commitChunkDrawRunBreakTypeConstPsB);
-        add(c.commitChunkDrawRunBreakTypeConstPsBBytes, stopRecordPayloadBytes);
-        add(c.commitChunkDrawRunBreakTypeConstPsBRegisters, stopRecordConstCount);
-        break;
-      default:
-        break;
-      }
-      break;
-    case 20:
-      add(c.commitChunkDrawRunBreakTypeClear);
-      break;
-    case 21:
-      add(c.commitChunkDrawRunBreakTypePresent);
-      break;
-    case 22:
-    case 23:
-    case 24:
-    case 25:
-    case 29:
-      add(c.commitChunkDrawRunBreakTypeSurfaceOp);
-      break;
-    case 26:
-      add(c.commitChunkDrawRunBreakTypeQueryIssue);
-      break;
-    case 27:
-      add(c.commitChunkDrawRunBreakTypeReadback);
-      break;
-    case 28:
-      add(c.commitChunkDrawRunBreakTypeStateApply);
-      break;
-    default:
-      add(c.commitChunkDrawRunBreakTypeOther);
-      break;
-    }
-    break;
-  case 5:
-    add(c.commitChunkDrawRunBreakStateDelta);
-    break;
-  default:
-    break;
-  }
-}
-
-void countCommitChunkDrawRunStateDeltaBucket(std::uint32_t deltaMask) {
-  auto& c = counters();
-  constexpr std::uint32_t streamMask = CommitChunkDrawDeltaStream;
-  constexpr std::uint32_t ibMask = CommitChunkDrawDeltaIndexBuffer;
-  constexpr std::uint32_t textureMask =
-      CommitChunkDrawDeltaTexture |
-      CommitChunkDrawDeltaTextureStageState |
-      CommitChunkDrawDeltaSamplerState;
-  constexpr std::uint32_t shaderMask = CommitChunkDrawDeltaShader;
-  constexpr std::uint32_t fvfVdeclMask =
-      CommitChunkDrawDeltaFvf |
-      CommitChunkDrawDeltaVertexDecl;
-  constexpr std::uint32_t knownMask =
-      streamMask | ibMask | textureMask | shaderMask | fvfVdeclMask;
-
-  const bool stream = (deltaMask & streamMask) != 0;
-  const bool ib = (deltaMask & ibMask) != 0;
-  const bool texture = (deltaMask & textureMask) != 0;
-  const bool shader = (deltaMask & shaderMask) != 0;
-  const bool fvfVdecl = (deltaMask & fvfVdeclMask) != 0;
-  const bool other = (deltaMask & ~knownMask) != 0;
-  const unsigned groups =
-      (stream ? 1u : 0u) +
-      (ib ? 1u : 0u) +
-      (texture ? 1u : 0u) +
-      (shader ? 1u : 0u) +
-      (fvfVdecl ? 1u : 0u) +
-      (other ? 1u : 0u);
-
-  if (groups != 1u) {
-    add(c.commitChunkDrawRunBreakStateDeltaMixed);
-    if (groups == 2u) {
-      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup2);
-      if (stream && ib) {
-        add(c.commitChunkDrawRunBreakStateDeltaStreamIbOnly);
-      }
-    } else if (groups == 3u) {
-      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup3);
-    } else {
-      add(c.commitChunkDrawRunBreakStateDeltaMixedGroup4Plus);
-    }
-    if (stream) add(c.commitChunkDrawRunBreakStateDeltaMixedWithStream);
-    if (ib) add(c.commitChunkDrawRunBreakStateDeltaMixedWithIb);
-    if (texture) add(c.commitChunkDrawRunBreakStateDeltaMixedWithTexture);
-    if (shader) add(c.commitChunkDrawRunBreakStateDeltaMixedWithShader);
-    if (fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl);
-    if (other) add(c.commitChunkDrawRunBreakStateDeltaMixedWithOther);
-    if (stream && ib) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamIb);
-    if (stream && texture) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture);
-    if (stream && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamShader);
-    if (stream && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl);
-    if (ib && texture) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbTexture);
-    if (ib && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbShader);
-    if (ib && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl);
-    if (texture && shader) add(c.commitChunkDrawRunBreakStateDeltaMixedPairTextureShader);
-    if (texture && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl);
-    if (shader && fvfVdecl) add(c.commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl);
-  } else if (stream) {
-    add(c.commitChunkDrawRunBreakStateDeltaStreamOnly);
-  } else if (ib) {
-    add(c.commitChunkDrawRunBreakStateDeltaIbOnly);
-  } else if (texture) {
-    add(c.commitChunkDrawRunBreakStateDeltaTextureOnly);
-  } else if (shader) {
-    add(c.commitChunkDrawRunBreakStateDeltaShaderOnly);
-  } else if (fvfVdecl) {
-    add(c.commitChunkDrawRunBreakStateDeltaFvfVdeclOnly);
-  } else {
-    add(c.commitChunkDrawRunBreakStateDeltaOtherOnly);
-  }
-}
-
-void countCommitChunkDrawRunBindingOverride(bool streamOverride,
-                                            bool indexBufferOverride,
-                                            bool alphaTestOverride,
-                                            std::size_t bytes) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunBindingOverrideRecords);
-  add(c.commitChunkDrawRunBindingOverrideBytes, static_cast<std::uint64_t>(bytes));
-  if (streamOverride) {
-    add(c.commitChunkDrawRunBindingOverrideStreamRecords);
-  }
-  if (indexBufferOverride) {
-    add(c.commitChunkDrawRunBindingOverrideIbRecords);
-  }
-  if (alphaTestOverride) {
-    // H228 -- per-draw alpha-test immediate override carried by an imported
-    // draw run (trio-only state deltas no longer break run coalescing).
-    add(c.commitChunkDrawRunBindingOverrideAlphaRecords);
-  }
-}
-
-void countCommitChunkDrawBatchConstUploadPassthrough() {
-  add(counters().commitChunkDrawBatchConstUploadPassthrough);
-}
-
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
   auto& c = counters();
   add(c.commitChunkDrawSubmissionBatchSubmits);
@@ -5380,189 +5126,6 @@ void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds) {
   add(c.commitChunkApplyDrawStateCpuNs, nanoseconds);
   updateMax(c.commitChunkApplyDrawStateCpuMaxNs, nanoseconds);
   recordRing(c.commitChunkApplyDrawStateCpuRing, nanoseconds);
-}
-
-void countCommitChunkDrawRunScanCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunScanCpuNs, nanoseconds);
-  updateMax(c.commitChunkDrawRunScanCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkDrawRunScanCpuRing, nanoseconds);
-}
-
-void countCommitChunkDrawRunBuildCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunBuildCpuNs, nanoseconds);
-  updateMax(c.commitChunkDrawRunBuildCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkDrawRunBuildCpuRing, nanoseconds);
-}
-
-void countCommitChunkDrawRunSubmitCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunSubmitCpuNs, nanoseconds);
-  updateMax(c.commitChunkDrawRunSubmitCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkDrawRunSubmitCpuRing, nanoseconds);
-}
-
-void countCommitChunkDrawRunFinalBindCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkDrawRunFinalBindCpuNs, nanoseconds);
-  updateMax(c.commitChunkDrawRunFinalBindCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkDrawRunFinalBindCpuRing, nanoseconds);
-}
-
-void countCommitChunkQueueDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkQueueDrawSubmissionCpuNs, nanoseconds);
-  updateMax(c.commitChunkQueueDrawSubmissionCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkQueueDrawSubmissionCpuRing, nanoseconds);
-}
-
-void countCommitChunkQueueDrawSubmissionEmplaceCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkQueueDrawSubmissionEmplaceCpuNs, nanoseconds);
-  updateMax(c.commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkQueueDrawSubmissionEmplaceCpuRing, nanoseconds);
-}
-
-void countCommitChunkQueueDrawSubmissionSnapshotCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkQueueDrawSubmissionSnapshotCpuNs, nanoseconds);
-  updateMax(c.commitChunkQueueDrawSubmissionSnapshotCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkQueueDrawSubmissionSnapshotCpuRing, nanoseconds);
-}
-
-void countCommitChunkIndexBindCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkIndexBindCpuNs, nanoseconds);
-  updateMax(c.commitChunkIndexBindCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkIndexBindCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayPendingFlushCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayPendingFlushCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushBeforeRecordCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayPendingFlushBeforeRecordCpuNs, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushDrawRunCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayPendingFlushDrawRunCpuNs, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushDrawFallbackCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayPendingFlushDrawFallbackCpuNs, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushFailureCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayPendingFlushFailureCpuNs, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushEndCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayPendingFlushEndCpuNs, nanoseconds);
-}
-
-void countCommitChunkReplayPendingFlushBeforeRecord(std::uint64_t records) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushBeforeRecordFlushes);
-  add(c.commitChunkReplayPendingFlushBeforeRecordRecords, records);
-}
-
-void countCommitChunkReplayPendingFlushDrawRun(std::uint64_t records) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushDrawRunFlushes);
-  add(c.commitChunkReplayPendingFlushDrawRunRecords, records);
-}
-
-void countCommitChunkReplayPendingFlushDrawFallback(std::uint64_t records) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushDrawFallbackFlushes);
-  add(c.commitChunkReplayPendingFlushDrawFallbackRecords, records);
-}
-
-void countCommitChunkReplayPendingFlushFailure(std::uint64_t records) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushFailureFlushes);
-  add(c.commitChunkReplayPendingFlushFailureRecords, records);
-}
-
-void countCommitChunkReplayPendingFlushEnd(std::uint64_t records) {
-  auto& c = counters();
-  add(c.commitChunkReplayPendingFlushEndFlushes);
-  add(c.commitChunkReplayPendingFlushEndRecords, records);
-}
-
-void countCommitChunkReplayDrawRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayDrawRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayDrawRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayDrawRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayNonDrawRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayNonDrawRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayNonDrawRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayNonDrawRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayConstRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayConstRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayConstRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayConstRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayApplyStateRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayApplyStateRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayApplyStateRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayApplyStateRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayClearRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayClearRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayClearRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayClearRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayPresentRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayPresentRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayPresentRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayPresentRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplaySurfaceRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplaySurfaceRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplaySurfaceRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplaySurfaceRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayQueryRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayQueryRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayQueryRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayQueryRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayOtherRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkReplayOtherRecordCpuNs, nanoseconds);
-  updateMax(c.commitChunkReplayOtherRecordCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkReplayOtherRecordCpuRing, nanoseconds);
-}
-
-void countCommitChunkConstUploadCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkConstUploadCpuNs, nanoseconds);
-  updateMax(c.commitChunkConstUploadCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkConstUploadCpuRing, nanoseconds);
 }
 
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
@@ -8732,7 +8295,8 @@ void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds) {
 }
 
 void countBridgeCommitLatencyNs(std::uint64_t nanoseconds) {
-  // V1 boundary B2 — measured across the whole commit_chunk bridge call.
+  // Command-chunk boundary B2 — measured across the whole commit_chunk
+  // bridge call.
   // This includes unix-side import/replay/queue-submit work and excludes
   // asynchronous encode/GPU work after the call returns. The matching call
   // site is in src/d3d9/device_c_chunk_replay.cpp
@@ -8740,36 +8304,6 @@ void countBridgeCommitLatencyNs(std::uint64_t nanoseconds) {
   add(counters().bridgeCommitLatencyNs, nanoseconds);
   updateMax(counters().bridgeCommitLatencyMaxNs, nanoseconds);
   recordRing(counters().bridgeCommitLatencyRing, nanoseconds);
-}
-
-void countCommitChunkImportCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkImportCpuNs, nanoseconds);
-  updateMax(counters().commitChunkImportCpuMaxNs, nanoseconds);
-  recordRing(counters().commitChunkImportCpuRing, nanoseconds);
-}
-
-void countCommitChunkHandleCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkHandleCpuNs, nanoseconds);
-  updateMax(counters().commitChunkHandleCpuMaxNs, nanoseconds);
-  recordRing(counters().commitChunkHandleCpuRing, nanoseconds);
-}
-
-void countCommitChunkReplayCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkReplayCpuNs, nanoseconds);
-  updateMax(counters().commitChunkReplayCpuMaxNs, nanoseconds);
-  recordRing(counters().commitChunkReplayCpuRing, nanoseconds);
-}
-
-void countCommitChunkDrawBatchSubmitCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkDrawBatchSubmitCpuNs, nanoseconds);
-  updateMax(counters().commitChunkDrawBatchSubmitCpuMaxNs, nanoseconds);
-  recordRing(counters().commitChunkDrawBatchSubmitCpuRing, nanoseconds);
-}
-
-void countCommitChunkRawEnqueueCpuTime(std::uint64_t nanoseconds) {
-  add(counters().commitChunkRawEnqueueCpuNs, nanoseconds);
-  updateMax(counters().commitChunkRawEnqueueCpuMaxNs, nanoseconds);
-  recordRing(counters().commitChunkRawEnqueueCpuRing, nanoseconds);
 }
 
 void countOffloadReplayCpuTime(std::uint64_t nanoseconds) {

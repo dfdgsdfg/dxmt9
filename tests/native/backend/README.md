@@ -21,7 +21,6 @@ NSObject release symbols link against winemetal.
 | `dxmt9_argbuf_populator_spec.cpp` | Per-encoder argbuf populator (encoder-resource init, dirtyBytesEstimate) |
 | `tile_ffp_selector_spec.cpp` | Tile-shader FFP capability gate + per-pass selector (`R-BACK-13.*`) |
 | `tile_ffp_msl_spec.cpp` | Tile-FFP MSL emitter source contract |
-| `dxmt9_unix_chunk_injection_probe.cpp` | Unix-side chunk-injection probe (Z1 audit; not registered as test — manual run only, see meson.build comment) |
 
 ## Running
 
@@ -36,8 +35,8 @@ keys appear in the perf JSON.
 
 ## Conventions
 
-- Spec files: `<area>_spec.cpp` (snake_case). Probe-only files use
-  `_probe` suffix (currently `dxmt9_unix_chunk_injection_probe.cpp`).
+- Spec files: `<area>_spec.cpp` (snake_case). Probe-only files use an
+  `_probe` suffix.
 - Test target name: `dxmt9-<name>` (kebab).
 - Specs holding `WMT::Reference<>` instances need `dxmt9_winemetal_dep`
   added to `dependencies:` so NSObject_release links — the test never

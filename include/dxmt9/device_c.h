@@ -460,8 +460,12 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
 
 #define D9C_COMMAND_CHUNK_VERSION 1u
 
-/* Data-oriented command chunk wire V1 shape carried by D9CCommandChunk's
- * records/recordBytes envelope. The blob layout is:
+/* Retired command chunk wire V1 shape. Production PE and unix runtimes no
+ * longer advertise, produce, import, or replay this grammar. The pointer-bearing
+ * envelope definitions remain for migration fixtures. D9CCommandRecord* value
+ * structs also remain temporarily as PE-local semantic staging inputs that are
+ * converted directly into V2; they are never serialized as a V1 chunk. The
+ * historical blob layout was:
  *
  *   D9CCommandChunkWireHeader
  *   D9CCommandChunkWireRecordHeader[recordCount]
@@ -474,7 +478,7 @@ typedef struct D9CDrawIndexedPrimitiveUPPacket {
  * written as zero by producers and validated as zero by consumers before
  * execution.
  *
- * V1 compatibility debt: payload handle fields and opaqueHandle contain
+ * V1 compatibility debt: payload handle fields and opaqueHandle contained
  * SERVER-SIDE D9C* wrapper addresses cast to integers. New schemas must not
  * extend that convention; wire V2 is specified to use stable object IDs and
  * payload handle-table indices (R-BACK-2.54). */
@@ -702,7 +706,9 @@ enum {
 
 /* Pointer-free command chunk wire V2 (R-BACK-2.54 / R-BACK-2.55).
  *
- * V1 above remains an immutable compatibility ABI. V2 keeps the same outer
+ * The retired V1 envelope declarations above remain only as migration fixtures;
+ * the shared semantic record values may be consumed only by the PE-local V2
+ * conversion adapter. V2 keeps the same outer
  * table/table/arena organization, but gives every type a V2 suffix so a layout
  * change cannot silently reinterpret a V1 blob. All offsets are byte offsets
  * from the start of the chunk blob or record payload as documented by the
