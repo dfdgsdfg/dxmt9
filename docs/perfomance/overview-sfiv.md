@@ -4,8 +4,8 @@ workload: SFIV Benchmark (D3D9Ex)
 title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-19
-source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714
+updated: 2026-07-20
+source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md
 ---
 
@@ -42,6 +42,14 @@ A separate long run observed 260.6 seconds and 10,740 presents. It sustained
 `42.684` sampled FPS with GPU CB p50/p95 `3.233/7.703ms` and zero GPU errors.
 Because its scene/loop coverage differs, it is stability evidence rather than
 a third member of the duration-matched median.
+
+The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+adds a quiet same-build ABBA pair. Sampled FPS is flat-positive
+(`45.544 -> 45.694`, `+0.33%`), draw/chunk CPU falls `32.57%/12.57%`, argbuf
+setup/binds become zero, and the character/effect captures plus error counters
+remain clean. Per-frame GPU-time p50/p95 increases `8.95%/4.34%`, however, so
+SFIV is the main reason not to interpret the CPU cleanup as a universal GPU or
+default-policy win.
 
 ## Performance Improvement Versus the V1 Era
 

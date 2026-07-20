@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching"
 type: domain-index
 status: current
-updated: 2026-07-12
-source: docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-07-20
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/state-churn-encode/overview.md; docs/perfomance/state-churn-encode/log.md
 ---
 
 # State-Churn Encode — the CPU encode path and draw-run batching
 
-Latest tracked row: `H210` - Uniform append residual after fixed-handle carry is bounded local cleanup (accepted direction).
+Latest tracked row: `H211` - direct-cbuf is a general constants-only Stage 2 CPU cleanup, but remains default-off.
 
 Current status: the commit-replay offload is engine-default ON (`d45af067`, H216 in [present-pacing](../present-pacing/index.md)), and the rejected replay-carrier lanes documented in this domain's history (chunk-end carry + `AndRun`/`WithResourceMarking` family, draw-run preflush merge/mixed-carrier, compact uniform submission carrier, canonical draw-run fast path, publish-time PSO prefetch) were removed from the tree in the H217-H220 cleanup waves — see the [overview](overview.md) current-status section.
 
@@ -23,6 +23,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-encode-phase.202 - Direct-Cbuf Cross-Workload Generality Gate](state-churn-encode-encode-phase.202.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)
 - [state-churn-encode-encode-phase.200 - Uniform Fixed Payload Handle Carry](state-churn-encode-encode-phase.200.md)
 - [state-churn-encode-encode-phase.199 - Stage-Level Uniform Append Split Counters](state-churn-encode-encode-phase.199.md)

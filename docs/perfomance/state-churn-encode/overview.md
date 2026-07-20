@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-12
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md
+updated: 2026-07-20
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -35,6 +35,7 @@ bottleneck — that is owned by [hidden-backend-storage](../hidden-backend-stora
 | H208 | The remaining uniform-append residual needs component-level attribution before mutation | instrumentation accepted; runtime gate completed | [state-churn-encode-encode-phase.199](state-churn-encode-encode-phase.199.md) adds behavior-neutral counters for fixed/VS/PS component find and append scopes inside `appendDrawUniformPayload()`, plus summary rows for known-with-components share and component residual. Existing H225 data predates the counters, so the new rows correctly report `n/a` rather than zero. | The follow-up run in H209 makes fixed-payload find the first local cleanup target. Keep the component split as attribution tooling; it is not `.gputrace` evidence by itself. |
 | H209 | Fixed-payload handle carry reduces the targeted component but does not break the FPS wall | accepted local cleanup; not FPS proof | [state-churn-encode-encode-phase.200](state-churn-encode-encode-phase.200.md) stamps submissions with `uniformFixedPayloadGeneration` and lets `appendDrawRunBatch()` reuse the previous slot-local fixed handle when the generation is unchanged and the record hash still matches the current fixed payload. The targeted row moves: `uniform_component_fixed_find_cpu_ms_per_present` `0.229 -> 0.150`, and total component find `0.323 -> 0.257`. | Keep the carry path. Do not promote it as a wall-breaker: `uniform_append_parent_cpu_ms_per_present` is flat (`0.882 -> 0.880`), sampled FPS is noisy/regressed (`16.170 -> 14.261`), and no-enqueue completion wait remains dominant. The next FPS-facing branch remains P4/no-enqueue overlap or larger replay/encode materialization elision. |
 | H210 | Uniform append residual after fixed-handle carry is bounded local cleanup | accepted direction | [state-churn-encode-encode-phase.201](state-churn-encode-encode-phase.201.md) audits H209's current run and the `appendDrawUniformPayload()` source. The remaining parent is `0.880ms/present`; known scopes plus component scopes explain `77.75%`, leaving `0.196ms/present` residual. VS stage append is the largest named remaining component (`0.116ms/present`) because `661,640` VS stage records are appended (`0.833` per payload append), while full uniform generation reuse remains `0` and full payload hash reuse is only `3,970 / 672,993` adjacent payloads. | Do not spend `.gputrace` on uniform append residual alone. A VS-stage split or stage-handle tweak is optional local cleanup with a small ceiling. The FPS branch remains P4/no-enqueue overlap or a larger replay/encode materialization change that moves serial rows under the visual-safe no-gputrace gate. |
+| H211 | Stage 2b direct-cbuf is a general constants-only Stage 2 CPU cleanup | accepted mechanism; keep default-off | [state-churn-encode-encode-phase.202](state-churn-encode-encode-phase.202.md) runs same-build ABBA pairs across GT1, GT2, GT3, and SFIV. Draw CPU falls `20.7-32.6%`, chunk CPU falls `12.6-24.9%`, argbuf setup/binds become zero, FPS changes `+0.32%` to `+1.15%`, and all errors remain zero. The direct-cbuf GT3 `1:07.66` capture is free of the former quadrant glitch. | Keep the option as a validated CPU/ABI probe: FPS is not decisively improved, phase-sampled GPU p50 rises in GT3/SFIV, resource-array mode intentionally suppresses the lane, and the phase-148 dirty-rebind path still lacks a deterministic native regression. |
 
 ## Current Status After The Engine-Default Offload And The Dead-Lane Cleanup
 
@@ -65,6 +66,7 @@ unpublished-slot PSO prefetch probe, sparse const records).
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-encode-phase.202 - Direct-Cbuf Cross-Workload Generality Gate](state-churn-encode-encode-phase.202.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)
 - [state-churn-encode-encode-phase.200 - Uniform Fixed Payload Handle Carry](state-churn-encode-encode-phase.200.md)
 - [state-churn-encode-encode-phase.199 - Stage-Level Uniform Append Split Counters](state-churn-encode-encode-phase.199.md)

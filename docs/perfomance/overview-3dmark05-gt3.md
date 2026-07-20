@@ -4,8 +4,8 @@ workload: 3DMark05 GT3
 title: "3DMark05 GT3 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-19
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair{1,2,3,4,5}-{v1,v2}; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact
+updated: 2026-07-20
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair{1,2,3,4,5}-{v1,v2}; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
@@ -37,6 +37,14 @@ One first `r3` launch stopped early with `missing_capture`; it is excluded and
 the completed `r3-retry1` run is the third sample. The failure contained no
 renderer/GPU error and is not mixed into either the performance or visual
 verdict.
+
+The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+measures sampled FPS `27.753 -> 27.893` (`+0.50%`) while draw/chunk CPU falls
+`22.60%/18.27%`, argbuf setup/binds become zero, and all errors stay zero.
+An additional ON capture lands at `1:07.66` in the former quadrant-noise
+window and shows normal water, airship, smoke, and full-frame output without
+the top-right filtered-noise rectangle. Phase-sampled GPU p50 rises `4.57%`,
+so the result supports visual/CPU generality but not default promotion.
 
 ## Preserved V1/V2 Comparisons
 

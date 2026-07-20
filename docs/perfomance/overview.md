@@ -4,7 +4,7 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-19
+updated: 2026-07-20
 source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
@@ -13,7 +13,7 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/
 
 > Root navigation: [index](index.md). Shared log: [log](log.md).
 
-Date: 2026-07-19
+Date: 2026-07-20
 
 Scope:
 
@@ -56,6 +56,18 @@ and replaced by the successful `r3-retry1` run. SFIV also has a separate
 260.6-second stability sample (`42.684` sampled FPS, GPU CB p50/p95
 `3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
 median.
+
+### Direct-Cbuf Generality Gate
+
+A 2026-07-20 same-build ABBA remeasurement validates
+`DXMT9_ARGBUF_DIRECT_CBUF=1` as a cross-workload constants-only Stage 2 CPU
+cleanup. Across GT1, GT2, GT3, and SFIV, draw encode falls `20.7-32.6%`, chunk
+encode falls `12.6-24.9%`, slot-30 argbuf setup/binds become zero, sampled FPS
+changes only `+0.32%` to `+1.15%`, and every run has zero GPU errors. The
+targeted GT3 `1:07.66` capture is visually normal. It remains default-off:
+phase-sampled GPU p50 increases in GT3/SFIV, the FPS gain is not decisive, and
+resource-array mode intentionally retains the mutable argbuf table. See the
+[cross-workload gate](state-churn-encode/state-churn-encode-encode-phase.202.md).
 
 GT2 is the one row newer than the original `153cacb14f2f` baseline: MANAGED
 buffer backing versioning removes `42.4ms/present` of writable-map sequence

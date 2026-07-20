@@ -4,7 +4,7 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-19
+updated: 2026-07-20
 source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
 ---
@@ -229,10 +229,13 @@ compositor cadence, or drawable-acquire bubble. Advancing publication cannot
 remove more than the roughly `0.26ms` mean global-idle remainder in this phase.
 
 Removing the old four-frame drawable saturation also changes the direct-cbuf
-result. Two current-policy control runs produce `7.794-7.843` FPS (median
-`7.819`); two direct-cbuf runs produce `7.925-8.021` FPS (median `7.973`,
-`+1.98%`) while draw-encode CPU falls by about one third. This is a modest
-current-policy gain, not yet a cross-workload default-promotion proof.
+result. The earlier two-run set measured `+1.98%`. The 2026-07-20
+[cross-workload gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+supersedes that isolated estimate with a fresh same-build ABBA pair: sampled
+FPS `8.087 -> 8.181` (`+1.15%`), draw/chunk CPU `-29.56%/-24.93%`, argbuf
+setup/binds zero, and zero errors. GT2 is the strongest throughput result in
+the four-workload set, but it is still modest and does not by itself promote
+the default.
 
 The V2 MANAGED backing work exposed a separate regression in the already
 default opaque-depth index-cache lane: every draw now carries a concrete

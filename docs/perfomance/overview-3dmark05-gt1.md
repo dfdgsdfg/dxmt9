@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-19
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719
+updated: 2026-07-20
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -50,6 +50,12 @@ This supersedes the older `~16-17` sampled-FPS calibration as the current
 whole-run reference. The narrow `1.3%` max/min FPS spread is small enough to
 use this baseline for future A/B gates without first increasing the repeat
 count.
+
+The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+adds two OFF and two ON current-build runs. Direct-cbuf changes sampled FPS
+`20.908 -> 20.974` (`+0.32%`) while draw/chunk CPU falls `20.72%/17.05%`,
+argbuf setup and table binds become zero, and visuals/errors remain clean. It
+is a proven local CPU cleanup, not a GT1 FPS owner or default-promotion result.
 
 ### V1 Comparison Status
 
