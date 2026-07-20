@@ -21,6 +21,8 @@
 
 using dxmt9::uniform::DirtyBit;
 using dxmt9::uniform::DirtyState;
+using dxmt9::uniform::DirectCbufPayloadCounts;
+using dxmt9::uniform::DirectCbufPayloadSourceHashes;
 using dxmt9::uniform::ShaderConstantUsageBounds;
 
 namespace {
@@ -386,6 +388,102 @@ void testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse() {
           "indexed PS usage uploads the full PsConsts struct");
 }
 
+// R-BACK-12.24 / R-BACK-12.26 — direct-cbuf must recreate the argbuf-table
+// repoint edge when a DrawRun changes compact uniform payload sources.
+void testDirectCbufPayloadSourceDirtyRebind() {
+  const DirectCbufPayloadSourceHashes sourceA{
+      .vertexConstants = 0x1111u,
+      .pixelConstants = 0x2222u,
+  };
+  const DirectCbufPayloadSourceHashes sourceB{
+      .vertexConstants = 0x3333u,
+      .pixelConstants = 0x4444u,
+  };
+  const DirectCbufPayloadCounts countsA{
+      .vertexFloat = 2,
+      .vertexInt = 1,
+      .pixelFloat = 3,
+      .pixelBool = 4,
+  };
+  const DirectCbufPayloadCounts countsB{
+      .vertexFloat = 5,
+      .vertexBool = 6,
+      .pixelInt = 7,
+  };
+
+  const auto initial = dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+      false, {}, sourceA);
+  check(!initial.vertex && !initial.pixel,
+        "first payload relies on pass-initial dirty state");
+
+  const auto unchanged =
+      dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+          true, sourceA, sourceA);
+  DirtyState dirty{};
+  dxmt9::uniform::applyDirectCbufPayloadSourceChange(
+      dirty, unchanged, countsA);
+  checkEq(dirty.mask, 0u, "unchanged payload source does not dirty cbufs");
+
+  const auto aToB = dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+      true, sourceA, sourceB);
+  dxmt9::uniform::applyDirectCbufPayloadSourceChange(
+      dirty, aToB, countsB);
+  checkEq(dirty.mask,
+          bitValue(DirtyBit::VsF) | bitValue(DirtyBit::VsB) |
+              bitValue(DirtyBit::PsI),
+          "A to B dirties only B's live VS/PS categories");
+  checkEq(dirty.maxChangedVsF, 5u, "A to B uses B VS float range");
+  checkEq(dirty.maxChangedVsB, 6u, "A to B uses B VS bool range");
+  checkEq(dirty.maxChangedPsI, 7u, "A to B uses B PS int range");
+
+  dxmt9::uniform::clearBits(
+      dirty, dxmt9::uniform::kVsAny | dxmt9::uniform::kPsAny);
+  const auto bToA = dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+      true, sourceB, sourceA);
+  dxmt9::uniform::applyDirectCbufPayloadSourceChange(
+      dirty, bToA, countsA);
+  checkEq(dirty.mask,
+          bitValue(DirtyBit::VsF) | bitValue(DirtyBit::VsI) |
+              bitValue(DirtyBit::PsF) | bitValue(DirtyBit::PsB),
+          "B to A re-dirties A instead of treating its old binding as current");
+  checkEq(dirty.maxChangedVsF, 2u, "B to A restores A VS float range");
+  checkEq(dirty.maxChangedVsI, 1u, "B to A restores A VS int range");
+  checkEq(dirty.maxChangedPsF, 3u, "B to A restores A PS float range");
+  checkEq(dirty.maxChangedPsB, 4u, "B to A restores A PS bool range");
+
+  dxmt9::uniform::clearBits(
+      dirty, dxmt9::uniform::kVsAny | dxmt9::uniform::kPsAny);
+  const auto aToEmpty =
+      dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+          true, sourceA, {});
+  dxmt9::uniform::applyDirectCbufPayloadSourceChange(
+      dirty, aToEmpty, {});
+  checkEq(dirty.mask,
+          bitValue(DirtyBit::VsF) | bitValue(DirtyBit::PsF),
+          "empty payload source keeps sentinel dirty bits for minimum slabs");
+  checkEq(dirty.maxChangedVsF, 0u,
+          "empty VS payload does not invent a live register range");
+  checkEq(dirty.maxChangedPsF, 0u,
+          "empty PS payload does not invent a live register range");
+
+  dxmt9::uniform::clearBits(
+      dirty, dxmt9::uniform::kVsAny | dxmt9::uniform::kPsAny);
+  const auto vertexOnly =
+      dxmt9::uniform::classifyDirectCbufPayloadSourceChange(
+          true,
+          sourceA,
+          DirectCbufPayloadSourceHashes{
+              .vertexConstants = sourceB.vertexConstants,
+              .pixelConstants = sourceA.pixelConstants,
+          });
+  dxmt9::uniform::applyDirectCbufPayloadSourceChange(
+      dirty, vertexOnly, countsB);
+  check(dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kVsAny),
+        "vertex-only source change dirties VS");
+  check(!dxmt9::uniform::anyDirty(dirty, dxmt9::uniform::kPsAny),
+        "vertex-only source change leaves PS clean");
+}
+
 }  // namespace
 
 int main() {
@@ -398,5 +496,6 @@ int main() {
   testIsDirtyConsistency();
   testShaderUsageAwareUploadPlanIsConservative();
   testShaderUsageAwareUploadPlanFallsBackForUnknownOrIndexedUse();
+  testDirectCbufPayloadSourceDirtyRebind();
   return 0;
 }

@@ -53,6 +53,39 @@ struct DirtyState {
   std::uint16_t maxChangedPsB = 0;
 };
 
+struct DirectCbufPayloadSourceHashes {
+  std::uint64_t vertexConstants = 0;
+  std::uint64_t pixelConstants = 0;
+};
+
+struct DirectCbufPayloadCounts {
+  std::uint16_t vertexFloat = 0;
+  std::uint16_t vertexInt = 0;
+  std::uint16_t vertexBool = 0;
+  std::uint16_t pixelFloat = 0;
+  std::uint16_t pixelInt = 0;
+  std::uint16_t pixelBool = 0;
+};
+
+struct DirectCbufPayloadSourceChange {
+  bool vertex = false;
+  bool pixel = false;
+};
+
+inline constexpr DirectCbufPayloadSourceChange
+classifyDirectCbufPayloadSourceChange(
+    bool hasPrevious,
+    DirectCbufPayloadSourceHashes previous,
+    DirectCbufPayloadSourceHashes current) noexcept {
+  if (!hasPrevious) {
+    return {};
+  }
+  return DirectCbufPayloadSourceChange{
+      .vertex = previous.vertexConstants != current.vertexConstants,
+      .pixel = previous.pixelConstants != current.pixelConstants,
+  };
+}
+
 using ShaderConstantUsageBounds = core::ShaderConstantUsageBounds;
 
 struct ShaderConstantUploadPlan {
@@ -105,6 +138,15 @@ void applyConstantSetVsB(DirtyState& state, std::uint32_t startReg, std::uint32_
 void applyConstantSetPsF(DirtyState& state, std::uint32_t startReg, std::uint32_t count);
 void applyConstantSetPsI(DirtyState& state, std::uint32_t startReg, std::uint32_t count);
 void applyConstantSetPsB(DirtyState& state, std::uint32_t startReg, std::uint32_t count);
+
+// Direct-cbuf removes the argbuf-table repoint side effect. When a DrawRun
+// switches compact uniform payload sources, recreate that edge by dirtying the
+// live ranges of the new source. A zero-count stage still dirties its float
+// category so the direct slot moves to the minimum valid backing slab.
+void applyDirectCbufPayloadSourceChange(
+    DirtyState& state,
+    DirectCbufPayloadSourceChange change,
+    DirectCbufPayloadCounts counts);
 
 // Coarse FFP / fixed-uniform-block apply helpers. These OR the matching
 // DirtyBit; they do not carry per-element ranges because the FFP

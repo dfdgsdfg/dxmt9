@@ -78,7 +78,8 @@ bool pipelineBuildTraceEnabled() noexcept {
 }
 
 bool argbufDirectCbufEnvEnabled() noexcept {
-  static const bool enabled = envFlag("DXMT9_ARGBUF_DIRECT_CBUF");
+  static const bool enabled =
+      resolveArgbufDirectCbufEnabled(std::getenv("DXMT9_ARGBUF_DIRECT_CBUF"));
   return enabled;
 }
 
@@ -1912,6 +1913,13 @@ ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView,
     return ArgbufHybridDecision::Stage1;
   }
   return ArgbufHybridDecision::Stage2;
+}
+
+bool resolveArgbufDirectCbufEnabled(const char* envValue) noexcept {
+  if (!envValue) {
+    return true;
+  }
+  return envValue[0] != '\0' && std::strcmp(envValue, "0") != 0;
 }
 
 bool argbufDirectCbufEnabled() noexcept {

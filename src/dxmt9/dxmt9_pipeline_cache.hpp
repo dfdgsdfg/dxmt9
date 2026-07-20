@@ -603,6 +603,11 @@ enum class ArgbufHybridDecision : std::uint8_t { Stage1, Stage2 };
 
 ArgbufHybridDecision selectArgbufHybridForPass(core::FlatDrawStateView state,
                                                 bool argbufHybridEnabled);
+// Stage 2b direct-cbuf is the default for constants-only Stage 2 draws.
+// An explicitly present empty value or "0" is the rollback escape hatch;
+// any other non-empty value enables it. A null value represents an unset
+// environment variable and therefore resolves to the default-on policy.
+bool resolveArgbufDirectCbufEnabled(const char* envValue) noexcept;
 bool argbufDirectCbufEnabled() noexcept;
 
 }  // namespace dxmt9::pipeline

@@ -14844,52 +14844,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 payload.psConst.bools, payload.pixelBoolConstantCount),
         };
       };
-  auto markDirectCbufVsPayloadDirty =
-      [](uniform::DirtyState& dirty,
-         const core::DrawUniformPayload& payload) {
-        bool marked = false;
-        if (payload.vertexFloatConstantCount != 0) {
-          uniform::applyConstantSetVsF(
-              dirty, 0u, payload.vertexFloatConstantCount);
-          marked = true;
-        }
-        if (payload.vertexIntConstantCount != 0) {
-          uniform::applyConstantSetVsI(
-              dirty, 0u, payload.vertexIntConstantCount);
-          marked = true;
-        }
-        if (payload.vertexBoolConstantCount != 0) {
-          uniform::applyConstantSetVsB(
-              dirty, 0u, payload.vertexBoolConstantCount);
-          marked = true;
-        }
-        if (!marked) {
-          uniform::setBit(dirty, uniform::DirtyBit::VsF);
-        }
-      };
-  auto markDirectCbufPsPayloadDirty =
-      [](uniform::DirtyState& dirty,
-         const core::DrawUniformPayload& payload) {
-        bool marked = false;
-        if (payload.pixelFloatConstantCount != 0) {
-          uniform::applyConstantSetPsF(
-              dirty, 0u, payload.pixelFloatConstantCount);
-          marked = true;
-        }
-        if (payload.pixelIntConstantCount != 0) {
-          uniform::applyConstantSetPsI(
-              dirty, 0u, payload.pixelIntConstantCount);
-          marked = true;
-        }
-        if (payload.pixelBoolConstantCount != 0) {
-          uniform::applyConstantSetPsB(
-              dirty, 0u, payload.pixelBoolConstantCount);
-          marked = true;
-        }
-        if (!marked) {
-          uniform::setBit(dirty, uniform::DirtyBit::PsF);
-        }
-      };
   struct ArgbufPayloadChangedPrefixStats {
     u64 changed = 0;
     u64 prefix = 0;
@@ -16054,21 +16008,44 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool reopenArgbuf =
           activePassUsesArgbufTable &&
           (activePassUsesArgbufResourceArray || argbufPayloadChanged);
+      const auto previousArgbufPayloadSource =
+          lastArgbufPayloadDeltaKey.has_value()
+              ? uniform::DirectCbufPayloadSourceHashes{
+                    .vertexConstants =
+                        lastArgbufPayloadDeltaKey->vertexConstantsHash,
+                    .pixelConstants =
+                        lastArgbufPayloadDeltaKey->pixelConstantsHash,
+                }
+              : uniform::DirectCbufPayloadSourceHashes{};
+      const auto argbufPayloadSourceChange =
+          uniform::classifyDirectCbufPayloadSourceChange(
+              lastArgbufPayloadDeltaKey.has_value(),
+              previousArgbufPayloadSource,
+              uniform::DirectCbufPayloadSourceHashes{
+                  .vertexConstants =
+                      drawArgbufPayloadDeltaKey.vertexConstantsHash,
+                  .pixelConstants =
+                      drawArgbufPayloadDeltaKey.pixelConstantsHash,
+              });
       const bool argbufVsPayloadSourceChanged =
-          lastArgbufPayloadDeltaKey.has_value() &&
-          lastArgbufPayloadDeltaKey->vertexConstantsHash !=
-              drawArgbufPayloadDeltaKey.vertexConstantsHash;
+          argbufPayloadSourceChange.vertex;
       const bool argbufPsPayloadSourceChanged =
-          lastArgbufPayloadDeltaKey.has_value() &&
-          lastArgbufPayloadDeltaKey->pixelConstantsHash !=
-              drawArgbufPayloadDeltaKey.pixelConstantsHash;
-      if (activePassUsesArgbufDirectCbuf) {
-        if (argbufVsPayloadSourceChanged) {
-          markDirectCbufVsPayloadDirty(uniformDirty, *drawUniformPayload);
-        }
-        if (argbufPsPayloadSourceChanged) {
-          markDirectCbufPsPayloadDirty(uniformDirty, *drawUniformPayload);
-        }
+          argbufPayloadSourceChange.pixel;
+      if (activePassUsesArgbufDirectCbuf &&
+          (argbufPayloadSourceChange.vertex ||
+           argbufPayloadSourceChange.pixel)) {
+        uniform::applyDirectCbufPayloadSourceChange(
+            uniformDirty,
+            argbufPayloadSourceChange,
+            uniform::DirectCbufPayloadCounts{
+                .vertexFloat =
+                    drawUniformPayload->vertexFloatConstantCount,
+                .vertexInt = drawUniformPayload->vertexIntConstantCount,
+                .vertexBool = drawUniformPayload->vertexBoolConstantCount,
+                .pixelFloat = drawUniformPayload->pixelFloatConstantCount,
+                .pixelInt = drawUniformPayload->pixelIntConstantCount,
+                .pixelBool = drawUniformPayload->pixelBoolConstantCount,
+            });
       }
       const bool argbufPayloadDeltaPerf =
           activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();

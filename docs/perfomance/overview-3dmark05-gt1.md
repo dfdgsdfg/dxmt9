@@ -55,7 +55,9 @@ The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-enco
 adds two OFF and two ON current-build runs. Direct-cbuf changes sampled FPS
 `20.908 -> 20.974` (`+0.32%`) while draw/chunk CPU falls `20.72%/17.05%`,
 argbuf setup and table binds become zero, and visuals/errors remain clean. It
-is a proven local CPU cleanup, not a GT1 FPS owner or default-promotion result.
+is a proven local CPU cleanup, not a GT1 FPS owner. The cross-workload result
+and deterministic dirty-rebind regression subsequently support its default-on
+promotion with explicit value `0` as the rollback lane.
 
 ### V1 Comparison Status
 

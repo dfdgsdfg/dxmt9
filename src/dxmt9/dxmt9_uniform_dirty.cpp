@@ -193,6 +193,49 @@ void applyConstantSetPsB(DirtyState& state, std::uint32_t startReg, std::uint32_
   bumpRange(state.maxChangedPsB, startReg, count);
 }
 
+void applyDirectCbufPayloadSourceChange(
+    DirtyState& state,
+    DirectCbufPayloadSourceChange change,
+    DirectCbufPayloadCounts counts) {
+  if (change.vertex) {
+    bool marked = false;
+    if (counts.vertexFloat != 0) {
+      applyConstantSetVsF(state, 0u, counts.vertexFloat);
+      marked = true;
+    }
+    if (counts.vertexInt != 0) {
+      applyConstantSetVsI(state, 0u, counts.vertexInt);
+      marked = true;
+    }
+    if (counts.vertexBool != 0) {
+      applyConstantSetVsB(state, 0u, counts.vertexBool);
+      marked = true;
+    }
+    if (!marked) {
+      setBit(state, DirtyBit::VsF);
+    }
+  }
+
+  if (change.pixel) {
+    bool marked = false;
+    if (counts.pixelFloat != 0) {
+      applyConstantSetPsF(state, 0u, counts.pixelFloat);
+      marked = true;
+    }
+    if (counts.pixelInt != 0) {
+      applyConstantSetPsI(state, 0u, counts.pixelInt);
+      marked = true;
+    }
+    if (counts.pixelBool != 0) {
+      applyConstantSetPsB(state, 0u, counts.pixelBool);
+      marked = true;
+    }
+    if (!marked) {
+      setBit(state, DirtyBit::PsF);
+    }
+  }
+}
+
 void applyTransformChange(DirtyState& state) {
   setBit(state, DirtyBit::FfpVsTransforms);
 }

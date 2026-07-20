@@ -64,10 +64,14 @@ A 2026-07-20 same-build ABBA remeasurement validates
 cleanup. Across GT1, GT2, GT3, and SFIV, draw encode falls `20.7-32.6%`, chunk
 encode falls `12.6-24.9%`, slot-30 argbuf setup/binds become zero, sampled FPS
 changes only `+0.32%` to `+1.15%`, and every run has zero GPU errors. The
-targeted GT3 `1:07.66` capture is visually normal. It remains default-off:
-phase-sampled GPU p50 increases in GT3/SFIV, the FPS gain is not decisive, and
-resource-array mode intentionally retains the mutable argbuf table. See the
-[cross-workload gate](state-churn-encode/state-churn-encode-encode-phase.202.md).
+targeted GT3 `1:07.66` capture is visually normal. After a deterministic
+payload-source dirty-rebind regression closed the remaining correctness gate,
+the constants-only path was promoted default-on; explicit value `0` retains
+the rollback lane. Phase-sampled GPU p50 increases in GT3/SFIV, so this remains
+a CPU-path promotion rather than an FPS/GPU claim. Resource-array mode
+intentionally retains the mutable argbuf table. See the [cross-workload
+gate](state-churn-encode/state-churn-encode-encode-phase.202.md) and [correctness
+gate](state-churn-encode/state-churn-encode-encode-phase.203.md).
 
 GT2 is the one row newer than the original `153cacb14f2f` baseline: MANAGED
 buffer backing versioning removes `42.4ms/present` of writable-map sequence

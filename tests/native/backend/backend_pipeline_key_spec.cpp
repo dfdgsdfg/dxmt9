@@ -954,6 +954,21 @@ void testResolveDrawPipelineStateCarriesDirectCbufStage2bBit() {
         "resource-array source suppresses direct-cbuf bit");
 }
 
+void testDirectCbufDefaultOnPolicyAndOptOut() {
+  using dxmt9::pipeline::resolveArgbufDirectCbufEnabled;
+
+  check(resolveArgbufDirectCbufEnabled(nullptr),
+        "an unset direct-cbuf environment variable selects the default-on path");
+  check(!resolveArgbufDirectCbufEnabled(""),
+        "an explicitly empty direct-cbuf environment variable opts out");
+  check(!resolveArgbufDirectCbufEnabled("0"),
+        "direct-cbuf value 0 opts out");
+  check(resolveArgbufDirectCbufEnabled("1"),
+        "direct-cbuf value 1 enables the path");
+  check(resolveArgbufDirectCbufEnabled("true"),
+        "any other non-empty direct-cbuf value enables the path");
+}
+
 void testSrgbCompatiblePixelFormatConversion() {
   BackendLimits limits{};
 
@@ -1033,6 +1048,7 @@ int main() {
     testSamplerLodBiasVariantBit();
     testFragmentlessDepthOnlyVariantBit();
     testResolveDrawPipelineStateCarriesDirectCbufStage2bBit();
+    testDirectCbufDefaultOnPolicyAndOptOut();
     testSrgbCompatiblePixelFormatConversion();
     testUnsupportedDrawTranslatorFailureReturnsEmptyPipelineFuture();
   } catch (const TestFailure& failure) {

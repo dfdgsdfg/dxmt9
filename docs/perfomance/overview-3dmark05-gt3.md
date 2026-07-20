@@ -44,7 +44,9 @@ measures sampled FPS `27.753 -> 27.893` (`+0.50%`) while draw/chunk CPU falls
 An additional ON capture lands at `1:07.66` in the former quadrant-noise
 window and shows normal water, airship, smoke, and full-frame output without
 the top-right filtered-noise rectangle. Phase-sampled GPU p50 rises `4.57%`,
-so the result supports visual/CPU generality but not default promotion.
+so the result does not establish a GPU win. The cross-workload CPU reduction
+and subsequent deterministic dirty-rebind regression nevertheless support the
+default-on promotion; GT3 GPU-phase behavior remains a monitoring item.
 
 ## Preserved V1/V2 Comparisons
 

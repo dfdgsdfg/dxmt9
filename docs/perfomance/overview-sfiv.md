@@ -48,8 +48,9 @@ adds a quiet same-build ABBA pair. Sampled FPS is flat-positive
 (`45.544 -> 45.694`, `+0.33%`), draw/chunk CPU falls `32.57%/12.57%`, argbuf
 setup/binds become zero, and the character/effect captures plus error counters
 remain clean. Per-frame GPU-time p50/p95 increases `8.95%/4.34%`, however, so
-SFIV is the main reason not to interpret the CPU cleanup as a universal GPU or
-default-policy win.
+SFIV is the main reason not to interpret the default-on CPU-path promotion as
+a universal GPU or FPS win. Its GPU-phase behavior remains a post-promotion
+monitoring item, with explicit value `0` available as the rollback lane.
 
 ## Performance Improvement Versus the V1 Era
 

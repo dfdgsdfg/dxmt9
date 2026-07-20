@@ -6,9 +6,9 @@ order: 202
 title: Direct-Cbuf Cross-Workload Generality Gate
 date: 2026-07-20
 type: experiment
-status: accepted-general-cpu-cleanup-default-off
+status: accepted-general-cpu-cleanup-promoted-after-phase-203
 source: experiments/output/app-d3d9-3dmark05-direct-cbuf-generality-gt{1,2,3}-{off,on}-r{1,2}-20260720; experiments/output/app-d3d9-sfiv-benchmark-direct-cbuf-generality-sfiv-{off,on}-r{1,2}-20260720; experiments/output/app-d3d9-3dmark05-direct-cbuf-generality-gt3-visual-67s-retry-20260720; traces/app-d3d9-3dmark05-direct-cbuf-generality-gt{1,2,3}-on-r1-20260720/analysis/direct-cbuf-vs-off-r1.md; traces/app-d3d9-sfiv-benchmark-direct-cbuf-generality-sfiv-on-r1-20260720/analysis/direct-cbuf-vs-off-r1.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md; docs/perfomance/overview.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; docs/perfomance/overview.md
 ---
 
 # Encode Phase 202 - Direct-Cbuf Cross-Workload Generality Gate
@@ -23,10 +23,12 @@ and SFIV all remove the slot-30 argument-table path, reduce draw/chunk encode
 CPU, complete without renderer errors, and preserve sampled FPS. The targeted
 GT3 capture at `1:07.66` is also free of the former top-right quadrant noise.
 
-This is not a default-promotion result. FPS moves only `+0.32%` to `+1.15%`,
-while phase-sampled GPU p50 increases in GT3 and SFIV. The path also does not
-apply when the resource-array lane is active. Keep the environment switch
-default-off as a validated CPU/ABI probe.
+This measurement alone does not establish an FPS or GPU win: FPS moves only
+`+0.32%` to `+1.15%`, while phase-sampled GPU p50 increases in GT3 and SFIV.
+The path also does not apply when the resource-array lane is active. After
+[phase 203](state-churn-encode-encode-phase.203.md) closed the deterministic
+dirty-rebind gate, the consistent CPU-path removal and clean visual/error
+evidence were accepted for default-on promotion with an explicit `0` rollback.
 
 ## Measurement Contract
 
@@ -84,16 +86,19 @@ All four focused targets pass. The resource-array dominance test is an
 intentional limit: texture/sampler arrays retain the mutable slot-30 argument
 table and suppress the direct-cbuf variant bit.
 
-## Decision and Remaining Gate
+## Default Promotion Decision
 
-Keep `DXMT9_ARGBUF_DIRECT_CBUF` default `0`:
+Promote `DXMT9_ARGBUF_DIRECT_CBUF` to default-on, with value `0` retaining the
+constants-only slot-30 table path as a diagnostic rollback:
 
 1. Accept the path as broadly effective CPU cleanup for constants-only Stage
    2 passes.
 2. Do not advertise an average-FPS win; all four results are noise-flat to
    modest.
-3. Before default promotion, add a deterministic regression for the phase-148
-   uniform-payload-source dirty rebind and repeat SFIV/GT3 GPU-phase sampling
-   with at least three samples per lane.
-4. Treat resource-array mode and non-Apple-Silicon Stage 1 fallback as outside
+3. The phase-148 uniform-payload-source dirty rebind now has a deterministic
+   `A -> B -> A` and empty-payload native regression in
+   [phase 203](state-churn-encode-encode-phase.203.md).
+4. Repeat SFIV/GT3 GPU-phase sampling with at least three samples per lane as a
+   post-promotion watchpoint; it is not an FPS claim or promotion blocker.
+5. Treat resource-array mode and non-Apple-Silicon Stage 1 fallback as outside
    this optimization's applicability, not failed direct-cbuf coverage.
