@@ -13552,7 +13552,8 @@ bool encodeDraw(EncodeContext& ctx,
           shouldOptimizeOpaqueDepthIndexOrder(
               hot.renderStates,
               fillMode,
-              debug::probeDisableDepthWrite());
+              debug::probeDisableDepthWrite(),
+              debug::optimizeOpaqueDepthIndexCacheExtendedScope());
       const bool applyProbeCacheOptCandidateSafetyEligible =
           opaqueDepthWritingEligible ||
           debug::probeApplyIndexCacheOptCandidateUnsafeNonOpaque();
@@ -15937,10 +15938,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
     // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
     // via setVertexBytes per draw with no slab traffic.
-    for (std::size_t i = 0; i < drawCount; ++i) {
+    const bool compatibleIndexedDrawMerge =
+        debug::optimizeCompatibleIndexedDrawMerge() && !activeVisibilityScout;
+    for (std::size_t i = 0; i < drawCount;) {
       traceEncodeCommand("drawrun.draw-begin", commandIndex,
                          Kind::DrawRun, command);
-      const auto& param = drawItems[i];
+      const auto merged = compatibleIndexedDrawMerge
+          ? makeCompatibleIndexedDrawMerge(drawItems.subspan(i),
+                                           recordPayloadArena)
+          : CompatibleIndexedDrawMerge{
+                .param = drawItems[i],
+                .drawCount = 1u,
+            };
+      const auto& param = merged.param;
+      const std::size_t mergedDrawCount =
+          std::max<std::size_t>(1u, merged.drawCount);
       const bool usesCommandUniform =
           !param.uniformHandle.valid() ||
           param.uniformHandle == command.drawRunRecord->uniformHandle;
@@ -15952,6 +15964,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       if (!drawUniformPayload) {
         traceEncodeCommand("drawrun.draw-skip-no-uniform", commandIndex,
                            Kind::DrawRun, command);
+        i += mergedDrawCount;
         continue;
       }
       PreUploadedDrawData preData{};
@@ -16257,7 +16270,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           activeColorAttachmentDump.commandDrawCount = drawCount;
           activeColorAttachmentDump.texture0 = drawTexture0;
           flushRender(perf::EncoderSplitReason::Final);
-          if (i + 1u < drawCount) {
+          if (i + mergedDrawCount < drawCount) {
             startRenderPass(drawStateView, std::nullopt, commandIndex,
                             renderPsoHandle);
           }
@@ -16266,6 +16279,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         traceEncodeCommand("drawrun.after-encode-draw-false", commandIndex,
                            Kind::DrawRun, command);
       }
+      i += mergedDrawCount;
     }
     traceEncodeCommand("drawrun.end", commandIndex, Kind::DrawRun, command);
     commandBufferHasWork = true;

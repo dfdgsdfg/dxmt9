@@ -1115,6 +1115,18 @@ bool optimizeOpaqueDepthIndexCache() {
   return v;
 }
 
+bool optimizeOpaqueDepthIndexCacheExtendedScope() {
+  static const bool v = util::getenvFlag(
+      "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_EXTENDED_SCOPE");
+  return v;
+}
+
+bool optimizeCompatibleIndexedDrawMerge() {
+  static const bool v = util::getenvFlag(
+      "DXMT9_OPTIMIZE_COMPATIBLE_INDEXED_DRAW_MERGE");
+  return v;
+}
+
 std::uint32_t optimizeOpaqueDepthIndexCacheMinGainPct() {
   static const std::uint32_t pct = [] {
     const auto value = util::getenvU64Auto(

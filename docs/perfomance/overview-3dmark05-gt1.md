@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-20
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+updated: 2026-07-21
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -58,6 +58,14 @@ argbuf setup and table binds become zero, and visuals/errors remain clean. It
 is a proven local CPU cleanup, not a GT1 FPS owner. The cross-workload result
 and deterministic dirty-rebind regression subsequently support its default-on
 promotion with explicit value `0` as the rollback lane.
+
+The 2026-07-21 [index-cache scope/merge gate](index-cache-locality/index-cache-locality-scope-merge.21.md)
+is also GT1 despite `gt2` output-directory and result-file suffixes: every run
+explicitly passed `-gt1`. Extending the reorder safety gate adds no candidate
+(`125` unique candidates, `143` misses, and `67` created buffers in every
+lane), while strict adjacent compatible indexed-draw merging eliminates zero
+draws. Candidate FPS `20.945-21.056` is inside the current reference range and
+has no mechanism movement; both experiment flags remain default OFF.
 
 ### V1 Comparison Status
 

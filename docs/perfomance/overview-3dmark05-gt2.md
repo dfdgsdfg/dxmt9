@@ -4,8 +4,8 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-20
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719
+updated: 2026-07-21
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
 ---
 
@@ -21,6 +21,15 @@ zero GPU errors at `8.122-8.178` sampled FPS (median `8.150`), wall p50
 `23.248-23.319ms`. The older three-run table below remains the promotion
 baseline for MANAGED versioning plus the incremental snapshot index; the later
 sections record each post-promotion addition and its isolated evidence.
+
+The 2026-07-21 [extended-scope/merge gate](index-cache-locality/index-cache-locality-scope-merge-gt2.22.md)
+adds a verified four-lane GT2 A/B. Extended index-cache scope leaves the
+candidate/miss/create population exactly `61/61/37`, and strict adjacent
+compatible indexed-draw merging eliminates zero draws. Sampled FPS is
+`8.185-8.211` versus baseline `8.201` (`-0.20%` to `+0.12%`); wall and GPU-CB
+percentiles are stable, all error gates pass, and closely phase-aligned
+captures at frames `500-502` are visually coherent. Both experimental flags
+remain default OFF, with no Xcode trace spend justified for GT2.
 
 Three completed current-runtime runs used the V2-only command wire with
 MANAGED buffer backing versioning and the default incremental shader-constant

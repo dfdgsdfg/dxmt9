@@ -4470,6 +4470,14 @@ else
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-1}")
 fi
 
+# Keep the experimental scope/merge lanes explicit in the recorded recipe.
+# They remain export-driven until workload and Xcode gates justify dedicated
+# wrapper switches or a production default change.
+env_args+=(
+  "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_EXTENDED_SCOPE=${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_EXTENDED_SCOPE:-0}"
+  "DXMT9_OPTIMIZE_COMPATIBLE_INDEXED_DRAW_MERGE=${DXMT9_OPTIMIZE_COMPATIBLE_INDEXED_DRAW_MERGE:-0}"
+)
+
 if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT=$optimize_opaque_depth_index_cache_min_gain_pct")
 fi

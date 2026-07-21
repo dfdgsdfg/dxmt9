@@ -2009,6 +2009,12 @@ void testOpaqueDepthIndexOrderOptimizationPredicateIsStrict() {
             greaterDepth.hot.renderStates,
             WMTTriangleFillModeFill),
         "non-order-preserving depth func rejects opaque-depth index-order optimization");
+  check(dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            greaterDepth.hot.renderStates,
+            WMTTriangleFillModeFill,
+            /*depthWriteGloballyDisabled=*/false,
+            /*extendedScope=*/true),
+        "extended scope accepts reverse-depth comparison");
 
   auto alphaBlend = state;
   setSortedRenderStates(
@@ -2031,6 +2037,75 @@ void testOpaqueDepthIndexOrderOptimizationPredicateIsStrict() {
             alphaBlend.hot.renderStates,
             WMTTriangleFillModeFill),
         "alpha blend rejects opaque-depth index-order optimization");
+
+  auto sourceReplacementBlend = state;
+  setSortedRenderStates(
+      sourceReplacementBlend,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_ALPHABLEND_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_SRC_BLEND,
+              static_cast<u32>(dxmt9::core::BlendFactor::One)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_DEST_BLEND,
+              static_cast<u32>(dxmt9::core::BlendFactor::Zero)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_BLEND_OP,
+              static_cast<u32>(dxmt9::core::BlendOp::Add)},
+      });
+  check(dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+            sourceReplacementBlend.hot.renderStates,
+            WMTTriangleFillModeFill,
+            /*depthWriteGloballyDisabled=*/false,
+            /*extendedScope=*/true),
+        "extended scope accepts source-replacement blending");
+
+  auto separateAlpha = sourceReplacementBlend;
+  setSortedRenderStates(
+      separateAlpha,
+      {
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_ALPHABLEND_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_SRC_BLEND,
+              static_cast<u32>(dxmt9::core::BlendFactor::One)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_DEST_BLEND,
+              static_cast<u32>(dxmt9::core::BlendFactor::Zero)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_WRITE_ENABLE,
+              1u},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_Z_FUNC,
+              static_cast<u32>(dxmt9::core::CompareFunc::LessEqual)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_BLEND_OP,
+              static_cast<u32>(dxmt9::core::BlendOp::Add)},
+          dxmt9::core::FlatStateEntry{
+              dxmt9::core::RS_SEPARATE_ALPHA_BLEND_ENABLE,
+              1u},
+      });
+  check(!dxmt9::encoders::shouldOptimizeOpaqueDepthIndexOrder(
+             separateAlpha.hot.renderStates,
+             WMTTriangleFillModeFill,
+             /*depthWriteGloballyDisabled=*/false,
+             /*extendedScope=*/true),
+        "extended scope rejects separate-alpha replacement ambiguity");
 
   auto alphaTest = state;
   setSortedRenderStates(
@@ -2097,6 +2172,99 @@ void testOpaqueDepthIndexOrderOptimizationPredicateIsStrict() {
             clipPlane.hot.renderStates,
             WMTTriangleFillModeFill),
         "clip planes reject opaque-depth index-order optimization");
+}
+
+void testCompatibleIndexedDrawMergePreservesContiguousIndexOrder() {
+  std::array<dxmt9::core::DrawParam, 4> draws{};
+  for (auto& draw : draws) {
+    draw.indexed = true;
+    draw.primitiveType = PrimitiveType::TriangleList;
+    draw.indexType = IndexType::UInt16;
+    draw.instanceCount = 1u;
+    draw.baseVertexIndex = -3;
+    draw.startVertex = 7u;
+    draw.uniformHandle = dxmt9::core::DrawUniformHandle{
+        .index = 2u,
+        .generation = 4u,
+        .hash = 0x55u,
+    };
+  }
+  draws[0].startIndex = 3u;
+  draws[0].primitiveCount = 2u;
+  draws[1].startIndex = 9u;
+  draws[1].primitiveCount = 4u;
+  draws[2].startIndex = 21u;
+  draws[2].primitiveCount = 1u;
+  draws[3].startIndex = 30u;
+  draws[3].primitiveCount = 8u;
+
+  const auto merged = dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+      draws, {});
+  checkEq(merged.drawCount, std::size_t{3},
+          "three contiguous indexed draws merge");
+  checkEq(merged.param.startIndex, 3u,
+          "merged draw keeps first source index");
+  checkEq(merged.param.primitiveCount, 7u,
+          "merged draw sums primitive counts");
+}
+
+void testCompatibleIndexedDrawMergeRejectsObservableDifferences() {
+  std::array<dxmt9::core::DrawParam, 2> draws{};
+  for (auto& draw : draws) {
+    draw.indexed = true;
+    draw.primitiveType = PrimitiveType::TriangleList;
+    draw.primitiveCount = 1u;
+    draw.instanceCount = 1u;
+    draw.uniformHandle = dxmt9::core::DrawUniformHandle{
+        .index = 1u,
+        .generation = 1u,
+        .hash = 0x44u,
+    };
+  }
+  draws[1].startIndex = 3u;
+
+  auto changedUniform = draws;
+  changedUniform[1].uniformHandle.hash = 0x45u;
+  checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+              changedUniform, {}).drawCount,
+          std::size_t{1},
+          "uniform change stops indexed draw merge");
+
+  auto instanced = draws;
+  instanced[0].instanceCount = 2u;
+  instanced[1].instanceCount = 2u;
+  checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+              instanced, {}).drawCount,
+          std::size_t{1},
+          "instancing keeps original cross-draw primitive order");
+
+  auto nonContiguous = draws;
+  nonContiguous[1].startIndex = 6u;
+  checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+              nonContiguous, {}).drawCount,
+          std::size_t{1},
+          "non-contiguous index ranges do not merge without a joined buffer");
+
+  auto overflowingIndexCount = draws;
+  overflowingIndexCount[0].primitiveCount =
+      std::numeric_limits<u32>::max() / 3u;
+  overflowingIndexCount[1].startIndex =
+      overflowingIndexCount[0].primitiveCount * 3u;
+  checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+              overflowingIndexCount, {}).drawCount,
+          std::size_t{1},
+          "combined Metal index count must remain representable");
+
+  std::array<std::uint8_t, 8> payload{};
+  payload[0] = 1u;
+  payload[4] = 2u;
+  auto changedBinding = draws;
+  changedBinding[0].bindingOverrideRange = {0u, 4u};
+  changedBinding[1].bindingOverrideRange = {4u, 4u};
+  checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
+              changedBinding, payload).drawCount,
+          std::size_t{1},
+          "binding change stops indexed draw merge");
 }
 
 void testVersionedIndexSnapshotIsStableCacheSource() {
@@ -3025,6 +3193,8 @@ int main() {
     testAutoExpandIndexedDrawHeuristicCoversProgrammableR32FCube();
     testScreenBlendIndexOrderOptimizationPredicateIsStrict();
     testOpaqueDepthIndexOrderOptimizationPredicateIsStrict();
+    testCompatibleIndexedDrawMergePreservesContiguousIndexOrder();
+    testCompatibleIndexedDrawMergeRejectsObservableDifferences();
     testVersionedIndexSnapshotIsStableCacheSource();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();

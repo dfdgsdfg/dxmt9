@@ -525,6 +525,19 @@ bool probeOptimizeIndexedTrianglesVertexCache();
 // Env: DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE.
 bool optimizeOpaqueDepthIndexCache();
 
+// Experimental scope extension for the opaque-depth index-cache path. In
+// addition to the production predicate, admit reverse-depth comparisons and
+// source-replacement blending (ONE/ZERO/ADD). The submitted render state is
+// unchanged; only triangle order may change.
+// Env: DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_EXTENDED_SCOPE.
+bool optimizeOpaqueDepthIndexCacheExtendedScope();
+
+// Experimental draw-boundary coalescing. Consecutive compatible indexed
+// triangle-list DrawParams whose source-IB ranges are contiguous are submitted
+// as one Metal draw without copying or changing index order.
+// Env: DXMT9_OPTIMIZE_COMPATIBLE_INDEXED_DRAW_MERGE.
+bool optimizeCompatibleIndexedDrawMerge();
+
 // Minimum whole-percent LRU32 miss reduction required by
 // DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE. Defaults to 10.
 // Env: DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT.

@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
@@ -918,12 +919,33 @@ template <std::size_t MaxEntries>
 inline bool shouldOptimizeOpaqueDepthIndexOrder(
     const core::FlatStateSet<MaxEntries>& renderStates,
     WMTTriangleFillMode fillMode,
-    bool depthWriteGloballyDisabled = false) {
+    bool depthWriteGloballyDisabled = false,
+    bool extendedScope = false) {
   if (fillMode != WMTTriangleFillModeFill) {
     return false;
   }
-  if (core::flatStateOr(renderStates, core::RS_ALPHABLEND_ENABLE, 0u) != 0u) {
-    return false;
+  const bool alphaBlendEnabled =
+      core::flatStateOr(renderStates, core::RS_ALPHABLEND_ENABLE, 0u) != 0u;
+  if (alphaBlendEnabled) {
+    const bool sourceReplacementBlend =
+        extendedScope &&
+        core::flatStateOr(
+            renderStates, core::RS_SRC_BLEND,
+            static_cast<u32>(core::BlendFactor::One)) ==
+            static_cast<u32>(core::BlendFactor::One) &&
+        core::flatStateOr(
+            renderStates, core::RS_DEST_BLEND,
+            static_cast<u32>(core::BlendFactor::Zero)) ==
+            static_cast<u32>(core::BlendFactor::Zero) &&
+        core::flatStateOr(
+            renderStates, core::RS_BLEND_OP,
+            static_cast<u32>(core::BlendOp::Add)) ==
+            static_cast<u32>(core::BlendOp::Add) &&
+        core::flatStateOr(
+            renderStates, core::RS_SEPARATE_ALPHA_BLEND_ENABLE, 0u) == 0u;
+    if (!sourceReplacementBlend) {
+      return false;
+    }
   }
   if (core::flatStateOr(renderStates, core::RS_ALPHA_TEST_ENABLE, 0u) != 0u) {
     return false;
@@ -951,9 +973,94 @@ inline bool shouldOptimizeOpaqueDepthIndexOrder(
     case core::CompareFunc::Less:
     case core::CompareFunc::LessEqual:
       return true;
+    case core::CompareFunc::Greater:
+    case core::CompareFunc::GreaterEqual:
+      return extendedScope;
     default:
       return false;
   }
+}
+
+inline bool drawParamPayloadRangesEqual(
+    core::DrawPayloadRange left,
+    core::DrawPayloadRange right,
+    std::span<const u8> arena) noexcept {
+  if (left.size != right.size) {
+    return false;
+  }
+  if (left.size == 0u) {
+    return true;
+  }
+  const auto leftBytes = core::drawPayloadRangeBytes(left, arena);
+  const auto rightBytes = core::drawPayloadRangeBytes(right, arena);
+  if (leftBytes.size() != left.size || rightBytes.size() != right.size) {
+    return false;
+  }
+  return std::memcmp(leftBytes.data(), rightBytes.data(), leftBytes.size()) == 0;
+}
+
+struct CompatibleIndexedDrawMerge {
+  core::DrawParam param{};
+  std::size_t drawCount = 0;
+};
+
+// Collapse only a byte-contiguous source-IB span. This preserves the exact
+// submitted index sequence and avoids a transient joined-index allocation.
+// InstanceCount is restricted to one because two instanced draws order work as
+// A0,A1,B0,B1 while one combined draw would order it A0,B0,A1,B1.
+inline CompatibleIndexedDrawMerge makeCompatibleIndexedDrawMerge(
+    std::span<const core::DrawParam> draws,
+    std::span<const u8> payloadArena) noexcept {
+  CompatibleIndexedDrawMerge result{};
+  if (draws.empty()) {
+    return result;
+  }
+
+  result.param = draws.front();
+  result.drawCount = 1u;
+  if (!result.param.indexed ||
+      result.param.primitiveType != core::PrimitiveType::TriangleList ||
+      result.param.instanceCount != 1u ||
+      !result.param.userVertexRange.empty() ||
+      !result.param.userIndexRange.empty()) {
+    return result;
+  }
+
+  for (std::size_t i = 1u; i < draws.size(); ++i) {
+    const auto& next = draws[i];
+    if (!next.indexed ||
+        next.primitiveType != result.param.primitiveType ||
+        next.indexType != result.param.indexType ||
+        next.instanceCount != 1u ||
+        next.baseVertexIndex != result.param.baseVertexIndex ||
+        next.startVertex != result.param.startVertex ||
+        next.uniformHandle != result.param.uniformHandle ||
+        !next.userVertexRange.empty() ||
+        !next.userIndexRange.empty() ||
+        !drawParamPayloadRangesEqual(
+            result.param.bindingOverrideRange,
+            next.bindingOverrideRange,
+            payloadArena) ||
+        !drawParamPayloadRangesEqual(
+            result.param.bindingSnapshotRange,
+            next.bindingSnapshotRange,
+            payloadArena)) {
+      break;
+    }
+
+    const u64 nextStart =
+        static_cast<u64>(result.param.startIndex) +
+        static_cast<u64>(result.param.primitiveCount) * 3u;
+    const u64 combinedPrimitiveCount =
+        static_cast<u64>(result.param.primitiveCount) + next.primitiveCount;
+    if (nextStart != next.startIndex ||
+        combinedPrimitiveCount > std::numeric_limits<u32>::max() / 3u) {
+      break;
+    }
+    result.param.primitiveCount = static_cast<u32>(combinedPrimitiveCount);
+    ++result.drawCount;
+  }
+  return result;
 }
 
 // A versioned MANAGED/DYNAMIC index binding is just as immutable for one
