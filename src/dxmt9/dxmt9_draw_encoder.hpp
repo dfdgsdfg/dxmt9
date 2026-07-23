@@ -226,12 +226,18 @@ struct RenderPassActionSummary {
 
 struct RenderPassStoreProofLookaheadSource {
   const core::ChunkSlot* slot = nullptr;
-  // Inclusive first command index for this source. The current source passes
-  // the command after the pass-opening draw; later selected sources pass 0.
+  // Optional complete, duplicate-free source-command permutation. When
+  // present, firstCommandIndex / commandEndIndex are ordinal positions in
+  // this span and the proof visits slot.commandAt(commandOrder[ordinal]).
+  // The caller retains the span for the synchronous proof call.
+  std::span<const std::uint32_t> commandOrder{};
+  // Inclusive first traversal index for this source. Source-order callers use
+  // a command index; reordered callers use the ordinal after the pass-opening
+  // draw. Later selected sources pass 0.
   std::size_t firstCommandIndex = 0;
-  // Exclusive end command index for this source. Defaults to the full slot so
-  // existing source-local callers keep their whole-suffix meaning; EncodeSession
-  // callers set this from QueueCompletionSource::{commandBegin,commandCount}.
+  // Exclusive traversal end. Defaults to the full slot/order so existing
+  // source-local callers keep their whole-suffix meaning; EncodeSession callers
+  // set this from QueueCompletionSource::{commandBegin,commandCount}.
   std::size_t commandEndIndex = std::numeric_limits<std::size_t>::max();
 };
 

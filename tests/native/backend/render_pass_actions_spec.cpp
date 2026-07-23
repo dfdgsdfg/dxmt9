@@ -449,6 +449,82 @@ void testSamePassDrawPrefixDoesNotBlockNextClear() {
           "R-BACK-15.8 same-key attachment sample remains Store");
 }
 
+void testReorderedStoreProofFollowsReplayOrder() {
+  // Production passcoalesce retains the source slot but supplies a complete
+  // command permutation. The Store proof must scan the suffix in that replay
+  // order, not the original source order.
+  Handle color{0xC018u};
+  ChunkSlot colorSlot;
+  appendDrawRunWithColor(colorSlot, color);  // source/replay ordinal 0
+  appendClearOnColor(colorSlot, color);      // source 1, replay ordinal 2
+  appendDrawRunWithColor(colorSlot, color);  // source 2, replay ordinal 1
+  const std::array<std::uint32_t, 3> colorOrder{{0u, 2u, 1u}};
+  const LookaheadSource colorSource{
+      .slot = &colorSlot,
+      .commandOrder = colorOrder,
+      .firstCommandIndex = 1u,
+      .commandEndIndex = colorOrder.size(),
+  };
+  const auto colorSources =
+      std::span<const LookaheadSource>(&colorSource, 1u);
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(colorSources, color),
+          ColorProof::BlockDrawTarget,
+          "R-BACK-15.8 reordered suffix observes draw before source clear");
+
+  const dxmt9::encoders::RenderPassStoreProofActivePass colorPass{
+      .hot = &colorSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = true,
+  };
+  std::uint32_t colorDistance = 0;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              colorSources, color, &colorDistance, {}, colorPass),
+          ColorProof::AllowNextClear,
+          "R-BACK-15.8 reordered same-pass prefix reaches replay-order clear");
+  checkEq(colorDistance, 2u,
+          "R-BACK-15.8 reordered color distance uses replay ordinals");
+
+  Handle depth{0xD018u};
+  ChunkSlot depthSlot;
+  appendDrawRunWithDepth(depthSlot, depth);
+  appendClearOnDepth(depthSlot, depth);
+  appendDrawRunWithDepth(depthSlot, depth);
+  const std::array<std::uint32_t, 3> depthOrder{{0u, 2u, 1u}};
+  const LookaheadSource depthSource{
+      .slot = &depthSlot,
+      .commandOrder = depthOrder,
+      .firstCommandIndex = 1u,
+      .commandEndIndex = depthOrder.size(),
+  };
+  const auto depthSources =
+      std::span<const LookaheadSource>(&depthSource, 1u);
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(depthSources, depth),
+          DepthProof::BlockDrawDepth,
+          "R-BACK-15.7 reordered suffix observes depth draw before source clear");
+  const dxmt9::encoders::RenderPassStoreProofActivePass depthPass{
+      .hot = &depthSlot.drawHotStates[0],
+      .allowSameAttachmentContinuation = true,
+  };
+  std::uint32_t depthDistance = 0;
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              depthSources, depth, &depthDistance, {}, depthPass),
+          DepthProof::AllowNextClear,
+          "R-BACK-15.7 reordered same-pass prefix reaches replay-order clear");
+  checkEq(depthDistance, 2u,
+          "R-BACK-15.7 reordered depth distance uses replay ordinals");
+
+  const std::array<std::uint32_t, 3> invalidOrder{{0u, 99u, 1u}};
+  const LookaheadSource invalidSource{
+      .slot = &depthSlot,
+      .commandOrder = invalidOrder,
+      .firstCommandIndex = 1u,
+      .commandEndIndex = invalidOrder.size(),
+  };
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(&invalidSource, 1u), depth),
+          DepthProof::BlockNoLookahead,
+          "R-BACK-15.7 invalid replay index falls back to defensive Store");
+}
+
 void testDepthForcedStoreOnNextRead() {
   // R-BACK-15.15 / defensive Store: if the next record after our DrawRun
   // is itself a DrawRun that re-binds the same depth handle (live-out
@@ -1015,6 +1091,7 @@ int main() {
     testDepthDontCareStoreOnNextClear();
     testColorDontCareStoreOnNextClear();
     testSamePassDrawPrefixDoesNotBlockNextClear();
+    testReorderedStoreProofFollowsReplayOrder();
     testDepthForcedStoreOnNextRead();
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();

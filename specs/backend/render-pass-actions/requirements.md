@@ -138,6 +138,14 @@ current execution chunk. The encoder must not block waiting for future
 chunks to determine the answer; a defensive `Store` is the correct fallback
 when the next operation is unknown.
 
+When the selected backend supplies a validated command permutation for the
+chunk, "next operation" means the next operation in that actual replay order,
+not the next source-record index. The proof may skip a prefix of compatible
+DrawRun records that remain in the active Metal render pass, but it must then
+classify every later clear, read, sample, helper operation, and present in
+replay order. Missing or invalid replay-order evidence requires the defensive
+`Store` fallback.
+
 When a chunk ends without a definitive next-operation signal, the
 attachment is treated as live-out and uses `Store`. The next chunk may
 then DontCare-load if its first pass on the attachment is a clear or full

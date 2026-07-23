@@ -368,12 +368,13 @@ weighted result is `8.063 -> 8.243 FPS` (`+2.24%`). Passes per present fall
 candidate runs complete the intended GT2 scene with coherent captures and zero
 GPU command-buffer errors.
 
-The conservative safety fallback is visible in attachment traffic. Per present,
-color load/store falls from about `9.27/57.17MiB` to `0.35/48.36MiB`, and depth
-load falls from `17.87MiB` to `8.98MiB`, but depth store rises from `36.84MiB`
-to `136.81MiB`. Reordered chunks currently disable the source-order Store proof,
-so every affected depth pass stores. The candidate wins despite that cost, but
-an order-aware Store proof is the next pass-coalescing optimization.
+The initial conservative safety fallback is visible in attachment traffic. Per
+present, color load/store falls from about `9.27/57.17MiB` to
+`0.35/48.36MiB`, and depth load falls from `17.87MiB` to `8.98MiB`, but depth
+store rises from `36.84MiB` to `136.81MiB`. At this stage reordered chunks
+disabled source-order Store proof, so every affected depth pass stored. The
+candidate won despite that cost and established order-aware Store proof as the
+next pass-coalescing optimization.
 
 Verdict: production pass coalescing is a real GT2 mechanism and a useful
 default-off progressive lane, not yet a default. Promotion still needs the
@@ -392,14 +393,66 @@ Evidence:
 - clean candidates:
   `experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-clean-candidate-r{1,2}-20260723`
 
+### Order-aware Store proof follow-up
+
+The follow-up makes Store proof consume the same complete, duplicate-free
+command permutation as v2 replay. `encodeChunk` builds an inverse
+source-command-to-replay-ordinal map while validating the permutation. A pass
+opening on source command `i` scans the replay suffix after `i`'s ordinal.
+Compatible DrawRuns retained in the active Metal pass are skipped as before;
+the first later clear, draw/read, sample, helper operation, or present is
+classified in actual replay order. Out-of-range proof input returns
+`BlockNoLookahead` and therefore keeps `Store`.
+
+The device-free render-pass-actions fixture covers both color and depth:
+source order sees a clear, the synthetic optimized order first sees a
+same-target draw and blocks without active-pass context, active-pass context
+skips that draw and reaches the clear at replay distance two, and an invalid
+replay index is defensive. The arm64 fixture, renderer/framegraph regression
+set, and Rosetta provider build pass.
+
+The same GT2 recipe then ran in B-A-B-A order: Sikarugir Wine,
+`-gt2 -nosplash -nosysteminfo -noscreens`, 120-second no-gputrace timeout,
+frame sampling, frontmost supervision, encoder breakdown, and the default
+offload/index-cache policy.
+
+| Run order | Mode | Sampled FPS | wall p50 / p95 | passes / present | encode CPU / present | color / depth Store per present |
+|---|---|---:|---:|---:|---:|---:|
+| B1 | framegraph / progressive + passcoalesce | `8.301` | `104.852 / 158.682ms` | `14.791` | `23.482ms` | `48.290 / 27.950MiB` |
+| A1 | traditional / strict | `7.944` | `110.905 / 162.327ms` | `17.744` | `24.892ms` | `57.162 / 36.836MiB` |
+| B2 | framegraph / progressive + passcoalesce | `8.329` | `103.274 / 159.040ms` | `14.791` | `22.960ms` | `48.291 / 27.950MiB` |
+| A2 | traditional / strict | `8.147` | `105.903 / 160.993ms` | `17.750` | `23.984ms` | `57.174 / 36.840MiB` |
+
+Pooled wall time is phase-balanced (`134.454s` candidate, `134.478s`
+control). Pooled sampled FPS is `8.046 -> 8.315` (`+3.35%`), while passes per
+present fall `16.66%`. Relative to the earlier conservative passcoalesce run,
+depth Store falls `136.81 -> 27.95MiB/present` (`-79.57%`). Relative to the
+same-build traditional control it falls `36.84 -> 27.95MiB/present`
+(`-24.13%`); total color-plus-depth Store falls about
+`94.00 -> 76.24MiB/present` (`-18.89%`).
+
+The two candidates record `3,804` and `3,818`
+`render_pass_depth_proof_allow_next_clear` decisions, zero
+`render_pass_depth_proof_block_no_lookahead`, and zero GPU command-buffer
+errors. All four runs complete normally. Candidate/control captures at frames
+`467-504` show the same coherent glowing-tree scene, including bloom.
+
+Evidence:
+
+- controls:
+  `experiments/output/app-d3d9-3dmark05-passcoalesce-order-store-control-r{1,2}-20260723`
+- candidates:
+  `experiments/output/app-d3d9-3dmark05-passcoalesce-order-store-candidate-r{1,2}-20260723`
+
 The practical order after the Immediate-default policy is:
 
 1. Reduce current-frame vertex/tiler volume beyond the restored opaque-depth
    index-cache path. Require an Xcode VS-invocation/hidden-write counter gate;
    the request partition leaves almost no idle scheduling bubble to optimize.
 2. Keep production pass coalescing as the measured secondary GPU/encode axis.
-   Its first GT2 ABBA is `+2.24%`, but order-aware Store proof and the parity /
-   Xcode gates above are required before promotion.
+   Its order-aware Store follow-up is `+3.35%` pooled with lower attachment
+   traffic than traditional, but the parity / Xcode gates above are still
+   required before promotion.
 3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
 4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not

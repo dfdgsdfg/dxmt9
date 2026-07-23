@@ -9551,13 +9551,24 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       return Proof::BlockNoLookahead;
     }
     const auto& slot = *source.slot;
+    const std::size_t traversalCount =
+        source.commandOrder.empty() ? slot.commandCount()
+                                    : source.commandOrder.size();
     const std::size_t firstCommandIndex =
-        std::min(source.firstCommandIndex, slot.commandCount());
+        std::min(source.firstCommandIndex, traversalCount);
     const std::size_t commandEndIndex =
-        std::min(source.commandEndIndex, slot.commandCount());
-    for (std::size_t i = firstCommandIndex; i < commandEndIndex; ++i) {
+        std::min(source.commandEndIndex, traversalCount);
+    for (std::size_t traversalIndex = firstCommandIndex;
+         traversalIndex < commandEndIndex;
+         ++traversalIndex) {
+      const std::size_t commandIndex = source.commandOrder.empty()
+          ? traversalIndex
+          : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
+      if (commandIndex >= slot.commandCount()) {
+        return Proof::BlockNoLookahead;
+      }
       ++logicalDistance;
-      const auto next = slot.commandAt(i);
+      const auto next = slot.commandAt(commandIndex);
       if (next.kind != Kind::DrawRun) {
         withinActivePass = false;
       }
@@ -9752,13 +9763,24 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       return Proof::BlockNoLookahead;
     }
     const auto& slot = *source.slot;
+    const std::size_t traversalCount =
+        source.commandOrder.empty() ? slot.commandCount()
+                                    : source.commandOrder.size();
     const std::size_t firstCommandIndex =
-        std::min(source.firstCommandIndex, slot.commandCount());
+        std::min(source.firstCommandIndex, traversalCount);
     const std::size_t commandEndIndex =
-        std::min(source.commandEndIndex, slot.commandCount());
-    for (std::size_t i = firstCommandIndex; i < commandEndIndex; ++i) {
+        std::min(source.commandEndIndex, traversalCount);
+    for (std::size_t traversalIndex = firstCommandIndex;
+         traversalIndex < commandEndIndex;
+         ++traversalIndex) {
+      const std::size_t commandIndex = source.commandOrder.empty()
+          ? traversalIndex
+          : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
+      if (commandIndex >= slot.commandCount()) {
+        return Proof::BlockNoLookahead;
+      }
       ++logicalDistance;
-      const auto next = slot.commandAt(i);
+      const auto next = slot.commandAt(commandIndex);
       if (next.kind != Kind::DrawRun) {
         withinActivePass = false;
       }
@@ -14604,21 +14626,27 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!replayRange.valid) {
     return std::nullopt;
   }
+  std::vector<std::size_t> replayOrdinalByCommandIndex;
   if (!options.replayCommandOrder.empty()) {
     if (options.replayCommandOrder.size() != replayRange.commandCount()) {
       return std::nullopt;
     }
-    std::vector<bool> seen(replayRange.commandCount(), false);
-    for (const std::uint32_t commandIndex : options.replayCommandOrder) {
+    const auto missingOrdinal = std::numeric_limits<std::size_t>::max();
+    replayOrdinalByCommandIndex.assign(replayRange.commandCount(),
+                                       missingOrdinal);
+    for (std::size_t ordinal = 0;
+         ordinal < options.replayCommandOrder.size();
+         ++ordinal) {
+      const std::uint32_t commandIndex = options.replayCommandOrder[ordinal];
       if (commandIndex < replayRange.commandBegin ||
           commandIndex >= replayRange.commandEnd) {
         return std::nullopt;
       }
       const std::size_t relative = commandIndex - replayRange.commandBegin;
-      if (seen[relative]) {
+      if (replayOrdinalByCommandIndex[relative] != missingOrdinal) {
         return std::nullopt;
       }
-      seen[relative] = true;
+      replayOrdinalByCommandIndex[relative] = ordinal;
     }
   }
 
@@ -15197,19 +15225,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::size_t storeProofLookaheadCount = 0;
     auto appendStoreProofLookahead = [&](const core::ChunkSlot* sourceSlot,
                                          std::size_t firstCommandIndex,
-                                         std::size_t commandEndIndex) {
+                                         std::size_t commandEndIndex,
+                                         std::span<const std::uint32_t>
+                                             commandOrder = {}) {
       if (!sourceSlot ||
           storeProofLookaheadCount >= storeProofLookaheadStorage.size()) {
         return;
       }
-      const std::size_t slotCommandCount = sourceSlot->commandCount();
+      const std::size_t traversalCount =
+          commandOrder.empty() ? sourceSlot->commandCount()
+                               : commandOrder.size();
       const std::size_t clampedFirst =
-          std::min(firstCommandIndex, slotCommandCount);
+          std::min(firstCommandIndex, traversalCount);
       const std::size_t clampedEnd =
-          std::min(commandEndIndex, slotCommandCount);
+          std::min(commandEndIndex, traversalCount);
       storeProofLookaheadStorage[storeProofLookaheadCount++] =
           RenderPassStoreProofLookaheadSource{
               .slot = sourceSlot,
+              .commandOrder = commandOrder,
               .firstCommandIndex = clampedFirst,
               .commandEndIndex = clampedEnd,
           };
@@ -15221,6 +15254,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           : sourceSlot.commandCount();
     };
     const bool selectedSessionLookaheadStartsHere =
+        options.replayCommandOrder.empty() &&
         !options.sessionLookaheadSources.empty() &&
         (options.sessionSource.has_value()
              ? readySlotSnapshotMatchesCompletionSource(
@@ -15268,12 +15302,23 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             sourceEnd);
       }
     }
-    if (options.replayCommandOrder.empty() &&
-        storeProofLookaheadCount == 0 &&
+    if (storeProofLookaheadCount == 0 &&
         useSourceLocalStoreProofLookahead(options.session != nullptr,
                                          deferSessionFinalization)) {
-      appendStoreProofLookahead(&slot, firstCommandAfter(slot, lookaheadStartIndex),
-                                slot.commandCount());
+      if (options.replayCommandOrder.empty()) {
+        appendStoreProofLookahead(
+            &slot, firstCommandAfter(slot, lookaheadStartIndex),
+            slot.commandCount());
+      } else if (lookaheadStartIndex >= replayRange.commandBegin &&
+                 lookaheadStartIndex < replayRange.commandEnd) {
+        const std::size_t relative =
+            lookaheadStartIndex - replayRange.commandBegin;
+        const std::size_t replayOrdinal =
+            replayOrdinalByCommandIndex[relative];
+        appendStoreProofLookahead(
+            &slot, replayOrdinal + 1u, options.replayCommandOrder.size(),
+            options.replayCommandOrder);
+      }
     }
     const std::span<const RenderPassStoreProofLookaheadSource>
         storeProofLookaheadSources(storeProofLookaheadStorage.data(),

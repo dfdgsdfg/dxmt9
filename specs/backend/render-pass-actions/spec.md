@@ -169,6 +169,13 @@ unbound is live-out. An implementation may evaluate this when the pass opens
 or at `flushRender`, but a pass-open proof must first skip the DrawRun prefix
 that the encoder will keep inside that same Metal render pass.
 
+The inspected sequence is the sequence the encoder will actually replay. A
+source-order chunk scans increasing command indices. A chunk with a validated,
+complete command permutation scans the permutation suffix after the
+pass-opening draw's replay ordinal. The same-pass DrawRun-prefix exception is
+applied to that suffix. An out-of-range command index or unavailable suffix is
+`BlockNoLookahead`, never an optimistic proof.
+
 ```mermaid
 flowchart TD
   Flush["flushRender(splitReason)"] --> ForEach["For each attachment\nbeing released"]
@@ -279,6 +286,7 @@ sequenceDiagram
 | `R-BACK-15.6` cross-frame retention | Same spec — second chunk reuses handle, gets Load (not DontCare). |
 | `R-BACK-15.7` depth DontCare-store on next-clear | Same spec — synthetic chunk with depth then depth-clear. |
 | `R-BACK-15.8` color DontCare-store on overwrite | Same spec — color RT then StretchRect dst. |
+| `R-BACK-15.7` / `R-BACK-15.8` reordered Store proof | Same spec — a complete command permutation moves a same-pass draw before a source-order clear; assert replay-order blocking without active-pass context, same-pass-prefix skipping with context, replay-ordinal distance, and defensive fallback for an invalid index. |
 | `R-BACK-15.9` no cross-chunk look-ahead | Same spec — chunk ends without proof, must Store. |
 | `R-BACK-15.10`–`15.12` counters | `tests/native/backend/allocation_counter_spec.cpp` extension or new — assert keys present, sums match. |
 | `R-BACK-15.13`–`15.15` safety invariants | Same spec — present source / lock / MSAA resolve forces Store. |

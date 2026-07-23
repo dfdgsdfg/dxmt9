@@ -65,8 +65,8 @@ observer runs:
 - The default-off `framegraph + progressive + passcoalesce` lane changes only
   source-command order. It rejects a merge whose second pass begins with a
   Clear/helper boundary, requires a complete duplicate-free command
-  permutation, disables source-order load/store lookahead for reordered
-  chunks, and falls back to source order on any planning/session mismatch.
+  permutation, evaluates load/store lookahead in that validated replay order,
+  and falls back to source order on any planning/session mismatch.
 - Promotion still requires pixel-exact parity and real-workload performance
   gates. Memoryless, DCE, reorder, mesh, and GPU-driven execution remain
   unimplemented production features.
