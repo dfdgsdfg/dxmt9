@@ -152,15 +152,21 @@ void testPassStructure() {
   check(p0.targets.depth == TextureHandle{0xD000u}, "pass 0 depth == ds");
   check(p0.draws.first == 0 && p0.draws.count == 2,
         "pass 0 owns both rt0 draw refs");
+  check(p0.commands.first == 0 && p0.commands.count == 3,
+        "pass 0 owns its clear and both rt0 DrawRun commands");
 
   const PassNode& p1 = graph.passes[1];
   check(p1.kind == PassKind::Render, "pass 1 is a render pass");
   check(p1.targets.color[0] == TextureHandle{0xB000u}, "pass 1 color0 == rt1");
   check(p1.targets.depth == TextureHandle{}, "pass 1 has no depth");
   check(p1.draws.first == 2 && p1.draws.count == 1, "pass 1 owns the rt1 draw");
+  check(p1.commands.first == 3 && p1.commands.count == 1,
+        "pass 1 owns its rt1 DrawRun command");
 
   const PassNode& p2 = graph.passes[2];
   check(p2.kind == PassKind::Present, "pass 2 is a present pass");
+  check(p2.commands.first == 4 && p2.commands.count == 1,
+        "pass 2 owns the Present command");
   check(graph.flush_boundary, "present marks a flush/frame boundary");
 }
 
@@ -175,6 +181,12 @@ void testDrawRefs() {
         "draw ref 1 -> command 2, 2 params");
   check(graph.draws[2].command_index == 3 && graph.draws[2].param_count == 1,
         "draw ref 2 -> command 3, 1 param");
+  check(graph.commands.size() == 5,
+        "source command refs retain Clear, DrawRuns, and Present");
+  for (std::uint32_t i = 0; i < graph.commands.size(); ++i) {
+    check(graph.commands[i].command_index == i,
+          "baseline source command refs preserve command order");
+  }
 }
 
 void testResourceAccessLogs() {

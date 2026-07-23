@@ -2267,6 +2267,92 @@ void testCompatibleIndexedDrawMergeRejectsObservableDifferences() {
           "binding change stops indexed draw merge");
 }
 
+void testCompatibleIndexedDrawMergeTelemetryClassifiesRelaxationSets() {
+  using dxmt9::encoders::CompatibleIndexedDrawMergeReject;
+  using dxmt9::encoders::CompatibleIndexedDrawMergeRelaxation;
+
+  std::array<dxmt9::core::DrawParam, 2> draws{};
+  for (auto& draw : draws) {
+    draw.indexed = true;
+    draw.primitiveType = PrimitiveType::TriangleList;
+    draw.primitiveCount = 1u;
+    draw.instanceCount = 1u;
+    draw.uniformHandle = dxmt9::core::DrawUniformHandle{
+        .index = 1u,
+        .generation = 1u,
+        .hash = 0x44u,
+    };
+  }
+  draws[1].startIndex = 3u;
+
+  auto uniformOnly = draws;
+  uniformOnly[1].uniformHandle.hash = 0x45u;
+  const auto uniformTelemetry =
+      dxmt9::encoders::measureCompatibleIndexedDrawMergePairs(
+          uniformOnly, {});
+  const auto uniformIndex =
+      dxmt9::encoders::compatibleIndexedDrawMergeRejectIndex(
+          CompatibleIndexedDrawMergeReject::Uniform);
+  checkEq(uniformTelemetry.pairAttempts, std::uint64_t{1},
+          "merge telemetry visits each adjacent draw boundary once");
+  checkEq(uniformTelemetry.compatiblePairs, std::uint64_t{0},
+          "uniform-only mismatch is not strictly compatible");
+  checkEq(uniformTelemetry.rejectPairs[uniformIndex], std::uint64_t{1},
+          "uniform mismatch contributes to rejection volume");
+  checkEq(uniformTelemetry.onlyRejectPairs[uniformIndex], std::uint64_t{1},
+          "uniform-only mismatch contributes to its relaxation frontier");
+  checkEq(uniformTelemetry.exactRelaxationSetPairs[static_cast<u32>(
+              CompatibleIndexedDrawMergeRelaxation::Uniform)],
+          std::uint64_t{1},
+          "uniform-only mismatch contributes to logical relaxation set");
+
+  auto uniformAndRange = uniformOnly;
+  uniformAndRange[1].startIndex = 6u;
+  const auto mixedTelemetry =
+      dxmt9::encoders::measureCompatibleIndexedDrawMergePairs(
+          uniformAndRange, {});
+  const auto rangeIndex =
+      dxmt9::encoders::compatibleIndexedDrawMergeRejectIndex(
+          CompatibleIndexedDrawMergeReject::NonContiguousIndexRange);
+  checkEq(mixedTelemetry.rejectPairs[uniformIndex], std::uint64_t{1},
+          "mixed mismatch retains uniform cause attribution");
+  checkEq(mixedTelemetry.rejectPairs[rangeIndex], std::uint64_t{1},
+          "mixed mismatch retains range cause attribution");
+  checkEq(mixedTelemetry.onlyRejectPairs[uniformIndex], std::uint64_t{0},
+          "mixed mismatch does not overstate uniform-only frontier");
+  checkEq(mixedTelemetry.onlyRejectPairs[rangeIndex], std::uint64_t{0},
+          "mixed mismatch does not overstate joined-index-only frontier");
+  checkEq(mixedTelemetry.multipleRejectPairs, std::uint64_t{1},
+          "multi-condition rejections remain separately visible");
+  const auto uniformAndRangeSet =
+      static_cast<u32>(CompatibleIndexedDrawMergeRelaxation::Uniform) |
+      static_cast<u32>(
+          CompatibleIndexedDrawMergeRelaxation::NonContiguousIndexRange);
+  checkEq(mixedTelemetry.exactRelaxationSetPairs[uniformAndRangeSet],
+          std::uint64_t{1},
+          "logical relaxation sets preserve exact multi-condition volume");
+
+  std::array<std::uint8_t, 8> payload{};
+  payload[0] = 1u;
+  payload[1] = 2u;
+  payload[4] = 3u;
+  payload[5] = 4u;
+  auto bindingPayloadOnly = draws;
+  bindingPayloadOnly[0].bindingOverrideRange = {0u, 1u};
+  bindingPayloadOnly[1].bindingOverrideRange = {4u, 1u};
+  bindingPayloadOnly[0].bindingSnapshotRange = {1u, 1u};
+  bindingPayloadOnly[1].bindingSnapshotRange = {5u, 1u};
+  const auto bindingTelemetry =
+      dxmt9::encoders::measureCompatibleIndexedDrawMergePairs(
+          bindingPayloadOnly, payload);
+  checkEq(bindingTelemetry.multipleRejectPairs, std::uint64_t{1},
+          "two serialized binding ranges remain two raw reject causes");
+  checkEq(bindingTelemetry.exactRelaxationSetPairs[static_cast<u32>(
+              CompatibleIndexedDrawMergeRelaxation::BindingPayload)],
+          std::uint64_t{1},
+          "serialized binding ranges form one logical relaxation condition");
+}
+
 void testVersionedIndexSnapshotIsStableCacheSource() {
   using dxmt9::core::DrawBufferBindingSnapshot;
 
@@ -3195,6 +3281,7 @@ int main() {
     testOpaqueDepthIndexOrderOptimizationPredicateIsStrict();
     testCompatibleIndexedDrawMergePreservesContiguousIndexOrder();
     testCompatibleIndexedDrawMergeRejectsObservableDifferences();
+    testCompatibleIndexedDrawMergeTelemetryClassifiesRelaxationSets();
     testVersionedIndexSnapshotIsStableCacheSource();
     testExpandedIndexedProgrammableDrawExpandsExtraStreamBytes();
     testMixedShaderPathsBindProgrammableDrawInputs();

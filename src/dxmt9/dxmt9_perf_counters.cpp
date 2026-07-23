@@ -1010,6 +1010,38 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateMeasureCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheGateCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheApplyCpuNs{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergePairAttempts{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeCompatiblePairs{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeMultipleRejectPairs{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeSelectedPairs{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectSourceShape{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectNextShape{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectIndexType{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectBaseVertex{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectStartVertex{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectUniform{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectBindingOverride{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectBindingSnapshot{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeRejectOverflow{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlySourceShape{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyNextShape{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyIndexType{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyBaseVertex{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyStartVertex{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyUniform{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyBindingOverride{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyBindingSnapshot{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeOnlyOverflow{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxBindingPayload{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxUniform{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxBindingPayloadUniform{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxBindingPayloadNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxUniformNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxBindingPayloadUniformNonContiguous{0};
+  std::atomic<std::uint64_t> compatibleIndexedDrawMergeExactRelaxOther{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateDraws{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateSkipped{0};
   std::atomic<std::uint64_t> indexedCacheOptCandidateBytes{0};
@@ -3159,6 +3191,38 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_index_cache_candidate_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateMeasureCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_gate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheGateCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_apply_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheApplyCpuNs, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_pair_attempts", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergePairAttempts, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_compatible_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeCompatiblePairs, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_multiple_reject_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeMultipleRejectPairs, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_selected_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeSelectedPairs, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_source_shape", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectSourceShape, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_next_shape", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectNextShape, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_index_type", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectIndexType, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_base_vertex", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectBaseVertex, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_start_vertex", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectStartVertex, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_uniform", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectUniform, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_binding_override", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectBindingOverride, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_binding_snapshot", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectBindingSnapshot, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_noncontiguous", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_reject_overflow", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeRejectOverflow, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_source_shape", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlySourceShape, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_next_shape", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyNextShape, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_index_type", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyIndexType, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_base_vertex", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyBaseVertex, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_start_vertex", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyStartVertex, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_uniform", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyUniform, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_binding_override", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyBindingOverride, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_binding_snapshot", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyBindingSnapshot, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_noncontiguous", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_only_overflow", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeOnlyOverflow, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_binding_payload_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxBindingPayload, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_uniform_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxUniform, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_binding_payload_uniform_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxBindingPayloadUniform, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_noncontiguous_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_binding_payload_noncontiguous_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxBindingPayloadNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_uniform_noncontiguous_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxUniformNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_binding_payload_uniform_noncontiguous_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxBindingPayloadUniformNonContiguous, nullptr, nullptr, 0.0},
+    {"compatible_indexed_draw_merge_exact_relax_other_pairs", CounterEntry::Kind::UnsignedCount, &Counters::compatibleIndexedDrawMergeExactRelaxOther, nullptr, nullptr, 0.0},
     {"indexed_cache_opt_candidate_draws", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateDraws, nullptr, nullptr, 0.0},
     {"indexed_cache_opt_candidate_skipped", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateSkipped, nullptr, nullptr, 0.0},
     {"indexed_cache_opt_candidate_bytes", CounterEntry::Kind::UnsignedCount, &Counters::indexedCacheOptCandidateBytes, nullptr, nullptr, 0.0},
@@ -6813,6 +6877,74 @@ void countEncodeDrawIndexCacheGateCpuTime(std::uint64_t nanoseconds) {
 
 void countEncodeDrawIndexCacheApplyCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIndexCacheApplyCpuNs, nanoseconds);
+}
+
+void countCompatibleIndexedDrawMergeTelemetry(
+    std::uint64_t pairAttempts,
+    std::uint64_t compatiblePairs,
+    std::uint64_t multipleRejectPairs,
+    std::uint64_t selectedPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRejectCount>& rejectPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRejectCount>& onlyRejectPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRelaxationSetCount>&
+        exactRelaxationSetPairs,
+    std::uint64_t otherRelaxationSetPairs) {
+  auto& c = counters();
+  add(c.compatibleIndexedDrawMergePairAttempts, pairAttempts);
+  add(c.compatibleIndexedDrawMergeCompatiblePairs, compatiblePairs);
+  add(c.compatibleIndexedDrawMergeMultipleRejectPairs, multipleRejectPairs);
+  add(c.compatibleIndexedDrawMergeSelectedPairs, selectedPairs);
+
+  std::atomic<std::uint64_t>* rejectCounters[] = {
+      &c.compatibleIndexedDrawMergeRejectSourceShape,
+      &c.compatibleIndexedDrawMergeRejectNextShape,
+      &c.compatibleIndexedDrawMergeRejectIndexType,
+      &c.compatibleIndexedDrawMergeRejectBaseVertex,
+      &c.compatibleIndexedDrawMergeRejectStartVertex,
+      &c.compatibleIndexedDrawMergeRejectUniform,
+      &c.compatibleIndexedDrawMergeRejectBindingOverride,
+      &c.compatibleIndexedDrawMergeRejectBindingSnapshot,
+      &c.compatibleIndexedDrawMergeRejectNonContiguous,
+      &c.compatibleIndexedDrawMergeRejectOverflow,
+  };
+  std::atomic<std::uint64_t>* onlyRejectCounters[] = {
+      &c.compatibleIndexedDrawMergeOnlySourceShape,
+      &c.compatibleIndexedDrawMergeOnlyNextShape,
+      &c.compatibleIndexedDrawMergeOnlyIndexType,
+      &c.compatibleIndexedDrawMergeOnlyBaseVertex,
+      &c.compatibleIndexedDrawMergeOnlyStartVertex,
+      &c.compatibleIndexedDrawMergeOnlyUniform,
+      &c.compatibleIndexedDrawMergeOnlyBindingOverride,
+      &c.compatibleIndexedDrawMergeOnlyBindingSnapshot,
+      &c.compatibleIndexedDrawMergeOnlyNonContiguous,
+      &c.compatibleIndexedDrawMergeOnlyOverflow,
+  };
+  static_assert(std::size(rejectCounters) ==
+                kCompatibleIndexedDrawMergeRejectCount);
+  static_assert(std::size(onlyRejectCounters) ==
+                kCompatibleIndexedDrawMergeRejectCount);
+  for (std::size_t i = 0u; i < rejectPairs.size(); ++i) {
+    add(*rejectCounters[i], rejectPairs[i]);
+    add(*onlyRejectCounters[i], onlyRejectPairs[i]);
+  }
+  add(c.compatibleIndexedDrawMergeExactRelaxBindingPayload,
+      exactRelaxationSetPairs[1u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxUniform,
+      exactRelaxationSetPairs[2u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxBindingPayloadUniform,
+      exactRelaxationSetPairs[3u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxNonContiguous,
+      exactRelaxationSetPairs[4u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxBindingPayloadNonContiguous,
+      exactRelaxationSetPairs[5u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxUniformNonContiguous,
+      exactRelaxationSetPairs[6u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxBindingPayloadUniformNonContiguous,
+      exactRelaxationSetPairs[7u]);
+  add(c.compatibleIndexedDrawMergeExactRelaxOther, otherRelaxationSetPairs);
 }
 
 void countIndexedCacheOptCandidate(bool available,

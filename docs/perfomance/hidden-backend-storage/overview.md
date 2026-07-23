@@ -1,12 +1,12 @@
 ---
 domain: hidden-backend-storage
-workload: 3DMark05 GT1
+workload: 3DMark05 GT1 and GT2
 title: "Hidden Backend Storage — the central GPU explanation - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-08
-source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md
-related: docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/log.md
+updated: 2026-07-22
+source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md
+related: docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
 # Hidden Backend Storage — the central GPU explanation - Current Overview
@@ -32,6 +32,7 @@ every other domain at the lever that actually moves the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
+| H46 | GT2's `~8 FPS` rate is owned by Wine/Rosetta or translation CPU work, and the large VS write is parameter-buffer overflow spill | rejected CPU/overflow explanations; accepted emitted-GPU-work attribution | [hidden-backend-storage-shape.36](hidden-backend-storage-shape.36.md) (full-frame Xcode native replay remains `126.77-131.678ms`, or `7.59-7.89 FPS`, at Xcode's reported `Medium` performance state; `2,529,660` VS invocations write `6,952.646MiB`, `15.66x` the visible VSOut expectation; all `19` encoders report `0` partial renders) |
 | H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
 | H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
 | H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | [hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
@@ -46,6 +47,7 @@ every other domain at the lever that actually moves the bucket.
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.36 - GT2 Full-Frame Native Replay Preserves the GPU Ceiling Without Partial Renders](hidden-backend-storage-shape.36.md)
 - [hidden-backend-storage-shape.35 - Current Shader Dump Join Keeps the Hidden Owner Below Visible VSOut](hidden-backend-storage-shape.35.md)
 - [hidden-backend-storage-shape.34 - Fragmentless Depth-Only Keep-VSOut Route Passes Equality but Fails Xcode Counter Gate](hidden-backend-storage-shape.34.md)
 - [hidden-backend-storage-shape.33 - Current Xcode/DXMT Attribution Narrows The Next Backend Gate](hidden-backend-storage-shape.33.md)

@@ -116,6 +116,21 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
       if (!(pa.targets == pb.targets)) {
         continue;
       }
+      // The existing v2 replay path can keep P_a's encoder open across P_b
+      // only when P_b contributes draw records. A Clear/helper command at the
+      // head of P_b is a semantic encoder boundary and must not be silently
+      // folded into the merged pass.
+      bool second_pass_draw_only = true;
+      for (u32 i = 0; i < pb.commands.count; ++i) {
+        if (graph.commands[pb.commands.first + i].kind !=
+            core::MetalCommandKind::DrawRun) {
+          second_pass_draw_only = false;
+          break;
+        }
+      }
+      if (!second_pass_draw_only) {
+        continue;
+      }
       // R-BACK-34.5 / L1 flush boundary: reject if any intervening pass is not
       // a plain render pass (Present/Blit/Sync may be flush-bearing).
       bool intervening_ok = true;
@@ -163,6 +178,14 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
       for (u32 i = 0; i < pb.draws.count; ++i) {
         merged_draws.push_back(graph.draws[pb.draws.first + i]);
       }
+      std::vector<CommandRef> merged_commands;
+      merged_commands.reserve(pa.commands.count + pb.commands.count);
+      for (u32 i = 0; i < pa.commands.count; ++i) {
+        merged_commands.push_back(graph.commands[pa.commands.first + i]);
+      }
+      for (u32 i = 0; i < pb.commands.count; ++i) {
+        merged_commands.push_back(graph.commands[pb.commands.first + i]);
+      }
 
       // 2. Build the new pass order as a list of "sources": each entry is either
       //    an existing pass index to copy verbatim, or the synthetic merged pass.
@@ -198,6 +221,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
       //    pass's draws.first/count is contiguous and valid.
       std::vector<PassNode> new_passes;
       std::vector<DrawRef> new_draws;
+      std::vector<CommandRef> new_commands;
       std::vector<u32> old_to_new(n, 0xFFFFFFFFu);
       new_passes.reserve(new_pass_src.size());
 
@@ -210,6 +234,11 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
           for (const DrawRef& d : merged_draws) {
             new_draws.push_back(d);
           }
+          merged.commands.first = static_cast<u32>(new_commands.size());
+          merged.commands.count = static_cast<u32>(merged_commands.size());
+          for (const CommandRef& command : merged_commands) {
+            new_commands.push_back(command);
+          }
           // The merged pass occupies BOTH old a and old b slots for remap.
           old_to_new[a] = new_idx;
           old_to_new[b] = new_idx;
@@ -221,6 +250,12 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
           copy.draws.count = orig.draws.count;
           for (u32 i = 0; i < orig.draws.count; ++i) {
             new_draws.push_back(graph.draws[orig.draws.first + i]);
+          }
+          copy.commands.first = static_cast<u32>(new_commands.size());
+          copy.commands.count = orig.commands.count;
+          for (u32 i = 0; i < orig.commands.count; ++i) {
+            new_commands.push_back(
+                graph.commands[orig.commands.first + i]);
           }
           old_to_new[src] = new_idx;
           new_passes.push_back(copy);
@@ -265,6 +300,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats) {
 
       graph.passes = std::move(new_passes);
       graph.draws = std::move(new_draws);
+      graph.commands = std::move(new_commands);
       graph.edges = std::move(new_edges);
 
       if (stats) {

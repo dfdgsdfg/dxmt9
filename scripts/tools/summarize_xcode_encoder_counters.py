@@ -28,6 +28,7 @@ REQUIRED_XCODE_COUNTER_COLUMNS = (
     "CommandBuffer Label",
     "Encoder Label",
     "GPU Time",
+    "Partial Render Count",
     "Bytes Written To Device Memory",
     "Buffer Device Memory Bytes Written",
     "VS Buffer Device Memory Bytes Written",
@@ -57,6 +58,7 @@ SUMMARY_FIELDS = (
     "command_buffer_label",
     "gpu_share_pct",
     "gpu_ms",
+    "partial_render_count",
     "rt",
     "depth",
     "device_write_mib",
@@ -564,6 +566,7 @@ def summarize_xcode(path: Path, run_label: str) -> list[dict[str, Any]]:
     needed_names = {
         "Index", "Encoder Index", "CommandBuffer Index", "CommandBuffer Label",
         "Encoder Label", "GPU Time", "Bytes Written To Device Memory",
+        "Partial Render Count",
         "Buffer Device Memory Bytes Written", "VS Bytes Written To Device Memory",
         "VS Buffer Device Memory Bytes Written", "FS Bytes Written To Device Memory",
         "FS Buffer Device Memory Bytes Written", "Texture Device Memory Bytes Written",
@@ -622,6 +625,8 @@ def summarize_xcode(path: Path, run_label: str) -> list[dict[str, Any]]:
             "command_buffer_label": cell(row, indexes, "CommandBuffer Label"),
             "gpu_share_pct": (gpu_ns / total_gpu_ns * 100.0) if total_gpu_ns else 0.0,
             "gpu_ms": gpu_ns / 1_000_000.0,
+            "partial_render_count": parse_value(
+                cell(row, indexes, "Partial Render Count")),
             "rt": rt,
             "depth": depth,
             "device_write_mib": mib(numeric(row, indexes, "Bytes Written To Device Memory")),
@@ -1309,6 +1314,8 @@ def encoder_keys(rows: list[dict[str, Any]]) -> str:
 
 def aggregate_brief(rows: list[dict[str, Any]], total_gpu_ms: float) -> dict[str, Any]:
     gpu_ms = sum(as_float(row.get("gpu_ms")) for row in rows)
+    partial_render_count = sum(
+        as_int(row.get("partial_render_count")) for row in rows)
     buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in rows)
     vs_buffer_write_mib = sum(as_float(row.get("vs_buffer_write_mib")) for row in rows)
     vs_invocations = sum(as_float(row.get("vs_invocations")) for row in rows)
@@ -1338,6 +1345,7 @@ def aggregate_brief(rows: list[dict[str, Any]], total_gpu_ms: float) -> dict[str
         "encoder_keys": encoder_keys(rows),
         "gpu_ms": gpu_ms,
         "gpu_share_pct": gpu_ms / total_gpu_ms * 100.0 if total_gpu_ms else 0.0,
+        "partial_render_count": partial_render_count,
         "buffer_write_mib": buffer_write_mib,
         "vs_buffer_write_mib": vs_buffer_write_mib,
         "vs_buffer_write_share": (
@@ -1392,12 +1400,16 @@ def write_report(
     hot_gpu_share_target: float = 95.0,
 ) -> None:
     total_gpu_ms = sum(as_float(row.get("gpu_ms")) for row in joined)
+    total_partial_render_count = sum(
+        as_int(row.get("partial_render_count")) for row in joined)
     total_buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in joined)
     total_device_write_mib = sum(as_float(row.get("device_write_mib")) for row in joined)
     top = joined[:3]
     hot_set = pick_gpu_hot_set(joined, total_gpu_ms, hot_gpu_share_target)
     hot = aggregate_brief(hot_set, total_gpu_ms)
     top_gpu_ms = sum(as_float(row.get("gpu_ms")) for row in top)
+    top_partial_render_count = sum(
+        as_int(row.get("partial_render_count")) for row in top)
     top_buffer_write_mib = sum(as_float(row.get("buffer_write_mib")) for row in top)
     top_device_write_mib = sum(as_float(row.get("device_write_mib")) for row in top)
     top_vs_buffer_write_mib = sum(as_float(row.get("vs_buffer_write_mib")) for row in top)
@@ -1792,6 +1804,12 @@ def write_report(
             "After subtracting named tiled-buffer counters and dxmt CPU writers, "
             "more than 90% of top VS buffer writes remain hidden backend traffic."
         )
+    if total_partial_render_count == 0 and top_vs_buffer_write_mib > 256.0:
+        notes.append(
+            "Xcode reports zero partial renders for the full capture; do not attribute "
+            "the VS buffer-write volume to parameter-buffer overflow-triggered partial "
+            "render store/reload without separate evidence."
+        )
     if top_tile_intersections_pct > 0 and top_vs_to_tiled_ratio > 16.0:
         notes.append(
             "Xcode tiler counters are present but small compared with VS buffer writes; "
@@ -1851,6 +1869,7 @@ def write_report(
     lines.append(f"- Run: `{run_label}`")
     lines.append(f"- Encoders: `{len(joined)}`")
     lines.append(f"- Total GPU: `{fmt_float(total_gpu_ms)} ms`")
+    lines.append(f"- Partial renders: `{fmt_int(total_partial_render_count)}`")
     lines.append(f"- Total buffer write: `{fmt_float(total_buffer_write_mib)} MiB`")
     lines.append(f"- Total device write: `{fmt_float(total_device_write_mib)} MiB`")
     lines.append(f"- Top 3 GPU share: `{fmt_float(top_gpu_share, 2)}%`")
@@ -1865,6 +1884,7 @@ def write_report(
     lines.append("| Metric | Value |")
     lines.append("|---|---:|")
     lines.append(f"| GPU time | `{fmt_float(top_gpu_ms)} ms` |")
+    lines.append(f"| Partial renders | `{fmt_int(top_partial_render_count)}` |")
     lines.append(f"| Buffer write | `{fmt_float(top_buffer_write_mib)} MiB` |")
     lines.append(f"| VS buffer write | `{fmt_float(top_vs_buffer_write_mib)} MiB` |")
     lines.append(f"| VS buffer / Xcode buffer write | `{fmt_float(vs_buffer_write_share, 3)}x` |")
@@ -2161,6 +2181,9 @@ def write_report(
         lines.append("|---|---:|")
         lines.append(f"| Encoders | `{hot.get('encoder_keys', '')}` |")
         lines.append(f"| GPU time | `{fmt_float(hot.get('gpu_ms'))} ms` |")
+        lines.append(
+            f"| Partial renders | `{fmt_int(hot.get('partial_render_count'))}` |"
+        )
         lines.append(f"| Buffer write | `{fmt_float(hot.get('buffer_write_mib'))} MiB` |")
         lines.append(f"| VS buffer write | `{fmt_float(hot.get('vs_buffer_write_mib'))} MiB` |")
         lines.append(

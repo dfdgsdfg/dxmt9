@@ -135,6 +135,53 @@ LinearizationPlan planLinearization(const FrameGraph& graph) {
   return plan;
 }
 
+ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
+                                     const core::ChunkSlot& slot) {
+  ReplayCommandPlan plan;
+  const std::size_t command_count = slot.commandCount();
+  plan.command_indices.reserve(command_count);
+  std::vector<bool> seen(command_count, false);
+
+  for (const PassNode& pass : graph.passes) {
+    if (pass.flags.dead) {
+      return plan;  // v2 replay-tape lane is passcoalesce-only.
+    }
+    if (pass.commands.first > graph.commands.size() ||
+        pass.commands.count >
+            graph.commands.size() - pass.commands.first) {
+      return plan;
+    }
+    for (u32 i = 0; i < pass.commands.count; ++i) {
+      const CommandRef& ref = graph.commands[pass.commands.first + i];
+      if (ref.command_index >= command_count ||
+          seen[ref.command_index] ||
+          slot.commandHeaders[ref.command_index].kind != ref.kind) {
+        return plan;
+      }
+      seen[ref.command_index] = true;
+      plan.command_indices.push_back(ref.command_index);
+    }
+  }
+
+  if (plan.command_indices.size() != command_count) {
+    return plan;
+  }
+  for (bool value : seen) {
+    if (!value) {
+      return plan;
+    }
+  }
+
+  plan.valid = true;
+  for (std::size_t i = 0; i < plan.command_indices.size(); ++i) {
+    if (plan.command_indices[i] != i) {
+      plan.reordered = true;
+      break;
+    }
+  }
+  return plan;
+}
+
 // ---------------------------------------------------------------------------
 // Part 2 — device-gated executor (NOT exercised by the device-free unit test).
 //

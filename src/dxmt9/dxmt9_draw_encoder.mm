@@ -14604,6 +14604,23 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!replayRange.valid) {
     return std::nullopt;
   }
+  if (!options.replayCommandOrder.empty()) {
+    if (options.replayCommandOrder.size() != replayRange.commandCount()) {
+      return std::nullopt;
+    }
+    std::vector<bool> seen(replayRange.commandCount(), false);
+    for (const std::uint32_t commandIndex : options.replayCommandOrder) {
+      if (commandIndex < replayRange.commandBegin ||
+          commandIndex >= replayRange.commandEnd) {
+        return std::nullopt;
+      }
+      const std::size_t relative = commandIndex - replayRange.commandBegin;
+      if (seen[relative]) {
+        return std::nullopt;
+      }
+      seen[relative] = true;
+    }
+  }
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(slot.seqId);
   auto traceEncodeStage = [&](const char* stage) {
@@ -14618,6 +14635,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         << " commands=" << slot.commandCount()
         << " command_begin=" << replayRange.commandBegin
         << " command_end=" << replayRange.commandEnd
+        << " command_order=" << options.replayCommandOrder.size()
         << " draw_only=" << (slot.drawOnlyCommandStream() ? 1 : 0);
     emitQueueTraceLine(out.str());
   };
@@ -14642,6 +14660,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             << " param_count=" << command.drawRunRecord->paramCount
             << " state_index=" << command.drawRunRecord->stateIndex;
       }
+    } else if (kind == core::MetalCommandKind::Clear && command.clear) {
+      const auto& clear = *command.clear;
+      out << " clear_color=" << (clear.clearColor ? 1 : 0)
+          << " clear_depth=" << (clear.clearDepth ? 1 : 0)
+          << " clear_stencil=" << (clear.clearStencil ? 1 : 0)
+          << " rects=" << clear.rects.size()
+          << " rt=0x" << std::hex
+          << static_cast<unsigned long long>(
+                 clear.colorAttachments[0].handle.value)
+          << " depth=0x"
+          << static_cast<unsigned long long>(clear.depthStencil.handle.value)
+          << std::dec;
     }
     emitQueueTraceLine(out.str());
   };
@@ -15238,7 +15268,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             sourceEnd);
       }
     }
-    if (storeProofLookaheadCount == 0 &&
+    if (options.replayCommandOrder.empty() &&
+        storeProofLookaheadCount == 0 &&
         useSourceLocalStoreProofLookahead(options.session != nullptr,
                                          deferSessionFinalization)) {
       appendStoreProofLookahead(&slot, firstCommandAfter(slot, lookaheadStartIndex),
@@ -15940,6 +15971,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // via setVertexBytes per draw with no slab traffic.
     const bool compatibleIndexedDrawMerge =
         debug::optimizeCompatibleIndexedDrawMerge() && !activeVisibilityScout;
+    const bool compatibleIndexedDrawMergeTelemetry =
+        compatibleIndexedDrawMerge && perf::enabled();
+    const auto mergeTelemetry = compatibleIndexedDrawMergeTelemetry
+        ? measureCompatibleIndexedDrawMergePairs(drawItems,
+                                                 recordPayloadArena)
+        : CompatibleIndexedDrawMergeTelemetry{};
+    u64 selectedMergePairs = 0u;
     for (std::size_t i = 0; i < drawCount;) {
       traceEncodeCommand("drawrun.draw-begin", commandIndex,
                          Kind::DrawRun, command);
@@ -15953,6 +15991,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const auto& param = merged.param;
       const std::size_t mergedDrawCount =
           std::max<std::size_t>(1u, merged.drawCount);
+      selectedMergePairs += static_cast<u64>(mergedDrawCount - 1u);
       const bool usesCommandUniform =
           !param.uniformHandle.valid() ||
           param.uniformHandle == command.drawRunRecord->uniformHandle;
@@ -16281,6 +16320,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       }
       i += mergedDrawCount;
     }
+    if (compatibleIndexedDrawMergeTelemetry) {
+      perf::countCompatibleIndexedDrawMergeTelemetry(
+          mergeTelemetry.pairAttempts,
+          mergeTelemetry.compatiblePairs,
+          mergeTelemetry.multipleRejectPairs,
+          selectedMergePairs,
+          mergeTelemetry.rejectPairs,
+          mergeTelemetry.onlyRejectPairs,
+          mergeTelemetry.exactRelaxationSetPairs,
+          mergeTelemetry.otherRelaxationSetPairs);
+    }
     traceEncodeCommand("drawrun.end", commandIndex, Kind::DrawRun, command);
     commandBufferHasWork = true;
   };
@@ -16312,9 +16362,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   };
 
+  const std::size_t replayCommandCount =
+      options.replayCommandOrder.empty()
+          ? replayRange.commandCount()
+          : options.replayCommandOrder.size();
+  auto replayCommandIndexAt = [&](std::size_t ordinal) {
+    return options.replayCommandOrder.empty()
+        ? replayRange.commandBegin + ordinal
+        : static_cast<std::size_t>(options.replayCommandOrder[ordinal]);
+  };
+
   if (slot.drawOnlyCommandStream()) {
-    for (std::size_t commandIndex = replayRange.commandBegin;
-         commandIndex < replayRange.commandEnd; ++commandIndex) {
+    for (std::size_t ordinal = 0; ordinal < replayCommandCount; ++ordinal) {
+      const std::size_t commandIndex = replayCommandIndexAt(ordinal);
       const auto command = slot.drawRunCommandAt(commandIndex);
       traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
@@ -16325,8 +16385,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
     }
   } else {
-    for (std::size_t commandIndex = replayRange.commandBegin;
-         commandIndex < replayRange.commandEnd; ++commandIndex) {
+    for (std::size_t ordinal = 0; ordinal < replayCommandCount; ++ordinal) {
+      const std::size_t commandIndex = replayCommandIndexAt(ordinal);
       const auto command = slot.commandAt(commandIndex);
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.

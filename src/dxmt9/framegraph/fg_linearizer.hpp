@@ -15,13 +15,18 @@
 //      This is the artifact the L1 parity-baseline test and the §13 parity
 //      harness compare.
 //
-//   2. executeLinearization() — the DEVICE-GATED executor (wired by B12).
+//   2. executeLinearization() — the staged DEVICE-GATED executor.
 //      Walks the SAME plan and drives the REAL encode through
 //      render::IExternalDrawEmitter + encoders::beginRenderPass / endEncoding.
 //      It needs a real WMT::Device / CommandBuffer / EncodeContext, which the
-//      native test host lacks, so it is NOT exercised by the unit test (see the
-//      device-gated boundary note on the declaration). B12 calls it from
-//      FrameGraphBackend::onChunkReady.
+//      native test host lacks, so it is NOT exercised by the unit test and is
+//      not yet the production path.
+//
+//   3. planReplayCommands() — the production passcoalesce bridge.
+//      Flattens the optimized pass order into a complete source-command
+//      permutation. FrameGraphBackend supplies it to the existing v2
+//      encodeChunk path, preserving its batching, binding, presenter, capture,
+//      and completion behavior while changing only proven pass order.
 //
 // L1 CORRECTNESS (spec.md §14 L1 / R-BACK-39.1):
 //   Under default OptimizerOptions{} (no feature passes), the plan MUST
@@ -89,6 +94,19 @@ struct LinearizationPlan {
   friend bool operator==(const LinearizationPlan&, const LinearizationPlan&) = default;
 };
 
+// Source-record replay order for the production v2 encoder. This keeps the
+// optimized pass order while routing every Clear/DrawRun/helper/Present record
+// back through encodeChunk, preserving batching, dirty-rebind, capture,
+// presenter, and completion behavior.
+struct ReplayCommandPlan {
+  std::vector<u32> command_indices;
+  bool valid = false;
+  bool reordered = false;
+
+  friend bool operator==(const ReplayCommandPlan&,
+                         const ReplayCommandPlan&) = default;
+};
+
 // Walk the optimized FrameGraph in pass order and produce the ordered op list.
 // Skips dead passes (flags.dead, set by DCE). Deterministic. DEVICE-FREE.
 //
@@ -100,6 +118,12 @@ LinearizationPlan planLinearization(const FrameGraph& graph);
 
 // In-place variant: reuse caller scratch (clears it first). Identical contents.
 void planLinearization(const FrameGraph& graph, LinearizationPlan& out);
+
+// Flatten PassNode::commands in optimized pass order. The plan is valid only
+// when it is a complete, duplicate-free permutation of the source chunk and
+// every retained command kind still matches the source header.
+ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
+                                     const core::ChunkSlot& slot);
 
 }  // namespace dxmt9::framegraph
 

@@ -833,6 +833,22 @@ void countEncodeDrawIndexCacheCandidateUpperBoundRejected(std::uint64_t rejected
 void countEncodeDrawIndexCacheCandidateMeasureCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIndexCacheGateCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIndexCacheApplyCpuTime(std::uint64_t nanoseconds);
+inline constexpr std::size_t kCompatibleIndexedDrawMergeRejectCount = 10u;
+inline constexpr std::size_t
+    kCompatibleIndexedDrawMergeRelaxationSetCount = 8u;
+void countCompatibleIndexedDrawMergeTelemetry(
+    std::uint64_t pairAttempts,
+    std::uint64_t compatiblePairs,
+    std::uint64_t multipleRejectPairs,
+    std::uint64_t selectedPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRejectCount>& rejectPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRejectCount>& onlyRejectPairs,
+    const std::array<std::uint64_t,
+                     kCompatibleIndexedDrawMergeRelaxationSetCount>&
+        exactRelaxationSetPairs,
+    std::uint64_t otherRelaxationSetPairs);
 void countIndexedCacheOptCandidate(bool available,
                                    std::uint64_t bytes,
                                    std::uint64_t originalMiss16,

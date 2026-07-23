@@ -4,8 +4,8 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-21
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md
+updated: 2026-07-23
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
 ---
 
@@ -30,6 +30,16 @@ compatible indexed-draw merging eliminates zero draws. Sampled FPS is
 percentiles are stable, all error gates pass, and closely phase-aligned
 captures at frames `500-502` are visually coherent. Both experimental flags
 remain default OFF, with no Xcode trace spend justified for GT2.
+
+The follow-up [merge-rejection distribution](index-cache-locality/index-cache-locality-merge-rejection.23.md)
+classifies every adjacent GT2 draw boundary with the same predicate used by
+the strict merge. All `575,523` pairs are indexed, single-instance triangle
+lists without UP data, but none has a single relaxable cause. The dominant
+exact class simultaneously changes serialized binding payload and uses a
+non-contiguous index range (`361,143`, `62.75%`); another `128,617` pairs also
+change uniforms. Joined-index-only volume is zero. This rejects a standalone
+joined-index-buffer merge and redirects any future work toward a mechanism
+that preserves per-subdraw binding/uniform state.
 
 Three completed current-runtime runs used the V2-only command wire with
 MANAGED buffer backing versioning and the default incremental shader-constant
@@ -295,15 +305,101 @@ opaque-depth indexed (`65.15%`) and alpha-blend indexed (`22.64%`). These stage
 sums are attribution totals, not additive frame-wall time, but they prioritize
 vertex volume and RT/clear-driven pass traffic over fragment shading.
 
+### Full-Frame Native Metal Replay Discriminator
+
+The 2026-07-22 [full-frame native replay](hidden-backend-storage/hidden-backend-storage-shape.36.md)
+removes 3DMark05, Wine/Rosetta, the PE/unix bridge, and dxmt CPU encoding from
+the timed path by replaying the captured frame279 Metal command stream directly
+in Xcode. Summary replay is `126.77ms`; encoder-counter replay is `131.678ms`,
+equivalent to replay rates of `7.89-7.59 FPS`. That is the same band as the
+current `~8.15 FPS` runtime and makes the emitted Metal GPU workload, not
+translation CPU time, the decisive owner for this representative frame. Xcode
+labels the Summary replay performance state `Medium`, so this is a
+CPU-removal discriminator at the captured replay state, not an absolute
+maximum-frequency M1 ceiling.
+
+The frame issues `2,529,660` VS invocations and writes `6,952.646MiB` through
+Xcode's VS buffer device-write bucket, `15.66x` the `443.895MiB` implied by its
+visible `184B` VSOut. Named tiled vertex and primitive-block buffers total only
+`47.750MiB`, and every one of the `19` encoders reports **zero partial
+renders**. The large hidden bucket therefore cannot be described as
+parameter-buffer overflow-triggered partial-render store/reload in GT2. The
+open owner is per-invocation hidden VS/backend write amplification; compiler
+spill versus other firmware/backend storage still needs a controlled A/B.
+
+This result also demotes draw-boundary-preserving multi-draw work. It can reduce
+CPU encode calls but preserves the VS invocation and hidden-write numerator
+that owns the native replay.
+
+### Frame279 Production Pass-Coalescing Discriminator
+
+Xcode identified frame279 encoder `0` as the first of four encoders that could
+be coalesced. The matching source encoders are `0`, `2`, `4`, and `11`: all
+write the same color/depth attachment pair, while the intervening passes clear
+and draw to other offscreen targets. The frame-scoped DAG scout confirms that
+the whole sequence is in one v2 chunk and changes `19 -> 16` total passes
+(`18 -> 15` render passes) under `passcoalesce`.
+
+The default-off production experiment keeps the existing v2 `encodeChunk`
+implementation and changes only its complete source-command permutation. It
+retains Clear/helper/Present records, rejects incomplete or duplicate plans,
+rejects a merge when the second pass starts with a Clear/helper boundary, and
+falls back to source order for an open encode session or injected command
+buffer. The diagnostic run proves that frame279 consumed all `818` commands
+through the reordered tape. Runtime encoder breakdown reports `18 -> 15`
+encoders and combines the four Xcode-identified encoders into one
+`1,323`-draw encoder. The captured GT2 image is coherent and
+`gpu_command_buffer_errors=0`.
+
+The clean performance gate used the same build in ABBA order, with DAG export
+and command tracing disabled:
+
+| Run order | Mode | Sampled FPS | wall p50 | passes / present | encode CPU / present | frame279 encoders |
+|---|---|---:|---:|---:|---:|---:|
+| A1 | traditional / strict | `7.955` | `110.600ms` | `17.744` | `24.614ms` | `18` |
+| B1 | framegraph / progressive + passcoalesce | `8.218` | `104.572ms` | `14.789` | `22.628ms` | `15` |
+| B2 | framegraph / progressive + passcoalesce | `8.269` | `104.749ms` | `14.790` | `22.523ms` | `15` |
+| A2 | traditional / strict | `8.171` | `104.928ms` | `17.751` | `23.538ms` | `18` |
+
+Both pairs favor the candidate (`+3.31%`, `+1.20%` sampled FPS). Pooled wall
+time is effectively equal (`134.565s` control, `134.533s` candidate), so the
+weighted result is `8.063 -> 8.243 FPS` (`+2.24%`). Passes per present fall
+`16.67%` and encode CPU per present falls `6.23%` on the two-run mean. Both
+candidate runs complete the intended GT2 scene with coherent captures and zero
+GPU command-buffer errors.
+
+The conservative safety fallback is visible in attachment traffic. Per present,
+color load/store falls from about `9.27/57.17MiB` to `0.35/48.36MiB`, and depth
+load falls from `17.87MiB` to `8.98MiB`, but depth store rises from `36.84MiB`
+to `136.81MiB`. Reordered chunks currently disable the source-order Store proof,
+so every affected depth pass stores. The candidate wins despite that cost, but
+an order-aware Store proof is the next pass-coalescing optimization.
+
+Verdict: production pass coalescing is a real GT2 mechanism and a useful
+default-off progressive lane, not yet a default. Promotion still needs the
+required parity capture set, production `framegraph_*` benefit/reorder counters,
+catalogue compatibility-profile plumbing, and an Xcode counter recapture that
+confirms the expected load/store reduction on the optimized frame.
+
+Evidence:
+
+- mechanism/DAG:
+  `experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-{chunk-scope,clear-shape,v2-tape}-r1-20260723`
+  and
+  `traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/analysis`
+- clean controls:
+  `experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-clean-control-r{1,2}-20260723`
+- clean candidates:
+  `experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-clean-candidate-r{1,2}-20260723`
+
 The practical order after the Immediate-default policy is:
 
 1. Reduce current-frame vertex/tiler volume beyond the restored opaque-depth
    index-cache path. Require an Xcode VS-invocation/hidden-write counter gate;
    the request partition leaves almost no idle scheduling bubble to optimize.
-2. Treat the remaining `121MiB/present` tile preservation as a secondary axis.
-   Color is mostly blocked by real texture sampling/presentation, so any next
-   reduction needs a cross-pass lifetime or coalescing proof rather than a
-   broader DontCare heuristic.
+2. Keep production pass coalescing as the measured secondary GPU/encode axis.
+   Its first GT2 ABBA is `+2.24%`, but order-aware Store proof and the parity /
+   Xcode gates above are required before promotion.
 3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
 4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not

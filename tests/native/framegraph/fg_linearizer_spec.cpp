@@ -198,6 +198,13 @@ void testParityBaselineOrder() {
   }
   check(firstBeginHasClear,
         "pass0 BeginPass carries LoadAction::Clear for the folded clear");
+
+  const ReplayCommandPlan replay = planReplayCommands(graph, slot);
+  check(replay.valid && !replay.reordered,
+        "baseline replay command plan is a valid identity permutation");
+  check(replay.command_indices ==
+            std::vector<std::uint32_t>({0u, 1u, 2u, 3u, 4u}),
+        "baseline replay command plan retains Clear/DrawRun/Present order");
 }
 
 // passcoalesce ON: two same-target render passes separated by an independent
@@ -252,6 +259,51 @@ void testPassCoalesceFewerBeginOps() {
   check(sawMergedSpan,
         "merged rtA pass holds both rtA draws (cmd0, cmd2) in submission order "
         "within one BeginPass/EndPass");
+
+  const ReplayCommandPlan replay = planReplayCommands(coalesced, slot);
+  check(replay.valid && replay.reordered,
+        "passcoalesce produces a valid reordered v2 replay command plan");
+  check(replay.command_indices ==
+            std::vector<std::uint32_t>({0u, 2u, 1u}),
+        "replay command plan groups the two rtA DrawRuns before rtB");
+}
+
+void testPassCoalesceReplayCarriesInterveningClear() {
+  ChunkSlot slot;
+  const Handle rtA{0xA000u};
+  const Handle rtB{0xB000u};
+  appendClearColor(slot, rtA);                                // cmd0
+  appendDrawRun(slot, rtA, {}, {}, 1);                       // cmd1
+  appendClearColor(slot, rtB);                                // cmd2
+  appendDrawRun(slot, rtB, {}, {}, 1);                       // cmd3
+  appendDrawRun(slot, rtA, {}, {}, 1);                       // cmd4
+
+  FrameGraph graph = buildFrameGraph(slot, 0);
+  OptimizerOptions opts{};
+  opts.passcoalesce = true;
+  OptimizerStats stats{};
+  runOptimizer(graph, opts, nullptr, &stats);
+
+  check(stats.pass_coalesced_count == 1,
+        "same-target re-entry without a second clear coalesces");
+  const ReplayCommandPlan replay = planReplayCommands(graph, slot);
+  check(replay.valid && replay.reordered,
+        "clear-carry replay plan is valid and reordered");
+  check(replay.command_indices ==
+            std::vector<std::uint32_t>({0u, 1u, 4u, 2u, 3u}),
+        "the intervening clear moves together with its offscreen pass");
+
+  ChunkSlot blocked;
+  appendClearColor(blocked, rtA);                             // cmd0
+  appendDrawRun(blocked, rtA, {}, {}, 1);                    // cmd1
+  appendDrawRun(blocked, rtB, {}, {}, 1);                    // cmd2
+  appendClearColor(blocked, rtA);                             // cmd3
+  appendDrawRun(blocked, rtA, {}, {}, 1);                    // cmd4
+  FrameGraph blockedGraph = buildFrameGraph(blocked, 0);
+  OptimizerStats blockedStats{};
+  runOptimizer(blockedGraph, opts, nullptr, &blockedStats);
+  check(blockedStats.pass_coalesced_count == 0,
+        "a clear at the head of the second same-target pass blocks coalescing");
 }
 
 // DCE ON marking a pass dead: that pass's ops are absent from the plan.
@@ -321,6 +373,7 @@ int main() {
   try {
     testParityBaselineOrder();
     testPassCoalesceFewerBeginOps();
+    testPassCoalesceReplayCarriesInterveningClear();
     testDceDropsDeadPassOps();
     testDeterminism();
   } catch (const TestFailure& failure) {

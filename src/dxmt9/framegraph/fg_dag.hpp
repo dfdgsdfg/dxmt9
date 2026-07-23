@@ -11,7 +11,9 @@
 //   pulling the original draw state out of the source core::ChunkSlot. The
 //   graph therefore references draws as a lightweight (command-index, range)
 //   pair into the chunk's SoA draw-run arrays rather than carrying any decoded
-//   per-draw geometry/binding payload.
+//   per-draw geometry/binding payload. It also retains a lightweight source
+//   CommandRef for every record so proven pass order can be replayed by the
+//   existing v2 encoder without reconstructing command semantics.
 //
 //   The full mesh DrawDescriptor from spec.md §3.3 (vb_pointers, bindless
 //   indices, bbox, …) is DEFERRED TO L2 and is intentionally NOT declared here.
@@ -21,7 +23,8 @@
 //   same graph twice from the same input yields byte-equal contents.
 //
 // DATA-ORIENTED SHAPE.
-//   PassNode / ResourceNode / Edge / DrawRef are flat POD-friendly records.
+//   PassNode / ResourceNode / Edge / DrawRef / CommandRef are flat POD-friendly
+//   records.
 //   ResourceNode carries a per-frame std::vector access log; the whole graph is
 //   per-frame build scratch (spec.md §3.4 "rebuilt every frame"), so the
 //   per-frame vectors are acceptable build-time storage, not a hot-path
@@ -85,12 +88,30 @@ struct DrawRange {
   friend bool operator==(const DrawRange&, const DrawRange&) = default;
 };
 
+struct CommandRange {
+  u32 first = 0;
+  u32 count = 0;
+
+  friend bool operator==(const CommandRange&, const CommandRange&) = default;
+};
+
 struct DrawRef {
   u32 command_index = 0;  // index into ChunkSlot::commandHeaders (a DrawRun)
   u32 param_first = 0;    // first draw-call ordinal within the draw run
   u32 param_count = 0;    // draw-call ordinals covered by this ref
 
   friend bool operator==(const DrawRef&, const DrawRef&) = default;
+};
+
+// Source command carried through pass reordering/coalescing. Unlike DrawRef,
+// this also retains Clear/helper/Present records so an optimized pass order can
+// be replayed by the existing v2 encodeChunk path without reconstructing or
+// bypassing its command semantics.
+struct CommandRef {
+  u32 command_index = 0;
+  core::MetalCommandKind kind = core::MetalCommandKind::DrawRun;
+
+  friend bool operator==(const CommandRef&, const CommandRef&) = default;
 };
 
 // spec.md §3.5 — load/store action selected by the optimizer (loadstore.cpp,
@@ -131,6 +152,7 @@ struct PassNode {
   PassKind kind = PassKind::Render;
   AttachmentSet targets{};
   DrawRange draws{};            // indices into FrameGraph::draws
+  CommandRange commands{};      // indices into FrameGraph::commands
   u64 state_profile = 0;        // dominant PSO/state hash (StateProfile); B2 fills
   LoadStorePolicy load_store{}; // updated by optimizer (loadstore.cpp)
   PassFlags flags{};
@@ -210,6 +232,7 @@ struct FrameGraph {
   std::vector<ResourceNode> resources;
   std::vector<Edge> edges;     // (src_pass, dst_pass, resource)
   std::vector<DrawRef> draws;  // L1 lightweight refs into the source ChunkSlot
+  std::vector<CommandRef> commands; // source records in optimized pass order
   u64 frame_id = 0;
   bool flush_boundary = false; // R-BACK-32.4
 
@@ -218,6 +241,7 @@ struct FrameGraph {
     resources.clear();
     edges.clear();
     draws.clear();
+    commands.clear();
     frame_id = 0;
     flush_boundary = false;
   }

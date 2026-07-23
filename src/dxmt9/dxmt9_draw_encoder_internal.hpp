@@ -1004,6 +1004,175 @@ struct CompatibleIndexedDrawMerge {
   std::size_t drawCount = 0;
 };
 
+enum class CompatibleIndexedDrawMergeReject : u32 {
+  SourceShape = 1u << 0,
+  NextShape = 1u << 1,
+  IndexType = 1u << 2,
+  BaseVertex = 1u << 3,
+  StartVertex = 1u << 4,
+  Uniform = 1u << 5,
+  BindingOverride = 1u << 6,
+  BindingSnapshot = 1u << 7,
+  NonContiguousIndexRange = 1u << 8,
+  PrimitiveCountOverflow = 1u << 9,
+};
+
+constexpr std::size_t kCompatibleIndexedDrawMergeRejectCount = 10u;
+constexpr std::size_t kCompatibleIndexedDrawMergeRelaxationSetCount = 8u;
+
+enum class CompatibleIndexedDrawMergeRelaxation : u32 {
+  BindingPayload = 1u << 0,
+  Uniform = 1u << 1,
+  NonContiguousIndexRange = 1u << 2,
+};
+
+constexpr u32 compatibleIndexedDrawMergeRejectBit(
+    CompatibleIndexedDrawMergeReject reject) noexcept {
+  return static_cast<u32>(reject);
+}
+
+constexpr std::size_t compatibleIndexedDrawMergeRejectIndex(
+    CompatibleIndexedDrawMergeReject reject) noexcept {
+  return static_cast<std::size_t>(
+      std::countr_zero(compatibleIndexedDrawMergeRejectBit(reject)));
+}
+
+struct CompatibleIndexedDrawMergeTelemetry {
+  u64 pairAttempts = 0u;
+  u64 compatiblePairs = 0u;
+  u64 multipleRejectPairs = 0u;
+  std::array<u64, kCompatibleIndexedDrawMergeRejectCount> rejectPairs{};
+  std::array<u64, kCompatibleIndexedDrawMergeRejectCount> onlyRejectPairs{};
+  std::array<u64, kCompatibleIndexedDrawMergeRelaxationSetCount>
+      exactRelaxationSetPairs{};
+  u64 otherRelaxationSetPairs = 0u;
+
+  void record(u32 rejectMask) noexcept {
+    ++pairAttempts;
+    if (rejectMask == 0u) {
+      ++compatiblePairs;
+      return;
+    }
+
+    for (std::size_t i = 0u; i < rejectPairs.size(); ++i) {
+      if ((rejectMask & (1u << i)) != 0u) {
+        ++rejectPairs[i];
+      }
+    }
+    if (std::popcount(rejectMask) == 1) {
+      const auto index = static_cast<std::size_t>(std::countr_zero(rejectMask));
+      ++onlyRejectPairs[index];
+    } else {
+      ++multipleRejectPairs;
+    }
+
+    const u32 bindingPayloadMask =
+        compatibleIndexedDrawMergeRejectBit(
+            CompatibleIndexedDrawMergeReject::BindingOverride) |
+        compatibleIndexedDrawMergeRejectBit(
+            CompatibleIndexedDrawMergeReject::BindingSnapshot);
+    const u32 uniformMask = compatibleIndexedDrawMergeRejectBit(
+        CompatibleIndexedDrawMergeReject::Uniform);
+    const u32 nonContiguousMask = compatibleIndexedDrawMergeRejectBit(
+        CompatibleIndexedDrawMergeReject::NonContiguousIndexRange);
+    const u32 relaxationRejectMask =
+        bindingPayloadMask | uniformMask | nonContiguousMask;
+    if ((rejectMask & ~relaxationRejectMask) != 0u) {
+      ++otherRelaxationSetPairs;
+      return;
+    }
+
+    u32 relaxationSet = 0u;
+    if ((rejectMask & bindingPayloadMask) != 0u) {
+      relaxationSet |= static_cast<u32>(
+          CompatibleIndexedDrawMergeRelaxation::BindingPayload);
+    }
+    if ((rejectMask & uniformMask) != 0u) {
+      relaxationSet |=
+          static_cast<u32>(CompatibleIndexedDrawMergeRelaxation::Uniform);
+    }
+    if ((rejectMask & nonContiguousMask) != 0u) {
+      relaxationSet |= static_cast<u32>(
+          CompatibleIndexedDrawMergeRelaxation::NonContiguousIndexRange);
+    }
+    ++exactRelaxationSetPairs[relaxationSet];
+  }
+};
+
+inline bool compatibleIndexedDrawMergeShape(
+    const core::DrawParam& draw) noexcept {
+  return draw.indexed &&
+         draw.primitiveType == core::PrimitiveType::TriangleList &&
+         draw.instanceCount == 1u && draw.userVertexRange.empty() &&
+         draw.userIndexRange.empty();
+}
+
+inline u32 classifyCompatibleIndexedDrawMergePair(
+    const core::DrawParam& source,
+    const core::DrawParam& next,
+    std::span<const u8> payloadArena) noexcept {
+  u32 rejectMask = 0u;
+  if (!compatibleIndexedDrawMergeShape(source)) {
+    rejectMask |= compatibleIndexedDrawMergeRejectBit(
+        CompatibleIndexedDrawMergeReject::SourceShape);
+  }
+  if (!compatibleIndexedDrawMergeShape(next)) {
+    rejectMask |= compatibleIndexedDrawMergeRejectBit(
+        CompatibleIndexedDrawMergeReject::NextShape);
+  }
+  if (rejectMask != 0u) {
+    return rejectMask;
+  }
+
+  const auto rejectIf = [&](bool rejected,
+                            CompatibleIndexedDrawMergeReject reason) {
+    if (rejected) {
+      rejectMask |= compatibleIndexedDrawMergeRejectBit(reason);
+    }
+  };
+  rejectIf(next.indexType != source.indexType,
+           CompatibleIndexedDrawMergeReject::IndexType);
+  rejectIf(next.baseVertexIndex != source.baseVertexIndex,
+           CompatibleIndexedDrawMergeReject::BaseVertex);
+  rejectIf(next.startVertex != source.startVertex,
+           CompatibleIndexedDrawMergeReject::StartVertex);
+  rejectIf(next.uniformHandle != source.uniformHandle,
+           CompatibleIndexedDrawMergeReject::Uniform);
+  rejectIf(!drawParamPayloadRangesEqual(
+               source.bindingOverrideRange,
+               next.bindingOverrideRange,
+               payloadArena),
+           CompatibleIndexedDrawMergeReject::BindingOverride);
+  rejectIf(!drawParamPayloadRangesEqual(
+               source.bindingSnapshotRange,
+               next.bindingSnapshotRange,
+               payloadArena),
+           CompatibleIndexedDrawMergeReject::BindingSnapshot);
+
+  const u64 nextStart =
+      static_cast<u64>(source.startIndex) +
+      static_cast<u64>(source.primitiveCount) * 3u;
+  const u64 combinedPrimitiveCount =
+      static_cast<u64>(source.primitiveCount) + next.primitiveCount;
+  rejectIf(nextStart != next.startIndex,
+           CompatibleIndexedDrawMergeReject::NonContiguousIndexRange);
+  rejectIf(combinedPrimitiveCount > std::numeric_limits<u32>::max() / 3u,
+           CompatibleIndexedDrawMergeReject::PrimitiveCountOverflow);
+  return rejectMask;
+}
+
+inline CompatibleIndexedDrawMergeTelemetry
+measureCompatibleIndexedDrawMergePairs(
+    std::span<const core::DrawParam> draws,
+    std::span<const u8> payloadArena) noexcept {
+  CompatibleIndexedDrawMergeTelemetry telemetry{};
+  for (std::size_t i = 1u; i < draws.size(); ++i) {
+    telemetry.record(classifyCompatibleIndexedDrawMergePair(
+        draws[i - 1u], draws[i], payloadArena));
+  }
+  return telemetry;
+}
+
 // Collapse only a byte-contiguous source-IB span. This preserves the exact
 // submitted index sequence and avoids a transient joined-index allocation.
 // InstanceCount is restricted to one because two instanced draws order work as
@@ -1018,45 +1187,19 @@ inline CompatibleIndexedDrawMerge makeCompatibleIndexedDrawMerge(
 
   result.param = draws.front();
   result.drawCount = 1u;
-  if (!result.param.indexed ||
-      result.param.primitiveType != core::PrimitiveType::TriangleList ||
-      result.param.instanceCount != 1u ||
-      !result.param.userVertexRange.empty() ||
-      !result.param.userIndexRange.empty()) {
+  if (!compatibleIndexedDrawMergeShape(result.param)) {
     return result;
   }
 
   for (std::size_t i = 1u; i < draws.size(); ++i) {
     const auto& next = draws[i];
-    if (!next.indexed ||
-        next.primitiveType != result.param.primitiveType ||
-        next.indexType != result.param.indexType ||
-        next.instanceCount != 1u ||
-        next.baseVertexIndex != result.param.baseVertexIndex ||
-        next.startVertex != result.param.startVertex ||
-        next.uniformHandle != result.param.uniformHandle ||
-        !next.userVertexRange.empty() ||
-        !next.userIndexRange.empty() ||
-        !drawParamPayloadRangesEqual(
-            result.param.bindingOverrideRange,
-            next.bindingOverrideRange,
-            payloadArena) ||
-        !drawParamPayloadRangesEqual(
-            result.param.bindingSnapshotRange,
-            next.bindingSnapshotRange,
-            payloadArena)) {
+    if (classifyCompatibleIndexedDrawMergePair(
+            result.param, next, payloadArena) != 0u) {
       break;
     }
 
-    const u64 nextStart =
-        static_cast<u64>(result.param.startIndex) +
-        static_cast<u64>(result.param.primitiveCount) * 3u;
     const u64 combinedPrimitiveCount =
         static_cast<u64>(result.param.primitiveCount) + next.primitiveCount;
-    if (nextStart != next.startIndex ||
-        combinedPrimitiveCount > std::numeric_limits<u32>::max() / 3u) {
-      break;
-    }
     result.param.primitiveCount = static_cast<u32>(combinedPrimitiveCount);
     ++result.drawCount;
   }

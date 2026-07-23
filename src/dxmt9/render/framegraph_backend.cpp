@@ -1,10 +1,15 @@
 #include "framegraph_backend.hpp"
 
 #include "../dxmt9_draw_encoder.hpp"
+#include "../framegraph/fg_builder.hpp"
+#include "../framegraph/fg_linearizer.hpp"
 #include "util/log/log.hpp"
 
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <string>
 #include <utility>
 
 namespace dxmt9::render {
@@ -28,32 +33,73 @@ bool hasAnyFeatureToken(const char* env) {
   return false;
 }
 
+bool isFeatureSeparator(unsigned char ch) {
+  return std::isspace(ch) || ch == ',' || ch == ';';
+}
+
 }  // namespace
+
+RendererCompatProfile resolveRendererCompatProfile(const char* env) {
+  if (env && std::strcmp(env, "progressive") == 0) {
+    return RendererCompatProfile::Progressive;
+  }
+  return RendererCompatProfile::Strict;
+}
 
 RendererFeatureSet resolveRendererFeatures(const char* env,
                                            RendererCompatProfile profile) {
-  // L0: there are no implemented features, so the resolved set is always
-  // empty. Under the Strict profile, any token present is rejected with a
-  // single warning and then ignored.
   if (profile == RendererCompatProfile::Strict && hasAnyFeatureToken(env)) {
     util::logf(util::LogLevel::Warn, "dxmt9-renderer",
                "DXMT9_RENDERER_FEATURES='%s' rejected: strict compat profile "
-               "has no renderer features at this stage; ignoring",
+               "disables optimizer features; ignoring",
+               env);
+    return RendererFeatureSet{};
+  }
+  if (!env) {
+    return RendererFeatureSet{};
+  }
+
+  RendererFeatureSet features{};
+  bool rejected = false;
+  const char* cursor = env;
+  while (*cursor != '\0') {
+    while (*cursor != '\0' &&
+           isFeatureSeparator(static_cast<unsigned char>(*cursor))) {
+      ++cursor;
+    }
+    const char* begin = cursor;
+    while (*cursor != '\0' &&
+           !isFeatureSeparator(static_cast<unsigned char>(*cursor))) {
+      ++cursor;
+    }
+    if (begin == cursor) {
+      continue;
+    }
+    const std::string token(begin, cursor);
+    if (token == "passcoalesce") {
+      features.passcoalesce = true;
+    } else {
+      rejected = true;
+    }
+  }
+  if (rejected) {
+    util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+               "DXMT9_RENDERER_FEATURES='%s' contains unsupported feature "
+               "tokens; ignoring unsupported tokens",
                env);
   }
-  return RendererFeatureSet{};
+  return features;
 }
 
 FrameGraphBackend::FrameGraphBackend()
-    : features_([] {
-        // Read the env once via the repo's static-const-lambda pattern (see
-        // resolveAcquirePolicyFromEnv / layerDisplaySyncEnabled in
-        // dxmt9_presenter.mm). L0 default compat_profile is Strict.
-        static const RendererFeatureSet value = resolveRendererFeatures(
-            std::getenv("DXMT9_RENDERER_FEATURES"),
-            RendererCompatProfile::Strict);
-        return value;
-      }()) {}
+    : profile_(resolveRendererCompatProfile(
+          std::getenv("DXMT9_RENDERER_COMPAT_PROFILE"))),
+      features_(resolveRendererFeatures(std::getenv("DXMT9_RENDERER_FEATURES"),
+                                        profile_)),
+      options_{
+          .passcoalesce = features_.passcoalesce,
+      },
+      observer_(options_) {}
 
 std::optional<core::metalqueue::QueueSubmissionRecord>
 FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
@@ -69,12 +115,36 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
   // dump is backend-agnostic — the TraditionalBackend owns the same observer.
   observer_.observeAndExport(slot);
 
-  // R-BACK-40.5: the Metal command stream stays byte-identical to the
-  // traditional path. The DAG above is observation-only.
-  //
-  // TODO(L1-device): drive encode via fg_linearizer::executeLinearization once
-  // on-device parity is validated; until then encode stays on encodeChunk and
-  // the DAG is observation-only.
+  if (features_.passcoalesce && !options.session &&
+      !options.hasInjectedCommandBuffer()) {
+    framegraph::FrameGraph graph =
+        framegraph::buildFrameGraph(slot, slot.seqId);
+    framegraph::OptimizerStats stats{};
+    framegraph::runOptimizer(graph, options_, /*observations=*/nullptr, &stats);
+    if (stats.pass_coalesced_count != 0) {
+      framegraph::ReplayCommandPlan plan =
+          framegraph::planReplayCommands(graph, slot);
+      if (plan.valid && plan.reordered) {
+        options.replayCommandOrder = plan.command_indices;
+        return encoders::encodeChunk(ctx, slotIndex, slot,
+                                     std::move(options));
+      }
+      static std::once_flag warning;
+      std::call_once(warning, [] {
+        util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+                   "passcoalesce replay plan was incomplete; falling back to "
+                   "source-order v2 replay");
+      });
+    }
+  } else if (features_.passcoalesce) {
+    static std::once_flag warning;
+    std::call_once(warning, [] {
+      util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+                 "passcoalesce is incompatible with an injected/open encode "
+                 "session; falling back to source-order v2 replay");
+    });
+  }
+
   return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
 }
 

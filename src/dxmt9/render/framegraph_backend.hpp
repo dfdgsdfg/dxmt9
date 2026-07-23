@@ -1,13 +1,12 @@
 #pragma once
 
-// FrameGraphBackend — modern-renderer backend (Task A5, R-BACK-40.5).
+// FrameGraphBackend — modern-renderer backend (R-BACK-40.5).
 //
-// At L0 this is a *pure delegate*: onChunkReady forwards verbatim to
-// encoders::encodeChunk, so it is byte-identical to the traditional path.
-// The DAG/optimizer reinterpretation lands later in L1 (Task B12). Because
-// there are no features at L0, the resolved feature set is always empty and
-// the strict compat profile rejects any DXMT9_RENDERER_FEATURES token with a
-// single warning.
+// `strict` remains a pure delegate to encoders::encodeChunk and is
+// byte-identical to the traditional path. The default-off `progressive`
+// passcoalesce lane builds an optimized source-command permutation and sends
+// every record back through the same v2 encodeChunk switch. Other modern
+// renderer features remain staged.
 
 #include "backend_interface.hpp"
 #include "dag_observer.hpp"
@@ -21,22 +20,27 @@
 
 namespace dxmt9::render {
 
-// Compat profile governs how unknown / not-yet-implemented feature tokens are
-// handled. At L0 only `Strict` exists in effect: every feature token is
-// rejected because no feature behavior is implemented.
-enum class RendererCompatProfile { Strict };
-
-// Resolved DXMT9_RENDERER_FEATURES set. At L0 this carries no enabled feature;
-// it exists so the (empty) result can be stored as a member and unit-tested.
-struct RendererFeatureSet {
-  bool empty() const { return true; }
+// Compat profile governs which implemented optimizer tokens may affect Metal
+// emission. Unknown profiles resolve to Strict.
+enum class RendererCompatProfile {
+  Strict,
+  Progressive,
 };
 
+// Resolved DXMT9_RENDERER_FEATURES set. Only passcoalesce has a production
+// progressive lane; the remaining spec tokens are rejected until implemented.
+struct RendererFeatureSet {
+  bool passcoalesce = false;
+
+  bool empty() const { return !passcoalesce; }
+};
+
+RendererCompatProfile resolveRendererCompatProfile(const char* env);
+
 // Pure resolver: parse a DXMT9_RENDERER_FEATURES-style env string under the
-// given compat profile. At L0 the Strict profile rejects every token (logging
-// a single warning) and always returns an empty feature set. Null / empty /
-// garbage input all yield an empty set. Testable without touching the
-// environment.
+// given compat profile. Strict rejects every token and always returns an empty
+// feature set. Progressive accepts implemented tokens and ignores unsupported
+// tokens with one warning. Testable without touching the environment.
 RendererFeatureSet resolveRendererFeatures(const char* env,
                                            RendererCompatProfile profile);
 
@@ -45,11 +49,10 @@ class FrameGraphBackend final : public IRenderBackend {
   FrameGraphBackend();
   ~FrameGraphBackend() override = default;
 
-  // L1 (R-BACK-40.5): the Metal encode stays byte-identical — onChunkReady
-  // delegates verbatim to encoders::encodeChunk. The only addition over L0 is
-  // the side-effect-neutral observe+export side-channel (the shared
-  // render::DagObserver below), which builds and dumps the Frame Graph DAG for
-  // debugging WITHOUT touching the encode.
+  // Strict delegates verbatim to encoders::encodeChunk. Progressive
+  // passcoalesce may supply a complete source-command permutation to that same
+  // encoder after DAG proof; every planning/session mismatch falls back to
+  // source order. The shared DagObserver remains a separate debug side-channel.
   std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
@@ -58,9 +61,8 @@ class FrameGraphBackend final : public IRenderBackend {
 
   BackendMode mode() const override { return BackendMode::FrameGraph; }
 
-  // Resolved optimizer options for this backend (from the L0 feature set). At
-  // L0/L1 strict the feature set is empty, so every option is false (parity
-  // baseline). Exposed for unit testing the option resolution.
+  // Resolved optimizer options for this backend. Strict keeps every option
+  // false (parity baseline). Exposed for unit testing the option resolution.
   const framegraph::OptimizerOptions& optimizerOptions() const {
     return options_;
   }
@@ -76,14 +78,14 @@ class FrameGraphBackend final : public IRenderBackend {
   const DagObserver& observer() const { return observer_; }
 
  private:
+  RendererCompatProfile profile_ = RendererCompatProfile::Strict;
   RendererFeatureSet features_;
-  // R-BACK-40.5: at L1 strict the feature set is empty, so these stay all-false
-  // (parity baseline). Memoryless stays gated behind an explicit relaxation
-  // (R-BACK-40.4) which does not exist yet, so it remains off here too.
+  // R-BACK-40.5: strict keeps this all-false. Memoryless stays gated behind the
+  // explicit relaxation contract (R-BACK-40.4) and has no production lane yet.
   framegraph::OptimizerOptions options_{};
   // Shared observe + DAG-export side-channel, constructed with options_ so the
   // observed post-opt DAG reflects this backend's resolved passes.
-  DagObserver observer_{options_};
+  DagObserver observer_;
 };
 
 }  // namespace dxmt9::render

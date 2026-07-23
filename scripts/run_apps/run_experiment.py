@@ -956,10 +956,12 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
                 "DXMT_EXPERIMENT_SKIP_STAGE": "1" if skip_stage else "",
                 # R-BACK-39.5: resolve the per-app renderer ONCE here, at the
                 # single point where the wine process is spawned, so it persists
-                # for that process lifetime. The dxmt9 backend factory reads
-                # DXMT9_RENDER_MODE once at startup ("traditional"/unset =>
-                # TraditionalBackend, "framegraph" => FrameGraphBackend).
-                "DXMT9_RENDER_MODE": app.render_mode,
+                # for that process lifetime. An explicit process environment
+                # value is a diagnostic-run override; otherwise the catalogue
+                # remains authoritative.
+                "DXMT9_RENDER_MODE": os.environ.get(
+                    "DXMT9_RENDER_MODE", app.render_mode
+                ),
             }
         )
         if app.wine_dll_overrides:

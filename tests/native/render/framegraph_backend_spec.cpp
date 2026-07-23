@@ -22,6 +22,7 @@ using dxmt9::render::BackendMode;
 using dxmt9::render::FrameGraphBackend;
 using dxmt9::render::IRenderBackend;
 using dxmt9::render::RendererCompatProfile;
+using dxmt9::render::resolveRendererCompatProfile;
 using dxmt9::render::resolveRendererFeatures;
 
 struct TestFailure : std::runtime_error {
@@ -74,6 +75,23 @@ void testResolverEmptyForGarbageTokens() {
         "multi-token env yields empty feature set");
 }
 
+void testProgressivePasscoalesceResolution() {
+  check(resolveRendererCompatProfile(nullptr) ==
+            RendererCompatProfile::Strict,
+        "unset compat profile resolves to strict");
+  check(resolveRendererCompatProfile("progressive") ==
+            RendererCompatProfile::Progressive,
+        "progressive compat profile is recognized");
+  check(resolveRendererFeatures("passcoalesce",
+                                RendererCompatProfile::Strict)
+            .empty(),
+        "strict rejects passcoalesce");
+  const auto progressive = resolveRendererFeatures(
+      "passcoalesce,unknown", RendererCompatProfile::Progressive);
+  check(progressive.passcoalesce,
+        "progressive accepts the implemented passcoalesce feature");
+}
+
 }  // namespace
 
 int main() {
@@ -82,6 +100,7 @@ int main() {
     testUsableThroughInterface();
     testResolverEmptyForNoTokens();
     testResolverEmptyForGarbageTokens();
+    testProgressivePasscoalesceResolution();
   } catch (const std::exception& e) {
     std::cerr << "framegraph_backend_spec failed: " << e.what() << '\n';
     return 1;

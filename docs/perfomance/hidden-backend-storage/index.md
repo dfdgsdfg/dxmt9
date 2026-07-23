@@ -1,17 +1,17 @@
 ---
 domain: hidden-backend-storage
-workload: 3DMark05 GT1
+workload: 3DMark05 GT1 and GT2
 title: "Hidden Backend Storage — the central GPU explanation"
 type: domain-index
 status: current
-updated: 2026-07-08
+updated: 2026-07-22
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/hidden-backend-storage/overview.md; docs/perfomance/hidden-backend-storage/log.md
 ---
 
 # Hidden Backend Storage — the central GPU explanation
 
-Latest tracked row: `H45` - Current shader-dump liveness reopens visible `VSOut` trimming as the next GPU lever (rejected by refresh).
+Latest tracked row: `H46` - GT2 full-frame native Metal replay preserves the `~8 FPS` GPU ceiling while reporting zero partial renders (accepted attribution; overflow-spill explanation rejected).
 
 ## Start Here
 
@@ -21,6 +21,7 @@ Latest tracked row: `H45` - Current shader-dump liveness reopens visible `VSOut`
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.36 - GT2 Full-Frame Native Replay Preserves the GPU Ceiling Without Partial Renders](hidden-backend-storage-shape.36.md)
 - [hidden-backend-storage-shape.35 - Current Shader Dump Join Keeps the Hidden Owner Below Visible VSOut](hidden-backend-storage-shape.35.md)
 - [hidden-backend-storage-shape.34 - Fragmentless Depth-Only Keep-VSOut Route Passes Equality but Fails Xcode Counter Gate](hidden-backend-storage-shape.34.md)
 - [hidden-backend-storage-shape.33 - Current Xcode/DXMT Attribution Narrows The Next Backend Gate](hidden-backend-storage-shape.33.md)

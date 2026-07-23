@@ -108,6 +108,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                 "CommandBuffer Label",
                 "Encoder Label",
                 "GPU Time",
+                "Partial Render Count",
                 "Bytes Written To Device Memory",
                 "Buffer Device Memory Bytes Written",
                 "VS Bytes Written To Device Memory",
@@ -130,6 +131,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                     "CommandBuffer Label": "cb_seq_1",
                     "Encoder Label": "RenderPass[seq=1,enc=2,rt=0x10,depth=0x20]",
                     "GPU Time": 10_000_000,
+                    "Partial Render Count": 3,
                     "Bytes Written To Device Memory": 300 * MIB,
                     "Buffer Device Memory Bytes Written": 256 * MIB,
                     "VS Bytes Written To Device Memory": 250 * MIB,
@@ -273,6 +275,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
                 row = next(csv.DictReader(handle))
 
             self.assertEqual(row["dxmt_gpu_write_hint"], "gpu_vs_buffer_write")
+            self.assertEqual(row["partial_render_count"], "3")
             self.assertEqual(row["dxmt_write_owner_confidence"], "high")
             self.assertEqual(row["dxmt_cull_none_draws"], "2")
             self.assertEqual(row["dxmt_cull_back_draws"], "8")
@@ -298,6 +301,7 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertEqual(row["dxmt_vsout_expected_stage_out_bytes_per_vertex"], "32")
             report_text = report.read_text(encoding="utf-8")
             self.assertIn("unexplained Xcode buffer write", report_text)
+            self.assertIn("- Partial renders: `3`", report_text)
             self.assertIn("VS buffer bytes / post-clipped primitive", report_text)
             self.assertIn("dxmt cull none/front/back draws", report_text)
             self.assertIn("dxmt screen blend draws", report_text)
@@ -307,6 +311,25 @@ class SummarizeXcodeEncoderCountersTests(unittest.TestCase):
             self.assertIn("3/1", report_text)
             self.assertIn("## DXMT Per-Stream Breakdown", report_text)
             self.assertIn("0xabc/32/48", report_text)
+
+    def test_zero_partial_renders_reject_overflow_attribution(self) -> None:
+        summarizer = load_xcode_summarizer()
+        rows = [{
+            "seq": 60,
+            "enc": 0,
+            "gpu_ms": 10.0,
+            "partial_render_count": 0,
+            "buffer_write_mib": 300.0,
+            "vs_buffer_write_mib": 300.0,
+        }]
+
+        report = Path(self.tmpdir.name) / "report.md"
+        summarizer.write_report(report, rows, "zero-partial")
+        text = report.read_text(encoding="utf-8")
+
+        self.assertIn("- Partial renders: `0`", text)
+        self.assertIn("zero partial renders for the full capture", text)
+        self.assertIn("overflow-triggered partial render", text)
 
     def test_report_emits_hot_set_when_top_three_miss_gpu_share_target(self) -> None:
         summarizer = load_xcode_summarizer()

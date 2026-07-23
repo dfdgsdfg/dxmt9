@@ -129,6 +129,9 @@ private:
     pass.targets = targets;
     pass.draws = DrawRange{.first = static_cast<u32>(graph_.draws.size()),
                            .count = 0};
+    pass.commands =
+        CommandRange{.first = static_cast<u32>(graph_.commands.size()),
+                     .count = 0};
     pass.state_profile = state_profile;
     graph_.passes.push_back(pass);
     currentPass_ = static_cast<u32>(graph_.passes.size() - 1u);
@@ -143,12 +146,19 @@ private:
 
   // Emit a self-contained, draw-less pass (Present / Blit). Any open render
   // pass is finalized first so submission order is preserved.
-  u32 emitStandalonePass(PassKind kind) {
+  u32 emitStandalonePass(PassKind kind, std::size_t commandIndex) {
     finalizeCurrentPass();
     PassNode pass{};
     pass.kind = kind;
     pass.draws = DrawRange{.first = static_cast<u32>(graph_.draws.size()),
                            .count = 0};
+    pass.commands =
+        CommandRange{.first = static_cast<u32>(graph_.commands.size()),
+                     .count = 1};
+    graph_.commands.push_back(CommandRef{
+        .command_index = static_cast<u32>(commandIndex),
+        .kind = slot_.commandHeaders[commandIndex].kind,
+    });
     graph_.passes.push_back(pass);
     return static_cast<u32>(graph_.passes.size() - 1u);
   }
@@ -298,6 +308,11 @@ private:
                                    .param_first = param_first,
                                    .param_count = param_count});
     graph_.passes[currentPass_].draws.count += 1u;
+    graph_.commands.push_back(CommandRef{
+        .command_index = static_cast<u32>(commandIndex),
+        .kind = core::MetalCommandKind::DrawRun,
+    });
+    graph_.passes[currentPass_].commands.count += 1u;
   }
 
   void recordAttachmentWrites(const AttachmentSet& targets, u32 pass_index) {
@@ -333,6 +348,11 @@ private:
     // the next encoder. A following same-target draw continues this pass.
     finalizeCurrentPass();
     openRenderPass(targets, /*state_profile=*/0u);
+    graph_.commands.push_back(CommandRef{
+        .command_index = static_cast<u32>(commandIndex),
+        .kind = core::MetalCommandKind::Clear,
+    });
+    graph_.passes[currentPass_].commands.count += 1u;
     for (u32 i = 0; i < targets.color_count; ++i) {
       noteAccess(ResourceHandle{targets.color[i].value}, currentPass_,
                  AccessKind::Clear, AccessStage::Fragment);
@@ -343,8 +363,8 @@ private:
     }
   }
 
-  void handlePresent(std::size_t /*commandIndex*/) {
-    const u32 pass_index = emitStandalonePass(PassKind::Present);
+  void handlePresent(std::size_t commandIndex) {
+    const u32 pass_index = emitStandalonePass(PassKind::Present, commandIndex);
     (void)pass_index;
     graph_.flush_boundary = true;  // present is a frame boundary (R-BACK-32.4)
   }
@@ -354,7 +374,7 @@ private:
     if (!command.surfaceCopy) {
       return;
     }
-    emitBlit(ResourceHandle{command.surfaceCopy->source.value},
+    emitBlit(commandIndex, ResourceHandle{command.surfaceCopy->source.value},
              ResourceHandle{command.surfaceCopy->destination.value});
   }
 
@@ -363,7 +383,7 @@ private:
     if (!command.stretchRect) {
       return;
     }
-    emitBlit(ResourceHandle{command.stretchRect->source.value},
+    emitBlit(commandIndex, ResourceHandle{command.stretchRect->source.value},
              ResourceHandle{command.stretchRect->destination.value});
   }
 
@@ -373,7 +393,8 @@ private:
       return;
     }
     // Fill has no source read, only a destination write.
-    emitBlit(ResourceHandle{}, ResourceHandle{command.colorFill->destination.value});
+    emitBlit(commandIndex, ResourceHandle{},
+             ResourceHandle{command.colorFill->destination.value});
   }
 
   void handleDepthResolve(std::size_t commandIndex) {
@@ -381,7 +402,8 @@ private:
     if (!command.depthResolve) {
       return;
     }
-    emitBlit(ResourceHandle{command.depthResolve->msaaDepth.value},
+    emitBlit(commandIndex,
+             ResourceHandle{command.depthResolve->msaaDepth.value},
              ResourceHandle{command.depthResolve->intzDest.value});
   }
 
@@ -390,7 +412,7 @@ private:
     if (!command.readback) {
       return;
     }
-    const u32 pass_index = emitStandalonePass(PassKind::Blit);
+    const u32 pass_index = emitStandalonePass(PassKind::Blit, commandIndex);
     currentPass_ = pass_index;
     const ResourceHandle source{command.readback->source.value};
     noteAccess(source, pass_index, AccessKind::Read, AccessStage::Copy);
@@ -401,8 +423,10 @@ private:
     }
   }
 
-  void emitBlit(ResourceHandle source, ResourceHandle dest) {
-    const u32 pass_index = emitStandalonePass(PassKind::Blit);
+  void emitBlit(std::size_t commandIndex, ResourceHandle source,
+                ResourceHandle dest) {
+    const u32 pass_index =
+        emitStandalonePass(PassKind::Blit, commandIndex);
     currentPass_ = pass_index;
     if (source.value != 0) {
       noteAccess(source, pass_index, AccessKind::Read, AccessStage::Copy);

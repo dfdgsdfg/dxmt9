@@ -11,7 +11,7 @@ related: docs/perfomance/index-cache-locality/overview.md; docs/perfomance/index
 
 # Index-Cache Locality — the only accepted production GPU win
 
-Latest tracked row: `H28` - A verified GT2 four-lane A/B confirms the extended safe reorder scope and strict adjacent compatible indexed-draw merge also have no GT2 coverage (rejected-current; candidate/miss/create population remains `61/61/37`, merge eliminates `0` draws, and FPS moves only `-0.20%` to `+0.12%`).
+Latest tracked row: `H29` - GT2 merge-rejection telemetry finds `575,523` adjacent indexed-triangle boundaries but no single-condition frontier. The dominant exact class is binding payload + non-contiguous IB (`361,143`, `62.75%`), so a joined-index buffer alone cannot provide a semantic merge.
 
 Current status: the coupled pair is engine-default ON since `d45af067` (2026-07-10, H216 in [present-pacing](../present-pacing/index.md)) — unset follows the offload, explicit `0` opts out — and the probe wrapper pins match the engine defaults since `e5129346` (2026-07-12, H221).
 
@@ -23,6 +23,7 @@ Current status: the coupled pair is engine-default ON since `d45af067` (2026-07-
 
 ## Recent Leaf Documents
 
+- [index-cache-locality-merge-rejection.23 - Strict Merge Rejections Require Multiple Preserved Draw Properties](index-cache-locality-merge-rejection.23.md)
 - [index-cache-locality-scope-merge-gt2.22 - GT2 Confirms Extended Scope And Strict Merge Are No-Ops](index-cache-locality-scope-merge-gt2.22.md)
 - [index-cache-locality-scope-merge.21 - Extended Scope And Strict Compatible Merge Have No GT1 Coverage](index-cache-locality-scope-merge.21.md)
 - [index-cache-locality-offload-promotion-proof.20 - Offload+IndexCache Promotion Proof Passes Every Gate](index-cache-locality-offload-promotion-proof.20.md)

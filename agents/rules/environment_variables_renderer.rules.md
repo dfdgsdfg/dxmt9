@@ -9,8 +9,9 @@ string that is not `0`, unless documented otherwise.
 
 | Var | Purpose | Default |
 |---|---|---|
-| `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset, empty, `0`, `traditional`, and unknown values resolve to `TraditionalBackend`; `framegraph` selects `FrameGraphBackend`. `scripts/run_apps/run_experiment.py` also maps catalogue `render_mode` to this env before launching Wine. | traditional |
-| `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. In the current strict L1 state, any token is rejected with one warning and ignored; the DAG observe/export side-channel is independent of this feature list. | unset |
+| `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset, empty, `0`, `traditional`, and unknown values resolve to `TraditionalBackend`; `framegraph` selects `FrameGraphBackend`. `scripts/run_apps/run_experiment.py` maps catalogue `render_mode` to this env unless the process environment explicitly overrides it for a diagnostic run. | traditional |
+| `DXMT9_RENDERER_COMPAT_PROFILE` | Runtime diagnostic compatibility-profile override. `progressive` enables implemented optimizer feature tokens; unset and unknown values resolve to `strict`. Catalogue `compat_profile` forwarding is still pending, so do not treat this env-only lane as a promoted per-app policy. | strict |
+| `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. `strict` rejects every token. `progressive` currently accepts only `passcoalesce`; unsupported tokens are warned and ignored. The passcoalesce lane builds an optimized source-command tape and replays it through the existing v2 `encodeChunk` path, preserving its batching/dirty-rebind/present/completion behavior. It is experimental and default-off. | unset |
 | `DXMT9_RENDERER_LOG_DIVERGENCE` | Enable renderer decision-divergence logging when the parity/divergence harness compares modern decisions against the traditional reference stream. | `0` |
 
 ## Frame Graph DAG debug export
@@ -58,10 +59,14 @@ observer runs:
 - The DAG dump is accepted tooling for render-pass-store H6: it makes
   same-attachment re-entry, RAW/WAR/WAW ordering, and no-intervening-writer
   safety machine-decidable on real GT1 frames.
-- Production encode still uses the traditional `encodeChunk` path in the
-  current strict L1 state. `DXMT9_RENDERER_DUMP_DAG_OPTIMIZE=passcoalesce`
-  changes only the exported post-opt DAG and observe counters, not rendered
-  pixels or GPU commands.
-- Device-gated work remains: driving Metal encode through
-  `fg_linearizer::executeLinearization`, proving byte-identical passcoalesce,
-  then measuring whether tile preservation and Xcode store/load traffic drop.
+- Strict L1 remains byte-identical: production encode delegates to the
+  source-order `encodeChunk` path. `DXMT9_RENDERER_DUMP_DAG_OPTIMIZE` remains
+  observation-only regardless of backend/profile.
+- The default-off `framegraph + progressive + passcoalesce` lane changes only
+  source-command order. It rejects a merge whose second pass begins with a
+  Clear/helper boundary, requires a complete duplicate-free command
+  permutation, disables source-order load/store lookahead for reordered
+  chunks, and falls back to source order on any planning/session mismatch.
+- Promotion still requires pixel-exact parity and real-workload performance
+  gates. Memoryless, DCE, reorder, mesh, and GPU-driven execution remain
+  unimplemented production features.

@@ -545,6 +545,11 @@ struct EncodeChunkOptions {
   // The span points at already dequeued ReadySlotSnapshot entries and must not
   // be retained by encodeChunk or EncodeSession.
   std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};
+  // Optional complete source-command permutation produced by the Frame Graph
+  // passcoalesce planner. Records still execute through the existing v2
+  // encodeChunk switch; only their pass-safe order changes. The span is
+  // call-local and must not be retained.
+  std::span<const std::uint32_t> replayCommandOrder{};
 
   bool hasInjectedCommandBuffer() const noexcept {
     return static_cast<bool>(commandBuffer);
