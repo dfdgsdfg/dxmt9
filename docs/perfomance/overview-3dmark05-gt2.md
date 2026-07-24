@@ -4,8 +4,8 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-23
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md
+updated: 2026-07-24
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
 ---
 
@@ -379,8 +379,8 @@ next pass-coalescing optimization.
 Verdict: production pass coalescing is a real GT2 mechanism and a useful
 default-off progressive lane, not yet a default. Promotion still needs the
 required parity capture set, production `framegraph_*` benefit/reorder counters,
-catalogue compatibility-profile plumbing, and an Xcode counter recapture that
-confirms the expected load/store reduction on the optimized frame.
+catalogue compatibility-profile plumbing, and the fixed-precision benefit/cost
+gate. The order-aware Xcode counter gate is recorded below.
 
 Evidence:
 
@@ -444,6 +444,59 @@ Evidence:
 - candidates:
   `experiments/output/app-d3d9-3dmark05-passcoalesce-order-store-candidate-r{1,2}-20260723`
 
+### Phase-aligned Xcode counter follow-up
+
+The 2026-07-24 Xcode follow-up compares the order-aware `passcoalesce`
+frame279 capture with a same-build strict control selected from the same
+dark-forest/glowing-tree phase. The historical frame279 capture was rejected
+because it had `23.7%` fewer draws and `17.1%` fewer vertices than the new
+candidate. A same-build strict frame231 capture was also rejected because its
+bright-forest image was an earlier visual phase. Strict frame255 is the closest
+usable control: its overlay time is `30.42s` versus `32.10s` for the candidate,
+and its draw, vertex, and primitive counts differ by at most `3.76%`.
+
+| Whole-frame metric | Strict frame255 | Passcoalesce frame279 | Delta |
+|---|---:|---:|---:|
+| Xcode encoders / renderer encoders | `19 / 18` | `16 / 15` | `-15.79% / -16.67%` |
+| DXMT draws | `2,238` | `2,175` | `-2.82%` |
+| Xcode vertices / primitives | `6,625,397 / 2,212,091` | `6,376,127 / 2,129,001` | `-3.76% / -3.76%` |
+| Xcode GPU replay | `172.670ms` | `149.701ms` | `-13.30%` |
+| GPU time / vertex | `26.062ns` | `23.478ns` | `-9.91%` |
+| GPU time / primitive | `78.057ns` | `70.315ns` | `-9.92%` |
+| VS invocations / vertex | `0.4705` | `0.4725` | `+0.43%` |
+| VS buffer write / vertex | `1,453.3B` | `1,440.4B` | `-0.89%` |
+| attachment Load | `27.293MiB` | `9.293MiB` | `-65.95%` |
+| attachment Store | `94.629MiB` | `76.629MiB` | `-19.02%` |
+| attachment Load + Store | `121.922MiB` | `85.922MiB` | `-29.53%` |
+| partial renders | `0` | `0` | unchanged |
+
+The raw replay gain is larger than the workload-normalized gain because the
+candidate frame has `3.76%` fewer vertices and primitives. Even after that
+correction, GPU cost per vertex and primitive falls about `9.9%`. VS
+invocations per vertex and hidden VS write per vertex are effectively
+unchanged, so this is not a vertex-work elimination result. The measured
+mechanism is fewer pass boundaries and less attachment preservation, with no
+partial-render spill introduced. Xcode's top-three comparison is not valid
+across this transformation because coalescing changes encoder boundaries: the
+candidate top three contain `94.02%` of frame GPU time versus `63.36%` for the
+control. Whole-frame totals are the comparison denominator.
+
+This single replay pair retains a `1.68s` visual-phase offset, so the normalized
+`~9.9%` result is directional mechanism evidence rather than a standalone
+promotion number. The phase-balanced B-A-B-A runtime result remains the policy
+gate at `+3.35%` pooled FPS. Together they close the Xcode load/store and
+partial-render evidence item; parity captures, production benefit/reorder
+counters, catalogue plumbing, and the fixed-precision gate remain open.
+
+Evidence:
+
+- strict control:
+  `traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis/frame255-{counters-xcode.csv,xcode-dxmt-bottleneck-report.md}`
+- passcoalesce candidate:
+  `traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-{counters-xcode.csv,xcode-dxmt-bottleneck-report.md}`
+- normalized whole-frame comparison:
+  `traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-vs-control-frame255-phasealigned-normalized.md`
+
 The practical order after the Immediate-default policy is:
 
 1. Reduce current-frame vertex/tiler volume beyond the restored opaque-depth
@@ -451,8 +504,9 @@ The practical order after the Immediate-default policy is:
    the request partition leaves almost no idle scheduling bubble to optimize.
 2. Keep production pass coalescing as the measured secondary GPU/encode axis.
    Its order-aware Store follow-up is `+3.35%` pooled with lower attachment
-   traffic than traditional, but the parity / Xcode gates above are still
-   required before promotion.
+   traffic than traditional, and the phase-aligned Xcode replay shows about
+   `9.9%` lower workload-normalized GPU cost. The parity and production
+   benefit/counter gates above are still required before promotion.
 3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
 4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not
