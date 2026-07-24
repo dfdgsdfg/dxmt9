@@ -12,7 +12,7 @@ TraditionalBackend::onChunkReady(encoders::EncodeContext& ctx,
   // Backend-agnostic DAG observe + export side-channel (R-BACK-39.7). Reads only
   // `slot`, writes only debug dump files when DXMT9_RENDERER_DUMP_DAG is set, and
   // early-outs otherwise — so the traditional encode below stays byte-identical.
-  observer_.observeAndExport(slot);
+  observer_.observeAndExport(slot, makeResourceAliasResolver(ctx.pool));
 
   // Byte-identical traditional path: forward straight to the free function.
   return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));

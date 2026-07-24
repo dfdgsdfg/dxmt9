@@ -113,12 +113,14 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
   // names read dag-frame<observeFrame>-chunk<seqId>-<stage>.json and
   // DXMT9_RENDERER_DUMP_DAG_FRAME can scope the dump to a single frame. The DAG
   // dump is backend-agnostic — the TraditionalBackend owns the same observer.
-  observer_.observeAndExport(slot);
+  const framegraph::ResourceAliasResolver aliasResolver =
+      makeResourceAliasResolver(ctx.pool);
+  observer_.observeAndExport(slot, aliasResolver);
 
   if (features_.passcoalesce && !options.session &&
       !options.hasInjectedCommandBuffer()) {
     framegraph::FrameGraph graph =
-        framegraph::buildFrameGraph(slot, slot.seqId);
+        framegraph::buildFrameGraph(slot, slot.seqId, aliasResolver);
     framegraph::OptimizerStats stats{};
     framegraph::runOptimizer(graph, options_, /*observations=*/nullptr, &stats);
     if (stats.pass_coalesced_count != 0) {

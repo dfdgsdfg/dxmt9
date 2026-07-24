@@ -114,6 +114,22 @@ AccessKind accessKindOf(const AccessLog& log) {
   return static_cast<AccessKind>(log.access_kind);
 }
 
+struct AliasPair {
+  Handle surface{};
+  Handle texture{};
+};
+
+ResourceHandle resolveAliasPair(const void* context,
+                                ResourceHandle handle) noexcept {
+  const auto* aliases = static_cast<const AliasPair*>(context);
+  for (std::size_t i = 0; i < 2; ++i) {
+    if (aliases[i].surface == handle) {
+      return ResourceHandle{aliases[i].texture.value};
+    }
+  }
+  return handle;
+}
+
 // --- Tests -----------------------------------------------------------------
 
 // clear(rt0/ds) -> 2 draws to rt0/ds -> set rt1 (draw) -> present.
@@ -387,6 +403,62 @@ void testDeterminism() {
   check(reused.passes == a.passes, "in-place build matches value build (reset)");
 }
 
+void testSurfaceTextureAliasHazardsShareOneResource() {
+  const Handle shadowTexture{0x2000u};
+  const Handle shadowSurfaceA{0x3001u};
+  const Handle shadowSurfaceB{0x3002u};
+  const Handle mainTarget{0x4000u};
+
+  ChunkSlot slot;
+  appendDrawRun(slot, shadowSurfaceA, {});
+  appendDrawRun(slot, mainTarget, {}, shadowTexture);
+  appendDrawRun(slot, shadowSurfaceB, {});
+
+  const AliasPair aliases[] = {
+      {shadowSurfaceA, shadowTexture},
+      {shadowSurfaceB, shadowTexture},
+  };
+  const ResourceAliasResolver resolver{
+      .context = aliases,
+      .resolve = resolveAliasPair,
+  };
+  const FrameGraph graph = buildFrameGraph(slot, 0, resolver);
+
+  const std::size_t shadowIndex =
+      findResourceIndex(graph, ResourceHandle{shadowTexture.value});
+  check(shadowIndex != graph.resources.size(),
+        "surface aliases and texture sample share one resource node");
+  check(findResourceIndex(graph, ResourceHandle{shadowSurfaceA.value}) ==
+            graph.resources.size() &&
+            findResourceIndex(graph, ResourceHandle{shadowSurfaceB.value}) ==
+                graph.resources.size(),
+        "aliased surface handles are not separate hazard identities");
+
+  const ResourceNode& shadow = graph.resources[shadowIndex];
+  check(shadow.accesses.size() == 3,
+        "canonical shadow resource records write-read-write");
+  check(shadow.accesses[0].pass_index == 0 &&
+            accessKindOf(shadow.accesses[0]) == AccessKind::Write &&
+            shadow.accesses[1].pass_index == 1 &&
+            accessKindOf(shadow.accesses[1]) == AccessKind::Read &&
+            shadow.accesses[2].pass_index == 2 &&
+            accessKindOf(shadow.accesses[2]) == AccessKind::Write,
+        "surface write -> texture read -> surface write order is preserved");
+
+  const auto hasEdge = [&](u32 src, u32 dst) {
+    for (const Edge& edge : graph.edges) {
+      if (edge.src_pass == src && edge.dst_pass == dst &&
+          edge.resource == ResourceHandle{shadowTexture.value}) {
+        return true;
+      }
+    }
+    return false;
+  };
+  check(hasEdge(0, 1), "alias RAW edge producer -> texture consumer");
+  check(hasEdge(0, 2), "alias WAW edge first writer -> second writer");
+  check(hasEdge(1, 2), "alias WAR edge texture consumer -> second writer");
+}
+
 }  // namespace
 
 int main() {
@@ -400,6 +472,7 @@ int main() {
     testReadbackClassifier();
     testEmptyChunk();
     testDeterminism();
+    testSurfaceTextureAliasHazardsShareOneResource();
   } catch (const TestFailure& failure) {
     std::cerr << "fg_builder_spec failed: " << failure.what() << '\n';
     return 1;

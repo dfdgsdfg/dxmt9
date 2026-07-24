@@ -4,8 +4,8 @@ workload: 3DMark05 GT1 and GT2
 title: "Hidden Backend Storage — the central GPU explanation - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-22
-source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md
+updated: 2026-07-24
+source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.37.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.38.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md
 related: docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
@@ -32,6 +32,9 @@ every other domain at the lever that actually moves the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
+| H49 | One of the two dominant GT2 R32F passes may be dead, and the current DAG can prove their subresource/consumer order | accepted liveness candidate; accepted correctness gap and fix | [hidden-backend-storage-shape.39](hidden-backend-storage-shape.39.md) (both surfaces alias the same `TwoD`, one-level `R32F` mip0/slice0; source order is `418 writes -> sample -> 418 writes`; the first pass is live and the final pass is a cross-chunk DCE candidate. Pre-fix passcoalesce split surface writes from texture reads and moved the consumer before the producer. Alias-aware RAW/WAW/WAR restoration produces a safe `18 -> 16` render-pass result instead of the invalid `18 -> 15` topology) |
+| H48 | Extending LRU32 reorder eligibility to the `229` alpha-tested draws in each dominant GT2 R32F pass can materially reduce VS invocations | rejected; accepted index-locality bound | [hidden-backend-storage-shape.38](hidden-backend-storage-shape.38.md) (valid alpha-test candidates move LRU32 only `238,571 -> 238,484`, `-0.0365%`, with `0` gate passes; `69` other draws already have `miss32 == unique`; captured VS invocations `486,280` match the effective LRU64 estimate `486,697` within `0.086%`, leaving at most `0.56%` whole-frame invocation headroom across both passes) |
+| H47 | The many black draw previews in the GT2 frame279 Xcode debugger are failed/redundant color work and the main hidden-write owner | rejected as primary owner; accepted as depth-prepass classification | [hidden-backend-storage-shape.37](hidden-backend-storage-shape.37.md) (the only color-write-off route is encoder 0's early `120`-draw depth prepass: `94,980` primitives and `284,940` submitted vertices, or `4.46%/4.47%` of the frame; Xcode shows black Color 0 with depth output; the similarly sized GT1 fragmentless/keep-VSOut route left VS invocations and write flat) |
 | H46 | GT2's `~8 FPS` rate is owned by Wine/Rosetta or translation CPU work, and the large VS write is parameter-buffer overflow spill | rejected CPU/overflow explanations; accepted emitted-GPU-work attribution | [hidden-backend-storage-shape.36](hidden-backend-storage-shape.36.md) (full-frame Xcode native replay remains `126.77-131.678ms`, or `7.59-7.89 FPS`, at Xcode's reported `Medium` performance state; `2,529,660` VS invocations write `6,952.646MiB`, `15.66x` the visible VSOut expectation; all `19` encoders report `0` partial renders) |
 | H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
 | H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
@@ -47,6 +50,9 @@ every other domain at the lever that actually moves the bucket.
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.39 - GT2 R32F Liveness Exposes a Surface-Alias Hazard Gap in Pass Coalescing](hidden-backend-storage-shape.39.md)
+- [hidden-backend-storage-shape.38 - GT2 R32F Alpha-Test Draws Are Already at the Index-Locality Floor](hidden-backend-storage-shape.38.md)
+- [hidden-backend-storage-shape.37 - GT2 Black Draws Are a Depth Prepass, Not the Main Hidden-Write Owner](hidden-backend-storage-shape.37.md)
 - [hidden-backend-storage-shape.36 - GT2 Full-Frame Native Replay Preserves the GPU Ceiling Without Partial Renders](hidden-backend-storage-shape.36.md)
 - [hidden-backend-storage-shape.35 - Current Shader Dump Join Keeps the Hidden Owner Below Visible VSOut](hidden-backend-storage-shape.35.md)
 - [hidden-backend-storage-shape.34 - Fragmentless Depth-Only Keep-VSOut Route Passes Equality but Fails Xcode Counter Gate](hidden-backend-storage-shape.34.md)

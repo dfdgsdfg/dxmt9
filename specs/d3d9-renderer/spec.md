@@ -638,10 +638,23 @@ edges are suppressed. Edges are stored as a flat `Vector<Edge>` and iterated by
 `A → B → A` attachment re-entry that is a clear-then-write therefore surfaces as
 a WAW edge `P_a → P_a'` (in addition to its resource access log).
 
+Before access logging, surface-backed attachment/blit handles are
+canonicalized to `SurfaceRecord::aliasTexture` when present. Shader texture
+reads already carry that texture handle and are not looked up again.
+`AttachmentSet` keeps the original surface handles: alias canonicalization is
+only the hazard-resource identity, not a pass-compatibility rewrite. Treating
+the entire owning texture as the hazard unit is intentionally conservative for
+multi-mip/cube resources, because a shader read may select mip or face
+dynamically. Without this normalization, a `surface write → texture sample →
+surface write` chain would be split across two `ResourceNode`s and
+`passcoalesce` could move the sample before its producer.
+
 ### 4.3 Determinism
 
-The builder must not read clock, thread id, or any external state besides the
-chunk being processed. This satisfies `R-BACK-32.2`.
+The builder must not read clock, thread id, or mutable scheduling state. Its
+inputs are the chunk and the retained resource records used to resolve
+surface-to-texture aliases; those records are immutable for the lifetime of the
+chunk. This satisfies `R-BACK-32.2`.
 
 ---
 

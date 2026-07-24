@@ -22,6 +22,7 @@
 //   (R-BACK-40.5 parity). The default path (no DXMT9_RENDERER_DUMP_DAG) early-
 //   outs after one cached-optional check.
 
+#include "../framegraph/fg_builder.hpp"    // framegraph::ResourceAliasResolver
 #include "../framegraph/fg_optimizer.hpp"  // framegraph::OptimizerOptions
 
 #include <cstdint>
@@ -32,7 +33,17 @@ namespace dxmt9::core {
 struct ChunkSlot;
 }  // namespace dxmt9::core
 
+namespace dxmt9::resources {
+struct Pool;
+}  // namespace dxmt9::resources
+
 namespace dxmt9::render {
+
+// Build the hazard-identity resolver shared by the production observer and
+// framegraph encode path. Surface aliases canonicalize to their owning texture;
+// texture and standalone-surface handles remain unchanged.
+framegraph::ResourceAliasResolver makeResourceAliasResolver(
+    const resources::Pool& pool) noexcept;
 
 class DagObserver {
  public:
@@ -50,7 +61,9 @@ class DagObserver {
   // NON-const: advances the inter-present frame counter (observe_frame_) after a
   // chunk that contains a Present. SINGLE WRITER: only the encode thread calls
   // this, so no atomic / lock is needed.
-  void observeAndExport(const core::ChunkSlot& slot);
+  void observeAndExport(
+      const core::ChunkSlot& slot,
+      framegraph::ResourceAliasResolver aliasResolver = {});
 
   // Explicit-directory observe+export test seam: writes the pre-opt + post-opt
   // DAG JSON to `dumpDir` for the caller-supplied `frameId`, bypassing the

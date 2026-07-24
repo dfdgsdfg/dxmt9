@@ -9,7 +9,10 @@
 //                                 start a new pass when the attachment set
 //                                 differs (mirrors encodeChunk's AttachmentKey
 //                                 split). Color attachments = Write, bound
-//                                 textures = Read.
+//                                 textures = Read. Surface attachment writes
+//                                 canonicalize to their owning texture hazard
+//                                 identity when the caller supplies an alias
+//                                 resolver.
 //   MetalCommandKind::Clear    -> Clear access on the cleared attachments;
 //                                 acts as a pass boundary (a fresh pass adopts
 //                                 the cleared targets, like beginRenderPass'
@@ -75,8 +78,9 @@ AttachmentSet attachmentSetFromClear(const core::ClearDesc& clear) {
 // can append accesses / draws / edges against the current pass.
 class Builder {
 public:
-  Builder(const core::ChunkSlot& slot, u64 frame_id, FrameGraph& graph)
-      : slot_(slot), graph_(graph) {
+  Builder(const core::ChunkSlot& slot, u64 frame_id,
+          ResourceAliasResolver aliasResolver, FrameGraph& graph)
+      : slot_(slot), aliasResolver_(aliasResolver), graph_(graph) {
     graph_.reset();
     graph_.frame_id = frame_id;
   }
@@ -179,7 +183,13 @@ private:
   }
 
   void noteAccess(ResourceHandle handle, u32 pass_index, AccessKind kind,
-                  AccessStage stage) {
+                  AccessStage stage, bool resolve_alias = true) {
+    if (handle.value == 0) {
+      return;
+    }
+    if (resolve_alias) {
+      handle = aliasResolver_(handle);
+    }
     if (handle.value == 0) {
       return;
     }
@@ -333,7 +343,8 @@ private:
         continue;
       }
       noteAccess(ResourceHandle{hot.textures[stage].value}, pass_index,
-                 AccessKind::Read, AccessStage::Fragment);
+                 AccessKind::Read, AccessStage::Fragment,
+                 /*resolve_alias=*/false);
     }
   }
 
@@ -437,6 +448,7 @@ private:
   }
 
   const core::ChunkSlot& slot_;
+  ResourceAliasResolver aliasResolver_{};
   FrameGraph& graph_;
   u32 currentPass_ = 0;
   bool openRenderPass_ = false;
@@ -445,13 +457,23 @@ private:
 }  // namespace
 
 void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id, FrameGraph& out) {
-  Builder builder(slot, frame_id, out);
+  buildFrameGraph(slot, frame_id, ResourceAliasResolver{}, out);
+}
+
+void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
+                     ResourceAliasResolver alias_resolver, FrameGraph& out) {
+  Builder builder(slot, frame_id, alias_resolver, out);
   builder.run();
 }
 
 FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id) {
+  return buildFrameGraph(slot, frame_id, ResourceAliasResolver{});
+}
+
+FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
+                           ResourceAliasResolver alias_resolver) {
   FrameGraph graph;
-  buildFrameGraph(slot, frame_id, graph);
+  buildFrameGraph(slot, frame_id, alias_resolver, graph);
   return graph;
 }
 

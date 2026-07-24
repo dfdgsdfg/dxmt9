@@ -21,15 +21,40 @@
 //   on — plus clear / present / blit / readback command boundaries.
 //
 // DETERMINISM (R-BACK-32.2 / spec.md §4.3).
-//   Reads nothing but the supplied ChunkSlot — no clock, thread-id, or RNG.
-//   Building the same graph twice from the same slot yields byte-equal
-//   contents (asserted by fg_builder_spec.cpp).
+//   Reads only the supplied ChunkSlot and optional retained resource-alias
+//   mapping — no clock, thread-id, or RNG. Building the same graph twice from
+//   the same inputs yields byte-equal contents (asserted by
+//   fg_builder_spec.cpp).
 
 #include "fg_dag.hpp"
 
 #include "../dxmt9_backend_types.hpp"
 
 namespace dxmt9::framegraph {
+
+// Optional resource-identity resolver used by the production unix renderer.
+//
+// D3D9 render-target/depth writes name a SurfaceHandle, while shader reads of
+// that same backing name the owning TextureHandle. Edge inference must compare
+// those accesses in one handle space or it can miss RAW/WAR/WAW hazards and let
+// passcoalesce move a consumer across its producer. The resolver canonicalizes
+// a surface alias to its owning texture; standalone surfaces and texture
+// handles resolve to themselves.
+//
+// The callback shape keeps the device-free builder independent of the Metal
+// resource pool. Tests and strict observation may omit it; production supplies
+// the immutable alias mapping owned by the retained resource records.
+struct ResourceAliasResolver {
+  using ResolveFn =
+      ResourceHandle (*)(const void* context, ResourceHandle handle) noexcept;
+
+  const void* context = nullptr;
+  ResolveFn resolve = nullptr;
+
+  ResourceHandle operator()(ResourceHandle handle) const noexcept {
+    return resolve ? resolve(context, handle) : handle;
+  }
+};
 
 // Build a FrameGraph DAG from one imported chunk slot.
 //
@@ -39,10 +64,14 @@ namespace dxmt9::framegraph {
 // graph (the slot carries a seqId, not a frame id; spec.md §3.5 notes the
 // frame id is caller-supplied).
 FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id = 0);
+FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
+                           ResourceAliasResolver alias_resolver);
 
 // In-place variant: reuse the caller's per-frame graph scratch (clears it
 // first). Identical contents to buildFrameGraph; avoids a fresh allocation
 // when the backend keeps a long-lived FrameGraph for the encode thread.
 void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id, FrameGraph& out);
+void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
+                     ResourceAliasResolver alias_resolver, FrameGraph& out);
 
 }  // namespace dxmt9::framegraph

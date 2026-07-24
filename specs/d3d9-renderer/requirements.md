@@ -260,15 +260,20 @@ submission order. The Frame Graph must not defer or coalesce a fence signal
 across the chunk boundary.
 
 **R-BACK-32.2** Frame Graph construction must be deterministic: the same chunk
-input must always produce the same DAG, the same optimizer outcome, and the
-same Metal call sequence. The renderer must not depend on wall clock, thread
-scheduling, or any non-deterministic source.
+input and retained resource-alias mapping must always produce the same DAG, the
+same optimizer outcome, and the same Metal call sequence. The renderer must not
+depend on wall clock, thread scheduling, or any non-deterministic source.
 
 **R-BACK-32.3** The Frame Graph must track per-resource access logs. For every
 texture, depth buffer, and buffer referenced by a chunk record, the graph
 records the pass index, the access kind (`read|write|read_write|preserve|
 clear`), and the stage (`vertex|fragment|compute|copy`). Resource handles use
-the same opaque-handle space as the traditional path.
+the same opaque-handle space as the traditional path. A render-target or
+depth/stencil surface that aliases a texture must use the owning texture handle
+as its hazard identity, because attachment writes name the surface handle while
+shader reads name the texture handle. Standalone surfaces retain their surface
+handle. This canonicalization must not change `AttachmentSet`, which continues
+to identify the exact bound surfaces used for pass compatibility.
 
 **R-BACK-32.9** The Frame Graph dependency edge set must be a complete hazard
 model: it must record **true (RAW: write → later read)**, **anti (WAR: read →

@@ -5,8 +5,8 @@ title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-24
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis
-related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis
+related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
@@ -333,6 +333,10 @@ that owns the native replay.
 
 ### Frame279 Production Pass-Coalescing Discriminator
 
+> Historical pre-alias-normalization result. The measured mechanism remains
+> useful, but the `18 -> 15` topology is not parity-safe and cannot support
+> promotion. See the alias-hazard correction below.
+
 Xcode identified frame279 encoder `0` as the first of four encoders that could
 be coalesced. The matching source encoders are `0`, `2`, `4`, and `11`: all
 write the same color/depth attachment pair, while the intervening passes clear
@@ -376,11 +380,10 @@ disabled source-order Store proof, so every affected depth pass stored. The
 candidate won despite that cost and established order-aware Store proof as the
 next pass-coalescing optimization.
 
-Verdict: production pass coalescing is a real GT2 mechanism and a useful
-default-off progressive lane, not yet a default. Promotion still needs the
-required parity capture set, production `framegraph_*` benefit/reorder counters,
-catalogue compatibility-profile plumbing, and the fixed-precision benefit/cost
-gate. The order-aware Xcode counter gate is recorded below.
+Historical verdict: pass coalescing exposed a real GT2 pass-boundary mechanism,
+but this specific candidate reordered a texture consumer before its surface
+producer. Its performance deltas must be re-measured after alias-aware hazard
+normalization. It is not promotion evidence.
 
 Evidence:
 
@@ -394,6 +397,10 @@ Evidence:
   `experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-clean-candidate-r{1,2}-20260723`
 
 ### Order-aware Store proof follow-up
+
+> Historical pre-alias-normalization performance result. Store proof itself
+> remains order-aware, but the command permutation it followed was built from
+> an incomplete surface/texture hazard graph.
 
 The follow-up makes Store proof consume the same complete, duplicate-free
 command permutation as v2 replay. `encodeChunk` builds an inverse
@@ -446,6 +453,10 @@ Evidence:
 
 ### Phase-aligned Xcode counter follow-up
 
+> Historical pre-alias-normalization capture. Per-encoder workload counters
+> remain useful shape evidence; the whole-frame replay delta is not a valid
+> parity comparison because the consumer ran before its producer.
+
 The 2026-07-24 Xcode follow-up compares the order-aware `passcoalesce`
 frame279 capture with a same-build strict control selected from the same
 dark-forest/glowing-tree phase. The historical frame279 capture was rejected
@@ -483,10 +494,9 @@ control. Whole-frame totals are the comparison denominator.
 
 This single replay pair retains a `1.68s` visual-phase offset, so the normalized
 `~9.9%` result is directional mechanism evidence rather than a standalone
-promotion number. The phase-balanced B-A-B-A runtime result remains the policy
-gate at `+3.35%` pooled FPS. Together they close the Xcode load/store and
-partial-render evidence item; parity captures, production benefit/reorder
-counters, catalogue plumbing, and the fixed-precision gate remain open.
+promotion number. Alias-liveness later invalidated the underlying command
+permutation, so neither this replay nor the phase-balanced `+3.35%` runtime
+result remains a policy gate. Both must be repeated on the alias-aware build.
 
 Evidence:
 
@@ -497,16 +507,111 @@ Evidence:
 - normalized whole-frame comparison:
   `traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-vs-control-frame255-phasealigned-normalized.md`
 
+### Black-draw / hidden-invocation discriminator
+
+The many black draw previews visible near the start of frame279 encoder 0 are
+not failed fragment shading. Xcode inspection of
+`Draw[seq=279,prim=2376]` shows Color 0 remaining black while the depth
+attachment receives the selected geometry; the bound depth state is
+`LessEqual, Write Yes`. Same-run route telemetry identifies exactly `120`
+such draws, all with `color_write=0`, depth write on, alpha blend/test off,
+and `VSOut=0xfff`. They occur in early encoder-draw blocks `0..8`,
+`75..180`, and `279..283`.
+
+The class contains `94,980` primitives and `284,940` submitted vertices:
+`4.46%` and `4.47%` of the full frame. It is therefore a real pre-Z route, but
+not a credible explanation for the full `149.701ms` replay or `8,758.891MiB`
+VS-write bucket. The existing indexed-state Xcode proxy must not be used as
+class attribution: it distributes encoder 0's whole counters over only
+`126/1,329` represented draws, of which `120` are this class, and consequently
+overstates the black route.
+
+The similarly sized GT1 `60/0` depth-only experiment already supplies the
+controlled mechanism check. Removing its fragment function while preserving
+`VSOut=0xfff` passed depth/color equality but left target VS invocations
+unchanged at `152,895` and VS write flat at
+`224.918 -> 224.944MiB`. Position-only `VSOut=0x0` changed depth and is not a
+legal route. The GT2 black draws therefore do not justify another
+fragmentless-only capture. The remaining material branch is invocation or
+backend-write reduction in the dominant programmable textured/color work.
+See [hidden-backend-storage-shape.37](hidden-backend-storage/hidden-backend-storage-shape.37.md).
+
+### R32F alpha-test index-locality discriminator
+
+The two dominant frame279 R32F passes each spend `23.789-26.359ms`, issue
+`486,280` VS invocations, and write about `1,535MiB` through Xcode's VS buffer
+bucket. Each pass has `367` indexed draws; `229` of them are alpha-tested and
+therefore outside the production opaque-depth LRU32 selector.
+
+A candidate-only GT2 scout measured the exact matching `367`-draw R32F shape
+without submitting reordered indices. The `160` alpha-tested draws for which a
+candidate was built move LRU32 misses only `238,571 -> 238,484`
+(`-0.0365%`), and none pass the `10%` gate. The other `69` draws already have
+`miss32 == unique`, so the upper-bound gate correctly avoids candidate
+construction. The non-alpha control in the same pass moves
+`174,601 -> 104,743` (`-40.01%`) with `125` gate passes, reproducing the
+existing production optimization.
+
+The R32F result is a sampled shadow/depth input, not disposable black output:
+the next main-color pass binds alias `0x20000010000003e` at texture stage 0 for
+`280` indexed draws. Despite that semantic risk, no mutation proof is needed
+because there is no useful performance numerator. Per-draw effective locality
+predicts `486,697` LRU64 misses per pass, within `0.086%` of Xcode's `486,280`
+VS invocations. Reaching the draw-local unique-index floor in both passes would
+save at most `16,832` invocations, only `0.56%` of the whole frame.
+
+Do not add alpha-test eligibility, run an unsafe reorder, or spend another
+gputrace on this branch. The remaining R32F cost is per required transformed
+vertex or higher-level submitted geometry, not missed index reorder coverage.
+See [hidden-backend-storage-shape.38](hidden-backend-storage/hidden-backend-storage-shape.38.md).
+
+### R32F subresource liveness and alias-hazard correction
+
+A source-order texture trace resolves the two dominant passes beyond the
+surface-handle level. Alias `0x20000010000003e` is a `2048x2048`, one-level,
+one-slice `TwoD R32F` texture, and every observed surface maps to
+`subresource=0, mip=0, slice=0`. Frame279 executes:
+
+1. `418` writes to the first R32F surface.
+2. A main-color interval samples the owning texture.
+3. `418` writes to the second R32F surface.
+
+The first pass is therefore mandatory. The final pass has no later sample
+before the next frame clears/writes the same subresource and is a strong
+higher-level DCE candidate, potentially much larger than the closed
+sub-`0.6%` index-locality branch. It is not yet droppable: the current graph is
+per chunk and cannot prove the future-chunk overwrite, and query/readback
+protections must remain conservative.
+
+The investigation also found that the pre-fix framegraph recorded attachment
+writes under surface handles and shader reads under the owning texture handle.
+No RAW/WAW/WAR edge joined the chain, so passcoalesce moved the merged main
+consumer before both R32F writers. The implementation now canonicalizes
+aliased surface accesses to the owning texture for hazards while retaining
+exact surface handles in `AttachmentSet`.
+
+Fixed frame279 validation records:
+
+| Stage | Render passes | Canonical R32F order |
+|---|---:|---|
+| pre-opt | `18` | pass `1` Clear -> pass `2` Read x`134` -> pass `3` Clear |
+| post-opt | `16` | pass `0` Clear -> pass `1` Read x`134` -> pass `2` Clear |
+
+The actual encoder order is `R32F 367 draws -> main 585 -> R32F 367`; all three
+RAW/WAW/WAR edges are present. This supersedes the old `18 -> 15` result.
+All passcoalesce runtime and Xcode performance gates must be re-run on the
+alias-aware build. See
+[hidden-backend-storage-shape.39](hidden-backend-storage/hidden-backend-storage-shape.39.md).
+
 The practical order after the Immediate-default policy is:
 
-1. Reduce current-frame vertex/tiler volume beyond the restored opaque-depth
-   index-cache path. Require an Xcode VS-invocation/hidden-write counter gate;
-   the request partition leaves almost no idle scheduling bubble to optimize.
-2. Keep production pass coalescing as the measured secondary GPU/encode axis.
-   Its order-aware Store follow-up is `+3.35%` pooled with lower attachment
-   traffic than traditional, and the phase-aligned Xcode replay shows about
-   `9.9%` lower workload-normalized GPU cost. The parity and production
-   benefit/counter gates above are still required before promotion.
+1. Treat further per-draw index reordering of the dominant R32F passes as
+   exhausted. A new vertex lever must reduce submitted scene geometry or bytes
+   per required transformed vertex and must pass an Xcode
+   VS-invocation/hidden-write counter gate.
+2. Re-run production pass coalescing on the alias-aware `18 -> 16` topology.
+   The old `+3.35%` pooled and `~9.9%` workload-normalized results crossed a
+   missing producer/consumer edge and are historical only.
 3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
 4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not

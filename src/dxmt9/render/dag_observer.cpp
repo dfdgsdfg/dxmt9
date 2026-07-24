@@ -2,6 +2,7 @@
 
 #include "../dxmt9_backend_types.hpp"  // core::ChunkSlot
 #include "../dxmt9_perf_counters.hpp"
+#include "../dxmt9_resource_pool.hpp"
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_debug_export.hpp"
 #include "../framegraph/fg_optimizer.hpp"
@@ -13,6 +14,18 @@
 namespace dxmt9::render {
 
 namespace {
+
+framegraph::ResourceHandle resolveResourceAlias(
+    const void* context, framegraph::ResourceHandle handle) noexcept {
+  const auto* pool = static_cast<const resources::Pool*>(context);
+  if (!pool) {
+    return handle;
+  }
+  const auto* surface = pool->findSurface(handle.value);
+  return surface && surface->aliasTexture
+             ? framegraph::ResourceHandle{surface->aliasTexture.value}
+             : handle;
+}
 
 // Write `<dir>/dag-frame<frameId>-chunk<seqId>-<stage>.json` from a serialized
 // snapshot. Matches framegraph::writeDagDump's file naming (Json format) but
@@ -72,6 +85,14 @@ void recordFramegraphObserveCounters(std::uint64_t passesBuilt,
 }
 
 }  // namespace
+
+framegraph::ResourceAliasResolver makeResourceAliasResolver(
+    const resources::Pool& pool) noexcept {
+  return framegraph::ResourceAliasResolver{
+      .context = &pool,
+      .resolve = resolveResourceAlias,
+  };
+}
 
 void DagObserver::observeAndExportDagToDir(const core::ChunkSlot& slot,
                                            std::uint64_t frameId,
@@ -148,7 +169,9 @@ void DagObserver::observeAndExportDagToDirForFrame(
   }
 }
 
-void DagObserver::observeAndExport(const core::ChunkSlot& slot) {
+void DagObserver::observeAndExport(
+    const core::ChunkSlot& slot,
+    framegraph::ResourceAliasResolver aliasResolver) {
   // Zero-overhead default path: the dump is purely DXMT9_RENDERER_DUMP_DAG-gated
   // (backend-agnostic). With no dump dir there is nothing to observe and nothing
   // to scope by frame, so we return after one cached-optional check — the Metal
@@ -184,7 +207,8 @@ void DagObserver::observeAndExport(const core::ChunkSlot& slot) {
   // PURE OBSERVATION — reads only `slot`, writes only dump files. The frame_id
   // stamped into the filename / JSON is the observe frame number (so the
   // filenames read dag-frame<N>-...), while slot.seqId stays the chunk_seq_id.
-  framegraph::FrameGraph fg = framegraph::buildFrameGraph(slot, observe_frame_);
+  framegraph::FrameGraph fg =
+      framegraph::buildFrameGraph(slot, observe_frame_, aliasResolver);
   // Capture the built pass count before runOptimizer can prune/coalesce.
   const std::uint64_t passesBuilt =
       static_cast<std::uint64_t>(fg.passes.size());
