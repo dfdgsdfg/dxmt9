@@ -7,7 +7,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 env:
   LLVM_MINGW_VERSION: '20260324'
@@ -91,18 +90,13 @@ jobs:
       - name: Create tarball
         id: tarball
         run: |
-          version="${GITHUB_REF_NAME}"
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            version="dev-$(git rev-parse --short HEAD)"
-          fi
-          name="dxmt9-app-local-${version}"
+          name="dxmt9-app-local-${GITHUB_REF_NAME}"
           mv dist/dxmt9-app-local "dist/${name}"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
           (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -111,12 +105,3 @@ jobs:
             --generate-notes \
             "dist/${{ steps.tarball.outputs.name }}.tar.gz" \
             "dist/${{ steps.tarball.outputs.name }}.tar.gz.sha256"
-
-      - name: Upload workflow artifact
-        if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.tarball.outputs.name }}
-          path: |
-            dist/${{ steps.tarball.outputs.name }}.tar.gz
-            dist/${{ steps.tarball.outputs.name }}.tar.gz.sha256
