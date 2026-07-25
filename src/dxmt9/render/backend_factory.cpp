@@ -12,13 +12,14 @@
 namespace dxmt9::render {
 
 BackendMode resolveBackendMode(const char* renderModeEnv) {
-  // Repo env-set convention: set when non-null, non-empty, and not "0".
-  const bool set = renderModeEnv && renderModeEnv[0] != '\0' &&
-                   std::strcmp(renderModeEnv, "0") != 0;
-  if (set && std::strcmp(renderModeEnv, "framegraph") == 0) {
+  // The proven L1 framegraph lane is the runtime default. Keep every explicit
+  // legacy/invalid value conservative so a diagnostic launch always has a
+  // simple rollback path.
+  if (renderModeEnv == nullptr ||
+      std::strcmp(renderModeEnv, "framegraph") == 0) {
     return BackendMode::FrameGraph;
   }
-  // Unset / "" / "0" / unknown strings (including "traditional") → Traditional.
+  // "" / "0" / "traditional" / unknown strings → Traditional.
   return BackendMode::Traditional;
 }
 
@@ -42,7 +43,16 @@ std::unique_ptr<IRenderBackend> createBackend(BackendMode mode) {
 }
 
 std::unique_ptr<IRenderBackend> createBackendFromEnv() {
-  return createBackend(resolveBackendMode(std::getenv("DXMT9_RENDER_MODE")));
+  const char* env = std::getenv("DXMT9_RENDER_MODE");
+  if (env && env[0] != '\0' && std::strcmp(env, "0") != 0 &&
+      std::strcmp(env, "traditional") != 0 &&
+      std::strcmp(env, "framegraph") != 0) {
+    util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+               "DXMT9_RENDER_MODE='%s' is unsupported; falling back to "
+               "Traditional",
+               env);
+  }
+  return createBackend(resolveBackendMode(env));
 }
 
 }  // namespace dxmt9::render

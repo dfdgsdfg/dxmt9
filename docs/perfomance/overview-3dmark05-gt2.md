@@ -4,8 +4,8 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-24
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis
+updated: 2026-07-25
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md
 ---
 
@@ -599,9 +599,13 @@ Fixed frame279 validation records:
 
 The actual encoder order is `R32F 367 draws -> main 585 -> R32F 367`; all three
 RAW/WAW/WAR edges are present. This supersedes the old `18 -> 15` result.
-All passcoalesce runtime and Xcode performance gates must be re-run on the
-alias-aware build. See
-[hidden-backend-storage-shape.39](hidden-backend-storage/hidden-backend-storage-shape.39.md).
+The alias-aware all-production-options GT2 rerun completes with no observed GPU
+or pipeline failure and cuts render-pass/present volume by about `11.2%`.
+Together with the clean GT1/GT3 runs and exact GT3 glitch-window captures, this
+clears the wild gate for promoting only the passcoalesce L1 policy. Because the
+run also carried unrelated experimental options, it is not a passcoalesce-only
+FPS A/B. Device-backed pixel parity remains open. See
+[hidden-backend-storage-shape.40](hidden-backend-storage/hidden-backend-storage-shape.40.md).
 
 The practical order after the Immediate-default policy is:
 
@@ -609,9 +613,10 @@ The practical order after the Immediate-default policy is:
    exhausted. A new vertex lever must reduce submitted scene geometry or bytes
    per required transformed vertex and must pass an Xcode
    VS-invocation/hidden-write counter gate.
-2. Re-run production pass coalescing on the alias-aware `18 -> 16` topology.
-   The old `+3.35%` pooled and `~9.9%` workload-normalized results crossed a
-   missing producer/consumer edge and are historical only.
+2. Treat the alias-aware `18 -> 16` passcoalesce topology as the default L1
+   policy. The old `+3.35%` pooled and `~9.9%` workload-normalized results
+   crossed a missing producer/consumer edge and remain historical only; close
+   device-backed pixel parity before promoting another framegraph feature.
 3. Revisit the residual snapshot (`10.2ms/present`) and argument-buffer CPU only with an
    A/B that also reduces the encode-lane total or frame wall time.
 4. Treat acquire relocation and compositor-cadence tuning as diagnostics, not

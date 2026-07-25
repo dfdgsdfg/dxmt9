@@ -172,3 +172,8 @@ test('dxmt9-run-experiment-wsi-acquisition', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-run-experiment-renderer-defaults', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_experiment_renderer_defaults.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)

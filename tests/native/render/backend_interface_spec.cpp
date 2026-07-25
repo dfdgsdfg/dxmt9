@@ -20,7 +20,7 @@ void testBackendModeAndCapsDefaults() {
 
 void testFactoryModeResolution() {
   using namespace dxmt9::render;
-  check(resolveBackendMode(nullptr) == BackendMode::Traditional, "unset → Traditional");
+  check(resolveBackendMode(nullptr) == BackendMode::FrameGraph, "unset → FrameGraph");
   check(resolveBackendMode("") == BackendMode::Traditional, "empty → Traditional");
   check(resolveBackendMode("0") == BackendMode::Traditional, "\"0\" → Traditional");
   check(resolveBackendMode("traditional") == BackendMode::Traditional, "traditional");

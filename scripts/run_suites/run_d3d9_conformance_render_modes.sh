@@ -2,17 +2,19 @@
 # CI conformance gate across both renderer backends (R-BACK-39.4).
 #
 # Runs the D3D9 conformance suite (scripts/tools/run_d3d9_conformance.py) once
-# per renderer mode — `traditional` and `framegraph` — by exporting
-# DXMT9_RENDER_MODE for each leg. Each leg's per-test verdict JSON is recorded
-# separately under a mode-tagged artifact name. A failing/timeout verdict in
-# EITHER leg fails this script (non-zero exit), so a mode-specific regression
-# blocks merge.
+# per renderer mode — `traditional` and `framegraph + strict` — by exporting
+# the renderer vars for each leg. The explicit strict profile keeps this the
+# byte-identical backend parity gate even though the user-facing framegraph
+# default is progressive + passcoalesce. Each leg's per-test verdict JSON is
+# recorded separately under a mode-tagged artifact name. A failing/timeout
+# verdict in EITHER leg fails this script (non-zero exit), so a mode-specific
+# regression blocks merge.
 #
 # DXMT9_RENDER_MODE is consumed by src/dxmt9/render/backend_factory.cpp
-# (resolveBackendMode): "framegraph" selects the Frame Graph backend; unset/
+# (resolveBackendMode): unset/"framegraph" selects the Frame Graph backend;
 # ""/"0"/"traditional"/unknown selects the Traditional backend. The conformance
 # runner inherits os.environ (build_env in run_d3d9_conformance.py), so exporting
-# the var here propagates it through Wine into the dxmt9 runtime.
+# the vars here propagates them through Wine into the dxmt9 runtime.
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -105,10 +107,14 @@ for mode in "${modes[@]}"; do
     cmd+=("${forwarded_args[@]}")
   fi
 
-  # Export the renderer selector for this leg only; the conformance runner
-  # forwards os.environ into the Wine process.
+  # Export the renderer selector for this leg only; force strict + no features
+  # so the framegraph leg remains the source-order parity baseline. The
+  # conformance runner forwards os.environ into the Wine process.
   leg_rc=0
-  DXMT9_RENDER_MODE="$mode" "${cmd[@]}" 2>&1 | tee "$leg_log" || leg_rc=${PIPESTATUS[0]}
+  DXMT9_RENDER_MODE="$mode" \
+    DXMT9_RENDERER_COMPAT_PROFILE=strict \
+    DXMT9_RENDERER_FEATURES=0 \
+    "${cmd[@]}" 2>&1 | tee "$leg_log" || leg_rc=${PIPESTATUS[0]}
 
   if [[ "$leg_rc" -ne 0 ]]; then
     printf 'render mode %s: runner exited %s\n' "$mode" "$leg_rc" >&2

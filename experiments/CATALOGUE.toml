@@ -612,11 +612,9 @@ allow_timeout = true
 wine_id = "sikarugir-cx-24.0.7"
 wine_alternatives = []
 install_drive_letter = "d"
-# Per-app renderer selection (R-BACK-39.5). Resolved once at spawn into
-# DXMT9_RENDER_MODE for the launched wine process. Valid values:
-#   "traditional" (default — current behavior) / "framegraph".
-# Omitting this field is equivalent to "traditional".
-render_mode = "traditional"
+# Renderer mode is omitted intentionally: the experiment runner injects the
+# promoted "framegraph" default. Set render_mode = "traditional" only for an
+# explicit rollback experiment.
 
 [[app]]
 name = "perf-d3d9-present-loop"

@@ -40,7 +40,7 @@ bool isFeatureSeparator(unsigned char ch) {
 }  // namespace
 
 RendererCompatProfile resolveRendererCompatProfile(const char* env) {
-  if (env && std::strcmp(env, "progressive") == 0) {
+  if (env == nullptr || std::strcmp(env, "progressive") == 0) {
     return RendererCompatProfile::Progressive;
   }
   return RendererCompatProfile::Strict;
@@ -48,14 +48,23 @@ RendererCompatProfile resolveRendererCompatProfile(const char* env) {
 
 RendererFeatureSet resolveRendererFeatures(const char* env,
                                            RendererCompatProfile profile) {
-  if (profile == RendererCompatProfile::Strict && hasAnyFeatureToken(env)) {
-    util::logf(util::LogLevel::Warn, "dxmt9-renderer",
-               "DXMT9_RENDERER_FEATURES='%s' rejected: strict compat profile "
-               "disables optimizer features; ignoring",
-               env);
+  if (profile == RendererCompatProfile::Strict) {
+    if (hasAnyFeatureToken(env)) {
+      util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+                 "DXMT9_RENDERER_FEATURES='%s' rejected: strict compat "
+                 "profile disables optimizer features; ignoring",
+                 env);
+    }
     return RendererFeatureSet{};
   }
   if (!env) {
+    // passcoalesce is the sole promoted production optimizer. All other
+    // framegraph features remain token-gated and disabled.
+    return RendererFeatureSet{
+        .passcoalesce = true,
+    };
+  }
+  if (env[0] == '\0' || std::strcmp(env, "0") == 0) {
     return RendererFeatureSet{};
   }
 

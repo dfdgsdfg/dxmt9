@@ -5,8 +5,8 @@
 //   - FrameGraphBackend is constructible
 //   - mode() == BackendMode::FrameGraph
 //   - usable through an IRenderBackend& reference
-//   - the pure resolveRendererFeatures resolver yields an empty feature set
-//     for null / empty / garbage input.
+//   - the pure profile/feature resolvers select the promoted passcoalesce-only
+//     default and retain explicit strict/empty rollback paths.
 // Deliberately does NOT call onChunkReady.
 
 #include "../../../src/dxmt9/render/framegraph_backend.hpp"
@@ -53,15 +53,15 @@ void testUsableThroughInterface() {
   iface.onDeviceDestroyed();
 }
 
-void testResolverEmptyForNoTokens() {
+void testStrictResolverEmptyForAllTokens() {
   check(resolveRendererFeatures(nullptr, RendererCompatProfile::Strict).empty(),
-        "null env yields empty feature set");
+        "strict null env yields empty feature set");
   check(resolveRendererFeatures("", RendererCompatProfile::Strict).empty(),
-        "empty env yields empty feature set");
+        "strict empty env yields empty feature set");
   check(resolveRendererFeatures("   , ;  ",
                                 RendererCompatProfile::Strict)
             .empty(),
-        "separator-only env yields empty feature set");
+        "strict separator-only env yields empty feature set");
 }
 
 void testResolverEmptyForGarbageTokens() {
@@ -77,15 +77,28 @@ void testResolverEmptyForGarbageTokens() {
 
 void testProgressivePasscoalesceResolution() {
   check(resolveRendererCompatProfile(nullptr) ==
-            RendererCompatProfile::Strict,
-        "unset compat profile resolves to strict");
+            RendererCompatProfile::Progressive,
+        "unset compat profile resolves to progressive");
   check(resolveRendererCompatProfile("progressive") ==
             RendererCompatProfile::Progressive,
         "progressive compat profile is recognized");
+  check(resolveRendererCompatProfile("strict") ==
+            RendererCompatProfile::Strict,
+        "strict compat profile is recognized");
+  check(resolveRendererCompatProfile("unknown") ==
+            RendererCompatProfile::Strict,
+        "unknown compat profile resolves to strict");
   check(resolveRendererFeatures("passcoalesce",
                                 RendererCompatProfile::Strict)
             .empty(),
         "strict rejects passcoalesce");
+  check(resolveRendererFeatures(nullptr, RendererCompatProfile::Progressive)
+            .passcoalesce,
+        "unset progressive features enable promoted passcoalesce");
+  check(resolveRendererFeatures("", RendererCompatProfile::Progressive).empty(),
+        "empty progressive features explicitly disable passcoalesce");
+  check(resolveRendererFeatures("0", RendererCompatProfile::Progressive).empty(),
+        "zero progressive features explicitly disable passcoalesce");
   const auto progressive = resolveRendererFeatures(
       "passcoalesce,unknown", RendererCompatProfile::Progressive);
   check(progressive.passcoalesce,
@@ -98,7 +111,7 @@ int main() {
   try {
     testConstructibleAndMode();
     testUsableThroughInterface();
-    testResolverEmptyForNoTokens();
+    testStrictResolverEmptyForAllTokens();
     testResolverEmptyForGarbageTokens();
     testProgressivePasscoalesceResolution();
   } catch (const std::exception& e) {

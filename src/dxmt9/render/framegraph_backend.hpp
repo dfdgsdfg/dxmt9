@@ -2,11 +2,11 @@
 
 // FrameGraphBackend — modern-renderer backend (R-BACK-40.5).
 //
-// `strict` remains a pure delegate to encoders::encodeChunk and is
-// byte-identical to the traditional path. The default-off `progressive`
-// passcoalesce lane builds an optimized source-command permutation and sends
-// every record back through the same v2 encodeChunk switch. Other modern
-// renderer features remain staged.
+// `progressive` + passcoalesce is the promoted default. It builds an optimized
+// source-command permutation and sends every record back through the same v2
+// encodeChunk switch. Explicit `strict` remains a pure source-order delegate
+// that is byte-identical to the traditional path. Other modern renderer
+// features remain staged.
 
 #include "backend_interface.hpp"
 #include "dag_observer.hpp"
@@ -21,7 +21,7 @@
 namespace dxmt9::render {
 
 // Compat profile governs which implemented optimizer tokens may affect Metal
-// emission. Unknown profiles resolve to Strict.
+// emission. Unset resolves to Progressive; unknown profiles resolve to Strict.
 enum class RendererCompatProfile {
   Strict,
   Progressive,
@@ -39,8 +39,10 @@ RendererCompatProfile resolveRendererCompatProfile(const char* env);
 
 // Pure resolver: parse a DXMT9_RENDERER_FEATURES-style env string under the
 // given compat profile. Strict rejects every token and always returns an empty
-// feature set. Progressive accepts implemented tokens and ignores unsupported
-// tokens with one warning. Testable without touching the environment.
+// feature set. Progressive enables passcoalesce when the env is unset, accepts
+// explicit implemented tokens, and ignores unsupported tokens with one
+// warning. An empty string or "0" explicitly disables every feature. Testable
+// without touching the environment.
 RendererFeatureSet resolveRendererFeatures(const char* env,
                                            RendererCompatProfile profile);
 
@@ -78,10 +80,11 @@ class FrameGraphBackend final : public IRenderBackend {
   const DagObserver& observer() const { return observer_; }
 
  private:
-  RendererCompatProfile profile_ = RendererCompatProfile::Strict;
+  RendererCompatProfile profile_ = RendererCompatProfile::Progressive;
   RendererFeatureSet features_;
-  // R-BACK-40.5: strict keeps this all-false. Memoryless stays gated behind the
-  // explicit relaxation contract (R-BACK-40.4) and has no production lane yet.
+  // R-BACK-40.5: strict keeps this all-false. Progressive defaults only
+  // passcoalesce on. Memoryless stays gated behind the explicit relaxation
+  // contract (R-BACK-40.4) and has no production lane yet.
   framegraph::OptimizerOptions options_{};
   // Shared observe + DAG-export side-channel, constructed with options_ so the
   // observed post-opt DAG reflects this backend's resolved passes.

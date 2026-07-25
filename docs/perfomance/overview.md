@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-20
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}
+updated: 2026-07-25
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -28,6 +28,14 @@ Scope:
   encoding, sub-command-buffer chaining, and present-frame pacing.
 - This document keeps the existing directory spelling, `docs/perfomance/`,
   to match the current repository path.
+
+The alias-aware `framegraph + progressive + passcoalesce` L1 lane is now the
+runtime and experiment-runner default. It preserves the v2 encoder, batching,
+dirty-rebind, presenter, and completion paths while changing only a fully
+validated source-command permutation. Traditional, strict, and empty-feature
+rollback paths remain available. No other modern-renderer feature is promoted;
+see
+[hidden-backend-storage-shape.40](hidden-backend-storage/hidden-backend-storage-shape.40.md).
 
 ## Current Multi-Workload Baseline
 

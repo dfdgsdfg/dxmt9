@@ -7,7 +7,7 @@ tags: [specs, d3d9-renderer, requirements]
 
 # D3D9 Renderer (Modern Path) Requirements
 
-This spec defines an opt-in **modern rendering path** that consumes the same PE
+This spec defines a **modern rendering path** that consumes the same PE
 `CommandChunk` stream as `specs/backend/` but produces Metal work through a
 Frame Graph DAG, Object/Mesh shader scheduling, and GPU-driven indirect
 dispatch. It is designed to **coexist with the existing 1:1 command-translation
@@ -41,12 +41,13 @@ dispatch, GPU-driven cull, and ICB-batched submission.
 
 ## 1. Scope and Goals
 
-**R-BACK-30.1** The modern renderer must be optional. The default Wine runtime
-path must continue to use the traditional 1:1 backend path
-(`specs/backend/requirements.md`) until an explicit opt-in selects the modern
-path. A process started without renderer-specific environment variables and
-without a `render_mode` field in its catalogue entry must behave identically to
-a process built and run today.
+**R-BACK-30.1** The traditional renderer must remain available as an explicit
+rollback. The default Wine runtime path is `framegraph + progressive` with only
+the proven `passcoalesce` production feature enabled. Empty, `0`,
+`traditional`, and invalid `DXMT9_RENDER_MODE` values select the traditional
+1:1 backend (`specs/backend/requirements.md`). Memoryless, DCE, generic reorder,
+mesh, bindless, object scheduling, and GPU-driven execution remain disabled
+unless a later requirement and acceptance gate explicitly promotes them.
 
 **R-BACK-30.2** The modern renderer must consume the same `CommandChunk` stream
 the traditional path consumes. The PE side must not branch its recording shape
@@ -76,12 +77,12 @@ release gate; those profiles are evaluated by separate per-feature
 parity / route-equality gates (R-BACK-41.6) and by the explicit bounded
 artifact contracts (§4 R-BACK-33.4, §5, §7.2).
 
-**R-BACK-30.7** A `progressive` or `aggressive` profile that ships
-in a user-facing default for any app must clear the per-feature bounded
-artifact contracts on the wild-test catalogue captures for that app.
-Default-on `progressive` per app is a per-app catalogue decision, not a
-global default; the global `compat_profile` default stays `strict`
-(R-BACK-40.1).
+**R-BACK-30.7** A `progressive` or `aggressive` feature that ships in a
+user-facing default must clear its per-feature proof and wild-test artifact
+contracts. The global `progressive` default contains only `passcoalesce`;
+semantic-relaxation features such as memoryless are never implied by the
+profile and still require an explicit per-app policy (R-BACK-40.1,
+R-BACK-40.4).
 
 **R-BACK-30.5** The modern renderer must be implemented behind a single
 `IRenderBackend` interface that the traditional path also implements. Both
@@ -103,34 +104,25 @@ environment variable `DXMT9_RENDER_MODE` with values:
 
 | Value | Meaning |
 |---|---|
-| `traditional` | the existing `specs/backend/` path (default when unset/empty) |
-| `framegraph` | the modern path defined by this spec, with feature subset selected by `DXMT9_RENDERER_FEATURES` |
-| `auto` | resolve per the catalogue profile; if catalogue is missing, fall back to `traditional` |
+| `traditional` | the existing `specs/backend/` rollback path |
+| `framegraph` | the modern path defined by this spec (default when unset), with feature subset selected by `DXMT9_RENDERER_FEATURES` |
 
-Unparseable values must fall back to `traditional` with a single warning log
-line. Value resolution must happen once at backend factory construction and
-must not change for the process lifetime.
+Empty, `0`, and unparseable values must fall back to `traditional`. An
+unparseable non-empty value must produce a single warning log line. Value
+resolution must happen once at backend factory construction and must not change
+for the process lifetime.
 
 **R-BACK-31.2** The catalogue (`experiments/CATALOGUE.toml`) must accept a
 `render_mode` field on each `[[app]]` entry with the same value set as
 `R-BACK-31.1`. The catalogue value is consumed by the experiment runner
 **before** the wine process starts; the runner reads the catalogue entry
 for the app it is launching and injects the resolved value as the
-`DXMT9_RENDER_MODE` environment variable in the process's environment
-block. The runtime itself never reads the catalogue: by the time the
-backend factory runs (R-BACK-31.1), `DXMT9_RENDER_MODE` is already set
-to the catalogue's resolved value (or to `traditional` / `framegraph`
-when the user override-injected an explicit value, or to unset when no
-catalogue entry exists and no user override is present, in which case
-R-BACK-31.1's fallback resolves to `traditional`). The `auto` value is
-therefore a runner-side opt-in: a user who launches an app outside the
-runner (`wine app.exe` directly) with `DXMT9_RENDER_MODE` unset gets the
-`traditional` fallback by default; setting `DXMT9_RENDER_MODE=auto` in
-the user environment is a runner-style request that, with no catalogue
-visible to the runtime, also resolves to `traditional` per R-BACK-31.1's
-unparseable/fallback clause. "Per-app default-on `progressive`" is thus
-expressed exclusively through the catalogue + runner pipeline; the
-runtime does not silently auto-discover.
+`DXMT9_RENDER_MODE` environment variable in the process's environment block.
+When `render_mode` is omitted, the runner injects `framegraph`. The runtime
+itself never reads the catalogue: by the time the backend factory runs
+(R-BACK-31.1), `DXMT9_RENDER_MODE` is already set to the catalogue's resolved
+value or a user override. A direct `wine app.exe` launch with the variable
+unset reaches the same `framegraph` default in the runtime resolver.
 
 **R-BACK-31.3** A new env var `DXMT9_RENDERER_FEATURES` must accept a
 comma-separated list of feature tokens that enable individual modern-path
@@ -146,10 +138,12 @@ features when `DXMT9_RENDER_MODE=framegraph`. Tokens:
 | `gpudriven` | ICB-based indirect dispatch per §7 (CPU-prefilled when `objectschedule` absent; GPU-emitted when `objectschedule` present) |
 | `bindless` | bindless texture/sampler heap per §8 |
 
-Unknown tokens must be ignored with a single warning log line. The empty list
-or unset variable must enable **no** modern features; in that state the
-modern backend must behave as a thin wrapper that issues the same Metal calls
-as the traditional backend.
+Unknown tokens must be ignored with a single warning log line. Under the
+default progressive profile, an unset variable enables only `passcoalesce`.
+An empty string or `0` enables no modern features; in that state the modern
+backend must behave as a thin wrapper that issues the same Metal calls as the
+traditional backend. Under `strict`, every token is rejected and the resolved
+feature set is empty.
 
 **R-BACK-31.4** Feature tokens must enforce these dependencies:
 
@@ -407,8 +401,9 @@ renderer must not encode such a blit. The correctness contract is instead:
 This is a **bounded, one-incident visual artifact** acceptable under
 `progressive` and `aggressive` profiles; `strict` profiles eliminate it by
 never promoting (R-BACK-38.6). Per-app catalogue entries with
-`compat_profile=aggressive` accept the risk; entries without an explicit
-profile default to `strict` per R-BACK-40.1.
+`compat_profile=aggressive` and the required semantic relaxation accept the
+risk. The default progressive profile does not enable memoryless
+(R-BACK-40.1).
 
 **R-BACK-33.5** A same-pass tile-shader copy from alias to persistent — run
 inside the encoder before pass end — is the only correctness-safe recovery
@@ -1005,7 +1000,10 @@ must accept the values `strict`, `progressive`, and `aggressive`:
 | `progressive` | allowed within `R-BACK-32.2` deterministic / `R-BACK-34.*` proof gates | **NOT auto-enabled** — requires per-app `semantic_relaxations` list (see R-BACK-40.4) | mesh + objectschedule allowed; gpudriven gated on Metal 3 + macOS 14 | on incompat → traditional (per-draw) |
 | `aggressive` | full | **NOT auto-enabled** — same `semantic_relaxations` gate as `progressive` | full | on incompat → traditional, then downgrade profile to `strict` for the remaining device lifetime per R-BACK-40.3 |
 
-The default for an app without a `compat_profile` entry is `strict`.
+The default for an app without a `compat_profile` entry is `progressive`.
+Its implicit feature set contains only `passcoalesce`. Explicit `strict`
+remains the feature-empty, source-order rollback; `memoryless` and every later
+layer remain opt-in even under progressive.
 
 **R-BACK-40.5** A `strict` profile that selected `framegraph` mode must
 delegate **all** Metal emission to `TraditionalBackend`. The
@@ -1061,17 +1059,18 @@ landed and what is staged. They are not implementation milestones; they are
 requirement dependency layers.
 
 **R-BACK-41.1 (Layer 0 — Refactor)**: extract `IRenderBackend`; introduce
-`backend_factory` driven by `DXMT9_RENDER_MODE`. `framegraph` mode is a
-no-feature wrapper that produces identical Metal output to `traditional`.
-Parity harness, divergence logging, and CI matrix must land in this layer.
-Without this layer the rest of the spec cannot be tested.
+`backend_factory` driven by `DXMT9_RENDER_MODE`. The L0 `framegraph + strict`
+baseline is a no-feature wrapper that produces identical Metal output to
+`traditional`. Parity harness, divergence logging, and CI matrix must land in
+this layer. Without this layer the rest of the spec cannot be tested.
 
-**R-BACK-41.2 (Layer 1 — Frame Graph)**: enable `passcoalesce` and
-`memoryless` features. No mesh, no GPU-driven. The Frame Graph builder,
-optimizer pipeline, and resource virtualization land in this layer. The
-DAG debug-export (R-BACK-39.7) also lands in this layer, since it is the
-first layer where a real DAG exists to serialize. This is the first layer
-that can produce a measurable GT1 delta on its own.
+**R-BACK-41.2 (Layer 1 — Frame Graph)**: enable `passcoalesce` as the default
+L1 feature; memoryless remains a separate semantic-relaxation feature. No mesh,
+no GPU-driven. The Frame Graph builder, optimizer pipeline, and resource
+virtualization land in this layer. The DAG debug-export (R-BACK-39.7) also
+lands in this layer, since it is the first layer where a real DAG exists to
+serialize. This is the first layer that can produce a measurable GT1 delta on
+its own.
 
 **R-BACK-41.3 (Layer 2 — Mesh and Bindless)**: enable `bindless` and `mesh`
 features. Mesh PSO cluster compilation, bindless heaps, mixed-path encoder
@@ -1082,10 +1081,14 @@ dispatches directly.
 `objectschedule` features. Object shader runs as GPU compute pre-pass;
 ICB-based mesh dispatch lands.
 
-**R-BACK-41.5** Each layer must pass `R-BACK-39.1` parity against the prior
-layer's accepted profile before the next layer is enabled by default. A
-layer that cannot prove parity may ship as opt-in for diagnostic work but
-must not become a default in any `compat_profile`.
+**R-BACK-41.5** Each layer after L1 must pass `R-BACK-39.1` parity against the
+prior layer's accepted profile before it is enabled by default. The promoted
+L1 passcoalesce subset additionally requires complete duplicate-free replay,
+alias-aware RAW/WAR/WAW ordering, order-aware Store proof, source-order
+fallback, and clean GT1/GT2/GT3 wild captures including the known GT3 glitch
+window. Device-backed pixel parity remains a required evidence-closure task.
+A later layer that cannot prove parity may ship as opt-in for diagnostic work
+but must not become a default in any `compat_profile`.
 
 **R-BACK-41.6** Mesh / object / GPU-driven acceptance must **not** require a
 GT1 performance number as a precondition. The performance investigation root

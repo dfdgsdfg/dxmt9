@@ -451,8 +451,9 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
 
   // R-BACK-31.7 — construct the render backend before the worker threads
   // start, so backend_ is non-null the first time the encode loop runs.
-  // With DXMT9_RENDER_MODE unset this resolves to TraditionalBackend, whose
-  // onChunkReady forwards to encoders::encodeChunk — byte-identical baseline.
+  // With DXMT9_RENDER_MODE unset this resolves to the promoted
+  // FrameGraphBackend passcoalesce lane. Explicit "traditional" retains the
+  // source-order byte-identical rollback.
   backend_ = render::createBackendFromEnv();
 
   // Spawn the three worker threads. Threads block on writeCv_ until the

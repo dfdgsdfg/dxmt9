@@ -24,7 +24,7 @@ status, and [log](log.md) for spec-tree maintenance history.
 - [archicture/gap](archicture/gap.md) - architecture, DOD, copy-policy, and concurrency acceptance.
 - [d3d9/gap](d3d9/gap.md) - frontend COM/API, state, resources, queries, and WSI-facing gaps.
 - [backend/gap](backend/gap.md) - Metal backend, command queue, resources, and encoder lifecycle.
-- [d3d9-renderer/gap](d3d9-renderer/gap.md) - modern renderer opt-in path.
+- [d3d9-renderer/gap](d3d9-renderer/gap.md) - modern renderer implementation and evidence gaps.
 - [deploy/gap](deploy/gap.md) - Wine PE / winemetal deployment.
 - [verification/gap](verification/gap.md) - TLA+ and deterministic native verification shortfalls.
 - [tests/gap](tests/gap.md) - test corpus, Wine conformance, and unit-first DoD gaps.
@@ -56,7 +56,7 @@ status, and [log](log.md) for spec-tree maintenance history.
 - d3d7: [requirements](d3d7/requirements.md), [spec](d3d7/spec.md) - D3D7 / DirectDraw shim contracts.
 - d3d8: [requirements](d3d8/requirements.md), [spec](d3d8/spec.md) - D3D8 shim contracts.
 - d3d9: [requirements](d3d9/requirements.md), [spec](d3d9/spec.md) - D3D9 frontend contracts.
-- d3d9-renderer: [requirements](d3d9-renderer/requirements.md), [spec](d3d9-renderer/spec.md) - modern renderer opt-in path.
+- d3d9-renderer: [requirements](d3d9-renderer/requirements.md), [spec](d3d9-renderer/spec.md) - modern renderer and default passcoalesce-only L1 path.
 - deploy: [requirements](deploy/requirements.md), [spec](deploy/spec.md) - Wine runtime and packaging contracts.
 - experiments: [requirements](experiments/requirements.md), [spec](experiments/spec.md) - wild integration experiment policy.
 - tests: [requirements](tests/requirements.md), [spec](tests/spec.md) - test corpus and conformance design.

@@ -4,14 +4,19 @@ workload: 3DMark05 GT1 and GT2
 title: "Hidden Backend Storage — the central GPU explanation"
 type: domain-index
 status: current
-updated: 2026-07-24
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md
+updated: 2026-07-25
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md
 related: docs/perfomance/hidden-backend-storage/overview.md; docs/perfomance/hidden-backend-storage/log.md
 ---
 
 # Hidden Backend Storage — the central GPU explanation
 
-Latest tracked row: `H49` - GT2's two dominant R32F passes write the same mip0/slice0 around a live texture sample; alias-aware hazards restore RAW/WAW/WAR ordering and reduce the safe passcoalesce result from `18 -> 15` to `18 -> 16` render passes.
+Latest tracked row: `H50` - alias-aware passcoalesce completes GT1/GT2/GT3
+without observed GPU/pipeline failures, preserves the corrected GT2 order, and
+does not reproduce the known GT3 quadrant glitch in exact-window captures. The
+env-clean default SFIV run also reaches a valid rendered scene with clean
+stability counters. The passcoalesce-only L1 policy is promoted; broader
+production options remain off.
 
 ## Start Here
 
@@ -21,6 +26,7 @@ Latest tracked row: `H49` - GT2's two dominant R32F passes write the same mip0/s
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.40 - Alias-Aware Pass Coalescing Clears the Default-Promotion Wild Gate](hidden-backend-storage-shape.40.md)
 - [hidden-backend-storage-shape.39 - GT2 R32F Liveness Exposes a Surface-Alias Hazard Gap in Pass Coalescing](hidden-backend-storage-shape.39.md)
 - [hidden-backend-storage-shape.38 - GT2 R32F Alpha-Test Draws Are Already at the Index-Locality Floor](hidden-backend-storage-shape.38.md)
 - [hidden-backend-storage-shape.37 - GT2 Black Draws Are a Depth Prepass, Not the Main Hidden-Write Owner](hidden-backend-storage-shape.37.md)

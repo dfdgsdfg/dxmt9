@@ -300,8 +300,8 @@ std::string dumpPath(const std::string& dir, std::uint64_t frameId,
 // files, no throw — byte-identical encode is preserved by onChunkReady's
 // delegation). `probeDir` is a real temp dir the test owns; the early-out must
 // leave it empty (the function has no dir to write to anyway, which is exactly
-// the contract). We additionally assert the resolved optimizer options are the
-// all-false L1 parity baseline.
+// the contract). We additionally assert that the promoted production option
+// set contains only passcoalesce.
 void testDefaultPathIsNoOp(const std::string& probeDir) {
   FrameGraphBackend backend;
   ChunkSlot slot = buildScenario(/*seqId=*/11);
@@ -317,8 +317,8 @@ void testDefaultPathIsNoOp(const std::string& probeDir) {
         "early-out wrote no post-opt file");
 
   const auto& opts = backend.optimizerOptions();
-  check(!opts.passcoalesce && !opts.memoryless && !opts.dce && !opts.reorder,
-        "L1 strict: every optimizer option is off (parity baseline)");
+  check(opts.passcoalesce && !opts.memoryless && !opts.dce && !opts.reorder,
+        "default L1 enables only passcoalesce");
 }
 
 void testObserveExportsPreAndPostOptDags(const std::string& dir) {

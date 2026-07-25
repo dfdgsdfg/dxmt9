@@ -16,7 +16,7 @@ This root document is only the project-level overview. Detailed implementation a
 | Architecture | partial | [archicture/gap](archicture/gap.md) | [archicture/log](archicture/log.md) | Project architecture, DOD, copy-policy, and concurrency acceptance. |
 | D3D9 | partial | [d3d9/gap](d3d9/gap.md) | [d3d9/log](d3d9/log.md) | Frontend COM/API, state, resources, queries, WSI-facing behaviour. |
 | Backend | partial | [backend/gap](backend/gap.md) | [backend/log](backend/log.md) | Metal backend, command queue, resources, encoder lifecycle. |
-| D3D9 Renderer | partial / opt-in | [d3d9-renderer/gap](d3d9-renderer/gap.md) | [d3d9-renderer/log](d3d9-renderer/log.md) | Modern renderer opt-in path. |
+| D3D9 Renderer | partial / default L1 | [d3d9-renderer/gap](d3d9-renderer/gap.md) | [d3d9-renderer/log](d3d9-renderer/log.md) | Modern renderer with default passcoalesce-only L1 path. |
 | Deployment | partial | [deploy/gap](deploy/gap.md) | [deploy/log](deploy/log.md) | Wine PE / winemetal builtin and app-local deployment. |
 | Verification | partial | [verification/gap](verification/gap.md) | [verification/log](verification/log.md) | TLA+ and deterministic native verification shortfalls. |
 | Tests | partial | [tests/gap](tests/gap.md) | [tests/log](tests/log.md) | Test corpus, Wine conformance, and unit-first DoD gaps. |

@@ -4,8 +4,8 @@ workload: 3DMark05 GT1 and GT2
 title: "Hidden Backend Storage — the central GPU explanation - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-24
-source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.37.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.38.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md
+updated: 2026-07-25
+source: docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.37.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.38.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md
 related: docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/log.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
@@ -32,6 +32,7 @@ every other domain at the lever that actually moves the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
+| H50 | The alias-aware passcoalesce lane is safe enough for default promotion | accepted default promotion with explicit evidence debt | [hidden-backend-storage-shape.40](hidden-backend-storage-shape.40.md) (GT1/GT2/GT3 complete without observed GPU/pipeline failure; corrected GT2 producer/consumer order remains; exact captures across the known GT3 1:06–1:08 glitch window are normal; render-pass/present work falls `8.25–11.2%`. An env-clean default SFIV run also reaches a valid rendered scene and a separate perf run records `7,320` Presents with zero GPU/pipeline failure. Only passcoalesce is promoted; device-backed pixel parity remains open.) |
 | H49 | One of the two dominant GT2 R32F passes may be dead, and the current DAG can prove their subresource/consumer order | accepted liveness candidate; accepted correctness gap and fix | [hidden-backend-storage-shape.39](hidden-backend-storage-shape.39.md) (both surfaces alias the same `TwoD`, one-level `R32F` mip0/slice0; source order is `418 writes -> sample -> 418 writes`; the first pass is live and the final pass is a cross-chunk DCE candidate. Pre-fix passcoalesce split surface writes from texture reads and moved the consumer before the producer. Alias-aware RAW/WAW/WAR restoration produces a safe `18 -> 16` render-pass result instead of the invalid `18 -> 15` topology) |
 | H48 | Extending LRU32 reorder eligibility to the `229` alpha-tested draws in each dominant GT2 R32F pass can materially reduce VS invocations | rejected; accepted index-locality bound | [hidden-backend-storage-shape.38](hidden-backend-storage-shape.38.md) (valid alpha-test candidates move LRU32 only `238,571 -> 238,484`, `-0.0365%`, with `0` gate passes; `69` other draws already have `miss32 == unique`; captured VS invocations `486,280` match the effective LRU64 estimate `486,697` within `0.086%`, leaving at most `0.56%` whole-frame invocation headroom across both passes) |
 | H47 | The many black draw previews in the GT2 frame279 Xcode debugger are failed/redundant color work and the main hidden-write owner | rejected as primary owner; accepted as depth-prepass classification | [hidden-backend-storage-shape.37](hidden-backend-storage-shape.37.md) (the only color-write-off route is encoder 0's early `120`-draw depth prepass: `94,980` primitives and `284,940` submitted vertices, or `4.46%/4.47%` of the frame; Xcode shows black Color 0 with depth output; the similarly sized GT1 fragmentless/keep-VSOut route left VS invocations and write flat) |
@@ -50,6 +51,7 @@ every other domain at the lever that actually moves the bucket.
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.40 - Alias-Aware Pass Coalescing Clears the Default-Promotion Wild Gate](hidden-backend-storage-shape.40.md)
 - [hidden-backend-storage-shape.39 - GT2 R32F Liveness Exposes a Surface-Alias Hazard Gap in Pass Coalescing](hidden-backend-storage-shape.39.md)
 - [hidden-backend-storage-shape.38 - GT2 R32F Alpha-Test Draws Are Already at the Index-Locality Floor](hidden-backend-storage-shape.38.md)
 - [hidden-backend-storage-shape.37 - GT2 Black Draws Are a Depth Prepass, Not the Main Hidden-Write Owner](hidden-backend-storage-shape.37.md)

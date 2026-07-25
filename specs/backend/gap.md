@@ -7,7 +7,7 @@ tags: [specs, gap, backend]
 
 # Backend Gap
 
-Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup. The modern renderer opt-in path has its own [d3d9-renderer gap](../d3d9-renderer/gap.md).
+Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup. The modern renderer path has its own [d3d9-renderer gap](../d3d9-renderer/gap.md).
 
 ## Backend Layer
 

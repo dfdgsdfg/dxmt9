@@ -4,8 +4,8 @@ workload: SFIV Benchmark (D3D9Ex)
 title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-20
-source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+updated: 2026-07-25
+source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md
 ---
 
@@ -42,6 +42,19 @@ A separate long run observed 260.6 seconds and 10,740 presents. It sustained
 `42.684` sampled FPS with GPU CB p50/p95 `3.233/7.703ms` and zero GPU errors.
 Because its scene/loop coverage differs, it is stability evidence rather than
 a third member of the duration-matched median.
+
+The 2026-07-25 env-clean default-renderer regression closes the SFIV
+scene-level gate for promoted `framegraph + progressive + passcoalesce`. Its
+35-second window capture reaches the rendered benchmark with Ryu, lighting,
+logos, and post effects intact. A separate `perf` run records `7,320` encoded
+Presents, `1,674,130` draws, GPU CB p50/p95 `3.532/6.392ms`, and zero chunk
+rejects, skipped Presents, GPU command-buffer errors, pipeline-build failures,
+or missing-pipeline draws. The late perf screenshot failed window-title lookup
+and is not visual evidence. The debug capture's `14.45` instantaneous and
+`11.41` average overlay is also not a performance baseline because verbose
+logging generated about 1.5 GB before compression. These runs therefore add
+default-policy correctness/stability evidence without replacing the
+duration-matched `44.668` sampled-FPS baseline.
 
 The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
 adds a quiet same-build ABBA pair. Sampled FPS is flat-positive

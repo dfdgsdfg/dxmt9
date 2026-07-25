@@ -122,8 +122,8 @@ class ExperimentApp:
     # Per-app renderer selection (R-BACK-39.5). Resolved ONCE at spawn into
     # DXMT9_RENDER_MODE in the launched wine process environment, where the
     # backend factory (src/dxmt9/render/backend_factory.cpp) reads it once.
-    # Valid: "traditional" (default) / "framegraph". Absent => "traditional".
-    render_mode: str = "traditional"
+    # Valid: "traditional" / "framegraph" (default). Absent => "framegraph".
+    render_mode: str = "framegraph"
     # Optional probe-level expected-range gate. Each entry maps a counter
     # key (matching kCounterTable in src/dxmt9/dxmt9_perf_counters.cpp) to
     # an inclusive {min, max} range. Either bound may be omitted. Absent
@@ -174,7 +174,7 @@ class ExperimentApp:
             wine_id=data.get("wine_id"),
             wine_alternatives=list(data.get("wine_alternatives") or []),
             install_drive_letter=data.get("install_drive_letter", "d"),
-            render_mode=str(data.get("render_mode", "traditional")),
+            render_mode=str(data.get("render_mode", "framegraph")),
         )
         if app.render_mode not in ("traditional", "framegraph"):
             raise ValueError(
