@@ -591,10 +591,12 @@ with the dump off.
 
 The builder runs on the unix-side encode thread and operates on **one
 `CommandChunk` at a time** per `R-BACK-32.1`. Each `onChunkReady` invocation
-builds a fresh `FrameGraph` over the records the chunk delivered;
-multi-chunk buffering is not allowed. The chunk's `completedSeqId` advances
-only after the linearized DAG finishes, preserving the per-chunk fence
-semantics from `specs/backend/requirements.md`. The mapping is small and
+builds a fresh `FrameGraph` over the records the chunk delivered. The opt-in
+R-BACK-32.10 scheduler may retain one chunk and independently build its selected
+FIFO successor, but it shares only a flat overwrite-proof summary; records,
+passes, edges, and completion sources never merge. The chunk's `completedSeqId`
+advances only after its own linearized DAG finishes, preserving the per-chunk
+fence semantics from `specs/backend/requirements.md`. The mapping is small and
 explicit:
 
 | Chunk record kind | Builder action |
@@ -604,7 +606,7 @@ explicit:
 | `Draw*` | Emit `DrawDescriptor`; append to current `PassNode.draws`. |
 | `SetTexture`/`SetSampler`/`SetVertexShader`/`SetPixelShader` | Update current pending state; persisted into the next `DrawDescriptor`. |
 | `BeginQuery`/`EndQuery` | Edge to the current pass; record into `PassNode.flags`. |
-| `Present` | Finalize current pass, emit `PassNode{kind=Present}`, mark frame boundary. |
+| `Present` | Finalize current pass, emit `PassNode{kind=Present}`, record a Read of the canonical present source, mark frame boundary. |
 | `LockRect`/`UnlockRect` (deferred record) | Force flush boundary per `R-BACK-32.4`. |
 | `StretchRect` | Either fuse into pass (same source/dest pass) or emit `PassNode{kind=Blit}`. |
 | `SetMarker` (debug) | Annotate pass; ignored by optimizer. |
@@ -680,14 +682,13 @@ residency, edge set (only reorder pass), and the linearized pass order
 
 ### 5.1 dce.cpp — Dead-Pass Elimination (Chunk-Conservative)
 
-The Frame Graph window is one `CommandChunk` (R-BACK-32.1). A pass whose
+Each Frame Graph still covers one `CommandChunk` (R-BACK-32.1). A pass whose
 written output is unread inside the chunk **may still be read by a future
-chunk**; the DCE pass cannot prove cross-chunk dead-ness from the per-chunk
-DAG. `specs/backend/render-pass-actions/requirements.md` §6 (live-out
-contracts) requires preservation whenever future use is unknown at chunk
-end. DCE therefore must default to off and, when enabled, must only drop
-passes that satisfy **provable in-chunk dead-ness** under conservative
-gates.
+chunk**; without an R-BACK-32.10 successor summary the DCE pass cannot prove
+cross-chunk dead-ness. `specs/backend/render-pass-actions/requirements.md` §6
+(live-out contracts) requires preservation whenever future use is unknown at
+chunk end. DCE therefore defaults off and drops passes only under conservative,
+explicit proof gates.
 
 DCE is **opt-in** via a separate feature token `dce` added to
 `DXMT9_RENDERER_FEATURES` (R-BACK-31.3). When `dce` is not in the feature
@@ -720,15 +721,45 @@ When `dce` **is** enabled, a pass is dead **only when all** of:
   provably fully-overwritten by a later record inside the **same** chunk
   (e.g. a same-chunk `Clear` of the same handle, or a same-chunk
   `StretchRect`/copy whose destination covers the full subresource), or
-  (c) the resource is a swap-chain backbuffer that has been re-cleared
-  inside the same chunk. Otherwise the pass stays alive.
+  (c) the immediate FIFO successor's first canonical access is a
+  full-subresource Clear. The condition is ANDed across every resource the pass
+  writes. Rectangular Clears are `ReadWrite` and do not qualify. A
+  depth/stencil Clear is also `ReadWrite` unless its flags cover every aspect
+  present in the retained surface format; a depth-only Clear of D24X8 therefore
+  qualifies, while a depth-only Clear of D24S8 does not. Present is a read of
+  its canonical source, so the in-chunk unread gate keeps a final backbuffer
+  writer alive. Otherwise the pass stays alive.
 
-Dead passes are dropped from the linearized order but kept in the array
-(for counter reporting). `framegraph_dce_dropped` and
-`framegraph_dce_preserved_unprovable` counters are emitted (§13).
+Dead passes are kept in the array for counter reporting. The production v2
+linearizer validates that every source command belongs to exactly one live or
+dead pass, then emits a duplicate-free ordered subset that omits only dead-pass
+commands. An empty subset is represented explicitly rather than confused with
+the source-order default. `framegraph_dce_dropped`,
+`framegraph_dce_preserved_unprovable`,
+`framegraph_dce_cross_chunk_proof_resources`, and
+`framegraph_dce_replay_commands_omitted` expose the proof and replay effect.
 
-`dce` belongs to the `progressive` / `aggressive` `compat_profile` feature
-sets (R-BACK-40.1); `strict` profile never enables it.
+The queue owns the bounded successor selection. It may keep one dequeued slot
+in `Encoding` while a proof-independent prefix of the passcoalesce-optimized
+command permutation is appended to an unsubmitted `EncodeSession`. The prefix
+ends before the first pass whose liveness could depend on successor proof. A
+prior observed overwrite set, or a bootstrap set containing every current
+resource, chooses only this scheduling checkpoint.
+
+After prefix encode the queue checks the ready FIFO once under the queue lock.
+If `N+1` is ready it becomes the fresh proof source; otherwise N is finalized
+immediately without cross-chunk proof. There is no condition-variable wait and
+no wall-clock timeout. The final plan re-runs passcoalesce and DCE, preserves
+any already-encoded pass that a changed proof would otherwise remove, and
+requires the encoded commands to be an exact prefix of the final live-command
+permutation. N submits before the carried N+1 and publishes only N's original
+completion identity. This state machine is checked by
+`specs/verification/tla/DceChunkLookahead.tla`.
+
+`dce` is accepted only as an explicit feature token under the implemented
+`progressive` profile. An unset feature list still enables only
+`passcoalesce`; `strict` rejects the token, and `aggressive` profile resolution
+is not implemented.
 
 ### 5.2 lifetime.cpp — Resource Lifetime
 

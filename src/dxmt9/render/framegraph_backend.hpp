@@ -4,9 +4,10 @@
 //
 // `progressive` + passcoalesce is the promoted default. It builds an optimized
 // source-command permutation and sends every record back through the same v2
-// encodeChunk switch. Explicit `strict` remains a pure source-order delegate
-// that is byte-identical to the traditional path. Other modern renderer
-// features remain staged.
+// encodeChunk switch. Explicit `dce` may instead produce a proven ordered
+// subset through the bounded successor window. Explicit `strict` remains a
+// pure source-order delegate that is byte-identical to the traditional path.
+// Other modern renderer features remain staged.
 
 #include "backend_interface.hpp"
 #include "dag_observer.hpp"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace dxmt9::render {
 
@@ -27,12 +29,14 @@ enum class RendererCompatProfile {
   Progressive,
 };
 
-// Resolved DXMT9_RENDERER_FEATURES set. Only passcoalesce has a production
-// progressive lane; the remaining spec tokens are rejected until implemented.
+// Resolved DXMT9_RENDERER_FEATURES set. Passcoalesce is the sole default;
+// bounded DCE is opt-in and may consume an already-selected next-source
+// overwrite proof without delaying the queue.
 struct RendererFeatureSet {
   bool passcoalesce = false;
+  bool dce = false;
 
-  bool empty() const { return !passcoalesce; }
+  bool empty() const { return !passcoalesce && !dce; }
 };
 
 RendererCompatProfile resolveRendererCompatProfile(const char* env);
@@ -52,9 +56,10 @@ class FrameGraphBackend final : public IRenderBackend {
   ~FrameGraphBackend() override = default;
 
   // Strict delegates verbatim to encoders::encodeChunk. Progressive
-  // passcoalesce may supply a complete source-command permutation to that same
-  // encoder after DAG proof; every planning/session mismatch falls back to
-  // source order. The shared DagObserver remains a separate debug side-channel.
+  // passcoalesce may supply a complete source-command permutation and DCE may
+  // supply a validated ordered subset to that same encoder after DAG proof;
+  // every planning mismatch falls back to source order. The shared DagObserver
+  // remains a separate debug side-channel.
   std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
@@ -62,6 +67,11 @@ class FrameGraphBackend final : public IRenderBackend {
       encoders::EncodeChunkOptions options = {}) override;
 
   BackendMode mode() const override { return BackendMode::FrameGraph; }
+  bool wantsNextChunkLookahead() const override { return features_.dce; }
+  std::vector<std::uint32_t> dceLookaheadReplayPrefix(
+      encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      const core::ChunkSlot& slot) override;
 
   // Resolved optimizer options for this backend. Strict keeps every option
   // false (parity baseline). Exposed for unit testing the option resolution.
@@ -86,6 +96,10 @@ class FrameGraphBackend final : public IRenderBackend {
   // passcoalesce on. Memoryless stays gated behind the explicit relaxation
   // contract (R-BACK-40.4) and has no production lane yet.
   framegraph::OptimizerOptions options_{};
+  // Last validated successor overwrite set. This only predicts the following
+  // chunk's ready-FIFO sample point; actual DCE still consumes the freshly
+  // selected successor and fails open when that proof differs.
+  std::vector<framegraph::ResourceHandle> priorDceLookaheadProof_;
   // Shared observe + DAG-export side-channel, constructed with options_ so the
   // observed post-opt DAG reflects this backend's resolved passes.
   DagObserver observer_;

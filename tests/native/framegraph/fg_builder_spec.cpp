@@ -234,6 +234,72 @@ void testResourceAccessLogs() {
   const ResourceNode& rt1 = graph.resources[rt1_idx];
   check(accessKindOf(rt1.accesses.front()) == AccessKind::Write,
         "rt1's first access is a write (attachment)");
+  check(rt1.accesses.size() == 2 &&
+            accessKindOf(rt1.accesses.back()) == AccessKind::Read &&
+            rt1.accesses.back().pass_index == 2,
+        "Present records a read of its source after the final writer");
+}
+
+void testPartialClearIsReadWrite() {
+  ChunkSlot slot;
+  ClearDesc desc{};
+  desc.colorAttachments[0].handle = Handle{0xA100u};
+  desc.clearColor = true;
+  desc.rects.push_back(dxmt9::core::Rect{0, 0, 16, 16});
+  slot.appendClear(desc);
+
+  const FrameGraph graph = buildFrameGraph(slot, 0);
+  const std::size_t index =
+      findResourceIndex(graph, ResourceHandle{0xA100u});
+  check(index != graph.resources.size(), "partial-clear resource exists");
+  check(graph.resources[index].accesses.size() == 1,
+        "partial clear emits one resource access");
+  check(accessKindOf(graph.resources[index].accesses.front()) ==
+            AccessKind::ReadWrite,
+        "partial clear preserves pixels and is not a full-overwrite proof");
+}
+
+void testAspectPartialDepthStencilClearIsReadWrite() {
+  ChunkSlot slot;
+  ClearDesc desc{};
+  desc.colorAttachments[0].handle = Handle{0xA100u};
+  desc.depthStencil.handle = Handle{0xD100u};
+  desc.clearColor = true;
+  desc.clearDepth = true;
+  desc.clearStencil = false;
+  slot.appendClear(desc);
+
+  const FrameGraph graph = buildFrameGraph(slot, 0);
+  const std::size_t colorIndex =
+      findResourceIndex(graph, ResourceHandle{0xA100u});
+  const std::size_t depthIndex =
+      findResourceIndex(graph, ResourceHandle{0xD100u});
+  check(colorIndex != graph.resources.size() &&
+            depthIndex != graph.resources.size(),
+        "color and depth/stencil clear resources exist");
+  check(accessKindOf(graph.resources[colorIndex].accesses.front()) ==
+            AccessKind::Clear,
+        "full color clear remains a full-overwrite proof");
+  check(accessKindOf(graph.resources[depthIndex].accesses.front()) ==
+            AccessKind::ReadWrite,
+        "one-aspect depth/stencil clear preserves the unproven other aspect");
+
+  const ResourceAliasResolver depthOnlyFormatResolver{
+      .depth_stencil_clear_covers_resource =
+          [](const void*, ResourceHandle, bool clearDepth,
+             bool clearStencil) noexcept {
+            return clearDepth && !clearStencil;
+          },
+  };
+  const FrameGraph depthOnlyGraph =
+      buildFrameGraph(slot, 0, depthOnlyFormatResolver);
+  const std::size_t depthOnlyIndex =
+      findResourceIndex(depthOnlyGraph, ResourceHandle{0xD100u});
+  check(depthOnlyIndex != depthOnlyGraph.resources.size() &&
+            accessKindOf(
+                depthOnlyGraph.resources[depthOnlyIndex].accesses.front()) ==
+                AccessKind::Clear,
+        "format proof promotes a depth-only clear to a full-resource overwrite");
 }
 
 void testCrossPassEdge() {
@@ -466,6 +532,8 @@ int main() {
     testPassStructure();
     testDrawRefs();
     testResourceAccessLogs();
+    testPartialClearIsReadWrite();
+    testAspectPartialDepthStencilClearIsReadWrite();
     testCrossPassEdge();
     testWawReentryEdge();
     testWarReadThenWriteEdge();

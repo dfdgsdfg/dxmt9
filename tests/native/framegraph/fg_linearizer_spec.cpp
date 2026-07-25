@@ -349,6 +349,15 @@ void testDceDropsDeadPassOps() {
     }
   }
   check(sawLiveDraw, "the live draw survives DCE");
+
+  const ReplayCommandPlan replay = planReplayCommands(graph, slot);
+  check(replay.valid && replay.dropped,
+        "DCE produces a valid ordered-subset replay plan");
+  check(!replay.reordered,
+        "dropping a prefix does not misclassify retained source order");
+  check(replay.command_indices ==
+            std::vector<std::uint32_t>({1u, 2u}),
+        "the replay subset omits only the dead pass command");
 }
 
 void testDeterminism() {

@@ -20,6 +20,7 @@
 #include "../../../src/dxmt9/framegraph/fg_dag.hpp"
 #include "../../../src/dxmt9/framegraph/fg_optimizer.hpp"
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -298,6 +299,120 @@ void testDceNeverDropsPresentOrQuery() {
   check(!g.passes[2].flags.dead, "occlusion-query pass never dropped");
 }
 
+void testDceUsesBoundedNextChunkOverwriteProof() {
+  FrameGraph current;
+  addRenderPass(current, 0xA000u, 0xD000u);
+  ResourceNode& color = addResource(current, 0xA000u);
+  access(color, 0, AccessKind::Write);
+  ResourceNode& depth = addResource(current, 0xD000u);
+  access(depth, 0, AccessKind::Write);
+
+  FrameGraph next;
+  addRenderPass(next, 0xA000u, 0xD000u);
+  ResourceNode& nextColor = addResource(next, 0xA000u);
+  access(nextColor, 0, AccessKind::Clear);
+  ResourceNode& nextDepth = addResource(next, 0xD000u);
+  access(nextDepth, 0, AccessKind::Clear);
+
+  const std::vector<ResourceHandle> overwrites =
+      collectDceLookaheadFullOverwrites(next);
+  check(overwrites.size() == 2,
+        "next-chunk full clears produce two overwrite proofs");
+
+  OptimizerStats stats{};
+  runDce(current, &stats, DceLookaheadProof{overwrites});
+  check(current.passes[0].flags.dead,
+        "persistent color+depth pass drops when every output is next-cleared");
+  check(stats.dce_dropped == 1,
+        "cross-chunk overwrite proof increments dropped count");
+
+  FrameGraph missingDepth;
+  addRenderPass(missingDepth, 0xA000u, 0xD000u);
+  ResourceNode& missingColor = addResource(missingDepth, 0xA000u);
+  access(missingColor, 0, AccessKind::Write);
+  ResourceNode& missingDepthNode = addResource(missingDepth, 0xD000u);
+  access(missingDepthNode, 0, AccessKind::Write);
+  const std::array<ResourceHandle, 1> colorOnly{ResourceHandle{0xA000u}};
+  runDce(missingDepth, nullptr, DceLookaheadProof{colorOnly});
+  check(!missingDepth.passes[0].flags.dead,
+        "missing proof for one attachment preserves the whole pass");
+}
+
+void testDceLookaheadRejectsReadBeforeClear() {
+  FrameGraph next;
+  addRenderPass(next, 0xB000u, 0u);
+  addRenderPass(next, 0xA000u, 0u);
+  ResourceNode& resource = addResource(next, 0xA000u);
+  access(resource, 0, AccessKind::Read);
+  access(resource, 1, AccessKind::Clear);
+
+  const std::vector<ResourceHandle> overwrites =
+      collectDceLookaheadFullOverwrites(next);
+  check(overwrites.empty(),
+        "a next-chunk read before clear cannot prove prior output dead");
+}
+
+void testDceLookaheadPredictsOnlyNonemptySafePrefix() {
+  FrameGraph graph;
+  addRenderPass(graph, 0xA000u, 0u);
+  addRenderPass(graph, 0xB000u, 0u);
+  PassNode present{};
+  present.kind = PassKind::Present;
+  graph.passes.push_back(present);
+
+  graph.commands = {
+      CommandRef{.command_index = 0,
+                 .kind = dxmt9::core::MetalCommandKind::DrawRun},
+      CommandRef{.command_index = 1,
+                 .kind = dxmt9::core::MetalCommandKind::DrawRun},
+      CommandRef{.command_index = 2,
+                 .kind = dxmt9::core::MetalCommandKind::Present},
+  };
+  for (u32 p = 0; p < graph.passes.size(); ++p) {
+    graph.passes[p].commands =
+        CommandRange{.first = p, .count = 1};
+  }
+
+  ResourceNode& retained = addResource(graph, 0xA000u);
+  access(retained, 0, AccessKind::Write);
+  access(retained, 2, AccessKind::Read);
+  ResourceNode& predicted = addResource(graph, 0xB000u);
+  access(predicted, 1, AccessKind::Write);
+
+  const std::array<ResourceHandle, 1> prior{ResourceHandle{0xB000u}};
+  OptimizerOptions options{};
+  options.dce = true;
+  const auto prefix = planDceLookaheadReplayPrefix(
+      graph, 3u, options, DceLookaheadProof{prior});
+  check(prefix == std::vector<u32>{0u},
+        "prior proof predicts commands before the first proof-dependent pass");
+
+  check(planDceLookaheadReplayPrefix(
+            graph, 3u, options, DceLookaheadProof{})
+            .empty(),
+        "no prior proof cannot place a speculative ready-FIFO sample boundary");
+
+  FrameGraph first;
+  addRenderPass(first, 0xB000u, 0u);
+  PassNode firstPresent{};
+  firstPresent.kind = PassKind::Present;
+  first.passes.push_back(firstPresent);
+  first.commands = {
+      CommandRef{.command_index = 0,
+                 .kind = dxmt9::core::MetalCommandKind::DrawRun},
+      CommandRef{.command_index = 1,
+                 .kind = dxmt9::core::MetalCommandKind::Present},
+  };
+  first.passes[0].commands = CommandRange{.first = 0, .count = 1};
+  first.passes[1].commands = CommandRange{.first = 1, .count = 1};
+  ResourceNode& firstPredicted = addResource(first, 0xB000u);
+  access(firstPredicted, 0, AccessKind::Write);
+  check(planDceLookaheadReplayPrefix(
+            first, 2u, options, DceLookaheadProof{prior})
+            .empty(),
+        "a proof-dependent first command cannot yield a nonempty prefix");
+}
+
 // reorder: a producer/consumer chain must keep the producer before the consumer
 // even if submission order or cost would otherwise move them.
 void testReorderPreservesEdges() {
@@ -531,6 +646,9 @@ int main() {
     testDceOffKeepsAll();
     testDceOnDropsProvablyDead();
     testDceNeverDropsPresentOrQuery();
+    testDceUsesBoundedNextChunkOverwriteProof();
+    testDceLookaheadRejectsReadBeforeClear();
+    testDceLookaheadPredictsOnlyNonemptySafePrefix();
     testReorderPreservesEdges();
     testReorderRespectsAntiDepEdge();
     testPassCoalesceBlockedByAntiDep();

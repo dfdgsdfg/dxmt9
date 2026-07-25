@@ -140,12 +140,10 @@ ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
   ReplayCommandPlan plan;
   const std::size_t command_count = slot.commandCount();
   plan.command_indices.reserve(command_count);
-  std::vector<bool> seen(command_count, false);
+  std::vector<bool> accounted(command_count, false);
+  std::vector<bool> omitted(command_count, false);
 
   for (const PassNode& pass : graph.passes) {
-    if (pass.flags.dead) {
-      return plan;  // v2 replay-tape lane is passcoalesce-only.
-    }
     if (pass.commands.first > graph.commands.size() ||
         pass.commands.count >
             graph.commands.size() - pass.commands.first) {
@@ -154,30 +152,37 @@ ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
     for (u32 i = 0; i < pass.commands.count; ++i) {
       const CommandRef& ref = graph.commands[pass.commands.first + i];
       if (ref.command_index >= command_count ||
-          seen[ref.command_index] ||
+          accounted[ref.command_index] ||
           slot.commandHeaders[ref.command_index].kind != ref.kind) {
         return plan;
       }
-      seen[ref.command_index] = true;
-      plan.command_indices.push_back(ref.command_index);
+      accounted[ref.command_index] = true;
+      if (pass.flags.dead) {
+        plan.dropped = true;
+        omitted[ref.command_index] = true;
+      } else {
+        plan.command_indices.push_back(ref.command_index);
+      }
     }
   }
 
-  if (plan.command_indices.size() != command_count) {
-    return plan;
-  }
-  for (bool value : seen) {
+  for (bool value : accounted) {
     if (!value) {
       return plan;
     }
   }
 
   plan.valid = true;
-  for (std::size_t i = 0; i < plan.command_indices.size(); ++i) {
-    if (plan.command_indices[i] != i) {
+  std::size_t natural_index = 0;
+  for (const u32 command_index : plan.command_indices) {
+    while (natural_index < command_count && omitted[natural_index]) {
+      ++natural_index;
+    }
+    if (command_index != natural_index) {
       plan.reordered = true;
       break;
     }
+    ++natural_index;
   }
   return plan;
 }

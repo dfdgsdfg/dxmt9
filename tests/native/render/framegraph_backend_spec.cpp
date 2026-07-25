@@ -92,17 +92,24 @@ void testProgressivePasscoalesceResolution() {
                                 RendererCompatProfile::Strict)
             .empty(),
         "strict rejects passcoalesce");
-  check(resolveRendererFeatures(nullptr, RendererCompatProfile::Progressive)
-            .passcoalesce,
+  const auto defaults =
+      resolveRendererFeatures(nullptr, RendererCompatProfile::Progressive);
+  check(defaults.passcoalesce,
         "unset progressive features enable promoted passcoalesce");
+  check(!defaults.dce,
+        "unset progressive features keep bounded DCE opt-in");
   check(resolveRendererFeatures("", RendererCompatProfile::Progressive).empty(),
         "empty progressive features explicitly disable passcoalesce");
   check(resolveRendererFeatures("0", RendererCompatProfile::Progressive).empty(),
         "zero progressive features explicitly disable passcoalesce");
   const auto progressive = resolveRendererFeatures(
-      "passcoalesce,unknown", RendererCompatProfile::Progressive);
+      "passcoalesce,dce,unknown", RendererCompatProfile::Progressive);
   check(progressive.passcoalesce,
         "progressive accepts the implemented passcoalesce feature");
+  check(progressive.dce,
+        "progressive accepts the opt-in bounded DCE feature");
+  check(resolveRendererFeatures("dce", RendererCompatProfile::Strict).empty(),
+        "strict rejects the bounded DCE token");
 }
 
 }  // namespace

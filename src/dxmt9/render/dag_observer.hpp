@@ -39,9 +39,10 @@ struct Pool;
 
 namespace dxmt9::render {
 
-// Build the hazard-identity resolver shared by the production observer and
+// Build the retained-resource resolver shared by the production observer and
 // framegraph encode path. Surface aliases canonicalize to their owning texture;
-// texture and standalone-surface handles remain unchanged.
+// texture and standalone-surface handles remain unchanged. Surface format also
+// proves whether a requested depth/stencil Clear covers every present aspect.
 framegraph::ResourceAliasResolver makeResourceAliasResolver(
     const resources::Pool& pool) noexcept;
 

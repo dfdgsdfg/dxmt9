@@ -353,7 +353,22 @@ private:
     if (!command.clear) {
       return;
     }
-    const AttachmentSet targets = attachmentSetFromClear(*command.clear);
+    const auto& clear = *command.clear;
+    const AttachmentSet targets = attachmentSetFromClear(clear);
+    // A rectangular clear preserves pixels outside the rect set. A
+    // depth-only or stencil-only clear may preserve the other aspect of the
+    // shared depth/stencil resource; ClearDesc does not carry enough format
+    // information to prove that the other aspect is absent. Model either case
+    // as ReadWrite so DCE cannot mistake it for a full-resource overwrite.
+    const AccessKind colorAccessKind =
+        clear.rects.empty() ? AccessKind::Clear : AccessKind::ReadWrite;
+    const AccessKind depthStencilAccessKind =
+        clear.rects.empty() &&
+            aliasResolver_.depthStencilClearCoversResource(
+                ResourceHandle{clear.depthStencil.handle.value},
+                clear.clearDepth, clear.clearStencil)
+            ? AccessKind::Clear
+            : AccessKind::ReadWrite;
     // A clear is a pass boundary: open a fresh render pass that adopts the
     // cleared targets, mirroring beginRenderPass folding a pendingClear into
     // the next encoder. A following same-target draw continues this pass.
@@ -366,17 +381,24 @@ private:
     graph_.passes[currentPass_].commands.count += 1u;
     for (u32 i = 0; i < targets.color_count; ++i) {
       noteAccess(ResourceHandle{targets.color[i].value}, currentPass_,
-                 AccessKind::Clear, AccessStage::Fragment);
+                 colorAccessKind, AccessStage::Fragment);
     }
     if (targets.depth.value != 0) {
       noteAccess(ResourceHandle{targets.depth.value}, currentPass_,
-                 AccessKind::Clear, AccessStage::Fragment);
+                 depthStencilAccessKind, AccessStage::Fragment);
     }
   }
 
   void handlePresent(std::size_t commandIndex) {
     const u32 pass_index = emitStandalonePass(PassKind::Present, commandIndex);
-    (void)pass_index;
+    const auto command = slot_.commandAt(commandIndex);
+    if (command.present && command.present->presentSource.value != 0) {
+      currentPass_ = pass_index;
+      // Present observes the source surface. Recording the read keeps a final
+      // backbuffer writer live even when a later chunk begins with a Clear.
+      noteAccess(ResourceHandle{command.present->presentSource.value},
+                 pass_index, AccessKind::Read, AccessStage::Copy);
+    }
     graph_.flush_boundary = true;  // present is a frame boundary (R-BACK-32.4)
   }
 

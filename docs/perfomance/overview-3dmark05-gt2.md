@@ -5,8 +5,8 @@ title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724
-related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
+source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
@@ -619,11 +619,30 @@ ready-only batching can see the overwrite. A safe prototype needs a fail-open
 cross-chunk scheduling window and TLA+ coverage. See
 [hidden-backend-storage-shape.41](hidden-backend-storage/hidden-backend-storage-shape.41.md).
 
+### Cross-chunk DCE implementation and GT2 gate
+
+The bounded cross-chunk prototype confirms the liveness result in the real
+renderer. With an already-available successor proof, the corrected
+passcoalesce-order prefix drops `389` passes and `56,283` commands and lowers
+GPU-CB p50 `2.886 -> 1.064ms`. Waiting for that proof is not viable:
+instantaneous FPS falls `9.157 -> 6.902` (`-24.6%`) and wall p50 grows
+`106.731 -> 142.400ms` because the cheap prefix no longer overlaps producer
+publication.
+
+The accepted implementation therefore never waits. It encodes only a
+proof-independent prefix, samples the ready FIFO once, and immediately
+fail-opens when the successor is absent. A bootstrap GT2 run exposes `498`
+prefixes but finds only one already-ready successor in `536` frames, dropping
+one pass and `30` commands with zero GPU or proof-validation errors. This is a
+safe opt-in mechanism, not a GT2 performance win, so `dce` remains outside the
+default feature set. See
+[hidden-backend-storage-shape.42](hidden-backend-storage/hidden-backend-storage-shape.42.md).
+
 The practical order after the Immediate-default policy is:
 
-1. Prototype the final-R32F cross-chunk DCE proof with explicit fail-open and
-   TLA+ gates. This is the only identified remaining lever that removes a
-   whole dominant pass; current per-draw index reordering remains exhausted.
+1. Treat cross-chunk DCE as a completed, rejected GT2 default candidate. Reopen
+   it only for a workload or scheduling design with meaningful already-ready
+   successor volume; do not add an encode-lane wait to recover proof coverage.
 2. Treat the alias-aware `18 -> 16` passcoalesce topology as the default L1
    policy. The old `+3.35%` pooled and `~9.9%` workload-normalized results
    crossed a missing producer/consumer edge and remain historical only; close

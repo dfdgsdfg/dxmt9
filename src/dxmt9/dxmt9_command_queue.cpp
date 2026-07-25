@@ -18,6 +18,7 @@
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "render/open_cb_carrier.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -77,6 +78,14 @@ bool openCbCarrierEnabled() {
   std::fprintf(stderr,
                "[dxmt9-queue] fatal: encoded open-CB pending work could not "
                "fail-open by submit (%s)\n",
+               reason ? reason : "unknown");
+  std::abort();
+}
+
+[[noreturn]] void abortDceLookaheadPendingFailOpen(const char* reason) {
+  std::fprintf(stderr,
+               "[dxmt9-queue] fatal: encoded DCE lookahead prefix could not "
+               "be finalized (%s)\n",
                reason ? reason : "unknown");
   std::abort();
 }
@@ -483,6 +492,16 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
                                  slot);
               return submission;
             };
+        if (backend_->wantsNextChunkLookahead()) {
+          if (openCbCarrierEnabled()) {
+            util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+                       "dce next-chunk proof window supersedes the open-CB "
+                       "carrier for this run");
+          }
+          runDceChunkLookaheadEncodeLoop(
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+          return;
+        }
         if (openCbCarrierEnabled()) {
           runOpenCbCarrierEncodeLoop(
               [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
@@ -3662,6 +3681,192 @@ void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubm
     std::unique_lock lock(mutex_);
     if (!queueLifecycle_.runEncodeIteration(lock, encodeChunk, onSubmitted)) {
       return;
+    }
+  }
+}
+
+void CommandQueue::runDceChunkLookaheadEncodeLoop(
+    OnSubmittedFn onSubmitted) {
+  // TLA+: DceChunkLookahead. One held Encoding source plus the FIFO ready
+  // queue refines HeldIsNext / ReadyIsFollowingPrefix; submitting current
+  // before carrying next refines SubmittedPrefix. A prior validated proof may
+  // place the ready-FIFO sample after a prefix of the optimized replay
+  // permutation: that prefix is encoded into an unsubmitted EncodeSession,
+  // while only the freshly selected successor can authorize omissions in the
+  // appended suffix.
+  using core::metalqueue::QueueSubmissionRecord;
+  using core::metalqueue::ReadySlotSnapshot;
+
+  std::optional<ReadySlotSnapshot> held;
+  while (true) {
+    std::unique_lock lock(mutex_);
+    if (!held.has_value()) {
+      ReadySlotSnapshot source{};
+      if (!queueLifecycle_.dequeueReadySlot(lock, source)) {
+        return;
+      }
+      held = source;
+    }
+
+    ReadySlotSnapshot current = *held;
+    held.reset();
+    DXMT_ASSERT(current.slot != nullptr);
+    auto& slot = *current.slot;
+    lock.unlock();
+
+    traceEncodeFnStage("entry", current.slotIndex, slot);
+    traceEncodeFnStage("before-make-context", current.slotIndex, slot);
+    auto ctx = makeEncodeContext();
+    traceEncodeFnStage("after-make-context", current.slotIndex, slot);
+
+    std::vector<std::uint32_t> predictedPrefix =
+        backend_->dceLookaheadReplayPrefix(ctx, current.slotIndex, slot);
+    if (encodeSlotPsoPrefetchEnabled() &&
+        !slot.prefetchedPipelinesSealed()) {
+      traceEncodeFnStage("before-pso-prefetch", current.slotIndex, slot);
+      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+      prefetchSlotPipelines(slot);
+      traceEncodeFnStage("after-pso-prefetch", current.slotIndex, slot);
+    }
+
+    bool predictedPrefixValid =
+        !predictedPrefix.empty() &&
+        predictedPrefix.size() < slot.commandCount();
+    std::vector<bool> predictedCommands(slot.commandCount(), false);
+    for (const std::uint32_t commandIndex : predictedPrefix) {
+      if (commandIndex >= slot.commandCount() ||
+          predictedCommands[commandIndex] ||
+          slot.commandHeaders[commandIndex].kind ==
+              core::MetalCommandKind::Present) {
+        predictedPrefixValid = false;
+        break;
+      }
+      predictedCommands[commandIndex] = true;
+    }
+    if (!predictedPrefixValid) {
+      predictedPrefix.clear();
+    }
+
+    bool encodedPrefix = false;
+    std::optional<QueueSubmissionRecord> prefixSubmission;
+    encoders::EncodeChunkSession prefixSession;
+    if (!predictedPrefix.empty()) {
+      prefixSession = encoders::makeEncodeChunkSession();
+      encoders::EncodeChunkOptions prefixOptions{};
+      prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
+      prefixOptions.session = prefixSession.get();
+      prefixOptions.deferSessionFinalization = true;
+      prefixOptions.replayCommandPlanActive = true;
+      prefixOptions.replayCommandOrder = predictedPrefix;
+      prefixOptions.skipBackendPlanning = true;
+      traceEncodeFnStage("before-dce-lookahead-prefix",
+                         current.slotIndex, slot);
+      prefixSubmission = backend_->onChunkReady(
+          ctx, current.slotIndex, slot, std::move(prefixOptions));
+      traceEncodeFnStage(prefixSubmission.has_value()
+                             ? "after-dce-lookahead-prefix"
+                             : "after-dce-lookahead-prefix-null",
+                         current.slotIndex, slot);
+      if (prefixSubmission.has_value() &&
+          prefixSubmission->commandBuffer) {
+        encodedPrefix = true;
+        perf::countFramegraphDceLookaheadPrefix(predictedPrefix.size());
+      } else {
+        prefixSubmission.reset();
+        prefixSession.reset();
+        predictedPrefix.clear();
+      }
+    }
+
+    lock.lock();
+    ReadySlotSnapshot next{};
+    bool hasNext = false;
+    const DceChunkLookaheadAction action =
+        resolveDceChunkLookaheadAction(!readySlots_.empty());
+    if (action == DceChunkLookaheadAction::UseReady) {
+      hasNext = queueLifecycle_.dequeueReadySlot(lock, next);
+      DXMT_ASSERT(hasNext);
+      // TLA+: DceChunkLookahead / HeldIsNext.
+      DXMT_ASSERT(!hasNext || next.seqId == current.seqId + 1u);
+      perf::countFramegraphDceLookaheadSelected();
+    } else {
+      perf::countFramegraphDceLookaheadFailOpen();
+    }
+
+    std::array<ReadySlotSnapshot, 2> selected{current, next};
+    encoders::EncodeChunkOptions options{};
+    if (hasNext) {
+      options.sessionLookaheadSources =
+          std::span<const ReadySlotSnapshot>(selected);
+    }
+    if (encodedPrefix) {
+      options.allowInjectedCommandBufferMidChunkCommits = true;
+      options.commandBuffer = std::move(prefixSubmission->commandBuffer);
+      options.session = prefixSession.get();
+      options.sessionSource =
+          core::metalqueue::completionSourceForReadySlot(current);
+      options.replayCommandsAlreadyEncoded = predictedPrefix;
+    }
+
+    lock.unlock();
+    traceEncodeFnStage("before-backend-onChunkReady",
+                       current.slotIndex, slot);
+    std::optional<QueueSubmissionRecord> submission =
+        backend_->onChunkReady(ctx, current.slotIndex, slot,
+                               std::move(options));
+    if (submission.has_value() && !submission->commandBuffer) {
+      submission.reset();
+    }
+    if (encodedPrefix) {
+      if (!submission.has_value()) {
+        abortDceLookaheadPendingFailOpen(
+            "suffix encode returned no command buffer");
+      }
+      const std::uint64_t prefixChainLength =
+          std::max<std::uint64_t>(
+              1u, prefixSubmission->commandBufferChainLength);
+      const std::uint64_t suffixChainLength =
+          std::max<std::uint64_t>(
+              1u, submission->commandBufferChainLength);
+      submission->commandBufferChainLength =
+          prefixChainLength + suffixChainLength - 1u;
+      if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
+              std::move(prefixSession), *submission)) {
+        abortDceLookaheadPendingFailOpen("session retain failed");
+      }
+    }
+    traceEncodeFnStage(submission.has_value()
+                           ? "after-backend-onChunkReady-submission"
+                           : "after-backend-onChunkReady-inline",
+                       current.slotIndex, slot);
+    lock.lock();
+
+    if (submission.has_value()) {
+      auto callbacks = std::move(submission->postCommitCallbacks);
+      queueLifecycle_.submitEncodedSubmission(lock, *submission);
+      lock.unlock();
+      for (auto& callback : callbacks) {
+        if (callback) {
+          callback();
+        }
+      }
+      lock.lock();
+    } else {
+      auto deferredReleases =
+          queueLifecycle_.completeInlineChunk(current.slotIndex,
+                                              current.seqId);
+      lock.unlock();
+      deferredReleases.clear();
+      lock.lock();
+      if (onSubmitted) {
+        onSubmitted(current.seqId);
+      }
+    }
+
+    if (hasNext) {
+      held = next;
+      // TLA+: DceChunkLookahead / BoundedHold.
+      DXMT_ASSERT(held->slot != nullptr);
     }
   }
 }

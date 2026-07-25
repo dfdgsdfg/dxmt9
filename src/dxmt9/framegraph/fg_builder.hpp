@@ -42,17 +42,36 @@ namespace dxmt9::framegraph {
 // handles resolve to themselves.
 //
 // The callback shape keeps the device-free builder independent of the Metal
-// resource pool. Tests and strict observation may omit it; production supplies
-// the immutable alias mapping owned by the retained resource records.
+// resource pool. The optional aspect callback also answers whether a
+// depth/stencil Clear covers every aspect present in the retained surface
+// format. Tests and strict observation may omit either callback; production
+// supplies both from immutable retained resource records.
 struct ResourceAliasResolver {
   using ResolveFn =
       ResourceHandle (*)(const void* context, ResourceHandle handle) noexcept;
+  using DepthStencilClearCoversResourceFn =
+      bool (*)(const void* context, ResourceHandle handle,
+               bool clearDepth, bool clearStencil) noexcept;
 
   const void* context = nullptr;
   ResolveFn resolve = nullptr;
+  DepthStencilClearCoversResourceFn depth_stencil_clear_covers_resource =
+      nullptr;
 
   ResourceHandle operator()(ResourceHandle handle) const noexcept {
     return resolve ? resolve(context, handle) : handle;
+  }
+
+  bool depthStencilClearCoversResource(ResourceHandle handle,
+                                       bool clearDepth,
+                                       bool clearStencil) const noexcept {
+    if (depth_stencil_clear_covers_resource) {
+      return depth_stencil_clear_covers_resource(
+          context, handle, clearDepth, clearStencil);
+    }
+    // Without format evidence, only clearing both logical aspects is a
+    // conservative full-resource overwrite.
+    return clearDepth && clearStencil;
   }
 };
 

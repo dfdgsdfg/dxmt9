@@ -5,10 +5,11 @@
 // is absent, no pass is ever dropped — every pass linearizes, which is the
 // parity baseline. This function only runs when the orchestrator gates it on.
 //
-// The Frame Graph window is one CommandChunk (R-BACK-32.1). A pass whose written
-// output is unread inside the chunk MAY still be read by a future chunk, so DCE
-// cannot prove cross-chunk dead-ness from the per-chunk DAG alone. A pass is
-// dead ONLY when ALL conservative gates hold (design §5.1):
+// Each Frame Graph still owns one CommandChunk (R-BACK-32.1). A pass whose
+// written output is unread inside the chunk MAY still be read by a future
+// chunk, so DCE needs either a local proof or the bounded, already-selected
+// successor summary from R-BACK-32.10. A pass is dead ONLY when ALL
+// conservative gates hold (design §5.1):
 //   - it writes a resource that nothing in the chunk reads after the write,
 //   - none of its written resources has CPU readback (readback_seen == 0),
 //   - kind != Present,
@@ -18,7 +19,8 @@
 //   - CROSS-CHUNK SAFETY: at least one written resource is memoryless-eligible
 //     (ResidencyClass::Memoryless — prior-frame observation proved no cross-chunk
 //     read of its stored contents) OR is provably fully overwritten later in the
-//     SAME chunk (a same-chunk Clear of the same handle in a later pass).
+//     SAME chunk (a same-chunk Clear of the same handle in a later pass), OR
+//     the immediate FIFO successor first accesses it through a full Clear.
 // Otherwise the pass stays alive (counted as preserved-unprovable).
 //
 // Dead passes are MARKED (PassNode.flags.dead = true) and stay in the array for
@@ -29,7 +31,9 @@
 
 #include "../fg_optimizer.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <vector>
 
 namespace dxmt9::framegraph {
 
@@ -63,7 +67,94 @@ bool fullyOverwrittenLaterInChunk(const ResourceNode& node, u32 write_pass) {
 
 }  // namespace
 
-void runDce(FrameGraph& graph, OptimizerStats* stats) {
+bool DceLookaheadProof::contains(ResourceHandle handle) const noexcept {
+  for (const ResourceHandle candidate : fully_overwritten_before_read) {
+    if (candidate == handle) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<ResourceHandle> collectDceLookaheadFullOverwrites(
+    const FrameGraph& lookahead) {
+  std::vector<ResourceHandle> result;
+  result.reserve(lookahead.resources.size());
+  for (const ResourceNode& node : lookahead.resources) {
+    if (node.handle.value == 0 || node.accesses.empty() ||
+        node.classifier_flags.lock_seen ||
+        node.classifier_flags.readback_seen) {
+      continue;
+    }
+    if (static_cast<AccessKind>(node.accesses.front().access_kind) ==
+        AccessKind::Clear) {
+      result.push_back(node.handle);
+    }
+  }
+  return result;
+}
+
+std::vector<u32> planDceLookaheadReplayPrefix(
+    const FrameGraph& graph, std::size_t command_count,
+    const OptimizerOptions& options, DceLookaheadProof prior_lookahead) {
+  if (prior_lookahead.fully_overwritten_before_read.empty() ||
+      command_count == 0) {
+    return {};
+  }
+
+  FrameGraph withoutLookahead = graph;
+  FrameGraph withLookahead = graph;
+  OptimizerOptions activeOptions = options;
+  activeOptions.dce = true;
+  runOptimizer(withoutLookahead, activeOptions);
+  runOptimizer(withLookahead, activeOptions, nullptr, nullptr,
+               prior_lookahead);
+
+  if (withoutLookahead.passes.size() != withLookahead.passes.size()) {
+    return {};
+  }
+  const std::size_t passCount =
+      withoutLookahead.passes.size();
+  std::size_t boundaryPass = passCount;
+  for (std::size_t p = 0; p < passCount; ++p) {
+    const PassNode& baselinePass = withoutLookahead.passes[p];
+    const PassNode& predictedPass = withLookahead.passes[p];
+    if (!baselinePass.flags.dead && predictedPass.flags.dead) {
+      boundaryPass = p;
+      break;
+    }
+  }
+  if (boundaryPass == 0 || boundaryPass >= passCount) {
+    return {};
+  }
+
+  std::vector<bool> seen(command_count, false);
+  std::vector<u32> result;
+  for (std::size_t p = 0; p < boundaryPass; ++p) {
+    const PassNode& pass = withLookahead.passes[p];
+    if (pass.flags.dead) {
+      continue;
+    }
+    for (u32 i = 0; i < pass.commands.count; ++i) {
+      const std::size_t commandOffset =
+          static_cast<std::size_t>(pass.commands.first) + i;
+      if (commandOffset >= withLookahead.commands.size()) {
+        return {};
+      }
+      const u32 commandIndex =
+          withLookahead.commands[commandOffset].command_index;
+      if (commandIndex >= command_count || seen[commandIndex]) {
+        return {};
+      }
+      seen[commandIndex] = true;
+      result.push_back(commandIndex);
+    }
+  }
+  return result;
+}
+
+void runDce(FrameGraph& graph, OptimizerStats* stats,
+            DceLookaheadProof lookahead) {
   for (std::size_t p = 0; p < graph.passes.size(); ++p) {
     PassNode& pass = graph.passes[p];
     const u32 pass_index = static_cast<u32>(p);
@@ -115,9 +206,12 @@ void runDce(FrameGraph& graph, OptimizerStats* stats) {
         all_writes_dead = false;
       }
       // Cross-chunk safety for THIS written resource: (a) memoryless-eligible,
-      // or (b) fully overwritten later in this chunk. ANDed across all writes.
+      // (b) fully overwritten later in this chunk, or (c) first accessed by a
+      // full overwrite in the already-selected next chunk. ANDed across all
+      // writes.
       if (node.residency != ResidencyClass::Memoryless &&
-          !fullyOverwrittenLaterInChunk(node, pass_index)) {
+          !fullyOverwrittenLaterInChunk(node, pass_index) &&
+          !lookahead.contains(node.handle)) {
         all_cross_chunk_safe = false;
       }
     }

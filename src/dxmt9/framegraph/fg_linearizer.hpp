@@ -24,9 +24,10 @@
 //
 //   3. planReplayCommands() — the production passcoalesce bridge.
 //      Flattens the optimized pass order into a complete source-command
-//      permutation. FrameGraphBackend supplies it to the existing v2
-//      encodeChunk path, preserving its batching, binding, presenter, capture,
-//      and completion behavior while changing only proven pass order.
+//      permutation or a DCE-validated ordered subset. FrameGraphBackend
+//      supplies it to the existing v2 encodeChunk path, preserving its
+//      batching, binding, presenter, capture, and completion behavior while
+//      changing only proven pass order/retention.
 //
 // L1 CORRECTNESS (spec.md §14 L1 / R-BACK-39.1):
 //   Under default OptimizerOptions{} (no feature passes), the plan MUST
@@ -102,6 +103,7 @@ struct ReplayCommandPlan {
   std::vector<u32> command_indices;
   bool valid = false;
   bool reordered = false;
+  bool dropped = false;
 
   friend bool operator==(const ReplayCommandPlan&,
                          const ReplayCommandPlan&) = default;
@@ -119,9 +121,11 @@ LinearizationPlan planLinearization(const FrameGraph& graph);
 // In-place variant: reuse caller scratch (clears it first). Identical contents.
 void planLinearization(const FrameGraph& graph, LinearizationPlan& out);
 
-// Flatten PassNode::commands in optimized pass order. The plan is valid only
-// when it is a complete, duplicate-free permutation of the source chunk and
-// every retained command kind still matches the source header.
+// Flatten live PassNode::commands in optimized pass order. The plan is valid
+// only when every source command is accounted for exactly once by a live or
+// DCE-dead pass and every command kind still matches the source header. With no
+// dead passes this remains a complete duplicate-free permutation; DCE produces
+// a validated ordered subset and sets `dropped`.
 ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
                                      const core::ChunkSlot& slot);
 

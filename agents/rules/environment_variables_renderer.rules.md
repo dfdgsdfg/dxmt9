@@ -11,7 +11,7 @@ string that is not `0`, unless documented otherwise.
 |---|---|---|
 | `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset and `framegraph` resolve to `FrameGraphBackend`. Empty, `0`, `traditional`, and unknown values resolve to the conservative `TraditionalBackend` rollback. `scripts/run_apps/run_experiment.py` maps an omitted catalogue `render_mode` to `framegraph` unless the process environment explicitly overrides it for a diagnostic run. | framegraph |
 | `DXMT9_RENDERER_COMPAT_PROFILE` | Runtime compatibility-profile override. Unset and `progressive` enable the promoted optimizer set; `strict`, empty, `0`, and unknown values resolve to the feature-empty strict rollback. Catalogue `compat_profile` forwarding is still pending, so per-app rollback currently requires a process-environment override. | progressive |
-| `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. Under the default progressive profile, unset enables only `passcoalesce`; empty or `0` disables every optimizer feature. Explicit tokens currently accept only `passcoalesce`; unsupported tokens are warned and ignored. Strict rejects every token. The production lane builds an optimized source-command tape and replays it through the existing v2 `encodeChunk` path, preserving batching, dirty-rebind, present, and completion behavior. | passcoalesce |
+| `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. Under the default progressive profile, unset enables only `passcoalesce`; empty or `0` disables every optimizer feature. Explicit tokens accept `passcoalesce` and opt-in `dce`; unsupported tokens are warned and ignored. Strict rejects every token. `dce` may encode a proof-independent prefix of one dequeued chunk, then selects its FIFO successor only when that source is already ready; it never waits for proof. Without a ready successor it immediately completes the current optimized permutation without cross-chunk omission. A selected successor may omit only passes whose every output has a full-overwrite proof. The DCE window supersedes `DXMT9_OPEN_CB_CARRIER` when both are selected. The production lane replays a validated full permutation or DCE ordered subset through the existing v2 `encodeChunk` path. | passcoalesce |
 | `DXMT9_RENDERER_LOG_DIVERGENCE` | Enable renderer decision-divergence logging when the parity/divergence harness compares modern decisions against the traditional reference stream. | `0` |
 
 ## Frame Graph DAG debug export
@@ -53,6 +53,14 @@ observer runs:
 | `framegraph_passes_coalesced` | Number of passes merged by analysis/feature-gated passcoalesce in the post-opt observer path. |
 | `framegraph_passes_dead` | Number of DCE-dropped passes in the post-opt observer path. |
 | `framegraph_resources_memoryless` | Number of resources marked memoryless by the observer's post-opt classifier. |
+| `framegraph_dce_dropped` | Production passes omitted by opt-in DCE. |
+| `framegraph_dce_preserved_unprovable` | Production write-bearing passes retained because at least one proof gate failed. |
+| `framegraph_dce_cross_chunk_proof_resources` | Canonical resources whose selected successor begins with a full Clear. |
+| `framegraph_dce_replay_commands_omitted` | Validated v2 source commands omitted because their owning pass is dead. |
+| `framegraph_dce_lookahead_prefixes` | Sources whose proof-independent optimized prefix was encoded before successor selection. |
+| `framegraph_dce_lookahead_prefix_commands` | Commands encoded through those optimized prefixes. |
+| `framegraph_dce_lookahead_selected` | Held sources that obtained a FIFO successor. |
+| `framegraph_dce_lookahead_fail_open` | Held sources completed without successor proof because no FIFO successor was ready after prefix encode. |
 
 ## Current frontier
 
@@ -70,5 +78,6 @@ observer runs:
 - The alias-aware GT1/GT2/GT3 wild runs, exact GT3 glitch-window rerun, and
   env-clean SFIV rendered-scene/stability runs are the promotion evidence.
   Device-backed pixel parity remains evidence debt, not a reason to enable any
-  additional optimizer. Memoryless, DCE, reorder, mesh, and GPU-driven
-  execution remain unimplemented production features.
+  additional optimizer. DCE is implemented only as an explicit token and still
+  lacks wild/pixel/performance promotion evidence. Memoryless, reorder, mesh,
+  and GPU-driven execution remain unimplemented production features.

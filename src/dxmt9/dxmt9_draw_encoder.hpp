@@ -547,15 +547,27 @@ struct EncodeChunkOptions {
   // session is active. The session publishes the ordered list during final
   // submission so one Metal tail can expand to per-source seqId completion.
   std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
-  // Call-local selected EncodeSession suffix used only for load/store proof.
-  // The span points at already dequeued ReadySlotSnapshot entries and must not
-  // be retained by encodeChunk or EncodeSession.
+  // Call-local selected FIFO source suffix used for load/store and FrameGraph
+  // lookahead proofs. The span points at already dequeued ReadySlotSnapshot
+  // entries and must not be retained by encodeChunk or EncodeSession.
   std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};
-  // Optional complete source-command permutation produced by the Frame Graph
-  // passcoalesce planner. Records still execute through the existing v2
-  // encodeChunk switch; only their pass-safe order changes. The span is
-  // call-local and must not be retained.
+  // Optional validated source-command replay plan produced by the Frame Graph.
+  // Passcoalesce supplies a complete permutation; DCE may supply an ordered
+  // subset, including an empty subset when every command belongs to a proven
+  // dead pass. `replayCommandPlanActive` distinguishes that case from the
+  // source-order default. Records still execute through the existing v2
+  // encodeChunk switch. The span is call-local and must not be retained.
+  bool replayCommandPlanActive = false;
   std::span<const std::uint32_t> replayCommandOrder{};
+  // Commands from the full optimized plan already encoded into `session`.
+  // The final DCE lookahead call validates that this sequence is an exact
+  // prefix of the fresh optimized plan, then replays only the remaining tail.
+  // The span is call-local and must not be retained.
+  std::span<const std::uint32_t> replayCommandsAlreadyEncoded{};
+  // The queue already supplied a validated optimized prefix for this partial
+  // call. Skip backend observation and replanning until the final suffix call,
+  // which observes the complete graph and validates that prefix.
+  bool skipBackendPlanning = false;
 
   bool hasInjectedCommandBuffer() const noexcept {
     return static_cast<bool>(commandBuffer);

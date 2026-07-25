@@ -54,6 +54,18 @@ void checkEq(const A& left, const B& right, std::string_view message) {
   }
 }
 
+void dceChunkLookaheadProgressPolicyIsFailOpen() {
+  using dxmt9::DceChunkLookaheadAction;
+  using dxmt9::resolveDceChunkLookaheadAction;
+
+  checkEq(resolveDceChunkLookaheadAction(/*hasReady=*/true),
+          DceChunkLookaheadAction::UseReady,
+          "a ready FIFO successor is selected opportunistically");
+  checkEq(resolveDceChunkLookaheadAction(/*hasReady=*/false),
+          DceChunkLookaheadAction::FailOpen,
+          "no ready successor immediately releases the held source");
+}
+
 template <typename T>
 std::span<const T> asSpan(const std::vector<T>& values) {
   return std::span<const T>(values.data(), values.size());
@@ -1644,6 +1656,7 @@ void mergeEncodedPendingTailSubmissionRejectsSourceListOverflow() {
 
 int main() {
   try {
+    dceChunkLookaheadProgressPolicyIsFailOpen();
     mapWaitTargetNeverExceedsCommittedWaterline();
     appendsSingleLegacySource();
     appendsMultiSourceBatchInStrictSeqOrder();

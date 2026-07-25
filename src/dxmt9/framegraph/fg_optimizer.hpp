@@ -38,6 +38,7 @@
 #include "fg_dag.hpp"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace dxmt9::framegraph {
@@ -75,6 +76,16 @@ struct OptimizerStats {
   u32 memoryless_blocked_observation = 0; // _promotion_blocked_observation
   u32 memoryless_dropped_via_lock = 0;    // _dropped_via_lock
   u32 memoryless_dropped_via_readback = 0;// _dropped_via_readback
+};
+
+// Bounded cross-chunk DCE evidence. The current chunk still owns an independent
+// FrameGraph and no command crosses the chunk boundary; the span only names
+// resources whose first access in an already-selected next chunk is a full
+// overwrite. The proof is call-local and must not be retained.
+struct DceLookaheadProof {
+  std::span<const ResourceHandle> fully_overwritten_before_read{};
+
+  bool contains(ResourceHandle handle) const noexcept;
 };
 
 // Per-surface state that must survive across frames (the prior-frame observation
@@ -135,7 +146,8 @@ class TransientAttachmentPool;
 // off). `stats` (optional) receives mechanism counters.
 void runOptimizer(FrameGraph& graph, const OptimizerOptions& options,
                   std::vector<MemorylessObservation>* observations = nullptr,
-                  OptimizerStats* stats = nullptr);
+                  OptimizerStats* stats = nullptr,
+                  DceLookaheadProof dce_lookahead = {});
 
 // ---------------------------------------------------------------------------
 // Per-pass entry points (declared for direct unit testing).
@@ -169,7 +181,26 @@ void markMemorylessCandidates(FrameGraph& graph,
 // §5.1 — dead-pass elimination. Default OFF. Marks PassNode.flags.dead under all
 // conservative gates; dead passes stay in the array but are excluded from
 // linearization. Feature-gated.
-void runDce(FrameGraph& graph, OptimizerStats* stats);
+void runDce(FrameGraph& graph, OptimizerStats* stats,
+            DceLookaheadProof lookahead = {});
+
+// Build the conservative proof set for a following, already-selected source.
+// A resource is included only when its first chronological access is a full
+// Clear and the graph carries no lock/readback observation for that resource.
+// Rectangular and aspect-incomplete depth/stencil clears are represented as
+// ReadWrite by fg_builder and therefore do not qualify.
+std::vector<ResourceHandle> collectDceLookaheadFullOverwrites(
+    const FrameGraph& lookahead);
+
+// Plan the optimized command prefix that can be encoded before the next
+// chunk's overwrite proof is known. `prior_lookahead` is only a scheduling
+// hint learned from an earlier successor: it chooses a ready-FIFO sample point
+// but can never authorize a drop. The returned commands precede the first pass
+// that would become dead with the hint but stays live without it. An empty
+// result means no useful prefix exists.
+std::vector<u32> planDceLookaheadReplayPrefix(
+    const FrameGraph& graph, std::size_t command_count,
+    const OptimizerOptions& options, DceLookaheadProof prior_lookahead);
 
 // §5.6 — dependency-respecting topological reorder with an integer
 // state-change-cost tiebreaker. Preserves every edge. Feature-gated.

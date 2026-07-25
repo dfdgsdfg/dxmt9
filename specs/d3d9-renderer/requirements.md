@@ -242,6 +242,9 @@ merge into a shared DAG even when no `Present` separates them, and a single
 chunk that spans a `Present` boundary must keep its `Present` record as one
 node inside the DAG. Nodes represent passes (render, compute, blit, present,
 sync). Edges represent resource read/write dependencies internal to the chunk.
+The opt-in DCE lookahead in R-BACK-32.10 may build a second, independent DAG
+for an already-selected FIFO successor and pass only its full-overwrite summary
+to the current DAG. It must not merge the DAGs or create a cross-chunk edge.
 
 **R-BACK-32.8** Per-chunk fence semantics from
 `specs/backend/requirements.md` (chunk `completedSeqId`, deferred resource
@@ -257,6 +260,9 @@ across the chunk boundary.
 input and retained resource-alias mapping must always produce the same DAG, the
 same optimizer outcome, and the same Metal call sequence. The renderer must not
 depend on wall clock, thread scheduling, or any non-deterministic source.
+When R-BACK-32.10 selects a successor, that immutable successor summary is an
+explicit optimizer input. A progress-hazard fail-open may omit that optional
+input, but both outcomes must preserve the same D3D9-visible result.
 
 **R-BACK-32.3** The Frame Graph must track per-resource access logs. For every
 texture, depth buffer, and buffer referenced by a chunk record, the graph
@@ -330,6 +336,35 @@ This identity is the parity baseline used by §10 validation.
 APIs in `specs/backend/spec.md` §4-§5. The graph linearizes the optimized
 DAG and calls the same encoder primitives the traditional path calls. Pass
 boundaries map 1:1 to `MTLRenderCommandEncoder` lifetimes per `R-BACK-2.4`.
+
+**R-BACK-32.10** When the `dce` token is enabled, the queue may hold at most one
+dequeued `CommandChunk N` in `Encoding` state while it encodes a
+proof-independent prefix of the optimized replay permutation. At the prefix
+checkpoint it may select the immediate FIFO successor `N+1` as a bounded proof
+input only when N+1 is already ready. It must not wait for N+1. If no successor
+is ready, it must immediately finish N without a cross-chunk proof. A prior or
+hypothetical overwrite shape may choose the checkpoint but must never authorize
+omission.
+
+The optimizer may drop a pass from N only when every written canonical
+resource is unread after that write in N and is either memoryless, fully
+overwritten later in N, or first accessed by a full-subresource Clear in the
+freshly selected N+1. A rectangular Clear is `ReadWrite`, not a
+full-overwrite proof. A depth/stencil Clear also qualifies only when its flags,
+together with the retained surface format, cover every aspect present in that
+resource; without format evidence it is conservative `ReadWrite`. Present must
+record a read of its source, so a presented backbuffer writer cannot be removed
+by a next-frame Clear.
+
+The queue must submit and complete N before N+1, must retain each slot and its
+resources under its original sequence ID, and must not merge completion
+sources. The final proof/no-proof plan must validate that any commands already
+encoded are an exact prefix of the freshly optimized permutation; a fresh proof
+that would remove an encoded pass must conservatively preserve that pass.
+`dce` stays opt-in and must not create a producer-to-encode wait, including
+when explicitly enabled. The DCE proof window supersedes the experimental
+open-CB carrier when both knobs are selected because the two paths require
+different source ownership.
 
 ---
 
@@ -808,6 +843,12 @@ framegraph_draw_fallback_strict_failed
 framegraph_chunk_fallback_mid_pass_discovery
 framegraph_dce_dropped
 framegraph_dce_preserved_unprovable
+framegraph_dce_cross_chunk_proof_resources
+framegraph_dce_replay_commands_omitted
+framegraph_dce_lookahead_prefixes
+framegraph_dce_lookahead_prefix_commands
+framegraph_dce_lookahead_selected
+framegraph_dce_lookahead_fail_open
 framegraph_optimizer_dag_build_us
 framegraph_optimizer_optimize_us
 ```

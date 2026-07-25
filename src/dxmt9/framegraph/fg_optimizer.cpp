@@ -14,7 +14,8 @@ namespace dxmt9::framegraph {
 
 void runOptimizer(FrameGraph& graph, const OptimizerOptions& options,
                   std::vector<MemorylessObservation>* observations,
-                  OptimizerStats* stats) {
+                  OptimizerStats* stats,
+                  DceLookaheadProof dce_lookahead) {
   // 1. lifetime — always (input to memoryless/reorder; cheap and order-neutral).
   runLifetime(graph);
 
@@ -36,7 +37,7 @@ void runOptimizer(FrameGraph& graph, const OptimizerOptions& options,
   // 4. dce — gated; default OFF. Runs after memoryless so it can use
   //    memoryless-eligibility as a cross-chunk safety gate.
   if (options.dce) {
-    runDce(graph, stats);
+    runDce(graph, stats, dce_lookahead);
   }
 
   // 5. reorder — gated. Dependency-respecting topological reorder; may change

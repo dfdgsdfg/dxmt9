@@ -1,6 +1,7 @@
 #include "dag_observer.hpp"
 
 #include "../dxmt9_backend_types.hpp"  // core::ChunkSlot
+#include "../dxmt9_format_convert.hpp"
 #include "../dxmt9_perf_counters.hpp"
 #include "../dxmt9_resource_pool.hpp"
 #include "../framegraph/fg_builder.hpp"
@@ -25,6 +26,23 @@ framegraph::ResourceHandle resolveResourceAlias(
   return surface && surface->aliasTexture
              ? framegraph::ResourceHandle{surface->aliasTexture.value}
              : handle;
+}
+
+bool depthStencilClearCoversResource(
+    const void* context, framegraph::ResourceHandle handle,
+    bool clearDepth, bool clearStencil) noexcept {
+  const auto* pool = static_cast<const resources::Pool*>(context);
+  const auto* surface = pool ? pool->findSurface(handle.value) : nullptr;
+  if (!surface) {
+    return false;
+  }
+  const bool hasDepth = convert::formatHasDepthAspect(surface->desc.format);
+  const bool hasStencil =
+      convert::formatHasStencilAspect(surface->desc.format);
+  if (!hasDepth && !hasStencil) {
+    return false;
+  }
+  return (!hasDepth || clearDepth) && (!hasStencil || clearStencil);
 }
 
 // Write `<dir>/dag-frame<frameId>-chunk<seqId>-<stage>.json` from a serialized
@@ -91,6 +109,8 @@ framegraph::ResourceAliasResolver makeResourceAliasResolver(
   return framegraph::ResourceAliasResolver{
       .context = &pool,
       .resolve = resolveResourceAlias,
+      .depth_stencil_clear_covers_resource =
+          depthStencilClearCoversResource,
   };
 }
 

@@ -5,18 +5,17 @@ title: "Hidden Backend Storage — the central GPU explanation"
 type: domain-index
 status: current
 updated: 2026-07-25
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/hidden-backend-storage/overview.md; docs/perfomance/hidden-backend-storage/log.md
 ---
 
 # Hidden Backend Storage — the central GPU explanation
 
-Latest tracked row: `H51` - GT2 repeats the same two-write R32F pattern in all
-`503` measured target frames. Three consecutive current-default DAGs prove
-that the final writer's color and depth outputs are overwritten before any
-later read, but ready depth remains exactly one. Reaching the candidate
-requires a fail-open cross-chunk scheduling/proof window, not current
-per-chunk DCE.
+Latest tracked row: `H52` - cross-chunk DCE can remove GT2's final R32F pass,
+but waiting for the successor proof cuts instantaneous FPS by `24.6%`. The
+accepted no-wait design exposes `498` safe prefixes yet finds only one
+already-ready successor in `536` frames and omits just `30` commands. DCE
+therefore remains opt-in and provides no current GT2 performance win.
 
 ## Start Here
 
@@ -26,6 +25,7 @@ per-chunk DCE.
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.42 - Cross-Chunk DCE Removes the R32F Pass but Cannot Wait for GT2 Proof](hidden-backend-storage-shape.42.md)
 - [hidden-backend-storage-shape.41 - GT2 Final R32F Pass Is Observationally Dead but Needs Cross-Chunk Scheduling](hidden-backend-storage-shape.41.md)
 - [hidden-backend-storage-shape.40 - Alias-Aware Pass Coalescing Clears the Default-Promotion Wild Gate](hidden-backend-storage-shape.40.md)
 - [hidden-backend-storage-shape.39 - GT2 R32F Liveness Exposes a Surface-Alias Hazard Gap in Pass Coalescing](hidden-backend-storage-shape.39.md)

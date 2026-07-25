@@ -74,6 +74,23 @@ namespace render { class IRenderBackend; }
 inline constexpr size_t kCommandChunkCount = 32;
 inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
 
+enum class DceChunkLookaheadAction : std::uint8_t {
+  UseReady,
+  FailOpen,
+};
+
+// Pure no-wait policy for the one-next-chunk DCE window. A FIFO-ready successor
+// is selected opportunistically after prefix encode; otherwise the held source
+// is released immediately without a cross-chunk proof. DCE must never create a
+// producer-to-encode bubble.
+inline DceChunkLookaheadAction resolveDceChunkLookaheadAction(
+    bool hasReady) noexcept {
+  if (hasReady) {
+    return DceChunkLookaheadAction::UseReady;
+  }
+  return DceChunkLookaheadAction::FailOpen;
+}
+
 // R-BACK-2.51 — shared present-latency helpers. Both the inline seqId-based
 // present boundary (CommandQueue::presentBoundary /
 // CommandQueue::deferPresentBoundary, via presentBoundaryLatency() below)
@@ -581,6 +598,10 @@ class CommandQueue {
           std::size_t slotIndex, core::ChunkSlot& slot)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
+  // Opt-in one-next-source proof window used by FrameGraph DCE. Holds at most
+  // one dequeued source, never moves commands across chunks, and immediately
+  // releases without proof when no successor is ready after prefix encode.
+  void runDceChunkLookaheadEncodeLoop(OnSubmittedFn onSubmitted);
   // H229 open-CB overlap carrier encode lane (DXMT9_OPEN_CB_CARRIER).
   // Keeps the current Metal command buffer open across appendable chunk
   // boundaries, accepts semantically-published ready work into it, and

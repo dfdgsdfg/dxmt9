@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace dxmt9::render {
 
@@ -43,6 +44,24 @@ class IRenderBackend {
       encoders::EncodeChunkOptions options = {}) = 0;
   virtual BackendMode mode() const = 0;
   virtual BackendCaps caps() const { return {}; }
+  // Opt-in queue planning seam for bounded cross-chunk proofs. The queue may
+  // retain one dequeued Encoding slot while it encodes a safe prefix, then use
+  // an already-ready FIFO successor or fail open without waiting. It must
+  // preserve per-chunk submission/completion order. Traditional and default
+  // FrameGraph paths return false.
+  virtual bool wantsNextChunkLookahead() const { return false; }
+  // Optional scheduling hint for the DCE lookahead lane. The backend may use
+  // previously observed proof shape to identify a non-empty prefix of the
+  // optimized replay permutation that can be encoded before the actual
+  // successor is available.
+  // This hint never authorizes omission; onChunkReady must still validate the
+  // selected successor before producing a DCE replay subset.
+  virtual std::vector<std::uint32_t> dceLookaheadReplayPrefix(
+      encoders::EncodeContext& /*ctx*/,
+      std::size_t /*slotIndex*/,
+      const core::ChunkSlot& /*slot*/) {
+    return {};
+  }
 };
 
 }  // namespace dxmt9::render

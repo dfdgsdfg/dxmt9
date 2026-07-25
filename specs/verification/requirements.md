@@ -91,6 +91,14 @@ only after the Metal tail containing its commands completes, per-source
 completion drains in strict sequence order, and present completion advances only
 for the represented present tail source.
 
+**R-VERIF-2.12** The formal spec must prove the bounded DCE successor-window
+refinement from R-BACK-32.10: at most one source is held outside the ready FIFO,
+the held source and ready suffix remain consecutive, submission stays in strict
+source order, an encoded prefix remains owned by the held source, and no-ready
+fail-open release cannot discard or overtake a source. The implementation
+must not wait for a successor.
+Coverage is provided by `tla/DceChunkLookahead.tla`.
+
 ---
 
 ## 3. Resource Lifetime

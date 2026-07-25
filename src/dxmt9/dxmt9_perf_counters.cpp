@@ -1848,6 +1848,14 @@ struct Counters {
   std::atomic<std::uint64_t> framegraphPassesDead{0};
   std::atomic<std::uint64_t> framegraphResourcesMemoryless{0};
   std::atomic<std::uint64_t> framegraphDagDumpsWritten{0};
+  std::atomic<std::uint64_t> framegraphDceDropped{0};
+  std::atomic<std::uint64_t> framegraphDcePreservedUnprovable{0};
+  std::atomic<std::uint64_t> framegraphDceCrossChunkProofResources{0};
+  std::atomic<std::uint64_t> framegraphDceReplayCommandsOmitted{0};
+  std::atomic<std::uint64_t> framegraphDceLookaheadPrefixes{0};
+  std::atomic<std::uint64_t> framegraphDceLookaheadPrefixCommands{0};
+  std::atomic<std::uint64_t> framegraphDceLookaheadSelected{0};
+  std::atomic<std::uint64_t> framegraphDceLookaheadFailOpen{0};
   // Sliding rings (R-BENCH-1.2): 64-sample percentile windows paired with the
   // *_max_ms counters above. Used to emit P50/P95/P99 in the shutdown report
   // so regression detection isn't outlier-driven by a single GC pause.
@@ -4178,6 +4186,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"framegraph_passes_dead", CounterEntry::Kind::UnsignedCount, &Counters::framegraphPassesDead, nullptr, nullptr, 0.0},
     {"framegraph_resources_memoryless", CounterEntry::Kind::UnsignedCount, &Counters::framegraphResourcesMemoryless, nullptr, nullptr, 0.0},
     {"framegraph_dag_dumps_written", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDagDumpsWritten, nullptr, nullptr, 0.0},
+    {"framegraph_dce_dropped", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceDropped, nullptr, nullptr, 0.0},
+    {"framegraph_dce_preserved_unprovable", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDcePreservedUnprovable, nullptr, nullptr, 0.0},
+    {"framegraph_dce_cross_chunk_proof_resources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceCrossChunkProofResources, nullptr, nullptr, 0.0},
+    {"framegraph_dce_replay_commands_omitted", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceReplayCommandsOmitted, nullptr, nullptr, 0.0},
+    {"framegraph_dce_lookahead_prefixes", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadPrefixes, nullptr, nullptr, 0.0},
+    {"framegraph_dce_lookahead_prefix_commands", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadPrefixCommands, nullptr, nullptr, 0.0},
+    {"framegraph_dce_lookahead_selected", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadSelected, nullptr, nullptr, 0.0},
+    {"framegraph_dce_lookahead_fail_open", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadFailOpen, nullptr, nullptr, 0.0},
 };
 
 void report() {
@@ -4991,6 +5007,35 @@ void countFramegraphResourcesMemoryless(std::uint64_t resources) {
 
 void countFramegraphDagDumpWritten() {
   add(counters().framegraphDagDumpsWritten);
+}
+
+void countFramegraphDceDropped(std::uint64_t passes) {
+  add(counters().framegraphDceDropped, passes);
+}
+
+void countFramegraphDcePreservedUnprovable(std::uint64_t passes) {
+  add(counters().framegraphDcePreservedUnprovable, passes);
+}
+
+void countFramegraphDceCrossChunkProofResources(std::uint64_t resources) {
+  add(counters().framegraphDceCrossChunkProofResources, resources);
+}
+
+void countFramegraphDceReplayCommandsOmitted(std::uint64_t commands) {
+  add(counters().framegraphDceReplayCommandsOmitted, commands);
+}
+
+void countFramegraphDceLookaheadPrefix(std::uint64_t commands) {
+  add(counters().framegraphDceLookaheadPrefixes);
+  add(counters().framegraphDceLookaheadPrefixCommands, commands);
+}
+
+void countFramegraphDceLookaheadSelected() {
+  add(counters().framegraphDceLookaheadSelected);
+}
+
+void countFramegraphDceLookaheadFailOpen() {
+  add(counters().framegraphDceLookaheadFailOpen);
 }
 
 void countPipelineBuild() {

@@ -14627,8 +14627,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
   std::vector<std::size_t> replayOrdinalByCommandIndex;
-  if (!options.replayCommandOrder.empty()) {
-    if (options.replayCommandOrder.size() != replayRange.commandCount()) {
+  if (options.replayCommandPlanActive) {
+    if (options.replayCommandOrder.size() > replayRange.commandCount()) {
       return std::nullopt;
     }
     const auto missingOrdinal = std::numeric_limits<std::size_t>::max();
@@ -14663,6 +14663,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         << " commands=" << slot.commandCount()
         << " command_begin=" << replayRange.commandBegin
         << " command_end=" << replayRange.commandEnd
+        << " command_plan=" << (options.replayCommandPlanActive ? 1 : 0)
         << " command_order=" << options.replayCommandOrder.size()
         << " draw_only=" << (slot.drawOnlyCommandStream() ? 1 : 0);
     emitQueueTraceLine(out.str());
@@ -15254,7 +15255,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           : sourceSlot.commandCount();
     };
     const bool selectedSessionLookaheadStartsHere =
-        options.replayCommandOrder.empty() &&
+        !options.replayCommandPlanActive &&
         !options.sessionLookaheadSources.empty() &&
         (options.sessionSource.has_value()
              ? readySlotSnapshotMatchesCompletionSource(
@@ -15305,7 +15306,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     if (storeProofLookaheadCount == 0 &&
         useSourceLocalStoreProofLookahead(options.session != nullptr,
                                          deferSessionFinalization)) {
-      if (options.replayCommandOrder.empty()) {
+      if (!options.replayCommandPlanActive) {
         appendStoreProofLookahead(
             &slot, firstCommandAfter(slot, lookaheadStartIndex),
             slot.commandCount());
@@ -16408,13 +16409,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   const std::size_t replayCommandCount =
-      options.replayCommandOrder.empty()
-          ? replayRange.commandCount()
-          : options.replayCommandOrder.size();
+      options.replayCommandPlanActive
+          ? options.replayCommandOrder.size()
+          : replayRange.commandCount();
   auto replayCommandIndexAt = [&](std::size_t ordinal) {
-    return options.replayCommandOrder.empty()
-        ? replayRange.commandBegin + ordinal
-        : static_cast<std::size_t>(options.replayCommandOrder[ordinal]);
+    return options.replayCommandPlanActive
+        ? static_cast<std::size_t>(options.replayCommandOrder[ordinal])
+        : replayRange.commandBegin + ordinal;
   };
 
   if (slot.drawOnlyCommandStream()) {
