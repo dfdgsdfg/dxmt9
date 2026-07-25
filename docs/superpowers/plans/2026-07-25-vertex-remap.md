@@ -653,7 +653,7 @@ class VertexOrderCliTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             summary = json.loads(
-                (output_dir / "dxmt9_3dmark05_mini_replay_summary.json").read_text(
+                (output_dir / "mini-replay-summary.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -678,7 +678,9 @@ Before running, confirm the summary filename by inspecting how the harness write
 
 Run: `grep -n "summary" scripts/tools/run_3dmark05_mini_replay.py | grep -i "write_text\|json.dump\|_summary"`
 
-If the emitted name differs from `dxmt9_3dmark05_mini_replay_summary.json`, use the actual name in `VertexOrderCliTest`.
+The harness writes `mini-replay-summary.json` (confirmed during Task 2). If the emitted name differs from that, use the actual name in `VertexOrderCliTest`.
+
+The manifest fixture also needs a `"shaders"` block, because the harness's `prepare()` path resolves per-draw MSL before it materializes payloads. Model a minimal one on the fixture in `tests/scripts/test_run_3dmark05_mini_replay.py` — one vertex and one fragment source is enough for a single-stream, texture-free draw.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1098,7 +1100,7 @@ for L in A B C D; do
   echo "== lane $L"
   python3 -c "
 import json,sys
-s=json.load(open('$LANES/lane$L/dxmt9_3dmark05_mini_replay_summary.json'))
+s=json.load(open('$LANES/lane$L/mini-replay-summary.json'))
 e=s['index_cache_estimate']
 print(' vertex_order', s['vertex_order'], 'primitive_order', s['primitive_order'])
 print(' lru32 original', e['original_lru32_misses'], 'replay', e['replay_lru32_misses'])
