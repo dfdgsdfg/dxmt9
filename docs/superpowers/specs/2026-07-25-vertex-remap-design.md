@@ -123,9 +123,11 @@ first-reference sequence is exactly `0, 1, 2, …`, and the new maximum index
 `|F| - 1` is at most the original maximum index, so uint16 index payloads cannot
 overflow.
 
-Precondition: `bv + |F| <= S`. If a draw violates it, fall back to `bv = 0` for
-that draw and record the fallback in the lane provenance. `bv` is expected to be
-`0` for these dumps, so the fallback should not trigger.
+`bv + |F| <= S` always holds and needs no fallback. Every index is
+non-negative, so `bv <= min(F)`, and therefore
+`bv + |F| <= max(F) + 1 <= S`. The implementation keeps the check as a
+defensive assertion rather than a reachable branch, and `base_vertex` is never
+rewritten.
 
 **Lane D — scatter**
 

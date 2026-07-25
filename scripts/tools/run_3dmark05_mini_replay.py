@@ -232,6 +232,124 @@ def uint16_indices(payload: bytes) -> list[int]:
     return list(struct.unpack(f"<{len(payload) // 2}H", payload))
 
 
+def vertex_slot_capacity(payload_bytes: int, offset: int, stride: int) -> int:
+    """Number of addressable vertex slots in a dumped stream payload.
+
+    The replay shader fetches a vertex at `offset + (index + base_vertex) *
+    stride`, so slots start at `offset`, not at byte 0 of the payload.
+    """
+    if stride <= 0:
+        raise SystemExit(f"vertex stride must be positive, got {stride}")
+    if offset < 0:
+        raise SystemExit(f"vertex offset must be non-negative, got {offset}")
+    usable = payload_bytes - offset
+    if usable < stride:
+        raise SystemExit(
+            f"stream payload of {payload_bytes} bytes at offset {offset} "
+            f"cannot hold one {stride}-byte vertex"
+        )
+    return usable // stride
+
+
+def vertex_reference_order(indices: list[int],
+                          base_vertex: int,
+                          vertex_order: str) -> list[int]:
+    """Distinct fetch slots referenced by `indices`, ordered per `vertex_order`.
+
+    `first-reference` returns them in order of first appearance, which makes the
+    rewritten first-reference index sequence exactly 0, 1, 2, ... `scatter`
+    returns them ordered by a multiplicative hash of the slot value, which
+    decorrelates the layout from both slot value and reference order. The hash
+    sort is used instead of an RNG so the permutation is reproducible across
+    Python versions.
+    """
+    seen: set[int] = set()
+    first_reference: list[int] = []
+    for index in indices:
+        slot = index + base_vertex
+        if slot < 0:
+            raise SystemExit(
+                f"index {index} with base_vertex {base_vertex} yields negative slot"
+            )
+        if slot not in seen:
+            seen.add(slot)
+            first_reference.append(slot)
+    if vertex_order == "first-reference":
+        return first_reference
+    if vertex_order == "scatter":
+        return sorted(first_reference,
+                      key=lambda slot: ((slot * 2654435761) % (2 ** 32), slot))
+    raise SystemExit(f"unsupported vertex order: {vertex_order}")
+
+
+def vertex_slot_assignment(order: list[int],
+                           base_vertex: int,
+                           slot_count: int) -> list[int]:
+    """Map every old slot to a new slot. Returns `new_for_old`.
+
+    Referenced slots land at `base_vertex + k` in `order` order, so the
+    rewritten index for `order[k]` is simply `k`. Unreferenced slots fill the
+    remaining positions in ascending order, which keeps the payload size and
+    byte multiset identical to the source and leaves `base_vertex` valid.
+
+    `base_vertex + len(order) <= slot_count` always holds for real input,
+    because every index is non-negative, so `base_vertex <= min(order)` and
+    therefore `base_vertex + len(order) <= max(order) + 1 <= slot_count`. The
+    check below is a defensive assertion, not a reachable branch.
+    """
+    if len(order) > slot_count:
+        raise SystemExit(
+            f"{len(order)} referenced vertices exceed {slot_count} payload slots"
+        )
+    for slot in order:
+        if slot >= slot_count:
+            raise SystemExit(
+                f"referenced slot {slot} escapes {slot_count} payload slots"
+            )
+    if base_vertex + len(order) > slot_count:
+        raise SystemExit(
+            f"base_vertex {base_vertex} plus {len(order)} referenced vertices "
+            f"exceed {slot_count} payload slots"
+        )
+    new_for_old: list[int] = [-1] * slot_count
+    taken: set[int] = set()
+    for position, slot in enumerate(order):
+        target = base_vertex + position
+        new_for_old[slot] = target
+        taken.add(target)
+    spare = (slot for slot in range(slot_count) if slot not in taken)
+    for slot in range(slot_count):
+        if new_for_old[slot] < 0:
+            new_for_old[slot] = next(spare)
+    return new_for_old
+
+
+def apply_vertex_permutation(payload: bytes,
+                             offset: int,
+                             stride: int,
+                             new_for_old: list[int]) -> bytes:
+    """Relocate each vertex slot. Reads from `payload`, writes into a copy."""
+    out = bytearray(payload)
+    for old_slot, new_slot in enumerate(new_for_old):
+        src = offset + old_slot * stride
+        dst = offset + new_slot * stride
+        out[dst:dst + stride] = payload[src:src + stride]
+    return bytes(out)
+
+
+def rewrite_indices_for_permutation(indices: list[int],
+                                    base_vertex: int,
+                                    order: list[int]) -> list[int]:
+    """Rewrite each index to its slot's position in `order`."""
+    position = {slot: index for index, slot in enumerate(order)}
+    rewritten = [position[index + base_vertex] for index in indices]
+    if rewritten and max(rewritten) > 0xffff:
+        raise SystemExit(
+            f"rewritten index {max(rewritten)} exceeds uint16 range"
+        )
+    return rewritten
+
+
 def lru_cache_misses(indices: list[int], cache_size: int) -> int:
     cache: list[int] = []
     misses = 0

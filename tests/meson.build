@@ -177,3 +177,8 @@ test('dxmt9-run-experiment-renderer-defaults', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-mini-replay-vertex-order', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_mini_replay_vertex_order.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
