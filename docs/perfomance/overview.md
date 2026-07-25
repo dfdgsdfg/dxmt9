@@ -5,7 +5,7 @@ title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; experiments/output/app-d3d9-3dmark05-release-default-gt{1,2,3}-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -70,6 +70,34 @@ and replaced by the successful `r3-retry1` run. SFIV also has a separate
 260.6-second stability sample (`42.684` sampled FPS, GPU CB p50/p95
 `3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
 median.
+
+### 2026-07-25 Release-Default Spot Check
+
+Commit `5dc7ca0160241da1b45e8d96950fa0ed7be9647f` was rebuilt from all three
+release/O3 staging directories and measured with the current engine defaults.
+Only perf counters and frame sampling were enabled; Metal capture, encoder
+breakdown, renderer experiment features, cross-chunk DCE, and the standard
+probe's `DXMT_DISABLE_AUTO_EXPAND_INDEXED` override were disabled.
+The GT runs used frontmost supervision, and SFIV retained the duration-matched
+25-second capture delay plus 110-second timeout.
+The repeated 3DMark references used the standard probe's auto-expand override,
+so their deltas below are context, not same-policy A/B regressions.
+
+| Workload | Closest reference FPS | Release FPS | Delta | Wall p50 / p95 | GPU CB p50 / p95 |
+|---|---:|---:|---:|---:|---:|
+| GT1 | `21.009` | `20.540` | `-2.23%` | `44.426 / 67.520ms` | `1.163 / 1.240ms` |
+| GT2 | `8.150` | `8.319` | `+2.07%` | `103.046 / 155.840ms` | `2.971 / 3.405ms` |
+| GT3 | `27.858` | `27.981` | `+0.44%` | `29.355 / 82.801ms` | `7.729 / 11.071ms` |
+| SFIV | `44.668` | `45.416` | `+1.67%` | `16.702 / 47.793ms` | `3.810 / 8.633ms` |
+
+All four runs passed with zero chunk/V2 rejects, GPU command-buffer errors,
+pipeline-build failures, missing-pipeline draws, and DCE activity. GT1 shows
+the muzzle/bloom path, GT2 the forest scene, GT3 a coherent full frame without
+the quadrant rectangle at its ordinary capture point, and SFIV the expected
+Ryu lighting/post-effect frame with a `46.06` benchmark overlay average. This
+is a single-run release sanity set, not a replacement for the repeated
+baselines above. GT2's original `7.868` promotion baseline is `5.73%` below
+this release sample; `8.150` is the closer post-policy reference.
 
 ### Direct-Cbuf Generality Gate
 

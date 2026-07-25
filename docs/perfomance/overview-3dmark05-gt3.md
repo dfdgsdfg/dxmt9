@@ -4,8 +4,8 @@ workload: 3DMark05 GT3
 title: "3DMark05 GT3 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-07-20
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair{1,2,3,4,5}-{v1,v2}; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+updated: 2026-07-25
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair{1,2,3,4,5}-{v1,v2}; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
@@ -37,6 +37,15 @@ One first `r3` launch stopped early with `missing_capture`; it is excluded and
 the completed `r3-retry1` run is the third sample. The failure contained no
 renderer/GPU error and is not mixed into either the performance or visual
 verdict.
+
+The 2026-07-25 release-default spot check rebuilt commit `5dc7ca01` as
+release/O3 and records `2,210` positive samples over `78.982s`, or `27.981`
+sampled FPS. Wall p50/p95 is `29.355/82.801ms` and GPU-CB p50/p95 is
+`7.729/11.071ms`; FPS is `0.44%` above the repeated median. The ordinary
+`0:54.44` capture shows the airship, water, lighting, and a coherent full frame
+without a quadrant rectangle, but it does not replace the exact 66-68-second
+gate. Chunk/V2 rejects, GPU errors, pipeline failures, missing-pipeline draws,
+and DCE activity are all zero.
 
 The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
 measures sampled FPS `27.753 -> 27.893` (`+0.50%`) while draw/chunk CPU falls

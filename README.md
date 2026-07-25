@@ -9,6 +9,22 @@ into Metal with no Vulkan middle layer. Supports `IDirect3D9`,
 Related projects: [DXMT](https://github.com/3Shain/dxmt) (D3D11/D3D12 Metal),
 [d3d9-webgl](https://github.com/LostMyCode/d3d9-webgl) (D3D9 reference).
 
+## Performance Snapshot
+
+Current release-default snapshot, measured on a 16 GB MacBook Air with an
+Apple M1 8-core GPU using Sikarugir-CX 24.0.7 Wine:
+
+| Workload | Average FPS |
+|---|---:|
+| 3DMark05 GT1 | `20.5` |
+| 3DMark05 GT2 | `8.3` |
+| 3DMark05 GT3 | `28.0` |
+| Street Fighter IV Benchmark | `45.4` |
+
+These are single-run frame-sampled averages, not 3DMark scores. See the
+[performance overview](docs/perfomance/overview.md) for methodology, visual
+checks, repeated baselines, and historical comparisons.
+
 ---
 
 ## Prerequisites

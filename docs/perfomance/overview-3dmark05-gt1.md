@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-21
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md
+updated: 2026-07-25
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -50,6 +50,15 @@ This supersedes the older `~16-17` sampled-FPS calibration as the current
 whole-run reference. The narrow `1.3%` max/min FPS spread is small enough to
 use this baseline for future A/B gates without first increasing the repeat
 count.
+
+The 2026-07-25 release-default spot check rebuilt commit `5dc7ca01` as
+release/O3 and ran with counters/frame sampling only. It records `2,242`
+positive samples over `109.155s`, or `20.540` sampled FPS, with wall
+p50/p95 `44.426/67.520ms` and GPU-CB p50/p95 `1.163/1.240ms`. FPS is
+`2.23%` below the repeated baseline median and remains a release sanity result,
+not a new baseline. The capture shows the robot, weapon, muzzle flash, bloom,
+lighting, and floor reflection intact. Chunk rejects, V2 rejects, GPU errors,
+pipeline failures, missing-pipeline draws, and DCE activity are all zero.
 
 The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
 adds two OFF and two ON current-build runs. Direct-cbuf changes sampled FPS

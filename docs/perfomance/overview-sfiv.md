@@ -5,7 +5,7 @@ title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md
 ---
 
@@ -42,6 +42,16 @@ A separate long run observed 260.6 seconds and 10,740 presents. It sustained
 `42.684` sampled FPS with GPU CB p50/p95 `3.233/7.703ms` and zero GPU errors.
 Because its scene/loop coverage differs, it is stability evidence rather than
 a third member of the duration-matched median.
+
+The 2026-07-25 release-default spot check rebuilt commit `5dc7ca01` as
+release/O3 and repeated the duration-matched window. It emits `5,654` positive
+frame samples over `124.493s`, or `45.416` sampled FPS (`+1.67%` versus the
+two-run median), with wall p50/p95 `16.702/47.793ms` and GPU-CB p50/p95
+`3.810/8.633ms`. The capture shows Ryu, lighting, bloom/blur, glyphs, and
+logos; its overlay reports `47.94` instantaneous and `46.06` average FPS.
+Chunk/V2 rejects, GPU errors, pipeline failures, missing-pipeline draws, and
+DCE activity are all zero. This single run confirms release health without
+replacing the repeated baseline.
 
 The 2026-07-25 env-clean default-renderer regression closes the SFIV
 scene-level gate for promoted `framegraph + progressive + passcoalesce`. Its
