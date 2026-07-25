@@ -98,6 +98,16 @@ retain their windows. Publication-to-dequeue remains only about
 throughput frontier remains current-frame GPU vertex/pass work and residual
 CPU snapshot/encode cost.
 
+GT2 is not yet at a demonstrated GPU-work ceiling. A 2026-07-25 whole-run
+liveness closure finds the final dominant `2048x2048 R32F` pass dead in all
+`503` measured target frames; three consecutive alias-aware DAGs also prove
+its shared depth dead. The opportunity is structural but not reachable from
+the current one-chunk optimizer window: all `531` encode dequeues observed
+ready depth exactly one. The next GPU-work experiment is therefore a
+fail-open, TLA-backed cross-chunk proof window, not another publication or
+per-draw locality tweak. See
+[hidden-backend-storage-shape.41](hidden-backend-storage/hidden-backend-storage-shape.41.md).
+
 ### V1 and Historical Comparison Boundary
 
 V1 is no longer runnable at current HEAD, so comparisons use preserved

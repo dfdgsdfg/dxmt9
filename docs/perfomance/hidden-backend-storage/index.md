@@ -5,18 +5,18 @@ title: "Hidden Backend Storage — the central GPU explanation"
 type: domain-index
 status: current
 updated: 2026-07-25
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
 related: docs/perfomance/hidden-backend-storage/overview.md; docs/perfomance/hidden-backend-storage/log.md
 ---
 
 # Hidden Backend Storage — the central GPU explanation
 
-Latest tracked row: `H50` - alias-aware passcoalesce completes GT1/GT2/GT3
-without observed GPU/pipeline failures, preserves the corrected GT2 order, and
-does not reproduce the known GT3 quadrant glitch in exact-window captures. The
-env-clean default SFIV run also reaches a valid rendered scene with clean
-stability counters. The passcoalesce-only L1 policy is promoted; broader
-production options remain off.
+Latest tracked row: `H51` - GT2 repeats the same two-write R32F pattern in all
+`503` measured target frames. Three consecutive current-default DAGs prove
+that the final writer's color and depth outputs are overwritten before any
+later read, but ready depth remains exactly one. Reaching the candidate
+requires a fail-open cross-chunk scheduling/proof window, not current
+per-chunk DCE.
 
 ## Start Here
 
@@ -26,6 +26,7 @@ production options remain off.
 
 ## Recent Leaf Documents
 
+- [hidden-backend-storage-shape.41 - GT2 Final R32F Pass Is Observationally Dead but Needs Cross-Chunk Scheduling](hidden-backend-storage-shape.41.md)
 - [hidden-backend-storage-shape.40 - Alias-Aware Pass Coalescing Clears the Default-Promotion Wild Gate](hidden-backend-storage-shape.40.md)
 - [hidden-backend-storage-shape.39 - GT2 R32F Liveness Exposes a Surface-Alias Hazard Gap in Pass Coalescing](hidden-backend-storage-shape.39.md)
 - [hidden-backend-storage-shape.38 - GT2 R32F Alpha-Test Draws Are Already at the Index-Locality Floor](hidden-backend-storage-shape.38.md)
