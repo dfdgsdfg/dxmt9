@@ -12,7 +12,7 @@ Prepare the repository for public release:
    release package, and the formal-verification story. Restrained tone:
    facts, numbers, and tables; no marketing copy.
 2. Move the developer build/install detail out of the README into
-   `docs/building.md`, with a thin `agents/rules/build.rules.md` pointer
+   `docs/build.md`, with a thin `agents/rules/build.rules.md` pointer
    carrying only agent-relevant operational rules.
 3. Add GitHub Actions: a CI build/test workflow and a tag-triggered
    release workflow that publishes the native app-local package.
@@ -22,8 +22,8 @@ Prepare the repository for public release:
 - **Release artifact**: app-local package only
   (`dxmt9-app-local-<tag>.tar.gz` from
   `scripts/tools/package_app_local.py`). The builtin lane stays a
-  build-from-source path documented in `docs/building.md`.
-- **Developer docs location**: `docs/building.md` for humans;
+  build-from-source path documented in `docs/build.md`.
+- **Developer docs location**: `docs/build.md` for humans;
   `agents/rules/build.rules.md` is a thin pointer plus the few
   agent-operational build rules (build-dir naming, the direct-ninja
   install_name fixup gotcha).
@@ -49,7 +49,7 @@ Installation          — download release, copy 5 files next to the game,
                         WINEDLLOVERRIDES guidance
 Formal verification   — what the four TLA+ specs cover + one-line TLC run
 Status                — condensed layer status table
-Building from source  — link to docs/building.md
+Building from source  — link to docs/build.md
 License / Credits     — related projects (DXMT etc.)
 ```
 

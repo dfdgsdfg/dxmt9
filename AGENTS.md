@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 dxmt9 is a Wine / D3D9-to-Metal translation layer for macOS. It translates
 Direct3D 9 calls from apps running under Wine directly into Metal, with no
-Vulkan middle layer. See `README.md` for full prerequisites, build, and install
-instructions; this file is the orientation layer for agents.
+Vulkan middle layer. See `docs/build.md` for full prerequisites, build, and
+install instructions (`README.md` is the user-facing overview); this file is
+the orientation layer for agents.
 
 ## Read these first
 
@@ -15,6 +16,7 @@ touching that surface — they encode hard-won constraints, not suggestions:
 | Rule file | When it applies |
 |---|---|
 | `agents/rules/codebase_conventions.rules.md` | Any implementation change — PE/unix/Metal boundary, hot-path DOD shape, span ownership, formatting. |
+| `agents/rules/build.rules.md` | Driving builds — build-dir naming contract, install_name fixup gotcha, ABI lockstep; full guide in `docs/build.md`. |
 | `agents/rules/environment_variables.rules.md` | Any `DXMT*` / `DXMT9*` runtime knob (master list). |
 | `agents/rules/metal_debugging.rules.md` | GPU-side debugging: frame capture, `.gputrace`, signposts, perf counters, 3DMark05 GT1 probe toolkit. |
 | `agents/rules/test_wild.rules.md` | Running against real D3D9 binaries under Wine (runtime selection — must use Sikarugir/symbol-exposing `winemac.so`). |
@@ -68,7 +70,8 @@ attach if they drift.
 
 ## Build & test
 
-Full prerequisites (`llvm-mingw`, `uv`, `WINE_ROOT`, etc.) are in `README.md`.
+Full prerequisites (`llvm-mingw`, `uv`, `WINE_ROOT`, etc.) are in
+`docs/build.md`.
 Toolchain is **Meson + Ninja, C++20 / C17**. The repo keeps four staging build
 dirs (the runner scripts and `test_wild.rules.md` expect these exact names):
 
