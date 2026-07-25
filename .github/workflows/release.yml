@@ -1,0 +1,122 @@
+name: Release
+
+# Builds the native app-local package (DXVK-style: PE x64 + x86 DLLs and
+# the x86_64 Wine unixlib provider) and publishes it as a GitHub Release
+# on version tags. See docs/build.md for the underlying build lanes.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  LLVM_MINGW_VERSION: '20260324'
+  SIKARUGIR_ENGINE: 'sikarugir-cx-24.0.7'
+
+permissions:
+  contents: write
+
+jobs:
+  app-local-package:
+    name: Build + publish app-local package
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install meson ninja
+
+      # --- llvm-mingw (PE cross toolchain; not in Homebrew) ---
+      - name: Cache llvm-mingw
+        id: cache-llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm-mingw
+          key: llvm-mingw-${{ env.LLVM_MINGW_VERSION }}-macos-universal
+
+      - name: Download llvm-mingw
+        if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/llvm-mingw
+          curl -fL "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-macos-universal.tar.xz" \
+            | tar -xJ --strip-components=1 -C ~/llvm-mingw
+
+      - name: Add llvm-mingw to PATH
+        run: echo "$HOME/llvm-mingw/bin" >> "$GITHUB_PATH"
+
+      # --- Wine runtime (link libraries for winemetal.so) ---
+      - name: Cache Wine runtime
+        id: cache-wine
+        uses: actions/cache@v4
+        with:
+          path: experiments/wine
+          key: wine-${{ env.SIKARUGIR_ENGINE }}
+
+      - name: Install Wine runtime
+        if: steps.cache-wine.outputs.cache-hit != 'true'
+        run: |
+          python3 scripts/wine/install_wine.py \
+            --engine "$SIKARUGIR_ENGINE" \
+            --target-id "$SIKARUGIR_ENGINE"
+
+      # --- Build the three app-local artifacts ---
+      - name: Build x64 PE DLLs (app-local)
+        run: |
+          meson setup build-win32-x64 \
+            --cross-file cross/x86_64-windows.ini \
+            -Dwine_builtin_dll=false
+          meson compile -C build-win32-x64
+
+      - name: Build x86 PE DLLs (app-local)
+        run: |
+          meson setup build-win32-x86 \
+            --cross-file cross/i686-windows.ini \
+            -Dwine_builtin_dll=false
+          meson compile -C build-win32-x86
+
+      - name: Build x86_64 unix provider
+        run: |
+          meson setup build-x86_64-builtin \
+            --native-file cross/x86_64-macos.ini \
+            -Dwine_install_path="$GITHUB_WORKSPACE/experiments/wine/$SIKARUGIR_ENGINE"
+          meson compile -C build-x86_64-builtin
+
+      # --- Package ---
+      - name: Package app-local
+        run: |
+          python3 scripts/tools/package_app_local.py --clean \
+            --output-dir dist/dxmt9-app-local
+
+      - name: Create tarball
+        id: tarball
+        run: |
+          version="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            version="dev-$(git rev-parse --short HEAD)"
+          fi
+          name="dxmt9-app-local-${version}"
+          mv dist/dxmt9-app-local "dist/${name}"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "dist/${{ steps.tarball.outputs.name }}.tar.gz" \
+            "dist/${{ steps.tarball.outputs.name }}.tar.gz.sha256"
+
+      - name: Upload workflow artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tarball.outputs.name }}
+          path: |
+            dist/${{ steps.tarball.outputs.name }}.tar.gz
+            dist/${{ steps.tarball.outputs.name }}.tar.gz.sha256
