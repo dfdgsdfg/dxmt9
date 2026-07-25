@@ -402,10 +402,77 @@ def index_cache_estimate(draws: list[dict[str, Any]],
     return result
 
 
+def remap_draw_vertex_layout(draw: dict[str, Any],
+                            ordinal: int,
+                            vertex_dir: Path,
+                            vertex_order: str) -> None:
+    """Permute this draw's vertex storage and rewrite its indices in place.
+
+    Preserves triangle order, triangle composition, vertex bytes, payload size,
+    and `base_vertex`. Every stream is permuted with one shared reference order
+    because a D3D9 indexed draw uses the same vertex index for every stream.
+    """
+    geometry = draw["geometry"]
+    state = draw["state"]
+    index_source = resolve_path(str(geometry["index_file"]))
+    indices = uint16_indices(index_source.read_bytes())
+    if not indices:
+        raise SystemExit(f"draw {ordinal}: index payload is empty")
+    base_vertex = int(state.get("base_vertex", 0))
+    order = vertex_reference_order(indices, base_vertex, vertex_order)
+
+    stream_entries = geometry.get("streams") or []
+    if not stream_entries:
+        stream_entries = [{
+            "stream": 0,
+            "metal_slot": 1,
+            "file": geometry["stream0_file"],
+            "bytes": int(geometry.get("stream0_bytes", 0)),
+            "offset": int(state.get("stream0_offset", 0)),
+            "stride": int(state.get("stream0_stride", 0)),
+        }]
+        geometry["streams"] = stream_entries
+
+    for entry in stream_entries:
+        stream_index = int(entry.get("stream", 0))
+        stride = int(entry.get("stride", 0))
+        offset = int(entry.get("offset", 0))
+        if stream_index == 0:
+            stride = int(state.get("stream0_stride", stride))
+            offset = int(state.get("stream0_offset", offset))
+        source = resolve_path(str(entry.get("file", "")))
+        if not source.exists():
+            raise SystemExit(
+                f"draw {ordinal}: missing stream{stream_index} payload: {source}"
+            )
+        payload = source.read_bytes()
+        slot_count = vertex_slot_capacity(len(payload), offset, stride)
+        new_for_old = vertex_slot_assignment(order, base_vertex, slot_count)
+        permuted = apply_vertex_permutation(payload, offset, stride, new_for_old)
+        target = vertex_dir / f"draw{ordinal:03d}-{vertex_order}.stream{stream_index}.bin"
+        target.write_bytes(permuted)
+        entry["file"] = str(target)
+        entry["bytes"] = len(permuted)
+        entry["vertex_order_source_file"] = str(source)
+        if stream_index == 0:
+            geometry["stream0_file"] = str(target)
+            geometry["stream0_bytes"] = len(permuted)
+
+    rewritten = rewrite_indices_for_permutation(indices, base_vertex, order)
+    index_target = vertex_dir / f"draw{ordinal:03d}-{vertex_order}.index.bin"
+    index_target.write_bytes(struct.pack(f"<{len(rewritten)}H", *rewritten))
+    geometry.setdefault("index_order_source_file", str(index_source))
+    geometry["index_file"] = str(index_target)
+    geometry["index_bytes"] = index_target.stat().st_size
+    geometry["vertex_order"] = vertex_order
+    geometry["vertex_order_referenced_vertices"] = len(order)
+
+
 def materialize_replay_draws(draws: list[dict[str, Any]],
                              output_dir: Path,
                              primitive_order: str,
-                             draw_order: str) -> list[dict[str, Any]]:
+                             draw_order: str,
+                             vertex_order: str = "original") -> list[dict[str, Any]]:
     replay_draws = copy.deepcopy(draws)
     if primitive_order != "original":
         index_dir = output_dir / "index-order"
@@ -420,6 +487,11 @@ def materialize_replay_draws(draws: list[dict[str, Any]],
             geometry["index_order_source_file"] = str(source)
             geometry["index_order"] = primitive_order
             geometry["index_bytes"] = len(transformed)
+    if vertex_order != "original":
+        vertex_dir = output_dir / "vertex-order"
+        vertex_dir.mkdir(parents=True, exist_ok=True)
+        for ordinal, draw in enumerate(replay_draws):
+            remap_draw_vertex_layout(draw, ordinal, vertex_dir, vertex_order)
     if draw_order == "reverse":
         replay_draws.reverse()
     elif draw_order != "original":
@@ -1609,6 +1681,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         args.output_dir,
         args.primitive_order,
         args.draw_order,
+        args.vertex_order,
     )
     shader_variants: list[dict[str, Any]] = []
     shader_variant_by_key: dict[tuple[str, str], int] = {}
@@ -1704,6 +1777,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "draw_count": len(replay_draws),
         "draw_order": args.draw_order,
         "primitive_order": args.primitive_order,
+        "vertex_order": args.vertex_order,
         "force_fragment_color": bool(args.force_fragment_color),
         "force_fragment_primitive_id": bool(args.force_fragment_primitive_id),
         "index_cache_estimate": index_cache_estimate(replay_draws),
@@ -1839,6 +1913,17 @@ def main() -> int:
         choices=("original", "reverse"),
         default="original",
         help="reorder manifest draws before replay",
+    )
+    parser.add_argument(
+        "--vertex-order",
+        choices=("original", "first-reference", "scatter"),
+        default="original",
+        help=(
+            "permute vertex storage and rewrite indices before replay while "
+            "preserving triangle order, vertex bytes, payload size, and "
+            "base_vertex; first-reference monotonizes index references, "
+            "scatter decorrelates them for the locality discriminator"
+        ),
     )
     parser.add_argument(
         "--trim-vsout-to-fs-reads",

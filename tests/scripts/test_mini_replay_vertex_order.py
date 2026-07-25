@@ -1,5 +1,8 @@
+import json
 import struct
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -220,6 +223,236 @@ class RewrittenIndexTest(unittest.TestCase):
         new_indices = mini.rewrite_indices_for_permutation(INDICES, 0, order)
         packed = struct.pack(f"<{len(new_indices)}H", *new_indices)
         self.assertEqual(mini.uint16_indices(packed), new_indices)
+
+
+SCRIPT = REPO_ROOT / "scripts" / "tools" / "run_3dmark05_mini_replay.py"
+
+# Minimal valid MSL for the CLI round-trip test. `prepare()` requires
+# `shaders.vs_file`/`shaders.ps_file` to exist and carry the
+# `constant ArgbufLayout& abuf [[buffer(30)]]` parameter that
+# `transform_msl()` rewrites; mirrors the fixture in
+# tests/scripts/test_run_3dmark05_mini_replay.py.
+VS_MSL = """
+#include <metal_stdlib>
+using namespace metal;
+struct VsConsts { float4 vsFloatConst[256]; int4 vsIntConst[16]; uint vsBoolConst[16]; };
+struct FfpVsConsts { float2 halfPixelFixup; };
+struct DrawVolatile { int vertexBaseIndex; uint vertexStreamOffset; uint vertexStreamStride; uint _pad; };
+struct VSOut {
+  float4 position [[position]];
+  float pointSize [[point_size]];
+};
+struct ArgbufLayout {
+  constant VsConsts* vsConsts [[id(0)]];
+  constant FfpVsConsts* ffpVs [[id(1)]];
+};
+vertex VSOut dxmt9_vs(uint vid [[vertex_id]],
+                     constant ArgbufLayout& abuf [[buffer(30)]],
+                     device const uchar* stream0 [[buffer(1)]],
+                     constant DrawVolatile& drawVolatile [[buffer(5)]]) {
+  constant VsConsts& vsConsts = *abuf.vsConsts;
+  constant FfpVsConsts& ffpVs = *abuf.ffpVs;
+  VSOut out;
+  out.position = vsConsts.vsFloatConst[0] + float4(float(vid), 0.0, 0.0, 1.0);
+  out.position.xy += ffpVs.halfPixelFixup;
+  out.pointSize = 1.0;
+  return out;
+}
+"""
+
+FS_MSL = """
+#include <metal_stdlib>
+using namespace metal;
+struct PsConsts { float4 psFloatConst[224]; int4 psIntConst[16]; uint psBoolConst[16]; };
+struct FfpPsConsts { uint fogMode; };
+struct VSOut {
+  float4 position [[position]];
+  float pointSize [[point_size]];
+};
+struct ArgbufLayout {
+  constant PsConsts* psConsts [[id(2)]];
+  constant FfpPsConsts* ffpPs [[id(3)]];
+};
+fragment float4 dxmt9_fs(VSOut in [[stage_in]],
+                     constant ArgbufLayout& abuf [[buffer(30)]]) {
+  constant PsConsts& psConsts = *abuf.psConsts;
+  constant FfpPsConsts& ffpPs = *abuf.ffpPs;
+  return psConsts.psFloatConst[0] + float4(float(ffpPs.fogMode), 0.0, 0.0, 1.0);
+}
+"""
+
+
+def write_manifest(root: Path) -> Path:
+    """One draw, one stream, uint16 indices, base_vertex 0."""
+    payload = make_payload()
+    stream_path = root / "draw000.stream0.bin"
+    stream_path.write_bytes(payload)
+    index_path = root / "draw000.index.bin"
+    index_path.write_bytes(struct.pack(f"<{len(INDICES)}H", *INDICES))
+    vs_path = root / "draw000.vs.metal"
+    vs_path.write_text(VS_MSL, encoding="utf-8")
+    ps_path = root / "draw000.ps.metal"
+    ps_path.write_text(FS_MSL, encoding="utf-8")
+    manifest = {
+        "schema": "dxmt9.3dmark05.mini_replay_manifest.v1",
+        "draws": [{
+            "row": "60/2",
+            "seq": 60,
+            "encoder": 2,
+            "encoder_draw_index": 0,
+            "draw_ordinal": 1,
+            "shaders": {
+                "vs_file": str(vs_path),
+                "ps_file": str(ps_path),
+            },
+            "geometry": {
+                "index_file": str(index_path),
+                "index_bytes": index_path.stat().st_size,
+                "stream0_file": str(stream_path),
+                "stream0_bytes": stream_path.stat().st_size,
+                "streams": [{
+                    "stream": 0,
+                    "metal_slot": 1,
+                    "file": str(stream_path),
+                    "bytes": stream_path.stat().st_size,
+                    "offset": 0,
+                    "stride": STRIDE,
+                }],
+            },
+            "state": {
+                "index_count": len(INDICES),
+                "base_vertex": 0,
+                "stream0_stride": STRIDE,
+                "stream0_offset": 0,
+                "index_type": "uint16",
+            },
+            "uniforms": {},
+        }],
+    }
+    manifest_path = root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_path
+
+
+class MaterializeVertexOrderTest(unittest.TestCase):
+    def test_original_leaves_payloads_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads(write_manifest(root).read_text(encoding="utf-8"))
+            replay = mini.materialize_replay_draws(
+                manifest["draws"], root / "out", "original", "original", "original"
+            )
+            geometry = replay[0]["geometry"]
+            self.assertNotIn("vertex_order", geometry)
+            self.assertEqual(
+                Path(geometry["stream0_file"]).read_bytes(), make_payload()
+            )
+
+    def test_first_reference_rewrites_stream_and_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads(write_manifest(root).read_text(encoding="utf-8"))
+            original_stream = make_payload()
+            replay = mini.materialize_replay_draws(
+                manifest["draws"], root / "out", "original", "original", "first-reference"
+            )
+            geometry = replay[0]["geometry"]
+            state = replay[0]["state"]
+            self.assertEqual(geometry["vertex_order"], "first-reference")
+            self.assertEqual(state["base_vertex"], 0)
+
+            new_stream = Path(geometry["stream0_file"]).read_bytes()
+            new_indices = mini.uint16_indices(
+                Path(geometry["index_file"]).read_bytes()
+            )
+            self.assertEqual(len(new_stream), len(original_stream))
+            self.assertEqual(geometry["stream0_bytes"], len(new_stream))
+            self.assertEqual(geometry["index_bytes"], 2 * len(INDICES))
+            self.assertEqual(geometry["streams"][0]["file"], geometry["stream0_file"])
+            self.assertEqual(geometry["streams"][0]["bytes"], len(new_stream))
+
+            for old_index, new_index in zip(INDICES, new_indices):
+                self.assertEqual(
+                    fetch(new_stream, 0, STRIDE, new_index),
+                    fetch(original_stream, 0, STRIDE, old_index),
+                )
+
+    def test_composes_after_primitive_order(self):
+        """Lane D: sorted primitive order plus a scattered layout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads(write_manifest(root).read_text(encoding="utf-8"))
+            original_stream = make_payload()
+            replay = mini.materialize_replay_draws(
+                manifest["draws"], root / "out", "sort-min-index", "original", "scatter"
+            )
+            geometry = replay[0]["geometry"]
+            self.assertEqual(geometry["index_order"], "sort-min-index")
+            self.assertEqual(geometry["vertex_order"], "scatter")
+
+            sorted_indices = mini.uint16_indices(
+                mini.transform_index_payload(
+                    struct.pack(f"<{len(INDICES)}H", *INDICES), "sort-min-index"
+                )
+            )
+            new_stream = Path(geometry["stream0_file"]).read_bytes()
+            new_indices = mini.uint16_indices(
+                Path(geometry["index_file"]).read_bytes()
+            )
+            for old_index, new_index in zip(sorted_indices, new_indices):
+                self.assertEqual(
+                    fetch(new_stream, 0, STRIDE, new_index),
+                    fetch(original_stream, 0, STRIDE, old_index),
+                )
+
+    def test_index_reuse_estimate_is_unchanged_by_remap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = json.loads(write_manifest(root).read_text(encoding="utf-8"))
+            replay = mini.materialize_replay_draws(
+                manifest["draws"], root / "out", "original", "original", "first-reference"
+            )
+            estimate = mini.index_cache_estimate(replay)
+            self.assertEqual(
+                estimate["original_lru32_misses"], estimate["replay_lru32_misses"]
+            )
+
+
+class VertexOrderCliTest(unittest.TestCase):
+    def test_cli_records_vertex_order_in_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = write_manifest(root)
+            output_dir = root / "out"
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), str(manifest_path),
+                    "--output-dir", str(output_dir),
+                    "--vertex-order", "first-reference",
+                ],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(
+                (output_dir / "mini-replay-summary.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(summary["vertex_order"], "first-reference")
+
+    def test_cli_rejects_unknown_vertex_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = write_manifest(root)
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT), str(manifest_path),
+                    "--output-dir", str(root / "out"),
+                    "--vertex-order", "sideways",
+                ],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
