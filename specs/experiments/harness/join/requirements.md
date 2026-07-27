@@ -1,7 +1,7 @@
 ---
 type: "Spec Requirements"
 title: "Harness Join Requirements — External Tool Joins"
-description: "Requirements for the join domain: the manual Xcode/xctrace counter export as a declared contract, and detecting a missing or wrong-run export instead of joining it into misleading rows."
+description: "Requirements for the join domain: the manual Xcode/xctrace export as a declared, checkable contract."
 tags: [specs, experiments, harness, join, requirements]
 ---
 
@@ -68,7 +68,7 @@ R-HARN-1.1.
 
 ---
 
-## 2. The Human Export Step Is a Declared Contract, Not an Out-of-Band Assumption
+## 2. The Human Export Step Is a Declared Contract
 
 **R-HARN-JOIN-2.1** The file a human produces by exporting Xcode
 encoder counters has a declared expected path
@@ -116,8 +116,9 @@ the dry-run path skips.
 the wrong run, the wrong frame, or a malformed/empty export into a
 "joined" artifact that reports success — per parent R-HARN-2.1, exiting
 zero after producing a misleading joined row is exactly the kind of
-silent degradation §2 of the parent spec forbids applied to this
-domain's boundary. `spec.md` §6 names the checks
+silent degradation §2 ("No Silent Degradation") of the parent
+`requirements.md` forbids, applied to this domain's boundary. `spec.md`
+§6 names the checks
 (`--require-xcode-counter-coverage`, `--require-dxmt-join-coverage`,
 and the xctrace-route equivalents) that exist to catch this today, and
 states plainly whether they run by default.

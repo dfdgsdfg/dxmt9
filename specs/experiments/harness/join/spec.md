@@ -1,7 +1,7 @@
 ---
 type: "Spec"
 title: "Harness Join Spec — External Tool Joins"
-description: "Script inventory, the manual Xcode counter-export contract, coverage-gate behavior as implemented, the joined CSV column contract, and environment ownership for the join domain."
+description: "Script inventory, the manual Xcode export contract, coverage-gate behavior, and the joined CSV column contract."
 tags: [specs, experiments, harness, join, spec]
 ---
 
@@ -15,7 +15,7 @@ spec's §2. Stage names, boundary names, and envelope fields are cited
 from the parent spec rather than redefined here.
 
 Facts below were verified against
-`scripts/tools/finalize_3dmark05_perf_probe.sh` (1,781 lines),
+`scripts/tools/finalize_3dmark05_perf_probe.sh` (1,780 lines, `wc -l`),
 `scripts/tools/summarize_xcode_encoder_counters.py` (2,892 lines),
 `scripts/tools/summarize_xctrace_metal_intervals.py` (742 lines), and
 `scripts/tools/summarize_xctrace_cpu_threads.py` (798 lines) at their
@@ -127,7 +127,7 @@ name the script, left unasserted:
 | `compare_experiment_images.py` | `gate` (parent spec.md §1: `scripts/tools/compare_*`) |
 
 This is stated here, rather than left implicit, because a reader who
-opens this one 1,781-line script and sees it call `compare_*` scripts
+opens this one 1,780-line script and sees it call `compare_*` scripts
 directly could otherwise conclude — incorrectly — that this document
 also owns those scripts' contracts. It does not; R-HARN-JOIN-1.3
 forbids that reading.
@@ -389,8 +389,11 @@ likewise an exact match against the real
 **Column counts drift across script versions; do not hardcode them.**
 An older real capture at the same path shape,
 `traces/app-d3d9-3dmark05-capture-layer-current-r2-20260619/analysis/frame60-xcode-dxmt-joined-summary.csv`
-(dated 2026-06-19, roughly five weeks before the counts above were
-verified), has a joined-CSV header of **384** fields and a
+(this file is also gitignored, so its date comes from its own
+directory name, `-r2-20260619`, cross-checked against filesystem
+mtime `2026-06-19 04:28:23` — the two agree — roughly five weeks
+before the frame255 capture above), has a joined-CSV header of **384**
+fields and a
 `frame60-counters-summary.csv` header of **60** fields — each exactly
 one column short of the counts verified above against the current
 script. This is not a defect in either file; it is direct evidence
@@ -419,9 +422,10 @@ tuple's literal string members out of the function source, since the
 tuple is local rather than a module-level constant). Verified against
 a real sidecar capture,
 `traces/app-d3d9-3dmark05-phase-aligned-gt1-current-v2-r1/analysis/xctrace-metal-gpu-intervals-summary.csv`
-(3,795 lines, dated 2026-06-13 in `git log`, re-generated 2026-07-19
-per its own mtime — i.e. produced by a script revision no older than
-that date): header has exactly 38 fields, and a name-by-name
+(3,795 lines; the whole `traces/` tree is gitignored per
+`.gitignore:25`, so this file carries no git history of its own — its
+only available date is filesystem mtime, `2026-07-19 16:11:32` per
+`stat -f "%Sm"`, checked 2026-07-27): header has exactly 38 fields, and a name-by-name
 comparison against the derived `fields` tuple is an exact match (all
 38 names identical in order). Three more matching captures exist at
 `traces/app-d3d9-3dmark05-p4-native-producer-current-r2-20260618/analysis/`,
