@@ -110,12 +110,16 @@ check is unimplemented, inconclusive, or does not run — exits
 non-zero rather than reporting success. Reporting success without an
 executed validity assertion is equivalent to skipping the assertion.
 
-**R-HARN-3.4** A degenerate artifact is strictly worse than a missing
-one, because it can silently pass a downstream equality-style gate. The
-four identical black PPMs from defect 4 produced four identical
-SHA-256 digests; a naive gate comparing digests across the four lanes
-would have read that agreement as a pass. A missing artifact fails
-such a gate loudly; a degenerate one does not.
+**R-HARN-3.4** A gate that compares two or more artifacts for
+agreement must not treat matching digests or matching byte content
+alone as evidence that the compared artifacts are valid; it must also
+consult each artifact's `validity` field (R-HARN-3.2) before treating
+agreement as a pass. Rationale: a degenerate artifact is worse than a
+missing one precisely because it can silently pass this kind of gate
+otherwise — the four identical black PPMs from defect 4 produced four
+identical SHA-256 digests, which a digest-only equality gate would
+have read as a pass without ever checking whether any of the four
+images was valid.
 
 ---
 
