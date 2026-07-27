@@ -1,7 +1,7 @@
 ---
 type: "Spec"
 title: "Harness Spec — Stages, Artifacts, Environment Ownership"
-description: "Harness stage boundary map, artifact envelope, and env ownership."
+description: "Harness stage boundary map, artifact envelope, env ownership, and legacy envelope migration."
 tags: [specs, experiments, harness, spec]
 ---
 
@@ -361,3 +361,55 @@ and `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE` are today, per
 recording only that "a value was in effect" without recording *which*
 source resolved it would itself be a silent degradation of the
 provenance the envelope exists to provide.
+
+---
+
+## 5. Legacy Envelope Migration
+
+Today's provenance is spread across two ad-hoc, per-app-family
+shapes with no shared schema:
+
+- **`result.json`**, written by the `runner` domain
+  (`scripts/run_apps/run_experiment.py`), mixes the counter payload
+  three independent readers depend on — `run_experiment.py`'s own
+  `expected_counters` L3 gate, `compare_3dmark05_perf_counters.py`,
+  and `docs/perfomance/` `source:` citations — with provenance
+  fields such as `wine_root` that were added over time without a
+  declared schema (`agents/rules/test_wild.rules.md`'s diagnostic
+  checklist already depends on `result.json:wine_root` informally).
+- **`3dmark05-trace-artifacts.json`**, written by the `probe` domain
+  (`scripts/tools/run_3dmark05_perf_probe.sh` and
+  `scripts/tools/finalize_3dmark05_perf_probe.sh`) as a manifest of
+  capture and analysis artifact paths for one probe run, in a shape
+  unrelated to `result.json`'s provenance fields.
+
+The migration to the artifact envelope (§3) is ordered in three
+steps:
+
+1. **Add.** The envelope's seven fields (`schema`, `producer`,
+   `stage`, `domain`, `inputs`, `env_snapshot`, `validity`; §3) are
+   added alongside the existing ad-hoc fields in both files — either
+   as a wrapper around the existing shape or as a sibling sidecar
+   file that references it.
+2. **Move.** Consumers that today read the ad-hoc provenance fields
+   are moved to read the corresponding envelope fields instead.
+3. **Remove.** Once no consumer reads an ad-hoc provenance field,
+   that field is removed from `result.json` and
+   `3dmark05-trace-artifacts.json`.
+
+**The counter payload is not provenance and is not migrated.**
+`result.json`'s counter fields — the values `expected_counters`,
+`compare_3dmark05_perf_counters.py`, and `docs/perfomance/`
+`source:` citations actually read as measurements, as opposed to the
+`wine_root`-style provenance fields above — are untouched at every
+step of this migration. Step 3 removes only the ad-hoc provenance
+fields the envelope replaces; it does not touch, rename, or
+restructure the counter payload those three readers consume.
+
+**No migration step has been performed.** As of this writing,
+neither `result.json` nor `3dmark05-trace-artifacts.json` carries
+any envelope field. This section states the intended migration path;
+it does not claim any part of it is done. A reader who finds an
+`env_snapshot` or `validity` field in a live `result.json` should
+treat that as evidence the migration has since started elsewhere,
+not as something this document produced.
