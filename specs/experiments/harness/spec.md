@@ -61,6 +61,19 @@ alongside the external export to attribute rows), but only `join`'s
 *primary* input crosses the `external-join` boundary from a tool
 dxmt9 does not control.
 
+**Second-order reductions.** A summariser's primary input is not
+always one of the three shapes named above directly — it may instead
+be a CSV or Markdown file that another `reduce`-domain script already
+produced from one of those shapes. This is resolved by the same
+origin test, applied transitively: trace the input back through its
+producing chain, one hop at a time, until the chain reaches either a
+dxmt9-produced log/`result.json`/DAG JSON with no intervening
+external-tool step, or an external tool's export. The summariser
+belongs to `reduce` in the first case and `join` in the second,
+regardless of how many `reduce`-domain hops sit between it and the
+dxmt9-produced origin. A primary input one hop removed from a raw
+dxmt9 log is not a third category.
+
 **Why the domain axis is harness families, not stages.** A single
 script commonly spans several stages —
 `run_3dmark05_perf_probe.sh` spans `run-capture` (launches Wine and
@@ -119,7 +132,7 @@ consumer must not read GPU-side content out of a capture layer that
 was never inserted (`agents/rules/metal_debugging.rules.md` §1); a
 `probe`-domain script's file-capture preflight is the in-band signal
 that the layer is present, not an assumption from the command line
-used to launch it.
+used to launch it (R-HARN-4.1).
 
 ### `dump-extract → offline-replay`
 
@@ -254,7 +267,7 @@ path exists. This is the mechanism behind §3's "second use of
 `inputs` digests": a citation with no recorded digest cannot
 distinguish "never produced" from "produced, then the file moved or
 was cleaned up" from "a different file now happens to sit at that
-path", and the 34-of-56 missing-path finding cited in §3 is exactly
+path", and the missing-evidence finding described in §3 is exactly
 the failure mode this boundary exists to make detectable. Unlike the
 other seven boundaries, the `record` stage does not hand its output
 to a further pipeline stage; §1 assigns it to the `audit` domain
@@ -300,17 +313,24 @@ as a wrapper, or a sibling sidecar file referencing it, but its
 counter fields and the three readers above are unchanged.
 
 **Second use of `inputs` digests: detecting missing evidence.** On
-2026-07-27, an audit of `docs/perfomance/` `source:` citations found
-34 of 56 cited log/output paths already missing from disk. A
-citation that names a path but carries no digest cannot distinguish
-"the file was never produced" from "the file existed and was later
-cleaned up" from "a different file now sits at that path". Recording
-a digest per `inputs` entry at the time an artifact is produced makes
-that distinction machine-detectable after the fact: a later audit can
-tell whether a cited path is missing-and-was-once-present (digest on
-record, file absent) versus missing-and-never-existed (no digest on
-record for that path at all), instead of relying on a human noticing
-a stale citation.
+2026-07-27, a scan for every `.log` path mentioned across `docs/`,
+`agents/`, and `README.md` — not filtered to a leaf's frontmatter
+`source:` field, so it also catches `.log` paths named in ordinary
+prose or example commands — found 56 distinct paths, of which 34 are
+already missing from disk (22 present). Restricted to
+`docs/perfomance/` alone, the count is 55 distinct paths, 33 missing
+(22 present); of those 55, 54 occur inside a leaf's `source:` field
+and 1 occurs elsewhere in body text, so calling the whole finding
+"paths cited as `source:`" would overstate what the scan actually
+matched. A citation that names a path but carries no digest cannot
+distinguish "the file was never produced" from "the file existed and
+was later cleaned up" from "a different file now sits at that path".
+Recording a digest per `inputs` entry at the time an artifact is
+produced makes that distinction machine-detectable after the fact: a
+later audit can tell whether a cited path is
+missing-and-was-once-present (digest on record, file absent) versus
+missing-and-never-existed (no digest on record for that path at
+all), instead of relying on a human noticing a stale citation.
 
 ---
 
@@ -377,11 +397,19 @@ shapes with no shared schema:
   fields such as `wine_root` that were added over time without a
   declared schema (`agents/rules/test_wild.rules.md`'s diagnostic
   checklist already depends on `result.json:wine_root` informally).
-- **`3dmark05-trace-artifacts.json`**, written by the `probe` domain
-  (`scripts/tools/run_3dmark05_perf_probe.sh` and
-  `scripts/tools/finalize_3dmark05_perf_probe.sh`) as a manifest of
-  capture and analysis artifact paths for one probe run, in a shape
-  unrelated to `result.json`'s provenance fields.
+- **`3dmark05-trace-artifacts.json`**, a manifest of capture and
+  analysis artifact paths for one probe run, in a shape unrelated to
+  `result.json`'s provenance fields. Its schema is owned by the
+  `probe` domain (§1): `scripts/tools/run_3dmark05_perf_probe.sh`
+  writes the initial manifest. The `join`-domain
+  `scripts/tools/finalize_3dmark05_perf_probe.sh` (§1) is a second,
+  permitted writer — it updates the same file in place once Xcode
+  exports exist, adding its own `external-join`-stage paths without
+  changing the schema `probe` established. A shared artifact's owning
+  domain is the one whose write establishes its schema, not every
+  domain whose script later writes to it; a downstream domain may
+  extend an already-established schema in place but must not
+  redefine it.
 
 The migration to the artifact envelope (§3) is ordered in three
 steps:

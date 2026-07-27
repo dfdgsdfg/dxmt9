@@ -22,17 +22,18 @@ prefix `R-HARN-AUDIT-`.
 boundary sections. Extracting every `R-HARN-\d+\.\d+` token from each
 `### ` boundary subsection in `specs/experiments/harness/spec.md`
 (bounded to each section's own text, stopping at the next `##`/`###`
-heading) on 2026-07-27 returns a non-empty match set for six of the
-eight and an empty match set for exactly two: `run-capture →
-dump-extract` (spec.md:112-123 — this section cites
-`agents/rules/metal_debugging.rules.md` §1 but no `R-HARN-*` ID at
-all) and `compare-gate → record` (spec.md:241-262 — the boundary this
-domain owns). This document does not claim `compare-gate → record` is
-the *only* zero-citation boundary — it is one of two, verified by
-re-running the same extraction rather than assumed from memory — but
-it is still true, and the only claim R-HARN-AUDIT-1.2 actually needs,
-that no `R-HARN-*` clause governs this domain's own boundary
-specifically. §1 below states plainly, for each requirement group that
+heading) returns a non-empty match set for seven of the eight and an
+empty match set for exactly one: `compare-gate → record`
+(spec.md:254-277 — the boundary this domain owns). A 2026-07-27
+extraction found a second zero-citation section, `run-capture →
+dump-extract` (then spec.md:112-123, citing
+`agents/rules/metal_debugging.rules.md` §1 but no `R-HARN-*` ID); the
+same day's cross-document consistency pass added an `R-HARN-4.1`
+citation there (now spec.md:125-136), closing that gap without this
+domain's own boundary gaining one. R-HARN-AUDIT-1.2 only needs the
+claim that still holds — that no `R-HARN-*` clause governs this
+domain's own boundary specifically — which this re-extraction
+confirms. §1 below states plainly, for each requirement group that
 follows, whether a parent clause actually governs it or whether the
 fit is by analogy only. Where a requirement below cites a parent ID,
 it is because that ID's general principle extends to this domain's
@@ -195,11 +196,13 @@ already missing from disk that this audit had never flagged, because
 it was never checking for that condition in the first place, not
 because it checked and passed a broken case. Parent
 `specs/experiments/harness/requirements.md` and `spec.md` cite this
-same incident (34 of 56 paths, parent spec.md §2/§3) as the motivating
+same incident (56 distinct `.log` paths mentioned across `docs/`,
+`agents/`, and `README.md`, 34 missing — 55/33 when restricted to
+`docs/perfomance/` alone; parent spec.md §2/§3) as the motivating
 background; this document's own contribution, verified independently
 in `spec.md` §4, is a second, live-reproduced instance of the same gap
 against the current working tree rather than a restatement of the
-parent's number.
+parent's numbers.
 
 **R-HARN-AUDIT-4.3** A future change that adds referent-existence
 checking to `audit_perf_docs_sources.py` (R-HARN-AUDIT-4.1's fix) must

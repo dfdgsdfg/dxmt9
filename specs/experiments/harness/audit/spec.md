@@ -141,10 +141,12 @@ exit=0
 ```
 
 This is one concrete, live instance of the class of failure parent
-spec.md §2/§3 report at 34-of-56 scale from a separate 2026-07-27 disk
-audit; this document does not claim this one file is among that
-original 34, only that the same mechanism gap reproduces against the
-current tree independently of that earlier count.
+spec.md §2/§3 report from a separate 2026-07-27 disk scan — 34 of 56
+distinct `.log` paths mentioned across `docs/`, `agents/`, and
+`README.md` (55/33 restricted to `docs/perfomance/` alone); this
+document does not claim this one file is among that original 34,
+only that the same mechanism gap reproduces against the current tree
+independently of that earlier count.
 
 ### 3.3 The registered conformance-status test skips its own strict gate
 
