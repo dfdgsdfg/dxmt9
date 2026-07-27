@@ -98,22 +98,28 @@ missing-artifact error — it is the expected pre-`external-join` state.
 Per R-HARN-PROBE-2.1, this domain's core script evaluates the
 following before spawning Wine (source order, all before the first
 `mkdir -p "$output_dir" "$trace_dir"` at
-`run_3dmark05_perf_probe.sh:5972`):
+`run_3dmark05_perf_probe.sh:5976`). Line numbers below were read
+directly from the script on 2026-07-27 (re-verified after an earlier
+draft of this section drifted by several lines); re-check them
+against the live file before citing further, since any subsequent
+edit to the script can move them again.
 
 1. `--dry-run` early exit (prints preflight previews, `exit 0`;
-   `run_3dmark05_perf_probe.sh:5880-5896`).
+   `run_3dmark05_perf_probe.sh:5886-5903`).
 2. macOS session-lock wait/fail
-   (`DXMT_3DMARK05_REQUIRE_UNLOCKED`, default on; `:5898-5924`).
+   (`DXMT_3DMARK05_REQUIRE_UNLOCKED`, default on; wait loop
+   `:5905-5922`, hard-exit check `:5924-5931`).
 3. Low free-space gputrace guard
-   (`DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB`; `:5926-5931`).
+   (`DXMT_3DMARK05_ALLOW_LOW_TRACE_FREE_MB`; `:5933-5939`).
 4. File `.gputrace` capture-layer preflight, direct
-   (`run_file_capture_layer_preflight`, `:403-451`) or via
+   (`run_file_capture_layer_preflight`, `:403-429`) or via
    `--with-wine-capture-layer`
-   (`run_wine_capture_layer_wrapper_preflight`; `:5933-5951`).
+   (`run_wine_capture_layer_wrapper_preflight`, `:431-453`); the
+   call site selecting between them is `:5941-5959`.
 5. `--require-xcode-attach-preflight` Xcode attach check, only for a
-   `developerTools`/`xcode` capture destination (`:5953-5959`).
+   `developerTools`/`xcode` capture destination (`:5961-5967`).
 6. General free-space guard (`--min-free-mb` /
-   `DXMT_3DMARK05_MIN_TRACE_FREE_MB`; `:5961-5966`).
+   `DXMT_3DMARK05_MIN_TRACE_FREE_MB`; `:5969-5974`).
 
 Any failure of steps 2, 3, 5, or 6 above `exit 2`s; step 4's failure
 also `exit 2`s with a diagnostic naming which of the direct or
@@ -130,14 +136,15 @@ exit.
 app-d3d9-3dmark05 --output-suffix "$suffix" --timeout "$timeout"`,
 optionally wrapped in `bash scripts/tools/
 run_with_wine_metal_capture_layer.sh --wine-root ... --allow-3dmark05
---` (`run_3dmark05_perf_probe.sh:5084-5102`) — is launched under
-`python3 scripts/tools/run_with_timeout.py --timeout
-"$watchdog_base_sec" --slack "$timeout_slack" --label
-3dmark05-perf-wrapper -- env "${env_args[@]}" "${cmd[@]}"`
-(`:6009-6017`), where `watchdog_base_sec = resolved --timeout +
-effective_capture_delay_sec` (`:3198-3203`,
-`resolved --timeout` default `420` with gputrace / `120` without,
-`--timeout` itself rejected unless `> 0` at `:3154-3157`) and
+--` (`run_3dmark05_perf_probe.sh:5084-5102`) — is opened in a
+subshell at `:6009` and launched under `python3 scripts/tools/
+run_with_timeout.py --timeout "$watchdog_base_sec" --slack
+"$timeout_slack" --label 3dmark05-perf-wrapper -- env
+"${env_args[@]}" "${cmd[@]}"` at `:6012-6017`, where
+`watchdog_base_sec = resolved --timeout + effective_capture_delay_sec`
+(`:3197-3203`, `resolved --timeout` default `420` with gputrace /
+`120` without, `--timeout` itself rejected unless `> 0` at
+`:3153-3157`) and
 `timeout_slack` defaults to `45`
 (`DXMT_3DMARK05_PROBE_TIMEOUT_SLACK`). `run_with_timeout.py` itself
 requires a positive `--timeout` and non-negative `--slack`
@@ -161,7 +168,7 @@ R-HARN-RUN-3.1/3.2) fails to fully terminate a detached Wine child.
 (`wine.capture.real` / `wine.capture.real-preloader` by default),
 after verifying both copies actually contain `MetalCaptureEnabled`
 (`:121-125`) and refusing a 3DMark05 command line unless
-`--allow-3dmark05` is also given (`:111-119`; this domain's core
+`--allow-3dmark05` is also given (`:109-114`; this domain's core
 script always passes `--allow-3dmark05` at `:5098` because a probe run
 is the deliberate diagnostic use this guard exists to gate).
 
@@ -174,7 +181,7 @@ The file-replacement primitive
 restore; exit "$status"' EXIT INT TERM` (`:150`) before the capture
 copies are installed, so a signal during the wrapped command still
 restores the originals; `restore()` is idempotent (a `restored` guard
-at `:141-148`) and is called again unconditionally after a normal
+at `:141-147`) and is called again unconditionally after a normal
 return before the trap is cleared (`:159-162`). After restoration, the
 script re-reads both restored files and the pre-replacement backup
 copies and asserts byte-for-byte equality before printing `restored`
@@ -295,14 +302,22 @@ option lines as of 2026-07-27 (`grep -cE '^  --' <<< "$(bash
 scripts/tools/run_3dmark05_perf_probe.sh --help)"`). Per
 R-HARN-PROBE-7.1, every one of them alters this domain's output —
 either the captured/dumped artifacts, the forwarded runtime
-environment, or (for the `--require-*`/`--max-*`/`--min-*`/
-`--target-row-key` family, §7.3) only the printed
-`finalize_cmd_after_xcode_export` suggestion text this domain emits
-for a human to run afterward. §7.1-7.2 table the flags whose semantics
-are specific to this domain's own run-capture/dump-extract behavior;
-§7.3 states the mechanical naming rule that accounts for the
-remaining bulk without re-deriving each of the ~300 diagnostic-probe
-rows' semantics, which already live in
+environment, a locally-invoked summarizer/comparator's own arguments
+(§7.2b), or only the printed `finalize_cmd_after_xcode_export`/
+`xctrace_system_trace_summary_cmd` suggestion text this domain emits
+for a human to run afterward (§7.2). Two of the four sub-buckets below
+are exact, grep-reproducible counts; the other two are not re-totaled
+here because §7.1 groups several flags per table row (e.g. "18
+sub-flags" in one row) and §7.3 covers a long tail of per-variable
+diagnostic families documented elsewhere — reporting an unverified sum
+across all four is exactly the kind of unreproduced arithmetic claim
+this section was previously wrong about, so it is not repeated. §7.1
+tables the run-shape/preflight flags individually; §7.2 is an exact
+count of 104 finalizer-gate-passthrough flags (command and output
+below); §7.2b names 13 flags verified individually to set no
+environment variable at all; §7.3 states the mechanical naming rule
+that accounts for the remaining diagnostic-probe flags without
+re-deriving each row's semantics, which already live in
 `agents/rules/environment_variables_encoder.rules.md`,
 `_capture.rules.md`, `_renderer.rules.md`, `_present.rules.md`, and
 `_perf.rules.md`.
@@ -343,12 +358,37 @@ rows' semantics, which already live in
 
 ### 7.2 Finalizer-passthrough flags (printed suggestion only)
 
-The `--require-*`, `--max-*`, `--min-*`, `--target-row-key`,
-`--allow-partial-stable-frame-proof`, `--baseline-output`, and
-`--baseline-joined` flags (the bulk of the remaining ~280 lines in
-`--help`) do not change what this domain captures or dumps. They are
-accepted so this domain's core script can carry them through into the
-`finalize_cmd_after_xcode_export` command line it prints after the
+The `--require-*`, `--max-*`, `--min-*` (excluding `--min-free-mb`,
+tabled in §7.1), `--target-row-key`,
+`--allow-partial-stable-frame-proof`, `--compare-baseline-output`, and
+`--baseline-joined` flags do not change what this domain captures or
+dumps. **Exact count, reproduced:**
+
+```
+$ bash scripts/tools/run_3dmark05_perf_probe.sh --help > /tmp/probe_help.txt
+$ grep -cE "^  --require-" /tmp/probe_help.txt
+84
+$ grep -cE "^  --max-" /tmp/probe_help.txt
+14
+$ grep -E "^  --min-" /tmp/probe_help.txt | grep -vc "min-free-mb"
+2
+$ grep -cE "^  --target-row-key" /tmp/probe_help.txt
+1
+$ grep -cE "^  --allow-partial-stable-frame-proof" /tmp/probe_help.txt
+1
+$ grep -cE "^  --compare-baseline-output" /tmp/probe_help.txt
+1
+$ grep -cE "^  --baseline-joined" /tmp/probe_help.txt
+1
+```
+
+`84 + 14 + 2 + 1 + 1 + 1 + 1 = 104`. (An earlier draft of this section
+claimed "~280," which was wrong by roughly 2.7x — it was never
+actually counted against this prefix set; the number above is.)
+
+These 104 flags are accepted so this domain's core script can carry
+them through into the `finalize_cmd_after_xcode_export` /
+`xctrace_system_trace_summary_cmd` command lines it prints after the
 run, for a human to paste into the `join`-domain
 `finalize_3dmark05_perf_probe.sh` invocation once Xcode counters are
 exported (per `agents/rules/metal_debugging.rules.md` §9's documented
@@ -356,16 +396,73 @@ recipe). Their gate semantics — what "top-N GPU decrease" or
 "opaque-depth-index-cache-proof" means when actually evaluated — are
 the `join`/`gate` domains' own mode-table responsibility, not this
 domain's; this domain's contract for them is limited to "accepted and
-echoed into the printed command unchanged."
+echoed into the printed command unchanged," **except**
+`--compare-baseline-output`, which additionally triggers this
+domain's own local invocation of the `gate`-domain
+`compare_3dmark05_perf_counters.py` against the given baseline
+directory and this run's `output_dir`, writing
+`$counter_comparison_path` (`run_3dmark05_perf_probe.sh:5104-5108`
+builds `counter_compare_cmd`; `:6175-6180` executes it) —
+so for that one flag, "accepted and echoed unchanged" is not the whole
+contract; it also causes a real local side effect. It is also echoed
+into `finalize_cmd` under a translated name, `--baseline-output`
+(`:5305-5306`), which is `finalize_3dmark05_perf_probe.sh`'s own flag
+spelling — this domain's own accepted flag is
+`--compare-baseline-output`, not `--baseline-output`.
+
+### 7.2b Flags that set no environment variable
+
+The following flags do not set any environment variable in
+`env_args` — they are consumed entirely by this domain's own script,
+either shaping the printed `finalize_cmd`/`xctrace_summary_cmd`
+suggestion text or feeding a locally-invoked summarizer's own CLI
+arguments. This bucket was missing from an earlier draft of this
+section, which incorrectly asserted (§7.3) that no exception to the
+mechanical env-var rule existed; the 13 flags below are that
+exception, found by checking, for each flag's assigned shell
+variable, whether that variable's name (or its all-caps
+`DXMT9_`/`DXMT_3DMARK05_`-prefixed form) appears anywhere else in the
+script:
+
+```
+$ grep -n "VISIBILITY_SCOUT_DRAW_INDICES\|VISIBILITY_SCOUT_SUMMARY\|SEMANTIC_IMAGE_POLICY\|SEMANTIC_IMAGE_BEFORE\|SEMANTIC_IMAGE_AFTER\|SEMANTIC_IMAGE_OUTPUT\|SEMANTIC_IMAGE_DIFF\|SEMANTIC_IMAGE_MIN_ACTIVE\|DXMT9_TOP_N\|DXMT9_HOT_GPU_SHARE" \
+    scripts/tools/run_3dmark05_perf_probe.sh
+(no output — none of these ever appears as an env_args entry name)
+```
+
+| Flag | Variable | Where it actually goes |
+|---|---|---|
+| `--semantic-image-policy` | `semantic_image_policy` | Printed into `finalize_cmd` as `--semantic-image-policy` (`:5313`). |
+| `--semantic-image-before` | `semantic_image_before` | Printed into `finalize_cmd` (`:5314`). |
+| `--semantic-image-after` | `semantic_image_after` | Printed into `finalize_cmd` (`:5315`). |
+| `--semantic-image-output` | `semantic_image_output` | Printed into `finalize_cmd`, when set (`:5318-5319`). |
+| `--semantic-image-summary-output` | `semantic_image_summary_output` | Printed into `finalize_cmd`, when set (`:5321-5322`). |
+| `--semantic-image-diff-output` | `semantic_image_diff_output` | Printed into `finalize_cmd`, when set (`:5324-5325`). |
+| `--semantic-image-min-active-pct` | `semantic_image_min_active_pct` | Printed into `finalize_cmd` (`:5316`). |
+| `--top` | `top_n` | Printed into `xctrace_summary_cmd`/`finalize_cmd`'s `--top` arguments (`:5302,5685`); never executed by this domain itself (only `printf`'d, `:5824`). |
+| `--hot-gpu-share` | `hot_gpu_share` | Printed into `finalize_cmd`'s `--hot-gpu-share` argument (`:5303`). |
+| `--visibility-scout-draw-indices` | `visibility_scout_draw_indices` | Passed as `--draw-indices` to the locally-invoked `scripts/tools/summarize_visibility_scout.py` (`:6051-6052`). |
+| `--visibility-scout-summary-output` | `visibility_scout_summary_output` | Passed as `--output` to the same locally-invoked summarizer (`:6043`). |
+| `--visibility-scout-summary-csv-output` | `visibility_scout_summary_csv_output` | Passed as `--csv-output` to the same summarizer (`:6044`). |
+| `--visibility-scout-summary-limit` | `visibility_scout_summary_limit` | Passed as `--limit`/`--no-sample-limit` to the same summarizer (`:6045-6046`). |
+
+Note the base `--visibility-scout`, `--visibility-scout-row`,
+`--visibility-scout-rows`, and `--visibility-scout-path` flags are
+**not** in this bucket — they do set `DXMT9_VISIBILITY_SCOUT`,
+`_ROW`, `_ROWS`, and `_PATH` respectively
+(`run_3dmark05_perf_probe.sh:5051-5062`) and are covered by §7.3's
+mechanical rule instead. Only the four `--visibility-scout-*` flags
+whose whole purpose is to shape the locally-invoked summarizer's own
+output are in this "no env var" bucket.
 
 ### 7.3 Mechanical flag-to-variable mapping for the remaining probe/diagnostic flags
 
-Every flag not listed in §7.1-7.2 sets exactly one environment
-variable via a direct, spellable rule: `--some-flag-name` sets
-`DXMT9_SOME_FLAG_NAME` (hyphens to underscores, uppercased), except
-for the older `DXMT_DEBUG_*`/`DXMT_*` (no `9`) family, where the flag
-spelling omits the `DEBUG`/`9` segment the variable carries — for
-example `--force-cull-mode` sets `DXMT_DEBUG_FORCE_CULL_MODE`,
+Every flag not listed in §7.1, §7.2, or §7.2b sets exactly one
+environment variable via a direct, spellable rule: `--some-flag-name`
+sets `DXMT9_SOME_FLAG_NAME` (hyphens to underscores, uppercased),
+except for the older `DXMT_DEBUG_*`/`DXMT_*` (no `9`) family, where
+the flag spelling omits the `DEBUG`/`9` segment the variable carries
+— for example `--force-cull-mode` sets `DXMT_DEBUG_FORCE_CULL_MODE`,
 `--disable-cull` sets `DXMT_DISABLE_CULL`, `--force-texture-white`
 sets `DXMT_FORCE_TEXTURE_WHITE`, and `--force-visible` sets
 `DXMT_DEBUG_FORCE_VISIBLE` (verified at
@@ -373,16 +470,23 @@ sets `DXMT_FORCE_TEXTURE_WHITE`, and `--force-visible` sets
 `--probe-*`, `--split-large-indexed-draws*`, `--optimize-*`,
 `--index-cache-candidate-*`, `--trim-*`, and row/class/texture-scoped
 sub-flag families documented per-variable in
-`agents/rules/environment_variables_encoder.rules.md`. A flag in this
-category that does not follow the mechanical rule (none found as of
-2026-07-27) would be a documentation defect in this section, not a
-license to skip cataloguing it — R-HARN-PROBE-7.1 still requires it to
-appear here if a future audit finds one.
+`agents/rules/environment_variables_encoder.rules.md`.
+
+This rule's scope is now explicitly bounded: §7.2b is the complete set
+of exceptions found by the check described there, run on 2026-07-27.
+An earlier draft of this section asserted "none found" without having
+run that check — that assertion was false, and the 13 flags in §7.2b
+are what it missed. A future change to this domain's flag surface must
+re-run an equivalent check (grep the candidate flag's assigned
+variable name and its derived `DXMT9_*`/`DXMT_*` spelling for any
+`env_args` occurrence) before repeating a "no exceptions" claim;
+R-HARN-PROBE-7.1 still requires any newly discovered exception to be
+named in §7.2b, not silently absorbed into this section's rule.
 
 Diagnostic flags in this category print a `warning: --flag-name is
 diagnostic only; ...` line describing the specific correctness risk
 (e.g. `--disable-alpha-test`, `--force-texture-white`,
 `--probe-reverse-indexed-triangles`) once the run proceeds past
-preflight (`run_3dmark05_perf_probe.sh:5830-5911`); this is the
+preflight (`run_3dmark05_perf_probe.sh:5827-5911`); this is the
 in-band signal required by parent R-HARN-6.1/6.2 that a diagnostic
 mode is not being mistaken for the primary path.
