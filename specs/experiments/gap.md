@@ -27,5 +27,6 @@ described by R-WILD-1.2.
 | Exploratory commercial entry: `app-d3d9-anno-1404` | ⚠️ | supported on Heroic `Wine-11.6-DXMT`; plain `Wine-11.6` is research-only due to Wine `d3dx10_43` aborts |
 | Initial catalogue from R-WILD-3.1 staged and verified | ✅ | All five required feature groups covered |
 | Reference screenshots for initial catalogue entries | ✅ | R-WILD-4.1 |
+| Harness script evidence-production contracts (`scripts/tools/`, `scripts/run_apps/`, `scripts/check/`, `scripts/run_suites/`) | ⚠️ | `specs/experiments/harness/requirements.md`; rollout order and open items in `specs/experiments/harness/plan.md` |
 
 ---
