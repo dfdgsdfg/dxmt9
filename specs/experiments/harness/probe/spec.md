@@ -137,10 +137,12 @@ app-d3d9-3dmark05 --output-suffix "$suffix" --timeout "$timeout"`,
 optionally wrapped in `bash scripts/tools/
 run_with_wine_metal_capture_layer.sh --wine-root ... --allow-3dmark05
 --` (`run_3dmark05_perf_probe.sh:5084-5102`) — is opened in a
-subshell at `:6009` and launched under `python3 scripts/tools/
-run_with_timeout.py --timeout "$watchdog_base_sec" --slack
-"$timeout_slack" --label 3dmark05-perf-wrapper -- env
-"${env_args[@]}" "${cmd[@]}"` at `:6012-6017`, where
+subshell at `:6010` (the `(` line; `:6009` is the unrelated preceding
+`start_3dmark05_frontmost_loop` call) and launched under
+`python3 scripts/tools/run_with_timeout.py --timeout
+"$watchdog_base_sec" --slack "$timeout_slack" --label
+3dmark05-perf-wrapper -- env "${env_args[@]}" "${cmd[@]}"` at
+`:6012-6017`, where
 `watchdog_base_sec = resolved --timeout + effective_capture_delay_sec`
 (`:3197-3203`, `resolved --timeout` default `420` with gputrace /
 `120` without, `--timeout` itself rejected unless `> 0` at
@@ -419,16 +421,34 @@ suggestion text or feeding a locally-invoked summarizer's own CLI
 arguments. This bucket was missing from an earlier draft of this
 section, which incorrectly asserted (§7.3) that no exception to the
 mechanical env-var rule existed; the 13 flags below are that
-exception, found by checking, for each flag's assigned shell
-variable, whether that variable's name (or its all-caps
-`DXMT9_`/`DXMT_3DMARK05_`-prefixed form) appears anywhere else in the
-script:
+exception. The check that matters is narrower than "does this
+variable's name appear anywhere in the script" — several of these
+flags' shell variables *do* appear elsewhere, as the default-value
+source for the wrapper's own `--flag` default:
+`${DXMT_3DMARK05_SEMANTIC_IMAGE_POLICY:-}` and six siblings
+(`:246-252`), `${DXMT_3DMARK05_VISIBILITY_SCOUT_SUMMARY_LIMIT:-12}`
+(`:243`), `${DXMT_3DMARK05_TOP_N:-3}` (`:365`), and
+`${DXMT_3DMARK05_HOT_GPU_SHARE:-95.0}` (`:366`). Each of those is a
+read that seeds this wrapper's own flag default from the caller's
+environment — a distinct mechanism from forwarding a value onward
+into the launched Wine subprocess — so a plain name-search wrongly
+counts it as an "appears in the script" hit. The actual question is
+whether any `env_args+=(...)` line in the script forwards the
+variable into the launched subprocess's environment:
 
 ```
-$ grep -n "VISIBILITY_SCOUT_DRAW_INDICES\|VISIBILITY_SCOUT_SUMMARY\|SEMANTIC_IMAGE_POLICY\|SEMANTIC_IMAGE_BEFORE\|SEMANTIC_IMAGE_AFTER\|SEMANTIC_IMAGE_OUTPUT\|SEMANTIC_IMAGE_DIFF\|SEMANTIC_IMAGE_MIN_ACTIVE\|DXMT9_TOP_N\|DXMT9_HOT_GPU_SHARE" \
-    scripts/tools/run_3dmark05_perf_probe.sh
-(no output — none of these ever appears as an env_args entry name)
+$ grep -n "env_args" scripts/tools/run_3dmark05_perf_probe.sh | \
+    grep -iE "semantic_image|top_n|hot_gpu_share|visibility_scout_draw_indices|visibility_scout_summary"
+$ echo "exit=$?"
+exit=1
 ```
+
+No output, exit status 1 (grep found no matching line). As a sanity
+check that this pipeline is actually exercising real content rather
+than failing on a broken first-stage pattern, `grep -c "env_args"
+scripts/tools/run_3dmark05_perf_probe.sh` returns `219` — the first
+stage does match plenty of lines; none of them, filtered by the
+second stage, ever forward one of these 13 flags' variables.
 
 | Flag | Variable | Where it actually goes |
 |---|---|---|
