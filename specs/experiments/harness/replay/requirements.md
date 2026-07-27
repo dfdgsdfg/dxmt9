@@ -130,11 +130,18 @@ reachable only behind a named opt-in flag (e.g. an explicit
 return path for an unrecognized value. Instantiates R-HARN-2.3.
 
 **R-HARN-REPLAY-2.3** The color and depth pixel formats this domain
-actually resolved for a replay run are recorded in
-`mini-replay-summary.json` (or the artifact envelope once adopted for
-this domain, parent spec.md §3) so a downstream reader can see which
-format was selected without re-deriving it from the manifest's raw
-`format` integer. Instantiates R-HARN-2.4.
+actually resolves for a replay run must be recorded — in
+`mini-replay-summary.json` today, or the artifact envelope once
+adopted for this domain (parent spec.md §3) — so a downstream reader
+can see which format was selected
+without re-deriving it from the manifest's raw `format` integer. This
+is intended contract, not current behavior: `prepare()`'s `summary`
+dict, the one written to `mini-replay-summary.json`, does not
+currently carry a resolved `color_format`/`depth_format` key —
+`color_pixel_format()`/`depth_pixel_format()`'s return values are
+consumed only locally inside `render_source()` to bake into the
+generated `.mm` source and are never written back to `summary`.
+Instantiates R-HARN-2.4.
 
 ---
 
@@ -225,14 +232,26 @@ exercised once the primary replay path has already failed to produce
 a useful image. Instantiates R-HARN-6.1/6.3. Rationale (defect 5):
 `--force-fragment-color`'s `force_fragment_color_source` replaces the
 body of `dxmt9_fs` with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);`
-without checking the function's declared return type; for a captured
-fixed-function-pipeline (FFP) shader, that declared return type is
-`FfpFsOut`, a struct, not `float4` (dxmt9's own FFP shader emitter,
-`src/dxmt9/dxmt9_ffp_shaders.cpp`, always declares
-`fragment FfpFsOut dxmt9_fs(...)`), so the rewritten source fails to
-compile. The one diagnostic flag meant to bisect a rendering failure
-between geometry and fragment stages is itself unusable exactly when
-it would be needed to investigate defect 4.
+without checking the function's declared return type. dxmt9 emits
+`dxmt9_fs` with one of three declared return shapes depending on which
+emitter produced it, not two: every real translated per-draw pixel
+shader declares `FSOut`, a struct, because
+`src/dxmt9/dxmt9_shader_metal_ir.cpp` hardcodes
+`usesFragmentOutStruct = true` unconditionally
+(`dxmt9_shader_metal_ir.cpp:2576`) — `FSOut` is therefore the dominant
+real shape for exactly the per-draw shaders this harness dumps and
+replays, not a secondary case; every fixed-function-pipeline (FFP)
+shader declares a different struct, `FfpFsOut`
+(`src/dxmt9/dxmt9_ffp_shaders.cpp:1109,1129,1150,1172,1181`); only
+dxmt9's internal blit/gamma-apply/debug-fill utility shaders
+(`src/dxmt9/dxmt9_shader_sources.cpp:124,152,178`) declare a bare
+`float4`, and those utility shaders are never the per-draw shader this
+harness dumps or replays. The rewritten body therefore fails to
+compile against essentially every real captured shader — translated
+and FFP alike — not only the FFP subset. The one diagnostic flag meant
+to bisect a rendering failure between geometry and fragment stages is
+itself unusable exactly when it would be needed to investigate
+defect 4.
 
 **R-HARN-REPLAY-6.3** This domain declares which index width(s) its
 replay binary supports. Today it declares exactly 16-bit indices: the

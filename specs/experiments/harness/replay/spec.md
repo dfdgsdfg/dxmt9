@@ -171,8 +171,8 @@ that set nothing).
 | `--draw-order` | `original` / `reverse`; reorders the manifest's draw list before replay (`materialize_replay_draws()`, lines 521-524). |
 | `--vertex-order` | `original` / `first-reference` / `scatter`; permutes vertex storage across every stream and rewrites indices in place, preserving triangle order, vertex bytes, payload size, and `base_vertex` (`remap_draw_vertex_layout()`, lines 428-494). Diagnostic locality discriminator. |
 | `--trim-vsout-to-fs-reads` | Trims the shared `VSOut` struct to only the fields the paired FS's `stage_in` reads (plus `position`/`texcoord0` fallbacks) via `apply_vsout_read_trim()` (lines 687-706). Diagnostic; changes VS/FS source shape. |
-| `--force-fragment-color` | Replaces the compiled `dxmt9_fs` function body with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` (`force_fragment_color_source()`, line 732). **Currently fails to compile against an FFP-shaped `dxmt9_fs`** (§7, defect 5). |
-| `--force-fragment-primitive-id` | Adds a `[[primitive_id]]` parameter and replaces `dxmt9_fs`'s body with a primitive-id-encoded color (`force_fragment_primitive_id_source()`, lines 759-771). Not one of the five defects this document was scoped to verify, but its body replacement is the same `replace_function_body(source, "dxmt9_fs", "{ ... return float4(...); }")` shape as `--force-fragment-color` (line 761) against a function signature whose declared return type it does not inspect; this domain has not independently exercised this flag against an `FfpFsOut`-returning shader, so whether it shares defect 5's compile failure is unconfirmed here, not ruled out. |
+| `--force-fragment-color` | Replaces the compiled `dxmt9_fs` function body with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` (`force_fragment_color_source()`, line 732). **Currently fails to compile against essentially every real captured `dxmt9_fs`** — translated per-draw shaders declare `FSOut` and FFP shaders declare `FfpFsOut`, neither of which is `float4` (§6, §7 defect 5). |
+| `--force-fragment-primitive-id` | Adds a `[[primitive_id]]` parameter and replaces `dxmt9_fs`'s body with a primitive-id-encoded color (`force_fragment_primitive_id_source()`, lines 759-771). Not one of the five defects this document was scoped to verify, but its body replacement is the same `replace_function_body(source, "dxmt9_fs", "{ ... return float4(...); }")` shape as `--force-fragment-color` (line 761) against a function signature whose declared return type it does not inspect; this domain has not independently exercised this flag against a real captured shader. The more consequential unconfirmed case is an `FSOut`-returning translated shader — the dominant real shape for captured per-draw PS (§6) — not only an `FfpFsOut`-returning FFP shader, so whether it shares defect 5's compile failure is unconfirmed here, not ruled out. |
 | `--compile` | Invokes `xcrun -sdk macosx clang++ -std=c++20 -fobjc-arc -O2 ...` (`compile_source()`, lines 1911-1925) to build the generated source into `<output-dir>/dxmt9-3dmark05-mini-replay`. |
 | `--run` | After compiling, runs the binary via `subprocess.run` (`run_binary()`, lines 1954-1966), forwarding `DXMT9_MINI_REPLAY_*` env (§5). |
 | `--repeat` | Sets `DXMT9_MINI_REPLAY_REPEAT` in the subprocess environment (default `1`); the binary re-issues every draw in the encoder that many times. |
@@ -215,6 +215,8 @@ direction that file does not itself state.
 
 ## 6. Declared Engine-Shape Expectations
 
+### 6.1 Cbuf-binding shapes
+
 This domain's `transform_msl()` (`run_3dmark05_mini_replay.py:590-638`)
 recognizes exactly two dumped-MSL cbuf-binding shapes, per
 R-HARN-REPLAY-5.1:
@@ -250,6 +252,59 @@ own reserved vertex-buffer slots 1 (stream0) and 5 (`DrawVolatile`,
 is declared or handled; per R-HARN-REPLAY-5.3, recognizing one would
 require both a new `transform_msl` branch and an update to this
 section, not a broadened regex on either existing branch.
+
+### 6.2 Fragment return-type shapes
+
+Separately from the cbuf-binding shapes in §6.1, dxmt9 declares
+`dxmt9_fs` with one of **three** distinct return types depending on
+which emitter produced the dumped MSL. This domain's diagnostic
+fragment-body rewrites (`--force-fragment-color`, `--force-fragment-
+primitive-id`, §4) depend on this shape even though `transform_msl`
+does not — they replace the function body but never inspect or adapt
+to the declared return type, which is the exact gap this section
+exists to make explicit.
+
+**`FSOut`** — the shape every real translated per-draw pixel shader
+declares, because `src/dxmt9/dxmt9_shader_metal_ir.cpp` hardcodes
+`const bool usesFragmentOutStruct = true;` unconditionally
+(`dxmt9_shader_metal_ir.cpp:2576`; there is no code path where this is
+`false`). The struct itself (`dxmt9_shader_metal_ir.cpp:2598-2606`) has
+a per-variant field layout — `color0..colorN [[color(i)]]` for
+`colorOutputCount` render targets, an optional `float depth
+[[depth(any)]]`, and a `uint sampleMask [[sample_mask]]` — and the
+emitter also always emits a matching constructor helper,
+`inline FSOut dxmt9_make_fs_out(float4 color, uint sampleMask)`
+(`dxmt9_shader_metal_ir.cpp:2607-2617`). `fragmentReturnType` is set to
+`"FSOut"` at `dxmt9_shader_metal_ir.cpp:2637` and used verbatim at
+every `dxmt9_fs` emission site (`:2658`, `:2686`, `:2702`, `:2720`,
+`:2732`). Because this is the shape for every translated per-draw
+pixel shader — exactly what `probe`-domain geometry dumps capture and
+this domain replays — `FSOut` is the **dominant real case**, not a
+secondary one.
+
+**`FfpFsOut`** — the shape every fixed-function-pipeline (FFP) shader
+declares, unconditionally
+(`src/dxmt9/dxmt9_ffp_shaders.cpp:1109,1129,1150,1172,1181`). A
+distinct, simpler struct — `float4 color [[color(0)]]` plus `uint
+sampleMask [[sample_mask]]` (`dxmt9_ffp_shaders.cpp:1053-1056`) — with
+its own matching constructor helper, `inline FfpFsOut
+dxmt9_make_ffp_fs_out(float4 color, uint sampleMask)`
+(`dxmt9_ffp_shaders.cpp:1057-1062`).
+
+**Bare `float4`** — confined to `src/dxmt9/dxmt9_shader_sources.cpp`'s
+internal utility shaders: `makeGenericFragmentSource`
+(debug-fill, line 124), `makeTexturedFragmentSource` (internal blit,
+line 152), and `makeGammaApplyFragmentSource` (gamma-ramp apply, line
+178). None of these is ever the per-draw pixel shader a `probe`-domain
+geometry dump captures or this domain replays — they exist only for
+dxmt9's own internal presenter/blit paths, which this harness has no
+mechanism to dump or reach.
+
+`--force-fragment-color`'s rewritten body (`float4(1.0f, 0.0f, 1.0f,
+1.0f)` returned bare) matches only the third, never-replayed shape.
+Against the two shapes real captured shaders actually declare —
+`FSOut` and `FfpFsOut` — it is a return-type mismatch and fails to
+compile (§7, defect 5).
 
 ---
 
@@ -303,21 +358,40 @@ reason this domain's documents exist.
    item), so the usual next diagnostic step is unavailable.
 
 4. **Unfixed — the fragment-stage bisection tool does not compile
-   (defect 5).** `--force-fragment-color` replaces `dxmt9_fs`'s body
-   with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` without
-   checking the function's declared return type. `dxmt9`'s own FFP
-   shader emitter always declares `fragment FfpFsOut dxmt9_fs(...)`
-   (`src/dxmt9/dxmt9_ffp_shaders.cpp:1109,1129,1150,1172,1181`, a
-   struct return type, not `float4`); against such a shader the
-   rewritten body fails to compile with a return-type mismatch. The
-   one diagnostic flag built specifically to separate "the geometry
-   reaches the fragment stage but the fragment shader is producing
-   wrong color" from "the geometry never reaches the fragment stage at
-   all" is unusable exactly when defect 4 needs it.
+   (defect 5), and against essentially all real captured shaders, not
+   only FFP ones.** `--force-fragment-color` replaces `dxmt9_fs`'s
+   body with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` without
+   checking the function's declared return type. dxmt9 declares
+   `dxmt9_fs` with one of **three** shapes, not two (§6.2): every real
+   translated per-draw pixel shader declares `FSOut` — dxmt9
+   hardcodes `usesFragmentOutStruct = true` unconditionally
+   (`src/dxmt9/dxmt9_shader_metal_ir.cpp:2576`), so `FSOut` is the
+   dominant real case for exactly the shaders this harness dumps and
+   replays, not a secondary one; every FFP shader declares a different
+   struct, `FfpFsOut`
+   (`src/dxmt9/dxmt9_ffp_shaders.cpp:1109,1129,1150,1172,1181`); only
+   dxmt9's internal blit/gamma-apply/debug-fill utility shaders
+   (`src/dxmt9/dxmt9_shader_sources.cpp:124,152,178`) declare a bare
+   `float4`, and those are never the per-draw shader this harness
+   dumps or replays. `--force-fragment-color`'s rewritten body matches
+   only that third, never-replayed shape, so it fails to compile
+   against essentially every real captured shader — translated and FFP
+   alike, not an FFP-only subset. The one diagnostic flag built
+   specifically to separate "the geometry reaches the fragment stage
+   but the fragment shader is producing wrong color" from "the
+   geometry never reaches the fragment stage at all" is unusable
+   exactly when defect 4 needs it.
 
 Because defect 5 leaves the fragment-stage bisection path unusable,
 defect 4's root cause cannot currently be narrowed further with this
 domain's own tooling. A future fix must restore `--force-fragment-
-color`'s ability to compile against both declared `dxmt9_fs` return
-shapes (`float4` and `FfpFsOut`, §6) before it can be trusted to
-diagnose defect 4.
+color`'s ability to compile against the two shapes real captured
+shaders actually declare — `FSOut` and `FfpFsOut` (§6.2) — not against
+`float4`, which the flag already matches but which no captured shader
+ever uses. Both emitters already provide a matching constructor helper
+a rewrite could target instead of a bare `return float4(...)`:
+`dxmt9_make_fs_out(float4, uint)`
+(`dxmt9_shader_metal_ir.cpp:2607-2617`) for `FSOut` and
+`dxmt9_make_ffp_fs_out(float4, uint)`
+(`dxmt9_ffp_shaders.cpp:1057-1062`) for `FfpFsOut`. Before it can be
+trusted to diagnose defect 4, the flag must compile against both.
