@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Write 17 specification documents under `specs/experiments/harness/` that define what each dxmt9 harness family owes its neighbours, so harness corrosion becomes detectable.
+**Goal:** Write 16 tracked specification documents under `specs/experiments/harness/` that define what each dxmt9 harness family owes its neighbours, so harness corrosion becomes detectable.
 
 **Architecture:** A parent `requirements.md` states five cross-cutting `R-HARN-*` contract groups derived one-to-one from observed defects. A parent `spec.md` carries the eight-stage boundary map, the artifact envelope, and environment-variable ownership. Seven domain subdirectories — one per harness family, not per pipeline stage — each carry `requirements.md` + `spec.md` describing that family's scripts, stages, modes, artifacts, and owned env vars.
 
@@ -36,7 +36,7 @@
 | `specs/experiments/harness/gate/{requirements,spec}.md` | Comparison and proof gates. |
 | `specs/experiments/harness/audit/{requirements,spec}.md` | Repository-level audits. |
 
-Each domain file pair is self-contained: a reader asking "what does the replay harness owe me?" reads two short files, not seventeen.
+Each domain file pair is self-contained: a reader asking "what does the replay harness owe me?" reads two short files, not sixteen.
 
 ## One design-document correction — CORRECTED AGAIN, read this
 
@@ -190,7 +190,7 @@ State the rule that decides `reduce` versus `join`: a summariser belongs to `red
 | `env_snapshot` | Resolved values of contract-relevant environment variables actually in effect |
 | `validity` | Result of the `R-HARN-3.*` validity assertion |
 
-State that the envelope is provenance and is separate from measurement payloads. Name the concrete consequence for `result.json`: its counter payload is consumed by `run_experiment.py`'s `expected_counters` L3 gate, by `compare_3dmark05_perf_counters.py`, and by `source:` citations in `docs/perfomance/`, so the envelope replaces the provenance fields only and the counter payload stays. State the second use of `inputs` digests: on 2026-07-27, 34 of the 56 log paths cited as `source:` evidence in `docs/perfomance/` were found already missing, and digested inputs make that state machine-detectable.
+State that the envelope is provenance and is separate from measurement payloads. Name the concrete consequence for `result.json`: its counter payload is consumed by `run_experiment.py`'s `expected_counters` L3 gate, by `compare_3dmark05_perf_counters.py`, and by `source:` citations in `docs/perfomance/`, so the envelope replaces the provenance fields only and the counter payload stays. State the second use of `inputs` digests: on 2026-07-27, of the 55 distinct `.log` paths referenced under `docs/perfomance/`, 33 were already missing (54 of the 55 sit in a frontmatter `source:` field; widening the scan to `docs` + `agents` + `README.md` gives 56 paths and 34 missing), and digested inputs make that state machine-detectable.
 
 **§4 Environment ownership.** Define contract-relevant: a variable whose value changes what a measurement means or how a downstream artifact must be interpreted. Give the discriminating example — a logging-verbosity knob is not contract-relevant; `DXMT9_ARGBUF_DIRECT_CBUF` is, because it changes the emitted MSL signature that `replay` pattern-matches, which is exactly how defect 1 arose. Then the three rules: exactly one owning domain may set each contract-relevant variable and downstream domains may read but not set; any forwarded variable appears in `env_snapshot`; a contract-relevant variable is never silently defaulted and its resolved value is recorded whether it came from the caller, the `DXMT_EXPERIMENT_PROFILE` profile, or the engine default.
 
@@ -265,7 +265,7 @@ Cover four things.
 - Enforcement is unbuilt. Requirements are predicates but nothing evaluates them. This is deliberate — the docs-only scope was chosen on 2026-07-27 — and it means these documents can corrode exactly as the harnesses did.
 - The `replay` harness does not currently work. Defects 1, 3, 4, and 5 are unfixed; defect 2 was fixed in commit `12348666`. The cause of the black replay output is unknown: constants, scissor, cull, depth input, and draw issue were all eliminated, and `--force-fragment-color`, the tool that would bisect geometry from fragment, is itself broken.
 - `scripts/tools/summarize_3dmark05_cleanup_candidates.py` miscounts brace-expanded citations such as `...-r{1,2,3}-...`, classifying 84 referenced runs (4.5 GB) as unreferenced.
-- 34 of the 56 log paths cited as `source:` in `docs/perfomance/` are already missing; the citations are dangling.
+- Of the 55 distinct `.log` paths referenced under `docs/perfomance/`, 33 are already missing and their references dangle. 54 of the 55 sit in a frontmatter `source:` field. Widening the scan to `docs` + `agents` + `README.md` gives 56 paths and 34 missing.
 
 **Non-goals.** No harness code changes, no new harness, no enforcement checker, no artifact migration.
 
@@ -587,7 +587,7 @@ clean-looking equality result."
 
 Title `"Harness Audit Requirements — Record Verification"`.
 
-Requirements must cover: an audit declares precisely what it does and does not check; an audit registered as a Meson test is part of CI and its scope is stated; citation audits verify referent existence, which is the gap `audit_perf_docs_sources.py` currently has and which left 34 of 56 cited log paths dangling undetected.
+Requirements must cover: an audit declares precisely what it does and does not check; an audit registered as a Meson test is part of CI and its scope is stated; citation audits verify referent existence, which is the gap `audit_perf_docs_sources.py` currently has and which left 33 of the 55 `.log` paths referenced under `docs/perfomance/` dangling undetected.
 
 - [ ] **Step 2: Write `spec.md`**
 
@@ -611,7 +611,7 @@ git add specs/experiments/harness/audit/
 git commit -m "specs(harness): specify the audit domain
 
 States what audit_perf_docs_sources.py does not check — referent
-existence — since that gap let 34 of 56 cited evidence paths go dangling
+existence — since that gap let 33 of 55 referenced evidence paths go dangling
 without any signal."
 ```
 
