@@ -57,9 +57,10 @@ supervised `caffeinate ... run_experiment.py run app-d3d9-3dmark05
 failure would make the demanded capture invalid: macOS session-lock
 state (after any configured `--wait-unlocked-sec` poll), the gputrace
 free-space guard, the file `.gputrace` capture-layer preflight (direct
-or via `--with-wine-capture-layer`), the `--require-xcode-attach-
-preflight` Xcode attach check when a `developerTools` capture
-destination is selected, and the general free-space guard. Any one of
+or via `--with-wine-capture-layer`), the
+`--require-xcode-attach-preflight` Xcode attach check when a
+`developerTools` capture destination is selected, and the general
+free-space guard. Any one of
 these failing exits non-zero (`exit 2`) with a diagnostic naming the
 failed precondition, and no `result.json`, `.gputrace`, or geometry
 artifact for the run is produced. Instantiates R-HARN-2.1 (no valid
@@ -93,8 +94,9 @@ R-HARN-2.3.
 **R-HARN-PROBE-3.1** This domain's core script rejects a resolved
 `--timeout` value that is not a positive number, independent of and in
 addition to the `runner`-domain's own `require_positive_timeout`
-catalogue-level enforcement (`specs/experiments/harness/runner/
-requirements.md` R-HARN-RUN-3.1/3.2). A `probe`-domain change must not
+catalogue-level enforcement
+(`specs/experiments/harness/runner/requirements.md`
+R-HARN-RUN-3.1/3.2). A `probe`-domain change must not
 remove this check on the theory that the `runner` domain already
 enforces it, because this domain's own watchdog (R-HARN-PROBE-3.2)
 depends on a positive `--timeout` to compute a positive watchdog

@@ -124,8 +124,9 @@ edit to the script can move them again.
 Any failure of steps 2, 3, 5, or 6 above `exit 2`s; step 4's failure
 also `exit 2`s with a diagnostic naming which of the direct or
 wine-capture-layer variant failed and why (missing `wine.real`,
-missing `MetalCaptureEnabled`, etc.). `DXMT_3DMARK05_ALLOW_NO_FILE_
-CAPTURE_LAYER=1` is the one documented escape hatch (R-HARN-PROBE-2.1
+missing `MetalCaptureEnabled`, etc.).
+`DXMT_3DMARK05_ALLOW_NO_FILE_CAPTURE_LAYER=1` is the one documented
+escape hatch (R-HARN-PROBE-2.1
 compatibility exception per parent R-HARN-2.3): it disables step 4 for
 a deliberate late-failure diagnostic where the expected evidence is
 `Capture layer is not inserted` after launch rather than a preflight
@@ -134,9 +135,9 @@ exit.
 **Outer watchdog.** The whole supervised invocation —
 `caffeinate -dimsu python3 scripts/run_apps/run_experiment.py run
 app-d3d9-3dmark05 --output-suffix "$suffix" --timeout "$timeout"`,
-optionally wrapped in `bash scripts/tools/
-run_with_wine_metal_capture_layer.sh --wine-root ... --allow-3dmark05
---` (`run_3dmark05_perf_probe.sh:5084-5102`) — is opened in a
+optionally wrapped in
+`bash scripts/tools/run_with_wine_metal_capture_layer.sh --wine-root ... --allow-3dmark05 --`
+(`run_3dmark05_perf_probe.sh:5084-5102`) — is opened in a
 subshell at `:6010` (the `(` line; `:6009` is the unrelated preceding
 `start_3dmark05_frontmost_loop` call) and launched under
 `python3 scripts/tools/run_with_timeout.py --timeout
@@ -200,9 +201,8 @@ This is the boundary parent spec.md calls out as having failed
 silently (its §2 `dump-extract → offline-replay` section, R-HARN-4.3/
 4.4, defect 2). This section restates the same rule from the `probe`
 side, verified independently against
-`traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/geometry/
-seq60-enc1-draw31825-slot140.meta` (229-file directory, 2026-07-27) in
-addition to the parent's own
+`traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/geometry/seq60-enc1-draw31825-slot140.meta`
+(229-file directory, 2026-07-27) in addition to the parent's own
 `.../vertexremap-dump-r1/analysis/geometry/` citation (156 files,
 including the 8 non-zero-offset rows).
 
@@ -271,6 +271,7 @@ above.
 | `DXMT_3DMARK05_RESULT_FILE` | `--result-file` value, default `dxmt9_gt1.3dr` (`:4204`). |
 | `DXMT_3DMARK05_LOG` | `$output_dir/3dmark05-direct.log` (`:4205`). |
 | `DXMT_3DMARK05_DIRECT` | `1` (`:4199`) — **dual-owner deviation** (R-HARN-PROBE-6.3): also set by the `runner`-domain `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh:15`, on a mutually exclusive invocation path. Neither domain owns this variable alone. |
+| `DXMT_DISABLE_AUTO_EXPAND_INDEXED` | `1` (`:4203`) — compiled-in default with **no wrapper flag**, unconditionally set in the same `env_args` initializer as the seven variables above and the `DXMT9_OFFLOAD_COMMIT_REPLAY` pair (R-HARN-PROBE-6.4's "compiled-in default the script itself pins for recipe determinism" class). Unlike `DXMT9_OFFLOAD_COMMIT_REPLAY=${DXMT9_OFFLOAD_COMMIT_REPLAY:-1}` two lines below it, this assignment has no `${...:-}` fallback, so a caller's pre-set environment value cannot override it. Per `agents/rules/environment_variables_encoder.rules.md`, the variable "disable[s] compatibility heuristic that auto-expands selected indexed draws" and its engine default is `0`; this domain pins it to `1` for every run it launches, so every 3DMark05 perf number this probe produces is measured with that heuristic off against an engine default of on, a fact no other document previously recorded. |
 | `DXMT_CAPTURE_FRAMES` / `DXMT_CAPTURE_RANGE` | `--capture-frames`/`--capture-range` values, when given. |
 | `DXMT_METAL_CAPTURE_FRAME` / `_PATH` / `_DESTINATION` | Gputrace capture target frame, `$capture_path`, and `--metal-capture-destination`, when gputrace capture is on. |
 | every other flag-forwarded `DXMT9_*`/`DXMT_*` variable in §7 | Forwarded verbatim from the matching `--flag`; see §7 for the mapping. |
@@ -280,13 +281,15 @@ documented in any `agents/rules/environment_variables_*.rules.md`
 file today (verified: `rg` over `agents/rules/` finds neither name).
 They exist only in `scripts/tools/run_3dmark05_perf_probe.sh` and are
 read with inline bash defaults
-(`${DXMT_3DMARK05_WINE_ROOT:-...}`, `${DXMT_3DMARK05_WINESERVER:-
-"$wine_root/bin/wineserver"}`) in
+(`${DXMT_3DMARK05_WINE_ROOT:-...}`,
+`${DXMT_3DMARK05_WINESERVER:-"$wine_root/bin/wineserver"}`) in
 `experiments/launchers/app-d3d9-3dmark05.sh:182,184`.
 `DXMT_3DMARK05_PREFIX`, `_RESULT_FILE`, and `_LOG` are documented in
 `agents/rules/environment_variables_perf.rules.md`;
 `DXMT_3DMARK05_DIRECT` is documented in
-`agents/rules/environment_variables_wine.rules.md`.
+`agents/rules/environment_variables_wine.rules.md`;
+`DXMT_DISABLE_AUTO_EXPAND_INDEXED` is documented in
+`agents/rules/environment_variables_encoder.rules.md`.
 
 `DXMT_EXPERIMENT_WINE_DLLOVERRIDES` and other `DXMT_EXPERIMENT_*`
 variables not listed above remain owned by the `runner` domain per

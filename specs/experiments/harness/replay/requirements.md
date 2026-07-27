@@ -220,9 +220,10 @@ alters this domain's output — the generated Objective-C++ replay
 source, the compiled binary's runtime behavior, or an artifact this
 domain writes — appears in this domain's own `spec.md` mode table,
 whether the flag is a routine shape control (`--width`, `--height`,
-`--depth-clear`) or a diagnostic bisection probe (`--force-fragment-
-color`, `--force-fragment-primitive-id`, `--primitive-order`,
-`--vertex-order`, `--draw-order`, `--trim-vsout-to-fs-reads`).
+`--depth-clear`) or a diagnostic bisection probe
+(`--force-fragment-color`, `--force-fragment-primitive-id`,
+`--primitive-order`, `--vertex-order`, `--draw-order`,
+`--trim-vsout-to-fs-reads`).
 Instantiates R-HARN-6.2.
 
 **R-HARN-REPLAY-6.2** A diagnostic flag that does not compile the

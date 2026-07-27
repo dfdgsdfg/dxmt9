@@ -87,8 +87,8 @@ objects:
   file path and byte count, present only when the source dump wrote
   that cbuf.
 - `textures` — up to 16 fragment-stage texture-slot entries with
-  handle, format, and dimensions, consumed by `run_3dmark05_mini_
-  replay.py`'s `--texture-input-dir`.
+  handle, format, and dimensions, consumed by
+  `run_3dmark05_mini_replay.py`'s `--texture-input-dir`.
 - `attachments` — up to 4 color surfaces plus one depth surface,
   each carrying `format`, `width`, `height`, and alias-texture fields.
 
@@ -258,10 +258,11 @@ section, not a broadened regex on either existing branch.
 Separately from the cbuf-binding shapes in §6.1, dxmt9 declares
 `dxmt9_fs` with one of **three** distinct return types depending on
 which emitter produced the dumped MSL. This domain's diagnostic
-fragment-body rewrites (`--force-fragment-color`, `--force-fragment-
-primitive-id`, §4) depend on this shape even though `transform_msl`
-does not — they replace the function body but never inspect or adapt
-to the declared return type, which is the exact gap this section
+fragment-body rewrites (`--force-fragment-color`,
+`--force-fragment-primitive-id`, §4) depend on this shape even though
+`transform_msl` does not — they replace the function body but never
+inspect or adapt to the declared return type, which is the exact gap
+this section
 exists to make explicit.
 
 **`FSOut`** — the shape every real translated per-draw pixel shader
@@ -274,10 +275,15 @@ a per-variant field layout — `color0..colorN [[color(i)]]` for
 [[depth(any)]]`, and a `uint sampleMask [[sample_mask]]` — and the
 emitter also always emits a matching constructor helper,
 `inline FSOut dxmt9_make_fs_out(float4 color, uint sampleMask)`
-(`dxmt9_shader_metal_ir.cpp:2607-2617`). `fragmentReturnType` is set to
-`"FSOut"` at `dxmt9_shader_metal_ir.cpp:2637` and used verbatim at
-every `dxmt9_fs` emission site (`:2658`, `:2686`, `:2702`, `:2720`,
-`:2732`). Because this is the shape for every translated per-draw
+(`dxmt9_shader_metal_ir.cpp:2607-2617`). `fragmentReturnType` is
+assigned via
+`const char* fragmentReturnType = usesFragmentOutStruct ? "FSOut" : "float4";`
+at `dxmt9_shader_metal_ir.cpp:2637` — a ternary whose `"float4"` false
+branch is dead code today, since `usesFragmentOutStruct` is hardcoded
+`true` at `:2576` with no code path that sets it `false`. The
+resolved value, `"FSOut"`, is used verbatim at every `dxmt9_fs`
+emission site (`:2658`, `:2686`, `:2702`, `:2720`, `:2732`). Because
+this is the shape for every translated per-draw
 pixel shader — exactly what `probe`-domain geometry dumps capture and
 this domain replays — `FSOut` is the **dominant real case**, not a
 secondary one.
@@ -305,6 +311,30 @@ mechanism to dump or reach.
 Against the two shapes real captured shaders actually declare —
 `FSOut` and `FfpFsOut` — it is a return-type mismatch and fails to
 compile (§7, defect 5).
+
+### 6.3 Declared index width
+
+Per R-HARN-REPLAY-6.3, this domain declares which index width(s) its
+replay binary supports, the same way §6.1 declares the accepted
+cbuf-binding shapes. Today it supports exactly one: 16-bit. The
+generated `drawIndexedPrimitives:` call
+(`run_3dmark05_mini_replay.py:1703-1705`) is emitted with a literal
+`indexType:MTLIndexTypeUInt16`; there is no branch, and no other
+`indexType:` literal, for a 32-bit source index buffer anywhere in
+this script.
+
+R-HARN-REPLAY-6.3 also requires that a manifest draw whose original
+D3D9 index format is 32-bit be rejected with a diagnostic naming the
+unsupported width, rather than replayed as if it were 16-bit. That
+check does not exist yet: nothing in `run_3dmark05_mini_replay.py`
+inspects the manifest's `index_type` field before emitting the
+hardcoded `MTLIndexTypeUInt16` call, so a 32-bit-indexed draw is
+replayed with the index buffer bytes silently reinterpreted as
+16-bit indices instead of being rejected. This is a declared
+requirement without a matching implementation, not a description of
+an existing check; `specs/experiments/gap.md` is where that
+implementation shortfall is tracked, per this project's own
+gap-tracking convention.
 
 ---
 
@@ -384,9 +414,10 @@ reason this domain's documents exist.
 
 Because defect 5 leaves the fragment-stage bisection path unusable,
 defect 4's root cause cannot currently be narrowed further with this
-domain's own tooling. A future fix must restore `--force-fragment-
-color`'s ability to compile against the two shapes real captured
-shaders actually declare — `FSOut` and `FfpFsOut` (§6.2) — not against
+domain's own tooling. A future fix must restore
+`--force-fragment-color`'s ability to compile against the two shapes
+real captured shaders actually declare — `FSOut` and `FfpFsOut`
+(§6.2) — not against
 `float4`, which the flag already matches but which no captured shader
 ever uses. Both emitters already provide a matching constructor helper
 a rewrite could target instead of a bare `return float4(...)`:

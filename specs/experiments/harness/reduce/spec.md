@@ -14,19 +14,19 @@ log-reduce` and `log-reduce → compare-gate` boundaries in that spec's
 §2. Stage names, boundary names, and envelope fields are cited from
 the parent spec rather than redefined here.
 
-Facts below were verified against `scripts/tools/
-summarize_3dmark05_perf.py` (8,757 lines), `scripts/tools/
-summarize_index_cache_runtime.py` (372 lines), and `scripts/tools/
-summarize_framegraph_dag.py` (394 lines) at their line numbers on
-2026-07-27, and against the real output directories
+Facts below were verified against
+`scripts/tools/summarize_3dmark05_perf.py` (8,757 lines),
+`scripts/tools/summarize_index_cache_runtime.py` (372 lines), and
+`scripts/tools/summarize_framegraph_dag.py` (394 lines) at their line
+numbers on 2026-07-27, and against the real output directories
 `experiments/output/app-d3d9-3dmark05-vertexremap-enc1-r1/` and
-`traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/
-analysis/` as noted per section. Column counts were derived by
-importing each script as a module and reading its column-list
-constant's length (`python3 -c 'exec(open(path).read()); print(len(
-CONST))'` style, run without invoking `main()`), not by hand-counting
-prose, then cross-checked against the real CSV header field counts in
-those directories.
+`traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/analysis/`
+as noted per section. Column counts were derived by importing each
+script as a module and reading its column-list constant's length
+(`python3 -c 'exec(open(path).read()); print(len(CONST))'` style, run
+without invoking `main()`), not by hand-counting prose, then
+cross-checked against the real CSV header field counts in those
+directories.
 
 ---
 
@@ -39,9 +39,10 @@ those directories.
 | `scripts/tools/summarize_framegraph_dag.py` | Reads `DXMT9_RENDERER_DUMP_DAG` JSON dumps (one file per chunk, `dag-frame<N>-chunk<S>-{pre-opt,post-opt}.json`) and emits a per-file summary CSV, a same-attachment-pair candidate CSV, and a Markdown report (§6). |
 
 Per R-HARN-REDUCE-1.1, this table covers exactly the three scripts the
-parent domain map names as examples of its own "the `scripts/tools/
-summarize_*` that read dxmt9's own logs" rule. Other `scripts/tools/
-summarize_*` scripts exist and are **not** covered by this document —
+parent domain map names as examples of its own "the
+`scripts/tools/summarize_*` that read dxmt9's own logs" rule. Other
+`scripts/tools/summarize_*` scripts exist and are **not** covered by
+this document —
 see §2.3.
 
 ---
@@ -55,8 +56,8 @@ origin of the input artifact, not the shape of the output."
 
 ### 2.1 `summarize_3dmark05_perf.py`
 
-Primary inputs, read directly from `main()` (`:8679-8709`): `result.
-json` (`load_result`, `:2893-2917`) and `dxmt9.log` (all eight
+Primary inputs, read directly from `main()` (`:8679-8709`):
+`result.json` (`load_result`, `:2893-2917`) and `dxmt9.log` (all eight
 `parse_*_lines` functions, `:2979-3043`). Both are dxmt9-produced —
 `result.json` is written by the `runner` domain and `dxmt9.log` is the
 process's own captured stdout/stderr. No external-tool export is read
@@ -138,7 +139,15 @@ document.
 ## 3. Declared Log-Line Prefixes and Their Gating Variables
 
 `summarize_3dmark05_perf.py` binds nine literal prefix constants
-(`:24-32`), each anchored at line start via `line.startswith(...)`:
+(`:24-32`), each anchored at line start via `line.startswith(...)`.
+§1 and §4 count these as **eight** distinct line families, not nine,
+because `PERF_PREFIX` and `BRIDGE_PREFIX` — two separate constants in
+the table below — are counted as one family: both are parsed only as
+a `result.json`-absent fallback through the same generic
+`parse_kv_line` call (§4.1's "eighth family" paragraph), rather than
+each owning independent line-shape or validity behavior the way the
+other seven constants do. Nine constants, eight families, is the
+reconciled count throughout this document:
 
 | Constant | Literal prefix | Emitting site (`src/`) | Gating variable | Set by |
 |---|---|---|---|---|
@@ -154,8 +163,9 @@ document.
 
 **`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE` has no `probe` wrapper flag
 today.** Per R-HARN-REDUCE-6.3, this was checked rather than assumed:
-`grep -n "ARGBUF_PAYLOAD_DELTA" scripts/tools/
-run_3dmark05_perf_probe.sh` returns no match on 2026-07-27. This
+`grep -n "ARGBUF_PAYLOAD_DELTA"
+scripts/tools/run_3dmark05_perf_probe.sh` returns no match on
+2026-07-27. This
 domain's `summarize_3dmark05_perf.py` can parse
 `[dxmt9-perf-argbuf-payload-delta-source]` lines and always writes
 `3dmark05-perf-argbuf-payload-delta-sources.csv` (§5, §6), but nothing
@@ -186,8 +196,9 @@ R-HARN-REDUCE-3.* contract, not what an idealized reducer would do.
 
 Six of the eight line families (`ENCODER_PREFIX`, `STREAM_PREFIX`,
 `PROBE_DRAW_PREFIX`, `RENDER_PASS_REENTRY_PREFIX`, `FRAME_PREFIX`,
-`ARGBUF_DELTA_SOURCE_PREFIX`) are parsed identically: `if line.
-startswith(PREFIX): rows.append(parse_kv_line(line))` (`:2984-3029`).
+`ARGBUF_DELTA_SOURCE_PREFIX`) are parsed identically:
+`if line.startswith(PREFIX): rows.append(parse_kv_line(line))`
+(`:2984-3029`).
 `parse_kv_line` (`:2920-2926`) is a generic `key=value` regex scan
 (`KEY_VALUE_RE = re.compile(r"\b([A-Za-z0-9_]+)=([^\s]+)")`,
 `:21`) that extracts whatever `key=value` tokens it finds and silently
@@ -200,16 +211,18 @@ six families as written today; it is stated here as a verified gap,
 not a compliant implementation.
 
 The seventh family, `VS_CONST_SETTER_RANGE_PREFIX`, is the one
-exception with an actual validity filter: `parse_vs_const_setter_
-range_lines` (`:3032-3043`) requires the line to end with `]`
-(`:3038-3039`, `continue` — silently — if not) and then calls
+exception with an actual validity filter:
+`parse_vs_const_setter_range_lines` (`:3032-3043`) requires the line
+to end with `]` (`:3038-3039`, `continue` — silently — if not) and
+then calls
 `valid_vs_const_setter_range_row` (`:2943-2976`), which rejects a row
 whose `phase` is not `call`/`flush`, whose `overflow` value is not
 `0`/`1`, or whose required integer/hex fields are missing, returning
 `False` with **no diagnostic naming which check failed or how many
 rows were rejected** — the row is simply dropped from the aggregate
-(`:3040-3042`: `if valid_vs_const_setter_range_row(row): rows.append(
-row)`). This is closer to R-HARN-REDUCE-3.2's intent than the six
+(`:3040-3042`:
+`if valid_vs_const_setter_range_row(row): rows.append(row)`). This is
+closer to R-HARN-REDUCE-3.2's intent than the six
 generic parsers (it does distinguish valid from invalid shape) but
 still does not emit the required count/diagnostic of rejected rows —
 a caller cannot tell "zero call/flush setter-range events happened"
@@ -218,8 +231,8 @@ from "N rows were seen and rejected" from this script's output alone.
 The eighth family, `[dxmt9-bridge-perf]`, and the base `[dxmt9-perf]`
 line, are parsed only as a `result.json`-absent fallback inside
 `load_result` (`:2903-2917`) via the same generic `parse_kv_line`; a
-missing or unparseable `[dxmt9-perf]` line after a missing `result.
-json` is the one hard-failure path in this script (`SystemExit`,
+missing or unparseable `[dxmt9-perf]` line after a missing
+`result.json` is the one hard-failure path in this script (`SystemExit`,
 `:2911`), because at that point there is no counter data of any kind
 to report.
 
@@ -263,9 +276,10 @@ this domain that meets the R-HARN-5.3-style "hard failure, not silent
 fallback" bar for its top-level input shape.
 
 Within a structurally valid file, however, individual malformed
-elements are silently skipped rather than failing: `resource_accesses_
-by_handle` (`:159-175`) does `if not isinstance(resource, dict):
-continue` for a non-dict entry in the `resources` list, and
+elements are silently skipped rather than failing:
+`resource_accesses_by_handle` (`:159-175`) does
+`if not isinstance(resource, dict): continue` for a non-dict entry in
+the `resources` list, and
 `render_passes`/`edge_rows` (`:139-146,178-181`) filter non-dict/
 non-`"Render"` entries the same way. A malformed individual pass or
 resource entry (as opposed to a malformed top-level file) is dropped
@@ -300,18 +314,20 @@ REDUCE-4.1/4.2 concretely. `3dmark05-perf-summary.md` reports:
 - VS const setter range rows: `0`
 ```
 
-`3dmark05-perf-argbuf-payload-delta-sources.csv` and `3dmark05-perf-
-vs-const-setter-ranges.csv` in that same directory are each exactly
-one line long (header only, verified with `wc -l`); `3dmark05-perf-
-render-pass-reentry.csv` and `3dmark05-perf-frames.csv` are the same
-shape. All four files are well-formed, valid CSVs — a consumer opening
+`3dmark05-perf-argbuf-payload-delta-sources.csv` and
+`3dmark05-perf-vs-const-setter-ranges.csv` in that same directory are
+each exactly one line long (header only, verified with `wc -l`);
+`3dmark05-perf-render-pass-reentry.csv` and
+`3dmark05-perf-frames.csv` are the same shape. All four files are
+well-formed, valid CSVs — a consumer opening
 any of them sees a syntactically correct, header-complete, zero-row
 file, indistinguishable in file structure from "this run never
-triggered a render-pass re-entry" (true here — `--render-pass-
-reentry-top` was not passed) from "the gating variable was never even
-offered a flag" (also true here for `DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_
-SOURCE`, §3) from a hypothetical future parsing regression that
-dropped every matching line. `main()` exits `0` in every case; nothing
+triggered a render-pass re-entry" (true here —
+`--render-pass-reentry-top` was not passed) from "the gating variable
+was never even offered a flag" (also true here for
+`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE`, §3) from a hypothetical
+future parsing regression that dropped every matching line. `main()`
+exits `0` in every case; nothing
 in this script's own artifact distinguishes these causes beyond the
 row-count line already quoted above, which is present but is a bare
 count, not a validity assertion per R-HARN-REDUCE-4.2.
@@ -329,10 +345,10 @@ row count itself.
 ## 6. Emitted Artifacts and Column Contract
 
 `summarize_3dmark05_perf.py --output_dir` writes eight artifacts,
-every one unconditionally (each CSV write is guarded by `log_path.
-exists() or not <csv>.exists()`, `:8711-8732` — on a fresh run with a
-log present, every guard is true), confirmed present together in
-`experiments/output/app-d3d9-3dmark05-vertexremap-enc1-r1/`:
+every one unconditionally (each CSV write is guarded by
+`log_path.exists() or not <csv>.exists()`, `:8711-8732` — on a fresh
+run with a log present, every guard is true), confirmed present
+together in `experiments/output/app-d3d9-3dmark05-vertexremap-enc1-r1/`:
 
 | Artifact | Column-list constant | Verified column count | Verified against real header |
 |---|---|---|---|
@@ -366,34 +382,36 @@ rather than reading them from any shared manifest).
 
 `summarize_index_cache_runtime.py --csv-output` writes one CSV keyed
 by `CSV_FIELDS` (`:178-236`), verified length `57`, matching the real
-header field count in `experiments/output/app-d3d9-3dmark05-
-vertexremap-enc1-r1/3dmark05-index-cache-runtime-summary.csv` exactly.
+header field count in
+`experiments/output/app-d3d9-3dmark05-vertexremap-enc1-r1/3dmark05-index-cache-runtime-summary.csv`
+exactly.
 
 `summarize_framegraph_dag.py --summary-csv`/`--csv` write
 `SUMMARY_FIELDS` (11 columns) and `CANDIDATE_FIELDS` (23 columns)
 respectively (`:21-33,35-59`), both verified against real headers in
-`traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/
-analysis/framegraph-dag-summary.csv` (11) and `framegraph-dag-
-candidates.csv` (23) — a non-empty real capture (2 and 6 data rows
-respectively), unlike the empty-CSV examples in §5.
+`traces/app-d3d9-3dmark05-gt2-passcoalesce-v2-tape-r1-20260723/analysis/framegraph-dag-summary.csv`
+(11) and `framegraph-dag-candidates.csv` (23) — a non-empty real
+capture (2 and 6 data rows respectively), unlike the empty-CSV
+examples in §5.
 
 ---
 
 ## 7. Environment Variables
 
 Per R-HARN-REDUCE-6.1, this domain sets no environment variable:
-verified `grep -n "os.environ\|getenv" scripts/tools/summarize_
-3dmark05_perf.py scripts/tools/summarize_index_cache_runtime.py
-scripts/tools/summarize_framegraph_dag.py` returns no match across all
-three files on 2026-07-27. Every gating variable this domain's output
+verified
+`grep -n "os.environ\|getenv" scripts/tools/summarize_3dmark05_perf.py scripts/tools/summarize_index_cache_runtime.py scripts/tools/summarize_framegraph_dag.py`
+returns no match across all three files on 2026-07-27. Every gating
+variable this domain's output
 depends on (§3) is set, if at all, by the `runner` domain
 (`DXMT_PERF_COUNTERS`) or the `probe` domain (the
 `DXMT9_PERF_ENCODER_BREAKDOWN`/`DXMT9_MEASURE_INDEX_REUSE`/
 `DXMT9_PERF_RENDER_PASS_REENTRY_TOP`/`DXMT9_PERF_FRAME_SAMPLING`/
 `DXMT9_PERF_VS_CONST_SETTER_RANGE`/`DXMT9_RENDERER_DUMP_DAG*` family),
-with the one documented exception (`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_
-SOURCE`, §3) that has no `probe` wrapper flag at all today and must be
-set directly by the caller. This domain reads none of them; it reads
+with the one documented exception
+(`DXMT9_PERF_ARGBUF_PAYLOAD_DELTA_SOURCE`, §3) that has no `probe`
+wrapper flag at all today and must be set directly by the caller. This
+domain reads none of them; it reads
 only the file paths it is given on its own command line.
 
 ---

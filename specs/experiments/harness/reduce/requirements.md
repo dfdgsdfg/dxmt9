@@ -24,8 +24,8 @@ Requirement IDs in this file use the prefix `R-HARN-REDUCE-`.
 
 **R-HARN-REDUCE-1.1** Unlike the `runner`, `probe`, and `replay` rows
 of the parent domain map, the `reduce` row is stated as a rule with
-examples, not an exhaustive enumeration: "the `scripts/tools/
-summarize_*` that read dxmt9's own logs, including
+examples, not an exhaustive enumeration: "the
+`scripts/tools/summarize_*` that read dxmt9's own logs, including
 `summarize_3dmark05_perf.py`, `summarize_index_cache_runtime.py`,
 `summarize_framegraph_dag.py`" (parent spec.md §1, emphasis on
 "including"). This document verifies and covers exactly those three
@@ -85,8 +85,9 @@ dxmt9-produced input (for example, one that summarizes "dxmt9 color
 attachment dump sidecars"). A reader must not treat this document's
 silence about those scripts as either an inclusion or an exclusion;
 classifying them requires the same origin test in §2, independently
-applied, before either this document or `specs/experiments/harness/
-join/*` may claim them. Instantiates R-HARN-1.1.
+applied, before either this document or
+`specs/experiments/harness/join/*` may claim them. Instantiates
+R-HARN-1.1.
 
 ---
 

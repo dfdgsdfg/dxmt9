@@ -29,11 +29,22 @@ should have violated loudly instead of silently.
 
 **R-HARN-1.1** This spec governs the harness scripts under
 `scripts/tools/`, `scripts/run_apps/`, `scripts/check/`, and
-`scripts/run_suites/` — 86 files at time of writing — grouped into
-seven domains: `runner`, `probe`, `replay`, `reduce`, `join`, `gate`,
-and `audit`. Each domain's own scripts, stages, artifacts, and owned
-environment variables are specified in
-`specs/experiments/harness/<domain>/requirements.md` and `spec.md`.
+`scripts/run_suites/` — 86 files at time of writing. The seven-domain
+grouping in `spec.md` §1 (`runner`, `probe`, `replay`, `reduce`,
+`join`, `gate`, `audit`) is a **partial partition, not a complete
+one**: mechanically applying that table's own `Owns` column (its
+explicit script names plus its two wildcard rows,
+`scripts/check/*` and `scripts/tools/compare_*`) assigns exactly 41 of
+the 86 files to a domain. The remaining 45 are in scope for this
+requirement but owned by no domain today. Of those 45,
+`reduce`-domain's own `spec.md` §2.4 names 11 by name while explicitly
+declining to assign them a domain; 5 more are named individually in a
+domain's own document without being assigned one; and 29 are not
+named in any of this spec's sixteen tracked documents at all.
+`specs/experiments/gap.md` records this residual. Each domain's own
+scripts, stages, artifacts, and owned environment variables are
+specified in `specs/experiments/harness/<domain>/requirements.md` and
+`spec.md`, for the scripts that document actually names.
 
 **R-HARN-1.2** This spec governs the contracts between harnesses —
 what a harness's output artifact promises the downstream harness that

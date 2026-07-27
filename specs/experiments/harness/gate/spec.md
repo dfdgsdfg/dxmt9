@@ -81,8 +81,8 @@ two required positional arguments (`before`, `after`).
 
 ### 3.1 `compare_xcode_dxmt_bottlenecks.py`
 
-18 `--require-*` flags (verified: `python3 scripts/tools/
-compare_xcode_dxmt_bottlenecks.py --help | grep -cE '^  --require-'`
+18 `--require-*` flags (verified:
+`python3 scripts/tools/compare_xcode_dxmt_bottlenecks.py --help | grep -cE '^  --require-'`
 → `18`) plus 12 `--max-*` regression-tolerance flags (same method,
 `--max-` → `12`), for 30 gate-shaping flags out of 35 total (the
 remaining 5 are `--before-label`/`--after-label`/`--top`/`--output`/

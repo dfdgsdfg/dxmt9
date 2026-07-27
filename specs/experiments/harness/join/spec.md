@@ -299,9 +299,9 @@ default.
 ### 5.2 `summarize_xctrace_metal_intervals.py` — same shape, one already-unconditional coverage line
 
 `--require-xctrace-render-rows` (`:697-701`) fails hard (`SystemExit`)
-if zero rows carry a `RenderPass[seq=...,enc=...]` label. `--min-dxmt-
-join-coverage` (default `0.0`, meaning off unless raised; `:702-709`)
-computes `coverage = matches / len(rows)` and fails with:
+if zero rows carry a `RenderPass[seq=...,enc=...]` label.
+`--min-dxmt-join-coverage` (default `0.0`, meaning off unless raised;
+`:702-709`) computes `coverage = matches / len(rows)` and fails with:
 
 ```
 "dxmt encoder join coverage below required threshold: "

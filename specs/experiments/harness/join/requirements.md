@@ -161,10 +161,11 @@ not implied to be closed.
 ## 5. The External Tool's Column Names Are a Declared Engine-Shape Dependency
 
 **R-HARN-JOIN-5.1** Every Xcode or `xctrace` column name this domain's
-scripts pattern-match against — including the `RenderPass[seq=...,
-enc=...]` encoder-label format used as the join key across both the
-Xcode and `xctrace` routes — is an engine/tool-shape dependency this
-domain's own `spec.md` declares by name and count, per parent
+scripts pattern-match against — including the
+`RenderPass[seq=...,enc=...]` encoder-label format used as the join
+key across both the Xcode and `xctrace` routes — is an
+engine/tool-shape dependency this domain's own `spec.md` declares by
+name and count, per parent
 R-HARN-5.1. This applies even though the shape being pattern-matched
 originates from Apple's tooling rather than from dxmt9's own emitted
 output, because parent R-HARN-5.1's obligation is stated in terms of
