@@ -9,10 +9,10 @@ tags: [specs, experiments, harness, spec]
 
 Implements the requirements in
 `specs/experiments/harness/requirements.md`. Defines the eight
-pipeline stages, the seven boundaries between them, the artifact
-envelope every cross-boundary artifact carries, and the rule that
-decides which domain owns a contract-relevant environment variable.
-Seven domain documents under `specs/experiments/harness/<domain>/`
+pipeline stages, the boundaries between them, the artifact envelope
+every cross-boundary artifact carries, and the rule that decides
+which domain owns a contract-relevant environment variable. Seven
+domain documents under `specs/experiments/harness/<domain>/`
 instantiate what this file defines; they cite stage names, boundary
 names, and envelope fields from here rather than redefining them.
 
@@ -77,13 +77,25 @@ produced or consumed it.
 
 ## 2. Stage Boundary Map
 
-Each of the seven boundaries below is named by the pair of stages it
-joins. Per R-HARN-4.1, every artifact crossing a boundary carries
-in-band the information its consumer needs; per R-HARN-4.2, every
-offset, stride, slice origin, and index base names its coordinate
-system. A domain document may add boundary detail specific to its own
-artifacts, but must not contradict the rule stated here for the
-boundary it touches.
+Each boundary below is named by the pair of stages it joins. Per
+R-HARN-4.1, every artifact crossing a boundary carries in-band the
+information its consumer needs; per R-HARN-4.2, every offset, stride,
+slice origin, and index base names its coordinate system. A domain
+document may add boundary detail specific to its own artifacts, but
+must not contradict the rule stated here for the boundary it touches.
+
+The eight stages (§0) do not form a single linear chain, which is why
+eight boundaries are named below rather than the seven a strict
+build-stage-to-record chain would need. The graph branches twice:
+`dump-extract` fans out to two consumers
+(`offline-replay` and `log-reduce`, because geometry-payload dumps
+and dxmt9 log/`result.json` output are independent artifacts written
+at the same stage), and `compare-gate` fans in from two producers
+(`log-reduce` and `external-join`, because a gate may compare a
+dxmt9-only summary or an Xcode-joined summary, or both). Every one of
+the eight stages named in §0 is the source or destination of at least
+one boundary below, including the terminal `compare-gate → record`
+boundary — `record` is not left unreached.
 
 ### `build-stage → run-capture`
 
@@ -225,6 +237,28 @@ comparing two joined artifacts for agreement must consult each
 artifact's `validity` field before treating matching values as a
 pass — a degenerate joined row (zero Xcode counter coverage, zero
 dxmt join coverage) must not silently satisfy a gate.
+
+### `compare-gate → record`
+
+This is the terminal boundary. What crosses is not a new measurement
+artifact but an **evidence citation**: the `gate`-domain script's
+pass/fail verdict, plus the specific upstream artifact paths and
+content digests (§3's `inputs` field, carried forward from whichever
+artifacts the gate consumed) that a `docs/perfomance/` leaf
+document's `source:` field will go on to name. The `audit`-domain
+consumer — `scripts/check/audit_perf_docs_sources.py` — is what makes
+this boundary checkable: it reads a `source:` citation and confirms
+the cited path still resolves to an artifact whose digest matches
+what was recorded at citation time, rather than only confirming the
+path exists. This is the mechanism behind §3's "second use of
+`inputs` digests": a citation with no recorded digest cannot
+distinguish "never produced" from "produced, then the file moved or
+was cleaned up" from "a different file now happens to sit at that
+path", and the 34-of-56 missing-path finding cited in §3 is exactly
+the failure mode this boundary exists to make detectable. Unlike the
+other seven boundaries, the `record` stage does not hand its output
+to a further pipeline stage; §1 assigns it to the `audit` domain
+because auditing a citation is where the chain ends.
 
 ---
 
