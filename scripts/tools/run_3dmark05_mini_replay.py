@@ -251,6 +251,29 @@ def vertex_slot_capacity(payload_bytes: int, offset: int, stride: int) -> int:
     return usable // stride
 
 
+def resolve_stream_payload_offset(offset: int,
+                                  start_byte: int,
+                                  ordinal: int,
+                                  stream_index: int) -> int:
+    """In-payload byte offset for a (possibly sliced) dumped stream payload.
+
+    The geometry dump writes a slice of the vertex buffer beginning at
+    `start_byte`, so byte 0 of the dumped file is fetch slot 0 at that source
+    byte, not at source byte 0. `offset - start_byte` is correct in all three
+    cases: a slice taken at the stream offset yields 0, an unsliced payload
+    (`start_byte == 0`) with a zero offset yields 0, and an unsliced payload
+    with a non-zero offset yields the offset itself. A negative result means
+    the manifest is inconsistent.
+    """
+    payload_offset = offset - start_byte
+    if payload_offset < 0:
+        raise SystemExit(
+            f"draw {ordinal}: stream{stream_index} start_byte {start_byte} "
+            f"exceeds offset {offset}"
+        )
+    return payload_offset
+
+
 def vertex_reference_order(indices: list[int],
                           base_vertex: int,
                           vertex_order: str) -> list[int]:
@@ -430,6 +453,7 @@ def remap_draw_vertex_layout(draw: dict[str, Any],
             "bytes": int(geometry.get("stream0_bytes", 0)),
             "offset": int(state.get("stream0_offset", 0)),
             "stride": int(state.get("stream0_stride", 0)),
+            "start_byte": 0,
         }]
         geometry["streams"] = stream_entries
 
@@ -437,18 +461,20 @@ def remap_draw_vertex_layout(draw: dict[str, Any],
         stream_index = int(entry.get("stream", 0))
         stride = int(entry.get("stride", 0))
         offset = int(entry.get("offset", 0))
+        start_byte = int(entry.get("start_byte", 0))
         if stream_index == 0:
             stride = int(state.get("stream0_stride", stride))
             offset = int(state.get("stream0_offset", offset))
+        payload_offset = resolve_stream_payload_offset(offset, start_byte, ordinal, stream_index)
         source = resolve_path(str(entry.get("file", "")))
         if not source.exists():
             raise SystemExit(
                 f"draw {ordinal}: missing stream{stream_index} payload: {source}"
             )
         payload = source.read_bytes()
-        slot_count = vertex_slot_capacity(len(payload), offset, stride)
+        slot_count = vertex_slot_capacity(len(payload), payload_offset, stride)
         new_for_old = vertex_slot_assignment(order, base_vertex, slot_count)
-        permuted = apply_vertex_permutation(payload, offset, stride, new_for_old)
+        permuted = apply_vertex_permutation(payload, payload_offset, stride, new_for_old)
         target = vertex_dir / f"draw{ordinal:03d}-{vertex_order}.stream{stream_index}.bin"
         target.write_bytes(permuted)
         entry["file"] = str(target)
@@ -529,6 +555,12 @@ def allocate_cbuf_slots(source: str, count: int) -> list[int]:
     raise SystemExit("not enough free Metal buffer slots for mini replay cbuf rewrite")
 
 
+def has_argbuf_parameter(source: str) -> bool:
+    return re.search(
+        r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\]", source
+    ) is not None
+
+
 def replace_argbuf_parameter(source: str, replacement: str) -> str:
     source, count = re.subn(
         r"constant\s+ArgbufLayout&\s+abuf\s+\[\[buffer\(30\)\]\]",
@@ -541,26 +573,66 @@ def replace_argbuf_parameter(source: str, replacement: str) -> str:
     return source
 
 
+def find_direct_cbuf_slot(source: str, type_name: str, var_name: str) -> int | None:
+    """Slot of an already-direct `constant <type_name>& <var_name> [[buffer(N)]]`.
+
+    Under `DXMT9_ARGBUF_DIRECT_CBUF=1` dumped MSL already binds constants
+    directly and carries no `buffer(30)` argbuf parameter at all; this finds
+    the slot Metal already uses instead of rewriting anything.
+    """
+    match = re.search(
+        rf"constant\s+{re.escape(type_name)}&\s+{re.escape(var_name)}\s+\[\[buffer\((\d+)\)\]\]",
+        source,
+    )
+    return int(match.group(1)) if match else None
+
+
 def transform_msl(source: str, stage: str) -> tuple[str, dict[str, int]]:
     if stage == "vs":
-        vs_slot, ffp_slot = allocate_cbuf_slots(source, 2)
-        source = replace_argbuf_parameter(
-            source,
-            f"constant VsConsts& vsConsts [[buffer({vs_slot})]],\n"
-            f"                     constant FfpVsConsts& ffpVs [[buffer({ffp_slot})]]",
-        )
-        source = re.sub(r"\s*constant VsConsts& vsConsts = \*abuf\.vsConsts;\n", "\n", source)
-        source = re.sub(r"\s*constant FfpVsConsts& ffpVs = \*abuf\.ffpVs;\n", "", source)
+        if has_argbuf_parameter(source):
+            vs_slot, ffp_slot = allocate_cbuf_slots(source, 2)
+            source = replace_argbuf_parameter(
+                source,
+                f"constant VsConsts& vsConsts [[buffer({vs_slot})]],\n"
+                f"                     constant FfpVsConsts& ffpVs [[buffer({ffp_slot})]]",
+            )
+            source = re.sub(r"\s*constant VsConsts& vsConsts = \*abuf\.vsConsts;\n", "\n", source)
+            source = re.sub(r"\s*constant FfpVsConsts& ffpVs = \*abuf\.ffpVs;\n", "", source)
+            return source, {"vsconsts": vs_slot, "ffpvs": ffp_slot}
+        vs_slot = find_direct_cbuf_slot(source, "VsConsts", "vsConsts")
+        ffp_slot = find_direct_cbuf_slot(source, "FfpVsConsts", "ffpVs")
+        if vs_slot is None and ffp_slot is None:
+            raise SystemExit(
+                "mini replay cbuf rewrite found no buffer(30) argbuf and no "
+                "direct constant binding for vs stage"
+            )
+        if vs_slot is None:
+            vs_slot = allocate_cbuf_slots(source, 1)[0]
+        if ffp_slot is None:
+            ffp_slot = allocate_cbuf_slots(source, 1)[0]
         return source, {"vsconsts": vs_slot, "ffpvs": ffp_slot}
     elif stage == "fs":
-        ps_slot, ffp_slot = allocate_cbuf_slots(source, 2)
-        source = replace_argbuf_parameter(
-            source,
-            f"constant PsConsts& psConsts [[buffer({ps_slot})]],\n"
-            f"                     constant FfpPsConsts& ffpPs [[buffer({ffp_slot})]]",
-        )
-        source = re.sub(r"\s*constant PsConsts& psConsts = \*abuf\.psConsts;\n", "\n", source)
-        source = re.sub(r"\s*constant FfpPsConsts& ffpPs = \*abuf\.ffpPs;\n", "", source)
+        if has_argbuf_parameter(source):
+            ps_slot, ffp_slot = allocate_cbuf_slots(source, 2)
+            source = replace_argbuf_parameter(
+                source,
+                f"constant PsConsts& psConsts [[buffer({ps_slot})]],\n"
+                f"                     constant FfpPsConsts& ffpPs [[buffer({ffp_slot})]]",
+            )
+            source = re.sub(r"\s*constant PsConsts& psConsts = \*abuf\.psConsts;\n", "\n", source)
+            source = re.sub(r"\s*constant FfpPsConsts& ffpPs = \*abuf\.ffpPs;\n", "", source)
+            return source, {"psconsts": ps_slot, "ffpps": ffp_slot}
+        ps_slot = find_direct_cbuf_slot(source, "PsConsts", "psConsts")
+        ffp_slot = find_direct_cbuf_slot(source, "FfpPsConsts", "ffpPs")
+        if ps_slot is None and ffp_slot is None:
+            raise SystemExit(
+                "mini replay cbuf rewrite found no buffer(30) argbuf and no "
+                "direct constant binding for fs stage"
+            )
+        if ps_slot is None:
+            ps_slot = allocate_cbuf_slots(source, 1)[0]
+        if ffp_slot is None:
+            ffp_slot = allocate_cbuf_slots(source, 1)[0]
         return source, {"psconsts": ps_slot, "ffpps": ffp_slot}
     else:
         raise ValueError(stage)
@@ -905,7 +977,7 @@ def render_source(draws: list[dict[str, Any]],
     depth_input_path = cxx_string(str(depth_input)) if depth_input else '""'
     depth_load_action = "MTLLoadActionLoad" if depth_input else "MTLLoadActionClear"
     draw_entries = []
-    for draw in draws:
+    for ordinal, draw in enumerate(draws):
         geometry = draw["geometry"]
         uniforms = draw.get("uniforms", {})
         state = draw["state"]
@@ -915,6 +987,14 @@ def render_source(draws: list[dict[str, Any]],
             str(index)
             for index in draw_fragment_texture_indices(draw, texture_sidecar_by_key)
         ]
+        stream0_entry = next(
+            (s for s in geometry.get("streams", []) if int(s.get("stream", 0)) == 0),
+            None,
+        )
+        stream0_start_byte = int(stream0_entry.get("start_byte", 0)) if stream0_entry else 0
+        stream0_payload_offset = resolve_stream_payload_offset(
+            int(state.get("stream0_offset", 0)), stream0_start_byte, ordinal, 0
+        )
         for stream in geometry.get("streams", []):
             stream_index = int(stream.get("stream", 0))
             if stream_index <= 0 or stream_index >= 16:
@@ -940,7 +1020,7 @@ def render_source(draws: list[dict[str, Any]],
                 str(int(state.get("index_count", 0))),
                 str(int(state.get("base_vertex", 0))),
                 str(int(state.get("stream0_stride", 0))),
-                str(int(state.get("stream0_offset", 0))),
+                str(stream0_payload_offset),
                 str(int(state.get("scissor", 0))),
                 str(int(state.get("scissor_l", 0))),
                 str(int(state.get("scissor_t", 0))),

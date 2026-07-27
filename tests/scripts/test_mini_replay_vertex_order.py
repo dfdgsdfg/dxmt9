@@ -282,6 +282,69 @@ fragment float4 dxmt9_fs(VSOut in [[stage_in]],
 """
 
 
+FS_MSL_DIRECT_CBUF = """
+#include <metal_stdlib>
+using namespace metal;
+struct PsConsts { float4 psFloatConst[224]; int4 psIntConst[16]; uint psBoolConst[16]; };
+struct FfpPsConsts { uint fogMode; };
+struct VSOut {
+  float4 position [[position]];
+};
+fragment float4 dxmt9_fs(VSOut in [[stage_in]],
+                     constant PsConsts& psConsts [[buffer(0)]],
+                     constant FfpPsConsts& ffpPs [[buffer(3)]]) {
+  return psConsts.psFloatConst[0] + float4(float(ffpPs.fogMode), 0.0, 0.0, 1.0);
+}
+"""
+
+# Mirrors a real dumped programmable fragment shader under
+# DXMT9_ARGBUF_DIRECT_CBUF=1: only psConsts is bound directly, no ffpPs and
+# no buffer(30) argbuf.
+FS_MSL_DIRECT_CBUF_PSCONSTS_ONLY = """
+#include <metal_stdlib>
+using namespace metal;
+struct PsConsts { float4 psFloatConst[224]; int4 psIntConst[16]; uint psBoolConst[16]; };
+struct FsVolatile { uint pad; };
+struct VSOut {
+  float4 position [[position]];
+};
+fragment float4 dxmt9_fs(VSOut in [[stage_in]],
+                     constant PsConsts& psConsts [[buffer(0)]],
+                     constant FsVolatile& fsVolatile [[buffer(5)]]) {
+  return psConsts.psFloatConst[0];
+}
+"""
+
+VS_MSL_DIRECT_CBUF_VSCONSTS_ONLY = """
+#include <metal_stdlib>
+using namespace metal;
+struct VsConsts { float4 vsFloatConst[256]; int4 vsIntConst[16]; uint vsBoolConst[16]; };
+struct VSOut {
+  float4 position [[position]];
+};
+vertex VSOut dxmt9_vs(uint vid [[vertex_id]],
+                     constant VsConsts& vsConsts [[buffer(2)]],
+                     device const uchar* stream0 [[buffer(1)]]) {
+  VSOut out;
+  out.position = vsConsts.vsFloatConst[0] + float4(float(vid), 0.0, 0.0, 1.0);
+  return out;
+}
+"""
+
+NO_ARGBUF_NO_DIRECT_BINDING_MSL = """
+#include <metal_stdlib>
+using namespace metal;
+struct VSOut {
+  float4 position [[position]];
+};
+vertex VSOut dxmt9_vs(uint vid [[vertex_id]]) {
+  VSOut out;
+  out.position = float4(0.0, 0.0, 0.0, 1.0);
+  return out;
+}
+"""
+
+
 def write_manifest(root: Path) -> Path:
     """One draw, one stream, uint16 indices, base_vertex 0."""
     payload = make_payload()
@@ -416,6 +479,163 @@ class MaterializeVertexOrderTest(unittest.TestCase):
             self.assertEqual(
                 estimate["original_lru32_misses"], estimate["replay_lru32_misses"]
             )
+
+
+class TransformMslDirectCbufTest(unittest.TestCase):
+    """Defect 1: DXMT9_ARGBUF_DIRECT_CBUF shaders have no buffer(30) argbuf."""
+
+    def test_argbuf_source_is_still_rewritten(self):
+        """Regression guard: the pre-existing buffer(30) rewrite path is untouched."""
+        source, slots = mini.transform_msl(VS_MSL, "vs")
+        self.assertNotIn("buffer(30)", source)
+        self.assertEqual(set(slots), {"vsconsts", "ffpvs"})
+        self.assertEqual(len(set(slots.values())), 2)
+
+    def test_direct_cbuf_fs_source_is_returned_unchanged(self):
+        source, slots = mini.transform_msl(FS_MSL_DIRECT_CBUF, "fs")
+        self.assertEqual(source, FS_MSL_DIRECT_CBUF)
+        self.assertEqual(slots, {"psconsts": 0, "ffpps": 3})
+
+    def test_direct_cbuf_fs_source_with_only_psconsts_is_unchanged(self):
+        source, slots = mini.transform_msl(FS_MSL_DIRECT_CBUF_PSCONSTS_ONLY, "fs")
+        self.assertEqual(source, FS_MSL_DIRECT_CBUF_PSCONSTS_ONLY)
+        self.assertEqual(slots["psconsts"], 0)
+        self.assertNotIn(slots["ffpps"], {0, 5, 30})
+
+    def test_direct_cbuf_vs_source_with_only_vsconsts_allocates_ffpvs_slot(self):
+        source, slots = mini.transform_msl(VS_MSL_DIRECT_CBUF_VSCONSTS_ONLY, "vs")
+        self.assertEqual(source, VS_MSL_DIRECT_CBUF_VSCONSTS_ONLY)
+        self.assertEqual(slots["vsconsts"], 2)
+        self.assertNotIn(slots["ffpvs"], {1, 2, 30})
+
+    def test_neither_argbuf_nor_direct_binding_raises(self):
+        with self.assertRaises(SystemExit):
+            mini.transform_msl(NO_ARGBUF_NO_DIRECT_BINDING_MSL, "vs")
+
+
+# Two triangles referencing exactly slots 0, 1, 2 with no gaps, so the
+# unique-referenced count equals the tight payload capacity a "sliced" dump
+# (start_byte == offset) would hold -- unlike the module-level INDICES, which
+# has gaps (references 0, 2, 4 but not 1 or 3).
+DENSE_INDICES = [0, 1, 2, 2, 1, 0]
+
+
+def write_stream_offset_draws(root: Path) -> list[dict]:
+    """Draws exercising the stream0_offset / stream0_start_byte relationship.
+
+    - draws[0] ("sliced"): offset == start_byte == 840; the dumped payload is
+      a slice holding exactly the referenced vertices, mirroring the real
+      capture's defect-2 shape (byte 0 of the file is fetch slot 0).
+    - draws[1] ("unsliced"): start_byte == 0, offset == 96; an un-sliced
+      payload where the offset is a genuine in-payload byte offset.
+    - draws[2] ("inconsistent"): start_byte > offset, which the manifest
+      should never produce.
+    """
+    draws: list[dict] = []
+
+    def make_draw(name: str, indices: list[int], payload: bytes,
+                  offset: int, start_byte: int) -> dict:
+        stream_path = root / f"{name}.stream0.bin"
+        stream_path.write_bytes(payload)
+        index_path = root / f"{name}.index.bin"
+        index_path.write_bytes(struct.pack(f"<{len(indices)}H", *indices))
+        return {
+            "geometry": {
+                "index_file": str(index_path),
+                "index_bytes": index_path.stat().st_size,
+                "stream0_file": str(stream_path),
+                "stream0_bytes": stream_path.stat().st_size,
+                "streams": [{
+                    "stream": 0,
+                    "metal_slot": 1,
+                    "file": str(stream_path),
+                    "bytes": stream_path.stat().st_size,
+                    "offset": offset,
+                    "stride": STRIDE,
+                    "start_byte": start_byte,
+                }],
+            },
+            "state": {
+                "index_count": len(indices),
+                "base_vertex": 0,
+                "stream0_stride": STRIDE,
+                "stream0_offset": offset,
+            },
+        }
+
+    unique_vertices = len(set(DENSE_INDICES))
+    draws.append(make_draw(
+        "sliced", DENSE_INDICES,
+        make_payload(slot_count=unique_vertices, offset=0), 840, 840,
+    ))
+    draws.append(make_draw(
+        "unsliced", INDICES, make_payload(slot_count=SLOT_COUNT, offset=96), 96, 0
+    ))
+    draws.append(make_draw(
+        "inconsistent", INDICES, make_payload(slot_count=SLOT_COUNT, offset=0), 10, 20
+    ))
+    return draws
+
+
+class StreamPayloadOffsetTest(unittest.TestCase):
+    """Defect 2: sliced stream payloads double-count the stream offset."""
+
+    def test_sliced_payload_materializes_successfully(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sliced = [write_stream_offset_draws(root)[0]]
+            replay = mini.materialize_replay_draws(
+                sliced, root / "out", "original", "original", "first-reference"
+            )
+            self.assertEqual(len(replay), 1)
+
+    def test_sliced_payload_fetch_equivalence_uses_zero_offset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sliced = write_stream_offset_draws(root)[0]
+            original_stream = Path(sliced["geometry"]["stream0_file"]).read_bytes()
+            replay = mini.materialize_replay_draws(
+                [sliced], root / "out", "original", "original", "first-reference"
+            )
+            geometry = replay[0]["geometry"]
+            new_stream = Path(geometry["stream0_file"]).read_bytes()
+            new_indices = mini.uint16_indices(
+                Path(geometry["index_file"]).read_bytes()
+            )
+            for old_index, new_index in zip(DENSE_INDICES, new_indices):
+                self.assertEqual(
+                    fetch(new_stream, 0, STRIDE, new_index),
+                    fetch(original_stream, 0, STRIDE, old_index),
+                )
+
+    def test_unsliced_payload_still_uses_nonzero_offset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unsliced = write_stream_offset_draws(root)[1]
+            original_stream = Path(unsliced["geometry"]["stream0_file"]).read_bytes()
+            replay = mini.materialize_replay_draws(
+                [unsliced], root / "out", "original", "original", "first-reference"
+            )
+            geometry = replay[0]["geometry"]
+            new_stream = Path(geometry["stream0_file"]).read_bytes()
+            new_indices = mini.uint16_indices(
+                Path(geometry["index_file"]).read_bytes()
+            )
+            self.assertEqual(new_stream[:96], original_stream[:96])
+            for old_index, new_index in zip(INDICES, new_indices):
+                self.assertEqual(
+                    fetch(new_stream, 96, STRIDE, new_index),
+                    fetch(original_stream, 96, STRIDE, old_index),
+                )
+
+    def test_inconsistent_start_byte_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inconsistent = [write_stream_offset_draws(root)[2]]
+            with self.assertRaises(SystemExit):
+                mini.materialize_replay_draws(
+                    inconsistent, root / "out", "original", "original", "first-reference"
+                )
 
 
 class VertexOrderCliTest(unittest.TestCase):
