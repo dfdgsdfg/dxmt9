@@ -136,3 +136,21 @@ into the launched subprocess's environment from the catalogue's
 `capture_frame` key, follows the same single-setter rule as
 R-HARN-RUN-5.1 for a run this domain launched. Instantiates
 R-HARN-1.3.
+
+**R-HARN-RUN-5.3** Not every `DXMT_EXPERIMENT_*`-prefixed variable is
+owned by this domain: `DXMT_EXPERIMENT_PROFILE` and
+`DXMT_EXPERIMENT_CAPTURE_DIR` carry the prefix but are set only by the
+`probe` domain (`scripts/tools/run_3dmark05_perf_probe.sh`, which
+assigns both directly before invoking `run_experiment.py`) and never
+by `run_experiment.py` itself, whose subprocess environment starts
+from `os.environ.copy()` and therefore forwards whatever value the
+caller already set, unchanged. This domain's own
+`experiments/launchers/common.sh` reads `DXMT_EXPERIMENT_PROFILE` to
+select validation/logging/offload defaults but does not set it, and
+the dxmt9 runtime reads `DXMT_EXPERIMENT_CAPTURE_DIR` directly without
+this domain ever inspecting it. R-HARN-RUN-5.1's single-setter claim
+governs only the 16 variables it lists; it must not be read as a
+claim that this domain owns the whole `DXMT_EXPERIMENT_*` namespace.
+The `probe` domain's own `requirements.md` is where ownership of
+`DXMT_EXPERIMENT_PROFILE` and `DXMT_EXPERIMENT_CAPTURE_DIR` belongs.
+Instantiates R-HARN-1.3.

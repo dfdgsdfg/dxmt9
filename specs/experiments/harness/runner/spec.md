@@ -156,18 +156,72 @@ launched subprocess's environment, so it falls outside the
 single-setter rule of R-HARN-RUN-5.1, which governs only variables
 this domain assigns *into* the run it launches.
 
+`DXMT_EXPERIMENT_PROFILE` and `DXMT_EXPERIMENT_CAPTURE_DIR` also carry
+the `DXMT_EXPERIMENT_*` prefix but are **not** set by this domain
+(R-HARN-RUN-5.3): `scripts/tools/run_3dmark05_perf_probe.sh` (the
+`probe` domain) assigns both directly — `DXMT_EXPERIMENT_PROFILE=perf`
+at line 4198 and `DXMT_EXPERIMENT_CAPTURE_DIR=$capture_dir` at line
+5074 — before invoking `run_experiment.py`. Because
+`run_experiment.py`'s subprocess environment starts from
+`os.environ.copy()` and its `env.update()` dict (§4 above) never
+touches either key, both values pass through this domain unchanged
+into the launched subprocess. `experiments/launchers/common.sh` (a
+script this domain owns) then reads `DXMT_EXPERIMENT_PROFILE` to
+select `DXMT_VALIDATE`/`DXMT_LOG_LEVEL`/`DXMT9_OFFLOAD_COMMIT_REPLAY`
+defaults, and the dxmt9 runtime itself reads
+`DXMT_EXPERIMENT_CAPTURE_DIR` directly (`src/d3d9/core.cpp`) — neither
+is ever assigned by a `runner`-domain script. Ownership of both
+variables belongs to the `probe` domain; this domain's contract is
+limited to reading (`DXMT_EXPERIMENT_PROFILE`, for its own launcher
+defaults) or purely forwarding (`DXMT_EXPERIMENT_CAPTURE_DIR`) them.
+
 `experiments/launchers/app-d3d9-3dmark05.sh` additionally reads a
-`DXMT_3DMARK05_DIRECT*` variable family (`DXMT_3DMARK05_DIRECT`,
-`_DIRECT_TIMEOUT`, `_LOG`, `_KILL_SERVER_ON_EXIT`,
-`_ALLOW_UNSUPERVISED`, `_REQUIRE_UNLOCKED`, among others) that selects
-its standalone direct-invocation mode, independent of
-`run_experiment.py`'s own supervision. These are set only by
-`scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` and read
-only by `experiments/launchers/app-d3d9-3dmark05.sh` — both `runner`-
-domain scripts — so no other domain sets or depends on them. Their
-full, current purposes are catalogued in
-`agents/rules/environment_variables_perf.rules.md`; this spec does not
-duplicate that table to avoid the two going out of sync.
+`DXMT_3DMARK05_*` variable family that selects its standalone
+direct-invocation mode, independent of `run_experiment.py`'s own
+supervision. Unlike the table in §4, this family does **not** have a
+single owning domain today, and the deviation is precise enough to
+name per variable rather than paper over:
+
+- `DXMT_3DMARK05_PREFIX`, `_WINE_ROOT`, `_WINESERVER`,
+  `_RESULT_FILE`, and `_LOG` are set only by the `probe`-domain
+  `scripts/tools/run_3dmark05_perf_probe.sh` (lines 4200-4205);
+  `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` (this
+  domain's own direct wrapper) does not set any of these five.
+  Ownership belongs to `probe`, not to this domain.
+- `DXMT_3DMARK05_DIRECT` is set by **both** domains, on different
+  invocation paths: this domain's own
+  `run_app-d3d9-3dmark05-verify_direct.sh:15` (`export
+  DXMT_3DMARK05_DIRECT=1`) and the `probe`-domain
+  `run_3dmark05_perf_probe.sh:4199` (`"DXMT_3DMARK05_DIRECT=1"` in its
+  `env_args`). The two setters are mutually exclusive within any one
+  run — a probe-driven run never goes through the verify-direct
+  wrapper and vice versa — but the variable itself does not have one
+  fixed owning domain the way `specs/experiments/harness/spec.md` §4
+  Rule 1 expects. This is a genuine deviation from that rule, not a
+  documentation gap: both call sites are named here so a future
+  `specs/experiments/harness/gap.md` entry can cite them without
+  re-deriving the finding.
+- `DXMT_3DMARK05_DIRECT_TIMEOUT` is set only by this domain's
+  `run_app-d3d9-3dmark05-verify_direct.sh:16`; no `probe`-domain
+  script sets it. Ownership is genuinely this domain's.
+- `DXMT_3DMARK05_KILL_SERVER_ON_EXIT`, `_ALLOW_UNSUPERVISED`, and
+  `_REQUIRE_UNLOCKED` are read by `app-d3d9-3dmark05.sh` with inline
+  bash defaults (`${VAR:-default}`) but are not assigned by any
+  harness script in either domain; there is no ownership conflict
+  because there is no in-repo setter to conflict.
+
+Catalogue pointer, corrected per variable: `DXMT_3DMARK05_DIRECT` and
+`DXMT_3DMARK05_LOG` are documented in
+`agents/rules/environment_variables_wine.rules.md`;
+`DXMT_3DMARK05_DIRECT_TIMEOUT`, `_PREFIX`, `_RESULT_FILE`,
+`_KILL_SERVER_ON_EXIT`, `_ALLOW_UNSUPERVISED`, `_REQUIRE_UNLOCKED`,
+and `_LAUNCHER_TIMEOUT` are in
+`agents/rules/environment_variables_perf.rules.md`.
+`DXMT_3DMARK05_WINE_ROOT` and `DXMT_3DMARK05_WINESERVER` are not
+documented in any `agents/rules/environment_variables_*.rules.md`
+file today — they exist only in
+`scripts/tools/run_3dmark05_perf_probe.sh` and
+`experiments/launchers/app-d3d9-3dmark05.sh` source.
 
 ---
 
