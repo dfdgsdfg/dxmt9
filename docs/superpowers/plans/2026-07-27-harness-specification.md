@@ -27,7 +27,7 @@
 |---|---|
 | `specs/experiments/harness/requirements.md` | The five `R-HARN-*` contract groups. Binds every domain. |
 | `specs/experiments/harness/spec.md` | Eight-stage boundary map, artifact envelope schema, env-ownership rules. |
-| `specs/experiments/harness/plan.md` | Rollout order, legacy envelope migration, open items. |
+| `specs/experiments/harness/plan.md` | Rollout order only, and **untracked** — see the correction section above. The legacy envelope migration belongs in `spec.md` and the open items in `specs/experiments/gap.md`. |
 | `specs/experiments/harness/runner/{requirements,spec}.md` | Catalogue runner and launchers. |
 | `specs/experiments/harness/probe/{requirements,spec}.md` | Capture orchestration and preflights. |
 | `specs/experiments/harness/replay/{requirements,spec}.md` | Dump → manifest → standalone Metal replay. |
@@ -38,9 +38,21 @@
 
 Each domain file pair is self-contained: a reader asking "what does the replay harness owe me?" reads two short files, not seventeen.
 
-## One design-document correction
+## One design-document correction — CORRECTED AGAIN, read this
 
-The design doc (`docs/superpowers/specs/2026-07-27-harness-specification-design.md`) twice says open items go in `gap.md`, but its layout block lists only `requirements.md`, `spec.md`, and `plan.md` at the parent. The repository convention resolves this: top-level domains carry `gap.md`; subdirectories such as `specs/experiments/runtime/`, `specs/d3d9/caps/`, and `specs/backend/surface-ops/` do not. Open items therefore live in an **Open Items** section of `specs/experiments/harness/plan.md`, with one pointer line added to the existing `specs/experiments/gap.md`. Task 3 covers both.
+The design doc (`docs/superpowers/specs/2026-07-27-harness-specification-design.md`) twice says open items go in `gap.md`, but its layout block lists only `requirements.md`, `spec.md`, and `plan.md` at the parent.
+
+My first resolution of that inconsistency was **wrong**, and Task 3's implementer caught it. I reasoned from the observation that spec subdirectories carry no `gap.md` and routed open items into `specs/experiments/harness/plan.md`. I had not read the rule that governs the question. `.gitignore:37` carries `specs/**/plan.md`, and `agents/rules/documentation_spec.rules.md:44-47` states: "`specs/**/plan.md` and `*.plan.md` files are local-only and gitignored. Do not commit implementation plans. Promote durable ordering constraints into `spec.md`, missing work into the owning `specs/<topic>/gap.md`." Sibling evidence is unanimous — `specs/verification/plan.md`, `specs/experiments/runtime/plan.md`, and `specs/backend/draw-uniforms/plan.md` are all untracked.
+
+The design document's original instinct was right. The correct routing is:
+
+| Content | Destination |
+|---|---|
+| Durable ordering constraints, including the legacy envelope migration | `specs/experiments/harness/spec.md` |
+| Open items / missing work | `specs/experiments/gap.md`, the owning topic's gap document |
+| Rollout order (session-local sequencing) | `specs/experiments/harness/plan.md`, left **untracked** |
+
+**The committed deliverable is therefore 16 files, not 17** — two at the parent (`requirements.md`, `spec.md`) plus fourteen across the seven domains. `specs/experiments/harness/plan.md` may exist on disk but must not be tracked.
 
 ---
 
@@ -646,13 +658,14 @@ grep -rhoE '\b(build-stage|run-capture|dump-extract|log-reduce|offline-replay|ex
 
 Expected: all eight names appear. A name appearing once may be a typo of another — inspect any singleton.
 
-- [ ] **Step 4: Check the file count**
+- [ ] **Step 4: Check the tracked file count**
 
 ```sh
-find specs/experiments/harness -name '*.md' | wc -l
+git ls-files specs/experiments/harness | wc -l
+git ls-files specs/experiments/harness | grep -c 'plan\.md'
 ```
 
-Expected: `17`.
+Expected: `16`, then `0`. Sixteen tracked documents — two at the parent plus fourteen across the seven domains — and no tracked `plan.md`, which `.gitignore` and `agents/rules/documentation_spec.rules.md` both forbid. An untracked `specs/experiments/harness/plan.md` on disk is fine and expected.
 
 - [ ] **Step 5: Confirm the existing checks still pass**
 
