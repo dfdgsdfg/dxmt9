@@ -19,19 +19,25 @@ document's `source:` field. Requirement IDs in this file use the
 prefix `R-HARN-AUDIT-`.
 
 **A verified absence, stated up front.** Parent spec.md §2 names eight
-boundary sections; every one of the other seven cites at least one
-`R-HARN-*` requirement ID from parent `requirements.md`, and the
-`compare-gate → record` section cites zero (verified by extracting
-`R-HARN-\d+\.\d+` tokens from each `### ` boundary subsection in
-`specs/experiments/harness/spec.md` on 2026-07-27: every section but
-this one returns a non-empty match set). This is not an oversight this
-document silently repeats — §1 below states plainly, for each
-requirement group that follows, whether a parent clause actually
-governs it or whether the fit is by analogy only. Where a requirement
-below cites a parent ID, it is because that ID's general principle
-extends to this domain's own artifact (a citation, not a measurement);
-where no citation appears, this document says so rather than
-inventing one.
+boundary sections. Extracting every `R-HARN-\d+\.\d+` token from each
+`### ` boundary subsection in `specs/experiments/harness/spec.md`
+(bounded to each section's own text, stopping at the next `##`/`###`
+heading) on 2026-07-27 returns a non-empty match set for six of the
+eight and an empty match set for exactly two: `run-capture →
+dump-extract` (spec.md:112-123 — this section cites
+`agents/rules/metal_debugging.rules.md` §1 but no `R-HARN-*` ID at
+all) and `compare-gate → record` (spec.md:241-262 — the boundary this
+domain owns). This document does not claim `compare-gate → record` is
+the *only* zero-citation boundary — it is one of two, verified by
+re-running the same extraction rather than assumed from memory — but
+it is still true, and the only claim R-HARN-AUDIT-1.2 actually needs,
+that no `R-HARN-*` clause governs this domain's own boundary
+specifically. §1 below states plainly, for each requirement group that
+follows, whether a parent clause actually governs it or whether the
+fit is by analogy only. Where a requirement below cites a parent ID,
+it is because that ID's general principle extends to this domain's
+own artifact (a citation, not a measurement); where no citation
+appears, this document says so rather than inventing one.
 
 ---
 

@@ -238,12 +238,29 @@ accurate for `assert_perf_counters.py` only in the sense that its
 `find_program()` declaration lives in `tests/meson.build` — the
 `test()` call that actually uses it lives in a file that
 `tests/meson.build` pulls in via `subdir('native/backend')`
-(`tests/meson.build:55`), not in `tests/meson.build` itself. The
-README does not name a Meson test for `assert_perf_counters.py` or
-`audit_winemetal_install_names.py`, unlike its entries for
-`check_d3d9_conformance_status.py`/`check_manifest.sh`/etc., which do
-name their test in parentheses; this document's table above is the
-place that names all ten.
+(`tests/meson.build:55`), not in `tests/meson.build` itself.
+
+The README's own bullet list (`:6-27`) is incomplete relative to the
+ten-script inventory in §1, in two distinct ways, counted directly
+against the file rather than estimated: it has exactly 8 bullets for
+10 scripts, and of those 8, 6 name a Meson test in parentheses.
+
+- **No bullet at all** (2 scripts): `audit_perf_counter_callsites.py`
+  and `audit_winemetal_install_names.py` are absent from the README
+  entirely — not merely missing a named test, but missing as an entry.
+- **Bullet present, no test named** (2 scripts): `assert_perf_counters.py`
+  and `audit_perf_docs_sources.py` — the latter being the script this
+  document's §2/§3/§4 are largely about — each have a bullet but no
+  `(test ...)` parenthetical, unlike the other 6 bulleted scripts.
+- **Bullet present, test named** (6 scripts): `check_drift.sh`,
+  `check_manifest.sh`, `check_d3d9_conformance_manifest.sh`,
+  `check_d3d9_conformance_status.py`, `verify_tla.sh`, and
+  `audit_perf_counter_table.py`.
+
+`8 = 2 + 6` and `6 + 2 + 2 = 10` reconcile the count above against the
+full inventory. This document's table above is the place that names
+all ten scripts' registration state; the README is not currently a
+substitute for it.
 
 ---
 
