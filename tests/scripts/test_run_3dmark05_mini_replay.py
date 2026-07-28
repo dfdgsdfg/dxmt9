@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,51 @@ fragment float4 dxmt9_fs(VSOut in [[stage_in]],
 
 
 class MiniReplayScriptTests(unittest.TestCase):
+    def parse_draw_entry_rows(self, objc: str) -> list[dict[str, str]]:
+        """Pair each generated `DrawEntry` initializer's scalar tail with the
+        field names declared in `struct DrawEntry`.
+
+        Assertions can then name the field they care about instead of pinning a
+        long positional literal. Commit 07c39ecb inserted `pipelineIndex`,
+        `depthStateIndex`, and `cullMode` ahead of the scissor fields and broke
+        exactly such a literal here; a named lookup survives that class of
+        change while still failing if a value stops being carried per draw.
+        """
+        struct_match = re.search(r"struct DrawEntry \{(.*?)\n\};", objc, re.DOTALL)
+        self.assertIsNotNone(struct_match, "generated source has no struct DrawEntry")
+        fields = re.findall(
+            r"^\s*(?:const\s+)?[A-Za-z_][\w\s*]*?([A-Za-z_]\w*)(\[\d+\])?;\s*$",
+            struct_match.group(1),
+            re.MULTILINE,
+        )
+        # The scalar tail is the contiguous suffix of non-array fields; the
+        # leading pointer/array members are emitted as brace groups and are
+        # matched structurally below.
+        tail_names: list[str] = []
+        for name, is_array in reversed(fields):
+            if is_array:
+                break
+            tail_names.append(name)
+        tail_names.reverse()
+        self.assertTrue(tail_names, "struct DrawEntry has no scalar tail fields")
+
+        rows = re.findall(
+            r"\{[^{}]*\},\s*\{[^{}]*\},\s*\{[^{}]*\},\s*([^{}]*?)\}",
+            objc,
+        )
+        self.assertTrue(rows, "generated source has no DrawEntry initializer rows")
+        parsed: list[dict[str, str]] = []
+        for row in rows:
+            values = [value.strip() for value in row.split(",")]
+            self.assertEqual(
+                len(values),
+                len(tail_names),
+                f"DrawEntry scalar tail {values} does not match declared "
+                f"fields {tail_names}",
+            )
+            parsed.append(dict(zip(tail_names, values)))
+        return parsed
+
     def write_manifest_fixture(self, root: Path) -> tuple[Path, Path]:
         shader_dir = root / "shaders"
         geometry_dir = root / "geometry"
@@ -398,7 +444,40 @@ class MiniReplayScriptTests(unittest.TestCase):
             objc = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(encoding="utf-8")
             self.assertIn("static MTLScissorRect scissorRect(const DrawEntry& draw", objc)
             self.assertIn("[encoder setScissorRect:scissorRect(draw, 1024, 768)];", objc)
-            self.assertIn(", 1, 10, 20, 110, 220}", objc)
+            # The draw table must still be well-formed under
+            # --force-fragment-primitive-id: one row carrying this fixture's
+            # per-draw state, not a collapsed or truncated initializer.
+            rows = self.parse_draw_entry_rows(objc)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                {
+                    key: rows[0][key]
+                    for key in (
+                        "cullMode",
+                        "indexCount",
+                        "baseVertex",
+                        "streamStride",
+                        "streamOffset",
+                        "scissorEnabled",
+                        "scissorL",
+                        "scissorT",
+                        "scissorR",
+                        "scissorB",
+                    )
+                },
+                {
+                    "cullMode": "2",
+                    "indexCount": "3",
+                    "baseVertex": "0",
+                    "streamStride": "24",
+                    "streamOffset": "0",
+                    "scissorEnabled": "1",
+                    "scissorL": "10",
+                    "scissorT": "20",
+                    "scissorR": "110",
+                    "scissorB": "220",
+                },
+            )
 
     def test_color_output_records_ppm_readback_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -212,3 +212,254 @@ test('dxmt9-mini-replay-execution-proof', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+
+# The remaining tests/scripts/*.py files. They existed but were never
+# registered, so `meson test --suite scripts` reported green while 456
+# assertions never ran (and 7 of them were already failing). Names are derived
+# from the filename: test_<stem>.py -> dxmt9-<stem with dashes>.
+test('dxmt9-3dmark05-probe-scripts', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_3dmark05_probe_scripts.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     timeout: 120,
+     is_parallel: false)
+test('dxmt9-analyze-alpha-backend-candidates', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_alpha_backend_candidates.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-encoder-row-shape', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_encoder_row_shape.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-index-merge-scout', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_index_merge_scout.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-indexed-probe-classes', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_indexed_probe_classes.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-mini-replay-primitive-conflicts', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_mini_replay_primitive_conflicts.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-mini-replay-semantics', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_mini_replay_semantics.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-primitive-id-replay', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_primitive_id_replay.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-programmable-route-feasibility', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_programmable_route_feasibility.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-pso-backend-churn', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_pso_backend_churn.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-shader-dumps', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_shader_dumps.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-stream-ib-backend-churn', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_stream_ib_backend_churn.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-stream-ib-staging-feasibility', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_stream_ib_staging_feasibility.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-tile-ffp-coverage', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_tile_ffp_coverage.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-tile-ffp-expansion', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_tile_ffp_expansion.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-vs-buffer-scaling', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_vs_buffer_scaling.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-xcode-dxmt-encoder-attribution', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_xcode_dxmt_encoder_attribution.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-xcode-replay-variance', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_xcode_replay_variance.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-analyze-xcode-row-drift', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_analyze_xcode_row_drift.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-audit-backend-escape-surface', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_audit_backend_escape_surface.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-audit-perf-docs-sources', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_audit_perf_docs_sources.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-build-3dmark05-mini-replay-manifest', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_build_3dmark05_mini_replay_manifest.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-compare-3dmark05-perf-counters', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_compare_3dmark05_perf_counters.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-compare-attachment-dumps', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_compare_attachment_dumps.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-compare-experiment-images', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_compare_experiment_images.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-compare-xcode-dxmt-bottlenecks', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_compare_xcode_dxmt_bottlenecks.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-metal-shader-codegen', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_metal_shader_codegen.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-plan-3dmark05-mini-replay', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_plan_3dmark05_mini_replay.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-plan-backend-escape-reduced-ab', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_plan_backend_escape_reduced_ab.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-plan-effect-roi-forcewhite-probes', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_plan_effect_roi_forcewhite_probes.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-run-3dmark05-mini-replay', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_3dmark05_mini_replay.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-run-3dmark05-semantic-replay-gate', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_3dmark05_semantic_replay_gate.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-select-3dmark05-payload-window', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_select_3dmark05_payload_window.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-3dmark05-cleanup-candidates', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_3dmark05_cleanup_candidates.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-3dmark05-perf', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_3dmark05_perf.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-3dmark05-perf-gates', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_3dmark05_perf_gates.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-3dmark05-visual-target-gate', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_3dmark05_visual_target_gate.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-capture-rois', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_capture_rois.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-color-attachment-dumps', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_color_attachment_dumps.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-effect-geometry-roi', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_effect_geometry_roi.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-fragmentless-depth-route-gate', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_fragmentless_depth_route_gate.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-framegraph-dag', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_framegraph_dag.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-index-cache-runtime', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_index_cache_runtime.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-primitive-conflict-selectors', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_primitive_conflict_selectors.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-semantic-payload-candidates', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_semantic_payload_candidates.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-visibility-scout', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_visibility_scout.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-xcode-encoder-counters', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_xcode_encoder_counters.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-xctrace-cpu-threads', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_xctrace_cpu_threads.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-summarize-xctrace-metal-intervals', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_xctrace_metal_intervals.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)

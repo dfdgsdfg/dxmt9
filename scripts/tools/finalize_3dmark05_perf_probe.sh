@@ -1486,9 +1486,18 @@ if [[ -n "$baseline_joined" ]]; then
       "$max_top_buffer_write_regression_mib"
     )
   fi
-  for row_key in "${target_row_keys[@]}"; do
-    xcode_compare_cmd+=(--target-row-key "$row_key")
-  done
+  # bash 3.2 (the macOS system bash this script runs under) treats
+  # "${arr[@]}" on an empty array as an unbound variable under `set -u`, so an
+  # unguarded loop aborts the whole finalizer before any Xcode comparison gate
+  # is emitted. Target row keys are optional — gates such as
+  # --require-stable-frame-proof / --require-tvb-mechanism-proof only require
+  # --baseline-joined — so guard the expansion the same way the other optional
+  # command arrays in this file are guarded.
+  if ((${#target_row_keys[@]})); then
+    for row_key in "${target_row_keys[@]}"; do
+      xcode_compare_cmd+=(--target-row-key "$row_key")
+    done
+  fi
   if [[ -n "$max_non_target_gpu_regression_ms" ]]; then
     xcode_compare_cmd+=(
       --max-non-target-gpu-regression-ms
