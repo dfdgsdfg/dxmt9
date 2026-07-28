@@ -192,3 +192,8 @@ test('dxmt9-mini-replay-fragment-override', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-mini-replay-attachment-format', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_mini_replay_attachment_format.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)

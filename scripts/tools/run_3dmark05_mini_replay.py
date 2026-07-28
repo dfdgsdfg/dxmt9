@@ -877,22 +877,46 @@ def first_depth_attachment(draws: list[dict[str, Any]]) -> dict[str, Any]:
     return depth if isinstance(depth, dict) else {}
 
 
-def color_pixel_format(format_value: int) -> str:
-    # dxmt9 core::Format values. Keep this narrow: unknown formats preserve the
-    # previous mini-replay fallback instead of guessing an incompatible RT.
+def color_pixel_format(format_value: int, width: int = 0, height: int = 0) -> str:
+    """Maps a dumped `core::Format` render-target value to a Metal pixel
+    format. Per specs/experiments/harness/replay/requirements.md
+    R-HARN-REPLAY-2.1, a `format_value` outside this declared finite set is a
+    hard failure naming the ordinal and RT dimensions -- not a fallback to a
+    plausible-looking format -- because a real capture row (`60/0`) declares
+    R32F (`core::Format` 16) and rendering its raw float bytes through
+    RGBA8Unorm silently reinterprets the bit pattern with no diagnostic.
+    `width`/`height` are only used to name the RT in that failure message;
+    callers that have no attachment metadata at all (see `render_source`'s
+    `attachments`-absent legacy path) must not route through this resolver.
+    """
     if format_value in (1, 2):  # A8R8G8B8 / X8R8G8B8
         return "MTLPixelFormatBGRA8Unorm"
     if format_value in (3, 4):  # A8B8G8R8 / X8B8G8R8
         return "MTLPixelFormatRGBA8Unorm"
-    return "MTLPixelFormatRGBA8Unorm"
+    raise SystemExit(
+        f"mini replay: unsupported color render-target core::Format={format_value} "
+        f"(RT {width}x{height}); no MTLPixelFormat mapping is declared for this "
+        f"value -- add an explicit mapping instead of falling back to RGBA8Unorm "
+        f"(specs/experiments/harness/replay/requirements.md R-HARN-REPLAY-2.1)"
+    )
 
 
-def depth_pixel_format(format_value: int) -> str:
+def depth_pixel_format(format_value: int, width: int = 0, height: int = 0) -> str:
+    """See `color_pixel_format`'s R-HARN-REPLAY-2.1 note: the identical
+    unnamed-fallback shape applies to depth formats (for example DF16,
+    `core::Format` 52, is documented in include/dxmt9/core_constants.hpp as
+    backed by MTLPixelFormatDepth16Unorm, not the old catch-all
+    Depth32Float)."""
     if format_value in (40, 41, 49):  # D24S8 / D24X8 / D24FS8
         return "MTLPixelFormatDepth32Float_Stencil8"
     if format_value in (42, 46):  # D16 / D16_LOCKABLE
         return "MTLPixelFormatDepth16Unorm"
-    return "MTLPixelFormatDepth32Float"
+    raise SystemExit(
+        f"mini replay: unsupported depth render-target core::Format={format_value} "
+        f"(RT {width}x{height}); no MTLPixelFormat mapping is declared for this "
+        f"value -- add an explicit mapping instead of falling back to Depth32Float "
+        f"(specs/experiments/harness/replay/requirements.md R-HARN-REPLAY-2.1)"
+    )
 
 
 def depth_format_has_stencil(format_value: int) -> bool:
@@ -1110,9 +1134,31 @@ def render_source(draws: list[dict[str, Any]],
                   texture_sidecar_by_key: dict[tuple[str, bool], int]) -> str:
     color_attachment = first_color_attachment(draws)
     depth_attachment = first_depth_attachment(draws)
-    color_format = color_pixel_format(int(color_attachment.get("format", 0)))
+    # A manifest that never populates per-draw `attachments` (the shape every
+    # earlier mini-replay test fixture and some diagnostic manifests use) is a
+    # different input shape from one that declares an attachment with an
+    # unrecognized format: there is no format value to classify at all, so
+    # this keeps the historical RGBA8Unorm/Depth32Float default explicitly and
+    # by name, rather than routing an inferred format_value=0 through the
+    # strict resolvers below and having it look like a declared-but-
+    # unrecognized `core::Format::Unknown`.
+    if color_attachment:
+        color_format = color_pixel_format(
+            int(color_attachment.get("format", 0)),
+            int(color_attachment.get("width", 0)),
+            int(color_attachment.get("height", 0)),
+        )
+    else:
+        color_format = "MTLPixelFormatRGBA8Unorm"
     depth_format_value = int(depth_attachment.get("format", 0))
-    depth_format = depth_pixel_format(depth_format_value)
+    if depth_attachment:
+        depth_format = depth_pixel_format(
+            depth_format_value,
+            int(depth_attachment.get("width", 0)),
+            int(depth_attachment.get("height", 0)),
+        )
+    else:
+        depth_format = "MTLPixelFormatDepth32Float"
     stencil_format = depth_format if depth_format_has_stencil(depth_format_value) else "MTLPixelFormatInvalid"
     pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
     pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
