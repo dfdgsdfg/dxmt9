@@ -3460,9 +3460,8 @@ void testVs20RelativeConstReadWithDefSelectsDefLiteralInPlace() {
   checkContains(source, "const float4 dxmt9_cdef6 = float4(1.0f, 0.0f, 0.0f, 0.0f);",
                 "vs_2_0 relative addressing plus DEF hoists the DEF literal");
   checkContains(source,
-                "([&]() -> float4 { int dxmt9_cfi = clamp(a0.x + 5, 0, 255);"
-                " if (dxmt9_cfi == 6) { return dxmt9_cdef6; }"
-                " return cFloat[dxmt9_cfi]; }())",
+                "((clamp(a0.x + 5, 0, 255)) == 6 ? dxmt9_cdef6"
+                " : cFloat[clamp(a0.x + 5, 0, 255)])",
                 "vs_2_0 relative constant read selects the DEF literal on a dynamic hit");
   checkContains(source, "r[0] = (r[0] + dxmt9_cdef6);",
                 "vs_2_0 static read of the DEF'd register resolves to the hoisted literal");
@@ -3478,13 +3477,13 @@ void testRelativeConstReadWithoutDefsEmitsNoDefSelect() {
   const auto pixelSource = translatePixel(makePs30IndexedConstSourceBytecode());
   checkContains(pixelSource, "cFloat[clamp(a0.x + 7, 0, 223)]",
                 "ps_3_0 DEF-free relative constant read stays a plain clamped access");
-  checkNotContains(pixelSource, "dxmt9_cfi",
+  checkNotContains(pixelSource, "? dxmt9_cdef",
                    "ps_3_0 DEF-free relative constant read must not emit a def select");
 
   const auto vertexSource = translateVertex(makeVs20IndexedConstSourceBytecode());
   checkContains(vertexSource, "cFloat[clamp(a0.x + 5, 0, 255)]",
                 "vs_2_0 DEF-free relative constant read stays a plain clamped access");
-  checkNotContains(vertexSource, "dxmt9_cfi",
+  checkNotContains(vertexSource, "? dxmt9_cdef",
                    "vs_2_0 DEF-free relative constant read must not emit a def select");
 }
 
@@ -3492,7 +3491,7 @@ void testRelativeConstReadDefSelectRespectsBoundedCap() {
   const auto atCap = translateVertex(makeVs20RelativeConstReadWithDefCountBytecode(8));
   checkContains(atCap, "constant float4* cFloat = vsConsts.vsFloatConst;",
                 "eight DEFs stay within the select cap and keep the pointer alias");
-  checkContains(atCap, "if (dxmt9_cfi == 7) { return dxmt9_cdef7; }",
+  checkContains(atCap, "== 7 ? dxmt9_cdef7 : ",
                 "every DEF'd register participates in the select chain at the cap");
   checkNotContains(atCap, "float4 cFloat[256];",
                    "eight DEFs must not materialize the register file");
@@ -3505,7 +3504,7 @@ void testRelativeConstReadDefSelectRespectsBoundedCap() {
                 "the over-cap fallback keeps the register-file copy loop");
   checkContains(overCap, "cFloat[8] = float4(1.0f, 0.0f, 0.0f, 0.0f);",
                 "the over-cap fallback keeps DEF array overwrites");
-  checkNotContains(overCap, "dxmt9_cfi",
+  checkNotContains(overCap, "? dxmt9_cdef",
                    "the over-cap fallback must not emit a def select");
 }
 
@@ -3521,7 +3520,7 @@ void testRuntimeConstWriteWithRelativeReadKeepsRegisterFileArray() {
                 "a runtime constant write keeps DEF array overwrites");
   checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)]",
                 "a runtime constant write keeps the plain clamped array read");
-  checkNotContains(source, "dxmt9_cfi",
+  checkNotContains(source, "? dxmt9_cdef",
                    "a runtime constant write must not emit a def select");
 }
 
@@ -3532,9 +3531,8 @@ void testRelativeIntAndBoolConstReadsSelectDefLiterals() {
   checkContains(intSource, "const int4 dxmt9_cdefi1 = int4(2, 0, 0, 0);",
                 "ps_3_0 relative int read plus DEFI hoists the DEFI literal");
   checkContains(intSource,
-                "([&]() -> int4 { int dxmt9_cii = clamp(a0.x + 0, 0, 15);"
-                " if (dxmt9_cii == 1) { return dxmt9_cdefi1; }"
-                " return cInt[dxmt9_cii]; }())",
+                "((clamp(a0.x + 0, 0, 15)) == 1 ? dxmt9_cdefi1"
+                " : cInt[clamp(a0.x + 0, 0, 15)])",
                 "ps_3_0 relative int read selects the DEFI literal on a dynamic hit");
   checkNotContains(intSource, "int4 cInt[16];",
                    "ps_3_0 relative int read plus DEFI must not materialize the int file");
@@ -3545,9 +3543,8 @@ void testRelativeIntAndBoolConstReadsSelectDefLiterals() {
   checkContains(boolSource, "const uint dxmt9_cdefb1 = 1u;",
                 "ps_3_0 relative bool read plus DEFB hoists the DEFB literal");
   checkContains(boolSource,
-                "([&]() -> uint { int dxmt9_cbi = clamp(a0.x + 0, 0, 15);"
-                " if (dxmt9_cbi == 1) { return dxmt9_cdefb1; }"
-                " return cBool[dxmt9_cbi]; }())",
+                "((clamp(a0.x + 0, 0, 15)) == 1 ? dxmt9_cdefb1"
+                " : cBool[clamp(a0.x + 0, 0, 15)])",
                 "ps_3_0 relative bool read selects the DEFB literal on a dynamic hit");
   checkNotContains(boolSource, "uint cBool[16];",
                    "ps_3_0 relative bool read plus DEFB must not materialize the bool file");

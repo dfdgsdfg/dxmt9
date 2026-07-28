@@ -612,13 +612,24 @@ private:
                                const std::map<u32, std::string>& defs,
                                std::string (*defLocalName)(u32),
                                const std::string& arrayPrefix) {
+    // Emitted as a plain nested-ternary expression rather than an
+    // immediately-invoked lambda: a lambda capturing the `constant`-space
+    // alias by reference is a form this translator has never shipped on the
+    // per-vertex path, and the register-expression formatter has no way to
+    // emit a preceding statement to bind the index. `indexExpr` is therefore
+    // repeated per comparison; it is a `clamp()` over `a0`/`aL`, which is
+    // cheap and trivially common-subexpression-eliminated.
+    (void)indexLocal;
+    (void)returnType;
     std::ostringstream out;
-    out << "([&]() -> " << returnType << " { int " << indexLocal << " = " << indexExpr << ";";
     for (const auto& def : defs) {
-      out << " if (" << indexLocal << " == " << def.first << ") { return "
-          << defLocalName(def.first) << "; }";
+      out << "((" << indexExpr << ") == " << def.first << " ? "
+          << defLocalName(def.first) << " : ";
     }
-    out << " return " << arrayPrefix << "[" << indexLocal << "]; }())";
+    out << arrayPrefix << "[" << indexExpr << "]";
+    for (std::size_t i = 0; i < defs.size(); ++i) {
+      out << ")";
+    }
     return out.str();
   }
 };
