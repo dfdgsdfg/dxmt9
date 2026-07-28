@@ -110,10 +110,11 @@ struct ConstantUsage {
   // Set when any source operand reads a constant register through
   // relative addressing (`c[a0+N]`, `c[aL+N]`). The emitter forces
   // pointer aliasing to the full `vsConsts.vsFloatConst[]` buffer when
-  // the shader does not write constants. If the shader combines indexed
-  // reads with DEF/DEFI/DEFB writes, the emitter materializes the full
-  // constant category into a mutable local array so both behaviours are
-  // preserved.
+  // the shader does not write constants at runtime. Indexed reads
+  // combined with DEF/DEFI/DEFB writes keep that alias and overlay the
+  // hoisted DEF literals with a select at the relative read site; only a
+  // runtime constant write (or an over-cap DEF count) still materializes
+  // the full constant category into a mutable local array.
   bool hasIndexedFloat = false;
   bool hasIndexedInt = false;
   bool hasIndexedBool = false;
