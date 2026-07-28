@@ -17,13 +17,16 @@ domain run already dumped and renders them in a standalone,
 Wine-independent Metal process. Requirement IDs in this file use the
 prefix `R-HARN-REPLAY-`.
 
-**This domain does not currently render a valid image.** Every
-requirement below states the contract the domain must satisfy; it
-does not describe the domain's present behavior as meeting that
-contract. Where today's source violates a requirement, this file says
-so in the requirement's own rationale, and this domain's own
-`spec.md` Known Deviations section states the same defect from the
-implementation side.
+**This domain renders a valid image as of 2026-07-28.** It did not
+when these requirements were written; the six defects that blocked it
+are fixed, and this domain's own `spec.md` §7 records each one with
+its fix from the implementation side. Every requirement below still
+states the contract the domain must satisfy rather than asserting the
+domain meets it — two requirements remain unimplemented
+(R-HARN-REPLAY-2.3's resolved-format recording, and the parent
+R-HARN-3.1 output-validity self-assertion). Where today's source
+violates a requirement, this file says so in the requirement's own
+rationale, and `specs/experiments/gap.md` tracks the shortfall.
 
 ---
 
@@ -171,10 +174,12 @@ identical digests, which a digest-only or exit-code-only gate would
 wrongly read as agreement.
 
 **R-HARN-REPLAY-3.3** For as long as R-HARN-REPLAY-3.1's assertion
-remains unimplemented, this domain's own `spec.md` Known Deviations
-section states that plainly — an unqualified reader of this domain's
-docs must not come away believing `exit 0` currently means "valid
-image." Instantiates R-HARN-3.3.
+remains unimplemented, this domain's own `spec.md` §7 states that
+plainly — an unqualified reader of this domain's docs must not come
+away believing `exit 0` currently means "valid image." It still does
+not: the 2026-07-28 defect-4 fix removed the cause of one degenerate
+render but added no check that would catch the next one.
+Instantiates R-HARN-3.3.
 
 ---
 

@@ -17,11 +17,15 @@ cited from the parent spec rather than redefined here. The geometry
 authoritatively, in `specs/experiments/harness/probe/spec.md` §5; it
 is cited below, not restated.
 
-**This domain does not currently render a valid image** (§7, Known
-Deviations). Every section below states this domain's intended
-contract. Where current source violates that contract, this file says
-so explicitly in the section concerned; nothing below should be read
-as a claim that today's replay output is correct.
+**This domain renders a valid image as of 2026-07-28** (§7, Defect
+History). It did not when this document was first written; the six
+defects that blocked it are all fixed, and §7 records each one and its
+fix. Every section below states this domain's intended contract. Where
+current source still violates that contract — the output-validity
+self-assertion and the resolved attachment formats in
+`mini-replay-summary.json` both remain unimplemented — this file says
+so explicitly in the section concerned, and `specs/experiments/gap.md`
+tracks the shortfall.
 
 Facts in this document were verified against
 `scripts/tools/run_3dmark05_mini_replay.py` (2,093 lines) and
@@ -171,7 +175,7 @@ that set nothing).
 | `--draw-order` | `original` / `reverse`; reorders the manifest's draw list before replay (`materialize_replay_draws()`, lines 521-524). |
 | `--vertex-order` | `original` / `first-reference` / `scatter`; permutes vertex storage across every stream and rewrites indices in place, preserving triangle order, vertex bytes, payload size, and `base_vertex` (`remap_draw_vertex_layout()`, lines 428-494). Diagnostic locality discriminator. |
 | `--trim-vsout-to-fs-reads` | Trims the shared `VSOut` struct to only the fields the paired FS's `stage_in` reads (plus `position`/`texcoord0` fallbacks) via `apply_vsout_read_trim()` (lines 687-706). Diagnostic; changes VS/FS source shape. |
-| `--force-fragment-color` | Replaces the compiled `dxmt9_fs` function body with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` (`force_fragment_color_source()`, line 732). **Currently fails to compile against essentially every real captured `dxmt9_fs`** — translated per-draw shaders declare `FSOut` and FFP shaders declare `FfpFsOut`, neither of which is `float4` (§6, §7 defect 5). |
+| `--force-fragment-color` | Replaces the compiled `dxmt9_fs` function body with a magenta constant. The rewrite is struct-aware as of `fe673fd5`: it targets whichever of the three return shapes the captured shader declares, via `dxmt9_make_fs_out` / `dxmt9_make_ffp_fs_out` for `FSOut` / `FfpFsOut` (§6, §7 defect 5). |
 | `--force-fragment-primitive-id` | Adds a `[[primitive_id]]` parameter and replaces `dxmt9_fs`'s body with a primitive-id-encoded color (`force_fragment_primitive_id_source()`, lines 759-771). Not one of the five defects this document was scoped to verify, but its body replacement is the same `replace_function_body(source, "dxmt9_fs", "{ ... return float4(...); }")` shape as `--force-fragment-color` (line 761) against a function signature whose declared return type it does not inspect; this domain has not independently exercised this flag against a real captured shader. The more consequential unconfirmed case is an `FSOut`-returning translated shader — the dominant real shape for captured per-draw PS (§6) — not only an `FfpFsOut`-returning FFP shader, so whether it shares defect 5's compile failure is unconfirmed here, not ruled out. |
 | `--compile` | Invokes `xcrun -sdk macosx clang++ -std=c++20 -fobjc-arc -O2 ...` (`compile_source()`, lines 1911-1925) to build the generated source into `<output-dir>/dxmt9-3dmark05-mini-replay`. |
 | `--run` | After compiling, runs the binary via `subprocess.run` (`run_binary()`, lines 1954-1966), forwarding `DXMT9_MINI_REPLAY_*` env (§5). |
@@ -306,11 +310,12 @@ geometry dump captures or this domain replays — they exist only for
 dxmt9's own internal presenter/blit paths, which this harness has no
 mechanism to dump or reach.
 
-`--force-fragment-color`'s rewritten body (`float4(1.0f, 0.0f, 1.0f,
-1.0f)` returned bare) matches only the third, never-replayed shape.
-Against the two shapes real captured shaders actually declare —
-`FSOut` and `FfpFsOut` — it is a return-type mismatch and fails to
-compile (§7, defect 5).
+`--force-fragment-color` originally emitted `float4(1.0f, 0.0f, 1.0f,
+1.0f)` returned bare, matching only the third, never-replayed shape;
+against the two shapes real captured shaders actually declare —
+`FSOut` and `FfpFsOut` — that was a return-type mismatch and failed to
+compile. `fe673fd5` made the rewrite select the shape the captured
+shader declares (§7, defect 5).
 
 ### 6.3 Declared index width
 
@@ -338,14 +343,14 @@ gap-tracking convention.
 
 ---
 
-## 7. Known Deviations
+## 7. Defect History
 
 Five defects blocked a vertex-remap experiment run against this
-domain on 2026-07-25/27 (parent `requirements.md`'s introduction).
-**One is fixed; four are not.** Nothing in this document, and nothing
-in this domain's `requirements.md`, should be read as describing the
-four open defects as acceptable current behavior — they are the
-reason this domain's documents exist.
+domain on 2026-07-25/27 (parent `requirements.md`'s introduction), and
+a sixth was found while debugging them. **All six are now fixed**, the
+last on 2026-07-28. They are the reason this domain's documents exist,
+and each is recorded below with its fix so a future reader can tell
+what the contract is protecting against.
 
 1. **Fixed in `12348666` (defect 2).** Sliced stream payloads
    double-counted `stream0_offset` as a payload-relative offset,
@@ -353,43 +358,74 @@ reason this domain's documents exist.
    (§3) is the fix; it is now this domain's stated, correct behavior,
    not an open deviation.
 
-2. **Unfixed — silent attachment-format fallback (defect 3).**
-   `color_pixel_format()` recognizes `core::Format` values 1-4 and
-   returns `MTLPixelFormatRGBA8Unorm` for every other value with no
-   diagnostic naming the unrecognized format. Row `60/0` renders to
-   R32F (`core::Format` 16), which falls into this silent-fallback
-   branch; the replay renders into a wrong-format attachment with no
-   indication the format was unrecognized. `depth_pixel_format()` has
+2. **Fixed in `e2d3ed0e` (defect 3).** `color_pixel_format()`
+   recognized `core::Format` values 1-4 and returned
+   `MTLPixelFormatRGBA8Unorm` for every other value with no diagnostic
+   naming the unrecognized format. Row `60/0` renders to R32F
+   (`core::Format` 16), which fell into that silent-fallback branch, so
+   the replay rendered into a wrong-format attachment with no
+   indication the format was unrecognized. `depth_pixel_format()` had
    the identical shape for depth formats outside `{40, 41, 49, 42,
-   46}` (§ requirements R-HARN-REPLAY-2.1), though no wild run has yet
-   exercised an unrecognized depth format specifically.
+   46}` (R-HARN-REPLAY-2.1). Both now fail loudly on an unrecognized
+   value instead of substituting a fallback, which is what
+   R-HARN-2.1's no-silent-degradation contract requires. Recording the
+   *resolved* format in `mini-replay-summary.json` (R-HARN-REPLAY-2.3)
+   remains unimplemented and is tracked in `specs/experiments/gap.md`.
 
-3. **Unfixed — every replay lane renders fully black, cause unknown
-   (defect 4).** All four lanes captured during the vertex-remap
+3. **Fixed in `36a41ad5` (defect 4) — every replay lane rendered
+   fully black.** All four lanes captured during the vertex-remap
    experiment reported `mini replay draws=229 repeat=1` and exited 0
    while each wrote a 1024×768 PPM containing exactly one distinct
-   pixel value. **The R32F format gap (defect 3) does not explain
-   this.** Row `60/1` renders to X8R8G8B8 — `core::Format` 2, a format
-   `color_pixel_format()` handles natively, not through the
-   unrecognized-value fallback — and its four lanes were **also**
-   fully black, one distinct RGB value across all 786,432 pixels.
-   Eliminated as causes, each by a direct check during this
-   investigation: the depth sidecar (still black with `--depth-clear
-   1.0`, i.e. independent of any depth-input upload path), the
-   constant buffers (the shader's `VsConsts` is `float4[256] +
-   int4[16] + uint[16]` = 4,416 bytes, and the dumped payload is
-   exactly 4,416 bytes carrying real transform values, not zeros or
-   truncated data), scissor (disabled, full-rect), cull and fill state,
-   and draw issue itself (the replay reports `draws=229 repeat=1` and
-   exits 0, i.e. every draw call is actually being issued to the
-   encoder). **The cause of the black output is unresolved.** The tool
-   that would normally bisect the failure between the geometry and
-   fragment stages — `--force-fragment-color` — is itself broken (next
-   item), so the usual next diagnostic step is unavailable.
+   pixel value. The R32F format gap (defect 3) did not explain it: row
+   `60/1` renders to X8R8G8B8 — `core::Format` 2, handled natively by
+   `color_pixel_format()` rather than through the unrecognized-value
+   fallback — and its four lanes were also fully black.
 
-4. **Unfixed — the fragment-stage bisection tool does not compile
-   (defect 5), and against essentially all real captured shaders, not
-   only FFP ones.** `--force-fragment-color` replaces `dxmt9_fs`'s
+   **Root cause: the generated program bound nothing to fragment
+   `buffer(5)`.** dxmt9 emits a `constant FsVolatile& fsVolatile
+   [[buffer(5)]]` parameter alongside the generated alpha-test tail
+   (`dxmt9_ffp_shaders.cpp:1098-1099`,
+   `dxmt9_shader_metal_ir.cpp:2643`), and the shader drives from its
+   contents both an alpha-test switch ending in `discard_fragment()`
+   and the `[[sample_mask]]` output. All 17 shader variants in the GT1
+   frame60 `enc1` capture declare it. Reading an unbound Metal buffer
+   is undefined; with nothing bound, no fragment survived to write.
+   The vertex stage had always bound its own `DrawVolatile` at the
+   same index — only the fragment volatile was omitted. The fix emits
+   a per-draw `FsVolatile` matching the engine struct
+   (`src/dxmt9/dxmt9_draw_state.hpp:131-139`) and binds it with
+   `setFragmentBytes ... atIndex:5`. `sampleMask` must be
+   `0xffffffffu`: the replay is always single-sample, and because that
+   field feeds `[[sample_mask]]` directly, a zero would mask out every
+   fragment in turn.
+
+   Eliminated as causes before the root cause was found, each by a
+   direct check: the depth sidecar (still black with `--depth-clear
+   1.0`), the constant buffers (the shader's `VsConsts` is
+   `float4[256] + int4[16] + uint[16]` = 4,416 bytes, and the dumped
+   payload is exactly 4,416 bytes carrying real transform values),
+   scissor (disabled, full-rect), cull and fill state, the render pass
+   and colour attachment, PSO creation, and draw issue itself. The
+   decisive step was changing the clear colour to magenta with real
+   shaders bound: 100% of the clear survived, proving fragments ran
+   but never wrote.
+
+   Verified end-to-end after the fix: replaying the GT1 frame60 `enc1`
+   manifest renders the recognisable "Return to Proxycon" interior,
+   12,231 distinct RGB values over 784,476 of 786,432 non-black
+   pixels, untextured because the replay binds white dummy textures.
+
+   **What this defect cost is the reason R-HARN-3.1 exists.** The
+   harness reported success on a degenerate artifact, so the failure
+   had to be found by bisecting generated Metal source rather than
+   being reported. Fixing the cause does not prevent a recurrence;
+   `run_3dmark05_mini_replay.py` still performs no output-validity
+   self-assertion, which `specs/experiments/gap.md` tracks.
+
+4. **Fixed in `fe673fd5` (defect 5) — the fragment-stage bisection
+   tool did not compile, and against essentially all real captured
+   shaders, not only FFP ones.** `--force-fragment-color` replaced
+   `dxmt9_fs`'s
    body with a bare `return float4(1.0f, 0.0f, 1.0f, 1.0f);` without
    checking the function's declared return type. dxmt9 declares
    `dxmt9_fs` with one of **three** shapes, not two (§6.2): every real
@@ -404,25 +440,36 @@ reason this domain's documents exist.
    (`src/dxmt9/dxmt9_shader_sources.cpp:124,152,178`) declare a bare
    `float4`, and those are never the per-draw shader this harness
    dumps or replays. `--force-fragment-color`'s rewritten body matches
-   only that third, never-replayed shape, so it fails to compile
+   only that third, never-replayed shape, so it failed to compile
    against essentially every real captured shader — translated and FFP
    alike, not an FFP-only subset. The one diagnostic flag built
    specifically to separate "the geometry reaches the fragment stage
    but the fragment shader is producing wrong color" from "the
-   geometry never reaches the fragment stage at all" is unusable
-   exactly when defect 4 needs it.
+   geometry never reaches the fragment stage at all" was unusable
+   exactly when defect 4 needed it. Rather than call either emitter's
+   constructor helper, the fix reads the declared return type, parses
+   its members and their `[[...]]` attributes, and assigns each one
+   explicitly — `color(N)` gets the forced colour, `depth(...)` gets
+   `0.0f`, `sample_mask` gets `0xffffffffu` — leaving no member
+   uninitialized and degrading to the historical bare `return` only
+   for the `float4` utility shape. An unrecognized attribute is a hard
+   error rather than a silent omission. That member-walk also avoids
+   assuming member names: `FfpFsOut`'s colour member is `color`, not
+   `color0`. The flag then did the job it was built for — forcing
+   magenta produced full-viewport coverage while the real shaders
+   produced none, which localized defect 4 to the fragment stage.
 
-Because defect 5 leaves the fragment-stage bisection path unusable,
-defect 4's root cause cannot currently be narrowed further with this
-domain's own tooling. A future fix must restore
-`--force-fragment-color`'s ability to compile against the two shapes
-real captured shaders actually declare — `FSOut` and `FfpFsOut`
-(§6.2) — not against
-`float4`, which the flag already matches but which no captured shader
-ever uses. Both emitters already provide a matching constructor helper
-a rewrite could target instead of a bare `return float4(...)`:
-`dxmt9_make_fs_out(float4, uint)`
-(`dxmt9_shader_metal_ir.cpp:2607-2617`) for `FSOut` and
-`dxmt9_make_ffp_fs_out(float4, uint)`
-(`dxmt9_ffp_shaders.cpp:1057-1062`) for `FfpFsOut`. Before it can be
-trusted to diagnose defect 4, the flag must compile against both.
+5. **Fixed in `07c39ecb` (defect 6) — every draw was encoded with
+   draw 0's pipeline, depth state, and cull mode.** The generator
+   collapsed blend, colour-write, depth, and cull state into a single
+   `first_state` sampled from the first draw in the manifest and
+   applied it to all of them. For the GT1 frame60 `enc1` row that is
+   provably wrong: its 229 draws carry three distinct
+   `(color_write, depth_write, alpha_blend)` combinations — 42
+   depth-only (`0x0, 1, 0`), 145 blended colour (`0xf, 0, 1`), and 42
+   unblended colour (`0xf, 0, 0`) — so no single shared state can
+   represent them. The fix derives per-draw blend, depth, and cull tuples and
+   emits one PSO per distinct combination, indexed per draw. This
+   defect was found while debugging defect 4 and is not among the five
+   in the parent `requirements.md` introduction; it is recorded here
+   because the same no-silent-degradation contract covers it.
