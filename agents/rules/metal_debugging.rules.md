@@ -724,14 +724,19 @@ bash scripts/tools/run_3dmark05_system_trace_sidecar.sh -- \
 | Const / cbuf upload | `--split-sparse-const-records` (`DXMT9_SPLIT_SPARSE_CONST_RECORDS`), encoder-breakdown cbuf class/field rows | `const-upload.md` |
 | Render-pass store policy | `--aggressive-color-dontcare` (`DXMT9_AGGRESSIVE_COLOR_DONTCARE`), `--aggressive-depth-dontcare` (`DXMT9_AGGRESSIVE_DEPTH_DONTCARE`) | `render-pass-store.md` |
 | Attachment pixel-format view | `--suppress-rt-pixel-format-view`, `--suppress-x8-rt-pixel-format-view`, `--x8-shader-alpha-fill` | `attachment-pixelformat.md` |
-| Mini-replay + bisection | `--dump-indexed-geometry[-cbufs]` (`-vs`/`-ps`/`-max-draws`), `--dump-depth-attachment-{handle,seq,enc,path}` (`DXMT9_DUMP_DEPTH_ATTACHMENT_*`), then `run_3dmark05_mini_replay.py --primitive-order {reverse-triangles,sort-min-index,sort-max-index,cache-opt-lru32,cache-opt-lru64} --draw-order {original,reverse} --depth-input <sidecar>` | `mini-replay-bisection.md` |
+| Mini-replay + bisection | `--dump-indexed-geometry[-cbufs]` (`-vs`/`-ps`/`-max-draws`), `--dump-depth-attachment-{handle,seq,enc,path}` (`DXMT9_DUMP_DEPTH_ATTACHMENT_*`), then `run_3dmark05_mini_replay.py --primitive-order {reverse-triangles,sort-min-index,sort-max-index,cache-opt-lru32,cache-opt-lru64} --vertex-order {original,first-reference,scatter} --draw-order {original,reverse} --depth-input <sidecar>` | `mini-replay-bisection.md` |
 
 Flag names above are taken from `run_3dmark05_perf_probe.sh --help` and
 `run_3dmark05_mini_replay.py --help`; the wrapper exposes many more
 scoped `-row/-rows/-class/-classes` variants and `--require-*` proof
 gates (see §2b and the full `--help`). Mini-replay selects encoder
 draws via the dumped manifest, not a draw-index flag — use
-`--primitive-order` / `--draw-order` / `--depth-input` for A/B probes.
+`--primitive-order` / `--vertex-order` / `--draw-order` / `--depth-input`
+for A/B probes. The `--vertex-order` lanes reorder vertex storage and
+rewrite indices to match, so they are bit-exact permutations that must
+produce a pixel-identical image: gate them by comparing the color-output
+hash against the `original` lane, and treat a mismatch as a remap bug
+rather than a finding. `--primitive-order` lanes legitimately differ.
 
 See also: `docs/perfomance/overview-3dmark05-gt1.md` (experiment
 knowledge graph) and `agents/rules/environment_variables.rules.md`
