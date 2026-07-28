@@ -973,6 +973,36 @@ def draw_cull_mode(state: dict[str, Any]) -> int:
     return int(state.get("cull", 1))
 
 
+def draw_fs_volatile(state: dict[str, Any], ordinal: int) -> tuple[int, float]:
+    """The subset of per-draw state that feeds the fragment-stage FsVolatile
+    binding: (alphaTest, alphaRef). Mirrors makeFsVolatile/buildFsVolatile
+    (src/dxmt9/dxmt9_draw_state.cpp:514-543): alphaTest folds enable+func into
+    one field (0 = alpha test disabled, otherwise the raw D3DCMPFUNC), and
+    alphaRef is the raw RS_ALPHA_REF byte scaled by 1.0f/255.0f. sampleMask
+    is not part of this tuple -- mini-replay is always single-sample, so the
+    emitted FsVolatile initializer hardcodes 0xFFFFFFFFu the same way
+    DrawVolatile hardcodes its trailing pad to 0 (see render_source's
+    DrawVolatile dv initializer).
+
+    The manifest has no alpha_ref field, so a draw with alpha_test != 0 but
+    no alpha_ref must fail loudly here instead of silently substituting a
+    reference of 0 -- that would render a wrong image and report success,
+    exactly the class of defect this function's caller fixes."""
+    alpha_test = int(str(state.get("alpha_test", "0")), 0)
+    if alpha_test == 0:
+        return (0, 0.0)
+    if "alpha_ref" not in state:
+        raise SystemExit(
+            f"draw {ordinal}: alpha_test={alpha_test} but state has no "
+            f"alpha_ref; the fragment alpha-test switch "
+            f"(dxmt9_fs.replay.metal:308-320) requires a real reference "
+            f"value -- refusing to substitute 0 and render a silently wrong "
+            f"image"
+        )
+    alpha_ref = int(str(state.get("alpha_ref")), 0)
+    return (alpha_test, alpha_ref / 255.0)
+
+
 def pso_build_statement(index: int, shader_index: int,
                          blend_key: tuple[int, int, int, int, int, int, int, int]) -> str:
     """Emit the literal-valued PSO build block for one (shader, blend state)
@@ -1218,6 +1248,7 @@ def render_source(draws: list[dict[str, Any]],
         blend_index = blend_state_index(state)
         depth_index = depth_state_index(state)
         cull_value = draw_cull_mode(state)
+        alpha_test_value, alpha_ref_value = draw_fs_volatile(state, ordinal)
         pipeline_index = pso_combo_index(shader_index, blend_index)
         extra_stream_paths = ['""'] * 16
         extra_stream_slots = ["0"] * 16
@@ -1267,6 +1298,8 @@ def render_source(draws: list[dict[str, Any]],
                 str(int(state.get("scissor_t", 0))),
                 str(int(state.get("scissor_r", pass_width))),
                 str(int(state.get("scissor_b", pass_height))),
+                str(alpha_test_value),
+                f"{alpha_ref_value!r}f",
             ])
             + "}"
         )
@@ -1465,12 +1498,21 @@ struct DrawEntry {{
   unsigned scissorT;
   unsigned scissorR;
   unsigned scissorB;
+  unsigned alphaTest;
+  float alphaRef;
 }};
 
 struct DrawVolatile {{
   int vertexBaseIndex;
   unsigned vertexStreamOffset;
   unsigned vertexStreamStride;
+  unsigned pad;
+}};
+
+struct FsVolatile {{
+  unsigned alphaTest;
+  float alphaRef;
+  unsigned sampleMask;
   unsigned pad;
 }};
 
@@ -1930,6 +1972,7 @@ int main() {{
         if (draw.depthStateIndex >= depthStateTableCount) return 2;
         const ShaderEntry& shader = shaders[draw.shaderIndex];
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
+        FsVolatile fsv = {{draw.alphaTest, draw.alphaRef, 0xFFFFFFFFu, 0}};
         [encoder setScissorRect:scissorRect(draw, {pass_width}, {pass_height})];
         [encoder setRenderPipelineState:psos[draw.pipelineIndex]];
         [encoder setDepthStencilState:depthStates[draw.depthStateIndex]];
@@ -1939,6 +1982,7 @@ int main() {{
         [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];
         [encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:shader.psConstsSlot];
         [encoder setFragmentBuffer:drawFfpPs offset:0 atIndex:shader.ffpPsSlot];
+        [encoder setFragmentBytes:&fsv length:sizeof(fsv) atIndex:5];
         [encoder setVertexBuffer:stream offset:0 atIndex:1];
         for (unsigned s = 1; s < 16; ++s) {{
           if (extraStreams[s]) {{
