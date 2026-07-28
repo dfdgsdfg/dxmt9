@@ -309,7 +309,7 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("[encoder setFragmentSamplerState:sampler atIndex:0];", objc)
             self.assertIn("[encoder setFragmentSamplerState:sampler atIndex:3];", objc)
             self.assertIn("[encoder setVertexBuffer:extraStreams[s] offset:0 atIndex:draw.extraStreamSlots[s]];", objc)
-            self.assertIn("[encoder setRenderPipelineState:psos[draw.shaderIndex]];", objc)
+            self.assertIn("[encoder setRenderPipelineState:psos[draw.pipelineIndex]];", objc)
             self.assertIn("[encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];", objc)
             self.assertIn("[encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];", objc)
             self.assertIn("[encoder setFragmentBuffer:drawPsConsts offset:0 atIndex:shader.psConstsSlot];", objc)
@@ -317,11 +317,15 @@ class MiniReplayScriptTests(unittest.TestCase):
             self.assertIn("draw.vsconsts.bin", objc)
             self.assertIn("sourceRGBBlendFactor = blendFactor(5, false);", objc)
             self.assertIn("destinationRGBBlendFactor = blendFactor(6, false);", objc)
-            self.assertIn("sourceAlphaBlendFactor =\n        blendFactor(2, true);", objc)
-            self.assertIn("alphaBlendOperation =\n        blendOperation(3);", objc)
-            self.assertIn("depthStateDesc.depthCompareFunction =\n        1 ? compareFunction(4) : MTLCompareFunctionAlways;", objc)
+            self.assertIn("sourceAlphaBlendFactor = blendFactor(2, true);", objc)
+            self.assertIn("alphaBlendOperation = blendOperation(3);", objc)
+            self.assertIn("depthStateDesc.depthCompareFunction =\n          1 ? compareFunction(4) : MTLCompareFunctionAlways;", objc)
             self.assertIn("depthStateDesc.depthWriteEnabled = 0;", objc)
-            self.assertIn("[encoder setCullMode:cullMode(2)];", objc)
+            # cull is per-draw state now (see agents/rules on the collapse
+            # defect): the encoder reads draw.cullMode instead of a single
+            # literal baked from draws[0], so this pins the mechanism rather
+            # than one hardcoded value.
+            self.assertIn("[encoder setCullMode:cullMode(draw.cullMode)];", objc)
             self.assertIn("unsigned scissorEnabled;", objc)
 
     def test_texture_input_dir_generates_real_texture_binds(self) -> None:

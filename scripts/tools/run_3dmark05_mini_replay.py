@@ -825,6 +825,91 @@ def depth_bytes_per_pixel(format_value: int) -> int:
     return 4
 
 
+def draw_blend_state(state: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int]:
+    """The subset of per-draw state that feeds a Metal color-attachment blend
+    descriptor. Separate-alpha resolution is baked in here so the returned
+    tuple is exactly what the PSO needs -- two draws that differ only in
+    `separate_alpha` but resolve to the same effective factors share a PSO."""
+    alpha_blend = int(state.get("alpha_blend", 0))
+    src_blend = int(state.get("src_blend", 2))
+    dst_blend = int(state.get("dst_blend", 1))
+    blend_op = int(state.get("blend_op", 1))
+    separate_alpha = int(state.get("separate_alpha", 0))
+    src_blend_alpha = int(state.get("src_blend_alpha", src_blend))
+    dst_blend_alpha = int(state.get("dst_blend_alpha", dst_blend))
+    blend_op_alpha = int(state.get("blend_op_alpha", blend_op))
+    color_write = int(str(state.get("color_write", "0xf")), 0)
+    effective_src_alpha = src_blend_alpha if separate_alpha else src_blend
+    effective_dst_alpha = dst_blend_alpha if separate_alpha else dst_blend
+    effective_blend_op_alpha = blend_op_alpha if separate_alpha else blend_op
+    return (
+        color_write,
+        alpha_blend,
+        src_blend,
+        dst_blend,
+        blend_op,
+        effective_src_alpha,
+        effective_dst_alpha,
+        effective_blend_op_alpha,
+    )
+
+
+def draw_depth_state(state: dict[str, Any]) -> tuple[int, int, int]:
+    """The subset of per-draw state that feeds a Metal depth-stencil
+    descriptor: (depth_enabled, depth_write, depth_func)."""
+    depth_enabled = int(state.get("depth_enabled", 0))
+    depth_write = int(state.get("depth_write", 0))
+    depth_func = int(state.get("depth_func", 8 if not depth_enabled else 4))
+    return (depth_enabled, depth_write, depth_func)
+
+
+def draw_cull_mode(state: dict[str, Any]) -> int:
+    return int(state.get("cull", 1))
+
+
+def pso_build_statement(index: int, shader_index: int,
+                         blend_key: tuple[int, int, int, int, int, int, int, int]) -> str:
+    """Emit the literal-valued PSO build block for one (shader, blend state)
+    combo. Values are baked as C++ literals per combo -- not read from a
+    runtime table -- so distinct combos are visible as distinct
+    `colorWriteMask(N)` / `blendFactor(N, ...)` call sites in the generated
+    source, the same way the pre-fix single-PSO path baked draws[0]'s state."""
+    (color_write, alpha_blend, src_blend, dst_blend, blend_op,
+     effective_src_alpha, effective_dst_alpha, effective_blend_op_alpha) = blend_key
+    return f"""    psoDesc.colorAttachments[0].writeMask = colorWriteMask({color_write});
+    psoDesc.colorAttachments[0].blendingEnabled = {alpha_blend};
+    psoDesc.colorAttachments[0].sourceRGBBlendFactor = blendFactor({src_blend}, false);
+    psoDesc.colorAttachments[0].destinationRGBBlendFactor = blendFactor({dst_blend}, false);
+    psoDesc.colorAttachments[0].rgbBlendOperation = blendOperation({blend_op});
+    psoDesc.colorAttachments[0].sourceAlphaBlendFactor = blendFactor({effective_src_alpha}, true);
+    psoDesc.colorAttachments[0].destinationAlphaBlendFactor = blendFactor({effective_dst_alpha}, true);
+    psoDesc.colorAttachments[0].alphaBlendOperation = blendOperation({effective_blend_op_alpha});
+    psoDesc.vertexFunction = [vsLibs[{shader_index}] newFunctionWithName:@"dxmt9_vs"];
+    psoDesc.fragmentFunction = [fsLibs[{shader_index}] newFunctionWithName:@"dxmt9_fs"];
+    psos[{index}] = [device newRenderPipelineStateWithDescriptor:psoDesc error:&error];
+    if (!psos[{index}]) {{
+      std::cerr << "failed to create PSO {index}: "
+                << [[error localizedDescription] UTF8String] << "\\n";
+      return 2;
+    }}
+"""
+
+
+def depth_build_statement(index: int, depth_key: tuple[int, int, int]) -> str:
+    """Emit the literal-valued depth-stencil-state build block for one
+    distinct (depth_enabled, depth_write, depth_func) tuple."""
+    depth_enabled, depth_write, depth_func = depth_key
+    write_enabled = 1 if (depth_enabled and depth_write) else 0
+    return f"""    {{
+      MTLDepthStencilDescriptor* depthStateDesc = [MTLDepthStencilDescriptor new];
+      depthStateDesc.depthCompareFunction =
+          {depth_enabled} ? compareFunction({depth_func}) : MTLCompareFunctionAlways;
+      depthStateDesc.depthWriteEnabled = {write_enabled};
+      depthStates[{index}] = [device newDepthStencilStateWithDescriptor:depthStateDesc];
+    }}
+"""
+
+
 def metal_pixel_format_name(value: int) -> str:
     names = {
         10: "MTLPixelFormatR8Unorm",
@@ -941,25 +1026,6 @@ def render_source(draws: list[dict[str, Any]],
                   depth_input: Path | None,
                   texture_sidecars: list[dict[str, Any]],
                   texture_sidecar_by_key: dict[tuple[str, bool], int]) -> str:
-    first_state = draws[0]["state"]
-    alpha_blend = int(first_state.get("alpha_blend", 0))
-    src_blend = int(first_state.get("src_blend", 2))
-    dst_blend = int(first_state.get("dst_blend", 1))
-    blend_op = int(first_state.get("blend_op", 1))
-    separate_alpha = int(first_state.get("separate_alpha", 0))
-    src_blend_alpha = int(first_state.get("src_blend_alpha", src_blend))
-    dst_blend_alpha = int(first_state.get("dst_blend_alpha", dst_blend))
-    blend_op_alpha = int(first_state.get("blend_op_alpha", blend_op))
-    color_write = int(str(first_state.get("color_write", "0xf")), 0)
-    depth_enabled = int(first_state.get("depth_enabled", 0))
-    depth_write = int(first_state.get("depth_write", 0))
-    depth_func = int(first_state.get("depth_func", 8 if not depth_enabled else 4))
-    cull = int(first_state.get("cull", 1))
-    scissor = int(first_state.get("scissor", 0))
-    scissor_l = int(first_state.get("scissor_l", 0))
-    scissor_t = int(first_state.get("scissor_t", 0))
-    scissor_r = int(first_state.get("scissor_r", width))
-    scissor_b = int(first_state.get("scissor_b", height))
     color_attachment = first_color_attachment(draws)
     depth_attachment = first_depth_attachment(draws)
     color_format = color_pixel_format(int(color_attachment.get("format", 0)))
@@ -976,11 +1042,55 @@ def render_source(draws: list[dict[str, Any]],
     depth_byte_count = depth_row_bytes * pass_height
     depth_input_path = cxx_string(str(depth_input)) if depth_input else '""'
     depth_load_action = "MTLLoadActionLoad" if depth_input else "MTLLoadActionClear"
+    # Per-draw render state (blend/color-write, depth, cull) is deduplicated
+    # into small tables instead of being baked once from draws[0]: real
+    # captures mix depth-prepass draws (color_write=0x0) with color-writing
+    # draws (color_write=0xf) in the same encoder, and a single collapsed PSO
+    # silently masked every color-writing draw with the prepass mask.
+    blend_states: list[tuple[int, int, int, int, int, int, int, int]] = []
+    blend_state_index_by_key: dict[tuple[int, int, int, int, int, int, int, int], int] = {}
+    depth_states: list[tuple[int, int, int]] = []
+    depth_state_index_by_key: dict[tuple[int, int, int], int] = {}
+    pso_combos: list[tuple[int, int]] = []
+    pso_combo_index_by_key: dict[tuple[int, int], int] = {}
+
+    def blend_state_index(draw_state: dict[str, Any]) -> int:
+        key = draw_blend_state(draw_state)
+        index = blend_state_index_by_key.get(key)
+        if index is None:
+            index = len(blend_states)
+            blend_state_index_by_key[key] = index
+            blend_states.append(key)
+        return index
+
+    def depth_state_index(draw_state: dict[str, Any]) -> int:
+        key = draw_depth_state(draw_state)
+        index = depth_state_index_by_key.get(key)
+        if index is None:
+            index = len(depth_states)
+            depth_state_index_by_key[key] = index
+            depth_states.append(key)
+        return index
+
+    def pso_combo_index(shader_index: int, blend_index: int) -> int:
+        key = (shader_index, blend_index)
+        index = pso_combo_index_by_key.get(key)
+        if index is None:
+            index = len(pso_combos)
+            pso_combo_index_by_key[key] = index
+            pso_combos.append(key)
+        return index
+
     draw_entries = []
     for ordinal, draw in enumerate(draws):
         geometry = draw["geometry"]
         uniforms = draw.get("uniforms", {})
         state = draw["state"]
+        shader_index = int(draw.get("_shader_variant", 0))
+        blend_index = blend_state_index(state)
+        depth_index = depth_state_index(state)
+        cull_value = draw_cull_mode(state)
+        pipeline_index = pso_combo_index(shader_index, blend_index)
         extra_stream_paths = ['""'] * 16
         extra_stream_slots = ["0"] * 16
         fragment_texture_indices = [
@@ -1016,7 +1126,10 @@ def render_source(draws: list[dict[str, Any]],
                 "{" + ", ".join(extra_stream_paths) + "}",
                 "{" + ", ".join(extra_stream_slots) + "}",
                 "{" + ", ".join(fragment_texture_indices) + "}",
-                str(int(draw.get("_shader_variant", 0))),
+                str(shader_index),
+                str(pipeline_index),
+                str(depth_index),
+                str(cull_value),
                 str(int(state.get("index_count", 0))),
                 str(int(state.get("base_vertex", 0))),
                 str(int(state.get("stream0_stride", 0))),
@@ -1030,6 +1143,16 @@ def render_source(draws: list[dict[str, Any]],
             + "}"
         )
     draw_array = ",\n".join(draw_entries)
+    pso_combo_count = len(pso_combos)
+    pso_build_statements = "\n".join(
+        pso_build_statement(i, shader_index, blend_states[blend_index])
+        for i, (shader_index, blend_index) in enumerate(pso_combos)
+    )
+    depth_state_count = len(depth_states)
+    depth_build_statements = "\n".join(
+        depth_build_statement(i, depth_key)
+        for i, depth_key in enumerate(depth_states)
+    )
     shader_entries = ",\n".join(
         "  {"
         + ", ".join([
@@ -1202,6 +1325,9 @@ struct DrawEntry {{
   unsigned extraStreamSlots[16];
   int fragmentTextures[16];
   unsigned shaderIndex;
+  unsigned pipelineIndex;
+  unsigned depthStateIndex;
+  unsigned cullMode;
   unsigned indexCount;
   int baseVertex;
   unsigned streamStride;
@@ -1510,44 +1636,34 @@ int main() {{
                              textureSubresources)) {{
       return 2;
     }}
-    std::vector<id<MTLRenderPipelineState>> psos(shaderCount);
     std::vector<id<MTLLibrary>> vsLibs(shaderCount);
     std::vector<id<MTLLibrary>> fsLibs(shaderCount);
-
-    MTLRenderPipelineDescriptor* psoDesc = [MTLRenderPipelineDescriptor new];
-    psoDesc.colorAttachments[0].pixelFormat = {color_format};
-    psoDesc.colorAttachments[0].writeMask = colorWriteMask({color_write});
-    psoDesc.colorAttachments[0].blendingEnabled = {alpha_blend};
-    psoDesc.colorAttachments[0].sourceRGBBlendFactor = blendFactor({src_blend}, false);
-    psoDesc.colorAttachments[0].destinationRGBBlendFactor = blendFactor({dst_blend}, false);
-    psoDesc.colorAttachments[0].rgbBlendOperation = blendOperation({blend_op});
-    psoDesc.colorAttachments[0].sourceAlphaBlendFactor =
-        blendFactor({src_blend_alpha if separate_alpha else src_blend}, true);
-    psoDesc.colorAttachments[0].destinationAlphaBlendFactor =
-        blendFactor({dst_blend_alpha if separate_alpha else dst_blend}, true);
-    psoDesc.colorAttachments[0].alphaBlendOperation =
-        blendOperation({blend_op_alpha if separate_alpha else blend_op});
-    psoDesc.depthAttachmentPixelFormat = {depth_format};
-    psoDesc.stencilAttachmentPixelFormat = {stencil_format};
     NSError* error = nil;
     for (unsigned i = 0; i < shaderCount; ++i) {{
       vsLibs[i] = makeLibrary(device, shaders[i].vsPath);
       fsLibs[i] = makeLibrary(device, shaders[i].fsPath);
       if (!vsLibs[i] || !fsLibs[i]) return 2;
-      psoDesc.vertexFunction = [vsLibs[i] newFunctionWithName:@"dxmt9_vs"];
-      psoDesc.fragmentFunction = [fsLibs[i] newFunctionWithName:@"dxmt9_fs"];
-      psos[i] = [device newRenderPipelineStateWithDescriptor:psoDesc error:&error];
-      if (!psos[i]) {{
-        std::cerr << "failed to create PSO " << i << ": "
-                  << [[error localizedDescription] UTF8String] << "\\n";
-        return 2;
-      }}
     }}
-    MTLDepthStencilDescriptor* depthStateDesc = [MTLDepthStencilDescriptor new];
-    depthStateDesc.depthCompareFunction =
-        {depth_enabled} ? compareFunction({depth_func}) : MTLCompareFunctionAlways;
-    depthStateDesc.depthWriteEnabled = {1 if depth_enabled and depth_write else 0};
-    id<MTLDepthStencilState> depthState = [device newDepthStencilStateWithDescriptor:depthStateDesc];
+
+    // One PSO per distinct (shader, blend/color-write state) combination that
+    // actually occurs among the replayed draws (see draw_blend_state /
+    // pso_combo_index in run_3dmark05_mini_replay.py). Each combo's values
+    // are baked as literals below instead of coming from one descriptor
+    // mutated from draws[0]'s state, so a depth-prepass draw's
+    // color_write=0x0 no longer masks every other draw's color_write=0xf.
+    const unsigned psoComboCount = {pso_combo_count};
+    std::vector<id<MTLRenderPipelineState>> psos(psoComboCount);
+    MTLRenderPipelineDescriptor* psoDesc = [MTLRenderPipelineDescriptor new];
+    psoDesc.colorAttachments[0].pixelFormat = {color_format};
+    psoDesc.depthAttachmentPixelFormat = {depth_format};
+    psoDesc.stencilAttachmentPixelFormat = {stencil_format};
+{pso_build_statements}
+
+    // One MTLDepthStencilState per distinct (depth_enabled, depth_write,
+    // depth_func) tuple that actually occurs among the replayed draws.
+    const unsigned depthStateTableCount = {depth_state_count};
+    std::vector<id<MTLDepthStencilState>> depthStates(depthStateTableCount);
+{depth_build_statements}
 
     MTLTextureDescriptor* colorDesc =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:{color_format}
@@ -1645,8 +1761,6 @@ int main() {{
     pass.depthAttachment.clearDepth = {depth_clear:.9g};
 {stencil_pass_attachment.rstrip()}
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-    [encoder setDepthStencilState:depthState];
-    [encoder setCullMode:cullMode({cull})];
 {fragment_texture_binds}
 {fragment_sampler_binds}
 {vertex_texture_binds}
@@ -1684,10 +1798,14 @@ int main() {{
                                 length:[indexData length]
                                options:MTLResourceStorageModeShared];
         if (draw.shaderIndex >= shaderCount) return 2;
+        if (draw.pipelineIndex >= psoComboCount) return 2;
+        if (draw.depthStateIndex >= depthStateTableCount) return 2;
         const ShaderEntry& shader = shaders[draw.shaderIndex];
         DrawVolatile dv = {{draw.baseVertex, draw.streamOffset, draw.streamStride, 0}};
         [encoder setScissorRect:scissorRect(draw, {pass_width}, {pass_height})];
-        [encoder setRenderPipelineState:psos[draw.shaderIndex]];
+        [encoder setRenderPipelineState:psos[draw.pipelineIndex]];
+        [encoder setDepthStencilState:depthStates[draw.depthStateIndex]];
+        [encoder setCullMode:cullMode(draw.cullMode)];
 {per_draw_fragment_texture_binds}
         [encoder setVertexBuffer:drawVsConsts offset:0 atIndex:shader.vsConstsSlot];
         [encoder setVertexBuffer:drawFfpVs offset:0 atIndex:shader.ffpVsSlot];
