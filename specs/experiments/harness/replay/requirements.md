@@ -20,11 +20,14 @@ prefix `R-HARN-REPLAY-`.
 **This domain renders a valid image as of 2026-07-28.** It did not
 when these requirements were written; the six defects that blocked it
 are fixed, and this domain's own `spec.md` §7 records each one with
-its fix from the implementation side. Every requirement below still
-states the contract the domain must satisfy rather than asserting the
-domain meets it — two requirements remain unimplemented
-(R-HARN-REPLAY-2.3's resolved-format recording, and the parent
-R-HARN-3.1 output-validity self-assertion). Where today's source
+its fix from the implementation side. A seventh defect, found on
+2026-07-29, was not a rendering fault at all: the domain rendered
+correctly and reported a pixel-identical result that was read as
+proof of a shader-translator change the replay had never executed
+(§4, R-HARN-REPLAY-3.4). Every requirement below still states the
+contract the domain must satisfy rather than asserting the domain
+meets it — one requirement remains unimplemented
+(R-HARN-REPLAY-2.3's resolved-format recording). Where today's source
 violates a requirement, this file says so in the requirement's own
 rationale, and `specs/experiments/gap.md` tracks the shortfall.
 
@@ -150,18 +153,24 @@ Instantiates R-HARN-2.4.
 
 ## 4. Output Validity Self-Assertion
 
-**R-HARN-REPLAY-3.1** Before the standalone replay binary prints its
-`mini replay draws=<N> repeat=<R>` success line and exits 0, it asserts
-that the color output it wrote (when `--color-output`/
-`DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH` requested one) is non-degenerate
-— not a single distinct pixel value across the whole image — and exits
-non-zero if the assertion fails or cannot be executed. Instantiates
-R-HARN-3.1/3.3. Rationale (defect 4): every one of four replay lanes
-in the vertex-remap experiment printed `mini replay draws=229 repeat=1`
-and exited 0 while each wrote a 1024×768 PPM containing exactly one
-distinct pixel value (fully black). Nothing in the current binary
-asserts the image carries content before declaring success — this
-requirement exists precisely because the code has no such check today.
+**R-HARN-REPLAY-3.1** A `run_3dmark05_mini_replay.py --run` invocation
+that requested a color output (`--color-output`/
+`DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH`) must read that image back, must
+assert it is non-degenerate — more than one distinct RGB triple across
+the whole image — must record the measured distinct-value and
+non-background pixel counts in `mini-replay-summary.json` under
+`validity`, and must exit non-zero when the assertion fails or the
+image is missing, truncated, or otherwise unreadable. The threshold is
+exactly the degenerate case; this requirement must not be extended to a
+percentage-coverage gate, for which the domain has no evidence.
+Instantiates R-HARN-3.1/3.3. Rationale (defect 4): every one of four
+replay lanes in the vertex-remap experiment printed `mini replay
+draws=229 repeat=1` and exited 0 while each wrote a 1024×768 PPM
+containing exactly one distinct pixel value (fully black). The
+assertion is implemented in the harness wrapper rather than inside the
+generated binary, so a maintainer who runs the compiled
+`dxmt9-3dmark05-mini-replay` executable directly still sees the
+unguarded exit 0; `specs/experiments/gap.md` tracks that residue.
 
 **R-HARN-REPLAY-3.2** A `mini replay draws=<N> repeat=<R>` line plus
 exit code 0 must not, by itself, be treated by any downstream consumer
@@ -173,13 +182,58 @@ rationale that four identical black PPMs would also produce four
 identical digests, which a digest-only or exit-code-only gate would
 wrongly read as agreement.
 
-**R-HARN-REPLAY-3.3** For as long as R-HARN-REPLAY-3.1's assertion
-remains unimplemented, this domain's own `spec.md` §7 states that
-plainly — an unqualified reader of this domain's docs must not come
-away believing `exit 0` currently means "valid image." It still does
-not: the 2026-07-28 defect-4 fix removed the cause of one degenerate
-render but added no check that would catch the next one.
-Instantiates R-HARN-3.3.
+**R-HARN-REPLAY-3.3** This domain's own `spec.md` §7 must state
+plainly what the current code does and does not check — an unqualified
+reader of this domain's docs must not come away believing `exit 0`
+means "valid image" beyond what R-HARN-REPLAY-3.1's assertion
+actually establishes. Instantiates R-HARN-3.3. As of 2026-07-29 the
+harness does perform that assertion; before then it did not, and the
+2026-07-28 defect-4 fix had removed the cause of one degenerate render
+without adding any check that would catch the next one.
+
+**R-HARN-REPLAY-3.4** A pixel comparison produced by this domain
+certifies only the draw window the replayed manifest covers — the
+draws of a single encoder from a single captured frame — and must not
+be used as the correctness oracle for a shader-translator or codegen
+change unless the changed code path is separately shown to execute
+within that window. To make that judgement possible,
+`mini-replay-summary.json` must carry a `coverage` block naming the
+manifest rows and encoders replayed, the replayed draw count, the
+shader-variant count, and the number of replayed draws per
+`shaders.vs_hash` and per `shaders.ps_hash`, with the per-hash counts
+summing to the replayed draw count. Instantiates R-HARN-3.2/3.4.
+Rationale (defect 7): a translator change was validated by replaying
+GT1 frame60 encoder 1 with the new emission applied by hand, produced
+786,432 of 786,432 pixels identical to baseline, and was read as
+correct; under the real runtime the same emission made every skinned
+character in 3DMark05 GT1 disappear. Instrumenting the eight affected
+vertex shaders so that taking the branch under test collapses the
+vertex position still produced a byte-identical image — across 229
+draws and roughly 795,000 vertex invocations that branch never
+executed. The harness had reported nothing about which shaders the
+replay contained, so nothing distinguished "the change is correct"
+from "the change was never reached."
+
+**R-HARN-REPLAY-3.5** The non-degeneracy result required by
+R-HARN-REPLAY-3.1 and the coverage description required by
+R-HARN-REPLAY-3.4 are independent claims and must be recorded,
+reported, and consumed as independent claims. A `validity` pass must
+never be presented or read as evidence that the replay exercised any
+particular draw, shader, or code path, and a `coverage` block must
+never be presented or read as evidence that the rendered image is
+correct. Instantiates R-HARN-3.2/3.4. Rationale: defect 7's image was
+non-degenerate — 12,231 distinct RGB values over 784,476 of 786,432
+non-background pixels — and the shaders under test contributed only
+15,134 pixels, 1.9% of the frame, so a validity check alone would have
+passed the very run that produced the false negative.
+
+**R-HARN-REPLAY-3.6** The `validity` field required by
+R-HARN-REPLAY-3.1 must be present in `mini-replay-summary.json` for
+every invocation, including invocations that produced no image to
+assert on; in that case it must state that the assertion did not run
+and why, and must not carry a degeneracy verdict or measured pixel
+counts. A consumer must never have to infer a pass from an absent
+field. Instantiates R-HARN-3.2/3.3.
 
 ---
 

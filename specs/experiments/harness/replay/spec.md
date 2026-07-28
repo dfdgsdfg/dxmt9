@@ -347,10 +347,12 @@ gap-tracking convention.
 
 Five defects blocked a vertex-remap experiment run against this
 domain on 2026-07-25/27 (parent `requirements.md`'s introduction), and
-a sixth was found while debugging them. **All six are now fixed**, the
-last on 2026-07-28. They are the reason this domain's documents exist,
-and each is recorded below with its fix so a future reader can tell
-what the contract is protecting against.
+a sixth was found while debugging them. A seventh — a verification
+defect rather than a rendering one — was found on 2026-07-29 after the
+domain was already rendering correctly. **All seven are now fixed**,
+the last on 2026-07-29. They are the reason this domain's documents
+exist, and each is recorded below with its fix so a future reader can
+tell what the contract is protecting against.
 
 1. **Fixed in `12348666` (defect 2).** Sliced stream payloads
    double-counted `stream0_offset` as a payload-relative offset,
@@ -418,9 +420,9 @@ what the contract is protecting against.
    **What this defect cost is the reason R-HARN-3.1 exists.** The
    harness reported success on a degenerate artifact, so the failure
    had to be found by bisecting generated Metal source rather than
-   being reported. Fixing the cause does not prevent a recurrence;
-   `run_3dmark05_mini_replay.py` still performs no output-validity
-   self-assertion, which `specs/experiments/gap.md` tracks.
+   being reported. Fixing the cause did not prevent a recurrence; the
+   output-validity self-assertion that would catch the next one landed
+   separately, with defect 7 below.
 
 4. **Fixed in `fe673fd5` (defect 5) — the fragment-stage bisection
    tool did not compile, and against essentially all real captured
@@ -473,3 +475,73 @@ what the contract is protecting against.
    defect was found while debugging defect 4 and is not among the five
    in the parent `requirements.md` introduction; it is recorded here
    because the same no-silent-degradation contract covers it.
+
+6. **Fixed on 2026-07-29 (defect 7) — the harness reported neither
+   what it covered nor whether its output was valid, and a
+   pixel-identical result from it was read as proof of a codegen
+   change the replay had never executed.** A D3D9→MSL translator
+   change (`959c848c`, reverted in `65a2d769`, corrected in
+   `d63f7a65`) rewrote how relative constant reads overlay DEF
+   literals. It was validated by replaying the GT1 frame60 `enc1`
+   manifest through this domain with the new emission applied by hand:
+   786,432 of 786,432 pixels identical to baseline. That was read as
+   "the codegen is correct." It was not — under the real runtime the
+   same emission made every skinned character in 3DMark05 GT1
+   disappear, across six captured frames spanning 0:13–0:57 that
+   showed the environment rendering correctly with weapons floating
+   unheld and no human figure anywhere.
+
+   **The replay could not have caught it, and the reason is worth
+   stating exactly.** Instrumenting the eight affected vertex shaders
+   so that *taking the DEF-select branch* collapses the vertex
+   position produced an image byte-identical to baseline: across the
+   row's 229 draws and roughly 795,000 vertex invocations, the branch
+   under test was never executed. The verification was testing dead
+   code. The control proves the instrumentation was live — forcing the
+   same marker on unconditionally changed 15,134 pixels. Those same
+   eight shaders account for only those 15,134 pixels, **1.9% of the
+   frame**, so even a total failure of them would have been easy to
+   miss in a whole-image comparison. The harness reported none of
+   this: it printed `mini replay draws=229 repeat=1` and exited 0.
+
+   This is a verification-fidelity defect, not a rendering one. The
+   domain rendered exactly what it was asked to render; what was
+   missing was any statement of what that covered. The fix adds two
+   deliberately separate records to `mini-replay-summary.json`
+   (R-HARN-REPLAY-3.5):
+
+   - `coverage` (R-HARN-REPLAY-3.4) — the manifest rows and encoders
+     replayed, the replayed draw count, the shader-variant count, and
+     the per-`vs_hash`/per-`ps_hash` draw counts, which sum to the
+     draw count. For the GT1 frame60 `enc1` manifest this reports row
+     `60/1`, 229 draws, 17 shader variants, and the 17 vertex-shader
+     hashes with their draw counts — so a reader who changed a shader
+     can see whether it is present in the replay at all, and in how
+     many draws. `scope` states in the artifact that this is a
+     single-encoder slice of one frame and does not establish that any
+     branch executed.
+   - `validity` (R-HARN-REPLAY-3.1) — the color output is read back
+     after the run, its distinct RGB triples and non-background pixels
+     are counted, and a single-distinct-value image exits non-zero
+     with the counts recorded before the exit. The threshold is two
+     distinct values, a named constant; no percentage-coverage gate
+     was added because the degenerate case is the only failure shape
+     with evidence behind it (defect 4).
+
+   **`validity` must not be read as coverage.** Defect 7's own image
+   was thoroughly non-degenerate — 12,231 distinct RGB values over
+   784,476 of 786,432 non-background pixels — so the validity check
+   would have passed the exact run that produced the false negative.
+   It removes one specific way a comparison can be vacuous; it proves
+   nothing about what the replay reached. The two claims are kept
+   apart in the summary, in the message text, and in
+   R-HARN-REPLAY-3.5.
+
+   Verified end-to-end: the GT1 frame60 `enc1` manifest passes
+   validity (12,231 distinct values, 784,476 non-background) and
+   reports coverage naming row `60/1`, 229 draws, 17 shader variants;
+   the same manifest sliced to its 42 depth-only draws — which write
+   no colour — now exits 1 naming the degeneracy, where it previously
+   exited 0. The assertion lives in the harness wrapper, so running
+   the compiled `dxmt9-3dmark05-mini-replay` binary directly still
+   exits 0 unguarded; `specs/experiments/gap.md` tracks that residue.

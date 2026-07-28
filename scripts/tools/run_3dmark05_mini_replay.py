@@ -27,6 +27,52 @@ from analyze_shader_dumps import parse_vsout_fields, stage_in_read_fields
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MIN_CAPTURE_FREE_MB = 2048
+# An image carrying exactly one distinct RGB triple is degenerate: it holds no
+# information, so a pixel comparison against it is vacuous. This is the exact
+# shape of the defect fixed in `36a41ad5` -- four replay lanes each wrote a
+# 1024x768 PPM with one distinct pixel value, printed `mini replay draws=229
+# repeat=1`, and exited 0. Two distinct values is therefore the whole gate
+# (R-HARN-REPLAY-3.1). Deliberately no percentage-coverage threshold: the
+# degenerate case is the only failure shape this harness has evidence for, and
+# inventing a "at least N% non-background" rule would reject legitimate
+# small-window replays on no evidence at all.
+MIN_DISTINCT_RGB_VALUES = 2
+# The replay render pass clears to opaque black (MTLClearColorMake(0,0,0,1)),
+# so "non-background" means "not the clear colour" -- pixels some draw wrote.
+BACKGROUND_RGB = (0, 0, 0)
+# Bucket for manifest draws whose `shaders.vs_hash`/`ps_hash` is absent or
+# empty. Per-hash draw counts must sum to the replayed draw count, so an
+# unattributable draw gets a named bucket rather than being dropped.
+UNKNOWN_SHADER_HASH = "unknown"
+# What `validity` proves, stated in the artifact itself so a reader cannot
+# mistake it for a coverage claim. These are two independent facts: an image
+# can be richly non-degenerate while the code path under test never executed
+# once (defect 7).
+VALIDITY_CERTIFIES = (
+    "the written image is non-degenerate (more than one distinct RGB value); "
+    "this does not certify that the replay executed any particular code path "
+    "-- see the coverage block for what the replayed draw window contains"
+)
+VALIDITY_REASON_NOT_RUN = (
+    "the replay binary was not executed, so no image was produced to assert on "
+    "(pass --run together with --color-output)"
+)
+VALIDITY_REASON_NO_COLOR_OUTPUT = (
+    "no color output was requested, so no image was produced to assert on "
+    "(pass --color-output)"
+)
+# The replay renders one encoder's draw window from one frame. Stated in the
+# artifact because the absence of this sentence is what let a byte-identical
+# replay be read as a whole-frame correctness result (defect 7).
+COVERAGE_SCOPE = (
+    "single-encoder slice of one captured frame: only the draws this manifest "
+    "lists were replayed. This is not a frame-level or scene-level result, and "
+    "an image comparison over it certifies nothing about draws, shaders, or "
+    "code paths outside this window. It does not establish that any particular "
+    "branch or shader path executed -- consult draws_by_vs_hash to see whether "
+    "a changed shader is present at all, and instrument the path itself to "
+    "prove it executes."
+)
 VSOUT_RE = re.compile(r"struct\s+VSOut\s*\{(?P<body>.*?)\};", re.S)
 # dxmt9_fs is declared with one of three return shapes depending on which
 # emitter produced it: `FSOut` (every D3D9-bytecode-translated pixel shader --
@@ -2037,6 +2083,177 @@ int main() {{
 """
 
 
+def shader_hash_counts(replay_draws: list[dict[str, Any]], key: str) -> dict[str, int]:
+    """Count replayed draws per manifest shader hash.
+
+    Keyed by the manifest's own `shaders.vs_hash` / `shaders.ps_hash` strings so
+    a reader can match a changed shader against the replay by the same hash the
+    dump and the joined Xcode reports use. The counts must sum to the replayed
+    draw count, so a draw with no hash lands in UNKNOWN_SHADER_HASH rather than
+    disappearing.
+    """
+    counts: dict[str, int] = {}
+    for draw in replay_draws:
+        value = str(draw.get("shaders", {}).get(key, "") or "").strip()
+        counts[value or UNKNOWN_SHADER_HASH] = counts.get(value or UNKNOWN_SHADER_HASH, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def build_coverage(manifest: dict[str, Any],
+                   replay_draws: list[dict[str, Any]],
+                   draw_count: int,
+                   shader_variant_count: int) -> dict[str, Any]:
+    """Describe what this replay contains, so a pixel result can be read in scope.
+
+    This block makes no correctness claim. It answers only "what was in the
+    replay": which manifest rows and encoders, how many draws, and how many
+    draws use each vertex/pixel shader hash. A reader who changed a shader can
+    tell from `draws_by_vs_hash` whether that shader is present at all and in
+    how many draws -- the question nobody could answer when a byte-identical
+    replay was read as proof of a translator change that had, in fact, never
+    executed the branch under test (R-HARN-REPLAY-3.4).
+    """
+    manifest_summary = manifest.get("summary") or {}
+    rows = sorted({str(draw.get("row", "")) for draw in replay_draws if draw.get("row")})
+    encoders = sorted({
+        f"{draw.get('seq')}/{draw.get('encoder')}"
+        for draw in replay_draws
+        if draw.get("seq") is not None and draw.get("encoder") is not None
+    })
+    return {
+        "scope": COVERAGE_SCOPE,
+        # Reported by the manifest builder; None when the manifest carries no
+        # summary block, which must not be confused with "covers nothing".
+        "manifest_rows": manifest_summary.get("rows"),
+        "manifest_encoder_draw_min": manifest_summary.get("encoder_draw_min"),
+        "manifest_encoder_draw_max": manifest_summary.get("encoder_draw_max"),
+        "manifest_draw_count": manifest_summary.get("draw_count"),
+        # Observed in the draws actually materialized for this replay.
+        "rows": rows,
+        "encoders": encoders,
+        "draw_count": draw_count,
+        "shader_variant_count": shader_variant_count,
+        "draws_by_vs_hash": shader_hash_counts(replay_draws, "vs_hash"),
+        "draws_by_ps_hash": shader_hash_counts(replay_draws, "ps_hash"),
+    }
+
+
+def not_asserted_validity(reason: str) -> dict[str, Any]:
+    """A `validity` record for a run that produced no image to assert on.
+
+    `validity` is never omitted from the summary: an absent field would read as
+    a pass to any consumer that only checks for a failure marker.
+    """
+    return {"asserted": False, "reason": reason}
+
+
+def read_ppm_rgb(path: Path) -> tuple[int, int, bytes]:
+    """Read back the P6 PPM the replay binary wrote (see writePpm in the
+    generated source). Malformed or truncated output is a hard failure, not a
+    fallback -- same no-silent-degradation contract as color_pixel_format()."""
+    if not path.exists():
+        raise SystemExit(f"mini replay color output was not written: {path}")
+    data = path.read_bytes()
+    if not data.startswith(b"P6"):
+        raise SystemExit(
+            f"mini replay color output is not a P6 PPM: {path} "
+            f"(starts with {data[:2]!r})"
+        )
+    fields: list[bytes] = []
+    offset = 2
+    while len(fields) < 3:
+        while offset < len(data) and data[offset:offset + 1].isspace():
+            offset += 1
+        if offset < len(data) and data[offset:offset + 1] == b"#":
+            while offset < len(data) and data[offset:offset + 1] != b"\n":
+                offset += 1
+            continue
+        start = offset
+        while offset < len(data) and not data[offset:offset + 1].isspace():
+            offset += 1
+        if offset == start:
+            raise SystemExit(f"mini replay color output has a truncated PPM header: {path}")
+        fields.append(data[start:offset])
+    offset += 1  # single whitespace byte terminating the maxval field
+    try:
+        width, height, maxval = (int(field) for field in fields)
+    except ValueError as exc:
+        raise SystemExit(
+            f"mini replay color output has a malformed PPM header: {path} ({fields!r})"
+        ) from exc
+    if maxval != 255:
+        raise SystemExit(
+            f"mini replay color output has unsupported PPM maxval {maxval}: {path}"
+        )
+    body = data[offset:]
+    expected = width * height * 3
+    if len(body) != expected:
+        raise SystemExit(
+            f"mini replay color output is truncated: {path} carries {len(body)} "
+            f"pixel bytes, expected {expected} for {width}x{height}"
+        )
+    return width, height, body
+
+
+def assess_color_output(path: Path) -> dict[str, Any]:
+    """Assert the written image is non-degenerate and report what was measured.
+
+    Counts distinct RGB triples and non-background pixels. It proves only that
+    the image carries more than one value; it says nothing about whether the
+    replay covered the code under test. Those are separate claims and the
+    returned record keeps them separate (see VALIDITY_CERTIFIES).
+    """
+    width, height, body = read_ppm_rgb(path)
+    background = bytes(BACKGROUND_RGB)
+    distinct: set[bytes] = set()
+    non_background = 0
+    for index in range(0, len(body), 3):
+        pixel = body[index:index + 3]
+        distinct.add(pixel)
+        if pixel != background:
+            non_background += 1
+    return {
+        "asserted": True,
+        "color_output": str(path),
+        "width": width,
+        "height": height,
+        "pixel_count": width * height,
+        "distinct_rgb_values": len(distinct),
+        "non_background_pixels": non_background,
+        "background_rgb": list(BACKGROUND_RGB),
+        "min_distinct_rgb_values": MIN_DISTINCT_RGB_VALUES,
+        "degenerate": len(distinct) < MIN_DISTINCT_RGB_VALUES,
+        "certifies": VALIDITY_CERTIFIES,
+    }
+
+
+def degenerate_message(validity: dict[str, Any]) -> str:
+    return (
+        f"mini replay color output is degenerate: {validity['color_output']} "
+        f"carries {validity['distinct_rgb_values']} distinct RGB value across "
+        f"{validity['pixel_count']} pixels "
+        f"({validity['non_background_pixels']} non-background), require at "
+        f"least {validity['min_distinct_rgb_values']}. An image with one value "
+        f"holds no information, so any pixel comparison against it is vacuous; "
+        f"this is the all-black failure shape fixed in 36a41ad5"
+    )
+
+
+def enforce_color_output_validity(validity: dict[str, Any]) -> None:
+    """Exit non-zero on a degenerate image (R-HARN-REPLAY-3.1).
+
+    A pass here is not evidence of coverage; it only removes the degenerate
+    case from the set of things a comparison could be silently reading.
+    """
+    if validity.get("degenerate"):
+        raise SystemExit(degenerate_message(validity))
+
+
+def write_summary(summary: dict[str, Any], output_dir: Path) -> None:
+    (output_dir / "mini-replay-summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     manifest = load_manifest(args.manifest)
     draws = manifest["draws"]
@@ -2193,8 +2410,20 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "all_vs_bindings": all_vs_bindings,
         "all_fs_bindings": all_fs_bindings,
     }
-    (args.output_dir / "mini-replay-summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    # Coverage answers "what did this replay contain"; validity answers "is the
+    # image it wrote non-degenerate". They are recorded as two separate fields
+    # because neither implies the other.
+    summary["coverage"] = build_coverage(
+        manifest,
+        replay_draws,
+        summary["draw_count"],
+        summary["shader_variant_count"],
+    )
+    summary["validity"] = not_asserted_validity(
+        VALIDITY_REASON_NO_COLOR_OUTPUT if args.color_output is None
+        else VALIDITY_REASON_NOT_RUN
+    )
+    write_summary(summary, args.output_dir)
     return summary
 
 
@@ -2244,7 +2473,14 @@ def check_capture_free_space(capture_path: Path, min_free_mb: int) -> None:
 def run_binary(summary: dict[str, Any],
                repeat: int,
                capture_path: Path | None,
-               color_output: Path | None) -> None:
+               color_output: Path | None) -> dict[str, Any]:
+    """Run the replay binary and return the `validity` record for its output.
+
+    A zero exit from the binary is not by itself evidence that the render
+    produced anything (R-HARN-REPLAY-3.2): it printed `mini replay draws=229
+    repeat=1` for four fully black images. When a color output was requested,
+    the artifact itself is read back and asserted.
+    """
     env = os.environ.copy()
     env["DXMT9_MINI_REPLAY_REPEAT"] = str(repeat)
     if capture_path is not None:
@@ -2254,6 +2490,9 @@ def run_binary(summary: dict[str, Any],
         color_output.parent.mkdir(parents=True, exist_ok=True)
         env["DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH"] = str(color_output)
     subprocess.run([summary["binary"]], check=True, env=env)
+    if color_output is None:
+        return not_asserted_validity(VALIDITY_REASON_NO_COLOR_OUTPUT)
+    return assess_color_output(color_output)
 
 
 def main() -> int:
@@ -2375,7 +2614,12 @@ def main() -> int:
     if args.compile or args.run:
         compile_source(summary)
     if args.run:
-        run_binary(summary, args.repeat, args.capture_path, args.color_output)
+        summary["validity"] = run_binary(
+            summary, args.repeat, args.capture_path, args.color_output)
+        # Record the result before enforcing it, so a degenerate run leaves the
+        # measured numbers behind rather than only an error message.
+        write_summary(summary, args.output_dir)
+        enforce_color_output_validity(summary["validity"])
     return 0
 
 

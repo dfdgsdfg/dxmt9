@@ -202,3 +202,8 @@ test('dxmt9-mini-replay-fs-volatile', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-mini-replay-coverage-validity', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_mini_replay_coverage_validity.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
