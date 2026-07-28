@@ -20,12 +20,12 @@ is cited below, not restated.
 **This domain renders a valid image as of 2026-07-28** (§7, Defect
 History). It did not when this document was first written; the six
 defects that blocked it are all fixed, and §7 records each one and its
-fix. Every section below states this domain's intended contract. Where
-current source still violates that contract — the output-validity
-self-assertion and the resolved attachment formats in
-`mini-replay-summary.json` both remain unimplemented — this file says
-so explicitly in the section concerned, and `specs/experiments/gap.md`
-tracks the shortfall.
+fix. A seventh — a verification-fidelity defect, not a rendering one —
+was found on 2026-07-29 and is recorded there too. Every section below
+states this domain's intended contract. Where current source still
+violates that contract — the 32-bit index-width rejection of §6.3
+remains unimplemented — this file says so explicitly in the section
+concerned, and `specs/experiments/gap.md` tracks the shortfall.
 
 Facts in this document were verified against
 `scripts/tools/run_3dmark05_mini_replay.py` (2,093 lines) and
@@ -102,8 +102,9 @@ and that `index_bytes`/`stream0_bytes` are positive, and for any
 present cbuf kind, that its file exists — each failure raises
 `SystemExit` naming the draw index and the missing key or path. This
 is the domain's existing R-HARN-2.1-compliant behavior for payload
-presence; it does not check payload *content* (§5, R-HARN-REPLAY-3.1's
-gap is downstream of this check, not covered by it).
+presence; it does not check payload *content* — R-HARN-REPLAY-3.1's
+output-validity assertion is downstream of this check, not covered by
+it.
 
 ---
 
@@ -151,17 +152,23 @@ correct behavior, not as a deviation.
 
 ## 4. Mode Table
 
-`run_3dmark05_mini_replay.py --help` enumerates 18 `--`-prefixed
-option lines as of 2026-07-27:
+`run_3dmark05_mini_replay.py --help` enumerates 19 `--`-prefixed
+option lines as of 2026-07-29:
 
 ```
-$ python3 scripts/tools/run_3dmark05_mini_replay.py --help | grep -oE '^\s+--[a-z-]+' | sort -u | wc -l
-18
+$ python3 scripts/tools/run_3dmark05_mini_replay.py --help | grep -oE '^  --[a-z-]+' | sort -u | wc -l
+19
 ```
+
+The anchor is exactly the two spaces argparse indents an option line
+with. The looser `'^\s+--[a-z-]+'` this section used while the count
+was 18 also matches a wrapped help-text continuation line that happens
+to begin with a flag name, which `--prove-executed`'s help does, so it
+over-counts.
 
 Per R-HARN-REPLAY-6.1, every one of them alters this domain's output —
 the generated Objective-C++ replay source, the compiled binary's
-runtime behavior, or a written artifact — so all 18 are tabled below;
+runtime behavior, or a written artifact — so all 19 are tabled below;
 there is no exception bucket comparable to the `probe` domain's §7.2/
 §7.2b (this script has no finalizer-passthrough flags and no flags
 that set nothing).
@@ -186,6 +193,7 @@ that set nothing).
 | `--capture-path` | Forwarded as `DXMT9_MINI_REPLAY_CAPTURE_PATH` (plus `MTL_CAPTURE_ENABLED=1`) to the replay binary's own subprocess environment when `--run` is also given; gated by `--min-capture-free-mb`'s free-space check (`check_capture_free_space()`, lines 1940-1951) before the binary is invoked. |
 | `--color-output` | Forwarded as `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH`; the binary blit-reads the color attachment back to a buffer and writes a PPM image (`writePpm()`, generated source lines ~1238-1263). |
 | `--min-capture-free-mb` | Free-space guard (MiB) checked before `--capture-path` is used when `--run` is given; default `2048`, overridable by `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB` (`parse_min_capture_free_mb()`, lines 1928-1937). |
+| `--prove-executed` | `'REGEX=>REPLACEMENT'`. Prepares a second, mutated shader tree and replay binary under `<output-dir>/execution-proof/`, replays it, compares the two images, writes `execution_proof` into the summary, and exits non-zero on either failing verdict (§7, defect 7; R-HARN-REPLAY-3.8). Requires `--run` and `--color-output`. A pattern that matches no site is decided from the generated sources before anything is compiled, and is reported as `not-present`, never as an execution verdict. |
 
 `build_3dmark05_mini_replay_manifest.py`'s own filter flags
 (`--row`, `--vs`, `--ps`, `--payload-selection`,
@@ -207,7 +215,7 @@ by the table above.
 |---|---|---|---|
 | `DXMT9_MINI_REPLAY_REPEAT` | `run_binary()` from `--repeat`, in the subprocess environment | Generated replay binary (`std::getenv`, generated source ~line 1621) | Number of times to re-issue every draw in the single render encoder. Default `1` when unset/unparseable (`std::max(1, std::atoi(env))`). |
 | `DXMT9_MINI_REPLAY_CAPTURE_PATH` | `run_binary()` from `--capture-path`, only when non-`None` | Generated replay binary, to configure a `MTLCaptureDescriptor` with `MTLCaptureDestinationGPUTraceDocument` | Output path for a `.gputrace` capture of the single replayed command buffer. |
-| `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH` | `run_binary()` from `--color-output`, only when non-`None` | Generated replay binary, to gate the color-attachment blit-readback and `writePpm()` call | Output path for the replayed color attachment as a PPM image. |
+| `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH` | `run_binary()` from `--color-output`, only when non-`None` | Generated replay binary, to gate the color-attachment blit-readback, the `writePpm()` call, and the binary's own degenerate-image check (§7, R-HARN-REPLAY-3.7) | Output path for the replayed color attachment as a PPM image. |
 | `DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB` | Caller's process environment (this domain never sets it into a subprocess) | `run_3dmark05_mini_replay.py`'s own argument parser, as the default source for `--min-capture-free-mb` (line 2073) | Overrides the free-space guard threshold without requiring `--min-capture-free-mb` on every invocation. |
 
 These four are documented identically in
@@ -370,9 +378,16 @@ tell what the contract is protecting against.
    the identical shape for depth formats outside `{40, 41, 49, 42,
    46}` (R-HARN-REPLAY-2.1). Both now fail loudly on an unrecognized
    value instead of substituting a fallback, which is what
-   R-HARN-2.1's no-silent-degradation contract requires. Recording the
-   *resolved* format in `mini-replay-summary.json` (R-HARN-REPLAY-2.3)
-   remains unimplemented and is tracked in `specs/experiments/gap.md`.
+   R-HARN-2.1's no-silent-degradation contract requires. The
+   *resolved* formats are now recorded in `mini-replay-summary.json`
+   under `attachment_formats` (R-HARN-REPLAY-2.3) — each
+   `MTLPixelFormat` name beside the `core::Format` ordinal it came
+   from, the attachment dimensions, and whether it came from a
+   declared attachment or the legacy no-`attachments` default.
+   `resolve_attachment_formats()` is the single resolution:
+   `render_source()` bakes into the generated `.mm` the same record
+   `prepare()` writes to the summary, so the artifact cannot name a
+   format the replay did not render with.
 
 3. **Fixed in `36a41ad5` (defect 4) — every replay lane rendered
    fully black.** All four lanes captured during the vertex-remap
@@ -506,7 +521,7 @@ tell what the contract is protecting against.
 
    This is a verification-fidelity defect, not a rendering one. The
    domain rendered exactly what it was asked to render; what was
-   missing was any statement of what that covered. The fix adds two
+   missing was any statement of what that covered. The fix adds three
    deliberately separate records to `mini-replay-summary.json`
    (R-HARN-REPLAY-3.5):
 
@@ -527,6 +542,18 @@ tell what the contract is protecting against.
      distinct values, a named constant; no percentage-coverage gate
      was added because the degenerate case is the only failure shape
      with evidence behind it (defect 4).
+   - `execution_proof` (R-HARN-REPLAY-3.8) — present only when
+     `--prove-executed` was passed, because proving execution costs a
+     second replay and needs a pattern only the maintainer testing a
+     specific change can write. It carries the substitution, the
+     scanned/mutated file counts, the site count, the differing-pixel
+     count, and one of three named verdicts.
+
+   **`validity` must not be read as coverage, and `coverage` must not
+   be read as execution.** Containment is what `coverage` answers:
+   defect 7's replay contained all eight affected vertex shaders and
+   still never took the branch. Execution is what `execution_proof`
+   answers, and only when asked.
 
    **`validity` must not be read as coverage.** Defect 7's own image
    was thoroughly non-degenerate — 12,231 distinct RGB values over
@@ -542,6 +569,60 @@ tell what the contract is protecting against.
    reports coverage naming row `60/1`, 229 draws, 17 shader variants;
    the same manifest sliced to its 42 depth-only draws — which write
    no colour — now exits 1 naming the degeneracy, where it previously
-   exited 0. The assertion lives in the harness wrapper, so running
-   the compiled `dxmt9-3dmark05-mini-replay` binary directly still
-   exits 0 unguarded; `specs/experiments/gap.md` tracks that residue.
+   exited 0.
+
+   **The generated program now carries the same gate**
+   (R-HARN-REPLAY-3.7). It counts distinct RGB triples in the readback
+   buffer `writePpm` just wrote from, prints `distinct_rgb=<n>` on the
+   `mini replay draws=<N> repeat=<R>` line, and returns
+   `REPLAY_DEGENERATE_EXIT_STATUS` (3) with the wrapper's own wording
+   when the count is below `MIN_DISTINCT_RGB_VALUES`. The threshold is
+   interpolated into the generated source from that one Python
+   constant, so the two sides cannot drift. The status is a dedicated
+   value rather than a generic failure so `run_binary()` can tell "the
+   replay rendered a degenerate image" apart from "the replay failed"
+   and carry the former through to the wrapper's assertion, which
+   remains the only side that records `validity` and diagnoses a
+   missing, truncated, or unreadable image. Verified: the 42
+   depth-only-draw slice, invoked as
+   `DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH=... ./dxmt9-3dmark05-mini-replay`
+   with no wrapper, prints `mini replay draws=42 repeat=1
+   distinct_rgb=1` and exits 3; the full `enc1` manifest prints
+   `distinct_rgb=12231` and exits 0.
+
+   **`--prove-executed` answers the execution half**
+   (R-HARN-REPLAY-3.8). `coverage` says the changed shader is in the
+   replay; only a mutation says the replay reaches it. Given
+   `'REGEX=>REPLACEMENT'`, the harness prepares a second shader tree
+   under `<output-dir>/execution-proof/` with `re.sub` applied to every
+   generated `.metal` source, replays it, and compares the two images.
+   Verdicts, and why they are three and not two:
+
+   | Verdict | Meaning | Exit |
+   |---|---|---|
+   | `not-present` | the substitution matched no site — wrong pattern, or the construct is absent from these dumped shaders. **Not an execution verdict** | non-zero, decided from the generated sources before anything is compiled |
+   | `present-but-not-executed` | matched sites, byte-identical image. Defect 7's exact shape | non-zero |
+   | `executed` | matched sites, image moved | zero |
+
+   Verified against defect 7's own manifest. The dumped GT1 frame60
+   `enc1` shaders predate `d63f7a65`'s emission, so the literal
+   `dxmt9_cdef<N> : ` pattern reports `not-present` — 0 sites across
+   34 generated sources — which is the correct answer and not
+   `not-executed`. Reconstructing the DEF select over the same
+   inputs those dumps do carry (`cFloat[196] = float4(3.0f, ...)`
+   overlays and `cFloat[clamp(a0.x + N, 0, 255)]` relative reads, in
+   exactly eight vertex shaders) reproduces the defect: substituting
+   the select's marker branch matches 48 sites in 8 of 34 sources and
+   changes **0 of 786,432 pixels** — the branch is never taken. The
+   unconditional-marker control over the same 48 sites changes
+   **15,134 pixels**, independently reproducing the figure the original
+   hand investigation measured, so the instrumentation is live and
+   those eight shaders own 1.9% of the frame.
+
+   The interface is a raw regex over emitted MSL with no shader
+   awareness, which is the right shape for a maintainer testing a
+   codegen change but is sharp: it matches inside comments and
+   substrings, and a replacement that does not compile fails at
+   compile time. The `sites` / `files_mutated` / `files_scanned`
+   counts in `execution_proof` are what make a verdict checkable, and
+   the flag's help text says so.

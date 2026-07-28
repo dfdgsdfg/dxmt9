@@ -32,12 +32,15 @@ the run exited 0. Only that case is gated; no percentage-coverage gate is
 claimed because degeneracy is the only failure shape with evidence behind it.
 """
 
+import contextlib
+import io
 import json
 import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -406,6 +409,102 @@ class DegenerateExitCodeTest(unittest.TestCase):
             write_ppm(path, 8, 4, lambda x, y: (x * 8, y * 8, 0))
             result = self._enforce_in_child(path)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class GeneratedProgramValidityGuardTest(unittest.TestCase):
+    """The same degenerate-image gate must live inside the generated program.
+
+    The wrapper's assertion only covers `run_3dmark05_mini_replay.py --run`; a
+    maintainer who invokes the compiled `dxmt9-3dmark05-mini-replay` binary
+    directly used to get the historical `mini replay draws=<N> repeat=<R>` and
+    exit 0 on a fully black image. There must be one contract, not two, and the
+    threshold must come from `MIN_DISTINCT_RGB_VALUES` rather than being
+    written out a second time where it can drift.
+    """
+
+    def _generated_source(self, root: Path) -> str:
+        manifest_path = write_manifest(root)
+        output_dir = root / "out"
+        result = run_cli(manifest_path, output_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+            encoding="utf-8")
+
+    def test_summary_line_carries_the_distinct_value_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._generated_source(Path(tmp))
+            self.assertIn("mini replay draws=", source)
+            self.assertIn("distinct_rgb=", source)
+
+    def test_generated_program_returns_non_zero_below_the_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._generated_source(Path(tmp))
+            self.assertIn(
+                f"< {mini.MIN_DISTINCT_RGB_VALUES}u", source)
+            self.assertIn(
+                f"return {mini.REPLAY_DEGENERATE_EXIT_STATUS};", source)
+
+    def test_generated_message_names_path_count_and_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = self._generated_source(Path(tmp))
+            # Same wording as degenerate_message(), so a reader of either the
+            # binary's stderr or the wrapper's sees one contract.
+            self.assertIn("mini replay color output is degenerate:", source)
+            self.assertIn("distinct RGB value across", source)
+            self.assertIn("require at least", source)
+            self.assertIn("colorOutputPath", source)
+
+    def test_threshold_is_emitted_from_the_shared_constant(self):
+        """Proves the emitted threshold is `MIN_DISTINCT_RGB_VALUES` and not a
+        second hardcoded literal: changing the constant must change the
+        generated check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = write_manifest(root)
+            output_dir = root / "out"
+            argv = [str(SCRIPT), str(manifest_path), "--output-dir", str(output_dir)]
+            with unittest.mock.patch.object(mini, "MIN_DISTINCT_RGB_VALUES", 7), \
+                    unittest.mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mini.main(), 0)
+            source = (output_dir / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                encoding="utf-8")
+            self.assertIn("< 7u", source)
+            self.assertNotIn("< 2u", source)
+
+
+class RunBinaryExitStatusTest(unittest.TestCase):
+    """The binary's own degenerate exit must not turn the wrapper's diagnostic
+    into a subprocess traceback -- the wrapper still owns the message, because
+    it is the only side that can also record `validity`."""
+
+    def _fake_binary(self, root: Path, body: str) -> Path:
+        path = root / "fake-replay"
+        path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def test_degenerate_exit_status_is_carried_to_the_wrapper_assertion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            color = root / "out.bin"
+            write_ppm(color, 8, 4, lambda x, y: (0, 0, 0))
+            binary = self._fake_binary(
+                root, f"exit {mini.REPLAY_DEGENERATE_EXIT_STATUS}\n")
+            validity = mini.run_binary({"binary": str(binary)}, 1, None, color)
+            self.assertTrue(validity["degenerate"])
+            with self.assertRaises(SystemExit) as ctx:
+                mini.enforce_color_output_validity(validity)
+            self.assertIn("degenerate", str(ctx.exception).lower())
+
+    def test_any_other_non_zero_exit_still_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            color = root / "out.bin"
+            binary = self._fake_binary(root, "exit 2\n")
+            with self.assertRaises(SystemExit) as ctx:
+                mini.run_binary({"binary": str(binary)}, 1, None, color)
+            self.assertIn("2", str(ctx.exception))
 
 
 class ValidityNotAssertedTest(unittest.TestCase):

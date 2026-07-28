@@ -24,12 +24,13 @@ its fix from the implementation side. A seventh defect, found on
 2026-07-29, was not a rendering fault at all: the domain rendered
 correctly and reported a pixel-identical result that was read as
 proof of a shader-translator change the replay had never executed
-(§4, R-HARN-REPLAY-3.4). Every requirement below still states the
-contract the domain must satisfy rather than asserting the domain
-meets it — one requirement remains unimplemented
-(R-HARN-REPLAY-2.3's resolved-format recording). Where today's source
-violates a requirement, this file says so in the requirement's own
-rationale, and `specs/experiments/gap.md` tracks the shortfall.
+(§4, R-HARN-REPLAY-3.4). Its containment half is answered by
+`coverage`; its execution half is answered by R-HARN-REPLAY-3.8's
+mutation check, which generalizes the hand technique that found the
+defect. Every requirement below still states the contract the domain
+must satisfy rather than asserting the domain meets it. Where today's
+source violates a requirement, this file says so in the requirement's
+own rationale, and `specs/experiments/gap.md` tracks the shortfall.
 
 ---
 
@@ -140,14 +141,14 @@ actually resolves for a replay run must be recorded — in
 `mini-replay-summary.json` today, or the artifact envelope once
 adopted for this domain (parent spec.md §3) — so a downstream reader
 can see which format was selected
-without re-deriving it from the manifest's raw `format` integer. This
-is intended contract, not current behavior: `prepare()`'s `summary`
-dict, the one written to `mini-replay-summary.json`, does not
-currently carry a resolved `color_format`/`depth_format` key —
-`color_pixel_format()`/`depth_pixel_format()`'s return values are
-consumed only locally inside `render_source()` to bake into the
-generated `.mm` source and are never written back to `summary`.
-Instantiates R-HARN-2.4.
+without re-deriving it from the manifest's raw `format` integer. The
+record must name each resolved `MTLPixelFormat` beside the
+`core::Format` ordinal it was resolved from, so the mapping itself is
+auditable and not only its result, and must state when a format came
+from the legacy no-`attachments` default rather than from a declared
+`core::Format`. The generated program and the recorded value must
+come from one resolution, so the artifact can never name a format the
+replay did not render with. Instantiates R-HARN-2.4.
 
 ---
 
@@ -167,10 +168,9 @@ Instantiates R-HARN-3.1/3.3. Rationale (defect 4): every one of four
 replay lanes in the vertex-remap experiment printed `mini replay
 draws=229 repeat=1` and exited 0 while each wrote a 1024×768 PPM
 containing exactly one distinct pixel value (fully black). The
-assertion is implemented in the harness wrapper rather than inside the
-generated binary, so a maintainer who runs the compiled
-`dxmt9-3dmark05-mini-replay` executable directly still sees the
-unguarded exit 0; `specs/experiments/gap.md` tracks that residue.
+generated program applies the same threshold to the same image
+(R-HARN-REPLAY-3.7), so the guarantee does not depend on which of the
+two entry points a maintainer used.
 
 **R-HARN-REPLAY-3.2** A `mini replay draws=<N> repeat=<R>` line plus
 exit code 0 must not, by itself, be treated by any downstream consumer
@@ -234,6 +234,57 @@ assert on; in that case it must state that the assertion did not run
 and why, and must not carry a degeneracy verdict or measured pixel
 counts. A consumer must never have to infer a pass from an absent
 field. Instantiates R-HARN-3.2/3.3.
+
+**R-HARN-REPLAY-3.7** The replay program this domain generates must
+apply R-HARN-REPLAY-3.1's threshold to the image it just wrote: it
+must print the measured distinct-value count on its own summary line,
+and must exit non-zero — naming the output path, the measured count,
+and the threshold — when the count is below it. The threshold must be
+emitted into the generated source from the same single constant the
+wrapper assertion uses, so the two can never disagree. This closes the
+guarantee for a maintainer who invokes the compiled
+`dxmt9-3dmark05-mini-replay` executable directly rather than through
+the wrapper, which is the only documented path and was therefore the
+only guarded one. The wrapper's assertion is not made redundant by
+this and must remain: it is the only side that can also record
+`validity` in the artifact (R-HARN-REPLAY-3.6) and diagnose the
+missing, truncated, or otherwise unreadable image. The generated
+program's degenerate exit status must therefore be distinguishable
+from a replay failure, and the wrapper must carry it through to its
+own assertion rather than surfacing it as an opaque subprocess error.
+Instantiates R-HARN-3.1/3.3.
+
+**R-HARN-REPLAY-3.8** This domain must provide an opt-in check that
+answers whether the replay *executes* a named construct, distinct from
+the containment question R-HARN-REPLAY-3.4's `coverage` block answers.
+Given a source-text substitution over the shader sources it generates,
+the harness must replay both the unmutated and the mutated sources and
+must exit non-zero when the two images are identical, because an
+identical image proves the mutated construct was never executed by
+this replay. It must report, in `mini-replay-summary.json` under
+`execution_proof`, the substitution, how many generated shader sources
+were scanned and mutated, how many sites were substituted, the
+differing-pixel count, and a named verdict.
+
+Two failing outcomes must be reported as distinct verdicts and
+distinct messages, never collapsed:
+
+- **not present** — the substitution matched no site. This is not an
+  execution verdict; the construct is absent from the replayed shaders
+  or the pattern is wrong, and the run establishes nothing about
+  whether the construct would execute.
+- **present but not executed** — the substitution matched sites and
+  the images are identical. The construct is present and this replay
+  never reaches it.
+
+Instantiates R-HARN-3.2/3.4. Rationale (defect 7): the technique that
+found the defect was exactly this substitution, applied by hand —
+collapsing the vertex position on the branch under test produced a
+byte-identical image, with an unconditional-marker control proving the
+instrumentation was live. Nothing in the harness supported it, so the
+judgement depended on a maintainer thinking to do it. A harness that
+reports success without establishing that it ran the code under test
+is worse than no harness, because it is believed.
 
 ---
 

@@ -37,6 +37,14 @@ DEFAULT_MIN_CAPTURE_FREE_MB = 2048
 # inventing a "at least N% non-background" rule would reject legitimate
 # small-window replays on no evidence at all.
 MIN_DISTINCT_RGB_VALUES = 2
+# Exit status the *generated* program returns for that same degenerate case, so
+# a maintainer running `dxmt9-3dmark05-mini-replay` directly is guarded too and
+# not only through this wrapper's `--run` path. It is a distinct status rather
+# than a generic failure so `run_binary()` can tell "the replay rendered, and
+# the image is degenerate" apart from "the replay itself failed": the former is
+# reported by the wrapper's own assertion, which is the only side that can also
+# record the measured counts in `validity`.
+REPLAY_DEGENERATE_EXIT_STATUS = 3
 # The replay render pass clears to opaque black (MTLClearColorMake(0,0,0,1)),
 # so "non-background" means "not the clear colour" -- pixels some draw wrote.
 BACKGROUND_RGB = (0, 0, 0)
@@ -72,6 +80,30 @@ COVERAGE_SCOPE = (
     "branch or shader path executed -- consult draws_by_vs_hash to see whether "
     "a changed shader is present at all, and instrument the path itself to "
     "prove it executes."
+)
+# `--prove-executed 'REGEX=>REPLACEMENT'`. `coverage` answers containment --
+# whether a changed shader is in the replay at all. This answers execution:
+# mutate the construct under test in every generated .metal source, replay
+# again, and compare. An identical image proves the construct was never
+# executed, which is exactly what defect 7's hand instrumentation found.
+PROVE_EXECUTED_SEPARATOR = "=>"
+EXECUTION_PROOF_DIR_NAME = "execution-proof"
+# The substitution matched nothing. This is *not* an execution verdict: the
+# construct is absent (or the pattern is wrong), so the run says nothing about
+# whether it would execute. Kept distinct from the verdict below because the
+# two demand opposite responses -- fix the pattern, versus stop trusting the
+# replay for this change.
+EXECUTION_VERDICT_NOT_PRESENT = "not-present"
+# The substitution matched sites and the image did not move: present, and never
+# reached. Defect 7's exact shape.
+EXECUTION_VERDICT_NOT_EXECUTED = "present-but-not-executed"
+EXECUTION_VERDICT_EXECUTED = "executed"
+EXECUTION_PROOF_CERTIFIES = (
+    "whether the mutated construct is executed by this replay: mutating it "
+    "changed the rendered image, so the replayed draw window does reach it. "
+    "This certifies execution within this replay only -- it is not a "
+    "correctness result, and it says nothing about draws or code paths outside "
+    "the replayed window (see the coverage block)"
 )
 VSOUT_RE = re.compile(r"struct\s+VSOut\s*\{(?P<body>.*?)\};", re.S)
 # dxmt9_fs is declared with one of three return shapes depending on which
@@ -977,6 +1009,80 @@ def depth_bytes_per_pixel(format_value: int) -> int:
     return 4
 
 
+LEGACY_COLOR_PIXEL_FORMAT = "MTLPixelFormatRGBA8Unorm"
+LEGACY_DEPTH_PIXEL_FORMAT = "MTLPixelFormatDepth32Float"
+ATTACHMENT_RESOLVED_FROM_MANIFEST = "manifest attachment core::Format"
+ATTACHMENT_RESOLVED_FROM_LEGACY = (
+    "legacy default: this manifest declares no attachments, so no core::Format "
+    "was classified"
+)
+
+
+def resolve_attachment_formats(draws: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resolve this replay's Metal attachment formats and record the mapping.
+
+    Returns both the resolved `MTLPixelFormat` names and the `core::Format`
+    ordinals they were resolved from, so a reader of
+    `mini-replay-summary.json` can audit the mapping rather than re-deriving it
+    from the manifest's raw integer (R-HARN-REPLAY-2.3). `render_source()`
+    consumes the same record it reports, so the summary can never name a format
+    the generated program did not use.
+
+    A manifest that never populates per-draw `attachments` has no format value
+    to classify at all; that path keeps the historical defaults and says so in
+    `resolved_from`, rather than routing an inferred `format_value=0` through
+    the strict resolvers and looking like a declared-but-unrecognized value
+    (see `color_pixel_format`'s R-HARN-REPLAY-2.1 note).
+    """
+    color_attachment = first_color_attachment(draws)
+    depth_attachment = first_depth_attachment(draws)
+    color_width = int(color_attachment.get("width", 0))
+    color_height = int(color_attachment.get("height", 0))
+    depth_width = int(depth_attachment.get("width", 0))
+    depth_height = int(depth_attachment.get("height", 0))
+    if color_attachment:
+        color_format_value: int | None = int(color_attachment.get("format", 0))
+        color_format = color_pixel_format(color_format_value, color_width, color_height)
+        color_resolved_from = ATTACHMENT_RESOLVED_FROM_MANIFEST
+    else:
+        color_format_value = None
+        color_format = LEGACY_COLOR_PIXEL_FORMAT
+        color_resolved_from = ATTACHMENT_RESOLVED_FROM_LEGACY
+    if depth_attachment:
+        depth_format_value: int | None = int(depth_attachment.get("format", 0))
+        depth_format = depth_pixel_format(depth_format_value, depth_width, depth_height)
+        depth_resolved_from = ATTACHMENT_RESOLVED_FROM_MANIFEST
+        has_stencil = depth_format_has_stencil(depth_format_value)
+        depth_bpp = depth_bytes_per_pixel(depth_format_value)
+    else:
+        depth_format_value = None
+        depth_format = LEGACY_DEPTH_PIXEL_FORMAT
+        depth_resolved_from = ATTACHMENT_RESOLVED_FROM_LEGACY
+        has_stencil = depth_format_has_stencil(0)
+        depth_bpp = depth_bytes_per_pixel(0)
+    return {
+        "color": {
+            "core_format": color_format_value,
+            "metal_pixel_format": color_format,
+            "width": color_width,
+            "height": color_height,
+            "resolved_from": color_resolved_from,
+        },
+        "depth": {
+            "core_format": depth_format_value,
+            "metal_pixel_format": depth_format,
+            "width": depth_width,
+            "height": depth_height,
+            "has_stencil": has_stencil,
+            "bytes_per_pixel": depth_bpp,
+            "resolved_from": depth_resolved_from,
+        },
+        "stencil_metal_pixel_format": (
+            depth_format if has_stencil else "MTLPixelFormatInvalid"
+        ),
+    }
+
+
 def draw_blend_state(state: dict[str, Any]) -> tuple[int, int, int, int, int, int, int, int]:
     """The subset of per-draw state that feeds a Metal color-attachment blend
     descriptor. Separate-alpha resolution is baked in here so the returned
@@ -1208,40 +1314,22 @@ def render_source(draws: list[dict[str, Any]],
                   depth_input: Path | None,
                   texture_sidecars: list[dict[str, Any]],
                   texture_sidecar_by_key: dict[tuple[str, bool], int]) -> str:
+    # The same record `prepare()` writes to `mini-replay-summary.json`
+    # (R-HARN-REPLAY-2.3), so the reported format is by construction the one
+    # this generated program renders with. `resolve_attachment_formats()` also
+    # owns the legacy no-`attachments` default and the strict-resolver split.
+    attachment_formats = resolve_attachment_formats(draws)
     color_attachment = first_color_attachment(draws)
     depth_attachment = first_depth_attachment(draws)
-    # A manifest that never populates per-draw `attachments` (the shape every
-    # earlier mini-replay test fixture and some diagnostic manifests use) is a
-    # different input shape from one that declares an attachment with an
-    # unrecognized format: there is no format value to classify at all, so
-    # this keeps the historical RGBA8Unorm/Depth32Float default explicitly and
-    # by name, rather than routing an inferred format_value=0 through the
-    # strict resolvers below and having it look like a declared-but-
-    # unrecognized `core::Format::Unknown`.
-    if color_attachment:
-        color_format = color_pixel_format(
-            int(color_attachment.get("format", 0)),
-            int(color_attachment.get("width", 0)),
-            int(color_attachment.get("height", 0)),
-        )
-    else:
-        color_format = "MTLPixelFormatRGBA8Unorm"
-    depth_format_value = int(depth_attachment.get("format", 0))
-    if depth_attachment:
-        depth_format = depth_pixel_format(
-            depth_format_value,
-            int(depth_attachment.get("width", 0)),
-            int(depth_attachment.get("height", 0)),
-        )
-    else:
-        depth_format = "MTLPixelFormatDepth32Float"
-    stencil_format = depth_format if depth_format_has_stencil(depth_format_value) else "MTLPixelFormatInvalid"
+    color_format = attachment_formats["color"]["metal_pixel_format"]
+    depth_format = attachment_formats["depth"]["metal_pixel_format"]
+    stencil_format = attachment_formats["stencil_metal_pixel_format"]
     pass_width = int(color_attachment.get("width", 0)) or int(depth_attachment.get("width", 0)) or width
     pass_height = int(color_attachment.get("height", 0)) or int(depth_attachment.get("height", 0)) or height
     color_row_bytes = ((pass_width * 4 + 255) // 256) * 256
     color_byte_count = color_row_bytes * pass_height
     color_is_bgra = "true" if color_format == "MTLPixelFormatBGRA8Unorm" else "false"
-    depth_bpp = depth_bytes_per_pixel(depth_format_value)
+    depth_bpp = attachment_formats["depth"]["bytes_per_pixel"]
     depth_row_bytes = pass_width * depth_bpp
     depth_byte_count = depth_row_bytes * pass_height
     depth_input_path = cxx_string(str(depth_input)) if depth_input else '""'
@@ -1602,6 +1690,41 @@ static bool writePpm(const char* path,
     }}
   }}
   return true;
+}}
+
+// Counts distinct RGB triples in the same readback buffer writePpm just wrote
+// from, plus how many are not the clear colour. This is the binary-side half of
+// the degenerate-image contract the harness wrapper enforces after the run
+// (run_3dmark05_mini_replay.py::enforce_color_output_validity): one contract,
+// one threshold, whichever way the replay is invoked.
+static unsigned countDistinctRgb(const unsigned char* pixels,
+                                 unsigned width,
+                                 unsigned height,
+                                 unsigned rowBytes,
+                                 bool bgra,
+                                 unsigned long long* nonBackground) {{
+  std::vector<unsigned> values;
+  values.reserve(static_cast<size_t>(width) * static_cast<size_t>(height));
+  unsigned long long nonBackgroundCount = 0;
+  for (unsigned y = 0; y < height; ++y) {{
+    const unsigned char* row = pixels + static_cast<size_t>(y) * rowBytes;
+    for (unsigned x = 0; x < width; ++x) {{
+      const unsigned char* p = row + static_cast<size_t>(x) * 4;
+      const unsigned r = bgra ? p[2] : p[0];
+      const unsigned g = p[1];
+      const unsigned b = bgra ? p[0] : p[2];
+      values.push_back((r << 16) | (g << 8) | b);
+      if (r != 0u || g != 0u || b != 0u) {{
+        ++nonBackgroundCount;
+      }}
+    }}
+  }}
+  std::sort(values.begin(), values.end());
+  values.erase(std::unique(values.begin(), values.end()), values.end());
+  if (nonBackground) {{
+    *nonBackground = nonBackgroundCount;
+  }}
+  return static_cast<unsigned>(values.size());
 }}
 
 static id<MTLLibrary> makeLibrary(id<MTLDevice> device, const char* path) {{
@@ -2064,6 +2187,8 @@ int main() {{
     }}
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
+    long long distinctRgb = -1;
+    unsigned long long nonBackgroundPixels = 0;
     if (colorOutputPath && colorOutputPath[0] != '\\0' && colorReadback) {{
       const unsigned char* pixels =
           static_cast<const unsigned char*>([colorReadback contents]);
@@ -2071,12 +2196,39 @@ int main() {{
                     {color_row_bytes}, {color_is_bgra})) {{
         return 2;
       }}
+      distinctRgb = static_cast<long long>(
+          countDistinctRgb(pixels, {pass_width}, {pass_height},
+                           {color_row_bytes}, {color_is_bgra},
+                           &nonBackgroundPixels));
     }}
     if ([[MTLCaptureManager sharedCaptureManager] isCapturing]) {{
       [[MTLCaptureManager sharedCaptureManager] stopCapture];
     }}
     std::cout << "mini replay draws=" << (sizeof(draws) / sizeof(draws[0]))
-              << " repeat=" << repeat << "\\n";
+              << " repeat=" << repeat << " distinct_rgb=";
+    if (distinctRgb < 0) {{
+      std::cout << "n/a";
+    }} else {{
+      std::cout << distinctRgb;
+    }}
+    std::cout << "\\n";
+    // An image carrying one distinct value holds no information, so any pixel
+    // comparison against it is vacuous -- the all-black failure shape fixed in
+    // 36a41ad5, which printed `mini replay draws=229 repeat=1` and exited 0.
+    // Wording is kept in step with degenerate_message() in the harness wrapper.
+    if (distinctRgb >= 0 &&
+        static_cast<unsigned>(distinctRgb) < {MIN_DISTINCT_RGB_VALUES}u) {{
+      std::cerr << "mini replay color output is degenerate: " << colorOutputPath
+                << " carries " << distinctRgb << " distinct RGB value across "
+                << (static_cast<unsigned long long>({pass_width}) * {pass_height}ull)
+                << " pixels (" << nonBackgroundPixels
+                << " non-background), require at least "
+                << {MIN_DISTINCT_RGB_VALUES}u
+                << ". An image with one value holds no information, so any "
+                   "pixel comparison against it is vacuous; this is the "
+                   "all-black failure shape fixed in 36a41ad5\\n";
+      return {REPLAY_DEGENERATE_EXIT_STATUS};
+    }}
   }}
   return 0;
 }}
@@ -2249,12 +2401,183 @@ def enforce_color_output_validity(validity: dict[str, Any]) -> None:
         raise SystemExit(degenerate_message(validity))
 
 
+def parse_prove_executed(value: str) -> tuple[str, str]:
+    """Split a `REGEX=>REPLACEMENT` argument on its first separator.
+
+    The replacement half may itself contain the separator; the pattern half may
+    not, which is the deliberate limit of a raw two-field interface.
+    """
+    if PROVE_EXECUTED_SEPARATOR not in value:
+        raise SystemExit(
+            f"invalid --prove-executed argument: {value!r} has no "
+            f"{PROVE_EXECUTED_SEPARATOR!r} separator; expected "
+            f"'REGEX{PROVE_EXECUTED_SEPARATOR}REPLACEMENT'"
+        )
+    pattern, replacement = value.split(PROVE_EXECUTED_SEPARATOR, 1)
+    if not pattern:
+        raise SystemExit(
+            f"invalid --prove-executed argument: {value!r} has an empty regex"
+        )
+    return pattern, replacement
+
+
+class ShaderMutation:
+    """A `re.sub` applied to every generated `.metal` source, with the counts.
+
+    The counts are the evidence that separates the two failure modes: zero
+    sites means the construct is not present, and a non-zero site count with an
+    unchanged image means it is present and unexecuted. Collapsing those into
+    one "the check failed" message is precisely how defect 7 could be
+    misdiagnosed a second time.
+    """
+
+    def __init__(self, pattern: str, replacement: str) -> None:
+        try:
+            self.regex = re.compile(pattern)
+        except re.error as exc:
+            raise SystemExit(
+                f"invalid --prove-executed regex {pattern!r}: {exc}"
+            ) from exc
+        self.pattern = pattern
+        self.replacement = replacement
+        self.files_scanned = 0
+        self.files_mutated = 0
+        self.sites = 0
+        self.mutated_files: list[str] = []
+
+    def apply(self, source: str, label: str) -> str:
+        self.files_scanned += 1
+        try:
+            mutated, count = self.regex.subn(self.replacement, source)
+        except re.error as exc:
+            raise SystemExit(
+                f"invalid --prove-executed replacement {self.replacement!r}: {exc}"
+            ) from exc
+        if count:
+            self.files_mutated += 1
+            self.sites += count
+            self.mutated_files.append(label)
+        return mutated
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "pattern": self.pattern,
+            "replacement": self.replacement,
+            "files_scanned": self.files_scanned,
+            "files_mutated": self.files_mutated,
+            "sites": self.sites,
+            "mutated_files": list(self.mutated_files),
+        }
+
+
+def count_differing_pixels(baseline: Path, mutated: Path) -> tuple[int, int]:
+    """Count pixels that differ between two replay images.
+
+    Differing dimensions are a hard failure: the two runs would no longer be
+    the same replay differing only by the substitution, so no comparison
+    between them means anything.
+    """
+    baseline_width, baseline_height, baseline_body = read_ppm_rgb(baseline)
+    mutated_width, mutated_height, mutated_body = read_ppm_rgb(mutated)
+    if (baseline_width, baseline_height) != (mutated_width, mutated_height):
+        raise SystemExit(
+            f"mini replay --prove-executed images have different dimensions: "
+            f"{baseline} is {baseline_width}x{baseline_height} but {mutated} is "
+            f"{mutated_width}x{mutated_height}; the mutated replay must differ "
+            f"from the baseline only by the substitution"
+        )
+    differing = sum(
+        1 for index in range(0, len(baseline_body), 3)
+        if baseline_body[index:index + 3] != mutated_body[index:index + 3]
+    )
+    return differing, baseline_width * baseline_height
+
+
+def build_execution_proof(mutation: ShaderMutation,
+                          baseline_output: Path | None,
+                          mutated_output: Path | None,
+                          differing_pixels: int | None,
+                          pixel_count: int | None) -> dict[str, Any]:
+    """Record what the mutation touched and what the comparison showed.
+
+    Records the verdict as one of three named values rather than a boolean, so
+    "not present" can never be read back out of the artifact as "not executed".
+    """
+    if mutation.sites == 0:
+        verdict = EXECUTION_VERDICT_NOT_PRESENT
+    elif differing_pixels:
+        verdict = EXECUTION_VERDICT_EXECUTED
+    else:
+        verdict = EXECUTION_VERDICT_NOT_EXECUTED
+    proof = dict(mutation.record())
+    proof.update({
+        "asserted": True,
+        "verdict": verdict,
+        "baseline_color_output": str(baseline_output) if baseline_output else None,
+        "mutated_color_output": str(mutated_output) if mutated_output else None,
+        "differing_pixels": differing_pixels,
+        "pixel_count": pixel_count,
+        "certifies": EXECUTION_PROOF_CERTIFIES,
+    })
+    return proof
+
+
+def execution_proof_message(proof: dict[str, Any]) -> str:
+    """One message per verdict. The two failing ones must not read alike."""
+    verdict = proof["verdict"]
+    if verdict == EXECUTION_VERDICT_NOT_PRESENT:
+        return (
+            f"mini replay --prove-executed: the construct is NOT PRESENT. "
+            f"Pattern {proof['pattern']!r} matched 0 sites across "
+            f"{proof['files_scanned']} generated .metal shader sources. This is "
+            f"not an execution verdict: nothing was mutated, so this run says "
+            f"nothing about whether the construct would execute. Either the "
+            f"pattern is wrong or these dumped shaders do not carry the "
+            f"emission under test -- read a generated *.replay.metal in the "
+            f"output directory and correct the pattern before reading any "
+            f"execution result"
+        )
+    if verdict == EXECUTION_VERDICT_NOT_EXECUTED:
+        return (
+            f"mini replay --prove-executed: the construct is present but was "
+            f"NEVER EXECUTED by this replay. Pattern {proof['pattern']!r} "
+            f"matched {proof['sites']} sites in {proof['files_mutated']} of "
+            f"{proof['files_scanned']} generated .metal shader sources, yet the "
+            f"mutated replay produced a byte-identical image (0 of "
+            f"{proof['pixel_count']} pixels differ between "
+            f"{proof['baseline_color_output']} and "
+            f"{proof['mutated_color_output']}). A pixel comparison over this "
+            f"replay therefore certifies nothing about that construct -- this "
+            f"is defect 7's exact shape, where a byte-identical replay was read "
+            f"as proof of a codegen change whose branch was never reached"
+        )
+    return (
+        f"mini replay --prove-executed: EXECUTED. Pattern {proof['pattern']!r} "
+        f"matched {proof['sites']} sites in {proof['files_mutated']} of "
+        f"{proof['files_scanned']} generated .metal shader sources and changed "
+        f"{proof['differing_pixels']} of {proof['pixel_count']} pixels, so this "
+        f"replay does reach the construct. This is an execution result for the "
+        f"replayed draw window only; it is not a correctness result"
+    )
+
+
+def enforce_execution_proof(proof: dict[str, Any]) -> None:
+    """Exit non-zero on either failing verdict (R-HARN-REPLAY-3.4/3.5).
+
+    A pass here is not evidence of correctness, only that the replay reaches
+    the mutated construct at all.
+    """
+    if proof["verdict"] != EXECUTION_VERDICT_EXECUTED:
+        raise SystemExit(execution_proof_message(proof))
+
+
 def write_summary(summary: dict[str, Any], output_dir: Path) -> None:
     (output_dir / "mini-replay-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def prepare(args: argparse.Namespace) -> dict[str, Any]:
+def prepare(args: argparse.Namespace,
+            shader_mutation: ShaderMutation | None = None) -> dict[str, Any]:
     manifest = load_manifest(args.manifest)
     draws = manifest["draws"]
     validate_payloads(draws)
@@ -2307,6 +2630,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
                 fs_source = force_fragment_color_source(fs_source)
             if args.force_fragment_primitive_id:
                 fs_source = force_fragment_primitive_id_source(fs_source)
+            if shader_mutation is not None:
+                # Applied last, to the exact text that would otherwise have been
+                # compiled, so the mutated replay differs from the baseline by
+                # the substitution and nothing else.
+                vs_source = shader_mutation.apply(vs_source, str(vs_replay))
+                fs_source = shader_mutation.apply(fs_source, str(fs_replay))
             vs_replay.write_text(vs_source, encoding="utf-8")
             fs_replay.write_text(fs_source, encoding="utf-8")
             vs_bindings = stage_bindings(vs_source)
@@ -2367,6 +2696,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "vertex_order": args.vertex_order,
         "force_fragment_color": bool(args.force_fragment_color),
         "force_fragment_primitive_id": bool(args.force_fragment_primitive_id),
+        # Present only on the mutated copy an execution proof generates; None
+        # on the baseline, so the two trees are distinguishable from their own
+        # artifacts.
+        "shader_mutation": shader_mutation.record() if shader_mutation else None,
         "index_cache_estimate": index_cache_estimate(replay_draws),
         "depth_clear": args.depth_clear,
         "depth_input": str(depth_input) if depth_input else None,
@@ -2384,6 +2717,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             }
             for texture in texture_sidecars
         ],
+        # The Metal formats this run actually resolved, beside the
+        # `core::Format` ordinals they came from, so the mapping is auditable
+        # from the artifact (R-HARN-REPLAY-2.3).
+        "attachment_formats": resolve_attachment_formats(replay_draws),
         "color_output": str(args.color_output) if args.color_output else None,
         "index_bytes": sum(int(draw["geometry"]["index_bytes"]) for draw in replay_draws),
         "stream0_bytes": sum(int(draw["geometry"]["stream0_bytes"]) for draw in replay_draws),
@@ -2480,6 +2817,13 @@ def run_binary(summary: dict[str, Any],
     produced anything (R-HARN-REPLAY-3.2): it printed `mini replay draws=229
     repeat=1` for four fully black images. When a color output was requested,
     the artifact itself is read back and asserted.
+
+    The generated program now runs the same degenerate check itself and returns
+    REPLAY_DEGENERATE_EXIT_STATUS, so that status is carried through rather than
+    raised: the wrapper still owns the diagnostic, because it is the only side
+    that can also record the measured counts in `validity` and handle the
+    missing/truncated/unreadable-image cases. Any other non-zero status is a
+    failure of the replay itself and stops the run.
     """
     env = os.environ.copy()
     env["DXMT9_MINI_REPLAY_REPEAT"] = str(repeat)
@@ -2489,13 +2833,18 @@ def run_binary(summary: dict[str, Any],
     if color_output is not None:
         color_output.parent.mkdir(parents=True, exist_ok=True)
         env["DXMT9_MINI_REPLAY_COLOR_OUTPUT_PATH"] = str(color_output)
-    subprocess.run([summary["binary"]], check=True, env=env)
+    completed = subprocess.run([summary["binary"]], env=env)
+    if completed.returncode not in (0, REPLAY_DEGENERATE_EXIT_STATUS):
+        raise SystemExit(
+            f"mini replay binary failed with exit status {completed.returncode}: "
+            f"{summary['binary']}"
+        )
     if color_output is None:
         return not_asserted_validity(VALIDITY_REASON_NO_COLOR_OUTPUT)
     return assess_color_output(color_output)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -2605,10 +2954,89 @@ def main() -> int:
             f"(default: {DEFAULT_MIN_CAPTURE_FREE_MB}MiB, env DXMT9_MINI_REPLAY_MIN_CAPTURE_FREE_MB)"
         ),
     )
+    parser.add_argument(
+        "--prove-executed",
+        metavar=f"REGEX{PROVE_EXECUTED_SEPARATOR}REPLACEMENT",
+        type=parse_prove_executed,
+        help=(
+            "prove the replay actually executes a construct, instead of only "
+            "containing it: replay once normally, then re-replay a copy of the "
+            "generated shader sources with re.sub(REGEX, REPLACEMENT) applied "
+            "to every .metal file, and exit non-zero when the two images are "
+            "identical -- an identical image proves the mutated construct was "
+            "never executed. Requires --run and --color-output. Two distinct "
+            "failures are reported: 'not present' when the pattern matched no "
+            "site (wrong pattern, or the construct is absent from these dumped "
+            "shaders -- this is not an execution verdict), and 'present but "
+            "never executed' when it matched sites and the image did not move. "
+            "This is a raw regex over emitted MSL text with no knowledge of "
+            "shader syntax: it will happily match inside comments, strings, or "
+            "an unrelated identifier that shares a substring, and a "
+            "replacement that does not compile fails the run at compile time. "
+            "Read a generated *.replay.metal and check the match count in the "
+            "summary's execution_proof block before trusting a verdict"
+        ),
+    )
+    return parser
+
+
+def run_execution_proof(args: argparse.Namespace,
+                        mutation: ShaderMutation,
+                        mutated_summary: dict[str, Any],
+                        mutated_color_output: Path) -> dict[str, Any]:
+    """Compile and run the mutated replay, then compare it against the baseline.
+
+    The mutated run's own `validity` is recorded but not enforced: a mutation
+    that blanks the image is a difference, not a degenerate baseline, and the
+    comparison is what this proof is about.
+    """
+    compile_source(mutated_summary)
+    mutated_summary["validity"] = run_binary(
+        mutated_summary, args.repeat, None, mutated_color_output)
+    write_summary(mutated_summary, Path(mutated_summary["output_dir"]))
+    differing, pixel_count = count_differing_pixels(
+        args.color_output, mutated_color_output)
+    return build_execution_proof(
+        mutation, args.color_output, mutated_color_output, differing, pixel_count)
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
+
+    # Validated before any work: a malformed proof request should cost nothing.
+    mutation: ShaderMutation | None = None
+    if args.prove_executed is not None:
+        if not args.run or args.color_output is None:
+            raise SystemExit(
+                "--prove-executed requires --run and --color-output: the proof "
+                "is a comparison between the baseline image and the mutated "
+                "replay's image, so both replays have to actually run"
+            )
+        mutation = ShaderMutation(*args.prove_executed)
 
     summary = prepare(args)
     print(json.dumps(summary, indent=2, sort_keys=True))
+
+    mutated_summary: dict[str, Any] | None = None
+    mutated_color_output: Path | None = None
+    if mutation is not None:
+        mutated_args = copy.copy(args)
+        mutated_args.output_dir = args.output_dir / EXECUTION_PROOF_DIR_NAME
+        mutated_color_output = mutated_args.output_dir / "mutated-color.ppm"
+        mutated_args.color_output = mutated_color_output
+        mutated_args.capture_path = None
+        mutated_args.prove_executed = None
+        mutated_summary = prepare(mutated_args, shader_mutation=mutation)
+        if mutation.sites == 0:
+            # Decided from the generated sources alone, before anything is
+            # compiled or run: a wrong pattern must not cost a GPU replay, and
+            # must never be reported as an execution verdict.
+            summary["execution_proof"] = build_execution_proof(
+                mutation, None, None, None, None)
+            write_summary(summary, args.output_dir)
+            enforce_execution_proof(summary["execution_proof"])
+
     if args.run and args.capture_path is not None:
         check_capture_free_space(args.capture_path, args.min_capture_free_mb)
     if args.compile or args.run:
@@ -2620,6 +3048,13 @@ def main() -> int:
         # measured numbers behind rather than only an error message.
         write_summary(summary, args.output_dir)
         enforce_color_output_validity(summary["validity"])
+    if mutation is not None:
+        assert mutated_summary is not None and mutated_color_output is not None
+        summary["execution_proof"] = run_execution_proof(
+            args, mutation, mutated_summary, mutated_color_output)
+        write_summary(summary, args.output_dir)
+        enforce_execution_proof(summary["execution_proof"])
+        print(execution_proof_message(summary["execution_proof"]))
     return 0
 
 

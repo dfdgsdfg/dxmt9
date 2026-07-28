@@ -277,5 +277,90 @@ class ManifestWithAttachmentsCliTest(unittest.TestCase):
             self.assertIn("MTLPixelFormatDepth32Float", source)
 
 
+class ResolvedAttachmentFormatSummaryTest(unittest.TestCase):
+    """R-HARN-REPLAY-2.3: the formats a run actually resolved must be readable
+    from `mini-replay-summary.json`.
+
+    Both resolvers' return values used to be consumed only inside
+    `render_source()` and baked into the generated `.mm`, so a downstream
+    reader could not tell which Metal format a run selected without
+    re-deriving it from the manifest's raw `core::Format` integer. The record
+    carries the source ordinal beside the resolved name so the mapping itself
+    is auditable, not just its result.
+    """
+
+    def _summary(self, root: Path, attachments: dict | None) -> dict:
+        manifest_path = write_manifest(root, attachments)
+        output_dir = root / "out"
+        result = run_cli(manifest_path, output_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(
+            (output_dir / "mini-replay-summary.json").read_text(encoding="utf-8"))
+
+    def test_declared_formats_are_recorded_with_their_source_ordinals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._summary(Path(tmp), {
+                "colors": [{"format": 2, "width": 1024, "height": 768}],  # X8R8G8B8
+                "depth": {"format": 41, "width": 1024, "height": 768},    # D24X8
+            })
+            formats = summary["attachment_formats"]
+            self.assertEqual(formats["color"]["metal_pixel_format"],
+                             "MTLPixelFormatBGRA8Unorm")
+            self.assertEqual(formats["color"]["core_format"], 2)
+            self.assertEqual(formats["color"]["width"], 1024)
+            self.assertEqual(formats["color"]["height"], 768)
+            self.assertEqual(formats["depth"]["metal_pixel_format"],
+                             "MTLPixelFormatDepth32Float_Stencil8")
+            self.assertEqual(formats["depth"]["core_format"], 41)
+            self.assertEqual(formats["depth"]["width"], 1024)
+            self.assertEqual(formats["depth"]["height"], 768)
+
+    def test_recorded_formats_match_what_the_generated_source_uses(self):
+        """The record is only auditable if it is the same value the replay
+        actually rendered with, not a second derivation of it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary = self._summary(root, {
+                "colors": [{"format": 3, "width": 640, "height": 480}],  # A8B8G8R8
+                "depth": {"format": 42, "width": 640, "height": 480},    # D16
+            })
+            source = (root / "out" / "dxmt9_3dmark05_mini_replay.mm").read_text(
+                encoding="utf-8")
+            formats = summary["attachment_formats"]
+            self.assertEqual(formats["color"]["metal_pixel_format"],
+                             "MTLPixelFormatRGBA8Unorm")
+            self.assertEqual(formats["depth"]["metal_pixel_format"],
+                             "MTLPixelFormatDepth16Unorm")
+            self.assertIn(formats["color"]["metal_pixel_format"], source)
+            self.assertIn(formats["depth"]["metal_pixel_format"], source)
+
+    def test_stencil_selection_is_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._summary(Path(tmp), {
+                "colors": [{"format": 2, "width": 8, "height": 8}],
+                "depth": {"format": 40, "width": 8, "height": 8},  # D24S8
+            })
+            formats = summary["attachment_formats"]
+            self.assertTrue(formats["depth"]["has_stencil"])
+            self.assertEqual(formats["stencil_metal_pixel_format"],
+                             "MTLPixelFormatDepth32Float_Stencil8")
+
+    def test_legacy_manifest_without_attachments_records_the_default_as_such(self):
+        """A manifest that declares no attachments resolves through the legacy
+        default, not through the strict resolvers. The record must say which,
+        so a reader does not mistake the default for a declared format."""
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = self._summary(Path(tmp), attachments=None)
+            formats = summary["attachment_formats"]
+            self.assertEqual(formats["color"]["metal_pixel_format"],
+                             "MTLPixelFormatRGBA8Unorm")
+            self.assertIsNone(formats["color"]["core_format"])
+            self.assertIn("default", formats["color"]["resolved_from"].lower())
+            self.assertEqual(formats["depth"]["metal_pixel_format"],
+                             "MTLPixelFormatDepth32Float")
+            self.assertIsNone(formats["depth"]["core_format"])
+            self.assertIn("default", formats["depth"]["resolved_from"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()
