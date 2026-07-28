@@ -15,6 +15,4 @@ f0e40800 0000001d 02000001 c00f0000 a0e40001 0000ffff
 
 [test]
 expect-source vertex contains "for (int dxmt9_loop_"
-expect-source vertex contains "int dxmt9_cfi = clamp(aL + 1, 0, 255);"
-expect-source vertex contains "if (dxmt9_cfi == 1) { return dxmt9_cdef1; }"
-expect-source vertex contains "return cFloat[dxmt9_cfi];"
+expect-source vertex contains "cFloat[clamp(aL + 1, 0, 255)]"

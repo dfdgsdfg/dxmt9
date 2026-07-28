@@ -505,30 +505,10 @@ std::string floatDefLocalName(u32 index) { return "dxmt9_cdef" + std::to_string(
 std::string intDefLocalName(u32 index) { return "dxmt9_cdefi" + std::to_string(index); }
 std::string boolDefLocalName(u32 index) { return "dxmt9_cdefb" + std::to_string(index); }
 
-// H226 follow-up (3DMark05 GT1 frame60) — a single DEF used to disqualify
-// the zero-copy alias above, because the DEF literal had to overwrite an
-// array entry. Eight of GT1's seventeen vertex variants combined relative
-// addressing with one DEF and therefore copied `float4 cFloat[256]`
-// (4,096 B) per invocation; that copy accounted for 96.4% of the measured
-// VS device-memory writes on the frame60 `60/1` encoder. When a category
-// has no runtime writes, the overlay is instead expressed as a select at
-// the relative read site, so the register file is never materialized.
-// The cap bounds both the select-chain depth on the dynamic-read path and
-// the emitted source size; over-cap categories keep the copy array.
-constexpr std::size_t kMaxDefSelectRegisters = 8;
-
 struct ConstantAccess {
   bool directFloat = false;
   bool directInt = false;
   bool directBool = false;
-  // Relative reads combined with DEF-only writes: the bound buffer is
-  // aliased read-only and DEF literals are hoisted, with a select at each
-  // relative read site so a dynamic index landing on a DEF'd register
-  // still observes the DEF value (D3D9: the DEF shadows the app-set
-  // constant). Never set for categories with runtime constant writes.
-  bool selectFloatDefs = false;
-  bool selectIntDefs = false;
-  bool selectBoolDefs = false;
   std::string floatBuffer;  // e.g. "psConsts.psFloatConst"
   std::string intBuffer;
   std::string boolBuffer;
@@ -538,38 +518,31 @@ struct ConstantAccess {
   std::map<u32, std::string> intDefs;
   std::map<u32, std::string> boolDefs;
 
-  // True when the category's DEF literals live in immutable locals rather
-  // than in a mutable array entry — the DEF instruction then emits no
-  // array overwrite and every use site resolves to the hoisted local.
-  bool hoistedFloatDefs() const { return directFloat || selectFloatDefs; }
-  bool hoistedIntDefs() const { return directInt || selectIntDefs; }
-  bool hoistedBoolDefs() const { return directBool || selectBoolDefs; }
-
   // Static-index read expressions. Non-direct categories keep the local
   // cFloat/cInt/cBool register file emitted by emitConstantBindings.
   std::string floatName(u32 index) const {
-    if (hoistedFloatDefs() && floatDefs.count(index) != 0) {
-      return floatDefLocalName(index);
-    }
     if (directFloat) {
+      if (floatDefs.count(index) != 0) {
+        return floatDefLocalName(index);
+      }
       return floatBuffer + "[" + std::to_string(index) + "]";
     }
     return "cFloat[" + std::to_string(index) + "]";
   }
   std::string intName(u32 index) const {
-    if (hoistedIntDefs() && intDefs.count(index) != 0) {
-      return intDefLocalName(index);
-    }
     if (directInt) {
+      if (intDefs.count(index) != 0) {
+        return intDefLocalName(index);
+      }
       return intBuffer + "[" + std::to_string(index) + "]";
     }
     return "cInt[" + std::to_string(index) + "]";
   }
   std::string boolName(u32 index) const {
-    if (hoistedBoolDefs() && boolDefs.count(index) != 0) {
-      return boolDefLocalName(index);
-    }
     if (directBool) {
+      if (boolDefs.count(index) != 0) {
+        return boolDefLocalName(index);
+      }
       return boolBuffer + "[" + std::to_string(index) + "]";
     }
     return "cBool[" + std::to_string(index) + "]";
@@ -581,46 +554,6 @@ struct ConstantAccess {
   std::string floatPrefix() const { return directFloat ? floatBuffer : "cFloat"; }
   std::string intPrefix() const { return directInt ? intBuffer : "cInt"; }
   std::string boolPrefix() const { return directBool ? boolBuffer : "cBool"; }
-
-  // Relative-index read expressions. `indexExpr` is the clamped dynamic
-  // index; it is bound to a lambda-local once (the LIT lowering already
-  // relies on MSL's C++ lambda support) because relAddrExpression is not
-  // trivial and would otherwise be repeated per DEF comparison.
-  std::string floatRelative(const std::string& indexExpr) const {
-    if (!selectFloatDefs) {
-      return floatPrefix() + "[" + indexExpr + "]";
-    }
-    return defSelect("float4", "dxmt9_cfi", indexExpr, floatDefs, floatDefLocalName,
-                     floatPrefix());
-  }
-  std::string intRelative(const std::string& indexExpr) const {
-    if (!selectIntDefs) {
-      return intPrefix() + "[" + indexExpr + "]";
-    }
-    return defSelect("int4", "dxmt9_cii", indexExpr, intDefs, intDefLocalName, intPrefix());
-  }
-  std::string boolRelative(const std::string& indexExpr) const {
-    if (!selectBoolDefs) {
-      return boolPrefix() + "[" + indexExpr + "]";
-    }
-    return defSelect("uint", "dxmt9_cbi", indexExpr, boolDefs, boolDefLocalName, boolPrefix());
-  }
-
-private:
-  static std::string defSelect(const char* returnType, const char* indexLocal,
-                               const std::string& indexExpr,
-                               const std::map<u32, std::string>& defs,
-                               std::string (*defLocalName)(u32),
-                               const std::string& arrayPrefix) {
-    std::ostringstream out;
-    out << "([&]() -> " << returnType << " { int " << indexLocal << " = " << indexExpr << ";";
-    for (const auto& def : defs) {
-      out << " if (" << indexLocal << " == " << def.first << ") { return "
-          << defLocalName(def.first) << "; }";
-    }
-    out << " return " << arrayPrefix << "[" << indexLocal << "]; }())";
-    return out.str();
-  }
 };
 
 ConstantAccess makeConstantAccess(const SpirvModule& module, bool vertexStage,
@@ -680,18 +613,6 @@ ConstantAccess makeConstantAccess(const SpirvModule& module, bool vertexStage,
         break;
     }
   }
-  // Relative reads with DEF-only writes: keep the read-only alias and
-  // overlay the DEFs with a select, as long as the chain stays bounded.
-  // A runtime write still needs the mutable array.
-  access.selectFloatDefs = !access.directFloat && !usage.floatRuntimeWrite &&
-                           !access.floatDefs.empty() &&
-                           access.floatDefs.size() <= kMaxDefSelectRegisters;
-  access.selectIntDefs = !access.directInt && !usage.intRuntimeWrite &&
-                         !access.intDefs.empty() &&
-                         access.intDefs.size() <= kMaxDefSelectRegisters;
-  access.selectBoolDefs = !access.directBool && !usage.boolRuntimeWrite &&
-                          !access.boolDefs.empty() &&
-                          access.boolDefs.size() <= kMaxDefSelectRegisters;
   return access;
 }
 
@@ -843,26 +764,22 @@ std::string readOperandExpression(const D3DDecodedInstruction& instruction, cons
       if (reg.relAddrToken != 0u) {
         const std::string maxIdx = vertexStage ? std::to_string(::dxmt9::core::kMaxVertexConstants - 1u)
                                                : std::to_string(::dxmt9::core::kMaxPixelConstants - 1u);
-        return constants.floatRelative("clamp(" + relAddrExpression(reg.relAddrToken) + " + "
-                                       + std::to_string(reg.index) + ", 0, " + maxIdx + ")");
+        return constants.floatPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, " + maxIdx + ")]";
       }
       return constants.floatName(reg.index);
     case D3DRegisterKind::ConstInt:
       if (reg.relAddrToken != 0u) {
-        return "float4(" +
-               constants.intRelative("clamp(" + relAddrExpression(reg.relAddrToken) + " + "
-                                     + std::to_string(reg.index) + ", 0, "
-                                     + std::to_string(::dxmt9::core::kMaxIntegerConstants - 1u) + ")") +
-               ")";
+        return "float4(" + constants.intPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, "
+               + std::to_string(::dxmt9::core::kMaxIntegerConstants - 1u) + ")])";
       }
       return "float4(" + constants.intName(reg.index) + ")";
     case D3DRegisterKind::ConstBool:
       if (reg.relAddrToken != 0u) {
-        return "(" +
-               constants.boolRelative("clamp(" + relAddrExpression(reg.relAddrToken) + " + "
-                                      + std::to_string(reg.index) + ", 0, "
-                                      + std::to_string(::dxmt9::core::kMaxBoolConstants - 1u) + ")") +
-               " != 0u ? float4(1.0f) : float4(0.0f))";
+        return "(" + constants.boolPrefix() + "[clamp(" + relAddrExpression(reg.relAddrToken) + " + "
+               + std::to_string(reg.index) + ", 0, "
+               + std::to_string(::dxmt9::core::kMaxBoolConstants - 1u) + ")] != 0u ? float4(1.0f) : float4(0.0f))";
       }
       return "(" + constants.boolName(reg.index) + " != 0u ? float4(1.0f) : float4(0.0f))";
     case D3DRegisterKind::Input:
@@ -969,13 +886,8 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
   //     legacy array-overwrite semantics for well-formed bytecode (D3D9
   //     places all defs ahead of code).
   //   relative reads without any write: constant pointer alias (legacy).
-  //   relative reads with DEF-only writes, DEF count within
-  //     kMaxDefSelectRegisters: constant pointer alias plus hoisted DEF
-  //     literals; relative read sites select the literal when the dynamic
-  //     index hits a DEF'd register (H226 follow-up — see ConstantAccess).
-  //   runtime writes (or over-cap DEF counts alongside relative reads):
-  //     materialized mutable array + copy loop (legacy); body writes
-  //     mutate the copy.
+  //   runtime writes (or relative reads combined with defs): materialized
+  //     mutable array + copy loop (legacy); body writes mutate the copy.
   const char* container = vertexStage ? "vsConsts" : "psConsts";
   const char* floatMember = vertexStage ? "vsFloatConst" : "psFloatConst";
   const char* intMember = vertexStage ? "vsIntConst" : "psIntConst";
@@ -995,11 +907,8 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
     for (const auto& [index, literal] : access.floatDefs) {
       out << "  const float4 " << floatDefLocalName(index) << " = " << literal << ";\n";
     }
-  } else if (access.selectFloatDefs || (!usage.floatDefWrite && !usage.floatRuntimeWrite)) {
+  } else if (!usage.floatDefWrite && !usage.floatRuntimeWrite) {
     out << "  constant float4* cFloat = " << container << "." << floatMember << ";\n";
-    for (const auto& [index, literal] : access.floatDefs) {
-      out << "  const float4 " << floatDefLocalName(index) << " = " << literal << ";\n";
-    }
   } else {
     out << "  float4 cFloat[" << std::max(1u, floatCount) << "];\n";
     out << "  for (uint i = 0; i < " << floatCount << "; ++i) { cFloat[i] = "
@@ -1009,11 +918,8 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
     for (const auto& [index, literal] : access.intDefs) {
       out << "  const int4 " << intDefLocalName(index) << " = " << literal << ";\n";
     }
-  } else if (access.selectIntDefs || (!usage.intDefWrite && !usage.intRuntimeWrite)) {
+  } else if (!usage.intDefWrite && !usage.intRuntimeWrite) {
     out << "  constant int4* cInt = " << container << "." << intMember << ";\n";
-    for (const auto& [index, literal] : access.intDefs) {
-      out << "  const int4 " << intDefLocalName(index) << " = " << literal << ";\n";
-    }
   } else {
     out << "  int4 cInt[" << std::max(1u, intCount) << "];\n";
     out << "  for (uint i = 0; i < " << intCount << "; ++i) { cInt[i] = "
@@ -1023,11 +929,8 @@ void emitConstantBindings(std::ostringstream& out, bool vertexStage, const Const
     for (const auto& [index, literal] : access.boolDefs) {
       out << "  const uint " << boolDefLocalName(index) << " = " << literal << ";\n";
     }
-  } else if (access.selectBoolDefs || (!usage.boolDefWrite && !usage.boolRuntimeWrite)) {
+  } else if (!usage.boolDefWrite && !usage.boolRuntimeWrite) {
     out << "  constant uint* cBool = " << container << "." << boolMember << ";\n";
-    for (const auto& [index, literal] : access.boolDefs) {
-      out << "  const uint " << boolDefLocalName(index) << " = " << literal << ";\n";
-    }
   } else {
     out << "  uint cBool[" << std::max(1u, boolCount) << "];\n";
     out << "  for (uint i = 0; i < " << boolCount << "; ++i) { cBool[i] = "
@@ -2509,10 +2412,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                     << " kind=" << static_cast<u32>(dst.kind);
             throw std::runtime_error(message.str());
           }
-          // H226 — whenever the DEF literal is hoisted into an immutable
-          // local by emitConstantBindings (direct or def-select mode),
-          // use sites reference it and there is no array to overwrite.
-          if (!constantAccess.hoistedFloatDefs()) {
+          // H226 — in direct mode the DEF literal is hoisted into an
+          // immutable local by emitConstantBindings; use sites reference
+          // it, so there is no array entry to overwrite.
+          if (!constantAccess.directFloat) {
             out << "  " << constantDestinationTarget(dst, true) << " = " << formatFloatVec4(values) << ";\n";
           }
           break;
@@ -2530,7 +2433,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (dst.kind != D3DRegisterKind::ConstInt) {
             throw std::runtime_error("DEFI requires an integer constant destination");
           }
-          if (!constantAccess.hoistedIntDefs()) {
+          if (!constantAccess.directInt) {
             out << "  " << constantDestinationTarget(dst, true) << " = " << formatIntVec4(values) << ";\n";
           }
           break;
@@ -2544,7 +2447,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
           if (dst.kind != D3DRegisterKind::ConstBool) {
             throw std::runtime_error("DEFB requires a boolean constant destination");
           }
-          if (!constantAccess.hoistedBoolDefs()) {
+          if (!constantAccess.directBool) {
             out << "  " << constantDestinationTarget(dst, true) << " = "
                 << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
           }
@@ -3344,10 +3247,10 @@ std::string translateSpirvToMsl(const SpirvModule& module,
                   << " kind=" << static_cast<u32>(dst.kind);
           throw std::runtime_error(message.str());
         }
-        // H226 — whenever the DEF literal is hoisted into an immutable
-        // local by emitConstantBindings (direct or def-select mode), use
-        // sites reference it and there is no array entry to overwrite.
-        if (!constantAccess.hoistedFloatDefs()) {
+        // H226 — in direct mode the DEF literal is hoisted into an
+        // immutable local by emitConstantBindings; use sites reference it,
+        // so there is no array entry to overwrite.
+        if (!constantAccess.directFloat) {
           out << "  " << constantDestinationTarget(dst, false) << " = " << formatFloatVec4(values) << ";\n";
         }
         break;
@@ -3362,7 +3265,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (dst.kind != D3DRegisterKind::ConstInt) {
           throw std::runtime_error("DEFI requires an integer constant destination");
         }
-        if (!constantAccess.hoistedIntDefs()) {
+        if (!constantAccess.directInt) {
           out << "  " << constantDestinationTarget(dst, false) << " = " << formatIntVec4(values) << ";\n";
         }
         break;
@@ -3373,7 +3276,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
         if (dst.kind != D3DRegisterKind::ConstBool) {
           throw std::runtime_error("DEFB requires a boolean constant destination");
         }
-        if (!constantAccess.hoistedBoolDefs()) {
+        if (!constantAccess.directBool) {
           out << "  " << constantDestinationTarget(dst, false) << " = "
               << (instruction.operands[1] != 0u ? "1u" : "0u") << ";\n";
         }
