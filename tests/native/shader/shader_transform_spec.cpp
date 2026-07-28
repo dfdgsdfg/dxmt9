@@ -3331,19 +3331,226 @@ std::vector<u32> makeVs20RelativeConstReadWithDefBytecode() {
   };
 }
 
-void testVs20RelativeConstReadWithDefKeepsRegisterFileArray() {
+// Same shape as makeVs20RelativeConstReadWithDefBytecode but with a
+// caller-chosen number of DEF'd registers (c0..cN-1), used to pin the
+// bounded def-select cap.
+std::vector<u32> makeVs20RelativeConstReadWithDefCountBytecode(u32 defCount) {
+  using namespace dxmt9::d3d9bc;
+  std::vector<u32> words{makeVersionToken(true, 2, 0)};
+  for (u32 i = 0; i < defCount; ++i) {
+    words.push_back(makeInstructionToken(kD3DSIO_DEF, 5));
+    words.push_back(makeDstToken(kD3DSPR_CONST, i));
+    words.push_back(0x3F800000u);
+    words.push_back(0u);
+    words.push_back(0u);
+    words.push_back(0u);
+  }
+  // dcl_blendindices v3
+  words.push_back(makeInstructionToken(kD3DSIO_DCL, 2));
+  words.push_back(makeDclSemanticToken(2u, 0u));
+  words.push_back(makeDstToken(kD3DSPR_INPUT, 3));
+  // mova a0.x, v3
+  words.push_back(makeInstructionToken(kD3DSIO_MOVA, 2));
+  words.push_back(makeDstToken(kD3DSPR_ADDR, 0, 0x1u));
+  words.push_back(makeSrcToken(kD3DSPR_INPUT, 3));
+  // mov r0, c[a0+5]
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_TEMP, 0));
+  words.push_back(makeRelativeSrcToken(kD3DSPR_CONST, 5));
+  words.push_back(makeSrcToken(kD3DSPR_ADDR, 0));
+  // mov oPos, r0
+  words.push_back(makeInstructionToken(kD3DSIO_MOV, 2));
+  words.push_back(makeDstToken(kD3DSPR_RASTOUT, 0));
+  words.push_back(makeSrcToken(kD3DSPR_TEMP, 0));
+  words.push_back(kD3DSIO_END);
+  return words;
+}
+
+// Relative float read, one DEF, plus a runtime (non-DEF) constant write.
+// Rule 1: a runtime write still needs the mutable register file.
+std::vector<u32> makeVs20RelativeConstReadWithDefAndRuntimeWriteBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(true, 2, 0),
+      // def c6, 1.0, 0.0, 0.0, 0.0
+      makeInstructionToken(kD3DSIO_DEF, 5),
+      makeDstToken(kD3DSPR_CONST, 6),
+      0x3F800000u,
+      0u,
+      0u,
+      0u,
+      // dcl_blendindices v3
+      makeInstructionToken(kD3DSIO_DCL, 2),
+      makeDclSemanticToken(2u, 0u),
+      makeDstToken(kD3DSPR_INPUT, 3),
+      // mova a0.x, v3
+      makeInstructionToken(kD3DSIO_MOVA, 2),
+      makeDstToken(kD3DSPR_ADDR, 0, 0x1u),
+      makeSrcToken(kD3DSPR_INPUT, 3),
+      // mov r0, c[a0+5]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONST, 5),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      // mov c2, r0 — runtime constant mutation.
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_CONST, 2),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      // mov oPos, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_RASTOUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30RelativeIntConstReadWithDefiBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      // defi i1, 2, 0, 0, 0
+      makeInstructionToken(kD3DSIO_DEFI, 5),
+      makeDstToken(kD3DSPR_CONSTINT, 1),
+      2u,
+      0u,
+      0u,
+      0u,
+      // mov r0, i[a0+0]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONSTINT, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      // mov oC0, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+std::vector<u32> makePs30RelativeBoolConstReadWithDefbBytecode() {
+  using namespace dxmt9::d3d9bc;
+  return {
+      makeVersionToken(false, 3, 0),
+      // defb b1, true
+      makeInstructionToken(kD3DSIO_DEFB, 2),
+      makeDstToken(kD3DSPR_CONSTBOOL, 1),
+      1u,
+      // mov r0, b[a0+0]
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_TEMP, 0),
+      makeRelativeSrcToken(kD3DSPR_CONSTBOOL, 0),
+      makeSrcToken(kD3DSPR_ADDR, 0),
+      // mov oC0, r0
+      makeInstructionToken(kD3DSIO_MOV, 2),
+      makeDstToken(kD3DSPR_COLOROUT, 0),
+      makeSrcToken(kD3DSPR_TEMP, 0),
+      kD3DSIO_END,
+  };
+}
+
+// H226 follow-up (3DMark05 GT1 frame60): a single DEF used to disqualify
+// the zero-copy pointer alias, so eight of seventeen GT1 vertex variants
+// copied `float4 cFloat[256]` (4KB) per invocation into stack/device
+// memory. The DEF overlay is now a select at the relative read site.
+void testVs20RelativeConstReadWithDefSelectsDefLiteralInPlace() {
   const auto source = translateVertex(makeVs20RelativeConstReadWithDefBytecode());
+  checkContains(source, "constant float4* cFloat = vsConsts.vsFloatConst;",
+                "vs_2_0 relative addressing plus DEF aliases the bound constant buffer");
+  checkContains(source, "const float4 dxmt9_cdef6 = float4(1.0f, 0.0f, 0.0f, 0.0f);",
+                "vs_2_0 relative addressing plus DEF hoists the DEF literal");
+  checkContains(source,
+                "([&]() -> float4 { int dxmt9_cfi = clamp(a0.x + 5, 0, 255);"
+                " if (dxmt9_cfi == 6) { return dxmt9_cdef6; }"
+                " return cFloat[dxmt9_cfi]; }())",
+                "vs_2_0 relative constant read selects the DEF literal on a dynamic hit");
+  checkContains(source, "r[0] = (r[0] + dxmt9_cdef6);",
+                "vs_2_0 static read of the DEF'd register resolves to the hoisted literal");
+  checkNotContains(source, "float4 cFloat[256];",
+                   "vs_2_0 relative addressing plus DEF must not materialize the register file");
+  checkNotContains(source, "cFloat[i] = vsConsts.vsFloatConst[i];",
+                   "vs_2_0 relative addressing plus DEF must not copy the register file");
+  checkNotContains(source, "cFloat[6] = float4(",
+                   "hoisted DEF literals leave no array entry to overwrite");
+}
+
+void testRelativeConstReadWithoutDefsEmitsNoDefSelect() {
+  const auto pixelSource = translatePixel(makePs30IndexedConstSourceBytecode());
+  checkContains(pixelSource, "cFloat[clamp(a0.x + 7, 0, 223)]",
+                "ps_3_0 DEF-free relative constant read stays a plain clamped access");
+  checkNotContains(pixelSource, "dxmt9_cfi",
+                   "ps_3_0 DEF-free relative constant read must not emit a def select");
+
+  const auto vertexSource = translateVertex(makeVs20IndexedConstSourceBytecode());
+  checkContains(vertexSource, "cFloat[clamp(a0.x + 5, 0, 255)]",
+                "vs_2_0 DEF-free relative constant read stays a plain clamped access");
+  checkNotContains(vertexSource, "dxmt9_cfi",
+                   "vs_2_0 DEF-free relative constant read must not emit a def select");
+}
+
+void testRelativeConstReadDefSelectRespectsBoundedCap() {
+  const auto atCap = translateVertex(makeVs20RelativeConstReadWithDefCountBytecode(8));
+  checkContains(atCap, "constant float4* cFloat = vsConsts.vsFloatConst;",
+                "eight DEFs stay within the select cap and keep the pointer alias");
+  checkContains(atCap, "if (dxmt9_cfi == 7) { return dxmt9_cdef7; }",
+                "every DEF'd register participates in the select chain at the cap");
+  checkNotContains(atCap, "float4 cFloat[256];",
+                   "eight DEFs must not materialize the register file");
+
+  const auto overCap = translateVertex(makeVs20RelativeConstReadWithDefCountBytecode(9));
+  checkContains(overCap, "float4 cFloat[256];",
+                "nine DEFs exceed the select cap and fall back to the register file");
+  checkContains(overCap,
+                "for (uint i = 0; i < 256; ++i) { cFloat[i] = vsConsts.vsFloatConst[i]; }",
+                "the over-cap fallback keeps the register-file copy loop");
+  checkContains(overCap, "cFloat[8] = float4(1.0f, 0.0f, 0.0f, 0.0f);",
+                "the over-cap fallback keeps DEF array overwrites");
+  checkNotContains(overCap, "dxmt9_cfi",
+                   "the over-cap fallback must not emit a def select");
+}
+
+void testRuntimeConstWriteWithRelativeReadKeepsRegisterFileArray() {
+  const auto source =
+      translateVertex(makeVs20RelativeConstReadWithDefAndRuntimeWriteBytecode());
   checkContains(source, "float4 cFloat[256];",
-                "vs_2_0 relative addressing plus DEF keeps the materialized register file");
+                "a runtime constant write keeps the materialized register file");
   checkContains(source,
                 "for (uint i = 0; i < 256; ++i) { cFloat[i] = vsConsts.vsFloatConst[i]; }",
-                "vs_2_0 relative addressing plus DEF keeps the register-file copy loop");
+                "a runtime constant write keeps the register-file copy loop");
   checkContains(source, "cFloat[6] = float4(1.0f, 0.0f, 0.0f, 0.0f);",
-                "vs_2_0 DEF overwrites the copied array entry in the relative-addressing path");
+                "a runtime constant write keeps DEF array overwrites");
   checkContains(source, "cFloat[clamp(a0.x + 5, 0, 255)]",
-                "vs_2_0 relative constant read stays a clamped array access");
-  checkContains(source, "r[0] = (r[0] + cFloat[6]);",
-                "vs_2_0 static read of the DEF'd register resolves through the array (defs win)");
+                "a runtime constant write keeps the plain clamped array read");
+  checkNotContains(source, "dxmt9_cfi",
+                   "a runtime constant write must not emit a def select");
+}
+
+void testRelativeIntAndBoolConstReadsSelectDefLiterals() {
+  const auto intSource = translatePixel(makePs30RelativeIntConstReadWithDefiBytecode());
+  checkContains(intSource, "constant int4* cInt = psConsts.psIntConst;",
+                "ps_3_0 relative int read plus DEFI aliases the bound int buffer");
+  checkContains(intSource, "const int4 dxmt9_cdefi1 = int4(2, 0, 0, 0);",
+                "ps_3_0 relative int read plus DEFI hoists the DEFI literal");
+  checkContains(intSource,
+                "([&]() -> int4 { int dxmt9_cii = clamp(a0.x + 0, 0, 15);"
+                " if (dxmt9_cii == 1) { return dxmt9_cdefi1; }"
+                " return cInt[dxmt9_cii]; }())",
+                "ps_3_0 relative int read selects the DEFI literal on a dynamic hit");
+  checkNotContains(intSource, "int4 cInt[16];",
+                   "ps_3_0 relative int read plus DEFI must not materialize the int file");
+
+  const auto boolSource = translatePixel(makePs30RelativeBoolConstReadWithDefbBytecode());
+  checkContains(boolSource, "constant uint* cBool = psConsts.psBoolConst;",
+                "ps_3_0 relative bool read plus DEFB aliases the bound bool buffer");
+  checkContains(boolSource, "const uint dxmt9_cdefb1 = 1u;",
+                "ps_3_0 relative bool read plus DEFB hoists the DEFB literal");
+  checkContains(boolSource,
+                "([&]() -> uint { int dxmt9_cbi = clamp(a0.x + 0, 0, 15);"
+                " if (dxmt9_cbi == 1) { return dxmt9_cdefb1; }"
+                " return cBool[dxmt9_cbi]; }())",
+                "ps_3_0 relative bool read selects the DEFB literal on a dynamic hit");
+  checkNotContains(boolSource, "uint cBool[16];",
+                   "ps_3_0 relative bool read plus DEFB must not materialize the bool file");
 }
 
 }  // namespace
@@ -3444,7 +3651,11 @@ int main() {
     testVs30ConstReadsBindConstantBufferInPlace();
     testPs30DefConstantsHoistToImmutableLocalsAndWinAtUseSites();
     testVs20DefConstantsHoistToImmutableLocalsAndWinAtUseSites();
-    testVs20RelativeConstReadWithDefKeepsRegisterFileArray();
+    testVs20RelativeConstReadWithDefSelectsDefLiteralInPlace();
+    testRelativeConstReadWithoutDefsEmitsNoDefSelect();
+    testRelativeConstReadDefSelectRespectsBoundedCap();
+    testRuntimeConstWriteWithRelativeReadKeepsRegisterFileArray();
+    testRelativeIntAndBoolConstReadsSelectDefLiterals();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;
