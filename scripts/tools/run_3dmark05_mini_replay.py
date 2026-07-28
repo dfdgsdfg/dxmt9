@@ -28,6 +28,17 @@ from analyze_shader_dumps import parse_vsout_fields, stage_in_read_fields
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MIN_CAPTURE_FREE_MB = 2048
 VSOUT_RE = re.compile(r"struct\s+VSOut\s*\{(?P<body>.*?)\};", re.S)
+# dxmt9_fs is declared with one of three return shapes depending on which
+# emitter produced it: `FSOut` (every D3D9-bytecode-translated pixel shader --
+# dxmt9_shader_metal_ir.cpp hardcodes usesFragmentOutStruct = true, making
+# this the dominant real shape for the per-draw shaders this harness dumps
+# and replays), `FfpFsOut` (fixed-function draws, dxmt9_ffp_shaders.cpp), or
+# a bare `float4` (only dxmt9's internal blit/gamma-apply/debug-fill utility
+# shaders, dxmt9_shader_sources.cpp -- never the per-draw shader this harness
+# replays). See specs/experiments/harness/replay/requirements.md
+# R-HARN-REPLAY-6.2.
+FRAGMENT_ENTRY_RE = re.compile(r"fragment\s+(\w+)\s+dxmt9_fs\s*\(")
+STRUCT_OUTPUT_MEMBER_RE = re.compile(r"[\w:<>]+\s+(\w+)\s*\[\[([^\]]+)\]\]\s*;")
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -729,12 +740,85 @@ def replace_function_body(source: str, function_name: str, replacement_body: str
     return source[:open_index] + replacement_body + source[close_index + 1:]
 
 
-def force_fragment_color_source(source: str) -> str:
-    return replace_function_body(
-        source,
-        "dxmt9_fs",
-        "{\n  return float4(1.0f, 0.0f, 1.0f, 1.0f);\n}",
+def fragment_entry_return_type(source: str) -> str:
+    """The declared return type of `dxmt9_fs`: `FSOut`, `FfpFsOut`, or the
+    bare `float4` used only by internal utility shaders. See the
+    FRAGMENT_ENTRY_RE comment for the three real emission sites."""
+    match = FRAGMENT_ENTRY_RE.search(source)
+    if not match:
+        raise SystemExit(
+            "mini replay rewrite could not find dxmt9_fs's declared "
+            "fragment return type (expected `fragment <Type> dxmt9_fs(`)"
+        )
+    return match.group(1)
+
+
+def struct_definition_body(source: str, struct_name: str) -> str:
+    """The brace-matched body text of `struct <struct_name> { ... };`."""
+    match = re.search(rf"struct\s+{re.escape(struct_name)}\s*\{{", source)
+    if not match:
+        raise SystemExit(f"mini replay rewrite could not find struct {struct_name} declaration")
+    open_index = match.end() - 1
+    depth = 0
+    for index in range(open_index, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_index + 1:index]
+    raise SystemExit(f"mini replay rewrite could not close struct {struct_name} declaration")
+
+
+def fragment_output_struct_members(source: str, struct_name: str) -> list[tuple[str, str]]:
+    """`[(member_name, attribute_text), ...]` for every attributed member of
+    `struct_name` (e.g. `("color0", "color(0)")`, `("sampleMask",
+    "sample_mask")`). The member name is parsed from the real source, not
+    assumed -- `FfpFsOut`'s color member is `color`, not `color0`."""
+    body = struct_definition_body(source, struct_name)
+    members = STRUCT_OUTPUT_MEMBER_RE.findall(body)
+    if not members:
+        raise SystemExit(
+            f"mini replay rewrite found no attributed output members in struct {struct_name}"
+        )
+    return members
+
+
+def fragment_output_member_statement(struct_name: str, name: str, attribute: str, color_expr: str) -> str:
+    if "color(" in attribute:
+        return f"  o.{name} = {color_expr};\n"
+    if "depth(" in attribute:
+        return f"  o.{name} = 0.0f;\n"
+    if attribute.strip() == "sample_mask":
+        return f"  o.{name} = 0xffffffffu;\n"
+    raise SystemExit(
+        f"mini replay rewrite does not know how to force struct member "
+        f"{struct_name}.{name} [[{attribute}]] in a forced fragment output "
+        f"(recognized attributes: color(N), depth(...), sample_mask)"
     )
+
+
+def fragment_output_body(source: str, color_expr: str, preamble: str = "") -> str:
+    """The replacement `dxmt9_fs` body that assigns `color_expr` to every
+    color-attachment member of the function's declared return type, leaving
+    no member (sampleMask, depth) uninitialized. For the bare-`float4`
+    utility-shader shape this degrades to the historical
+    `return <color_expr>;`."""
+    ret_type = fragment_entry_return_type(source)
+    if ret_type == "float4":
+        return "{\n" + preamble + f"  return {color_expr};\n}}"
+    members = fragment_output_struct_members(source, ret_type)
+    body = "{\n" + preamble + f"  {ret_type} o;\n"
+    for name, attribute in members:
+        body += fragment_output_member_statement(ret_type, name, attribute, color_expr)
+    body += "  return o;\n}"
+    return body
+
+
+def force_fragment_color_source(source: str) -> str:
+    body = fragment_output_body(source, "float4(1.0f, 0.0f, 1.0f, 1.0f)")
+    return replace_function_body(source, "dxmt9_fs", body)
 
 
 def add_fragment_primitive_id_parameter(source: str) -> str:
@@ -758,17 +842,15 @@ def add_fragment_primitive_id_parameter(source: str) -> str:
 
 def force_fragment_primitive_id_source(source: str) -> str:
     source = add_fragment_primitive_id_parameter(source)
-    return replace_function_body(
-        source,
-        "dxmt9_fs",
-        "{\n"
-        "  uint value = primitiveId + 1u;\n"
-        "  return float4(float(value & 255u) / 255.0f,\n"
+    preamble = "  uint value = primitiveId + 1u;\n"
+    color_expr = (
+        "float4(float(value & 255u) / 255.0f,\n"
         "                float((value >> 8u) & 255u) / 255.0f,\n"
         "                float((value >> 16u) & 255u) / 255.0f,\n"
-        "                1.0f);\n"
-        "}",
+        "                1.0f)"
     )
+    body = fragment_output_body(source, color_expr, preamble)
+    return replace_function_body(source, "dxmt9_fs", body)
 
 
 def cxx_string(value: str) -> str:
