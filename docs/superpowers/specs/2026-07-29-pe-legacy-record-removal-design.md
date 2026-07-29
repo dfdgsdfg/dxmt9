@@ -115,9 +115,17 @@ function of chunk-boundary history, not of the shadow. Its comment states the
 contract explicitly: "The serialized packet remains the sole source of retention
 semantics (R-CORE-11.17)."
 
-**Resolution: keep the transform pure by making every one of these an explicit
-POD input.** COM-to-wire translation stays on the device; chunk context is
-passed in rather than reached for.
+**Resolution: two functions, not one.** Classes (a)-(c) are producer inputs.
+Class (d) is *not* — correcting an error in this document's first draft, which
+merged them. `populatePendingChunkDrawStreamDependencies` is called from the
+four draw sites only (`:9349`, `:9363`, `:9422`, `:9437`); the APPLY_STATE path
+at `:10000` applies no chunk-context logic at all. Merging them would have made
+APPLY_STATE emit sections production never emits, and would have made any
+old-versus-new differential unsatisfiable. So the split mirrors production: a
+pure producer, then a separate chunk-context step the draw sites call after it.
+
+COM-to-wire translation stays on the device; chunk context is passed to the
+second function rather than reached for.
 
 ```cpp
 // New TU. No windows.h / d3d9.h.
@@ -138,13 +146,22 @@ struct PeChunkContext {  // (d) — the destination chunk's history, as data
 
 struct PeDrawPayloads { std::span<const std::byte> upIndex, upVertex; };  // (c)
 
-bool buildSparseStateV2(const PeStateShadow&   shadow,
-                        const PeConstShadow&   constants,   // (b)
-                        const PeBindingView&   bindings,    // (a)
-                        const PeChunkContext&  chunk,       // (d)
-                        const PeDrawPayloads&  payloads,    // (c)
-                        PeSparseScratch&       scratch,
-                        SparseStateV2Input&    out) noexcept;
+// Pure over (a)-(c). Every record type uses this.
+bool buildSparseStateV2(const PeHotStateShadow& shadow,
+                        PeConstShadowBlock&     constants,  // (b), drained
+                        const PeBindingView&    bindings,   // (a)
+                        const PeDrawPayloads&   payloads,   // (c)
+                        const PeDrawParams&     params,
+                        PeSparseScratch&        scratch,
+                        D9CCommandChunkWireDrawHeaderV2& header,
+                        SparseStateV2Input&     out) noexcept;
+
+// (d), applied afterwards. Draw sites only -- APPLY_STATE never calls it.
+// Mirrors populatePendingChunkDrawStreamDependencies / ...IndexDependency.
+bool addChunkContextSections(const PeChunkContext& chunk,
+                             const PeBindingView&  bindings,
+                             PeSparseScratch&      scratch,
+                             SparseStateV2Input&   out) noexcept;
 ```
 
 `PeStreamBinding` is `{PeWireObjectRef buffer; std::uint32_t offset, stride;}`.
@@ -155,10 +172,12 @@ which the output spans point at. It is an output parameter rather than a local
 so that no per-draw allocation occurs and the spans stay alive exactly until
 `appendSparseRecordV2` has consumed them.
 
-With `chunk` as an explicit parameter the function is a pure transform again —
-and, importantly, the differential test can now *drive* chunk context instead of
-being unable to reproduce it. That is the whole reason to surface it rather than
-let the producer call back into the builder.
+With `chunk` an explicit parameter of the second function, both are pure
+transforms and the differential can *drive* chunk context instead of being
+unable to reproduce it — which is the whole reason to surface it rather than let
+either function call back into the builder. The differential compares
+producer-only lanes for APPLY_STATE and producer-plus-context lanes for draws,
+matching what production does at each site.
 
 Constraints `appendSparseRecordV2` imposes on any producer, verified against
 `d3d9_pe_chunk_v2_draw.cpp`: strictly ascending slot order per section
@@ -402,6 +421,11 @@ the change, not a follow-up.
 - It does not claim an FPS improvement.
 
 ## 10. Review history
+
+Amended 2026-07-29 after the implementation plan's review found a sixth defect:
+§3 originally listed destination-chunk state as a fourth *producer input*. It is
+not. Production applies it in the draw call sites' writer lambdas, after the
+producer runs, and never for APPLY_STATE. §3 now specifies two functions.
 
 Reviewed adversarially on 2026-07-29 against the source. Five claims in the
 first draft were confirmed defective and are corrected above: the
