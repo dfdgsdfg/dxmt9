@@ -7,8 +7,8 @@ title: Encode Session GPU Sample State
 date: 2026-06-20
 type: implementation-scaffold
 status: accepted-prerequisite
-source: src/dxmt9/dxmt9_draw_encoder.mm, docs/perfomance/present-pacing/present-pacing-encode-session-shadow-state.131.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
-related: docs/perfomance/present-pacing/present-pacing-encode-session-shadow-state.131.md, docs/perfomance/present-pacing/present-pacing-encode-session-injection-api.130.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
+source: src/dxmt9/dxmt9_draw_encoder.mm, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
+related: docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
 ---
 
 # Present Pacing / Encode Session GPU Sample State 132

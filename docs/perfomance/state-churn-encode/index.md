@@ -5,7 +5,7 @@ title: "State-Churn Encode — the CPU encode path and draw-run batching"
 type: domain-index
 status: current
 updated: 2026-07-20
-source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+source: docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/state-churn-encode/overview.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -27,14 +27,12 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 ## Recent Leaf Documents
 
 - [state-churn-encode-encode-phase.203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression](state-churn-encode-encode-phase.203.md)
-- [state-churn-encode-encode-phase.202 - Direct-Cbuf Cross-Workload Generality Gate](state-churn-encode-encode-phase.202.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)
 - [state-churn-encode-encode-phase.200 - Uniform Fixed Payload Handle Carry](state-churn-encode-encode-phase.200.md)
 - [state-churn-encode-encode-phase.199 - Stage-Level Uniform Append Split Counters](state-churn-encode-encode-phase.199.md)
 - [state-churn-encode-encode-phase.198 - Append Uniform CPU Residual Reanalysis](state-churn-encode-encode-phase.198.md)
 - [state-churn-encode-encode-phase.197 - Draw Batch Submit Residual Reanalysis](state-churn-encode-encode-phase.197.md)
 - [state-churn-encode-encode-phase.196 - Queue Lock Attribution Runtime](state-churn-encode-encode-phase.196.md)
-- [state-churn-encode-encode-phase.195 - Current Wall Review and Next Owner Split](state-churn-encode-encode-phase.195.md)
 - [state-churn-encode-encode-phase.194 - Forced Resource-Marking Flush Attribution](state-churn-encode-encode-phase.194.md)
 - [state-churn-encode-encode-phase.191 - Forced Resource-Marking Submit Prerequisite](state-churn-encode-encode-phase.191.md)
 - [state-churn-encode-encode-phase.190 - Chunk-End Carry Feasibility Audit](state-churn-encode-encode-phase.190.md)

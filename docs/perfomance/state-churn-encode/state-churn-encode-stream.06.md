@@ -7,12 +7,12 @@ title: Handle-Stable Stream/IB A/B Feasibility
 date: 2026-06-06
 type: design-gate
 status: accepted-gate
-source: docs/perfomance/state-churn-encode/state-churn-encode-stream.05.md; src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_resource_pool.hpp; src/dxmt9/dxmt9_resource_pool.cpp; src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_debug_trace.hpp; src/dxmt9/dxmt9_debug_trace.cpp
+source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_resource_pool.hpp; src/dxmt9/dxmt9_resource_pool.cpp; src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_debug_trace.hpp; src/dxmt9/dxmt9_debug_trace.cpp
 ---
 
 # Handle-Stable Stream/IB A/B Feasibility
 
-**Question / hypothesis.** [state-churn-encode-stream.05](state-churn-encode-stream.05.md) makes stream/IB a
+**Question / hypothesis.** state-churn-encode-stream.05 makes stream/IB a
 bounded tuple-alternation target. Can the next experiment be a small bind-cache
 change, or does a valid handle-stable A/B require a data-layout mechanism?
 
@@ -92,6 +92,6 @@ production-shaped option is allocation-time coalescing, but that is a broader
 resource-pool design change because the current `BufferRecord` model has no
 slice/base-offset abstraction.
 
-**Related.** [state-churn-encode-stream.05](state-churn-encode-stream.05.md) ·
-[state-churn-encode-stream.04](state-churn-encode-stream.04.md) · [state-churn-encode](index.md) ·
+**Related.** state-churn-encode-stream.05 ·
+state-churn-encode-stream.04 · [state-churn-encode](index.md) ·
 [hidden-backend-storage](../hidden-backend-storage/index.md).

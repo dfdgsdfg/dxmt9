@@ -7,7 +7,7 @@ source: /Users/dididi/workspaces/wine/dlls/winemac.drv/cocoa_event.m, /Users/did
 
 # Present Pacing 28 - winemac OnMainThread Transmission Audit
 
-**Question.** [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) identifies the P4 front
+**Question.** present-pacing-pe-caller-stack.20 identifies the P4 front
 gate as the app-side interval between 3DMark05 command-object dispatches:
 `SetRenderTarget` returns from the wrapper quickly, then the record-producing
 `Clear` wrapper is dispatched about `17.4ms` later. Can Wine's macOS driver
@@ -56,7 +56,7 @@ This would explain why:
 - early RT setup and child getters are not the sleeper
   (present-pacing-pe-clear-gate.15, present-pacing-pe-wide-call-coverage.17);
 - the stable owner appears above D3D wrapper stubs in the 3DMark05 command
-  dispatcher ([present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md));
+  dispatcher (present-pacing-pe-caller-stack.20);
 - dxmt9 boundary/latency and completed-seq perturbations do not move the gate
   (present-pacing-boundary-latency-ab.06,
   present-pacing-completion-signal-delay.21).
@@ -177,12 +177,12 @@ overhead make it weak final evidence for the low-overhead FPS lane.
 
 **Decision.** Source-audit hypothesis accepted as a possible P4 transmission
 path, but demoted below the native-thread System Trace scouts. It supersedes
-neither [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) nor
+neither present-pacing-pe-caller-stack.20 nor
 present-pacing-lowoverhead-serial.24: those remain runtime evidence.
 Promotion requires a real 3DMark05 run that joins macdrv `OnMainThread` wait
 rows to the PE `SetRenderTarget` -> `Clear` gap and contradicts the later
 producer-running negative scouts.
 
-**Related.** [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) ·
+**Related.** present-pacing-pe-caller-stack.20 ·
 present-pacing-xctrace-threadstate.18 · present-pacing-lowoverhead-serial.24
 · [present-pacing](index.md).

@@ -8,7 +8,7 @@ date: 2026-06-19
 type: tooling-attribution
 status: accepted-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h174-carrier-counter-r1/result.json, experiments/output/app-d3d9-3dmark05-h179-keepfront-current-r1/result.json, traces/app-d3d9-3dmark05-h179-keepfront-current-r1/analysis/frame60-perf-counter-comparison.md
-related: docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.163.md, docs/perfomance/present-pacing/present-pacing-publish-residency-counters.85.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.163.md, docs/perfomance/present-pacing/present-pacing-publish-residency-counters.85.md
 ---
 
 # Present Pacing / Publish Residency Percentile Gate 100

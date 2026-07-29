@@ -8,7 +8,7 @@ date: 2026-06-18
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_compare_3dmark05_perf_counters.py, tests/scripts/test_3dmark05_probe_scripts.py
-related: docs/perfomance/present-pacing/present-pacing-noenqueue-compare-closure.80.md, docs/perfomance/present-pacing/present-pacing-run-ahead-current-code.73.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md
+related: docs/perfomance/present-pacing/present-pacing-noenqueue-compare-closure.80.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md
 ---
 
 # Present-Pacing 81 - Encode ready-depth compare gate

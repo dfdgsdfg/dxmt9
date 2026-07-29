@@ -7,7 +7,7 @@ title: Post Stream/IB Xcode Gate Triage
 date: 2026-06-06
 type: validation
 status: accepted-gate
-source: docs/perfomance/state-churn-encode/state-churn-encode-stream.09.md; docs/perfomance/state-churn-encode/state-churn-encode-stream.08.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.09.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.11.md; docs/perfomance/overview-3dmark05-gt1.md
+source: docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Post Stream/IB Xcode Gate Triage
@@ -16,12 +16,12 @@ source: docs/perfomance/state-churn-encode/state-churn-encode-stream.09.md; docs
 Xcode result mean for the hidden-backend-storage investigation, and where
 should the next engineering/Xcode budget go?
 
-**Method.** Treat [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) as the first complete
+**Method.** Treat state-churn-encode-stream.09 as the first complete
 handle-identity A/B for `60/2`: same draw count, vertex count, triangle count,
 VS invocations, PSO shape, argbuf/cbuf bytes, and visible VSOut key, but
 stream/IB handle changes reduced to zero. Then reclassify the remaining open
-hidden-backend branches from [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) and
-[hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md).
+hidden-backend branches from hidden-backend-storage-shape.09 and
+hidden-backend-storage-shape.11.
 
 ```mermaid
 flowchart TD
@@ -96,6 +96,6 @@ back to VS-invocation reduction with semantic proof, real position/binning
 backend experiments, mesh/object escape experiments, or isolated PSO/spill A/B.
 
 **Related.** [hidden-backend-storage](index.md) ·
-[hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) · [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md) ·
-[state-churn-encode-stream.08](../state-churn-encode/state-churn-encode-stream.08.md) · [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) ·
+hidden-backend-storage-shape.09 · hidden-backend-storage-shape.11 ·
+state-churn-encode-stream.08 · state-churn-encode-stream.09 ·
 [mini-replay-bisection](../mini-replay-bisection/index.md) · [index-cache-locality](../index-cache-locality/index.md).

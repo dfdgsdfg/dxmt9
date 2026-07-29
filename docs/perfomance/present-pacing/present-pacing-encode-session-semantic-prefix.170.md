@@ -8,7 +8,7 @@ date: 2026-06-27
 type: no-gputrace
 status: diagnostic-safe-runtime-rejected
 source: experiments/output/app-d3d9-3dmark05-encode-session-semantic-prefix-r1-20260627/result.json, experiments/output/app-d3d9-3dmark05-encode-session-semantic-prefix-r1-20260627/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-semantic-prefix-r1-20260627/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-semantic-prefix-r1-20260627/dxmt9.log, experiments/output/app-d3d9-3dmark05-encode-session-semantic-prefix-r1-20260627/actual.png
-related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-ordinary-source-append.169.md, docs/perfomance/present-pacing/present-pacing-encode-session-wait-start-cpuready-publish.168.md, specs/backend/spec.md, specs/backend/requirements.md
+related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-ordinary-source-append.169.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H170 - EncodeSession Semantic Prefix Selection

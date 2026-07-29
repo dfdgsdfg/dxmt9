@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-attribution
 status: accepted-current-attribution
 source: src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h180-first-publish-slot-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-h180-first-publish-slot-r1/analysis/frame60-perf-counter-comparison.md
-related: docs/perfomance/present-pacing/present-pacing-publish-residency-percentiles.100.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/present-pacing/present-pacing-publish-residency-counters.85.md
+related: docs/perfomance/present-pacing/present-pacing-publish-residency-percentiles.100.md, docs/perfomance/present-pacing/present-pacing-publish-residency-counters.85.md
 ---
 
 # Present Pacing / No-Enqueue First Publish Slot Shape 101

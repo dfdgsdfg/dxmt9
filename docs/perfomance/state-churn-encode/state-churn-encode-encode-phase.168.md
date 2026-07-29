@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-scout
 status: rejected-visual-fix
 source: experiments/output/app-d3d9-3dmark05-h190-resource-shape-memo-disabled-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h190-resource-shape-memo-disabled-r1/actual.png, experiments/output/app-d3d9-3dmark05-h190-resource-shape-memo-disabled-r1/h189-vs-h190-resource-shape-memo-disabled.md, traces/app-d3d9-3dmark05-h190-resource-shape-memo-disabled-r1/analysis/h189-vs-h190-actual-image-compare.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.167.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.81.md, docs/perfomance/overview-3dmark05-gt1.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.167.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 168 - Resource shape memo opt-out visual A/B

@@ -8,7 +8,7 @@ date: 2026-06-18
 type: experiment
 status: accepted-local-cpu-win-rejected-correctness-rejected-fps-owner
 source: experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/actual.png, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-r1-20260618/actual.png, traces/app-d3d9-3dmark05-v003-direct-cbuf-r1-20260618/analysis/frame60-perf-counter-comparison.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.146.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.01.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.01.md
 ---
 
 # Encode Phase 147 - V003 Direct-Cbuf Visual-Safety Repeat

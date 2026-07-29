@@ -8,7 +8,7 @@ date: 2026-07-20
 type: implementation-validation
 status: accepted-correctness-gate-closed-default-on
 source: src/dxmt9/dxmt9_uniform_dirty.hpp; src/dxmt9/dxmt9_uniform_dirty.cpp; src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_pipeline_cache.cpp; tests/native/core/draw_uniforms_dirty_spec.cpp; tests/native/backend/backend_pipeline_key_spec.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md
 ---
 
 # Encode Phase 203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression
@@ -75,4 +75,4 @@ other non-empty values to ON.
 
 No new GPU capture was required because this gate concerns deterministic
 payload-source and dirty-range semantics. The cross-workload visual and GPU
-health evidence remains owned by [phase 202](state-churn-encode-encode-phase.202.md).
+health evidence remains owned by phase 202.

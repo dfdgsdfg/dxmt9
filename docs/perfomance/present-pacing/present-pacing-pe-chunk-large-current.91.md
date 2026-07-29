@@ -8,7 +8,7 @@ date: 2026-06-19
 type: ablation
 status: rejected-large-pe-chunk-capacity
 source: experiments/output/app-d3d9-3dmark05-h172-pe-chunk128-512k-r1/result.json, experiments/output/app-d3d9-3dmark05-h172-pe-chunk128-512k-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h172-pe-chunk128-512k-r1/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-h172-pe-chunk128-512k-r1/actual.png
-related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence.90.md, docs/perfomance/present-pacing/present-pacing-pe-chunk-size-ab.12.md, docs/perfomance/present-pacing/present-pacing-noenqueue-compare-closure.80.md
+related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence.90.md, docs/perfomance/present-pacing/present-pacing-noenqueue-compare-closure.80.md
 ---
 
 # Present Pacing 91 - Larger PE chunk capacity reduces bridge count but fails P4

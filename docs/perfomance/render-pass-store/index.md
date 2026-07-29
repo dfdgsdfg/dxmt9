@@ -21,5 +21,4 @@ Latest tracked row: `H14` - The stable role ping-pong also has stable pass-actio
 
 ## Recent Leaf Documents
 
-- [render-pass-store-coalesce.04 - H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled](render-pass-store-coalesce.04.md)
 - [render-pass-store-memoryless.01 - Transient D3D9 RT Memoryless Promotion (design)](render-pass-store-memoryless.01.md)

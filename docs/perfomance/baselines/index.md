@@ -20,5 +20,3 @@ Latest tracked row: `H15` - A latest black-geometry / transparent-weapon report 
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
-
-- [baselines-gputrace-capture.02 - Capture Layer File Route Recovers After Fragment Function Lifetime Fix](baselines-gputrace-capture.02.md)

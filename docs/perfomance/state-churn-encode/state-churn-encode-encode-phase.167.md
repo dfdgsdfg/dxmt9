@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-scout
 status: rejected-default-validation
 source: experiments/output/app-d3d9-3dmark05-h189-resource-shape-probekey-gate-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h189-resource-shape-probekey-gate-r1/actual.png, src/dxmt9/dxmt9_command_queue.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.81.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.82.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.166.md, docs/perfomance/overview-3dmark05-gt1.md
+related: docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 167 - Resource shape memo ProbeKey validation

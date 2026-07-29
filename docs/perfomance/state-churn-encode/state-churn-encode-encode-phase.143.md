@@ -8,7 +8,6 @@ date: 2026-06-16
 type: implementation+test
 status: accepted-abi-gate
 source: src/dxmt9/dxmt9_draw_shader.hpp, src/dxmt9/dxmt9_shader_sources.hpp, src/dxmt9/dxmt9_pipeline_cache.hpp, src/dxmt9/dxmt9_pipeline_cache.cpp, src/dxmt9/dxmt9_ffp_shaders.cpp, src/dxmt9/dxmt9_shader_metal_ir.cpp, tests/native/backend/argbuf_hybrid_msl_spec.cpp, tests/native/backend/argbuf_hybrid_spec.cpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.133.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.142.md
 ---
 
 # Encode Phase 143 - Stage 2b Direct-Cbuf ABI Gate
@@ -94,5 +93,5 @@ when resource-array table mutation is not required, then verify:
   for GPU-side invariance, not as the primary CPU proof.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.133](state-churn-encode-encode-phase.133.md) ·
-[state-churn-encode-encode-phase.142](state-churn-encode-encode-phase.142.md).
+state-churn-encode-encode-phase.133 ·
+state-churn-encode-encode-phase.142.

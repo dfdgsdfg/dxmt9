@@ -7,7 +7,7 @@ title: Occlusion Oracle Feasibility Gate
 date: 2026-06-06
 type: code-audit
 status: blocked-current-implementation
-source: docs/perfomance/mini-replay-bisection/mini-replay-bisection-texture.07.md; src/d3d9/core_resources.cpp; src/d3d9/core_draw.cpp; src/d3d9/d3d9_pe_device_child_misc.cpp; src/winemetal/winemetal.h; src/winemetal/Metal.hpp; src/winemetal/unix/winemetal_private_api.mm; tests/native/core/core_device_lifecycle_spec.cpp; tests/conformance/d3d9/d3d9_queries.cpp
+source: src/d3d9/core_resources.cpp; src/d3d9/core_draw.cpp; src/d3d9/d3d9_pe_device_child_misc.cpp; src/winemetal/winemetal.h; src/winemetal/Metal.hpp; src/winemetal/unix/winemetal_private_api.mm; tests/native/core/core_device_lifecycle_spec.cpp; tests/conformance/d3d9/d3d9_queries.cpp
 ---
 
 # Occlusion Oracle Feasibility Gate
@@ -126,5 +126,5 @@ cannot be repurposed for that signal. The remaining production choices are:
   mechanisms.
 
 **Related.** [mini-replay-bisection](index.md) ·
-[mini-replay-bisection-texture.07](mini-replay-bisection-texture.07.md) · [index-cache-locality](../index-cache-locality/index.md) ·
+mini-replay-bisection-texture.07 · [index-cache-locality](../index-cache-locality/index.md) ·
 [hidden-backend-storage](../hidden-backend-storage/index.md).

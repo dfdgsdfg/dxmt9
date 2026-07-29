@@ -133,5 +133,5 @@ not an Xcode `VS Buffer Device Memory Bytes Written` proof.
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.91](state-churn-encode-encode-phase.91.md) ·
-[state-churn-encode-encode-phase.48](state-churn-encode-encode-phase.48.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+state-churn-encode-encode-phase.48 · [snapshot-cache](../snapshot-cache/index.md) ·
 [present-pacing](../present-pacing/index.md).

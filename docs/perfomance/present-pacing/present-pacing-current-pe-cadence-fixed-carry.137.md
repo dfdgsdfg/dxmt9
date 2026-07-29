@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-attribution
 status: accepted-attribution
 source: experiments/output/app-d3d9-3dmark05-current-pe-cadence-fixed-carry-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-pe-cadence-fixed-carry-r1/result.json, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.200.md
-related: docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence-wrapper.117.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.200.md
+related: docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.200.md
 ---
 
 # Present Pacing / Current PE cadence after fixed uniform carry 137

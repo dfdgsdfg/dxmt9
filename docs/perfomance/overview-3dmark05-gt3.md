@@ -5,7 +5,7 @@ title: "3DMark05 GT3 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair{1,2,3,4,5}-{v1,v2}; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+source: 2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725; 2; 3; 4; 5}-{v1; v2}; v2}-exact
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
@@ -47,7 +47,7 @@ without a quadrant rectangle, but it does not replace the exact 66-68-second
 gate. Chunk/V2 rejects, GPU errors, pipeline failures, missing-pipeline draws,
 and DCE activity are all zero.
 
-The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+The 2026-07-20 direct-cbuf generality gate
 measures sampled FPS `27.753 -> 27.893` (`+0.50%`) while draw/chunk CPU falls
 `22.60%/18.27%`, argbuf setup/binds become zero, and all errors stay zero.
 An additional ON capture lands at `1:07.66` in the former quadrant-noise

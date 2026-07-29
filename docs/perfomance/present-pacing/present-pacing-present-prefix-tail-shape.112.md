@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-attribution
 status: accepted-carrier-blocker
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h187-present-prefix-tailshape-r1/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-present-split-tail-shape.111.md, docs/perfomance/present-pacing/present-pacing-present-tail-prefix-current.102.md, docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md
+related: docs/perfomance/present-pacing/present-pacing-present-tail-prefix-current.102.md, docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md
 ---
 
 # Present Pacing / Present-Published Prefix Tail-Shape Attribution 112

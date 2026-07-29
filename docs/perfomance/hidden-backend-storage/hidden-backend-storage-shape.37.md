@@ -7,7 +7,7 @@ title: GT2 Black Draws Are a Depth Prepass, Not the Main Hidden-Write Owner
 date: 2026-07-24
 type: measurement
 status: accepted-classification-rejected-primary-owner
-source: traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/frame279.gputrace; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-counters-xcode.csv; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-indexed-state-class-xcode-proxy.md; experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/3dmark05-perf-encoders.csv; experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/3dmark05-perf-indexed-probe-draws.csv; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.34.md
+source: traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/frame279.gputrace; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-counters-xcode.csv; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-indexed-state-class-xcode-proxy.md; experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/3dmark05-perf-encoders.csv; experiments/output/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/3dmark05-perf-indexed-probe-draws.csv
 related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md
 ---
 

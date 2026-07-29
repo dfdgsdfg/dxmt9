@@ -8,14 +8,14 @@ date: 2026-06-15
 type: tooling
 status: accepted-compare-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/index.md
+related: docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 105 - Argbuf CPU Compare Gates
 
 ## Question
 
-After [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) shows `argbuf_setup` is the top
+After state-churn-encode-encode-phase.104 shows `argbuf_setup` is the top
 encode row, how should the next A/B prove that it moved the intended owner
 instead of only shifting noise into another CPU bucket?
 
@@ -71,5 +71,5 @@ with the existing serial/P4 gates. A local reduction of `argbuf_setup`,
 average-FPS fix until frame sampling, completion wait, or no-enqueue stage
 shape also moves.
 
-**Related.** [state-churn-encode-encode-phase.104](state-churn-encode-encode-phase.104.md) ·
+**Related.** state-churn-encode-encode-phase.104 ·
 [state-churn-encode](index.md).

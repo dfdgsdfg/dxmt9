@@ -30,4 +30,3 @@ Current status: the coupled pair is engine-default ON since `d45af067` (2026-07-
 - [index-cache-locality-offload-synergy.19 - Offload Absorbs The Index-Cache CPU Tax At FPS Parity](index-cache-locality-offload-synergy.19.md)
 - [index-cache-locality-cpucost.18 - Candidate Gate Shape Counters](index-cache-locality-cpucost.18.md)
 - [index-cache-locality-cpucost.16 - Draw-Shape Prefilter Audit](index-cache-locality-cpucost.16.md)
-- [index-cache-locality-screenblend.10 - Semantic Ceiling Is Now an Automated Gate](index-cache-locality-screenblend.10.md)

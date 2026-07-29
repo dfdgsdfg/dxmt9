@@ -22,14 +22,5 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 ## Recent Leaf Documents
 
 - [mini-replay-bisection-vertexremap.01 - Vertex Remap Is A Null On Row 60/1, And Its Positive Control Failed](mini-replay-bisection-vertexremap.01.md)
-- [mini-replay-bisection-texture.11 - Visibility Positive Semantic Join](mini-replay-bisection-texture.11.md)
-- [mini-replay-bisection-texture.10 - Visibility Scout Cache Join](mini-replay-bisection-texture.10.md)
 - [mini-replay-bisection-texture.09 - Metal Visibility Scout Wiring](mini-replay-bisection-texture.09.md)
 - [mini-replay-bisection-texture.08 - Occlusion Oracle Feasibility Gate](mini-replay-bisection-texture.08.md)
-- [mini-replay-bisection-texture.07 - Primitive Conflict Selector Scout Requires Final-Color Oracle](mini-replay-bisection-texture.07.md)
-- [mini-replay-bisection-texture.06 - Rank-4 Real-Texture Gate Is Color-Exact Owner-Masked](mini-replay-bisection-texture.06.md)
-- [mini-replay-bisection-texture.05 - Rank-3 Real-Texture Gate Is Also Color-Exact Owner-Masked](mini-replay-bisection-texture.05.md)
-- [mini-replay-bisection-texture.04 - Rank-2 Real-Texture Gate Is Color-Exact but Owner-Masked](mini-replay-bisection-texture.04.md)
-- [mini-replay-bisection-texture.03 - Ranked Real-Texture Semantic Gate Queue](mini-replay-bisection-texture.03.md)
-- [mini-replay-bisection-texture.02 - Real-Texture Replay Rejects Exact 60/2 Cache-Opt Proof](mini-replay-bisection-texture.02.md)
-- [mini-replay-bisection-semantic.02 - Scoped 60/2 Depth-Read No-Blend Cache-Opt Replay](mini-replay-bisection-semantic.02.md)

@@ -35,4 +35,3 @@ Latest tracked row: `H232` - phase-aligned GT2 traces locate the 307ms CPU-to-di
 - [present-pacing-consolidation-long-confirm.194 - Consolidation Long Confirm - Offload+IndexCache +10% Over The Full Demo](present-pacing-consolidation-long-confirm.194.md)
 - [present-pacing-pe-const-overhead-cut.193 - PE Const-Chain Overhead Cuts Land Clean But Move No FPS](present-pacing-pe-const-overhead-cut.193.md)
 - [present-pacing-pe-cost-verification.192 - PE Recording Cost Is Real (~10ms/present, Overhead-Corrected)](present-pacing-pe-cost-verification.192.md)
-- [present-pacing-offload-backpressure-attribution.191 - Offload Backpressure Attribution Closes The Mechanism Gate](present-pacing-offload-backpressure-attribution.191.md)

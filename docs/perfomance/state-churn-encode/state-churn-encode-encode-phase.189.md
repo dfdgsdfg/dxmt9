@@ -8,7 +8,7 @@ date: 2026-06-20
 type: experiment
 status: opportunity-accepted-uniform-stable-carry-rejected
 source: experiments/output/app-d3d9-3dmark05-h221-end-flush-intersection-probe-r1
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.188.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
+related: docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
 ---
 
 # Encode Phase 189 - Chunk-end flush uniform intersection probe

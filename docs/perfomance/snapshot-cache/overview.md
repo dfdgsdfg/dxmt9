@@ -53,8 +53,3 @@ write" owner ([hidden-backend-storage](../hidden-backend-storage/index.md)).
 > 2 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [snapshot-cache-snapshot.29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache](snapshot-cache-snapshot.29.md)
-- [snapshot-cache-snapshot.26 - Replay / Snapshot Derived Ranking Re-centers P2/P3 After Direct Cbuf](snapshot-cache-snapshot.26.md)
-- [snapshot-cache-snapshot.25 - Batch-Miss Uniform Payload Reuse Gate](snapshot-cache-snapshot.25.md)
-- [snapshot-cache-snapshot.24 - Batch-Miss Reason Bucket Instrumentation](snapshot-cache-snapshot.24.md)
-- [snapshot-cache-snapshot.23 - Direct-Cbuf Residual Snapshot Owner Recheck](snapshot-cache-snapshot.23.md)
-- [snapshot-cache-snapshot.22 - Redundant Shader Constant No-Op Invalidation](snapshot-cache-snapshot.22.md)

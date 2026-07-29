@@ -7,7 +7,7 @@ title: Backend Escape Feasibility After Current Gate
 date: 2026-06-06
 type: design-triage
 status: accepted-gate
-source: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.13.md; docs/perfomance/overview-3dmark05-gt1.md; src/dxmt9/dxmt9_shader_sources.cpp; src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_pipeline_cache.cpp; src/winemetal/winemetal.h; src/winemetal/Metal.hpp; src/winemetal/unix/winemetal_private_api.mm; tests/native/backend/tile_ffp_selector_spec.cpp; tests/native/backend/tile_ffp_msl_spec.cpp
+source: docs/perfomance/overview-3dmark05-gt1.md; src/dxmt9/dxmt9_shader_sources.cpp; src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_pipeline_cache.cpp; src/winemetal/winemetal.h; src/winemetal/Metal.hpp; src/winemetal/unix/winemetal_private_api.mm; tests/native/backend/tile_ffp_selector_spec.cpp; tests/native/backend/tile_ffp_msl_spec.cpp
 ---
 
 # Backend Escape Feasibility After Current Gate
@@ -112,6 +112,6 @@ should be one of:
 Another visible `VSOut`, stream/IB identity, no-sample visibility, or
 uncontrolled PSO/state Xcode capture would not move the objective.
 
-**Related.** [hidden-backend-storage](index.md) · [hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md) ·
-[state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) · [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) ·
+**Related.** [hidden-backend-storage](index.md) · hidden-backend-storage-shape.13 ·
+state-churn-encode-stream.09 · mini-replay-bisection-texture.10 ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -8,14 +8,14 @@ date: 2026-06-15
 type: tooling
 status: accepted-summary-tooling
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py
-related: docs/perfomance/present-pacing/present-pacing-summary-triage.40.md, docs/perfomance/present-pacing/present-pacing-summary-triage-current.41.md, docs/perfomance/state-churn-encode/index.md
+related: docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 103 - Encode CPU Summary Ranking
 
 ## Question
 
-[present-pacing-summary-triage.40](../present-pacing/present-pacing-summary-triage.40.md) added a standalone P4/P2/P3 summary and
+present-pacing-summary-triage.40 added a standalone P4/P2/P3 summary and
 the current scout in present-pacing-summary-triage-current.41 named
 `encode dequeue -> command buffer commit` as the largest exposed p50 no-enqueue
 row. Can the same single-run summary immediately show which encode child should
@@ -72,5 +72,5 @@ Promotion rule is unchanged: reducing one encode row is only an average-FPS
 claim when the same low-overhead run also moves completion wait, producer
 overlap, no-enqueue stage deltas, or frame sampling.
 
-**Related.** [present-pacing-summary-triage.40](../present-pacing/present-pacing-summary-triage.40.md) ·
+**Related.** present-pacing-summary-triage.40 ·
 present-pacing-summary-triage-current.41 · [state-churn-encode](index.md).

@@ -49,41 +49,41 @@ every other domain at the lever that actually moves the bucket.
 | H7 | Which sub-component (stage-out vs primitive/binning vs spill) dominates | open | hidden-backend-storage-shape.01 (probe agenda → reorder / cache-locality) |
 | H8 | Current non-reorder backend-shape probes materially reduce bytes/invocation | rejected | [hidden-backend-storage-shape.02](hidden-backend-storage-shape.02.md) (best bytes/inv `-1.94%`, GPU regresses) |
 | H9 | Which candidates still deserve Xcode/gputrace spend for residual `50/2` | accepted (gate) | [hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) (CPU-only index-cache probes rejected; semantic or bytes/inv preflight required) |
-| H10 | Post-visualfix frame60 candidate class proxy can rank residual `60/2` state classes before another Xcode capture | accepted (attribution) | [hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md) (`60/2` split into depth-read/screen/alpha classes, each ~`111-128 MiB` proxy hidden and `~25-28%` candidate LRU32 reduction) |
-| H11 | A selected `60/2 depth-read + no-alpha-blend` locality window has same-input exact replay output | accepted (scoped) | [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) (`0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; white-texture/selector scope) |
-| H12 | Post-rank4 semantic evidence changes the next Xcode spend gate | accepted (gate) | [hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) (depth-read reorder blocked; non-reorder backend-shape candidate missing; final-color oracle or bytes/inv preflight required) |
-| H13 | Offline Metal shader variants can prioritize the next primitive-order-preserving backend-shape smoke | accepted (preflight) | [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) (`60/2` and `60/1` live-vsout shrink IR return but not scratch; `60/0` live-vsout also removes `128 B` scratch) |
-| H14 | Hash-scoped `60/0` live-vsout can be isolated at runtime | accepted (runtime smoke) | [hidden-backend-storage-shape.07](hidden-backend-storage-shape.07.md) (`60/0` layout moves to `0x701`; `60/1`/`60/2` stay `0xfff` after rebuilding the actual runtime binary) |
-| H15 | Hash-scoped `60/0` live-vsout reduces Xcode VS-write bytes/invocation | rejected | [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) (`60/0` expected VSOut `184 B -> 68 B`, but VS buffer `224.947 MiB -> 224.990 MiB`, bytes/inv `1542.722 -> 1543.013`) |
-| H16 | After live-vsout rejection, the next Xcode budget should target below-AIR state/parameter shape or a semantic-safe invocation reducer | accepted (gate) | [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md), [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) (visible-width closed; strongest non-reorder clue is `large4096+alpha` B/inv `-43.56%` but correctness-invalid; current no-sample rows are not hot, so sample-visible locality needs final-writer proof) |
-| H17 | `large4096+alpha` blend-off can be promoted to a legal optimization | rejected (gate) | [hidden-backend-storage-shape.10](hidden-backend-storage-shape.10.md) (`15` `60/2` large alpha draws split into screen/standard-alpha; screen is `InvDestColor+One`, standard-alpha uses varying alpha; no static blend-off equivalence) |
-| H18 | Existing query/visibility plumbing can unblock final-writer or Metal-visibility-backed no-sample locality | rejected for production feedback; diagnostic scout implemented | [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md), [mini-replay-bisection-texture.09](../mini-replay-bisection/mini-replay-bisection-texture.09.md), [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) (D3D9 query is primitive-count compatible; diagnostic Metal visibility now exports per-draw sample counts, but positive samples are not final-color proof; the old rank-1 `36..37` window and all `60/2` `large4096` buckets are sample-visible; zero rows account for only `-2,016` LRU32 delta) |
-| H19 | Current PSO/state churn is isolated enough to justify a backend-spill Xcode replay | rejected-current; isolated A/B still open | [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md) (`60/2` has `47` PSO changes, but `271` stream-handle and `160` IB-handle changes; hot rows are `stream-ib-dominant`) |
-| H20 | Current stream/IB handle churn must be isolated before a GPU-owner conclusion | accepted (gate completed) | [state-churn-encode-stream.04](../state-churn-encode/state-churn-encode-stream.04.md), [state-churn-encode-stream.08](../state-churn-encode/state-churn-encode-stream.08.md) (`60/2` binding tuple changes `160/187`; staged A/B keeps draw/geometry/PSO/argbuf/cbuf stable while handle churn drops) |
-| H21 | Stream/IB handle identity is the first-order hidden backend owner | rejected | [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md), [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) (`60/2` stream/IB handles `271/160 -> 0/0`, but VS write `981.159 -> 981.166 MiB`, GPU `19.184 -> 19.278 ms`) |
-| H22 | Current automated perf gate still queues stale visible-width shader smoke after Xcode rejection | rejected by refreshed gate | [hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md) (`shader-variant-backend-smoke=closed-by-xcode-gate`; next queue is final-color/final-writer proof or a new below-visible backend mechanism) |
+| H10 | Post-visualfix frame60 candidate class proxy can rank residual `60/2` state classes before another Xcode capture | accepted (attribution) | hidden-backend-storage-shape.04 (`60/2` split into depth-read/screen/alpha classes, each ~`111-128 MiB` proxy hidden and `~25-28%` candidate LRU32 reduction) |
+| H11 | A selected `60/2 depth-read + no-alpha-blend` locality window has same-input exact replay output | accepted (scoped) | mini-replay-bisection-semantic.02 (`0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; white-texture/selector scope) |
+| H12 | Post-rank4 semantic evidence changes the next Xcode spend gate | accepted (gate) | hidden-backend-storage-shape.05 (depth-read reorder blocked; non-reorder backend-shape candidate missing; final-color oracle or bytes/inv preflight required) |
+| H13 | Offline Metal shader variants can prioritize the next primitive-order-preserving backend-shape smoke | accepted (preflight) | hidden-backend-storage-shape.06 (`60/2` and `60/1` live-vsout shrink IR return but not scratch; `60/0` live-vsout also removes `128 B` scratch) |
+| H14 | Hash-scoped `60/0` live-vsout can be isolated at runtime | accepted (runtime smoke) | hidden-backend-storage-shape.07 (`60/0` layout moves to `0x701`; `60/1`/`60/2` stay `0xfff` after rebuilding the actual runtime binary) |
+| H15 | Hash-scoped `60/0` live-vsout reduces Xcode VS-write bytes/invocation | rejected | hidden-backend-storage-shape.08 (`60/0` expected VSOut `184 B -> 68 B`, but VS buffer `224.947 MiB -> 224.990 MiB`, bytes/inv `1542.722 -> 1543.013`) |
+| H16 | After live-vsout rejection, the next Xcode budget should target below-AIR state/parameter shape or a semantic-safe invocation reducer | accepted (gate) | hidden-backend-storage-shape.09, mini-replay-bisection-texture.10 (visible-width closed; strongest non-reorder clue is `large4096+alpha` B/inv `-43.56%` but correctness-invalid; current no-sample rows are not hot, so sample-visible locality needs final-writer proof) |
+| H17 | `large4096+alpha` blend-off can be promoted to a legal optimization | rejected (gate) | hidden-backend-storage-shape.10 (`15` `60/2` large alpha draws split into screen/standard-alpha; screen is `InvDestColor+One`, standard-alpha uses varying alpha; no static blend-off equivalence) |
+| H18 | Existing query/visibility plumbing can unblock final-writer or Metal-visibility-backed no-sample locality | rejected for production feedback; diagnostic scout implemented | [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md), [mini-replay-bisection-texture.09](../mini-replay-bisection/mini-replay-bisection-texture.09.md), mini-replay-bisection-texture.10 (D3D9 query is primitive-count compatible; diagnostic Metal visibility now exports per-draw sample counts, but positive samples are not final-color proof; the old rank-1 `36..37` window and all `60/2` `large4096` buckets are sample-visible; zero rows account for only `-2,016` LRU32 delta) |
+| H19 | Current PSO/state churn is isolated enough to justify a backend-spill Xcode replay | rejected-current; isolated A/B still open | hidden-backend-storage-shape.11 (`60/2` has `47` PSO changes, but `271` stream-handle and `160` IB-handle changes; hot rows are `stream-ib-dominant`) |
+| H20 | Current stream/IB handle churn must be isolated before a GPU-owner conclusion | accepted (gate completed) | state-churn-encode-stream.04, state-churn-encode-stream.08 (`60/2` binding tuple changes `160/187`; staged A/B keeps draw/geometry/PSO/argbuf/cbuf stable while handle churn drops) |
+| H21 | Stream/IB handle identity is the first-order hidden backend owner | rejected | state-churn-encode-stream.09, [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) (`60/2` stream/IB handles `271/160 -> 0/0`, but VS write `981.159 -> 981.166 MiB`, GPU `19.184 -> 19.278 ms`) |
+| H22 | Current automated perf gate still queues stale visible-width shader smoke after Xcode rejection | rejected by refreshed gate | hidden-backend-storage-shape.13 (`shader-variant-backend-smoke=closed-by-xcode-gate`; next queue is final-color/final-writer proof or a new below-visible backend mechanism) |
 | H23 | Remaining backend escape candidates are equally ready for the next GT1 experiment | rejected by feasibility triage | [hidden-backend-storage-shape.14](hidden-backend-storage-shape.14.md) (Tile-FFP is implemented but narrow/default-off; mesh/object is lower API only for current D3D9 GT1; visibility is sample-count only; position-only VSOut is not a real binning path) |
-| H24 | Tile-FFP has enough current GT1 hot-row coverage to justify an Xcode spend | rejected-current | [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) (frame60 `60/0..2` eligible primitives `0`; partial-run eligible primitive share only `0.005%`) |
-| H25 | The current perf gate can keep final-color proof blocked even when the selector-sweep artifact is absent | accepted (gate) | [hidden-backend-storage-shape.16](hidden-backend-storage-shape.16.md) (`final-color-proof-gap=blocked-proof-gap`; `final-color-occlusion-predicate=blocked-semantic-proof-gap`) |
-| H26 | The current perf gate can keep positive Metal visibility from being reused as a final-color oracle | accepted (gate) | [hidden-backend-storage-shape.17](hidden-backend-storage-shape.17.md) (`visibility-positive-oracle=reject-positive-oracle`; `4` sample-positive rows, `58,014` samples, but no-final-color/fail/exact split) |
-| H27 | Current per-draw PSO movement is isolated enough to justify a backend-spill Xcode replay | rejected-current | [hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md) (`60/2` PSO changes `47`, handle tuple changes `160`, max stable tuple run `6`, PSO-isolated runs `0`) |
-| H28 | The current perf gate can keep unisolated PSO movement out of the Xcode queue | accepted (gate) | [hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md) (`pso-backend-isolation=reject-current`; queue rows now say current PSO per-draw motion is not isolated) |
-| H29 | The current perf gate can keep too-small semantic locality out of the Xcode queue | accepted (cross-domain gate) | [index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md) (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample locality is too small, sample-visible locality needs final-color/final-writer proof) |
-| H30 | The current perf gate can attach real-texture final-writer replay summaries before Xcode spend | accepted (gate) | [hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
-| H31 | Mesh/object and position/binning backend escapes are ready current-GT1 Xcode candidates | rejected-current; reduced A/B required | [hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) (mesh/object bridge present but dxmt9 route/emitter missing; position/binning is visible `VSOut` only; Tile-FFP coverage rejected) |
-| H32 | The current perf gate can keep backend escape surface results attached to the next Xcode queue | accepted (gate) | [hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md) (`backend-escape-surface=reduced-ab-required`; queue rows now require reduced A/B or a new route before GT1 Xcode) |
-| H33 | The reduced A/B requirement can be turned into concrete route/equality/counter gates | accepted (gate) | [hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) (`blocked-before-reduced-ab`; mesh/object blocked by missing dxmt9 route/emitter, position/binning by visible-probe-only route, Tile-FFP by rejected hot-row coverage) |
-| H34 | Tile-FFP hot-row coverage can be recovered by widening the current FFP selector | rejected; programmable/textured route required | [hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) (`60/2` and `60/1` are `100%` not-FFP fallback; `60/0` is `100%` unsupported-state; full gate carries `tile-ffp=blocked-hot-row-coverage/needs-programmable-tile-route`) |
-| H35 | Programmable route work is one uniform textured backend problem | rejected; split into depth-only, color, and textured routes | [hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) (`60/0` is `candidate-depth-only-route`; `60/1` needs programmable color; `60/2` needs programmable textured route) |
-| H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | [hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
-| H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [hidden-backend-storage-shape.28](hidden-backend-storage-shape.28.md) (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
-| H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | [hidden-backend-storage-shape.29](hidden-backend-storage-shape.29.md) (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
+| H24 | Tile-FFP has enough current GT1 hot-row coverage to justify an Xcode spend | rejected-current | hidden-backend-storage-shape.15 (frame60 `60/0..2` eligible primitives `0`; partial-run eligible primitive share only `0.005%`) |
+| H25 | The current perf gate can keep final-color proof blocked even when the selector-sweep artifact is absent | accepted (gate) | hidden-backend-storage-shape.16 (`final-color-proof-gap=blocked-proof-gap`; `final-color-occlusion-predicate=blocked-semantic-proof-gap`) |
+| H26 | The current perf gate can keep positive Metal visibility from being reused as a final-color oracle | accepted (gate) | hidden-backend-storage-shape.17 (`visibility-positive-oracle=reject-positive-oracle`; `4` sample-positive rows, `58,014` samples, but no-final-color/fail/exact split) |
+| H27 | Current per-draw PSO movement is isolated enough to justify a backend-spill Xcode replay | rejected-current | hidden-backend-storage-shape.18 (`60/2` PSO changes `47`, handle tuple changes `160`, max stable tuple run `6`, PSO-isolated runs `0`) |
+| H28 | The current perf gate can keep unisolated PSO movement out of the Xcode queue | accepted (gate) | hidden-backend-storage-shape.19 (`pso-backend-isolation=reject-current`; queue rows now say current PSO per-draw motion is not isolated) |
+| H29 | The current perf gate can keep too-small semantic locality out of the Xcode queue | accepted (cross-domain gate) | index-cache-locality-screenblend.10 (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample locality is too small, sample-visible locality needs final-color/final-writer proof) |
+| H30 | The current perf gate can attach real-texture final-writer replay summaries before Xcode spend | accepted (gate) | hidden-backend-storage-shape.20 (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
+| H31 | Mesh/object and position/binning backend escapes are ready current-GT1 Xcode candidates | rejected-current; reduced A/B required | hidden-backend-storage-shape.21 (mesh/object bridge present but dxmt9 route/emitter missing; position/binning is visible `VSOut` only; Tile-FFP coverage rejected) |
+| H32 | The current perf gate can keep backend escape surface results attached to the next Xcode queue | accepted (gate) | hidden-backend-storage-shape.22 (`backend-escape-surface=reduced-ab-required`; queue rows now require reduced A/B or a new route before GT1 Xcode) |
+| H33 | The reduced A/B requirement can be turned into concrete route/equality/counter gates | accepted (gate) | hidden-backend-storage-shape.23 (`blocked-before-reduced-ab`; mesh/object blocked by missing dxmt9 route/emitter, position/binning by visible-probe-only route, Tile-FFP by rejected hot-row coverage) |
+| H34 | Tile-FFP hot-row coverage can be recovered by widening the current FFP selector | rejected; programmable/textured route required | hidden-backend-storage-shape.24 (`60/2` and `60/1` are `100%` not-FFP fallback; `60/0` is `100%` unsupported-state; full gate carries `tile-ffp=blocked-hot-row-coverage/needs-programmable-tile-route`) |
+| H35 | Programmable route work is one uniform textured backend problem | rejected; split into depth-only, color, and textured routes | hidden-backend-storage-shape.25 (`60/0` is `candidate-depth-only-route`; `60/1` needs programmable color; `60/2` needs programmable textured route) |
+| H36 | The `60/0` depth-only route can be reached by a fragmentless Metal PSO | accepted (runtime smoke), rejected for Xcode promotion | hidden-backend-storage-shape.26 (`60/0` probe covers all `42` draws / `97,294` primitives / `291,882` vertices, reports position-only VSOut key `0x0`, and logs `2` accepted / `0` rejected fragmentless PSO variants; same-input gate then fails depth equality: `D24X8` depth changes `1,252,096 / 3,145,728` bytes, while `60/0` color is exact and the final frame still changes `21.658325%`; Xcode counter spend is blocked until depth semantics are fixed) |
+| H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | hidden-backend-storage-shape.28 (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
+| H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | hidden-backend-storage-shape.29 (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
 | H39 | "GPU floor" and "average FPS owner" are the same question | rejected | [hidden-backend-storage-shape.30](hidden-backend-storage-shape.30.md) (`replay.03` proves `3.86x` hidden-write density headroom at the same VS invocation count; no-gputrace counters show average wall-clock is completion/present paced) |
 | H40 | Current head changes the capture/timing route status | accepted refresh | hidden-backend-storage-shape.31 (`frame120.gputrace` file capture still fails with `Capture layer is not inserted` after normal rendering, while the System Trace sidecar joins `5263/5263` rows over `seq=1213..1591`; vertex share `90.39%`; route split remains programmable color `46.22%`, programmable textured `39.15%`, mixed `14.63%`) |
-| H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
-| H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
-| H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | [hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
-| H44 | Removing the `60/0` fragment function while keeping `VSOut=0xfff` reduces hidden VS writes | rejected | [hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) (capture-layer route is usable again and exports Xcode counters, but target `60/0` VS buffer write stays flat: `224.918 -> 224.944 MiB`, VS invocations `152,895 -> 152,895`, top-three hidden estimate `1749.858 -> 1749.694 MiB`) |
+| H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | hidden-backend-storage-shape.32 (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
+| H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | hidden-backend-storage-shape.33 (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
+| H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | hidden-backend-storage-shape.34 (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
+| H44 | Removing the `60/0` fragment function while keeping `VSOut=0xfff` reduces hidden VS writes | rejected | hidden-backend-storage-shape.34 (capture-layer route is usable again and exports Xcode counters, but target `60/0` VS buffer write stays flat: `224.918 -> 224.944 MiB`, VS invocations `152,895 -> 152,895`, top-three hidden estimate `1749.858 -> 1749.694 MiB`) |
 | H45 | Current shader-dump liveness reopens visible `VSOut` trimming as the next GPU lever | rejected by refresh | [hidden-backend-storage-shape.35](hidden-backend-storage-shape.35.md) (H226 no-gputrace shader dump joins `9/9` top-row VS/PS rows, but top-three still write `1543..1602 B/VS invocation` against `184 B` visible `VSOut`; PS liveness is useful, generic varying trim remains closed) |
 
 ## Verification methods
@@ -257,14 +257,14 @@ timing path: `metal-gpu-intervals` joined `3590/3590` dxmt encoder labels across
 `8.68%` fragment. The top rows are the same large-geometry `/11` shape
 (`1.5M..1.86M` vertices per encoder), so this is consistent with the accepted
 vertex/tiler backend-storage model while remaining timing-only evidence.
-The seq-range sidecar follow-up ([hidden-backend-storage-shape.28](hidden-backend-storage-shape.28.md)) makes
+The seq-range sidecar follow-up (hidden-backend-storage-shape.28) makes
 that path more usable: after ensuring the active Wine unix provider is rebuilt,
 `metal-gpu-intervals` joined `215/215` rows with indexed draw telemetry in the
 same seq window (`1000..1035`, out-of-range rows `0`). The captured window is
 still vertex dominated (`88.86%` vertex share), but the route split is now
 known: programmable color (`45.65%`) and programmable textured (`40.49%`) rows
 own most of the stage time, while depth-only rows are only `1.85%`. The
-encoder-summary route follow-up ([hidden-backend-storage-shape.29](hidden-backend-storage-shape.29.md)) then
+encoder-summary route follow-up (hidden-backend-storage-shape.29) then
 removes the indexed per-draw requirement for that timing lane: a no-indexed
 sidecar joined `1633/1633` rows from `route_source=encoder-summary`, with
 `91.90%` vertex-stage share and route split dominated by programmable color
@@ -273,10 +273,10 @@ timing evidence, not a substitute for Xcode replay counters.
 The current-head sidecar refresh (hidden-backend-storage-shape.31) preserved
 that split after the latest CPU/profile cleanup work while file `.gputrace`
 capture was still layer-blocked. That measurement-route status is now updated by
-[hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md): after the fragment `WMT::Function` lifetime
+hidden-backend-storage-shape.32: after the fragment `WMT::Function` lifetime
 fix, the explicit capture-layer file route writes `frame60.gputrace`, Xcode
 performance data, and encoder counters. The current joined refresh
-([hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md)) does not change the owner: the integrated
+(hidden-backend-storage-shape.33) does not change the owner: the integrated
 `--with-wine-capture-layer` wrapper run reports GPU time `37.492ms`, top-three
 encoder share `98.40%`, top-three `VS Buffer Device Memory Bytes Written`
 `1779.246 MiB`, and hidden backend estimate `1750.007 MiB`. System Trace remains
@@ -314,50 +314,50 @@ and broad-state attempt was rejected as "not the first-order owner."
 index-cache changes no longer justify Xcode replay by themselves, and residual
 `50/2` GPU work must either carry a semantic locality proof or a non-reorder
 bytes-per-invocation mechanism before another expensive capture. The
-post-visualfix candidate class proxy ([hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md)) adds a current
+post-visualfix candidate class proxy (hidden-backend-storage-shape.04) adds a current
 frame60 ranking without another gputrace export: `60/2` is split across
 depth-read / screen-blend / standard-alpha classes with roughly `111-128 MiB`
 proxy hidden backend each and `~25-28%` candidate LRU32 reduction, while the
 remaining low-risk opaque-depth work is already covered by the accepted opt-in
-index-cache mechanism. [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) then proves one
+index-cache mechanism. mini-replay-bisection-semantic.02 then proves one
 selected `60/2 depth-read + no-alpha-blend` two-draw candidate is same-input
 exact while reducing replay LRU32 misses by `-14,593` (`-27.6%`). This is enough
 to justify continued scoped selector work, but not enough to generalize broad
 depth-read reorder: the replay still uses white dummy textures and lacks a
 runtime-visible production selector, even though a real D24X8 depth-input replay
 for this selected window also stayed exact. The post-rank4 gate
-([hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md)) closes that ambiguity for current Xcode
+(hidden-backend-storage-shape.05) closes that ambiguity for current Xcode
 budgeting: real textures make rank 1 a visible failure, ranks 2-4 are
 color-exact but owner-masked, and the primitive-conflict selector scout rejects
 owner/depth/UV thresholds. The next expensive capture should therefore be a
 real final-color/final-writer proof or a primitive-order-preserving
 backend-shape preflight that moves bytes per invocation. The current
 visibility/cache join rejects no-sample rows as the hot owner. The first cheap
-shader-side preflight ([hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md)) narrows that path:
+shader-side preflight (hidden-backend-storage-shape.06) narrows that path:
 `60/2` and `60/1` `live-vsout` shrink source-visible return bytes
 (`184 B -> 36 B`) but leave Metal-visible scratch at `128 B`, so they look like
 below-AIR/backend-denominator rows rather than a simple VSOut-width retry.
 `60/0` is the only hot row where `live-vsout` also removes the visible
 `128 B` scratch estimate (`184 B -> 52 B`, scratch `128 B -> 0 B`), making it
 the cheapest primitive-order-preserving runtime smoke candidate before another
-Xcode export. [hidden-backend-storage-shape.07](hidden-backend-storage-shape.07.md) cleared that cheap runtime
+Xcode export. hidden-backend-storage-shape.07 cleared that cheap runtime
 precondition: after rebuilding the actual `build-x86_64-builtin`
 `winemetal.so`, the hash-scoped run changes only `60/0` (`0xfff -> 0x701`) and
 leaves `60/1`/`60/2` at the full `0xfff` layout. The follow-up Xcode gate
-([hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md)) rejects the mechanism as a bottleneck fix:
+(hidden-backend-storage-shape.08) rejects the mechanism as a bottleneck fix:
 `60/0` expected stage-out bytes fall from `184 B` to `68 B`, but Xcode VS buffer
 write stays effectively flat (`224.947 MiB -> 224.990 MiB`,
 `1542.722 -> 1543.013 B/VS invocation`). This closes scoped `live-vsout` as a
 visible-shape path. The remaining hidden-denominator work must target a real
 position/binning/tiler-parameter, backend-spill/layout, mesh/object, or
 PSO/state-shape mechanism rather than source-visible varying width.
-[hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) turns that into the current budget policy:
+hidden-backend-storage-shape.09 turns that into the current budget policy:
 no more Xcode for visible-width variants; the next expensive run must either
 carry a legal `large4096+alpha`/backend-state denominator hypothesis,
 final-color/final-writer proof for sample-visible depth-read locality, or a real
 backend escape path such as position/binning, mesh/object, or an isolated
 PSO/spill A/B.
-[hidden-backend-storage-shape.10](hidden-backend-storage-shape.10.md) now rejects the naive legal alpha shortcut:
+hidden-backend-storage-shape.10 now rejects the naive legal alpha shortcut:
 current `60/2` large alpha work is `15` draws / `154,761` primitives split into
 screen blend (`InvDestColor + One + Add`) and standard alpha
 (`SrcAlpha + InvSrcAlpha + Add`) classes. The screen PS outputs are dynamic
@@ -372,16 +372,16 @@ dxmt9 draw encoding and delayed CSV feedback, but only as a no-sample triage
 signal. Its first `60/2` pass reports the old rank-1 `36..37` window as
 sample-visible, so it does not supply the missing final-color/final-writer
 production gate. The visibility/cache join
-([mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md)) confirms the zero-sample rows seen so far
+(mini-replay-bisection-texture.10) confirms the zero-sample rows seen so far
 are small `596`-primitive draws and only `-2,016` of `-182,856` LRU32 delta, so
 they are not the dominant hidden-backend storage owners.
-The PSO/state-shape preflight ([hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md)) also rejects
+The PSO/state-shape preflight (hidden-backend-storage-shape.11) also rejects
 the current rows as an Xcode spend target: the hot rows do have PSO changes, but
 stream/IB handle churn dominates them (`60/2`: `47` PSO changes vs `271` stream
 handle and `160` IB handle changes). PSO/backend coupling therefore remains an
 open mechanism only for a future isolated A/B, not for the current frame60
 counter budget.
-The follow-up stream/IB preflight ([state-churn-encode-stream.04](../state-churn-encode/state-churn-encode-stream.04.md)) confirms
+The follow-up stream/IB preflight (state-churn-encode-stream.04) confirms
 that this is real handle churn rather than offset/stride noise: `60/2` has
 combined stream+IB handle changes/draw `2.305` and offset+stride/draw `0.053`,
 with explicit dxmt writers only `0.089 B/vertex`; the draw-level join already
@@ -389,7 +389,7 @@ shows `160` stream0 and `160` IB changes. The fresh `stream_extra_bindings`
 run also confirms stream1 as row-local (`111` extra-stream changes, `25` unique
 extra bindings) and shows the full binding tuple changes `160` times over
 `187` draws with only `58` unique tuples. The tuple-structure pass
-([state-churn-encode-stream.05](../state-churn-encode/state-churn-encode-stream.05.md)) then shows this is bounded geometry-object
+(state-churn-encode-stream.05) then shows this is bounded geometry-object
 alternation: `60/2` has `168/187` stream0/IB `+2` pairs and `132/187`
 stream0/stream1/IB `+1/+2` triplets, while `60/1` and `60/0` are entirely
 stream0/IB `+2` pairs. That makes stream/IB the next state-motion A/B target,
@@ -399,16 +399,16 @@ per-draw transient copies as evidence because they change the denominator or add
 explicit writer traffic. Geometry, index order, VS invocations, render state,
 and visible shader layout must remain stable while the Metal buffer identities
 are reduced or stabilized. The staging-cost preflight
-([state-churn-encode-stream.07](../state-churn-encode/state-churn-encode-stream.07.md)) keeps row-stable staging alive as a
+(state-churn-encode-stream.07) keeps row-stable staging alive as a
 no-gputrace diagnostic (`60/2` estimated copy `8.2 MiB`) but blocks direct Xcode
 promotion because it adds explicit writer traffic (`~78.7x` current row writers)
 and turns handle churn into offset churn.
 
-The row-scoped staged A/B ([state-churn-encode-stream.08](../state-churn-encode/state-churn-encode-stream.08.md)) then satisfies the
+The row-scoped staged A/B (state-churn-encode-stream.08) then satisfies the
 missing isolation precondition: it keeps `60/2` draw count, geometry, PSO shape,
 argbuf bytes, cbuf bytes, and visible VSOut layout stable while dropping stream
 and IB handle changes to zero. The Xcode counter gate
-([state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md)) rejects the actual GPU-owner hypothesis:
+(state-churn-encode-stream.09) rejects the actual GPU-owner hypothesis:
 target-row VS invocations remain `642,001`, VS buffer write stays
 `981.159 -> 981.166 MiB`, and GPU time moves only `19.184 -> 19.278 ms`. This
 does not make stream/IB work useless; it moves stream/IB back to the CPU
@@ -418,7 +418,7 @@ budget gate: the next expensive capture must change VS invocations, prove a
 correctness-safe locality selector, exercise a real Apple position/binning or
 mesh/object backend path, or isolate PSO/spill coupling with all geometry and
 stream/IB variables held stable.
-The automated gate refresh ([hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md)) makes that
+The automated gate refresh (hidden-backend-storage-shape.13) makes that
 policy executable: the scoped `60/0 live-vsout` Xcode reject now closes the
 stale shader-variant smoke queue (`shader-variant-backend-smoke =
 closed-by-xcode-gate`) instead of re-queuing a visible-output family that
@@ -434,14 +434,14 @@ limited to eligible untextured FFP draws; it needs a hot-row eligibility/routing
 gate before another Xcode replay. Mesh/object is lower-API plumbing without a
 current D3D9 GT1 draw route. Visibility scout is useful sample-count feedback,
 but not final-color/final-writer proof.
-The Tile-FFP coverage gate ([hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md)) closes the
+The Tile-FFP coverage gate (hidden-backend-storage-shape.15) closes the
 nearest implemented backend escape for current GT1 hot rows: frame60
 `60/0..2` have `0` eligible primitives, and the partial run's eligible
 primitive share is only `0.005%`. Tile-FFP remains a correctness/architecture
 lever, but it should not receive another GT1 Xcode/gputrace performance spend
 until eligibility expands into the programmable/textured hot rows.
 The automated final-color proof-gap gate
-([hidden-backend-storage-shape.16](hidden-backend-storage-shape.16.md)) keeps the semantic blocker visible even
+(hidden-backend-storage-shape.16) keeps the semantic blocker visible even
 when a selector-sweep CSV is not attached to the current gate run. The current
 post-stream/IB report now emits `final-color-proof-gap=blocked-proof-gap` and
 `final-color-occlusion-predicate=blocked-semantic-proof-gap` directly from the
@@ -450,7 +450,7 @@ sparse/no-final-color `-6661`. That preserves the budget rule after Tile-FFP
 rejection: do not schedule another sample-visible depth-read reorder Xcode run
 unless a real final-color/final-writer proof exists, or the candidate is a
 primitive-order-preserving backend mechanism.
-The visibility-positive gate ([hidden-backend-storage-shape.17](hidden-backend-storage-shape.17.md)) then closes
+The visibility-positive gate (hidden-backend-storage-shape.17) then closes
 the other visibility shortcut in the automated queue. With the joined semantic
 payload CSV, the gate emits
 `visibility-positive-oracle=reject-positive-oracle`: all four ranked windows are
@@ -459,7 +459,7 @@ rank1/rank3 split visible fail versus visible exact-pass. The next experiment
 queue now says positive Metal visibility is not enough for `60/2` depth-read or
 standard-alpha reorder candidates; they need final-color/final-writer proof or
 a new primitive-order-preserving backend mechanism before another Xcode spend.
-The per-draw PSO isolation gate ([hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md)) closes the
+The per-draw PSO isolation gate (hidden-backend-storage-shape.18) closes the
 current PSO/backend-spill residual in the same way: post-stream/IB hot rows
 still show PSO changes, but the same-run probe rows show no stream/IB handle
 tuple-stable run where PSO changes independently. `60/2` has `47` PSO changes
@@ -467,7 +467,7 @@ and `160` handle-tuple changes over `187` draws, the longest stable tuple run is
 only `6` draws, and PSO-isolated runs are `0`. PSO or backend spill remains a
 valid Apple GPU mechanism only for a future synthetic/stable A/B; it is not a
 current GT1 Xcode counter target.
-The automated PSO gate ([hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md)) attaches that
+The automated PSO gate (hidden-backend-storage-shape.19) attaches that
 negative result to the current full gate. The report now emits
 `pso-backend-isolation=reject-current` and adds a `pso-backend-spill =
 blocked-current-telemetry` implementation track. The next experiment queue now
@@ -475,12 +475,12 @@ keeps the `60/2` depth-read and standard-alpha rows blocked until they get a
 final-color/final-writer proof or a genuinely new non-reorder backend
 mechanism; current PSO per-draw motion is explicitly not isolated.
 The cross-domain locality semantic ceiling gate
-([index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md)) adds the final budget constraint for
+(index-cache-locality-screenblend.10) adds the final budget constraint for
 primitive-order locality: `locality-semantic-ceiling=oracle-required`. The
 current color-exact and zero-sample rows are too small to justify another Xcode
 capture, while the only large bucket is sample-visible and still lacks
 final-color/final-writer proof. The automated final-writer replay gate
-([hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md)) now attaches the real-texture
+(hidden-backend-storage-shape.20) now attaches the real-texture
 `semantic-gate-summary.json` files to that decision and emits
 `final-writer-replay-oracle=blocked-final-writer-hazard`: rank1 contributes the
 actual fail (`-14,593` LRU32, `2` color pixels, `7` owner pixels), rank2-4 are
@@ -489,7 +489,7 @@ owner-safe LRU32 is `0`. This leaves the same two real next paths, but with a
 stronger negative gate: prove a different final-color/final-writer oracle that
 keeps enough sample-visible gain, or define a new primitive-order-preserving
 backend denominator.
-The backend escape surface audit ([hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md)) then
+The backend escape surface audit (hidden-backend-storage-shape.21) then
 keeps that second path honest. Mesh/object is currently bridge-only: winemetal
 has descriptor and replay command support, but dxmt9 has no mesh shader emitter
 or GT1 draw-route producer. Position/binning is still only the source-visible
@@ -498,29 +498,29 @@ the only complete dxmt9 backend escape, and its current GT1 hot-row coverage is
 rejected. Therefore the next non-reorder backend experiment must be a reduced
 synthetic/replay A/B or a real new route, not a direct GT1 Xcode replay.
 The full perf gate now consumes that audit through
-[hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md) and emits
+hidden-backend-storage-shape.22 and emits
 `backend-escape-surface=reduced-ab-required`. The blocked `60/2` queue rows now
 carry all three blockers together: the current final-writer replay fails,
 current PSO motion is not isolated, and the current backend escape surface
 requires a reduced A/B or new route before GT1 Xcode.
-[hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) makes that requirement concrete:
+hidden-backend-storage-shape.23 makes that requirement concrete:
 the current reduced-A/B plan is `blocked-before-reduced-ab`, with mesh/object
 blocked by missing dxmt9 route/emitter, position/binning blocked by the lack of
 a real route below visible `VSOut`, and Tile-FFP blocked by rejected hot-row
 coverage. Future backend work must first clear route/coverage, same-input
 equality, and reduced counter movement before another GT1 Xcode capture.
-[hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) refines the Tile-FFP branch: `60/2` and
+hidden-backend-storage-shape.24 refines the Tile-FFP branch: `60/2` and
 `60/1` are `100%` not-FFP fallback, `60/0` is `100%` unsupported-state fallback,
 and the run-top expansion rows all point at `needs-programmable-tile-route`.
 So Tile-FFP coverage is not a small selector widening problem; GT1 needs a
 programmable/textured tile or mesh-style route before reduced A/B.
-[hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) splits that route work by actual frame60
+hidden-backend-storage-shape.25 splits that route work by actual frame60
 draw telemetry: `60/0` is a `candidate-depth-only-route` (`97,294` primitives,
 color write off, depth write on, no alpha blend/test), `60/1` needs a
 programmable color route, and `60/2` needs the full programmable textured
 route. This makes `60/0` the smallest credible reduced backend-route A/B before
 attempting the harder textured path.
-[hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) then clears the first implementation
+hidden-backend-storage-shape.26 then clears the first implementation
 precondition for that reduced A/B: the scoped fragmentless-depth-only runtime
 smoke reaches all `42` `60/0` draws (`97,294` primitives, `291,882` vertices),
 uses the route-aware position-only VSOut key `0x0`, and logs `2` accepted /
@@ -530,7 +530,7 @@ route reachability. The same-input gate then rejects the route for promotion:
 `1,252,096 / 3,145,728` bytes (`39.803060%`, max delta `255`) and the final
 frame changes `21.658325%`. The route is now a depth-semantic debug target, not
 an Xcode counter target.
-[hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) isolates that failure by keeping the
+hidden-backend-storage-shape.34 isolates that failure by keeping the
 pair-local `VSOut` layout (`0xfff`) while still omitting the fragment function.
 The route remains fully covered (`42` draws / `97,294` primitives /
 `291,882` vertices) and the same-input pass-end equality now passes for both
@@ -579,66 +579,66 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   certifies a reduction of this exact bucket.
 - [hidden-backend-storage-shape.02](hidden-backend-storage-shape.02.md) — current non-reorder backend-shape gate;
   bytes/inv movement is too small and GPU regresses.
-- [hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md) — post-visualfix candidate class proxy
+- hidden-backend-storage-shape.04 — post-visualfix candidate class proxy
   that ranks residual `60/2` semantic-risk classes before another Xcode replay.
-- [hidden-backend-storage-shape.05](hidden-backend-storage-shape.05.md) — current post-rank4 perf gate; depth-read
+- hidden-backend-storage-shape.05 — current post-rank4 perf gate; depth-read
   reorder needs an oracle, non-reorder backend-shape needs a preflight.
-- [hidden-backend-storage-shape.06](hidden-backend-storage-shape.06.md) — offline Metal shader variant preflight;
+- hidden-backend-storage-shape.06 — offline Metal shader variant preflight;
   top-two rows remain below-AIR candidates, rank3 `60/0` is the narrow runtime
   smoke candidate.
-- [hidden-backend-storage-shape.07](hidden-backend-storage-shape.07.md) — scoped `60/0` live-VSOut runtime smoke;
+- hidden-backend-storage-shape.07 — scoped `60/0` live-VSOut runtime smoke;
   isolates the offline candidate.
-- [hidden-backend-storage-shape.08](hidden-backend-storage-shape.08.md) — scoped `60/0` live-VSOut Xcode counter
+- hidden-backend-storage-shape.08 — scoped `60/0` live-VSOut Xcode counter
   gate; rejects visible `VSOut` width as the denominator lever.
-- [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) — below-AIR next-probe triage after the
+- hidden-backend-storage-shape.09 — below-AIR next-probe triage after the
   live-VSOut rejection.
-- [hidden-backend-storage-shape.10](hidden-backend-storage-shape.10.md) — large alpha static-equivalence gate;
+- hidden-backend-storage-shape.10 — large alpha static-equivalence gate;
   rejects blend-off as a legal fix and keeps it diagnostic-only.
-- [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md) — PSO/backend churn preflight; rejects
+- hidden-backend-storage-shape.11 — PSO/backend churn preflight; rejects
   current hot rows as an isolated Xcode candidate because stream/IB churn
   dominates PSO changes.
 - [hidden-backend-storage-shape.12](hidden-backend-storage-shape.12.md) — post stream/IB Xcode triage; rejects
   stream/IB handle identity as first-order GPU owner and names the next valid
   Xcode budget gates.
-- [hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md) — refreshed automated perf gate; closes
+- hidden-backend-storage-shape.13 — refreshed automated perf gate; closes
   the stale `live-vsout` smoke queue after the matching Xcode rejection.
 - [hidden-backend-storage-shape.14](hidden-backend-storage-shape.14.md) — feasibility triage for the remaining
   backend escape routes after the current gate.
-- [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md) — Tile-FFP coverage gate; rejects the
+- hidden-backend-storage-shape.15 — Tile-FFP coverage gate; rejects the
   current tile path as a GT1 hot-row FPS lever.
-- [hidden-backend-storage-shape.16](hidden-backend-storage-shape.16.md) — final-color proof-gap gate; keeps
+- hidden-backend-storage-shape.16 — final-color proof-gap gate; keeps
   depth-read reorder blocked even without a selector-sweep artifact.
-- [hidden-backend-storage-shape.17](hidden-backend-storage-shape.17.md) — visibility-positive gate; rejects
+- hidden-backend-storage-shape.17 — visibility-positive gate; rejects
   positive Metal visibility as the final-color oracle in the automated queue.
-- [hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md) — per-draw PSO isolation gate; rejects
+- hidden-backend-storage-shape.18 — per-draw PSO isolation gate; rejects
   current hot-row PSO movement as an independent Xcode counter target.
-- [hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md) — automated PSO isolation gate; keeps
+- hidden-backend-storage-shape.19 — automated PSO isolation gate; keeps
   unisolated PSO movement out of the current next-experiment queue.
-- [index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md) — automated semantic ceiling gate;
+- index-cache-locality-screenblend.10 — automated semantic ceiling gate;
   blocks another locality Xcode spend until enough sample-visible gain is
   final-color/final-writer safe.
-- [hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md) — automated final-writer replay gate;
+- hidden-backend-storage-shape.20 — automated final-writer replay gate;
   attaches same-input real-texture replay summaries and blocks the current
   sample-visible locality set from becoming an Xcode candidate.
-- [hidden-backend-storage-shape.21](hidden-backend-storage-shape.21.md) — backend escape surface audit; keeps
+- hidden-backend-storage-shape.21 — backend escape surface audit; keeps
   mesh/object and position/binning in the reduced-A/B lane instead of current
   GT1 Xcode spend.
-- [hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md) — full perf gate attachment for backend
+- hidden-backend-storage-shape.22 — full perf gate attachment for backend
   escape surface results.
-- [hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md) — reduced A/B plan for backend escape
+- hidden-backend-storage-shape.23 — reduced A/B plan for backend escape
   candidates; converts "reduced A/B required" into route, equality, counter,
   and GT1 promotion gates.
-- [hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md) — Tile-FFP expansion analysis; shows the
+- hidden-backend-storage-shape.24 — Tile-FFP expansion analysis; shows the
   current Tile-FFP route cannot reach GT1 hot rows without a
   programmable/textured route.
-- [hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md) — programmable route feasibility split;
+- hidden-backend-storage-shape.25 — programmable route feasibility split;
   identifies `60/0` as a depth-only reduced A/B candidate and separates it from
   the harder `60/2` textured route.
-- [hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md) — fragmentless depth-only runtime smoke;
+- hidden-backend-storage-shape.26 — fragmentless depth-only runtime smoke;
   proves the `60/0` route is reachable and fully covers the row, but same-input
   depth equality fails, so Xcode counter promotion is blocked until depth
   semantics are fixed.
-- [hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) — fragmentless depth-only keep-VSOut
+- hidden-backend-storage-shape.34 — fragmentless depth-only keep-VSOut
   equality plus Xcode gate; isolates the position-only variable, passes
   pass-end depth and color equality, and then rejects the fragmentless
   keep-VSOut route as a hidden-write performance lever.
@@ -646,22 +646,22 @@ per-experiment flags live in each leaf's `**Method.**` field; see
   joins current MSL/PS dumps to the existing Xcode top rows and keeps generic
   visible varying trim closed because the hot rows still write `8.4..8.7x` the
   visible `VSOut` bytes.
-- [hidden-backend-storage-shape.27](hidden-backend-storage-shape.27.md) — Metal System Trace sidecar after
+- hidden-backend-storage-shape.27 — Metal System Trace sidecar after
   compact draw-state work; confirms the residual top rows remain vertex-stage
   dominated large indexed encoders while `.gputrace` replay remains blocked by
   capture-layer startup mutation.
-- [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) — recovered capture-layer file route;
+- hidden-backend-storage-shape.32 — recovered capture-layer file route;
   frame60 Xcode replay counters are available again and reconfirm top-three VS
   buffer device write dominance with zero partial renders.
-- [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) — current Xcode/dxmt joined attribution;
+- hidden-backend-storage-shape.33 — current Xcode/dxmt joined attribution;
   same hidden-density band across `60/2`, `60/1`, and `60/0` narrows the next
   GPU capture gate to invocation/locality, final-color/final-writer proof, or a
   real backend-route denominator A/B.
-- [state-churn-encode-stream.04](../state-churn-encode/state-churn-encode-stream.04.md) — stream/IB backend preflight; confirms
+- state-churn-encode-stream.04 — stream/IB backend preflight; confirms
   handle-dominant hot rows but requires a handle-stable A/B before Xcode.
-- [state-churn-encode-stream.09](../state-churn-encode/state-churn-encode-stream.09.md) — Xcode handle-stable gate; shows `60/2`
+- state-churn-encode-stream.09 — Xcode handle-stable gate; shows `60/2`
   stream/IB handles can drop to zero while VS write and GPU time stay flat.
-- [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) — scoped `60/2` depth-read/no-blend
+- mini-replay-bisection-semantic.02 — scoped `60/2` depth-read/no-blend
   exact replay candidate selected from the class proxy.
 - [vsout-layout](../vsout-layout/index.md) — visible varying-width attempts this domain rejected as the
   first-order owner (trim / point-size / position-only / half-VSOut).
@@ -724,7 +724,7 @@ share above `92%`. Route verdicts are still unavailable for these artifacts
 because their indexed probe draw CSVs are header-only; the next System Trace
 sidecar must include indexed draw telemetry and must fail if those rows do not
 join the traced encoder rows before selecting depth-only, textured, or color
-backend routes. [hidden-backend-storage-shape.27](hidden-backend-storage-shape.27.md)
+backend routes. hidden-backend-storage-shape.27
 That capture-route status has now changed for the explicit diagnostic file
 route. `app-d3d9-3dmark05-capture-layer-atomic-r9` writes `frame60.gputrace`,
 Xcode performance data, and encoder counters after the draw PSO path retains
@@ -735,8 +735,8 @@ GPU time is `37.475ms`, the top-three encoders are `98.32%`, top-three VS buffer
 device write is `1779.231 MiB`, and partial render count is `0`.
 Therefore System Trace is no longer the only current GPU-side measurement path;
 use System Trace for low-overhead route timing and the recovered file capture
-route for Xcode replay counters. See [baselines-gputrace-capture.02](../baselines/baselines-gputrace-capture.02.md) and
-[hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md).
+route for Xcode replay counters. See baselines-gputrace-capture.02 and
+hidden-backend-storage-shape.32.
 The same artifact was run through the capture ROI/component gate. A tight
 right-effect window found compact warm/white candidates, led by bbox
 `1300,556..1370,602` with `warm=528`, `white=136`, and max `[255,255,255]`.
@@ -754,56 +754,56 @@ are not enough to schedule a capture; the candidate must either be an accepted
 locality path, carry an explicit semantic policy, or prove a new non-reorder
 backend mechanism before replay. The refreshed gate also closes the stale
 `60/0 live-vsout` shader-smoke queue after its matching Xcode rejection
-([hidden-backend-storage-shape.13](hidden-backend-storage-shape.13.md)). The current gate also keeps the semantic
+(hidden-backend-storage-shape.13). The current gate also keeps the semantic
 blocker explicit without requiring a selector-sweep artifact:
 `final-color-proof-gap=blocked-proof-gap` and
 `final-color-occlusion-predicate=blocked-semantic-proof-gap`
-([hidden-backend-storage-shape.16](hidden-backend-storage-shape.16.md)), and the joined visibility-positive gate
+(hidden-backend-storage-shape.16), and the joined visibility-positive gate
 now emits `visibility-positive-oracle=reject-positive-oracle`
-([hidden-backend-storage-shape.17](hidden-backend-storage-shape.17.md)). Historical opaque-depth and screen-blend
+(hidden-backend-storage-shape.17). Historical opaque-depth and screen-blend
 proofs are kept as mechanism evidence. The refreshed opaque-depth proof now
 reattaches Xcode movement to current frame60 rows `60/0+60/1`; screen-blend
 now has a current same-input mini-replay `lsb1` semantic input and target-row
 Xcode movement, but the full proof is demoted because top GPU does not decrease.
 The row-level follow-up shows this is target-only movement plus non-target
 replay timing drift, not direct mutation of `60/0+60/1`
-([index-cache-locality-opaque.08](../index-cache-locality/index-cache-locality-opaque.08.md), index-cache-locality-screenblend.08,
+(index-cache-locality-opaque.08, index-cache-locality-screenblend.08,
 index-cache-locality-screenblend.07, index-cache-locality-screenblend.06,
 index-cache-locality-proofinput.01). The per-draw PSO gate now adds the
 same budget guard for backend-spill guesses: `60/2` has `47` PSO changes but
 `160` handle-tuple changes and `0` PSO-isolated stable-tuple runs, so PSO
 remains a future controlled A/B rather than a current Xcode replay
-([hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md)). The automated full gate now records that
+(hidden-backend-storage-shape.18). The automated full gate now records that
 as `pso-backend-isolation=reject-current` and adds a `pso-backend-spill =
 blocked-current-telemetry` implementation track
-([hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md)). The same full gate now carries the
+(hidden-backend-storage-shape.19). The same full gate now carries the
 locality spend threshold as `locality-semantic-ceiling=oracle-required`:
 color-exact/zero-sample locality is too small for another Xcode capture, while
 sample-visible locality is large enough only if a final-color/final-writer
-oracle makes it safe ([index-cache-locality-screenblend.10](../index-cache-locality/index-cache-locality-screenblend.10.md)). The full gate
+oracle makes it safe (index-cache-locality-screenblend.10). The full gate
 now also accepts the current real-texture mini-replay summaries directly as
 `final-writer-replay-oracle=blocked-final-writer-hazard`: rank1 is a real
 final-writer fail, rank2-4 are owner-masked color-exact rows, and owner-safe
-LRU32 is `0` ([hidden-backend-storage-shape.20](hidden-backend-storage-shape.20.md)). The backend escape audit is
+LRU32 is `0` (hidden-backend-storage-shape.20). The backend escape audit is
 now attached to the same full gate as
 `backend-escape-surface=reduced-ab-required`, so mesh/object bridge-only,
 position/binning visible-probe-only, and Tile-FFP no-coverage results also
-block direct GT1 Xcode spend ([hidden-backend-storage-shape.22](hidden-backend-storage-shape.22.md)). The reduced
+block direct GT1 Xcode spend (hidden-backend-storage-shape.22). The reduced
 A/B planner then makes the blocker actionable as `blocked-before-reduced-ab`:
 mesh/object lacks a dxmt9 route/emitter, position/binning is not a real route
 below visible `VSOut`, and Tile-FFP lacks hot-row coverage
-([hidden-backend-storage-shape.23](hidden-backend-storage-shape.23.md)). The Tile-FFP expansion split then shows
+(hidden-backend-storage-shape.23). The Tile-FFP expansion split then shows
 that this is not a minor FFP selector problem: `60/2` and `60/1` are `100%`
 not-FFP fallback, `60/0` is `100%` unsupported-state fallback, and the run-top
 rows require a programmable/textured tile or mesh-style route
-([hidden-backend-storage-shape.24](hidden-backend-storage-shape.24.md)). The programmable route split then
+(hidden-backend-storage-shape.24). The programmable route split then
 separates this into a smaller first reduced A/B and harder follow-ups: `60/0`
 is a depth-only candidate, `60/1` needs programmable color, and `60/2` needs
-the full programmable textured route ([hidden-backend-storage-shape.25](hidden-backend-storage-shape.25.md)).
+the full programmable textured route (hidden-backend-storage-shape.25).
 The first implementation smoke for that branch reached the entire `60/0`
 depth-only row through a fragmentless, position-only Metal render PSO, but that
 first shape failed equality because it also collapsed the vertex output layout
-to position-only `0x0` ([hidden-backend-storage-shape.26](hidden-backend-storage-shape.26.md)). The follow-up
+to position-only `0x0` (hidden-backend-storage-shape.26). The follow-up
 diagnostic keeps the ordinary pair-local `VSOut` layout (`0xfff`) while still
 omitting the fragment function. It covers the same `42` draws / `97,294`
 primitives / `291,882` vertices and pass-end `D24X8` depth plus `X8R8G8B8`
@@ -811,7 +811,7 @@ color both compare with `0` changed bytes. That made it a valid reduced
 `60/0` Xcode candidate, but the completed counter gate rejects it as a
 performance lever: target VS buffer write stays flat (`224.918 -> 224.944
 MiB`) with unchanged VS invocations (`152,895 -> 152,895`)
-([hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md)).
+(hidden-backend-storage-shape.34).
 A current shader-dump join then attaches MSL source and PS varying liveness to
 the existing Xcode top rows without spending another gputrace. It matches `9/9`
 top-row VS/PS pairs and shows the top rows read only small visible field sets,
@@ -884,14 +884,14 @@ proof.
   alpha-test; cull moves only the small named-tiled counters (~30 MiB). Large
   alpha blend-off remains a diagnostic backend-state clue, not a legal fix:
   current screen/standard-alpha rows fail static blend-off equivalence.
-  [backend-shape-classifiers](../backend-shape-classifiers/index.md), [hidden-backend-storage-shape.10](hidden-backend-storage-shape.10.md)
+  [backend-shape-classifiers](../backend-shape-classifiers/index.md), hidden-backend-storage-shape.10
 
 - Current PSO/state churn as an Xcode candidate. The hot rows are
   stream/IB-dominant rather than isolated PSO churn, and the per-draw join
   finds no stable stream/IB tuple run where PSO changes independently. PSO /
   backend spill still needs a deliberately controlled A/B before expensive
-  counters. [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md),
-  [hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md), [hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md)
+  counters. hidden-backend-storage-shape.11,
+  hidden-backend-storage-shape.18, hidden-backend-storage-shape.19
 
 - Which sub-component of the hidden backend dominates (stage-out vs binning
   parameter storage vs compiler spill). [hidden-backend-storage](index.md)
@@ -909,7 +909,7 @@ proof.
   smoke has no skipped/error/overflow/hazard-split evidence, so the next cheap
   branch is final-color isolation plus RT/depth/clear/present pass-churn
   comparison, not broad error handling.
-  [hidden-backend-storage-shape.10](hidden-backend-storage-shape.10.md),
+  hidden-backend-storage-shape.10,
   [backend-shape-classifiers-alpha.04](../backend-shape-classifiers/backend-shape-classifiers-alpha.04.md)
 
 - Whether Metal 3 mesh/object shaders can move GT1-style FFP/fixed-function
@@ -919,12 +919,12 @@ proof.
   post-pass code exists, but the coverage gate shows zero eligible primitives
   in frame60 hot rows and only `0.005%` eligible primitive share in the partial
   run. It remains a narrow correctness/architecture lever, not a measured GT1
-  performance path. [hidden-backend-storage-shape.15](hidden-backend-storage-shape.15.md)
+  performance path. hidden-backend-storage-shape.15
 
 - Whether a deliberately isolated PSO/state-churn A/B changes hidden backend
   layout/spill storage. The current rows do not isolate it: stream/IB handle
   churn dominates PSO changes in the hot encoders, and per-draw stable tuple
   runs contain no independent PSO changes. The present data rejects another
   PSO-churn Xcode spend but does not close the mechanism forever.
-  [hidden-backend-storage-shape.11](hidden-backend-storage-shape.11.md), [hidden-backend-storage-shape.18](hidden-backend-storage-shape.18.md),
-  [hidden-backend-storage-shape.19](hidden-backend-storage-shape.19.md)
+  hidden-backend-storage-shape.11, hidden-backend-storage-shape.18,
+  hidden-backend-storage-shape.19

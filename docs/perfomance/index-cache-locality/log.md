@@ -40,11 +40,11 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
 | H1 | Hot indexed rows carry large reducible post-transform LRU32 locality (ceiling) | accepted (model) | index-cache-locality-opaque.01 |
-| H2 | A cached LRU32 reorder for **opaque depth-writing** triangles reduces Xcode VS invocations, VS write, and GPU time on target rows | **accepted (production WIN)**; refreshed frame60 proxy rows now have attached opaque proof input | index-cache-locality-proofinput.01, [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), index-cache-locality-opaque.07, index-cache-locality-opaque.03 |
+| H2 | A cached LRU32 reorder for **opaque depth-writing** triangles reduces Xcode VS invocations, VS write, and GPU time on target rows | **accepted (production WIN)**; refreshed frame60 proxy rows now have attached opaque proof input | index-cache-locality-proofinput.01, index-cache-locality-opaque.08, index-cache-locality-opaque.07, index-cache-locality-opaque.03 |
 | H3 | The opt-in is correctly scoped (opaque rows only; 50/2 untouched) and is not a no-op on the current tree | accepted | index-cache-locality-opaque.02, index-cache-locality-opaque.04 |
 | H4 | The CPU side-effect can be cut and attributed without changing candidate selection (dense adjacency, LRU32-only, source-resolve split; remaining build owner is candidate selection volume) | accepted | index-cache-locality-cpucost.03, index-cache-locality-cpucost.05, index-cache-locality-cpucost.06, index-cache-locality-cpucost.08, index-cache-locality-cpucost.09, index-cache-locality-cpucost.10 |
 | H5 | A faster lookup structure or simpler pool lookup scan reduces lookup CPU | rejected | index-cache-locality-cpucost.02, index-cache-locality-cpucost.07 |
-| H6 | The screen-blend index-cache reduces 50/2 / 60/2 VS invocations / write | mechanism confirmed on target rows, but current full-frame proof is **not promotable**: `60/2` GPU `-3.55%`, VS invocations `-10.76%`, VS write `-10.84%`, while top GPU fails `+0.97%`; follow-up shows this is target-only movement plus non-target replay variance, not reordered-cache mutation on `60/0+60/1`; semantic ceiling is now automated and says no more locality Xcode spend until a final-color/final-writer oracle or broader safe selector exists | [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), index-cache-locality-screenblend.08, index-cache-locality-screenblend.07, index-cache-locality-screenblend.06, [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md), [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md), index-cache-locality-screenblend.03 |
+| H6 | The screen-blend index-cache reduces 50/2 / 60/2 VS invocations / write | mechanism confirmed on target rows, but current full-frame proof is **not promotable**: `60/2` GPU `-3.55%`, VS invocations `-10.76%`, VS write `-10.84%`, while top GPU fails `+0.97%`; follow-up shows this is target-only movement plus non-target replay variance, not reordered-cache mutation on `60/0+60/1`; semantic ceiling is now automated and says no more locality Xcode spend until a final-color/final-writer oracle or broader safe selector exists | index-cache-locality-screenblend.10, index-cache-locality-screenblend.09, index-cache-locality-screenblend.08, index-cache-locality-screenblend.07, index-cache-locality-screenblend.06, index-cache-locality-screenblend.05, [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md), index-cache-locality-screenblend.03 |
 | H7 | Lowering min-gain `10→0` improves Xcode counters | rejected (weaker avg gain, no hardware movement) | index-cache-locality-mingain.01 |
 | H8 | Texture/fragment material is the first-order owner of the residual `50/2` cost | rejected; owner stays hidden vertex-stage storage | index-cache-locality-triage.01 |
 | H9 | A simple fixed candidate frontier cap cuts candidate-select CPU | rejected; cap 32/64 reduces slots but not select CPU | index-cache-locality-cpucost.11 |
@@ -54,14 +54,14 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 | H13 | A missing persistent rejected verdict is the remaining opaque-depth CPU blocker | rejected; already implemented and amortizing | index-cache-locality-cpucost.15 |
 | H14 | A missing draw-shape prefilter before reordered-index-cache lookup is the remaining CPU blocker | rejected; non-scope draws are already gated before lookup | [index-cache-locality-cpucost.16](index-cache-locality-cpucost.16.md) |
 | H15 | Strict no-duplicate LRU simulation inside the candidate builder improves candidate quality or CPU enough to change the default | rejected; candidate miss32 worsens by `+46`, CPU gain is too small/noisy | index-cache-locality-cpucost.17 |
-| H16 | Selected `60/2 depth-read + no-alpha-blend` windows can use `cache-opt-lru32` without same-input color movement | mixed; rank2/3/4 color-exact but owner-masked | [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) had `0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; [mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md) rank1 real-texture replay changes `2` pixels and canonical primitive-id replay shows `7` final-writer pixels changed; [mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md) rank2 real-texture replay has `0` changed pixels, LRU32 `-5,937`, and `809` owner-changed pixels; [mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md) rank3 has `0` changed pixels, LRU32 `-2,452`, and `52` owner-changed pixels; [mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md) rank4 has `0` changed pixels, LRU32 `-724`, and `17` owner-changed pixels |
-| H17 | Who owns the residual `50/2` / refreshed `60/2` (`~1.49–1.60 GiB` hidden) GPU cost | **OPEN** | index-cache-locality-triage.01, [hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md), [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) |
-| H18 | Primitive-conflict owner/depth/UV metrics can make scoped depth-read reorder production-safe | rejected; only final color separates fail/pass | [mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) |
-| H19 | Existing D3D9 occlusion query can be reused as the scoped depth-read no-final-color oracle | rejected; it resolves primitive count; diagnostic Metal visibility is separate sample-count triage, not final-color proof; current zero-sample rows are not the hot LRU owner | [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md), [mini-replay-bisection-texture.09](../mini-replay-bisection/mini-replay-bisection-texture.09.md), [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) |
-| H20 | The current continued experiment is still useful after the bottleneck model is known | accepted as proof gating; refreshed frame60 opaque proof passed, screen-blend was demoted from "missing movement" to "target movement pass, aggregate GPU fail, likely replay variance", and semantic/visibility joins now prevent another low-ROI locality gputrace without a final-color oracle or broader safe selector | [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), index-cache-locality-proofinput.01, [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), index-cache-locality-screenblend.08, index-cache-locality-screenblend.07 |
-| H21 | Positive Metal visibility can promote scoped depth-read locality | rejected; rank2 has positive samples with no final color, while rank1/rank3 are both positive but fail/pass diverge | [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md) |
-| H22 | The current perf gate can keep the locality semantic ceiling attached to the next Xcode queue | accepted (gate) | [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md) (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample buckets are too small, sample-visible bucket needs final-color/final-writer proof) |
-| H23 | Current real-texture semantic replay summaries provide the missing final-writer oracle | rejected by gate | [hidden-backend-storage-shape.20](../hidden-backend-storage/hidden-backend-storage-shape.20.md) (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
+| H16 | Selected `60/2 depth-read + no-alpha-blend` windows can use `cache-opt-lru32` without same-input color movement | mixed; rank2/3/4 color-exact but owner-masked | mini-replay-bisection-semantic.02 had `0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; mini-replay-bisection-texture.02 rank1 real-texture replay changes `2` pixels and canonical primitive-id replay shows `7` final-writer pixels changed; mini-replay-bisection-texture.04 rank2 real-texture replay has `0` changed pixels, LRU32 `-5,937`, and `809` owner-changed pixels; mini-replay-bisection-texture.05 rank3 has `0` changed pixels, LRU32 `-2,452`, and `52` owner-changed pixels; mini-replay-bisection-texture.06 rank4 has `0` changed pixels, LRU32 `-724`, and `17` owner-changed pixels |
+| H17 | Who owns the residual `50/2` / refreshed `60/2` (`~1.49–1.60 GiB` hidden) GPU cost | **OPEN** | index-cache-locality-triage.01, hidden-backend-storage-shape.04, mini-replay-bisection-semantic.02 |
+| H18 | Primitive-conflict owner/depth/UV metrics can make scoped depth-read reorder production-safe | rejected; only final color separates fail/pass | mini-replay-bisection-texture.07 |
+| H19 | Existing D3D9 occlusion query can be reused as the scoped depth-read no-final-color oracle | rejected; it resolves primitive count; diagnostic Metal visibility is separate sample-count triage, not final-color proof; current zero-sample rows are not the hot LRU owner | [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md), [mini-replay-bisection-texture.09](../mini-replay-bisection/mini-replay-bisection-texture.09.md), mini-replay-bisection-texture.10 |
+| H20 | The current continued experiment is still useful after the bottleneck model is known | accepted as proof gating; refreshed frame60 opaque proof passed, screen-blend was demoted from "missing movement" to "target movement pass, aggregate GPU fail, likely replay variance", and semantic/visibility joins now prevent another low-ROI locality gputrace without a final-color oracle or broader safe selector | mini-replay-bisection-texture.11, index-cache-locality-screenblend.09, index-cache-locality-proofinput.01, index-cache-locality-opaque.08, index-cache-locality-screenblend.08, index-cache-locality-screenblend.07 |
+| H21 | Positive Metal visibility can promote scoped depth-read locality | rejected; rank2 has positive samples with no final color, while rank1/rank3 are both positive but fail/pass diverge | mini-replay-bisection-texture.11 |
+| H22 | The current perf gate can keep the locality semantic ceiling attached to the next Xcode queue | accepted (gate) | index-cache-locality-screenblend.10 (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample buckets are too small, sample-visible bucket needs final-color/final-writer proof) |
+| H23 | Current real-texture semantic replay summaries provide the missing final-writer oracle | rejected by gate | hidden-backend-storage-shape.20 (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
 | H24 | Gate/class/primitive-shape telemetry can classify the remaining opaque-depth CPU side-effect before another Xcode spend | accepted; frame60 hot rows have `102/102` candidate gate-pass and `0` gate-fail, so the blocker is valid candidate construction/cache lookup, not hot-row failed-gate waste | [index-cache-locality-cpucost.18](index-cache-locality-cpucost.18.md) |
 | H25 | The commit-replay offload absorbs the candidate/lookup CPU tax at FPS parity | accepted; with `DXMT9_OFFLOAD_COMMIT_REPLAY=1` the opt-in runs at `1999 -> 1980` presents (`-0.95%`, noise) while applying `333,283` reordered-buffer hits (`~168` draws/present, `67` buffers created) — the `~0.24ms/present` build/select/lookup cost lands on worker/encode threads with idle headroom, so the runtime promotion blocker is gone; remaining formal gate is a paired offload+opt-in `.gputrace` proof | [index-cache-locality-offload-synergy.19](index-cache-locality-offload-synergy.19.md) |
 | H26 | The paired offload+opt-in `.gputrace` proof passes every promotion gate | accepted; frame60 finalizer verdict "all requested requirement gates were satisfied" vs the June baseline: target rows `60/0+60/1` GPU `-7.39%`, VS buffer write `-16.54%`, VS invocations `-14.12%` (identical to the historical proof), `175` candidate draws with miss32 `582,658 -> 450,807`; stable-frame, PSO-attribution, and coverage gates all pass, so the opt-in's evidence is complete — its default remains coupled to the offload because the CPU tax is only absorbed there | [index-cache-locality-offload-promotion-proof.20](index-cache-locality-offload-promotion-proof.20.md) |
@@ -326,44 +326,44 @@ invocations/write/draw/geometry. That demotes screen-blend from "missing proof
 input" to "target mechanism confirmed, aggregate proof failed by non-target
 replay variance" (index-cache-locality-screenblend.08,
 index-cache-locality-screenblend.07). The follow-up semantic ceiling
-projection ([index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md)) makes the Xcode budget
+projection (index-cache-locality-screenblend.09) makes the Xcode budget
 decision explicit: rank2-4 color-exact owner-masked windows sum to only
 `-9,113` LRU32 delta (estimated `-0.071ms`), rank1-4 still include a visible
 hazard and only reach `-23,706` LRU32 (estimated `-0.186ms`), while the
 sample-visible bucket is large enough in principle (`-180,840` LRU32, estimated
 `-1.416ms`) but still lacks final-color/final-writer proof.
-The automated gate [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md) now carries this
+The automated gate index-cache-locality-screenblend.10 now carries this
 budget decision into the current full report as
 `locality-semantic-ceiling=oracle-required`: color-exact/zero-sample locality is
 too small for another Xcode capture, while the only large bucket is
 sample-visible and still needs final-color/final-writer proof.
 The post-visualfix `60/2` class proxy then found depth-read/no-blend windows with
 similar locality ceilings. The first selected
-two-draw window ([mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md)) cuts replay LRU32 misses
+two-draw window (mini-replay-bisection-semantic.02) cuts replay LRU32 misses
 `52,865 -> 38,272` (`-27.6%`) and was exact with clear depth and captured D24X8
 depth, but the rank-1 real-texture follow-up
-([mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md)) changes `2` pixels with max delta `5`,
+(mini-replay-bisection-texture.02) changes `2` pixels with max delta `5`,
 and canonical primitive-id replay shows `7` pixels where the final writer
-changes. The rank-2 follow-up ([mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md)) is
+changes. The rank-2 follow-up (mini-replay-bisection-texture.04) is
 color-exact with real textures and LRU32 `19,131 -> 13,194` (`-31.0%`), but
 still changes canonical primitive ownership at `809` pixels. Rank 3
-([mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md)) repeats the color-exact owner-masked
+(mini-replay-bisection-texture.05) repeats the color-exact owner-masked
 shape with LRU32 `11,398 -> 8,946` (`-21.5%`) and `52` owner pixels changed.
-Rank 4 ([mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md)) completes the queued lower-ranked
+Rank 4 (mini-replay-bisection-texture.06) completes the queued lower-ranked
 set with the same color-exact owner-masked shape: LRU32 `4,237 -> 3,513`
 (`-17.1%`) and `17` owner pixels changed. That rejects broad exact/`lsb1`
 production promotion for this state class. The primitive-conflict selector
-scout ([mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md)) also rejects the cheap
+scout (mini-replay-bisection-texture.07) also rejects the cheap
 non-color-threshold family: owner-count, depth, UV, and projected-texcoord
 ranges overlap between rank1 fail and rank2-4 exact passes. The visibility/cache
-join ([mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md)) also rejects current no-sample rows
+join (mini-replay-bisection-texture.10) also rejects current no-sample rows
 as the hot LRU owner: zero rows are only `-2,016` of `-182,856` LRU32 delta.
-The visibility-positive semantic join ([mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md))
+The visibility-positive semantic join (mini-replay-bisection-texture.11)
 then rejects the remaining positive-sample shortcut: rank2 is sample-positive
 with no final color, while rank1 and rank3 are both sample-positive but split
 visible fail versus visible exact-pass.
 The full perf gate now attaches the same real-texture semantic replay summaries
-directly through [hidden-backend-storage-shape.20](../hidden-backend-storage/hidden-backend-storage-shape.20.md) and emits
+directly through hidden-backend-storage-shape.20 and emits
 `final-writer-replay-oracle=blocked-final-writer-hazard`: rank1 is a real
 final-writer fail (`-14,593` LRU32), rank2-4 are color-exact but owner-masked
 (`-9,113` LRU32), and owner-safe LRU32 is `0`.
@@ -399,20 +399,20 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) — the reverse-triangle / min-index / cache-aware reorder scouts that motivated a *cached, gated* reorder instead of naive order changes; `sort-min-index` was rejected here.
 - [index-reuse-measurement](../index-reuse-measurement/index.md) — the `DXMT9_MEASURE_INDEX_REUSE` / LRU32 cache-miss telemetry the candidate gate is built on.
 - [mini-replay-bisection](../mini-replay-bisection/index.md) — consumes the no-mutate identity rows; the real-input replay path needed to settle the open `50/2` semantic-tolerance question.
-- [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) — selected `60/2` depth-read/no-blend window with exact white-texture/depth-input replay output.
-- [mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md) — rank-1 selected window with real texture inputs; exact/`lsb1` promotion rejected.
-- [mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md) — rank-2 selected window with real texture inputs; final color exact but owner-masked.
-- [mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md) — rank-3 selected window with real texture inputs; final color exact but owner-masked.
-- [mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md) — rank-4 selected window with real texture inputs; final color exact but owner-masked.
-- [mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) — primitive-conflict selector scout rejects simple non-color thresholds.
+- mini-replay-bisection-semantic.02 — selected `60/2` depth-read/no-blend window with exact white-texture/depth-input replay output.
+- mini-replay-bisection-texture.02 — rank-1 selected window with real texture inputs; exact/`lsb1` promotion rejected.
+- mini-replay-bisection-texture.04 — rank-2 selected window with real texture inputs; final color exact but owner-masked.
+- mini-replay-bisection-texture.05 — rank-3 selected window with real texture inputs; final color exact but owner-masked.
+- mini-replay-bisection-texture.06 — rank-4 selected window with real texture inputs; final color exact but owner-masked.
+- mini-replay-bisection-texture.07 — primitive-conflict selector scout rejects simple non-color thresholds.
 - index-cache-locality-proofinput.01 — explains why the current experiment matters, records the refreshed opaque proof result, and records the screen-blend demotion proof.
 - index-cache-locality-screenblend.06 — current screen-blend same-input `lsb1` semantic input prepared.
 - index-cache-locality-screenblend.07 — current full screen-blend proof: target `60/2` movement passes, aggregate top-GPU gate fails.
 - index-cache-locality-screenblend.08 — row-level follow-up: screen-blend applies only to `60/2`; `60/0+60/1` regression is GPU-time-only replay variance.
-- [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md) — semantic ceiling projection: no more locality gputrace/Xcode spend without a final-color/final-writer oracle, broader safe selector, or non-reorder denominator mechanism.
-- [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md) — automated semantic ceiling gate;
+- index-cache-locality-screenblend.09 — semantic ceiling projection: no more locality gputrace/Xcode spend without a final-color/final-writer oracle, broader safe selector, or non-reorder denominator mechanism.
+- index-cache-locality-screenblend.10 — automated semantic ceiling gate;
   emits `locality-semantic-ceiling=oracle-required` in the current full gate.
-- [hidden-backend-storage-shape.20](../hidden-backend-storage/hidden-backend-storage-shape.20.md) — automated final-writer replay gate;
+- hidden-backend-storage-shape.20 — automated final-writer replay gate;
   attaches the current real-texture semantic summaries and blocks this
   sample-visible locality set before Xcode.
 - [index-cache-locality-offload-synergy.19](index-cache-locality-offload-synergy.19.md) — commit-replay offload absorbs the opt-in's CPU tax at FPS parity; runtime promotion blocker removed.
@@ -450,4 +450,4 @@ index-buffer lookup.
   safe. The automated ceiling gate now rejects current color-exact/zero-sample
   buckets as too small for another Xcode capture, while leaving the large
   sample-visible bucket open only behind an oracle.
-  [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md)
+  index-cache-locality-screenblend.10

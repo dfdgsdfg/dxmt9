@@ -5,7 +5,7 @@ title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-{restore,direct-cbuf}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-versioned-indexcache-direct-cbuf-passaware-store-gt2-r{1,2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+source: 2; 4}-20260719; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; 2; 3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; preacquire}-gt2-r1-20260719; 2}-phase-latency{1; -control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; direct-cbuf-r1; direct-cbuf-r2}-20260719; direct-cbuf}-gt2-r1-20260719; 2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; gt2-phase-latency1}-systemtrace-20260719; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge-gt2.22.md; docs/perfomance/index-cache-locality/index-cache-locality-merge-rejection.23.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.36.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.39.md; traces/app-d3d9-3dmark05-gt2-order-store-control-phasealigned-frame255-xcode-r1-20260724/analysis; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis; experiments/output/app-d3d9-3dmark05-gt2-all-production-opts-r1-20260724; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
@@ -258,7 +258,7 @@ remove more than the roughly `0.26ms` mean global-idle remainder in this phase.
 
 Removing the old four-frame drawable saturation also changes the direct-cbuf
 result. The earlier two-run set measured `+1.98%`. The 2026-07-20
-[cross-workload gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+cross-workload gate
 supersedes that isolated estimate with a fresh same-build ABBA pair: sampled
 FPS `8.087 -> 8.181` (`+1.15%`), draw/chunk CPU `-29.56%/-24.93%`, argbuf
 setup/binds zero, and zero errors. GT2 is the strongest throughput result in
@@ -615,7 +615,7 @@ Together with the clean GT1/GT3 runs and exact GT3 glitch-window captures, this
 clears the wild gate for promoting only the passcoalesce L1 policy. Because the
 run also carried unrelated experimental options, it is not a passcoalesce-only
 FPS A/B. Device-backed pixel parity remains open. See
-[hidden-backend-storage-shape.40](hidden-backend-storage/hidden-backend-storage-shape.40.md).
+hidden-backend-storage-shape.40.
 
 A whole-run closure now strengthens the final-writer result beyond frame279.
 All `503` measured target frames have two R32F write runs and no read-first

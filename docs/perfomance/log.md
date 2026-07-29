@@ -5,7 +5,7 @@ title: "DXMT9 Performance Documentation Log"
 type: root-log
 status: historical
 updated: 2026-07-29
-source: docs/perfomance/index.md; docs/perfomance/overview.md; experiments/output/app-d3d9-3dmark05-release-default-gt{1,2,3}-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-gt2-phase-latency1-systemtrace-20260719; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
+source: docs/perfomance/index.md; docs/perfomance/overview.md; 2; 3}-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-gt2-phase-latency1-systemtrace-20260719; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md
 ---
 

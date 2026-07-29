@@ -5,7 +5,7 @@ title: "SFIV Benchmark Performance — Investigation Map"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: experiments/output/app-d3d9-sfiv-benchmark-current-v2-r{1,2,3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md
+source: 2; 3}-20260719; experiments/output/app-d3d9-sfiv-benchmark-solo-clean-r1-20260712; experiments/output/app-d3d9-sfiv-benchmark-at-immediate-sfiv-r2-20260714; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-default-passcoalesce-perf-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725
 related: docs/perfomance/log.md; docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-sfiv-scene-pass-stall.204.md; docs/perfomance/present-pacing/present-pacing-sfiv-shader-cost-attribution.205.md
 ---
 
@@ -66,7 +66,7 @@ logging generated about 1.5 GB before compression. These runs therefore add
 default-policy correctness/stability evidence without replacing the
 duration-matched `44.668` sampled-FPS baseline.
 
-The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+The 2026-07-20 direct-cbuf generality gate
 adds a quiet same-build ABBA pair. Sampled FPS is flat-positive
 (`45.544 -> 45.694`, `+0.33%`), draw/chunk CPU falls `32.57%/12.57%`, argbuf
 setup/binds become zero, and the character/effect captures plus error counters

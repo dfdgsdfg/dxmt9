@@ -5,7 +5,7 @@ title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
 updated: 2026-07-29
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
+source: 2; 3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -60,7 +60,7 @@ not a new baseline. The capture shows the robot, weapon, muzzle flash, bloom,
 lighting, and floor reflection intact. Chunk rejects, V2 rejects, GPU errors,
 pipeline failures, missing-pipeline draws, and DCE activity are all zero.
 
-The 2026-07-20 [direct-cbuf generality gate](state-churn-encode/state-churn-encode-encode-phase.202.md)
+The 2026-07-20 direct-cbuf generality gate
 adds two OFF and two ON current-build runs. Direct-cbuf changes sampled FPS
 `20.908 -> 20.974` (`+0.32%`) while draw/chunk CPU falls `20.72%/17.05%`,
 argbuf setup and table binds become zero, and visuals/errors remain clean. It

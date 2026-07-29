@@ -8,7 +8,7 @@ date: 2026-06-19
 type: runtime-attribution
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-h180-first-publish-slot-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-h180-first-publish-slot-r1/analysis/frame60-perf-counter-comparison.md, src/dxmt9/dxmt9_command_queue.cpp, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py
-related: docs/perfomance/present-pacing/present-pacing-first-publish-slot-shape.101.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/present-pacing/present-pacing-publish-residency-percentiles.100.md
+related: docs/perfomance/present-pacing/present-pacing-first-publish-slot-shape.101.md, docs/perfomance/present-pacing/present-pacing-publish-residency-percentiles.100.md
 ---
 
 # Present Pacing / Present Tail Prefix Is The Missed Draw Head 102

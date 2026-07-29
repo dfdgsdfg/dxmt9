@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-attribution
 status: rejected-as-owner
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/result.json, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-h225-queue-lock-current-r1/analysis/captures/frame000900.bmp, traces/app-d3d9-3dmark05-h225-queue-lock-current-r1/analysis/captures/frame000920.bmp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.195.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.04.md
+related: docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.04.md
 ---
 
 # Encode Phase 196 - Queue lock attribution runtime

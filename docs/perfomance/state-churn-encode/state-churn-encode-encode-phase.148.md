@@ -8,7 +8,7 @@ date: 2026-06-18
 type: experiment
 status: accepted-correctness-fix-local-cpu-win-rejected-fps-owner
 source: src/dxmt9/dxmt9_draw_encoder.mm, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/actual.png, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-dirtyfix-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-dirtyfix-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-direct-cbuf-dirtyfix-r1-20260618/actual.png, traces/app-d3d9-3dmark05-v003-direct-cbuf-dirtyfix-r1-20260618/analysis/frame60-perf-counter-comparison.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.147.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.143.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.147.md
 ---
 
 # Encode Phase 148 - Direct-Cbuf Dirty Payload Rebind Fix

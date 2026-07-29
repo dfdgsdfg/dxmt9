@@ -8,7 +8,7 @@ date: 2026-06-20
 type: runtime-baseline
 status: accepted-current-baseline
 source: experiments/output/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/h216-vs-h220-current-visual-p4.md, experiments/output/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/actual.png, traces/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/analysis/captures/frame000880.bmp, traces/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/analysis/captures/frame000910.bmp, traces/app-d3d9-3dmark05-h220-current-visual-p4-baseline-r1/analysis/captures/frame000960.bmp
-related: docs/perfomance/present-pacing/present-pacing-open-cb-carry-state.135.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.188.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.03.md
+related: docs/perfomance/snapshot-cache/snapshot-cache-visual.03.md
 ---
 
 # Present Pacing / Current Visual-Safe P4 Baseline 136

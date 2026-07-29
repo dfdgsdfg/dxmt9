@@ -145,6 +145,6 @@ counter CSV by `seq,encoder,command,draw_ordinal` to check whether the suspected
 high-VS-write window is no-sample, sample-visible, or mixed.
 
 **Related.** [mini-replay-bisection-texture.08](mini-replay-bisection-texture.08.md) ·
-[mini-replay-bisection-texture.10](mini-replay-bisection-texture.10.md) ·
+mini-replay-bisection-texture.10 ·
 [mini-replay-bisection](index.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [hidden-backend-storage](../hidden-backend-storage/index.md).

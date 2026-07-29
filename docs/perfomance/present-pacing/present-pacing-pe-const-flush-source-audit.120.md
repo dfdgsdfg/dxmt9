@@ -8,7 +8,6 @@ date: 2026-06-20
 type: source-audit
 status: accepted-current-attribution
 source: src/d3d9/d3d9_pe_const_shadow.hpp, src/d3d9/d3d9_pe_device.cpp, include/dxmt9/device_c.h, src/d3d9/device_c_chunk_replay.cpp, docs/perfomance/present-pacing/present-pacing-pe-between-call-body-current.119.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md
-related: docs/perfomance/present-pacing/present-pacing-pe-between-call-body-current.119.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-body-time.118.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.141.md
 ---
 
 # Present Pacing / PE Const Setter And Flush Source Audit 120

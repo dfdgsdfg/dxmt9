@@ -8,7 +8,7 @@ date: 2026-06-20
 type: source-audit
 status: design-gate-accepted
 source: src/d3d9/device_c_chunk_replay.cpp, src/d3d9/device_c_common.hpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_command_queue.hpp
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.188.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.189.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.189.md
 ---
 
 # Encode Phase 190 - Chunk-end carry feasibility audit

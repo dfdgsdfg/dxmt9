@@ -8,7 +8,7 @@ date: 2026-06-18
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, experiments/output/app-d3d9-3dmark05-v003-vs-const-setter-range-r1-20260618/result.json
-related: docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md, docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md
+related: docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md
 ---
 
 # Present-Pacing 80 - No-Enqueue Before-Publish Closure Compare Metrics

@@ -8,7 +8,7 @@ date: 2026-06-19
 type: sidecar-reanalysis
 status: accepted-carrier-blocker
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/h108-final-reopen-comparison.md, experiments/output/app-d3d9-3dmark05-h185-open-cb-tailshape-r1/h185-final-reopen-comparison.md, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-h185-open-cb-tailshape-r1/3dmark05-perf-encoders.csv
-related: docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md, docs/perfomance/present-pacing/present-pacing-present-split-tail-shape.111.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md
+related: docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md
 ---
 
 # Present Pacing / Open-CB Final Same-Key Reopen Attribution 115

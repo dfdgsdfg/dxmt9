@@ -8,7 +8,7 @@ date: 2026-06-20
 type: tooling-attribution
 status: accepted-attribution
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/result.json, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/3dmark05-perf-summary.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.196.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.195.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.196.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.196.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
 ---
 
 # Encode Phase 197 - Draw batch submit residual reanalysis
@@ -86,7 +86,7 @@ flowchart TD
 The next local submit branch is not queue lock or a large unknown outer-submit
 gap. It is append materialization width, especially uniform append and state
 append. That does not automatically make it the average-FPS lever:
-[state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) and
+state-churn-encode-encode-phase.195 and
 [present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md) still show the frame-level owner is
 P4/no-enqueue cadence plus exposed replay/encode serial work.
 
@@ -106,5 +106,5 @@ append owns the submit row, and uniform/state append own most of append. The
 next implementation choice is either a real append materialization reduction
 with a P4 proof gate, or a return to the render-pass-safe overlap branch.
 
-**Related.** [state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) ·
+**Related.** state-churn-encode-encode-phase.195 ·
 [state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) · [present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md).

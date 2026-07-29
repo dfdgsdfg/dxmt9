@@ -179,5 +179,5 @@ constant tail hashing as a broad fix.
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.90](state-churn-encode-encode-phase.90.md) ·
-[snapshot-cache-snapshot.22](../snapshot-cache/snapshot-cache-snapshot.22.md) ·
+snapshot-cache-snapshot.22 ·
 present-pacing-lowoverhead-refresh.33 · [present-pacing](../present-pacing/index.md).

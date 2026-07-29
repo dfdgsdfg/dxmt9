@@ -77,6 +77,6 @@ a plausible holder row, or explicitly explain why only one side was sampled.
 - `python3 -m pytest tests/scripts/test_3dmark05_probe_scripts.py -q -k cpu_summary`
 - `git diff --check -- scripts/tools/summarize_xctrace_cpu_threads.py tests/scripts/test_summarize_xctrace_cpu_threads.py docs/perfomance/present-pacing/index.md docs/perfomance/present-pacing/present-pacing-xctrace-holder-summary.42.md`
 
-**Related.** [present-pacing-xctrace-cpu-summary-tooling.29](present-pacing-xctrace-cpu-summary-tooling.29.md) ·
+**Related.** present-pacing-xctrace-cpu-summary-tooling.29 ·
 [present-pacing-winemac-onmainthread.28](present-pacing-winemac-onmainthread.28.md) ·
 present-pacing-systemtrace-p4-range.36 · [present-pacing](index.md).

@@ -8,7 +8,7 @@ date: 2026-06-19
 type: code-and-counter-audit
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/result.json, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_backend_types.hpp, scripts/tools/summarize_3dmark05_perf.py
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.120.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/present-pacing/present-pacing-current-frontier.89.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.149.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md, docs/perfomance/present-pacing/present-pacing-current-frontier.89.md
 ---
 
 # Encode Phase 151 - V003 uniform append residual audit

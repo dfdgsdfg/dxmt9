@@ -52,5 +52,3 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 ## Recent Leaf Documents
 
 > 7 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
-
-- [render-pass-store-coalesce.04 - H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled](render-pass-store-coalesce.04.md)

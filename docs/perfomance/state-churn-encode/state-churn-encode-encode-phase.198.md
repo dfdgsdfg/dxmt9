@@ -8,7 +8,7 @@ date: 2026-06-20
 type: tooling-attribution
 status: accepted-attribution
 source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/result.json, experiments/output/app-d3d9-3dmark05-h225-queue-lock-current-r1/3dmark05-perf-summary.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.197.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.195.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.196.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.197.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
+related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.196.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.197.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
 ---
 
 # Encode Phase 198 - Append uniform CPU residual reanalysis
@@ -97,7 +97,7 @@ useful local CPU work is narrower than before: reduce stage-level uniform append
 materialization or implement N-1 state/uniform elision; do not chase queue lock,
 broad outer-submit residuals, or payload-record append copy alone.
 
-**Related.** [state-churn-encode-encode-phase.195](state-churn-encode-encode-phase.195.md) ·
+**Related.** state-churn-encode-encode-phase.195 ·
 [state-churn-encode-encode-phase.196](state-churn-encode-encode-phase.196.md) ·
 [state-churn-encode-encode-phase.197](state-churn-encode-encode-phase.197.md) ·
 [present-pacing-current-visual-p4.136](../present-pacing/present-pacing-current-visual-p4.136.md).
