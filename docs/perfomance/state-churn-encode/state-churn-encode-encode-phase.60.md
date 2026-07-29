@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 60
+title: Encode Phase 60 - Draw Issue Split
+date: 2026-06-14
+type: instrumentation
+status: accepted-attribution
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-draw-issue-split-r1-20260614/result.json
+---
+
 # Encode Phase 60 - Draw Issue Split
 
-date: 2026-06-14
-status: accepted-attribution
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-draw-issue-split-r1-20260614/result.json
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The current no-gputrace profile still carries an
 `encode_draw_issue_cpu_ms` bucket around `~1s/run`. This phase asks whether it

@@ -28,6 +28,10 @@ the bucket.
 
 ## Latest Conclusions
 
+> **Every row below cites a leaf now marked `outdated: retired-journal`.** These
+> rejections cannot be re-checked today; they are kept because they are the
+> reason nobody should re-open visible varying width as the hidden-write owner.
+
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | [vsout-layout-varying.03](vsout-layout-varying.03.md) |
@@ -43,6 +47,8 @@ the bucket.
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 7 of the 7 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [vsout-layout-varying.03 - Dump-First VSOut Liveness Replay (semantic-safe)](vsout-layout-varying.03.md)
 - [vsout-layout-varying.02 - VSOut Liveness Trim Hypothesis Rejection](vsout-layout-varying.02.md)

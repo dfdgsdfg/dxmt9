@@ -54,6 +54,8 @@ every other domain at the lever that actually moves the bucket.
 
 ## Recent Leaf Documents
 
+> 1 of the 15 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
+
 - [hidden-backend-storage-shape.42 - Cross-Chunk DCE Removes the R32F Pass but Cannot Wait for GT2 Proof](hidden-backend-storage-shape.42.md)
 - [hidden-backend-storage-shape.41 - GT2 Final R32F Pass Is Observationally Dead but Needs Cross-Chunk Scheduling](hidden-backend-storage-shape.41.md)
 - [hidden-backend-storage-shape.40 - Alias-Aware Pass Coalescing Clears the Default-Promotion Wild Gate](hidden-backend-storage-shape.40.md)

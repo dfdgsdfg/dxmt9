@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-25
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-{direct-cbuf,preacquire}-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt{1,2}-phase-latency{1,-control}-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-latency-r1-20260719; traces/app-d3d9-3dmark05-{managed-versioned-gt2,gt2-phase-latency1}-systemtrace-20260719; experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*; experiments/output/app-d3d9-3dmark05-gt3-quadrant-glitch-{v1,v2}-exact; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; experiments/output/app-d3d9-3dmark05-release-default-gt{1,2,3}-r1-20260725; experiments/output/app-d3d9-sfiv-benchmark-final-release-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
+updated: 2026-07-29
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-current-v2-*; experiments/output/app-d3d9-3dmark05-managed-versioned-gt2-r{1,2,4}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-gt2-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.40.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -13,7 +13,7 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/
 
 > Root navigation: [index](index.md). Shared log: [log](log.md).
 
-Date: 2026-07-25
+Date: 2026-07-29
 
 Scope:
 
@@ -71,88 +71,30 @@ and replaced by the successful `r3-retry1` run. SFIV also has a separate
 `3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
 median.
 
-### 2026-07-25 Release-Default Spot Check
+Four further readouts used to live in this section. They are chronology,
+per-experiment verdict detail, or workload-owned synthesis rather than the
+general model, so on 2026-07-29 they were moved out under
+`agents/rules/documentation.rules.md`. Each is quoted verbatim in
+[log](log.md#2026-07-29---root-overview-re-centring):
 
-Commit `5dc7ca0160241da1b45e8d96950fa0ed7be9647f` was rebuilt from all three
-release/O3 staging directories and measured with the current engine defaults.
-Only perf counters and frame sampling were enabled; Metal capture, encoder
-breakdown, renderer experiment features, cross-chunk DCE, and the standard
-probe's `DXMT_DISABLE_AUTO_EXPAND_INDEXED` override were disabled.
-The GT runs used frontmost supervision, and SFIV retained the duration-matched
-25-second capture delay plus 110-second timeout.
-The repeated 3DMark references used the standard probe's auto-expand override,
-so their deltas below are context, not same-policy A/B regressions.
-
-| Workload | Closest reference FPS | Release FPS | Delta | Wall p50 / p95 | GPU CB p50 / p95 |
-|---|---:|---:|---:|---:|---:|
-| GT1 | `21.009` | `20.540` | `-2.23%` | `44.426 / 67.520ms` | `1.163 / 1.240ms` |
-| GT2 | `8.150` | `8.319` | `+2.07%` | `103.046 / 155.840ms` | `2.971 / 3.405ms` |
-| GT3 | `27.858` | `27.981` | `+0.44%` | `29.355 / 82.801ms` | `7.729 / 11.071ms` |
-| SFIV | `44.668` | `45.416` | `+1.67%` | `16.702 / 47.793ms` | `3.810 / 8.633ms` |
-
-All four runs passed with zero chunk/V2 rejects, GPU command-buffer errors,
-pipeline-build failures, missing-pipeline draws, and DCE activity. GT1 shows
-the muzzle/bloom path, GT2 the forest scene, GT3 a coherent full frame without
-the quadrant rectangle at its ordinary capture point, and SFIV the expected
-Ryu lighting/post-effect frame with a `46.06` benchmark overlay average. This
-is a single-run release sanity set, not a replacement for the repeated
-baselines above. GT2's original `7.868` promotion baseline is `5.73%` below
-this release sample; `8.150` is the closer post-policy reference.
-
-### Direct-Cbuf Generality Gate
-
-A 2026-07-20 same-build ABBA remeasurement validates
-`DXMT9_ARGBUF_DIRECT_CBUF=1` as a cross-workload constants-only Stage 2 CPU
-cleanup. Across GT1, GT2, GT3, and SFIV, draw encode falls `20.7-32.6%`, chunk
-encode falls `12.6-24.9%`, slot-30 argbuf setup/binds become zero, sampled FPS
-changes only `+0.32%` to `+1.15%`, and every run has zero GPU errors. The
-targeted GT3 `1:07.66` capture is visually normal. After a deterministic
-payload-source dirty-rebind regression closed the remaining correctness gate,
-the constants-only path was promoted default-on; explicit value `0` retains
-the rollback lane. Phase-sampled GPU p50 increases in GT3/SFIV, so this remains
-a CPU-path promotion rather than an FPS/GPU claim. Resource-array mode
-intentionally retains the mutable argbuf table. See the [cross-workload
-gate](state-churn-encode/state-churn-encode-encode-phase.202.md) and [correctness
-gate](state-churn-encode/state-churn-encode-encode-phase.203.md).
-
-GT2 is the one row newer than the original `153cacb14f2f` baseline: MANAGED
-buffer backing versioning removes `42.4ms/present` of writable-map sequence
-wait, and the default range-incremental shader-constant content index reduces
-snapshot CPU `15.8%` (`12.164 -> 10.248ms/present`) while preserving payload
-deduplication. Together they improve the earlier `current-v2` median by
-`5.92%`. Phase-aligned tracing places the former drawable stall in queued-GPU
-run-ahead: request-to-first-GPU-work is p50 `235.871ms`, while GPU-end to
-completion is only `0.205ms`. An Immediate one-frame completion boundary
-eliminates drawable waits (`146 -> 0`) and cuts CPU-present-to-display
-`307.194 -> 155.734ms` without moving GT2 or GT1 throughput beyond `1%`.
-The engine now applies that stricter boundary when an Immediate present still
-uses the default maximum of four; synchronized and explicit non-default values
-retain their windows. Publication-to-dequeue remains only about
-`0.003ms/present`, so more bulk chunk streaming is not the next lever; the GT2
-throughput frontier remains current-frame GPU vertex/pass work and residual
-CPU snapshot/encode cost.
-
-GT2 is not yet at a demonstrated GPU-work ceiling. A 2026-07-25 whole-run
-liveness closure finds the final dominant `2048x2048 R32F` pass dead in all
-`503` measured target frames; three consecutive alias-aware DAGs also prove
-its shared depth dead. The opportunity is structural but not reachable from
-the current one-chunk optimizer window: all `531` encode dequeues observed
-ready depth exactly one. The next GPU-work experiment is therefore a
-fail-open, TLA-backed cross-chunk proof window, not another publication or
-per-draw locality tweak. See
-[hidden-backend-storage-shape.41](hidden-backend-storage/hidden-backend-storage-shape.41.md).
-
-### V1 and Historical Comparison Boundary
-
-V1 is no longer runnable at current HEAD, so comparisons use preserved
-artifacts and must retain their original scope.
-
-| Workload | Available comparison | Readout |
-|---|---|---|
-| GT1 | No completed frame-sampled same-build V1/V2 pair | No defensible wire-only delta. The older `1,800 -> 2,220-2,293` presents/120s comparison includes other engine-default changes. |
-| GT2 | Only incomplete/timed-out V1-era diagnostic runs | No defensible V1/V2 performance delta. The current V2-only baseline is the first completed frame-sampled reference. |
-| GT3 | Five same-build V1/V2 promotion pairs plus one exact-window pair | The five-pair median showed V2 process throughput `-1.1%` and offload replay CPU/present `-30.8%`, passing the no-worse-than-`-3%` gate. The exact pair measured `+5.46%` throughput. Historical captures contain the then-open quadrant artifact, so they are performance evidence only; current captures are whole-run sanity evidence and the targeted 66-68-second heuristic remains the visual gate. |
-| SFIV | Duration-matched V1-era and current V2-only runs, but not a single-change A/B | Presents improved `1,500 -> 5,610` (`+274%`), GPU CB p50 `110.117 -> 2.725ms` (`-97.5%`), and p95 `126.235 -> 8.005ms` (`-93.7%`). This is a cumulative renderer improvement; a 2026-07-14 pre-V2 run had already reached `40.34` presents/s and `3.167/8.932ms`, so the gain must not be attributed to command-chunk V2 alone. |
+- **2026-07-25 release-default spot check** — a single-run GT1/GT2/GT3/SFIV
+  sanity set rebuilt from the release/O3 staging directories at `5dc7ca01`. It
+  never was a baseline, and the repeated medians in the table above remain the
+  reference. Its GT1 row is also carried in
+  [overview-3dmark05-gt1](overview-3dmark05-gt1.md).
+- **Direct-cbuf generality gate** — the cross-workload ABBA promotion record for
+  `DXMT9_ARGBUF_DIRECT_CBUF`. The surviving general statement is in [Current
+  Default Policy](#current-default-policy); the evidence is owned by
+  [state-churn-encode](state-churn-encode/log.md).
+- **GT2 MANAGED-versioning / incremental-hash / Immediate-boundary readout and
+  the 2026-07-25 R32F whole-run liveness closure** — the live versions are
+  [overview-3dmark05-gt2](overview-3dmark05-gt2.md) and
+  [hidden-backend-storage-shape.41](hidden-backend-storage/hidden-backend-storage-shape.41.md).
+- **V1 and historical comparison boundary** — V1 is not runnable at current HEAD,
+  so the table was a record of what preserved artifacts still allowed. Its GT3
+  row cites `experiments/output/app-d3d9-3dmark05-command-chunk-v2-final2-pair*`
+  and `...-gt3-quadrant-glitch-{v1,v2}-exact`, both now gone from disk; those
+  numbers are last measurements and cannot be re-checked.
 
 ## Bound Legend
 
@@ -548,6 +490,23 @@ index-cache locality opt-in whose unset default follows the offload
 managed-buffer lock cache. The 3DMark05 probe wrapper pins the pair to the
 same defaults since 2026-07-12 (`e5129346`); probe baselines after that date
 are trio-on unless `0` is exported explicitly.
+
+The engine also applies a stricter effective present boundary when an Immediate
+present still carries the default maximum frame latency of four: the boundary
+becomes one, without changing the public maximum. Synchronized presents and
+explicit non-default `DXMT9_MAX_FRAME_LATENCY` values retain their normal
+windows. The GT2 measurement that motivated this is in
+[overview-3dmark05-gt2](overview-3dmark05-gt2.md).
+
+The constants-only Stage 2 direct-cbuf path (`DXMT9_ARGBUF_DIRECT_CBUF`) is also
+default-on, with explicit value `0` as the rollback lane. It is a CPU-path
+promotion, not an FPS or GPU claim, and resource-array mode intentionally keeps
+the mutable argbuf table. Correctness evidence:
+[state-churn-encode-encode-phase.203](state-churn-encode/state-churn-encode-encode-phase.203.md),
+which keeps its artifacts. The cross-workload gate
+[state-churn-encode-encode-phase.202](state-churn-encode/state-churn-encode-encode-phase.202.md)
+has lost most of its run directories, so its percentages are last measurements —
+see [state-churn-encode/log.md](state-churn-encode/log.md).
 
 ## Experiment And Validation Areas
 

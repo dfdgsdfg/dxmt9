@@ -303,7 +303,8 @@ cannot shorten the predecessor GPU chain.
 The GT1 residual is different: its current acquire wait was about
 `0.1ms/present`, while its remaining wall was attributed to the app's Rosetta
 guest CPU and Wine thunking
-([GT1 frame sampling](present-pacing/present-pacing-frame-sampling-current.39.md),
+([GT1 frame sampling](present-pacing/present-pacing-frame-sampling-current.39.md) —
+`outdated: evidence-missing`,
 [GT1 producer attribution](present-pacing/present-pacing-postcache-resample.199.md)).
 
 The phase-aligned result promotes GPU execution to the primary residual axis.

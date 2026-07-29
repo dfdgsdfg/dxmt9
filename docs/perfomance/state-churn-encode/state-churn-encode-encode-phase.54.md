@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 54
+title: Encode Phase 54 - Prefetched PSO Resolve Cache Rejected
+date: 2026-06-14
+type: implementation-ab
+status: rejected-current
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_pipeline_cache.cpp, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/actual.png
+---
+
 # Encode Phase 54 - Prefetched PSO Resolve Cache Rejected
 
-date: 2026-06-14
-status: rejected-current
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_pipeline_cache.cpp, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-pso-resolve-cache-r1-20260614/actual.png
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.53](state-churn-encode-encode-phase.53.md) left
 `encode_draw_pipeline_lookup_cpu_ms=934.420ms` even though PSO prefetch was

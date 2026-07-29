@@ -29,6 +29,10 @@ estimate, not raw references.
 
 ## Latest Conclusions
 
+> **Every row below cites a leaf now marked `outdated: retired-journal`.** These
+> measurements cannot be re-derived today; they are kept because they record
+> which cheap explanations for the hidden bucket were already ruled out.
+
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H5 | dxmt indexed-expansion is inflating GT1 geometry | rejected (`draw_expanded_indexed=0`) | [index-reuse-measurement-geometry.01](index-reuse-measurement-geometry.01.md) |
@@ -44,6 +48,8 @@ estimate, not raw references.
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 7 of the 7 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [index-reuse-measurement-geometry.03 - Indexed Draw-Size Histogram Probe](index-reuse-measurement-geometry.03.md)
 - [index-reuse-measurement-reuse.02 - Order-Preserving Vertex Payload Canonicalization Check](index-reuse-measurement-reuse.02.md)

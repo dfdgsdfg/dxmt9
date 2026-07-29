@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 62
+title: Encode Phase 62 - Dirty VS Cbuf Identity Probe Refresh
+date: 2026-06-14
+type: implementation-ab
+status: rejected-current
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-dirty-vs-identity-r1-20260614/result.json
+---
+
 # Encode Phase 62 - Dirty VS Cbuf Identity Probe Refresh
 
-date: 2026-06-14
-status: rejected-current
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-dirty-vs-identity-r1-20260614/result.json
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Phase 61 left dirty VS cbuf update as the largest
 argbuf cbuf child. This phase asks whether those dirty VS uploads are still

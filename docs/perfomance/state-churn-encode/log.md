@@ -2452,3 +2452,36 @@ named child left is VS stage append at `0.116ms/present` with `661,640` VS
 stage records. That makes further uniform append work optional local cleanup,
 not an Xcode/gputrace candidate by itself. The FPS branch remains P4/no-enqueue
 overlap or a larger replay/encode materialization change that moves serial rows.
+
+## Direct-Cbuf Generality Gate — relocated from the root overview 2026-07-29
+
+This block lived in `docs/perfomance/overview.md` under
+"Direct-Cbuf Generality Gate". It is per-experiment promotion detail owned by
+this domain, so it was moved here on 2026-07-29; the root overview keeps only
+the one-paragraph default-policy statement. Text is unchanged:
+
+> A 2026-07-20 same-build ABBA remeasurement validates
+> `DXMT9_ARGBUF_DIRECT_CBUF=1` as a cross-workload constants-only Stage 2 CPU
+> cleanup. Across GT1, GT2, GT3, and SFIV, draw encode falls `20.7-32.6%`, chunk
+> encode falls `12.6-24.9%`, slot-30 argbuf setup/binds become zero, sampled FPS
+> changes only `+0.32%` to `+1.15%`, and every run has zero GPU errors. The
+> targeted GT3 `1:07.66` capture is visually normal. After a deterministic
+> payload-source dirty-rebind regression closed the remaining correctness gate,
+> the constants-only path was promoted default-on; explicit value `0` retains
+> the rollback lane. Phase-sampled GPU p50 increases in GT3/SFIV, so this remains
+> a CPU-path promotion rather than an FPS/GPU claim. Resource-array mode
+> intentionally retains the mutable argbuf table. See the [cross-workload
+> gate](state-churn-encode-encode-phase.202.md) and [correctness
+> gate](state-churn-encode-encode-phase.203.md).
+
+Evidence status, checked 2026-07-29. The correctness gate
+([state-churn-encode-encode-phase.203](state-churn-encode-encode-phase.203.md))
+keeps every cited artifact. The cross-workload gate
+([state-churn-encode-encode-phase.202](state-churn-encode-encode-phase.202.md))
+does not: its GT1/GT2/GT3 and SFIV `off`/`on` ABBA run directories and the GT1/
+GT2/GT3 `direct-cbuf-vs-off-r1.md` comparison reports are gone from disk. Only
+`experiments/output/app-d3d9-3dmark05-direct-cbuf-generality-gt3-visual-67s-retry-20260720`
+and the SFIV `on` trace analysis survive. The leaf is unmarked because it is not
+*wholly* evidence-missing, but the `20.7-32.6%` / `12.6-24.9%` figures above are
+last measurements and cannot be re-derived from what remains. Treat the
+default-on decision as standing and the percentages as historical.

@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
-updated: 2026-07-25
-source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md
+updated: 2026-07-29
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt1-r{1,2,3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.202.md; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 
@@ -67,6 +67,13 @@ argbuf setup and table binds become zero, and visuals/errors remain clean. It
 is a proven local CPU cleanup, not a GT1 FPS owner. The cross-workload result
 and deterministic dirty-rebind regression subsequently support its default-on
 promotion with explicit value `0` as the rollback lane.
+**These four figures are last measurements.** That leaf's GT1/GT2/GT3 and SFIV
+`off`/`on` run directories and its per-workload comparison reports are gone from
+disk, so the percentages cannot be re-derived; the leaf is unmarked only because
+two of its artifacts survive. See
+[state-churn-encode/log.md](state-churn-encode/log.md) for the evidence status.
+The default-on decision itself stands on the still-intact correctness gate
+[state-churn-encode-encode-phase.203](state-churn-encode/state-churn-encode-encode-phase.203.md).
 
 The 2026-07-21 [index-cache scope/merge gate](index-cache-locality/index-cache-locality-scope-merge.21.md)
 is also GT1 despite `gt2` output-directory and result-file suffixes: every run
@@ -126,6 +133,40 @@ frontier (tile-FFP two-stage encode, argbuf direct-cbuf scout, unpublished-slot
 PSO prefetch, sparse const records, `DXMT9_PE_INLINE_CONST_DELTA` — mechanism
 proven, FPS-null, kept opt-in per H214).
 
+## Current Open Items
+
+Two 2026-07-28 results are not yet reflected in the axes above. Both are open,
+neither is a win.
+
+**Vertex remap is a null on row `60/1`, and its positive control failed.** Four
+same-build mini-replay lanes over one GT1 frame60 manifest show a pure
+first-reference vertex permutation changing nothing: VS invocations `794,896`
+and Tiled Vertex Buffer bytes `14,057,472` identical to baseline, VS device
+writes `-0.005%`, GPU `+0.251%`, LRU32 miss delta `0.0000%`, color hash equal.
+Hidden write volume on that row tracks VS invocation count at `~1591.9 B` per
+invocation, which a permutation cannot change. The design's own sanity gate then
+failed: the `sort-min-index` control measured `1623.4 B/inv`, not the `442.6`
+that would show the row reproduces `replay.03`'s `3.86x` density spread. So the
+`replay.03` question is **still open** and needs the encoder2 (row `60/2`) dump;
+do not retry the remap on row `60/1`. Evidence:
+[mini-replay-bisection-vertexremap.01](mini-replay-bisection/mini-replay-bisection-vertexremap.01.md),
+carried as H53 in
+[hidden-backend-storage](hidden-backend-storage/overview.md).
+
+**A shader-codegen fix landed and has no GPU measurement.** Commit `d63f7a65`
+stops 8 of GT1's 17 frame60 `enc1` vertex shader variants from copying
+`float4 cFloat[256]` — `4,096 B` of per-invocation stack traffic — merely to
+service a single `DEF`. Those variants carry `297,935` of `797,864` LRU64
+invocations (`37.3%`), and the copy accounts for `~96%` of the `1,265,398,976 B`
+of VS device-memory writes measured on that encoder. It passed a GT1 visual gate
+(character models present and correctly skinned at matching frame ordinals; 81 of
+92 GT1 shaders byte-identical, exactly the 11 register-file shaders changed).
+**No GPU measurement exists yet** — the invocation and byte figures above are the
+pre-fix attribution that motivated it, not a measured result. Treat this as an
+open item, not a win, until a paired frame60 `.gputrace` or encoder-counter export
+shows VS device writes, VS invocations, and GPU time moving together. Owner
+domain: [shader-codegen](shader-codegen/overview.md).
+
 ## Promotion Gates
 
 | Gate | Required evidence | Where details live |
@@ -172,9 +213,9 @@ flowchart TD
 | [index-cache-locality](index-cache-locality/index.md) | opaque-depth and screen-blend locality | Only accepted production-shaped GPU win, engine-default ON since `d45af067` (coupled to the offload); screen-blend remains policy/oracle-bound. |
 | [index-reuse-measurement](index-reuse-measurement/index.md) | cache-miss and geometry reuse measurement | Supports locality attribution and candidate ranking. |
 | [primitive-reorder-diagnostics](primitive-reorder-diagnostics/index.md) | reverse/min-index/split reorder probes | Keeps frame-shape artifacts out of promotion claims. |
-| [mini-replay-bisection](mini-replay-bisection/index.md) | row-local replay and final-writer bisection | Supplies correctness/oracle evidence before Xcode spend. |
+| [mini-replay-bisection](mini-replay-bisection/index.md) | row-local replay and final-writer bisection | Supplies correctness/oracle evidence before Xcode spend. The `replay.03` `3.86x` hidden-density question is still open: the row `60/1` vertex-remap discriminator was an exact null and its positive control failed, so the encoder2 (`60/2`) dump is still required. |
 | [vsout-layout](vsout-layout/index.md) | visible varying / `VSOut` layout probes | Rejected as first-order hidden-write owner; keep as evidence, not next budget. |
-| [shader-codegen](shader-codegen/index.md) | MSL/AIR/temp/scratch probes | Rejected above-AIR explanations; owner is below source-visible shader shape. |
+| [shader-codegen](shader-codegen/index.md) | MSL/AIR/temp/scratch probes | Rejected above-AIR explanations; owner is below source-visible shader shape. One open, unmeasured item: `d63f7a65` removes the `float4 cFloat[256]` DEF-overlay copy from 8 of 17 frame60 `enc1` VS variants; visual gate passed, no GPU measurement yet. |
 | [backend-shape-classifiers](backend-shape-classifiers/index.md) | alpha/depth/cull/scissor/fog/texture classifiers | Mostly rejected or secondary; still relevant to visual/perf coupling. |
 | [attachment-pixelformat](attachment-pixelformat/index.md) | R32F/X8 attachment format probes | Secondary texture/write path, not the central VS owner. |
 | [const-upload](const-upload/index.md) | cbuf/argbuf upload and constant traffic | CPU amplifier; accepted cleanups do not by themselves prove GPU/FPS promotion. |

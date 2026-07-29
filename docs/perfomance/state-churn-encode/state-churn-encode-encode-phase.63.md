@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 63
+title: Encode Phase 63 - Argbuf Payload Delta Attribution
+date: 2026-06-14
+type: instrumentation
+status: accepted-attribution
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-r1-20260614/result.json
+---
+
 # Encode Phase 63 - Argbuf Payload Delta Attribution
 
-date: 2026-06-14
-status: accepted-attribution
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-r1-20260614/result.json
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Phase 62 closed dirty-VS cached identity reuse, but
 the argbuf constants-only path still reopens the table for almost every dirty

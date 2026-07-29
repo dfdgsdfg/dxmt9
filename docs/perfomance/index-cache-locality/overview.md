@@ -56,6 +56,8 @@ candidate/lookup CPU tax (H25), which is why the coupling is one-way. The
 
 ## Recent Leaf Documents
 
+> 4 of the 11 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
+
 - [index-cache-locality-merge-rejection.23 - Strict Merge Rejections Require Multiple Preserved Draw Properties](index-cache-locality-merge-rejection.23.md)
 - [index-cache-locality-scope-merge-gt2.22 - GT2 Confirms Extended Scope And Strict Merge Are No-Ops](index-cache-locality-scope-merge-gt2.22.md)
 - [index-cache-locality-scope-merge.21 - Extended Scope And Strict Compatible Merge Have No GT1 Coverage](index-cache-locality-scope-merge.21.md)

@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 56
+title: Encode Phase 56 - Argbuf Reopen Identity Skip Rejection
+date: 2026-06-14
+type: implementation-ab
+status: rejected-current
+outdated: knob-removed
+source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/compare-phase55-phase56.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/actual.png
+---
+
 # Encode Phase 56 - Argbuf Reopen Identity Skip Rejection
 
-date: 2026-06-14
-status: rejected-current
-source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/compare-phase55-phase56.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-identity-r1-20260614/actual.png
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.55](state-churn-encode-encode-phase.55.md) showed that
 the old `encode_draw_argbuf_open_cpu_ms` bucket is a per-draw reopen-block

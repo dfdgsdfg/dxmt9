@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 59
+title: Encode Phase 59 - Uniform Payload Dedup-Off Probe
+date: 2026-06-14
+type: implementation-ab
+status: accepted-micro-win
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_backend_types.hpp, agents/rules/environment_variables_perf.rules.md, tests/native/core/state_draw_transform_spec.cpp, experiments/output/app-d3d9-3dmark05-snapshot-uniform-adjacent-same-gen-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-uniform-payload-dedup-off-r1-20260614/result.json
+---
+
 # Encode Phase 59 - Uniform Payload Dedup-Off Probe
 
-date: 2026-06-14
-status: accepted-micro-win
-source: src/dxmt9/dxmt9_backend_types.hpp, agents/rules/environment_variables_perf.rules.md, tests/native/core/state_draw_transform_spec.cpp, experiments/output/app-d3d9-3dmark05-snapshot-uniform-adjacent-same-gen-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-uniform-payload-dedup-off-r1-20260614/result.json
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.20](../snapshot-cache/snapshot-cache-snapshot.20.md) rejects adjacent
 uniform snapshot elision: there are no adjacent same-`uniformGeneration`

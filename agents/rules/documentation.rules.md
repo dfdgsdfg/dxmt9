@@ -86,11 +86,59 @@ bash scripts/check/verify_tla.sh
 - Domain `index.md`, `overview.md`, and `log.md` files should carry YAML
   frontmatter with `domain`, `workload`, `title`, `type`, `status`, `updated`,
   `source`, and `related` keys.
+- Leaf documents under `docs/perfomance/<domain>/` may carry an optional
+  `outdated:` frontmatter key. See
+  [The `outdated:` key](#the-outdated-key-for-docsperfomance-leaves) below.
 - Use inline code for requirement IDs, commands, files, and env vars.
 - Keep Mermaid diagrams for ordering, ownership, and state machines where prose
   would hide the important dependency.
 - Avoid long code listings in rules. Link to source when exact implementation
   detail matters.
+
+## The `outdated:` Key For `docs/perfomance/` Leaves
+
+A leaf document records an experiment. Over time the thing it measured can stop
+existing: the knob is deleted from `src/`, the run directory is cleaned up, the
+journal it cited is removed. The experiment is still worth keeping — a rejected
+hypothesis is the reason nobody should retry that lane — but its numbers are no
+longer something a reader can go and check.
+
+`outdated:` is an optional leaf frontmatter key that says exactly that. It sits
+beside `status:` and takes one of three values:
+
+| Value | What it asserts |
+|---|---|
+| `knob-removed` | The `DXMT9_*` knob or code path this leaf measured is confirmed absent from `src/`. The experiment cannot be re-run at all. |
+| `evidence-missing` | Every artifact path the leaf cites in `source:` is gone from disk. The numbers cannot be re-derived or re-checked. |
+| `retired-journal` | The leaf's only `source:` is the deleted `specs/perfomance.plan.md` journal. |
+
+Precedence when more than one applies: `knob-removed` > `evidence-missing` >
+`retired-journal`. A removed knob is the strongest form of "cannot be measured
+again".
+
+A marked leaf also opens with a one-line body banner naming the ground, so the
+reader sees it before any number. Do not delete a marked leaf and do not strip
+the key; the leaf is history, and history is what this tree is for.
+
+**Rules:**
+
+- An overview must not present an `outdated:` leaf as current evidence. If a
+  conclusion row's evidence link points at one, say so in the row — a short
+  inline marker naming the ground is enough, because the leaf's own banner
+  carries the detail. If every row in a table is outdated, say it once above the
+  table instead of marking each row.
+- Do not delete the row. A rejected hypothesis whose evidence is gone still
+  records which lane was already tried.
+- A figure that stays in `overview.md`, `overview-3dmark05-*.md`, or a domain
+  `overview.md` must either come from a leaf that still has its artifacts, or be
+  labelled plainly as a last measurement that cannot be re-checked. Never carry
+  an unverifiable number as though it were current.
+- `outdated:` is per-leaf and mechanical. A leaf whose `source:` is only
+  *partly* gone stays unmarked; if an overview quotes a figure from the missing
+  part, label that figure where it is quoted.
+- New leaves should not need the key. If a new leaf would already qualify, its
+  `source:` is wrong — cite a concrete surviving artifact instead
+  (`scripts/check/audit_perf_docs_sources.py` enforces this for new files).
 
 ## AGENTS.md vs. Rules vs. Specs
 

@@ -29,6 +29,14 @@ both row-local and full-frame.
 
 ## Latest Conclusions
 
+> **Every row below cites a leaf now marked `outdated: retired-journal`.** The
+> mechanism these rows accept is still the load-bearing model for the accepted
+> index-cache win, but the two proof leaves behind it can no longer be
+> re-derived. Treat the model as carried forward, not as freshly verifiable.
+> The independent corroboration that survives is
+> [hidden-backend-storage](../hidden-backend-storage/overview.md) H53, whose row
+> `60/1` lanes measure hidden write volume tracking VS invocations directly.
+
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H1 | TVB write bytes scale linearly with `VS invocations × per-vertex VSOut bytes` (Imagination/Asahi PB model) | accepted (model) | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
@@ -44,6 +52,8 @@ both row-local and full-frame.
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 2 of the 2 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [tvb-mechanism-proof-proof.02 - TVB / Parameter-Buffer Design Reference](tvb-mechanism-proof-proof.02.md)
 - [tvb-mechanism-proof-proof.01 - TVB Pressure Mechanism Proof](tvb-mechanism-proof-proof.01.md)

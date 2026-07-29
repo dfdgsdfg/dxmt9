@@ -1,8 +1,19 @@
+---
+domain: state-churn-encode
+workload: 3DMark05 GT1
+subcategory: encode-phase
+order: 58
+title: Encode Phase 58 - Binding Packet Plan Split
+date: 2026-06-14
+type: instrumentation
+status: accepted-attribution
+outdated: evidence-missing
+source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-binding-packet-plan-split-optin-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-binding-packet-plan-split-off-r1-20260614/result.json
+---
+
 # Encode Phase 58 - Binding Packet Plan Split
 
-date: 2026-06-14
-status: accepted-attribution
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-binding-packet-plan-split-optin-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-binding-packet-plan-split-off-r1-20260614/result.json
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The current no-gputrace backend profile still has a
 non-trivial `encode_draw_binding_packet_plan_cpu_ms` bucket. This phase asks

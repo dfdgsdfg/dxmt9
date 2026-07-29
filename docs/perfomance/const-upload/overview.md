@@ -26,6 +26,11 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 
 ## Latest Conclusions
 
+> **Every row below cites a leaf now marked `outdated: retired-journal`.** The
+> byte and percentage figures in this table are last measurements, not
+> re-checkable ones; they are kept because they record which cbuf/argbuf lanes
+> were already tried.
+
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H5 | Resetting dirty-range counters with the dirty bit cuts VS cbuf | accepted as CPU win (`-66.48%` argbuf, `4.6GB`→~`1.06GB`); GPU unmoved | [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) |
@@ -41,6 +46,8 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 8 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [const-upload-sparse.02 - Sparse Const Split Xcode Validation](const-upload-sparse.02.md)
 - [const-upload-dirtyrange.02 - Dirty Range Reset Xcode Frame Capture](const-upload-dirtyrange.02.md)

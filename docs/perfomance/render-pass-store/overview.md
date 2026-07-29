@@ -28,6 +28,13 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 
 ## Latest Conclusions
 
+> **Every row below cites the single leaf
+> [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md),
+> now marked `outdated: evidence-missing`.** The counter samples quoted here are
+> last measurements; the artifacts they came from are gone, so the row counts
+> cannot be re-derived. They are kept because they record which ping-pong
+> explanations were already eliminated.
+
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
 | H10 | Top one-hop ping-pong is blocked by direct attachment-as-texture reads between B and A | rejected-counter-sample (`3561/3561` raw top rows have `B reads A=none`, `A reads B=none`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
@@ -43,6 +50,8 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 7 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [render-pass-store-coalesce.05 - Current Frame60 DAG Refresh Keeps H6 Coalesce Candidate Alive](render-pass-store-coalesce.05.md)
 - [render-pass-store-coalesce.04 - H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled](render-pass-store-coalesce.04.md)

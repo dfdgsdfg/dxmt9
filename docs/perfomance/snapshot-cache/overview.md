@@ -19,9 +19,12 @@ related: docs/perfomance/snapshot-cache/index.md; docs/perfomance/snapshot-cache
 This domain owns the **D3D9 importer-side draw-state snapshot/rebuild** cost.
 It started as the single largest CPU consumer in GT1 (~21s per no-gputrace run),
 but after the accepted snapshot hash work it is no longer the top current CPU
-bucket: [snapshot-cache-snapshot.09](snapshot-cache-snapshot.09.md) reports
+bucket: [snapshot-cache-snapshot.09](snapshot-cache-snapshot.09.md)
+(`outdated: evidence-missing`) reports
 `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents, while
-backend `encode_draw_cpu_ms` is `17711.215`.
+backend `encode_draw_cpu_ms` is `17711.215`. Those are last measurements from a
+run whose artifacts are gone; the ordering claim they support is still the
+domain's position, but the two numbers cannot be re-checked.
 It covers the `CachedBaseDrawState` instrumentation, the hot-state/uniform
 invalidation split, the miss-reason classification (which found stream/IB handle
 churn dominates), the binding-agnostic snapshot that tripled hit rate but exposed a
@@ -46,6 +49,8 @@ write" owner ([hidden-backend-storage](../hidden-backend-storage/index.md)).
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
+
+> 2 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [snapshot-cache-snapshot.29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache](snapshot-cache-snapshot.29.md)
 - [snapshot-cache-snapshot.28 - Batch Miss Refreshes Hot State In Place](snapshot-cache-snapshot.28.md)
