@@ -8,7 +8,6 @@ date: 2026-06-19
 type: no-gputrace-run
 status: accepted-attribution
 source: experiments/output/app-d3d9-3dmark05-h83-completion-wait-overlap-r1/result.json, experiments/output/app-d3d9-3dmark05-h83-completion-wait-overlap-r1/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-completion-wait-overlap-counters.83.md, docs/perfomance/present-pacing/present-pacing-batch-carrier-current.82.md, docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md, docs/perfomance/present-pacing/present-pacing-run-ahead-cpu-ready.70.md
 ---
 
 # Present-Pacing 84 - Current completion wait overlap shows present-gated publish
@@ -124,5 +123,5 @@ Before another `.gputrace`, the next no-gputrace candidate should show:
 
 **Related.** [present-pacing-completion-wait-overlap-counters.83](present-pacing-completion-wait-overlap-counters.83.md) ·
 [present-pacing-batch-carrier-current.82](present-pacing-batch-carrier-current.82.md) ·
-[present-pacing-run-ahead-coalesce.69](present-pacing-run-ahead-coalesce.69.md) ·
-[present-pacing-run-ahead-cpu-ready.70](present-pacing-run-ahead-cpu-ready.70.md).
+present-pacing-run-ahead-coalesce.69 ·
+present-pacing-run-ahead-cpu-ready.70.

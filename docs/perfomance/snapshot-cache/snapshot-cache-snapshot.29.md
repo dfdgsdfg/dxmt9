@@ -13,7 +13,7 @@ related: docs/perfomance/snapshot-cache/snapshot-cache-snapshot.28.md, docs/perf
 
 # Snapshot Cache 29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache
 
-**Question / hypothesis.** After [snapshot-cache-snapshot.28](snapshot-cache-snapshot.28.md), batch misses
+**Question / hypothesis.** After snapshot-cache-snapshot.28, batch misses
 still own about `~2ms/present`. Are those misses recurring in a short window
 such that a small multi-entry cache or interner could recover them?
 

@@ -8,7 +8,6 @@ date: 2026-06-20
 type: instrumentation
 status: instrumentation-accepted-runtime-attributed-visual-rejected
 source: src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h224-end-carry-forced-mark-attrib-r1/result.json, traces/app-d3d9-3dmark05-h224-end-carry-forced-mark-attrib-r1/analysis/frame60-perf-counter-comparison.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.193.md
 ---
 
 # Encode Phase 194 - Forced resource-marking flush attribution

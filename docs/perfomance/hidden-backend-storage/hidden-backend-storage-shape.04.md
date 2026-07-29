@@ -137,5 +137,5 @@ buffer total `29.375 MiB`, weighted primitive-block tile intersections
 
 **Related.** [hidden-backend-storage](index.md) · prev:
 [hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) · [index-cache-locality](../index-cache-locality/index.md) ·
-[index-cache-locality-cpucost.15](../index-cache-locality/index-cache-locality-cpucost.15.md) · [baselines-frame60.02](../baselines/baselines-frame60.02.md) ·
+index-cache-locality-cpucost.15 · baselines-frame60.02 ·
 [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md).

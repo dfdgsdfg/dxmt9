@@ -70,7 +70,7 @@ scene geometry, bright bloom, impact particles, and HUD are visible; this is
 not the HUD-only or black-screen failure class.
 
 Compared with the documented current low-overhead refresh
-[present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md), r1/r2 repeat the intended local
+present-pacing-lowoverhead-refresh.33, r1/r2 repeat the intended local
 direction but not a frame-rate proof:
 
 | Metric | Refresh 33 | Phase 90 r1 | Phase 90 r2 | r1/r2 avg delta |
@@ -127,7 +127,7 @@ repeated low-overhead run with normal visual smoke.
 - `bash scripts/tools/run_3dmark05_perf_probe.sh --suffix phase90-pending-scratch-r2-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 - `git diff --check`
 
-**Related.** [present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md) ·
-[present-pacing-systemtrace-p4-smoke.34](../present-pacing/present-pacing-systemtrace-p4-smoke.34.md) ·
-[state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) ·
-[state-churn-encode-encode-phase.37](state-churn-encode-encode-phase.37.md) · [state-churn-encode](index.md).
+**Related.** present-pacing-lowoverhead-refresh.33 ·
+present-pacing-systemtrace-p4-smoke.34 ·
+state-churn-encode-encode-phase.35 ·
+state-churn-encode-encode-phase.37 · [state-churn-encode](index.md).

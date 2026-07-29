@@ -130,5 +130,5 @@ Further sub-millisecond local append cleanups should stay below the FPS branch
 unless they move those P4 gates.
 
 **Related.** [present-pacing-current-visual-p4.136](present-pacing-current-visual-p4.136.md) ·
-[present-pacing-open-cb-tail-ready-prefix.141](present-pacing-open-cb-tail-ready-prefix.141.md) ·
+present-pacing-open-cb-tail-ready-prefix.141 ·
 [state-churn-encode-encode-phase.201](../state-churn-encode/state-churn-encode-encode-phase.201.md).

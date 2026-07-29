@@ -119,7 +119,7 @@ The strongest current owner is no longer one of the old closed branches
 or stream/IB generation). It is normal batch-miss construction: true shader
 constant volatility plus hot-state/key rebuild. The VS hash child remains
 visible because the run still has `166,164` full indexed-float VS hash calls,
-but [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) already sized the safe tail as too small for a
+but snapshot-cache-snapshot.18 already sized the safe tail as too small for a
 standalone FPS lever.
 
 ## Batch-Miss Shape
@@ -166,6 +166,6 @@ candidate must be paired with the present-pacing gates from
 
 Without the last P4 movement, classify the candidate as a local CPU cleanup only.
 
-**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.18](snapshot-cache-snapshot.18.md) ·
-[snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) · [snapshot-cache-snapshot.22](snapshot-cache-snapshot.22.md) ·
+**Related.** [snapshot-cache](index.md) · snapshot-cache-snapshot.18 ·
+snapshot-cache-snapshot.21 · [snapshot-cache-snapshot.22](snapshot-cache-snapshot.22.md) ·
 [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

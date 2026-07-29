@@ -8,7 +8,6 @@ date: 2026-06-18
 type: analysis
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-v003-current-baseline-r1-20260618/3dmark05-perf-summary.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.48.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.92.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.48.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.92.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.148.md, docs/perfomance/snapshot-cache/snapshot-cache-snapshot.17.md
 ---
 
 # Encode Phase 149 - Current V003 State-Elision Residual Review

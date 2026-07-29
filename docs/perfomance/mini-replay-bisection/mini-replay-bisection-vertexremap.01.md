@@ -8,7 +8,7 @@ date: 2026-07-28
 type: experiment-run
 status: lanec-null-positive-control-failed
 source: traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/laneA-counters-xcode.csv; traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/laneB-counters-xcode.csv; traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/laneC-counters-xcode.csv; traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/laneD-counters-xcode.csv; traces/app-d3d9-3dmark05-vertexremap-enc1-r1/analysis/frame60-mini-replay-manifest-enc1.json; docs/superpowers/specs/2026-07-25-vertex-remap-design.md
-related: docs/perfomance/mini-replay-bisection/mini-replay-bisection-replay.03.md; docs/perfomance/hidden-backend-storage/overview.md
+related: docs/perfomance/hidden-backend-storage/overview.md
 ---
 
 # Vertex Remap Is A Null On Row 60/1, And Its Positive Control Failed
@@ -86,5 +86,5 @@ delta"; the discriminator never ran on the row where that delta was observed.
 Answering it still requires the encoder2 (row `60/2`) dump the design's Task 3
 specifies. Do not retry the vertex-remap lane on row `60/1`.
 
-**Related.** [mini-replay-bisection](index.md) · [mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md) ·
+**Related.** [mini-replay-bisection](index.md) · mini-replay-bisection-replay.03 ·
 [hidden-backend-storage](../hidden-backend-storage/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

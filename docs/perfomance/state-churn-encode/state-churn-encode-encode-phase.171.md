@@ -8,7 +8,6 @@ date: 2026-06-19
 type: instrumentation
 status: accepted-runtime-attribution
 source: src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h202-batch-miss-shader-hash-path-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h202-batch-miss-shader-hash-path-current-r1/h200-vs-h202-perf-counters.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.170.md, docs/perfomance/present-pacing/present-pacing-pe-draw-flush.114.md
 ---
 
 # Encode Phase 171 - Batch-miss shader-constant hash path counters

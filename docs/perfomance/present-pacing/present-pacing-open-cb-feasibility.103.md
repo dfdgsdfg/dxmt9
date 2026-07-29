@@ -8,7 +8,6 @@ date: 2026-06-19
 type: design-audit
 status: accepted-design-gate
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, src/dxmt9/render/backend_interface.hpp, src/dxmt9/render/tail_present_batch.cpp, docs/perfomance/present-pacing/present-pacing-present-tail-prefix-current.102.md
-related: docs/perfomance/present-pacing/present-pacing-present-tail-prefix-current.102.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/present-pacing/present-pacing-tail-present-staged-carrier.93.md
 ---
 
 # Present Pacing / Open Command Buffer Pre-Encode Feasibility 103

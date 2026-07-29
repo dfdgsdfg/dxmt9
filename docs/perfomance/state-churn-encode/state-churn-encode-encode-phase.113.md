@@ -116,6 +116,6 @@ Interpretation:
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 - `git diff --check -- src/dxmt9/dxmt9_perf_counters.hpp src/dxmt9/dxmt9_perf_counters.cpp src/dxmt9/dxmt9_backend_types.hpp scripts/check/assert_perf_counters.py scripts/tools/summarize_3dmark05_perf.py scripts/tools/compare_3dmark05_perf_counters.py tests/scripts/test_summarize_3dmark05_perf.py tests/scripts/test_compare_3dmark05_perf_counters.py`
 
-**Related.** [state-churn-encode-encode-phase.112](state-churn-encode-encode-phase.112.md) ·
+**Related.** state-churn-encode-encode-phase.112 ·
 [state-churn-encode-encode-phase.102](state-churn-encode-encode-phase.102.md) ·
 [state-churn-encode-encode-phase.101](state-churn-encode-encode-phase.101.md) · [state-churn-encode](index.md).

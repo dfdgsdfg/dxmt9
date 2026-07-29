@@ -139,4 +139,4 @@ Direct-cbuf remains a real local CPU win, but it should not be promoted as the
 default FPS fix by itself.
 
 **Related.** [present-pacing-direct-cbuf.45](present-pacing-direct-cbuf.45.md) -
-[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) - [present-pacing](index.md).
+present-pacing-current-lowoverhead.43 - [present-pacing](index.md).

@@ -40,13 +40,13 @@ every other domain at the lever that actually moves the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | The big VS-write bucket is dxmt's own CPU-side writers (argbuf/cbuf/transient) | rejected | [hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md) (`0.444 MiB`, ratio `0.0003x`, r `0.188`) |
-| H2 | It is the source-visible MSL `VSOut` width | rejected | [hidden-backend-storage-density.01](hidden-backend-storage-density.01.md), [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md) (`184 B`→`88.4x` gap; position-only still `1548 MiB`) |
-| H3 | It is Xcode's named tiled-buffer counters | rejected | [hidden-backend-storage-density.01](hidden-backend-storage-density.01.md) (`29.5 MiB`, ~`55x` smaller) |
-| H4 | It is fragment-stage volume / varyings-per-fragment | rejected | [hidden-backend-storage-density.01](hidden-backend-storage-density.01.md) (`enc=0` `0` varyings, `225 MiB`), [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md) (FS r `0.034`) |
-| H5 | It is hidden Apple vertex/tiler/parameter backend storage scaling with geometry/VS invocations | accepted | [hidden-backend-storage-model.01](hidden-backend-storage-model.01.md), [hidden-backend-storage-scaling.01](hidden-backend-storage-scaling.01.md) (r `0.70-0.80`), [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md) (r `0.971-0.977`) |
-| H6 | External GPU architecture literature supports the model | accepted | [hidden-backend-storage-model.02](hidden-backend-storage-model.02.md) (Asahi TVB, Mesa UVS/PPP/ISP, Apple TBDR) |
-| H7 | Which sub-component (stage-out vs primitive/binning vs spill) dominates | open | [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md) (probe agenda → reorder / cache-locality) |
+| H1 | The big VS-write bucket is dxmt's own CPU-side writers (argbuf/cbuf/transient) | rejected | hidden-backend-storage-attribution.01 (`0.444 MiB`, ratio `0.0003x`, r `0.188`) |
+| H2 | It is the source-visible MSL `VSOut` width | rejected | hidden-backend-storage-density.01, hidden-backend-storage-scaling.02 (`184 B`→`88.4x` gap; position-only still `1548 MiB`) |
+| H3 | It is Xcode's named tiled-buffer counters | rejected | hidden-backend-storage-density.01 (`29.5 MiB`, ~`55x` smaller) |
+| H4 | It is fragment-stage volume / varyings-per-fragment | rejected | hidden-backend-storage-density.01 (`enc=0` `0` varyings, `225 MiB`), hidden-backend-storage-scaling.02 (FS r `0.034`) |
+| H5 | It is hidden Apple vertex/tiler/parameter backend storage scaling with geometry/VS invocations | accepted | hidden-backend-storage-model.01, hidden-backend-storage-scaling.01 (r `0.70-0.80`), hidden-backend-storage-scaling.02 (r `0.971-0.977`) |
+| H6 | External GPU architecture literature supports the model | accepted | hidden-backend-storage-model.02 (Asahi TVB, Mesa UVS/PPP/ISP, Apple TBDR) |
+| H7 | Which sub-component (stage-out vs primitive/binning vs spill) dominates | open | hidden-backend-storage-shape.01 (probe agenda → reorder / cache-locality) |
 | H8 | Current non-reorder backend-shape probes materially reduce bytes/invocation | rejected | [hidden-backend-storage-shape.02](hidden-backend-storage-shape.02.md) (best bytes/inv `-1.94%`, GPU regresses) |
 | H9 | Which candidates still deserve Xcode/gputrace spend for residual `50/2` | accepted (gate) | [hidden-backend-storage-shape.03](hidden-backend-storage-shape.03.md) (CPU-only index-cache probes rejected; semantic or bytes/inv preflight required) |
 | H10 | Post-visualfix frame60 candidate class proxy can rank residual `60/2` state classes before another Xcode capture | accepted (attribution) | [hidden-backend-storage-shape.04](hidden-backend-storage-shape.04.md) (`60/2` split into depth-read/screen/alpha classes, each ~`111-128 MiB` proxy hidden and `~25-28%` candidate LRU32 reduction) |
@@ -79,7 +79,7 @@ every other domain at the lever that actually moves the bucket.
 | H37 | System Trace can provide route-attributed timing while `.gputrace` is blocked | accepted (sidecar evidence) | [hidden-backend-storage-shape.28](hidden-backend-storage-shape.28.md) (`215/215` xctrace rows joined, `1005..1024` captured seq, indexed probe rows `1000..1035` with `0` out-of-range rows; vertex share `88.86%`; route split: programmable color `45.65%`, programmable textured `40.49%`, mixed `12.02%`, depth-only `1.85%`) |
 | H38 | Route-attributed System Trace sidecars must require indexed per-draw logging | rejected-current | [hidden-backend-storage-shape.29](hidden-backend-storage-shape.29.md) (encoder breakdown emits `route_*` primitive counters; no-indexed sidecar now verifies `route_source=encoder-summary` on `1633/1633` joined rows, while indexed rows remain optional override detail) |
 | H39 | "GPU floor" and "average FPS owner" are the same question | rejected | [hidden-backend-storage-shape.30](hidden-backend-storage-shape.30.md) (`replay.03` proves `3.86x` hidden-write density headroom at the same VS invocation count; no-gputrace counters show average wall-clock is completion/present paced) |
-| H40 | Current head changes the capture/timing route status | accepted refresh | [hidden-backend-storage-shape.31](hidden-backend-storage-shape.31.md) (`frame120.gputrace` file capture still fails with `Capture layer is not inserted` after normal rendering, while the System Trace sidecar joins `5263/5263` rows over `seq=1213..1591`; vertex share `90.39%`; route split remains programmable color `46.22%`, programmable textured `39.15%`, mixed `14.63%`) |
+| H40 | Current head changes the capture/timing route status | accepted refresh | hidden-backend-storage-shape.31 (`frame120.gputrace` file capture still fails with `Capture layer is not inserted` after normal rendering, while the System Trace sidecar joins `5263/5263` rows over `seq=1213..1591`; vertex share `90.39%`; route split remains programmable color `46.22%`, programmable textured `39.15%`, mixed `14.63%`) |
 | H41 | Recovered capture-layer file route changes measurement availability, not the GPU owner | accepted refresh | [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md) (`frame60.gputrace` and Xcode counters exported; first recovered proof GPU `37.475ms`, top-three `98.32%`, top-three VS buffer device write `1779.231 MiB`, partial render count `0`) |
 | H42 | Current joined Xcode/dxmt attribution narrows the next GPU gate | accepted next gate | [hidden-backend-storage-shape.33](hidden-backend-storage-shape.33.md) (top-three Xcode rows join to dxmt encoder sidecars; latest integrated capture-layer wrapper refresh reports GPU `37.492ms`, top-three `98.40%`, top-three VS write `1779.246 MiB`; `60/2`, `60/1`, and `60/0` cover different state classes but share the same hidden-density band, dxmt CPU writer bytes negligible) |
 | H43 | The `60/0` fragmentless depth-only equality failure was caused by fragmentless routing itself | rejected; keep-VSOut route is equality-safe | [hidden-backend-storage-shape.34](hidden-backend-storage-shape.34.md) (new diagnostic sub-mode keeps the pair-local `VSOut` layout at `0xfff` while omitting the fragment function; route coverage remains `42/42` draws and `97,294/97,294` primitives; pass-end `D24X8` depth and `X8R8G8B8` color both compare with `0` changed bytes) |
@@ -234,19 +234,19 @@ flowchart TD
 
 What is settled: the dominant GT1 GPU cost is a hidden Apple vertex-stage /
 tiler / parameter backend-storage bucket. The normal-source baseline
-([hidden-backend-storage-attribution.01](hidden-backend-storage-attribution.01.md)) pins it at `1627.240 MiB` top-three
+(hidden-backend-storage-attribution.01) pins it at `1627.240 MiB` top-three
 VS buffer write against `0.444 MiB` of dxmt CPU writers and `184 B` of visible
 `VSOut`, leaving an unexplained ratio of `1.000`. Density
-([hidden-backend-storage-density.01](hidden-backend-storage-density.01.md)) shows ~`1448 B` per VS invocation —
+(hidden-backend-storage-density.01) shows ~`1448 B` per VS invocation —
 ~`55x` the named tiled counters and ~`8x` the visible `VSOut` — and a
 vertex-stage that is memory-dominated (`96.13%` weighted vertex-stage time,
 only `2.39%` VS-ALU limiter). Two correlation passes
-([hidden-backend-storage-scaling.01](hidden-backend-storage-scaling.01.md), [hidden-backend-storage-scaling.02](hidden-backend-storage-scaling.02.md))
+(hidden-backend-storage-scaling.01, hidden-backend-storage-scaling.02)
 independently show the bucket tracks post-clipped primitives / VS invocations
 (r up to `0.977`/`0.971`) and not dxmt writers (`0.188`) or fragment
 invocations (`0.034`). The five-component model
-([hidden-backend-storage-model.01](hidden-backend-storage-model.01.md)) is corroborated by external AGX/UVS/PPP
-literature ([hidden-backend-storage-model.02](hidden-backend-storage-model.02.md)). The model's core claim is
+(hidden-backend-storage-model.01) is corroborated by external AGX/UVS/PPP
+literature (hidden-backend-storage-model.02). The model's core claim is
 therefore **ACCEPTED**.
 
 A current-head `xctrace` sidecar
@@ -270,7 +270,7 @@ sidecar joined `1633/1633` rows from `route_source=encoder-summary`, with
 `91.90%` vertex-stage share and route split dominated by programmable color
 (`57.04%`) plus programmable textured (`29.22%`). This is route-attributed
 timing evidence, not a substitute for Xcode replay counters.
-The current-head sidecar refresh ([hidden-backend-storage-shape.31](hidden-backend-storage-shape.31.md)) preserved
+The current-head sidecar refresh (hidden-backend-storage-shape.31) preserved
 that split after the latest CPU/profile cleanup work while file `.gputrace`
 capture was still layer-blocked. That measurement-route status is now updated by
 [hidden-backend-storage-shape.32](hidden-backend-storage-shape.32.md): after the fragment `WMT::Function` lifetime
@@ -296,7 +296,7 @@ and backed by a counter gate that changes hidden bytes per invocation.
 
 What is still open: *which* sub-component of the model dominates — VS stage-out,
 primitive/binning/tiler parameter storage, or compiler/backend spill. Visible
-shape is rejected, so [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md) hands off to backend-
+shape is rejected, so hidden-backend-storage-shape.01 hands off to backend-
 shape classifiers, primitive-reorder diagnostics, and the row-local
 [tvb-mechanism-proof](../tvb-mechanism-proof/index.md). [hidden-backend-storage-shape.30](hidden-backend-storage-shape.30.md) pins the
 interpretation of that handoff: the mini-replay sorted-row control rejects a
@@ -767,9 +767,9 @@ now has a current same-input mini-replay `lsb1` semantic input and target-row
 Xcode movement, but the full proof is demoted because top GPU does not decrease.
 The row-level follow-up shows this is target-only movement plus non-target
 replay timing drift, not direct mutation of `60/0+60/1`
-([index-cache-locality-opaque.08](../index-cache-locality/index-cache-locality-opaque.08.md), [index-cache-locality-screenblend.08](../index-cache-locality/index-cache-locality-screenblend.08.md),
-[index-cache-locality-screenblend.07](../index-cache-locality/index-cache-locality-screenblend.07.md), [index-cache-locality-screenblend.06](../index-cache-locality/index-cache-locality-screenblend.06.md),
-[index-cache-locality-proofinput.01](../index-cache-locality/index-cache-locality-proofinput.01.md)). The per-draw PSO gate now adds the
+([index-cache-locality-opaque.08](../index-cache-locality/index-cache-locality-opaque.08.md), index-cache-locality-screenblend.08,
+index-cache-locality-screenblend.07, index-cache-locality-screenblend.06,
+index-cache-locality-proofinput.01). The per-draw PSO gate now adds the
 same budget guard for backend-spill guesses: `60/2` has `47` PSO changes but
 `160` handle-tuple changes and `0` PSO-isolated stable-tuple runs, so PSO
 remains a future controlled A/B rather than a current Xcode replay

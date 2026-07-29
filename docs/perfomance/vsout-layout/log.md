@@ -38,13 +38,13 @@ the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Trimming unused varyings (`DXMT9_TRIM_UNUSED_VARYINGS`) shrinks the VS-write bucket | rejected | [vsout-layout-varying.01](vsout-layout-varying.01.md) |
-| H2 | Exact FS-read liveness trim (keep only fields the FS reads) moves it where blanket trim did not | rejected | [vsout-layout-varying.02](vsout-layout-varying.02.md) |
-| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | [vsout-layout-varying.03](vsout-layout-varying.03.md) |
-| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) |
-| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | [vsout-layout-position.01](vsout-layout-position.01.md) |
-| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | [vsout-layout-position.02](vsout-layout-position.02.md) |
-| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | [vsout-layout-half.01](vsout-layout-half.01.md) |
+| H1 | Trimming unused varyings (`DXMT9_TRIM_UNUSED_VARYINGS`) shrinks the VS-write bucket | rejected | vsout-layout-varying.01 |
+| H2 | Exact FS-read liveness trim (keep only fields the FS reads) moves it where blanket trim did not | rejected | vsout-layout-varying.02 |
+| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | vsout-layout-varying.03 |
+| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | vsout-layout-pointsize.01 |
+| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | vsout-layout-position.01 |
+| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | vsout-layout-position.02 |
+| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | vsout-layout-half.01 |
 
 ## Verification methods
 

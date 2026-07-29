@@ -33,11 +33,11 @@ bucket substantially, and forced **indexed expansion** nearly doubled it
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H12 | Fragment texture sampling owns the bucket | secondary (GPU −3.72%, top-3 VS write −3.24%, enc2-specific) | [backend-shape-classifiers-texture.01](backend-shape-classifiers-texture.01.md) *(outdated: retired-journal)* |
-| H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | [backend-shape-classifiers-visible.01](backend-shape-classifiers-visible.01.md) *(outdated: retired-journal)* |
-| H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | [backend-shape-classifiers-expand.01](backend-shape-classifiers-expand.01.md) *(outdated: retired-journal)* |
-| H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | [backend-shape-classifiers-alphatest.01](backend-shape-classifiers-alphatest.01.md) *(outdated: retired-journal)* |
-| H16 | Rifle muzzle fire correctness changes perf interpretation | visual-positive/perf-coupled. The public `01:05` oracle shows several rifle shots as compact barrel-attached round white/yellow bloom discs. Current split-payload artifacts reproduce that shape; same-run geometry promotes `0x80`, and after-draw color history confirms the two-triangle `0x80` sprite as the local writer (`seq=1094`, post-split `enc=3/draw=0/cmd=320`, `bright=706`, `white=196`, `warm=909` in the candidate ROI). `0x7f/0x75` remain broad/non-local for that target. This resolves the visual writer for the wide infantry scene, but not the main FPS owner: skipped/error/hazard/map-wait counters stay zero, while RT/depth/clear/present pass churn and Xcode GPU-counter proof remain open | [backend-shape-classifiers-alpha.04](backend-shape-classifiers-alpha.04.md), [baselines-frame60.03](../baselines/baselines-frame60.03.md) *(outdated: evidence-missing)* |
+| H12 | Fragment texture sampling owns the bucket | secondary (GPU −3.72%, top-3 VS write −3.24%, enc2-specific) | backend-shape-classifiers-texture.01 *(removed: retired-journal; in git history)* |
+| H13 | Hidden writes are coupled to fragment visibility | rejected (VS write +0.042 MiB, GPU +5.13%) | backend-shape-classifiers-visible.01 *(removed: retired-journal; in git history)* |
+| H14 | Indexed-submission pressure drives the bucket | confirmed (expand: GPU +87.74%, VS write +98.10%) — keep indexed path | backend-shape-classifiers-expand.01 *(removed: retired-journal; in git history)* |
+| H15 | Alpha-test discard owns the bucket / force-frag delta | rejected (GPU +1.72%, VS write +0.00%) | backend-shape-classifiers-alphatest.01 *(removed: retired-journal; in git history)* |
+| H16 | Rifle muzzle fire correctness changes perf interpretation | visual-positive/perf-coupled. The public `01:05` oracle shows several rifle shots as compact barrel-attached round white/yellow bloom discs. Current split-payload artifacts reproduce that shape; same-run geometry promotes `0x80`, and after-draw color history confirms the two-triangle `0x80` sprite as the local writer (`seq=1094`, post-split `enc=3/draw=0/cmd=320`, `bright=706`, `white=196`, `warm=909` in the candidate ROI). `0x7f/0x75` remain broad/non-local for that target. This resolves the visual writer for the wide infantry scene, but not the main FPS owner: skipped/error/hazard/map-wait counters stay zero, while RT/depth/clear/present pass churn and Xcode GPU-counter proof remain open | [backend-shape-classifiers-alpha.04](backend-shape-classifiers-alpha.04.md), baselines-frame60.03 *(removed: evidence-missing; in git history)* |
 
 ## Current Navigation
 
@@ -49,11 +49,4 @@ bucket substantially, and forced **indexed expansion** nearly doubled it
 
 > 7 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
-- [backend-shape-classifiers-cull.04 - Row/Class-Scoped Cull Shape Probe](backend-shape-classifiers-cull.04.md)
 - [backend-shape-classifiers-alpha.04 - Rifle Muzzle Bloom Correctness Gate for Alpha/Effect Rows](backend-shape-classifiers-alpha.04.md)
-- [backend-shape-classifiers-cull.03 - Force-Cull-Back Probe](backend-shape-classifiers-cull.03.md)
-- [backend-shape-classifiers-alpha.03 - Scoped Alpha-Blend State-Shape Probe (large4096+alpha)](backend-shape-classifiers-alpha.03.md)
-- [backend-shape-classifiers-scissor.02 - Scissor State Classifier](backend-shape-classifiers-scissor.02.md)
-- [backend-shape-classifiers-cull.02 - Cull State Classifier](backend-shape-classifiers-cull.02.md)
-- [backend-shape-classifiers-alpha.02 - Scoped Screen-Blend Alpha Disable](backend-shape-classifiers-alpha.02.md)
-- [backend-shape-classifiers-visible.01 - Force-Visible Render-State Probe](backend-shape-classifiers-visible.01.md)

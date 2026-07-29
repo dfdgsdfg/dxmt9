@@ -70,4 +70,4 @@ yes`. No sample artifacts were produced.
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.98](state-churn-encode-encode-phase.98.md) ·
 [state-churn-encode-encode-phase.97](state-churn-encode-encode-phase.97.md) ·
-[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md).
+state-churn-encode-encode-phase.88.

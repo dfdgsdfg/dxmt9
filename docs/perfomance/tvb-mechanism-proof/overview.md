@@ -39,11 +39,11 @@ both row-local and full-frame.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H1 | TVB write bytes scale linearly with `VS invocations × per-vertex VSOut bytes` (Imagination/Asahi PB model) | accepted (model) | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
-| H2 | A row-local index-cache LRU32 reorder lowers VS invocations, named tiled bytes, and GPU time together (geometry/shader locked) | accepted | [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) |
-| H3 | A standalone mini-replay reading `VS Buffer Device Memory Bytes Written = 0 MiB` is an architectural artifact (PB never spills), not a fidelity defect | accepted | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
-| H4 | The mechanism reproduces at full-frame scale through the production opt-in `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` (target rows only, non-target stable) | accepted | [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) |
-| H5 | Named tiled counters alone are a sufficient pass/fail gate | rejected (they cover ~15% of proxy; demoted to subtype evidence) | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
+| H1 | TVB write bytes scale linearly with `VS invocations × per-vertex VSOut bytes` (Imagination/Asahi PB model) | accepted (model) | tvb-mechanism-proof-proof.02 |
+| H2 | A row-local index-cache LRU32 reorder lowers VS invocations, named tiled bytes, and GPU time together (geometry/shader locked) | accepted | tvb-mechanism-proof-proof.01 |
+| H3 | A standalone mini-replay reading `VS Buffer Device Memory Bytes Written = 0 MiB` is an architectural artifact (PB never spills), not a fidelity defect | accepted | tvb-mechanism-proof-proof.02 |
+| H4 | The mechanism reproduces at full-frame scale through the production opt-in `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` (target rows only, non-target stable) | accepted | tvb-mechanism-proof-proof.01 |
+| H5 | Named tiled counters alone are a sufficient pass/fail gate | rejected (they cover ~15% of proxy; demoted to subtype evidence) | tvb-mechanism-proof-proof.02 |
 
 ## Current Navigation
 
@@ -54,6 +54,3 @@ both row-local and full-frame.
 ## Recent Leaf Documents
 
 > 2 of the 2 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
-
-- [tvb-mechanism-proof-proof.02 - TVB / Parameter-Buffer Design Reference](tvb-mechanism-proof-proof.02.md)
-- [tvb-mechanism-proof-proof.01 - TVB Pressure Mechanism Proof](tvb-mechanism-proof-proof.01.md)

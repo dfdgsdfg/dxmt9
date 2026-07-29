@@ -39,26 +39,26 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Hot indexed rows carry large reducible post-transform LRU32 locality (ceiling) | accepted (model) | [index-cache-locality-opaque.01](index-cache-locality-opaque.01.md) |
-| H2 | A cached LRU32 reorder for **opaque depth-writing** triangles reduces Xcode VS invocations, VS write, and GPU time on target rows | **accepted (production WIN)**; refreshed frame60 proxy rows now have attached opaque proof input | [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md), [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), [index-cache-locality-opaque.07](index-cache-locality-opaque.07.md), [index-cache-locality-opaque.03](index-cache-locality-opaque.03.md) |
-| H3 | The opt-in is correctly scoped (opaque rows only; 50/2 untouched) and is not a no-op on the current tree | accepted | [index-cache-locality-opaque.02](index-cache-locality-opaque.02.md), [index-cache-locality-opaque.04](index-cache-locality-opaque.04.md) |
-| H4 | The CPU side-effect can be cut and attributed without changing candidate selection (dense adjacency, LRU32-only, source-resolve split; remaining build owner is candidate selection volume) | accepted | [index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md), [index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md), [index-cache-locality-cpucost.06](index-cache-locality-cpucost.06.md), [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md), [index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md), [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) |
-| H5 | A faster lookup structure or simpler pool lookup scan reduces lookup CPU | rejected | [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md), [index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md) |
-| H6 | The screen-blend index-cache reduces 50/2 / 60/2 VS invocations / write | mechanism confirmed on target rows, but current full-frame proof is **not promotable**: `60/2` GPU `-3.55%`, VS invocations `-10.76%`, VS write `-10.84%`, while top GPU fails `+0.97%`; follow-up shows this is target-only movement plus non-target replay variance, not reordered-cache mutation on `60/0+60/1`; semantic ceiling is now automated and says no more locality Xcode spend until a final-color/final-writer oracle or broader safe selector exists | [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), [index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md), [index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md), [index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md), [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md), [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md), [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md) |
-| H7 | Lowering min-gain `10→0` improves Xcode counters | rejected (weaker avg gain, no hardware movement) | [index-cache-locality-mingain.01](index-cache-locality-mingain.01.md) |
-| H8 | Texture/fragment material is the first-order owner of the residual `50/2` cost | rejected; owner stays hidden vertex-stage storage | [index-cache-locality-triage.01](index-cache-locality-triage.01.md) |
-| H9 | A simple fixed candidate frontier cap cuts candidate-select CPU | rejected; cap 32/64 reduces slots but not select CPU | [index-cache-locality-cpucost.11](index-cache-locality-cpucost.11.md) |
-| H10 | A heap-backed lazy priority frontier cuts candidate-select CPU while preserving quality | rejected; scored work falls but CPU and miss32 regress | [index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) |
-| H11 | A cached-vertex-count bucketed selector cuts candidate-select CPU | rejected; scored work falls but bucket maintenance regresses CPU | [index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md) |
-| H12 | A unique-count upper-bound pre-gate avoids building impossible candidates | rejected; rejects 76 candidates but candidate CPU regresses | [index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md) |
-| H13 | A missing persistent rejected verdict is the remaining opaque-depth CPU blocker | rejected; already implemented and amortizing | [index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md) |
+| H1 | Hot indexed rows carry large reducible post-transform LRU32 locality (ceiling) | accepted (model) | index-cache-locality-opaque.01 |
+| H2 | A cached LRU32 reorder for **opaque depth-writing** triangles reduces Xcode VS invocations, VS write, and GPU time on target rows | **accepted (production WIN)**; refreshed frame60 proxy rows now have attached opaque proof input | index-cache-locality-proofinput.01, [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), index-cache-locality-opaque.07, index-cache-locality-opaque.03 |
+| H3 | The opt-in is correctly scoped (opaque rows only; 50/2 untouched) and is not a no-op on the current tree | accepted | index-cache-locality-opaque.02, index-cache-locality-opaque.04 |
+| H4 | The CPU side-effect can be cut and attributed without changing candidate selection (dense adjacency, LRU32-only, source-resolve split; remaining build owner is candidate selection volume) | accepted | index-cache-locality-cpucost.03, index-cache-locality-cpucost.05, index-cache-locality-cpucost.06, index-cache-locality-cpucost.08, index-cache-locality-cpucost.09, index-cache-locality-cpucost.10 |
+| H5 | A faster lookup structure or simpler pool lookup scan reduces lookup CPU | rejected | index-cache-locality-cpucost.02, index-cache-locality-cpucost.07 |
+| H6 | The screen-blend index-cache reduces 50/2 / 60/2 VS invocations / write | mechanism confirmed on target rows, but current full-frame proof is **not promotable**: `60/2` GPU `-3.55%`, VS invocations `-10.76%`, VS write `-10.84%`, while top GPU fails `+0.97%`; follow-up shows this is target-only movement plus non-target replay variance, not reordered-cache mutation on `60/0+60/1`; semantic ceiling is now automated and says no more locality Xcode spend until a final-color/final-writer oracle or broader safe selector exists | [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), index-cache-locality-screenblend.08, index-cache-locality-screenblend.07, index-cache-locality-screenblend.06, [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md), [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md), index-cache-locality-screenblend.03 |
+| H7 | Lowering min-gain `10→0` improves Xcode counters | rejected (weaker avg gain, no hardware movement) | index-cache-locality-mingain.01 |
+| H8 | Texture/fragment material is the first-order owner of the residual `50/2` cost | rejected; owner stays hidden vertex-stage storage | index-cache-locality-triage.01 |
+| H9 | A simple fixed candidate frontier cap cuts candidate-select CPU | rejected; cap 32/64 reduces slots but not select CPU | index-cache-locality-cpucost.11 |
+| H10 | A heap-backed lazy priority frontier cuts candidate-select CPU while preserving quality | rejected; scored work falls but CPU and miss32 regress | index-cache-locality-cpucost.12 |
+| H11 | A cached-vertex-count bucketed selector cuts candidate-select CPU | rejected; scored work falls but bucket maintenance regresses CPU | index-cache-locality-cpucost.13 |
+| H12 | A unique-count upper-bound pre-gate avoids building impossible candidates | rejected; rejects 76 candidates but candidate CPU regresses | index-cache-locality-cpucost.14 |
+| H13 | A missing persistent rejected verdict is the remaining opaque-depth CPU blocker | rejected; already implemented and amortizing | index-cache-locality-cpucost.15 |
 | H14 | A missing draw-shape prefilter before reordered-index-cache lookup is the remaining CPU blocker | rejected; non-scope draws are already gated before lookup | [index-cache-locality-cpucost.16](index-cache-locality-cpucost.16.md) |
-| H15 | Strict no-duplicate LRU simulation inside the candidate builder improves candidate quality or CPU enough to change the default | rejected; candidate miss32 worsens by `+46`, CPU gain is too small/noisy | [index-cache-locality-cpucost.17](index-cache-locality-cpucost.17.md) |
+| H15 | Strict no-duplicate LRU simulation inside the candidate builder improves candidate quality or CPU enough to change the default | rejected; candidate miss32 worsens by `+46`, CPU gain is too small/noisy | index-cache-locality-cpucost.17 |
 | H16 | Selected `60/2 depth-read + no-alpha-blend` windows can use `cache-opt-lru32` without same-input color movement | mixed; rank2/3/4 color-exact but owner-masked | [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) had `0` changed pixels with clear and D24X8 depth input, LRU32 `-14,593`; [mini-replay-bisection-texture.02](../mini-replay-bisection/mini-replay-bisection-texture.02.md) rank1 real-texture replay changes `2` pixels and canonical primitive-id replay shows `7` final-writer pixels changed; [mini-replay-bisection-texture.04](../mini-replay-bisection/mini-replay-bisection-texture.04.md) rank2 real-texture replay has `0` changed pixels, LRU32 `-5,937`, and `809` owner-changed pixels; [mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md) rank3 has `0` changed pixels, LRU32 `-2,452`, and `52` owner-changed pixels; [mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md) rank4 has `0` changed pixels, LRU32 `-724`, and `17` owner-changed pixels |
-| H17 | Who owns the residual `50/2` / refreshed `60/2` (`~1.49–1.60 GiB` hidden) GPU cost | **OPEN** | [index-cache-locality-triage.01](index-cache-locality-triage.01.md), [hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md), [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) |
+| H17 | Who owns the residual `50/2` / refreshed `60/2` (`~1.49–1.60 GiB` hidden) GPU cost | **OPEN** | index-cache-locality-triage.01, [hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md), [mini-replay-bisection-semantic.02](../mini-replay-bisection/mini-replay-bisection-semantic.02.md) |
 | H18 | Primitive-conflict owner/depth/UV metrics can make scoped depth-read reorder production-safe | rejected; only final color separates fail/pass | [mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) |
 | H19 | Existing D3D9 occlusion query can be reused as the scoped depth-read no-final-color oracle | rejected; it resolves primitive count; diagnostic Metal visibility is separate sample-count triage, not final-color proof; current zero-sample rows are not the hot LRU owner | [mini-replay-bisection-texture.08](../mini-replay-bisection/mini-replay-bisection-texture.08.md), [mini-replay-bisection-texture.09](../mini-replay-bisection/mini-replay-bisection-texture.09.md), [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) |
-| H20 | The current continued experiment is still useful after the bottleneck model is known | accepted as proof gating; refreshed frame60 opaque proof passed, screen-blend was demoted from "missing movement" to "target movement pass, aggregate GPU fail, likely replay variance", and semantic/visibility joins now prevent another low-ROI locality gputrace without a final-color oracle or broader safe selector | [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md), [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), [index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md), [index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md) |
+| H20 | The current continued experiment is still useful after the bottleneck model is known | accepted as proof gating; refreshed frame60 opaque proof passed, screen-blend was demoted from "missing movement" to "target movement pass, aggregate GPU fail, likely replay variance", and semantic/visibility joins now prevent another low-ROI locality gputrace without a final-color oracle or broader safe selector | [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md), [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md), index-cache-locality-proofinput.01, [index-cache-locality-opaque.08](index-cache-locality-opaque.08.md), index-cache-locality-screenblend.08, index-cache-locality-screenblend.07 |
 | H21 | Positive Metal visibility can promote scoped depth-read locality | rejected; rank2 has positive samples with no final color, while rank1/rank3 are both positive but fail/pass diverge | [mini-replay-bisection-texture.11](../mini-replay-bisection/mini-replay-bisection-texture.11.md) |
 | H22 | The current perf gate can keep the locality semantic ceiling attached to the next Xcode queue | accepted (gate) | [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md) (`locality-semantic-ceiling=oracle-required`; color-exact/zero-sample buckets are too small, sample-visible bucket needs final-color/final-writer proof) |
 | H23 | Current real-texture semantic replay summaries provide the missing final-writer oracle | rejected by gate | [hidden-backend-storage-shape.20](../hidden-backend-storage/hidden-backend-storage-shape.20.md) (`final-writer-replay-oracle=blocked-final-writer-hazard`; fail LRU32 `-14,593`, masked LRU32 `-9,113`, owner-safe LRU32 `0`) |
@@ -90,7 +90,7 @@ bottleneck triage. The mechanism behind why this works is proven separately by
   have attached Xcode movement proof for `60/0+60/1`; the current screen-blend
   rank-1 window now has a same-input `lsb1` mini-replay semantic CSV and target
   `60/2` Xcode movement, but failed the aggregate top-GPU gate. See
-  [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) for the current recipes and proof
+  index-cache-locality-proofinput.01 for the current recipes and proof
   status.
 - **LRU32 telemetry** — `indexed_cache_opt_candidate_*_miss32`,
   `candidate_miss_delta32` (production uses miss32; miss16/64 are `0` in
@@ -218,73 +218,73 @@ flowchart TD
 almost every other hypothesis was rejected as "not the first-order owner," the
 single safe, real GPU win is **reducing VS invocations via post-transform index
 locality on opaque depth-writing triangles**. The chain is closed: the no-mutate
-identity scouts ([index-cache-locality-identity.01](index-cache-locality-identity.01.md), [index-cache-locality-identity.02](index-cache-locality-identity.02.md))
+identity scouts (index-cache-locality-identity.01, index-cache-locality-identity.02)
 exposed per-draw shape and the candidate ceiling
-([index-cache-locality-opaque.01](index-cache-locality-opaque.01.md), top-3 LRU32 `-24.39%`); the opt-in proved
+(index-cache-locality-opaque.01, top-3 LRU32 `-24.39%`); the opt-in proved
 correctly scoped to opaque rows with `50/2` untouched
-([index-cache-locality-opaque.02](index-cache-locality-opaque.02.md), [index-cache-locality-opaque.04](index-cache-locality-opaque.04.md)); and the
-fast-measure Xcode proof ([index-cache-locality-opaque.07](index-cache-locality-opaque.07.md)) PASSED every strong
+(index-cache-locality-opaque.02, index-cache-locality-opaque.04); and the
+fast-measure Xcode proof (index-cache-locality-opaque.07) PASSED every strong
 gate — top GPU `-9.50%`, target rows `50/0+50/1` GPU `-18.39%`, VS invocations
 `536,583→460,839` (`-14.12%`), VS write `-16.79%`, with attribution showing the
 **primary mover is invocation count, not bytes per invocation**. The refreshed
-post-stream/IB frame60 proof ([index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md)) then
+post-stream/IB frame60 proof (index-cache-locality-proofinput.01) then
 reattached that mechanism to current rows `60/0+60/1`: target GPU
 `13.800ms→12.331ms` (`-10.64%`), VS invocations `536,583→460,839` (`-14.12%`),
 VS write `646.173MiB→537.842MiB` (`-16.77%`), and top-3 GPU
 `33.614ms→32.501ms` (`-3.31%`). That is exactly the prediction of
 [tvb-mechanism-proof](../tvb-mechanism-proof/index.md). The CPU side-effect was understood and cut (dense
 adjacency / LRU32-only, candidate CPU `-58.87%` in
-[index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)), while the lookup-structure rewrite and the
+index-cache-locality-cpucost.03), while the lookup-structure rewrite and the
 min-gain-0 relaxation were both rejected as non-improvements.
 
 **Open.** Two things remain. (1) The opt-in stays **opt-in**, not a shared `perf`
 default, because index setup still adds meaningful candidate/lookup + draw-path CPU
 cost; the narrow source-resolve counter showed base IB resolve is not the owner
-([index-cache-locality-cpucost.04](index-cache-locality-cpucost.04.md), refreshed in
-[index-cache-locality-cpucost.05](index-cache-locality-cpucost.05.md) after repairing the direct-prefix wrapper;
-bounded without diagnostic rows in [index-cache-locality-cpucost.06](index-cache-locality-cpucost.06.md) at
+(index-cache-locality-cpucost.04, refreshed in
+index-cache-locality-cpucost.05 after repairing the direct-prefix wrapper;
+bounded without diagnostic rows in index-cache-locality-cpucost.06 at
 `encode_draw_cpu_ms +215.588ms`, with source-resolve still flat).
 The first follow-up implementation attempt, simplifying the pool lookup scan,
 was rejected because it did not reduce the explicit lookup bucket
-([index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md)). The next attribution split
-([index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md)) shows the remaining candidate-build owner
+(index-cache-locality-cpucost.07). The next attribution split
+(index-cache-locality-cpucost.08) shows the remaining candidate-build owner
 is not source index read/write:
 `encode_draw_index_cache_candidate_select_cpu_ms=99.187ms` is `75.4%` of
 `encode_draw_index_cache_candidate_build_cpu_ms`, while adjacency is `19.1%`.
-The follow-up cache-position table ([index-cache-locality-cpucost.09](index-cache-locality-cpucost.09.md)) cut the
+The follow-up cache-position table (index-cache-locality-cpucost.09) cut the
 select bucket to `92.121ms` without changing miss32/created counts, but total
 `encode_draw_cpu_ms` stayed flat. The remaining CPU problem is now candidate
-rescoring volume, not raw cache-position lookup: [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md)
+rescoring volume, not raw cache-position lookup: index-cache-locality-cpucost.10
 measured `302,538` select calls and `2,061,493` scored candidates with no skipped
 stale slots. A hard frontier cap was then rejected in
-[index-cache-locality-cpucost.11](index-cache-locality-cpucost.11.md): cap 32 cut scored slots by `20.33%`, but
+index-cache-locality-cpucost.11: cap 32 cut scored slots by `20.33%`, but
 `encode_draw_index_cache_candidate_select_cpu_ms` still increased
 `91.635ms→96.232ms`, proving that bounding the worst-case vector width is not
 enough. The first heap-backed lazy frontier was also rejected in
-[index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md): it cut scored work by `80.97%`, but
+index-cache-locality-cpucost.12: it cut scored work by `80.97%`, but
 `candidate_select_cpu_ms` regressed `91.635ms→111.247ms` and candidate LRU32
 misses worsened `418,033→434,791`. A viable follow-up needs a cheaper
 domain-specific frontier or candidate construction change, not a generic heap.
 The next attempt, a cached-vertex-count bucketed selector
-([index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md)), kept quality neutral and cut scored work
+(index-cache-locality-cpucost.13), kept quality neutral and cut scored work
 by `72.61%`, but still regressed select CPU `91.635ms→121.378ms` because
 `190,647` bucket moves replaced the scan work. That closes the generic active-
 frontier family for now: the next CPU path must reduce candidate calls or avoid
 building low-value candidates, not maintain a smarter candidate container. The
-first such pre-gate attempt ([index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md)) used the
+first such pre-gate attempt (index-cache-locality-cpucost.14) used the
 theoretical bound `candidate_miss32 >= unique` to skip impossible candidates.
 It did reject `76` candidates and preserved the accepted cache set
 (`reordered_index_cache_created=67`), but unique-count work moved
 `encode_draw_index_cache_original_measure_cpu_ms` `15.146ms→24.301ms` and total
 candidate CPU `152.117ms→165.050ms`, so this form is also rejected. A
 post-visualfix refresh then checked the persistent verdict idea directly:
-[index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md) shows rejected verdict caching is already
+index-cache-locality-cpucost.15 shows rejected verdict caching is already
 implemented and active (`401,681` rejected hits against `143` cold misses).
 The follow-up code audit ([index-cache-locality-cpucost.16](index-cache-locality-cpucost.16.md)) then rejects a
 missing broad draw-shape prefilter as the next blocker: non-scope draws are
 already gated before `findReorderedIndexBuffer()`, so the `687,387` lookups are
 eligible-key decisions, not unrelated draw traffic. The next local builder
-diagnostic ([index-cache-locality-cpucost.17](index-cache-locality-cpucost.17.md)) normalized the simulated LRU
+diagnostic (index-cache-locality-cpucost.17) normalized the simulated LRU
 miss path to the same no-duplicate update used by the LRU32 measurement helper,
 but that also failed as a default-change reason: candidate miss32 worsened
 `418,033→418,079`, the candidate CPU delta was only `-5.082ms`, and total
@@ -306,15 +306,15 @@ local LRU miss-path normalization.
 (2) The dominant remaining frame owner is row
 `50/2` — depth-read, screen-blend/standard-alpha/blend-off, textured, large indexed
 geometry — whose `~1.49–1.58 GiB` cost is hidden vertex/tiler/parameter storage, not
-texture/fragment ([index-cache-locality-triage.01](index-cache-locality-triage.01.md)). The screen-blend cache *can*
-reduce it ([index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md), `50/2` GPU `-4.64%`) but is
+texture/fragment (index-cache-locality-triage.01). The screen-blend cache *can*
+reduce it (index-cache-locality-screenblend.03, `50/2` GPU `-4.64%`) but is
 allowed only as an **explicit exact/`lsb1`** artifact
 ([index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md)): the combined opaque+screen-blend run
 improves top GPU `-11.89%`. The current post-stream/IB proof attempt has now
 closed the old "missing movement" gap. The rank-1 same-input mini-replay lowers
 replay LRU32 `52,865 -> 38,272` (`-27.6%`) and the `lsb1` image gate changes
 only `33 / 786,432` pixels with max delta `1` and SSIM `1.000000`
-([index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md)). The full `gputrace` proof then shows
+(index-cache-locality-screenblend.06). The full `gputrace` proof then shows
 target `60/2` movement: GPU `19.184ms -> 18.503ms` (`-3.55%`), VS invocations
 `642,001 -> 572,933` (`-10.76%`), and VS write `981.159MiB -> 874.767MiB`
 (`-10.84%`). However, non-target hot rows `60/0+60/1` move
@@ -324,8 +324,8 @@ cache path applied only to `60/2` (`103` lookups, `66` hits, `37` rejected
 hits), while `60/0+60/1` had no reordered-cache lookups and unchanged
 invocations/write/draw/geometry. That demotes screen-blend from "missing proof
 input" to "target mechanism confirmed, aggregate proof failed by non-target
-replay variance" ([index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md),
-[index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md)). The follow-up semantic ceiling
+replay variance" (index-cache-locality-screenblend.08,
+index-cache-locality-screenblend.07). The follow-up semantic ceiling
 projection ([index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md)) makes the Xcode budget
 decision explicit: rank2-4 color-exact owner-masked windows sum to only
 `-9,113` LRU32 delta (estimated `-0.071ms`), rank1-4 still include a visible
@@ -405,10 +405,10 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [mini-replay-bisection-texture.05](../mini-replay-bisection/mini-replay-bisection-texture.05.md) — rank-3 selected window with real texture inputs; final color exact but owner-masked.
 - [mini-replay-bisection-texture.06](../mini-replay-bisection/mini-replay-bisection-texture.06.md) — rank-4 selected window with real texture inputs; final color exact but owner-masked.
 - [mini-replay-bisection-texture.07](../mini-replay-bisection/mini-replay-bisection-texture.07.md) — primitive-conflict selector scout rejects simple non-color thresholds.
-- [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) — explains why the current experiment matters, records the refreshed opaque proof result, and records the screen-blend demotion proof.
-- [index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md) — current screen-blend same-input `lsb1` semantic input prepared.
-- [index-cache-locality-screenblend.07](index-cache-locality-screenblend.07.md) — current full screen-blend proof: target `60/2` movement passes, aggregate top-GPU gate fails.
-- [index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md) — row-level follow-up: screen-blend applies only to `60/2`; `60/0+60/1` regression is GPU-time-only replay variance.
+- index-cache-locality-proofinput.01 — explains why the current experiment matters, records the refreshed opaque proof result, and records the screen-blend demotion proof.
+- index-cache-locality-screenblend.06 — current screen-blend same-input `lsb1` semantic input prepared.
+- index-cache-locality-screenblend.07 — current full screen-blend proof: target `60/2` movement passes, aggregate top-GPU gate fails.
+- index-cache-locality-screenblend.08 — row-level follow-up: screen-blend applies only to `60/2`; `60/0+60/1` regression is GPU-time-only replay variance.
 - [index-cache-locality-screenblend.09](index-cache-locality-screenblend.09.md) — semantic ceiling projection: no more locality gputrace/Xcode spend without a final-color/final-writer oracle, broader safe selector, or non-reorder denominator mechanism.
 - [index-cache-locality-screenblend.10](index-cache-locality-screenblend.10.md) — automated semantic ceiling gate;
   emits `locality-semantic-ceiling=oracle-required` in the current full gate.

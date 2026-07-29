@@ -8,14 +8,13 @@ date: 2026-06-14
 type: attribution
 status: accepted
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_device_child.hpp, experiments/output/app-d3d9-3dmark05-present-pe-caller-stack-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-caller-stack-r1-20260614/dxmt9.log, experiments/prefixs/app-d3d9-3dmark05/drive_c/Program Files (x86)/Futuremark/3DMark05/3DMark05.exe
-related: docs/perfomance/present-pacing/present-pacing-pe-caller-pc.19.md
 ---
 
 # Present-Pacing 20 - PE Caller Stack for the Clear Front Gate
 
 ## Question
 
-[present-pacing-pe-caller-pc.19](present-pacing-pe-caller-pc.19.md) proved that the `Clear` front gate is not
+present-pacing-pe-caller-pc.19 proved that the `Clear` front gate is not
 inside dxmt9's `SetRenderTarget`, `Clear`, child getter, query, lock, or
 present-boundary paths. It still over-attributed the owner to the direct caller
 PCs `0x0042AF4F` and `0x0042B061`. Disassembly shows those PCs are 3DMark05's

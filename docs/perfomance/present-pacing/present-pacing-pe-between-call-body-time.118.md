@@ -8,7 +8,6 @@ date: 2026-06-20
 type: implementation
 status: accepted-instrumentation
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_recorder.hpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py
-related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence-wrapper.117.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-name.66.md, docs/perfomance/present-pacing/present-pacing-pe-desc-cache.67.md
 ---
 
 # Present Pacing / PE Between-Call Exact Body-Time Attribution 118

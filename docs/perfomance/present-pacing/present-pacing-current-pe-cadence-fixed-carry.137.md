@@ -145,5 +145,5 @@ by the existing P4 gates:
 
 **Related.** [present-pacing-current-visual-p4.136](present-pacing-current-visual-p4.136.md) ·
 [present-pacing-current-pe-cadence.113](present-pacing-current-pe-cadence.113.md) ·
-[present-pacing-current-pe-cadence-wrapper.117](present-pacing-current-pe-cadence-wrapper.117.md) ·
+present-pacing-current-pe-cadence-wrapper.117 ·
 [state-churn-encode-encode-phase.200](../state-churn-encode/state-churn-encode-encode-phase.200.md).

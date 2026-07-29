@@ -7,12 +7,11 @@ title: H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-wri
 date: 2026-06-09
 type: measurement
 status: accepted-gate
-source: experiments/output/app-d3d9-3dmark05-dagcheck-coalesce/3dmark05-perf-summary.md (render_pass_*_preservation_bytes, gpu_command_buffer_time_ms), traces/app-d3d9-3dmark05-dagcheck-coalesce/analysis/dag/ (100% coalesce), experiments/output/app-d3d9-3dmark05-dag-current-20260612-203736/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-dag-current-20260612-203736/analysis/dag/, docs/perfomance/render-pass-store/render-pass-store-coalesce.02.md
 ---
 
 # H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled
 
-**Question / hypothesis.** [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) showed `passcoalesce`
+**Question / hypothesis.** render-pass-store-coalesce.02 showed `passcoalesce`
 removes **100%** of the distance-1 `A→B→A` re-entries on real GT1 frames. Before
 paying the (large, risky) cost of the device-gated executor that would actually
 merge them in the Metal stream, **measure the ceiling**: how much memory traffic
@@ -96,7 +95,7 @@ hidden vertex/TVB path remains the likely FPS mover. The new wrapper also makes
 the pre-opt/post-opt distinction explicit: pre-opt discovers candidates,
 post-opt verifies that the analysis-only optimizer removes them.
 
-**Related.** [render-pass-store-coalesce.02](render-pass-store-coalesce.02.md) (100% coalesceable) ·
-[render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) (WAW edge) ·
-[render-pass-store-passchain.01](render-pass-store-passchain.01.md) (H5/H6) · [hidden-backend-storage](../hidden-backend-storage/index.md) (P0) ·
+**Related.** render-pass-store-coalesce.02 (100% coalesceable) ·
+render-pass-store-coalesce.01 (WAW edge) ·
+render-pass-store-passchain.01 (H5/H6) · [hidden-backend-storage](../hidden-backend-storage/index.md) (P0) ·
 [present-pacing](../present-pacing/index.md) (P4 wall-clock) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

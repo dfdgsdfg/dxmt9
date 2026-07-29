@@ -39,11 +39,11 @@ both row-local and full-frame.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | TVB write bytes scale linearly with `VS invocations × per-vertex VSOut bytes` (Imagination/Asahi PB model) | accepted (model) | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
-| H2 | A row-local index-cache LRU32 reorder lowers VS invocations, named tiled bytes, and GPU time together (geometry/shader locked) | accepted | [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) |
-| H3 | A standalone mini-replay reading `VS Buffer Device Memory Bytes Written = 0 MiB` is an architectural artifact (PB never spills), not a fidelity defect | accepted | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
-| H4 | The mechanism reproduces at full-frame scale through the production opt-in `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` (target rows only, non-target stable) | accepted | [tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md) |
-| H5 | Named tiled counters alone are a sufficient pass/fail gate | rejected (they cover ~15% of proxy; demoted to subtype evidence) | [tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md) |
+| H1 | TVB write bytes scale linearly with `VS invocations × per-vertex VSOut bytes` (Imagination/Asahi PB model) | accepted (model) | tvb-mechanism-proof-proof.02 |
+| H2 | A row-local index-cache LRU32 reorder lowers VS invocations, named tiled bytes, and GPU time together (geometry/shader locked) | accepted | tvb-mechanism-proof-proof.01 |
+| H3 | A standalone mini-replay reading `VS Buffer Device Memory Bytes Written = 0 MiB` is an architectural artifact (PB never spills), not a fidelity defect | accepted | tvb-mechanism-proof-proof.02 |
+| H4 | The mechanism reproduces at full-frame scale through the production opt-in `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` (target rows only, non-target stable) | accepted | tvb-mechanism-proof-proof.01 |
+| H5 | Named tiled counters alone are a sufficient pass/fail gate | rejected (they cover ~15% of proxy; demoted to subtype evidence) | tvb-mechanism-proof-proof.02 |
 
 ## Verification methods
 
@@ -91,11 +91,11 @@ flowchart TD
 ## Results synthesis
 
 **Settled.** The mechanism is closed. The Imagination/Asahi Parameter-Buffer
-model ([tvb-mechanism-proof-proof.02](tvb-mechanism-proof-proof.02.md)) predicts that TVB write traffic scales
+model (tvb-mechanism-proof-proof.02) predicts that TVB write traffic scales
 with `VS invocations × per-vertex VSOut bytes`, and two geometry/shader-locked
 row-local replays (50/1, 50/3) confirm that an LRU32 post-transform index-cache
 reorder drives named tiled bytes, VS invocations, and GPU time down *together*
-with the visible `VSOut` layout held constant ([tvb-mechanism-proof-proof.01](tvb-mechanism-proof-proof.01.md)).
+with the visible `VSOut` layout held constant (tvb-mechanism-proof-proof.01).
 The full-frame production opt-in `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1`
 reproduced the effect (`opaque-depth-index-opt-gputrace-r2`): target opaque
 depth-writing rows lose VS invocations and VS-write bytes while the non-target
@@ -147,4 +147,3 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [mini-replay-bisection](../mini-replay-bisection/index.md) — the row-local replay harness that produced the geometry-locked 50/1 / 50/3 evidence.
 - [vsout-layout](../vsout-layout/index.md) — visible varying width was held constant across variants, so this proof rules it out as the first-order owner.
 - [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root priority DAG and synthesis.
-

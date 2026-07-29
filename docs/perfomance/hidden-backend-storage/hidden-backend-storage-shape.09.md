@@ -7,7 +7,7 @@ title: Below-AIR Next Probe Triage After Live-VSOut Rejection
 date: 2026-06-06
 type: validation
 status: accepted-gate
-source: traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/analysis/frame60-vs-scaling.md; traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/analysis/frame60-vs-scaling-delta.csv; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.08.md; docs/perfomance/backend-shape-classifiers/index.md; docs/perfomance/backend-shape-classifiers/backend-shape-classifiers-alpha.03.md; docs/perfomance/backend-shape-classifiers/backend-shape-classifiers-cull.02.md; docs/perfomance/backend-shape-classifiers/backend-shape-classifiers-expand.01.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.04.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.05.md; scripts/tools/analyze_vs_buffer_scaling.py; scripts/tools/summarize_3dmark05_perf_gates.py
+source: traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/analysis/frame60-vs-scaling.md; traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/analysis/frame60-vs-scaling-delta.csv; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.08.md; docs/perfomance/backend-shape-classifiers/index.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.04.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.05.md; scripts/tools/analyze_vs_buffer_scaling.py; scripts/tools/summarize_3dmark05_perf_gates.py
 ---
 
 # Below-AIR Next Probe Triage After Live-VSOut Rejection

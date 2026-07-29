@@ -7,7 +7,7 @@ title: Final-Color Runtime Blocker
 date: 2026-06-05
 type: validation
 status: rejected
-source: scripts/tools/analyze_mini_replay_semantics.py; scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/mini-replay-bisection/mini-replay-bisection-payload.01.md; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md
+source: scripts/tools/analyze_mini_replay_semantics.py; scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md
 ---
 
 # Final-Color Runtime Blocker

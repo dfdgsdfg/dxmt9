@@ -86,7 +86,7 @@ dominant average-FPS path remains serialized P2/P3 CPU work plus missing P4
 overlap.
 
 **Related.** [present-pacing-winemac-onmainthread.28](present-pacing-winemac-onmainthread.28.md) ·
-[present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) ·
-[present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
-[present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) ·
-[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md).
+present-pacing-native-selector-xctrace.31 ·
+present-pacing-native-selector-xctrace.32 ·
+present-pacing-systemtrace-p4-range.36 ·
+present-pacing-current-lowoverhead.43.

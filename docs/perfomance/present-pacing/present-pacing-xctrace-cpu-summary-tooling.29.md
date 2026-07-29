@@ -8,7 +8,6 @@ date: 2026-06-14
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/summarize_xctrace_cpu_threads.py, scripts/tools/run_3dmark05_system_trace_sidecar.sh, tests/scripts/test_summarize_xctrace_cpu_threads.py, tests/scripts/test_3dmark05_probe_scripts.py, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/time-profile.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/time-sample.xml
-related: docs/perfomance/present-pacing/present-pacing-winemac-onmainthread.28.md, docs/perfomance/present-pacing/present-pacing-xctrace-threadstate.18.md, docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-current.30.md
 ---
 
 # Present-Pacing 29 - xctrace CPU Thread Summary Tooling
@@ -101,7 +100,7 @@ creating a new trace:
 This is not a new owner decision because the old trace was not aligned to the
 PE `SetRenderTarget` return -> `Clear` milestone rows. It does show the summary
 can separate the main D3D/Wine producer from encode and callback threads, and
-it reinforces the old [present-pacing-xctrace-threadstate.18](present-pacing-xctrace-threadstate.18.md) result: the
+it reinforces the old present-pacing-xctrace-threadstate.18 result: the
 representative producer thread is sampled as running, not obviously parked in
 `OnMainThread` / `kevent` / `dispatch_semaphore_wait`.
 
@@ -124,7 +123,7 @@ when log extraction is requested but no native or PE id exists, the verdict is
 `producer-thread-selector-missing`; when an extracted/explicit selector matches
 no xctrace thread or `tid`, the verdict is `producer-thread-not-found`.
 Neither case falls back to the highest-weight thread.
-The first current-head same-run scout, [present-pacing-xctrace-cpu-summary-current.30](present-pacing-xctrace-cpu-summary-current.30.md),
+The first current-head same-run scout, present-pacing-xctrace-cpu-summary-current.30,
 hit the second case: PE `thread_id=0xd0` was present in `45,053` rows, but it
 did not match xctrace's native thread labels or `thread-info` `tid` values.
 Treat PE `thread_id` as a Win32-thread-id namespace; the next run should use

@@ -73,5 +73,5 @@ flowchart LR
 - `git diff --check`
 
 **Related.** [present-pacing-noenqueue-compare-closure.80](present-pacing-noenqueue-compare-closure.80.md) ·
-[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md) ·
+present-pacing-run-ahead-current-code.73 ·
 [present-pacing-run-ahead-design.68](present-pacing-run-ahead-design.68.md).

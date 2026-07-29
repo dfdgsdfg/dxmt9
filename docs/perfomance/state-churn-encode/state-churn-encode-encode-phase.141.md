@@ -126,4 +126,4 @@ paired with P4 overlap/frame gates.
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.140](state-churn-encode-encode-phase.140.md) ·
-[const-upload-sparse.01](../const-upload/const-upload-sparse.01.md) · [const-upload-sparse.02](../const-upload/const-upload-sparse.02.md) · [present-pacing](../present-pacing/index.md).
+const-upload-sparse.01 · const-upload-sparse.02 · [present-pacing](../present-pacing/index.md).

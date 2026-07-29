@@ -34,11 +34,11 @@ the bucket.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | [vsout-layout-varying.03](vsout-layout-varying.03.md) |
-| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | [vsout-layout-pointsize.01](vsout-layout-pointsize.01.md) |
-| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | [vsout-layout-position.01](vsout-layout-position.01.md) |
-| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | [vsout-layout-position.02](vsout-layout-position.02.md) |
-| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | [vsout-layout-half.01](vsout-layout-half.01.md) |
+| H3 | A liveness trim can at least be done safely (no pixel change) | rejected (perf), but **semantically safe** (0 changed px, SSIM 1.000) | vsout-layout-varying.03 |
+| H4 | Dropping only `VSOut.pointSize` (184B→180B) moves the bucket | rejected | vsout-layout-pointsize.01 |
+| H5 | Extreme position-only VSOut (184B→16B) drops the bucket proportionally | rejected (non-proportional; correctness-invalid diagnostic) | vsout-layout-position.01 |
+| H6 | Control: constant-fragment alone (184B VSOut unchanged) reproduces the same delta → mover is fragment/raster, not width | rejected as width owner (control confirms) | vsout-layout-position.02 |
+| H7 | Half-precision varyings reduce hidden TVB/parameter storage | rejected (fails GPU-time TVB mechanism gate) | vsout-layout-half.01 |
 
 ## Current Navigation
 
@@ -49,11 +49,3 @@ the bucket.
 ## Recent Leaf Documents
 
 > 7 of the 7 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
-
-- [vsout-layout-varying.03 - Dump-First VSOut Liveness Replay (semantic-safe)](vsout-layout-varying.03.md)
-- [vsout-layout-varying.02 - VSOut Liveness Trim Hypothesis Rejection](vsout-layout-varying.02.md)
-- [vsout-layout-position.02 - Fragment-Only Constant-Color Probe](vsout-layout-position.02.md)
-- [vsout-layout-varying.01 - Trim-Varyings Xcode Recheck](vsout-layout-varying.01.md)
-- [vsout-layout-position.01 - Runtime Position-Only VSOut Probe](vsout-layout-position.01.md)
-- [vsout-layout-pointsize.01 - Point-Size-Only Pipeline Probe](vsout-layout-pointsize.01.md)
-- [vsout-layout-half.01 - Half VSOut Probe](vsout-layout-half.01.md)

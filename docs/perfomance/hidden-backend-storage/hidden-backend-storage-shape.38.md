@@ -8,7 +8,7 @@ date: 2026-07-24
 type: measurement
 status: rejected-optimization-accepted-bound
 source: experiments/output/app-d3d9-3dmark05-gt2-alpha-index-candidate-frame279-r1-20260724/3dmark05-perf-indexed-probe-draws.csv; experiments/output/app-d3d9-3dmark05-gt2-alpha-index-candidate-frame279-r1-20260724/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-gt2-passcoalesce-order-store-frame279-xcode-r1-20260724/analysis/frame279-xcode-dxmt-joined-summary.csv
-related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.37.md; docs/perfomance/backend-shape-classifiers/backend-shape-classifiers-alphatest.01.md
+related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/hidden-backend-storage/index.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.37.md
 ---
 
 # GT2 R32F Alpha-Test Draws Are Already at the Index-Locality Floor

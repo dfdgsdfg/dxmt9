@@ -7,7 +7,7 @@ title: Non-Reorder Backend Gate
 date: 2026-06-05
 type: validation
 status: rejected
-source: scripts/tools/analyze_vs_buffer_scaling.py; scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md; docs/perfomance/vsout-layout/vsout-layout-half.01.md; docs/perfomance/index-cache-locality/index-cache-locality-triage.01.md
+source: scripts/tools/analyze_vs_buffer_scaling.py; scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md
 ---
 
 # Non-Reorder Backend Gate
@@ -65,6 +65,6 @@ axis has yet moved hidden bytes materially. A future non-reorder candidate must
 first clear the bytes/invocation preflight before spending Xcode capture time;
 otherwise the practical GPU path remains semantic-safe post-transform locality.
 
-**Related.** [hidden-backend-storage](index.md) · prev: [hidden-backend-storage-shape.01](hidden-backend-storage-shape.01.md)
+**Related.** [hidden-backend-storage](index.md) · prev: hidden-backend-storage-shape.01
 · [vsout-layout](../vsout-layout/index.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [index-cache-locality-screenblend.04](../index-cache-locality/index-cache-locality-screenblend.04.md) · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md).

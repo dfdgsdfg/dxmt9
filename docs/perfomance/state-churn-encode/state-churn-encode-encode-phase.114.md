@@ -136,4 +136,4 @@ Interpretation:
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 
 **Related.** [state-churn-encode-encode-phase.113](state-churn-encode-encode-phase.113.md) ·
-[state-churn-encode-encode-phase.112](state-churn-encode-encode-phase.112.md) · [state-churn-encode](index.md).
+state-churn-encode-encode-phase.112 · [state-churn-encode](index.md).

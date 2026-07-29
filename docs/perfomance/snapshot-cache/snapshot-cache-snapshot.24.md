@@ -21,7 +21,7 @@ misses?
 **Initial answer.** Not precisely enough. The existing
 `d3d9_draw_state_cache_miss_after_*` counters are global bit counts across all
 cache callers and are not exclusive. They proved that stream/IB deltas frequently
-co-occur, but [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) already rejected pure binding churn
+co-occur, but snapshot-cache-snapshot.21 already rejected pure binding churn
 as the current stable-generation owner. The next run needs batch-only,
 exclusive grouped miss reasons.
 
@@ -184,5 +184,5 @@ has to move `d3d9_snapshot_cache_lookup_cpu_ms_per_present`, the queued
 replay/submission stage, and the P4 completion wait or overlap gate from
 [present-pacing-compare-gates.37](../present-pacing/present-pacing-compare-gates.37.md).
 
-**Related.** [snapshot-cache](index.md) · [snapshot-cache-snapshot.21](snapshot-cache-snapshot.21.md) ·
+**Related.** [snapshot-cache](index.md) · snapshot-cache-snapshot.21 ·
 [snapshot-cache-snapshot.23](snapshot-cache-snapshot.23.md) · [present-pacing-direct-cbuf.45](../present-pacing/present-pacing-direct-cbuf.45.md).

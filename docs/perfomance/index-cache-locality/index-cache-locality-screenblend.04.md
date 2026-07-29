@@ -7,7 +7,7 @@ title: Explicit LSB1 Screen-Blend Gate
 date: 2026-06-05
 type: validation
 status: accepted
-source: scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.03.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-semantic.01.md
+source: scripts/tools/summarize_3dmark05_perf_gates.py; docs/perfomance/mini-replay-bisection/mini-replay-bisection-semantic.01.md
 ---
 
 # Explicit LSB1 Screen-Blend Gate
@@ -72,6 +72,6 @@ final-color/final-writer oracle, or a new non-reorder backend mechanism that
 preflights meaningful bytes/invocation or hidden-backend proxy movement before
 capture.
 
-**Related.** [index-cache-locality](index.md) · prev: [index-cache-locality-screenblend.03](index-cache-locality-screenblend.03.md)
+**Related.** [index-cache-locality](index.md) · prev: index-cache-locality-screenblend.03
 · [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) · [primitive-reorder-diagnostics](../primitive-reorder-diagnostics/index.md) ·
 [mini-replay-bisection](../mini-replay-bisection/index.md) · [hidden-backend-storage](../hidden-backend-storage/index.md).

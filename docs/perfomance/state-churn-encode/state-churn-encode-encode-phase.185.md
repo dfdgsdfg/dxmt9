@@ -8,7 +8,6 @@ date: 2026-06-20
 type: implementation-prerequisite
 status: accepted-prerequisite-no-runtime-claim
 source: src/d3d9/core_draw.cpp, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.184.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md
 ---
 
 # Encode Phase 185 - Hot state hash-only uniform input refactor

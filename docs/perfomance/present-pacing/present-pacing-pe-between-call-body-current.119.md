@@ -8,7 +8,6 @@ date: 2026-06-20
 type: experiment
 status: accepted-current-attribution
 source: experiments/output/app-d3d9-3dmark05-h206-pe-between-call-body-time-r1/result.json, experiments/output/app-d3d9-3dmark05-h206-pe-between-call-body-time-r1/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-pe-between-call-body-time.118.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence-wrapper.117.md, docs/perfomance/present-pacing/present-pacing-pe-desc-cache.67.md
 ---
 
 # Present Pacing / Current PE Between-Call Exact Body-Time Scout 119

@@ -8,7 +8,6 @@ date: 2026-06-20
 type: source-and-counter-audit
 status: accepted-direction
 source: src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-uniform-fixed-carry-r1/result.json, experiments/output/app-d3d9-3dmark05-uniform-fixed-carry-r1/3dmark05-perf-summary.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.198.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.199.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.200.md
-related: docs/perfomance/state-churn-encode/index.md, docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-pe-producer-cadence-source-audit.138.md
 ---
 
 # Encode Phase 201 - Uniform append residual after fixed handle carry

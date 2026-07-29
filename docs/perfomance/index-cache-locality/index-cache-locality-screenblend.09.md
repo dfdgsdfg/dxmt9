@@ -100,5 +100,5 @@ capture needs one of:
   invocation instead of relying on more primitive-order movement.
 
 **Related.** [index-cache-locality](index.md) · prev:
-[index-cache-locality-screenblend.08](index-cache-locality-screenblend.08.md) ·
+index-cache-locality-screenblend.08 ·
 [mini-replay-bisection-texture.10](../mini-replay-bisection/mini-replay-bisection-texture.10.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

@@ -8,7 +8,6 @@ date: 2026-06-19
 type: source-and-sidecar-audit
 status: accepted-design-blocker
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-h185-open-cb-tailshape-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h185-open-cb-tailshape-r1/3dmark05-perf-encoders.csv
-related: docs/perfomance/present-pacing/present-pacing-open-cb-final-reopen.115.md, docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md, docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.109.md
 ---
 
 # Present Pacing / Open-CB Render-State Carry Audit 116

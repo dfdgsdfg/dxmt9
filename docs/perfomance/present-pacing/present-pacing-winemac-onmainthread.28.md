@@ -51,15 +51,15 @@ sequenceDiagram
 
 This would explain why:
 
-- `Present()` itself is not the long wait ([present-pacing-pe-present-timing.09](present-pacing-pe-present-timing.09.md));
-- the next PE D3D9 call starts quickly ([present-pacing-pe-call-cadence.10](present-pacing-pe-call-cadence.10.md));
+- `Present()` itself is not the long wait (present-pacing-pe-present-timing.09);
+- the next PE D3D9 call starts quickly (present-pacing-pe-call-cadence.10);
 - early RT setup and child getters are not the sleeper
-  ([present-pacing-pe-clear-gate.15](present-pacing-pe-clear-gate.15.md), [present-pacing-pe-wide-call-coverage.17](present-pacing-pe-wide-call-coverage.17.md));
+  (present-pacing-pe-clear-gate.15, present-pacing-pe-wide-call-coverage.17);
 - the stable owner appears above D3D wrapper stubs in the 3DMark05 command
   dispatcher ([present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md));
 - dxmt9 boundary/latency and completed-seq perturbations do not move the gate
-  ([present-pacing-boundary-latency-ab.06](present-pacing-boundary-latency-ab.06.md),
-  [present-pacing-completion-signal-delay.21](present-pacing-completion-signal-delay.21.md)).
+  (present-pacing-boundary-latency-ab.06,
+  present-pacing-completion-signal-delay.21).
 
 ## Caveats
 
@@ -128,10 +128,10 @@ thread:
 
 | Follow-up | Result | Consequence |
 |---|---|---|
-| [present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) | Native `unix_commit_chunk_entry` thread selected; producer sampled running in `10427 / 10427` rows; producer wait-keyword hits `0`. | PE `thread_id` namespace mismatch is solved for this route, and the actual producer does not look blocked in winemac during the sampled window. |
-| [present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) | Default resource-shape path repeats the native selection; producer sampled running in `10439 / 10439` rows; producer wait-keyword hits `0`. | The negative signal survives the later default-on backend path. |
-| [present-pacing-systemtrace-p4-smoke.34](present-pacing-systemtrace-p4-smoke.34.md) | Short sidecar while `.gputrace` attach is blocked joins Metal rows and selects the producer; producer sampled running in `2519 / 2519` rows; wait hits `0`. | The System Trace fallback is viable, and it does not support a broad producer-thread wait. |
-| [present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) | Seq-range sidecar keeps output bounded, joins `395 / 395` rows, and reports `producer-running-negative-scout` with `0` blocked rows and `0` producer wait hits. | This is the preferred blocked-gputrace P4 fallback shape. |
+| present-pacing-native-selector-xctrace.31 | Native `unix_commit_chunk_entry` thread selected; producer sampled running in `10427 / 10427` rows; producer wait-keyword hits `0`. | PE `thread_id` namespace mismatch is solved for this route, and the actual producer does not look blocked in winemac during the sampled window. |
+| present-pacing-native-selector-xctrace.32 | Default resource-shape path repeats the native selection; producer sampled running in `10439 / 10439` rows; producer wait-keyword hits `0`. | The negative signal survives the later default-on backend path. |
+| present-pacing-systemtrace-p4-smoke.34 | Short sidecar while `.gputrace` attach is blocked joins Metal rows and selects the producer; producer sampled running in `2519 / 2519` rows; wait hits `0`. | The System Trace fallback is viable, and it does not support a broad producer-thread wait. |
+| present-pacing-systemtrace-p4-range.36 | Seq-range sidecar keeps output bounded, joins `395 / 395` rows, and reports `producer-running-negative-scout` with `0` blocked rows and `0` producer wait hits. | This is the preferred blocked-gputrace P4 fallback shape. |
 
 The open part is therefore narrower than the original source audit:
 
@@ -151,7 +151,7 @@ flowchart TD
 Do not read this leaf as the current dominant pacing verdict. It remains a
 candidate transmission path and a patch point if future evidence shows a
 specific macdrv call overlapping the `SetRenderTarget` return -> `Clear` entry
-gap. Until then, the runtime evidence in [present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md)
+gap. Until then, the runtime evidence in present-pacing-systemtrace-p4-range.36
 keeps broad winemac `OnMainThread` below P2/P3 replay, snapshot, queue-submit,
 and backend encode work as the next average-FPS target.
 
@@ -178,11 +178,11 @@ overhead make it weak final evidence for the low-overhead FPS lane.
 **Decision.** Source-audit hypothesis accepted as a possible P4 transmission
 path, but demoted below the native-thread System Trace scouts. It supersedes
 neither [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) nor
-[present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md): those remain runtime evidence.
+present-pacing-lowoverhead-serial.24: those remain runtime evidence.
 Promotion requires a real 3DMark05 run that joins macdrv `OnMainThread` wait
 rows to the PE `SetRenderTarget` -> `Clear` gap and contradicts the later
 producer-running negative scouts.
 
 **Related.** [present-pacing-pe-caller-stack.20](present-pacing-pe-caller-stack.20.md) ·
-[present-pacing-xctrace-threadstate.18](present-pacing-xctrace-threadstate.18.md) · [present-pacing-lowoverhead-serial.24](present-pacing-lowoverhead-serial.24.md)
+present-pacing-xctrace-threadstate.18 · present-pacing-lowoverhead-serial.24
 · [present-pacing](index.md).

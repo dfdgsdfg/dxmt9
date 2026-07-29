@@ -87,6 +87,6 @@ probe. It should either reduce VS invocations with a correctness oracle, or
 produce a reduced same-input backend-route A/B that moves bytes per invocation.
 Average-FPS work remains a separate pacing/CPU lane.
 
-**Related.** [hidden-backend-storage-shape.31](hidden-backend-storage-shape.31.md) ·
+**Related.** hidden-backend-storage-shape.31 ·
 [baselines-gputrace-capture.02](../baselines/baselines-gputrace-capture.02.md) · [hidden-backend-storage](index.md) ·
 [present-pacing](../present-pacing/index.md).

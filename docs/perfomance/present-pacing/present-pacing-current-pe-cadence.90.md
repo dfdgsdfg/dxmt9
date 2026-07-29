@@ -8,7 +8,6 @@ date: 2026-06-19
 type: experiment
 status: accepted-current-pe-cadence-refresh
 source: experiments/output/app-d3d9-3dmark05-h171-current-pe-cadence-r1/result.json, experiments/output/app-d3d9-3dmark05-h171-current-pe-cadence-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h171-current-pe-cadence-r1/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-h171-current-pe-cadence-r1/actual.png
-related: docs/perfomance/present-pacing/present-pacing-current-frontier.89.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-current.72.md, docs/perfomance/present-pacing/present-pacing-pe-gap-callfamily.62.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.160.md
 ---
 
 # Present Pacing 90 - Current PE cadence refresh after compact timer gate
@@ -16,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-current-frontier.89.md, d
 ## Question
 
 After the compact-uniform breakdown timers were gated off again in
-[state-churn-encode-encode-phase.160](../state-churn-encode/state-churn-encode-encode-phase.160.md), does the current no-gputrace path still
+state-churn-encode-encode-phase.160, does the current no-gputrace path still
 attribute the average-FPS P4 owner to PE producer/replay cadence, or did the
 frontier move back to compact uniform, GPU hot-frame work, or queue publish
 wait?

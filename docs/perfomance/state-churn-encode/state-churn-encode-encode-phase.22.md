@@ -123,4 +123,4 @@ visible artifact.
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.20](state-churn-encode-encode-phase.20.md) ·
-[state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).
+[state-churn-encode-encode-phase.21](state-churn-encode-encode-phase.21.md) · baselines-visual-capture.01.

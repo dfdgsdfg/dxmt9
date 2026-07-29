@@ -38,10 +38,10 @@ AIR-visible shape.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | [shader-codegen-temps.01](shader-codegen-temps.01.md) |
-| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | [shader-codegen-scratch.01](shader-codegen-scratch.01.md) |
-| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | [shader-codegen-offline.01](shader-codegen-offline.01.md) |
-| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | [shader-codegen-offline.02](shader-codegen-offline.02.md) |
+| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | shader-codegen-temps.01 |
+| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | shader-codegen-scratch.01 |
+| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | shader-codegen-offline.01 |
+| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | shader-codegen-offline.02 |
 
 ## Verification methods
 
@@ -96,17 +96,17 @@ flowchart TD
 ## Results synthesis
 
 Every codegen-side lever was tried and rejected. The runtime trims
-([shader-codegen-temps.01](shader-codegen-temps.01.md), [shader-codegen-scratch.01](shader-codegen-scratch.01.md)) demonstrably changed
+(shader-codegen-temps.01, shader-codegen-scratch.01) demonstrably changed
 the generated MSL (`r[32]→r[1]`, `outTexcoord[8]→outTexcoord[1]`) yet left
 `top_vs_buffer_write_mib` flat at ~`1627.3 MiB` with
 `top_unexplained_buffer_write_ratio = 1.000`; the only movement was uncorrelated
 GPU-time noise (`-3.38%` then `+1.12%`). Offline compilation
-([shader-codegen-offline.01](shader-codegen-offline.01.md)) then explained *why*: the Apple compiler already
+(shader-codegen-offline.01) then explained *why*: the Apple compiler already
 DCEs the large `r[32]` array, leaving a single `128B` scratch and a `184B` IR
 return — and the AIR objdump shows zero stores/allocas in the top VS functions.
 The measured Xcode VS write is `6.3x`–`8.7x` larger than that IR return
 (`1151–1603 B/invocation` vs `184 B`), so the visible/AIR shape simply cannot
-account for the bucket. The variant study ([shader-codegen-offline.02](shader-codegen-offline.02.md))
+account for the bucket. The variant study (shader-codegen-offline.02)
 confirmed the compiler *does* honour structural VSOut reductions
 (`184B → 36/52B → 16B`), which closes the last "maybe the compiler can't see it"
 escape: the bucket is below source-visible VSOut return width.

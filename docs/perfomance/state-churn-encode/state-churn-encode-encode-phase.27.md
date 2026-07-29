@@ -88,7 +88,7 @@ whether those deltas are value-changing.
 
 **Next proof.** Run the narrowly scoped draw-packet actual-change diagnostic
 before changing default invalidation policy. This was executed in
-[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md) and rejected the broad redundant
+state-churn-encode-encode-phase.28 and rejected the broad redundant
 non-binding hypothesis.
 
 ```mermaid
@@ -142,4 +142,4 @@ bash scripts/tools/run_3dmark05_perf_probe.sh \
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md) ·
 [state-churn-encode-encode-phase.26](state-churn-encode-encode-phase.26.md) ·
-[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md).
+state-churn-encode-encode-phase.28.

@@ -7,7 +7,7 @@ title: Refreshed Gate Covers Opaque-Depth Proof Input
 date: 2026-06-06
 type: validation
 status: covered-current-gate
-source: traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-perf-gates.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-next-experiment-queue.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-vs-scaling-with-opaque-proof-aggregate.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-vs-scaling-with-opaque-proof-delta.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-opaque-proof-r1/analysis/frame60-xcode-dxmt-comparison.md; docs/perfomance/index-cache-locality/index-cache-locality-proofinput.01.md; docs/perfomance/index-cache-locality/index-cache-locality-opaque.07.md
+source: traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-perf-gates.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-next-experiment-queue.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-vs-scaling-with-opaque-proof-aggregate.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-vs-scaling-with-opaque-proof-delta.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-opaque-proof-r1/analysis/frame60-xcode-dxmt-comparison.md
 ---
 
 # Refreshed Gate Covers Opaque-Depth Proof Input
@@ -20,9 +20,9 @@ attached?
 **Method.** Re-read the post-stream/IB gate report and next-experiment queue,
 then regenerate the VS scaling input with the refreshed opaque proof run
 `post-streamib-frame60-opaque-proof-r1` included. The historical
-[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) proof remains accepted: the fast-measure
+index-cache-locality-opaque.07 proof remains accepted: the fast-measure
 frame50 run passed `--require-opaque-depth-index-cache-proof`. The refreshed
-frame60 proof is recorded in [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md).
+frame60 proof is recorded in index-cache-locality-proofinput.01.
 
 ```mermaid
 flowchart TD
@@ -65,6 +65,6 @@ input is screen-blend movement plus same-input exact/`lsb1` semantic image
 evidence.
 
 **Related.** [index-cache-locality](index.md) · prev:
-[index-cache-locality-opaque.07](index-cache-locality-opaque.07.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
+index-cache-locality-opaque.07 · index-cache-locality-proofinput.01 ·
 [index-cache-locality-screenblend.05](index-cache-locality-screenblend.05.md) ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md).

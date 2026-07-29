@@ -7,7 +7,7 @@ title: Encoder-Summary Route Counters Remove Indexed Per-Draw Requirement From S
 date: 2026-06-13
 type: instrumentation
 status: accepted-tooling
-source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_perf_counters.hpp; src/dxmt9/dxmt9_perf_counters.cpp; scripts/tools/summarize_xctrace_metal_intervals.py; scripts/tools/run_3dmark05_system_trace_sidecar.sh; tests/scripts/test_summarize_xctrace_metal_intervals.py; tests/scripts/test_3dmark05_probe_scripts.py; experiments/output/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/analysis/xctrace-metal-gpu-intervals-summary.md; docs/perfomance/baselines/baselines-frame60.04.md
+source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_perf_counters.hpp; src/dxmt9/dxmt9_perf_counters.cpp; scripts/tools/summarize_xctrace_metal_intervals.py; scripts/tools/run_3dmark05_system_trace_sidecar.sh; tests/scripts/test_summarize_xctrace_metal_intervals.py; tests/scripts/test_3dmark05_probe_scripts.py; experiments/output/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/3dmark05-perf-encoders.csv; traces/app-d3d9-3dmark05-systemtrace-route-summary-r1-20260613/analysis/xctrace-metal-gpu-intervals-summary.md
 ---
 
 # Encoder-Summary Route Counters Remove Indexed Per-Draw Requirement From Sidecars
@@ -91,7 +91,7 @@ optimization by itself and does not change the hidden backend-storage owner.
 It reduces the measurement cost of the next System Trace route sidecar: route
 selection no longer needs indexed per-draw logging unless exact draw selectors
 or index-cache metrics are required. This directly addresses the FPS-tail
-caveat captured in [baselines-frame60.04](../baselines/baselines-frame60.04.md). The no-indexed sidecar gate is now
+caveat captured in baselines-frame60.04. The no-indexed sidecar gate is now
 verified: route verdict coverage comes from `route_source=encoder-summary`, not
 from indexed probe telemetry.
 

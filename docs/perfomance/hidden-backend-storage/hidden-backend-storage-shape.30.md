@@ -7,7 +7,7 @@ title: GPU Efficiency Ceiling Is Separate From Wall-Clock FPS Ownership
 date: 2026-06-13
 type: synthesis
 status: accepted-gate
-source: docs/perfomance/mini-replay-bisection/mini-replay-bisection-replay.03.md; docs/perfomance/render-pass-store/render-pass-store-coalesce.04.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.42.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-encode-budget-fix-proposal.01.md
+source: docs/perfomance/render-pass-store/render-pass-store-coalesce.04.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.42.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-encode-budget-fix-proposal.01.md
 ---
 
 # GPU Efficiency Ceiling Is Separate From Wall-Clock FPS Ownership
@@ -20,7 +20,7 @@ same question as the hot-frame GPU efficiency limit?
 
 | Question | Answer | Load-bearing evidence |
 |---|---|---|
-| Is the hidden VS/TVB write bucket already at the GPU floor? | No. Primitive order/locality can collapse bytes per invocation without materially changing invocation count. | [mini-replay-bisection-replay.03](../mini-replay-bisection/mini-replay-bisection-replay.03.md) |
+| Is the hidden VS/TVB write bucket already at the GPU floor? | No. Primitive order/locality can collapse bytes per invocation without materially changing invocation count. | mini-replay-bisection-replay.03 |
 | Is pass coalescing the proof of that `~3x` hidden-write headroom? | No. Pass coalescing is a P1 tile-preservation lever, not the P0 TVB/PB denominator proof. | [render-pass-store-coalesce.04](../render-pass-store/render-pass-store-coalesce.04.md) |
 | Does reducing GPU hot-frame cost necessarily move average wall-clock FPS? | No. Current no-gputrace runs spend much more wall-clock time in completion/present pacing than in GPU command-buffer execution. | [state-churn-encode-encode-phase.42](../state-churn-encode/state-churn-encode-encode-phase.42.md), [present-pacing](../present-pacing/index.md) |
 
@@ -90,6 +90,6 @@ density headroom, and the average run is not GPU-execution-bound. The next work
 must keep those axes separate: GPU locality/equality/counter A/B for the hot
 frame, and CPU/pacing attribution for average FPS.
 
-**Related.** [hidden-backend-storage](index.md) · [mini-replay-bisection-replay.03](../mini-replay-bisection/mini-replay-bisection-replay.03.md) ·
+**Related.** [hidden-backend-storage](index.md) · mini-replay-bisection-replay.03 ·
 [render-pass-store-coalesce.04](../render-pass-store/render-pass-store-coalesce.04.md) · [index-cache-locality](../index-cache-locality/index.md) ·
 [present-pacing](../present-pacing/index.md) · [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

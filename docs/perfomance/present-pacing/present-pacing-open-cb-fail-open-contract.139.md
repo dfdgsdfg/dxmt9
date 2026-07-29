@@ -7,8 +7,6 @@ title: Open-CB Fail-Open Contract
 date: 2026-06-20
 type: source-audit
 status: accepted-design-gate
-source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, docs/perfomance/present-pacing/present-pacing-open-cb-render-session-carry.134.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-state.135.md
-related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md, docs/perfomance/present-pacing/present-pacing-encode-session-finalizer-seam.133.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-session-carry.134.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-state.135.md
 ---
 
 # Present Pacing / Open-CB Fail-Open Contract 139
@@ -127,4 +125,3 @@ misaligned. The next useful work is either:
   regression; or
 - lower-risk serial CPU cleanup that reduces replay/snapshot/encode wall time
   while preserving the current visual-safe baseline.
-

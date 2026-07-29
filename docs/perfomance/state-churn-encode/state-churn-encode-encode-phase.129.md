@@ -146,5 +146,5 @@ snapshot/cache replay cost, argbuf table/cbuf update frequency, stream binding,
 or PSO prefetch. The cbuf content observer is no longer a valid default-profile
 owner.
 
-**Related.** [state-churn-encode-encode-phase.128](state-churn-encode-encode-phase.128.md) -
+**Related.** state-churn-encode-encode-phase.128 -
 [state-churn-encode](index.md).

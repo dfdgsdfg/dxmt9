@@ -7,7 +7,6 @@ title: Current-Run P4 and CPU Stage Summary Triage
 date: 2026-06-15
 type: tooling
 status: accepted-tooling
-source: scripts/tools/summarize_3dmark05_perf.py, tests/scripts/test_summarize_3dmark05_perf.py, docs/perfomance/present-pacing/present-pacing-frame-sampling-current.39.md
 related: docs/perfomance/present-pacing/present-pacing-frame-sampling-current.39.md, docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md, docs/perfomance/present-pacing/present-pacing-compare-gates.37.md
 ---
 
@@ -45,7 +44,7 @@ flowchart TD
 
 ## Why
 
-The current baseline in [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) shows the
+The current baseline in present-pacing-frame-sampling-current.39 shows the
 same shape repeatedly: GPU command-buffer time is not the average frame floor,
 completion wait has almost no overlap, and exposed CPU stages remain large.
 Before a candidate can claim average-FPS movement, the summary should make that
@@ -62,6 +61,6 @@ dependent on ad hoc `jq` or Python snippets.
 - `python3 -m py_compile scripts/tools/summarize_3dmark05_perf.py tests/scripts/test_summarize_3dmark05_perf.py`
 - `python3 -m pytest tests/scripts/test_summarize_3dmark05_perf.py -q`
 
-**Related.** [present-pacing-frame-sampling-current.39](present-pacing-frame-sampling-current.39.md) ·
+**Related.** present-pacing-frame-sampling-current.39 ·
 [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
 [present-pacing-compare-gates.37](present-pacing-compare-gates.37.md) · [present-pacing](index.md).

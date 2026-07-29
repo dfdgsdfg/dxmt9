@@ -151,4 +151,4 @@ trusting native tests.
 - 3DMark05 GT1 120s no-gputrace scout above.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.41](state-churn-encode-encode-phase.41.md).
+state-churn-encode-encode-phase.41.

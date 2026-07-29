@@ -8,7 +8,7 @@ source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf
 # Encode Phase 89 - Stream Bind Phase Split Default-Off Cleanup
 
 **Question.** `encode_draw_stream_bind_cpu_ms` remains a current CPU child
-(`1.388ms/present` in [present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md)), but the
+(`1.388ms/present` in present-pacing-lowoverhead-refresh.33), but the
 phase child timers under it are attribution-only:
 
 - `encode_draw_stream_bind_raster_phase_cpu_ms`
@@ -71,7 +71,7 @@ Both runs keep explicit clean-run counters at zero:
 `render_split_hazard`, `map_buffer_wait_ms`, and `queue_sequence_wait_ms`.
 
 **Decision.** Accepted as a hot-path instrumentation cleanup, not an FPS proof.
-Unlike [state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md), removing these child timers did
+Unlike state-churn-encode-encode-phase.88, removing these child timers did
 not expose a black-screen or HUD-only visual failure. The default-off run keeps
 normal visual output and live call counters, while the opt-in run proves the
 old phase attribution remains available when needed.
@@ -80,7 +80,7 @@ This does not solve the `stream_bind` structural cost. It only removes
 default-profile clock calls around the coarse phase split. Future stream-bind
 work should reduce the underlying texture/sampler, shader-stream, or index
 binding work and then pass the P4 gate from
-[present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md).
+present-pacing-lowoverhead-refresh.33.
 
 **Verification.**
 
@@ -91,7 +91,7 @@ binding work and then pass the P4 gate from
 - `DXMT9_PERF_STREAM_BIND_PHASE_SPLIT=1 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix stream-bind-phase-split-optin-r1-20260615 --no-gputrace --no-encoder-breakdown --frame-sampling --timeout 120`
 - `git diff --check`
 
-**Related.** [present-pacing-lowoverhead-refresh.33](../present-pacing/present-pacing-lowoverhead-refresh.33.md) ·
-[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md) ·
-[state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) ·
-[state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) · [state-churn-encode](index.md).
+**Related.** present-pacing-lowoverhead-refresh.33 ·
+state-churn-encode-encode-phase.88 ·
+state-churn-encode-encode-phase.14 ·
+state-churn-encode-encode-phase.12 · [state-churn-encode](index.md).

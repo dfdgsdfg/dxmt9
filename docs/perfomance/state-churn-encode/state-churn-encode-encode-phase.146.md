@@ -22,7 +22,7 @@ that now move the average-FPS/P4 owner?
 ## Verdict
 
 The local CPU mechanism still works, but it is not the current average-FPS
-owner. Compared with [present-pacing-current-lowoverhead.52](../present-pacing/present-pacing-current-lowoverhead.52.md), direct-cbuf cuts
+owner. Compared with present-pacing-current-lowoverhead.52, direct-cbuf cuts
 `encode_chunk_cpu_ms_per_present` by `-23.49%` and `encode_draw_cpu_ms_per_present`
 by `-29.90%`, while all argbuf table/open/cbuf-update counters drop to zero.
 

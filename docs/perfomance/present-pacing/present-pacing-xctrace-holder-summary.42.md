@@ -8,7 +8,6 @@ date: 2026-06-15
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/summarize_xctrace_cpu_threads.py, tests/scripts/test_summarize_xctrace_cpu_threads.py, docs/perfomance/present-pacing/index.md
-related: docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-tooling.29.md, docs/perfomance/present-pacing/present-pacing-winemac-onmainthread.28.md, docs/perfomance/present-pacing/present-pacing-systemtrace-p4-range.36.md
 ---
 
 # Present-Pacing 42 - xctrace CPU Holder Summary Split
@@ -80,4 +79,4 @@ a plausible holder row, or explicitly explain why only one side was sampled.
 
 **Related.** [present-pacing-xctrace-cpu-summary-tooling.29](present-pacing-xctrace-cpu-summary-tooling.29.md) ·
 [present-pacing-winemac-onmainthread.28](present-pacing-winemac-onmainthread.28.md) ·
-[present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) · [present-pacing](index.md).
+present-pacing-systemtrace-p4-range.36 · [present-pacing](index.md).

@@ -107,5 +107,5 @@ scratch path, or return to serial P2/P3/P4 overlap and larger encode/replay
 children. Do not spend `.gputrace` on this cleanup alone.
 
 **Related.** [state-churn-encode-encode-phase.121](state-churn-encode-encode-phase.121.md) -
-[state-churn-encode-encode-phase.122](state-churn-encode-encode-phase.122.md) -
-[state-churn-encode-encode-phase.124](state-churn-encode-encode-phase.124.md) - [state-churn-encode](index.md).
+state-churn-encode-encode-phase.122 -
+state-churn-encode-encode-phase.124 - [state-churn-encode](index.md).

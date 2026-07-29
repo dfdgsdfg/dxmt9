@@ -1634,6 +1634,6 @@ Do not use independent command-index force-white replays as final-writer proof
 unless the summary shows a nonzero `probe_force_texture_white_draws` count and
 the captured HUD/scene matches the baseline visual target.
 
-**Related.** [backend-shape-classifiers](index.md) · [backend-shape-classifiers-alpha.03](backend-shape-classifiers-alpha.03.md) ·
-[baselines-frame60.03](../baselines/baselines-frame60.03.md) · [index-cache-locality-screenblend.02](../index-cache-locality/index-cache-locality-screenblend.02.md) ·
+**Related.** [backend-shape-classifiers](index.md) · backend-shape-classifiers-alpha.03 ·
+baselines-frame60.03 · index-cache-locality-screenblend.02 ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md)

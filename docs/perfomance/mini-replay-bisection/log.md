@@ -37,15 +37,15 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | Hot-row attribution / shaders / draw identity are ready; only geometry bytes are missing | tooling (gap found) | [mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md) |
-| H2 | Runtime can dump replayable index/stream/cbuf bytes for a hot window without mutating state | tooling | [mini-replay-bisection-payload.01](mini-replay-bisection-payload.01.md) |
-| H3 | Runner can replay a multi-PSO slice with stream1 + dynamic cbuf slots | tooling | [mini-replay-bisection-harness.02](mini-replay-bisection-harness.02.md) |
-| H4 | Captured payloads alone reproduce the original ~1 GiB VS-write scale/shape | inconclusive (class yes, scale no) | [mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md) |
-| H5 | Fragment overdraw (missing per-draw scissor) is the gap | rejected (real fix, but VS write unmoved) | [mini-replay-bisection-replay.02](mini-replay-bisection-replay.02.md) |
-| H6 | Depth attachment content (clear scalar or real D24X8) owns the amplification | rejected | [mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md) |
-| H7 | The wider encoder2 (113-draw) sequence reproduces vertex-stage dominance | accepted | [mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md) |
-| H8 | The pressure is a single late draw/state transition | rejected (additive, independent windows) | [mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md) |
-| H9 | The cost is per-draw geometry/shader-pair amplification, not alpha/scissor | accepted | [mini-replay-bisection-pair.01](mini-replay-bisection-pair.01.md) |
+| H1 | Hot-row attribution / shaders / draw identity are ready; only geometry bytes are missing | tooling (gap found) | mini-replay-bisection-harness.01 |
+| H2 | Runtime can dump replayable index/stream/cbuf bytes for a hot window without mutating state | tooling | mini-replay-bisection-payload.01 |
+| H3 | Runner can replay a multi-PSO slice with stream1 + dynamic cbuf slots | tooling | mini-replay-bisection-harness.02 |
+| H4 | Captured payloads alone reproduce the original ~1 GiB VS-write scale/shape | inconclusive (class yes, scale no) | mini-replay-bisection-replay.01 |
+| H5 | Fragment overdraw (missing per-draw scissor) is the gap | rejected (real fix, but VS write unmoved) | mini-replay-bisection-replay.02 |
+| H6 | Depth attachment content (clear scalar or real D24X8) owns the amplification | rejected | mini-replay-bisection-depth.01 |
+| H7 | The wider encoder2 (113-draw) sequence reproduces vertex-stage dominance | accepted | mini-replay-bisection-replay.03 |
+| H8 | The pressure is a single late draw/state transition | rejected (additive, independent windows) | mini-replay-bisection-bisect.01 |
+| H9 | The cost is per-draw geometry/shader-pair amplification, not alpha/scissor | accepted | mini-replay-bisection-pair.01 |
 | H10 | Broad depth-read reorder can be made production-shaped with current runtime selectors | rejected | [mini-replay-bisection-semantic.01](mini-replay-bisection-semantic.01.md) |
 | H11 | A selected `60/2 depth-read + no-alpha-blend` cache-opt window can preserve same-input final color | accepted (scoped) | [mini-replay-bisection-semantic.02](mini-replay-bisection-semantic.02.md) |
 | H12 | Draw-time texture sidecars can remove the current white-texture replay caveat | tooling | [mini-replay-bisection-texture.01](mini-replay-bisection-texture.01.md) |
@@ -314,11 +314,11 @@ Detail migrated from the former long-form root [3DMark05 overview](../overview-3
 ### From Frame shape
 
 The current canonical A/B baseline is frame50 normal-source
-([baselines-frame50.01](../baselines/baselines-frame50.01.md)): **35.024 ms**, top-3 98.19%, rows 50/2
+(baselines-frame50.01): **35.024 ms**, top-3 98.19%, rows 50/2
 (56.9%) / 50/1 (24.5%) / 50/0 (16.8%), hidden backend estimate
 ≈1597.6 MiB. Mid-investigation probes A/B against frame60
-([baselines-frame60.01](../baselines/baselines-frame60.01.md)). The current post-visualfix frame60 refresh
-([baselines-frame60.02](../baselines/baselines-frame60.02.md)) keeps the same owner after the latest visual/cbuf
+(baselines-frame60.01). The current post-visualfix frame60 refresh
+(baselines-frame60.02) keeps the same owner after the latest visual/cbuf
 identity path: **33.614 ms**, top-3 **32.984 ms / 98.12%**, VS write
 **1627.332 MiB**, hidden backend **1597.755 MiB**. Its no-mutate class proxy
 ([hidden-backend-storage-shape.04](../hidden-backend-storage/hidden-backend-storage-shape.04.md)) splits residual `60/2` into depth-read,

@@ -20,8 +20,3 @@ Latest tracked row: `H4` - The Metal compiler cannot see VSOut structural reduct
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
-
-- [shader-codegen-offline.02 - Offline Live-VSOut Variant Codegen](shader-codegen-offline.02.md)
-- [shader-codegen-temps.01 - Vertex Temp Array Trim Probe](shader-codegen-temps.01.md)
-- [shader-codegen-scratch.01 - VS Output Scratch Array Trim Probe](shader-codegen-scratch.01.md)
-- [shader-codegen-offline.01 - Offline Metal Codegen Baseline](shader-codegen-offline.01.md)

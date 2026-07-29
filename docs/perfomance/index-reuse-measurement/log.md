@@ -39,15 +39,15 @@ estimate, not raw references.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | VS invocations follow raw indexed references (`0.549x`) | rejected | [index-reuse-measurement-reuse.01](index-reuse-measurement-reuse.01.md) |
-| H2 | VS invocations follow draw-local unique vertices exactly | rejected (`1.18x` gap = finite cache) | [index-reuse-measurement-reuse.01](index-reuse-measurement-reuse.01.md) |
-| H3 | VS invocations ≈ finite 64-entry post-transform cache misses (`0.976x`) | **accepted** | [index-reuse-measurement-reuse.01](index-reuse-measurement-reuse.01.md) |
-| H4 | Order-preserving payload canonicalization can cut VS invocations | rejected (0 duplicate payloads, LRU32 delta 0) | [index-reuse-measurement-reuse.02](index-reuse-measurement-reuse.02.md) |
-| H5 | dxmt indexed-expansion is inflating GT1 geometry | rejected (`draw_expanded_indexed=0`) | [index-reuse-measurement-geometry.01](index-reuse-measurement-geometry.01.md) |
-| H6 | Redundant replay of the same geometry shape owns the bucket | rejected (dup ratio `0.143x`) | [index-reuse-measurement-geometry.02](index-reuse-measurement-geometry.02.md) |
-| H7 | Bucket is driven by many tiny repeated draws | rejected; real large indexed pressure (`22,622` prim/draw) | [index-reuse-measurement-geometry.03](index-reuse-measurement-geometry.03.md) |
-| H8 | Hot frame is one homogeneous material class | rejected; splits opaque-dw / depth-read-textured / mixed | [index-reuse-measurement-classattr.01](index-reuse-measurement-classattr.01.md) |
-| H9 | The positive `60/4` large-draw signal is production-safe | rejected; `60/4` large4096 is 0 opaque / all depth-read | [index-reuse-measurement-classattr.02](index-reuse-measurement-classattr.02.md) |
+| H1 | VS invocations follow raw indexed references (`0.549x`) | rejected | index-reuse-measurement-reuse.01 |
+| H2 | VS invocations follow draw-local unique vertices exactly | rejected (`1.18x` gap = finite cache) | index-reuse-measurement-reuse.01 |
+| H3 | VS invocations ≈ finite 64-entry post-transform cache misses (`0.976x`) | **accepted** | index-reuse-measurement-reuse.01 |
+| H4 | Order-preserving payload canonicalization can cut VS invocations | rejected (0 duplicate payloads, LRU32 delta 0) | index-reuse-measurement-reuse.02 |
+| H5 | dxmt indexed-expansion is inflating GT1 geometry | rejected (`draw_expanded_indexed=0`) | index-reuse-measurement-geometry.01 |
+| H6 | Redundant replay of the same geometry shape owns the bucket | rejected (dup ratio `0.143x`) | index-reuse-measurement-geometry.02 |
+| H7 | Bucket is driven by many tiny repeated draws | rejected; real large indexed pressure (`22,622` prim/draw) | index-reuse-measurement-geometry.03 |
+| H8 | Hot frame is one homogeneous material class | rejected; splits opaque-dw / depth-read-textured / mixed | index-reuse-measurement-classattr.01 |
+| H9 | The positive `60/4` large-draw signal is production-safe | rejected; `60/4` large4096 is 0 opaque / all depth-read | index-reuse-measurement-classattr.02 |
 
 ## Verification methods
 
@@ -158,4 +158,3 @@ The exact per-experiment flags live in each leaf's `**Method.**` field. See
 - [vsout-layout](../vsout-layout/index.md) — refuted as the width owner here: the bucket is far wider
   than the visible `184B` `VSOut`.
 - [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) — root priority DAG and synthesis.
-

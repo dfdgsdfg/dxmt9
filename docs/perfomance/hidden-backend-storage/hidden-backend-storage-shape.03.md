@@ -7,7 +7,7 @@ title: 50/2 Next Xcode Spend Gate
 date: 2026-06-06
 type: validation
 status: accepted
-source: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.02.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.11.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.12.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.13.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.14.md; docs/perfomance/index-cache-locality/index-cache-locality-triage.01.md; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-semantic.01.md; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/finalize_3dmark05_perf_probe.sh
+source: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.02.md; docs/perfomance/index-cache-locality/index-cache-locality-screenblend.04.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-semantic.01.md; scripts/tools/run_3dmark05_perf_probe.sh; scripts/tools/finalize_3dmark05_perf_probe.sh
 ---
 
 # 50/2 Next Xcode Spend Gate

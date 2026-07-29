@@ -86,5 +86,5 @@ opening two summaries side by side.
 - `git diff --check`
 
 **Related.** [present-pacing-serial-stage-compare-gates.38](present-pacing-serial-stage-compare-gates.38.md) ·
-[present-pacing-noenqueue-inter-replay-gap.55](present-pacing-noenqueue-inter-replay-gap.55.md) ·
+present-pacing-noenqueue-inter-replay-gap.55 ·
 [state-churn-encode-encode-phase.150](../state-churn-encode/state-churn-encode-encode-phase.150.md).

@@ -129,4 +129,4 @@ residual. Any further cbuf change needs the same visual smoke gate because this
 phase proved apparently unused constants can still affect GT1.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.19](state-churn-encode-encode-phase.19.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).
+[state-churn-encode-encode-phase.19](state-churn-encode-encode-phase.19.md) · baselines-visual-capture.01.

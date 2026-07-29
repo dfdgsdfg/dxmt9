@@ -92,6 +92,6 @@ R-BACK-2.35..2.41 CPU-ready path:
    no-gputrace run fails to build ready backlog or reduce no-enqueue closure,
    the candidate has not touched the current P4 owner.
 
-**Related.** [present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md) ·
+**Related.** present-pacing-run-ahead-current-code.73 ·
 [present-pacing-noenqueue-compare-closure.80](present-pacing-noenqueue-compare-closure.80.md) ·
 [present-pacing-ready-depth-compare.81](present-pacing-ready-depth-compare.81.md).

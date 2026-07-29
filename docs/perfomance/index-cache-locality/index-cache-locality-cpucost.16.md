@@ -7,12 +7,12 @@ title: Draw-Shape Prefilter Audit
 date: 2026-06-06
 type: code-audit
 status: rejected-as-missing-optimization
-source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_resource_pool.cpp; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.02.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.07.md; docs/perfomance/index-cache-locality/index-cache-locality-cpucost.15.md
+source: src/dxmt9/dxmt9_draw_encoder.mm; src/dxmt9/dxmt9_resource_pool.cpp
 ---
 
 # Draw-Shape Prefilter Audit
 
-**Question / hypothesis.** After [index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md) rejected
+**Question / hypothesis.** After index-cache-locality-cpucost.15 rejected
 "missing persistent rejected verdict" as the remaining CPU blocker, is there
 still an obvious draw-shape prefilter missing before the reordered-index-cache
 lookup/candidate path?
@@ -43,10 +43,10 @@ for shapes that already passed the production scope and stable-IB predicates.
 **Prior lookup evidence.** Two earlier lookup-structure attempts were already
 rejected:
 
-- [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md) measured the original vector lookup at
+- index-cache-locality-cpucost.02 measured the original vector lookup at
   about `0.18us` per cached decision; `unordered_map` and last-hit variants
   regressed or stayed flat.
-- [index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md) tried a single-scan hot path; explicit
+- index-cache-locality-cpucost.07 tried a single-scan hot path; explicit
   `encode_draw_index_cache_lookup_cpu_ms` regressed `99.368 -> 102.799ms`.
 
 The post-visualfix refresh then showed why the lookup still appears in bulk:
@@ -96,5 +96,5 @@ positive hits. The remaining plausible CPU paths are narrower:
   is worth paying in the default profile.
 
 **Related.** [index-cache-locality](index.md) · prev:
-[index-cache-locality-cpucost.15](index-cache-locality-cpucost.15.md) · [index-cache-locality-cpucost.02](index-cache-locality-cpucost.02.md) ·
-[index-cache-locality-cpucost.07](index-cache-locality-cpucost.07.md).
+index-cache-locality-cpucost.15 · index-cache-locality-cpucost.02 ·
+index-cache-locality-cpucost.07.

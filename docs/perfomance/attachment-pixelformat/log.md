@@ -40,11 +40,11 @@ texture-write bucket, not the VS-write owner.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|-----------|---------|----------|
-| H1 | R32F RT `PixelFormatView`/shader-read view owns GT1 GPU cost | rejected (texture-write `-49.66%`, VS write unchanged) | [attachment-pixelformat-r32f.01](attachment-pixelformat-r32f.01.md) |
-| H2 | Per-encoder attachment metadata can map Xcode's `fmt2` compression hint to hot RT shapes | tooling (maps to X8R8G8B8 RT0 in enc0/2; `usage=0x2` is not an unsampled proof) | [attachment-pixelformat-metadata.01](attachment-pixelformat-metadata.01.md) |
-| H3 | Allocation-wide X8 RT view suppression removes the `fmt2` hint and moves cost | rejected (too coarse; run incomplete; X8 rows mostly textured) | [attachment-pixelformat-x8.01](attachment-pixelformat-x8.01.md) |
-| H4 | The hot GT1 encoder actually samples X8 RT aliases (so suppression matters there) | tooling/refuted (hot enc `60/2` samples 0 X8 RT; sampling only in post passes) | [attachment-pixelformat-x8.02](attachment-pixelformat-x8.02.md) |
-| H5 | Shader X8 alpha-fill + view suppression moves the texture/store or VS-write bucket | rejected (hot passes 0 alpha-fill; top-3 VS write unchanged `~1627.25MiB`) | [attachment-pixelformat-x8.03](attachment-pixelformat-x8.03.md) |
+| H1 | R32F RT `PixelFormatView`/shader-read view owns GT1 GPU cost | rejected (texture-write `-49.66%`, VS write unchanged) | attachment-pixelformat-r32f.01 |
+| H2 | Per-encoder attachment metadata can map Xcode's `fmt2` compression hint to hot RT shapes | tooling (maps to X8R8G8B8 RT0 in enc0/2; `usage=0x2` is not an unsampled proof) | attachment-pixelformat-metadata.01 |
+| H3 | Allocation-wide X8 RT view suppression removes the `fmt2` hint and moves cost | rejected (too coarse; run incomplete; X8 rows mostly textured) | attachment-pixelformat-x8.01 |
+| H4 | The hot GT1 encoder actually samples X8 RT aliases (so suppression matters there) | tooling/refuted (hot enc `60/2` samples 0 X8 RT; sampling only in post passes) | attachment-pixelformat-x8.02 |
+| H5 | Shader X8 alpha-fill + view suppression moves the texture/store or VS-write bucket | rejected (hot passes 0 alpha-fill; top-3 VS write unchanged `~1627.25MiB`) | attachment-pixelformat-x8.03 |
 
 ## Verification methods
 

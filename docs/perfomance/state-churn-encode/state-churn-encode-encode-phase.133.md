@@ -102,7 +102,7 @@ For GT1 runtime proof, use the same visual/P4 gate as phase 132. A local
 `completion_wait_without_enqueue` rises or frame sampling stays flat.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) ·
-[state-churn-encode-encode-phase.68](state-churn-encode-encode-phase.68.md) ·
-[state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·
+state-churn-encode-encode-phase.67 ·
+state-churn-encode-encode-phase.68 ·
+state-churn-encode-encode-phase.131 ·
 [state-churn-encode-encode-phase.132](state-churn-encode-encode-phase.132.md).

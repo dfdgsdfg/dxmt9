@@ -8,7 +8,6 @@ date: 2026-06-20
 type: no-gputrace
 status: rejected-runtime
 source: experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-limit128-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h144-open-cb-finalizer-limit128-r1/actual.png
-related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-session-finalizer-api.144.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md
 ---
 
 # Present-Pacing H145 - Open-CB Finalizer Limit128 Runtime Scout
@@ -116,7 +115,7 @@ The next open-CB design needs an explicit release policy for a pending head:
 
 Do not spend `.gputrace` on H145. It fails no-gputrace promotion.
 
-Update: [present-pacing-open-cb-bounded-tail-wait.146](present-pacing-open-cb-bounded-tail-wait.146.md) tested the first
+Update: present-pacing-open-cb-bounded-tail-wait.146 tested the first
 bounded-wait option and rejected it visually. The branch can start a pending
 head, but the run black-screens before any coherent tail submission, so this
 specific open-CB carrier should not be treated as the default P4 path.

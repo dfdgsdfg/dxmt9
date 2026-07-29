@@ -29,7 +29,7 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 ## Latest Conclusions
 
 > **Every row below cites the single leaf
-> [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md),
+> render-pass-store-reentry-distance.01,
 > now marked `outdated: evidence-missing`.** The counter samples quoted here are
 > last measurements; the artifacts they came from are gone, so the row counts
 > cannot be re-derived. They are kept because they record which ping-pong
@@ -37,11 +37,11 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H10 | Top one-hop ping-pong is blocked by direct attachment-as-texture reads between B and A | rejected-counter-sample (`3561/3561` raw top rows have `B reads A=none`, `A reads B=none`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
-| H11 | Top one-hop ping-pong is kept live by present/clear/helper ops | rejected-counter-sample (`3569/3569` raw top rows are `BlockDrawTarget` + `BlockDrawDepth`, not present/clear/helper) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
-| H12 | Top one-hop ping-pong is blocked by distant live-out reuse rather than immediate target reuse | rejected-counter-sample (dominant top patterns report `B next touch=color/depth 1`, `A next touch=color/depth 1`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
-| H13 | The immediate ping-pong is role-random and needs a global scheduler | rejected-counter-sample (encoder join shows stable role pairs: textured-depth-read <-> opaque-depth-write and screen-blend-depth-read <-> opaque-depth-write) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
-| H14 | The stable role ping-pong also has stable pass-action shape | accepted-counter-sample (depth-read side is `color/depth Load+Store`; opaque depth-write side is `color/depth Clear+Store`) | [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) |
+| H10 | Top one-hop ping-pong is blocked by direct attachment-as-texture reads between B and A | rejected-counter-sample (`3561/3561` raw top rows have `B reads A=none`, `A reads B=none`) | render-pass-store-reentry-distance.01 |
+| H11 | Top one-hop ping-pong is kept live by present/clear/helper ops | rejected-counter-sample (`3569/3569` raw top rows are `BlockDrawTarget` + `BlockDrawDepth`, not present/clear/helper) | render-pass-store-reentry-distance.01 |
+| H12 | Top one-hop ping-pong is blocked by distant live-out reuse rather than immediate target reuse | rejected-counter-sample (dominant top patterns report `B next touch=color/depth 1`, `A next touch=color/depth 1`) | render-pass-store-reentry-distance.01 |
+| H13 | The immediate ping-pong is role-random and needs a global scheduler | rejected-counter-sample (encoder join shows stable role pairs: textured-depth-read <-> opaque-depth-write and screen-blend-depth-read <-> opaque-depth-write) | render-pass-store-reentry-distance.01 |
+| H14 | The stable role ping-pong also has stable pass-action shape | accepted-counter-sample (depth-read side is `color/depth Load+Store`; opaque depth-write side is `color/depth Clear+Store`) | render-pass-store-reentry-distance.01 |
 
 ## Current Navigation
 
@@ -53,11 +53,4 @@ real lever — dependency-aware pass reordering/coalescing — is still **open**
 
 > 7 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
-- [render-pass-store-coalesce.05 - Current Frame60 DAG Refresh Keeps H6 Coalesce Candidate Alive](render-pass-store-coalesce.05.md)
 - [render-pass-store-coalesce.04 - H6 Benefit Ceiling — 38% of Tile Preservation Eliminable, ~3% of VS-write, FPS Conversion Unsettled](render-pass-store-coalesce.04.md)
-- [render-pass-store-coalesce.03 - Per-draw D3D9 Detail Confirms the Re-entry Role Pair from the DAG Dump](render-pass-store-coalesce.03.md)
-- [render-pass-store-dontcare.02 - Color Next-Clear StoreActionDontCare Run](render-pass-store-dontcare.02.md)
-- [render-pass-store-coalesce.02 - passcoalesce Removes 100% of Distance-1 Re-entries on Real GT1 Frames (observe-time)](render-pass-store-coalesce.02.md)
-- [render-pass-store-reentry.01 - Same RT/Depth Re-entry Measurement Run](render-pass-store-reentry.01.md)
-- [render-pass-store-reentry-distance.01 - Same-Key Re-entry Distance Distribution](render-pass-store-reentry-distance.01.md)
-- [render-pass-store-passchain.01 - Pass-Chain Split Measurement Run](render-pass-store-passchain.01.md)

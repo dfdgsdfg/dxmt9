@@ -8,7 +8,6 @@ date: 2026-06-19
 type: experiment
 status: accepted-current-pe-cadence-refresh
 source: experiments/output/app-d3d9-3dmark05-h188-current-pe-cadence-r1/result.json, experiments/output/app-d3d9-3dmark05-h188-current-pe-cadence-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h188-current-pe-cadence-r1/3dmark05-direct.log
-related: docs/perfomance/present-pacing/present-pacing-present-prefix-tail-shape.112.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence.90.md, docs/perfomance/present-pacing/present-pacing-present-split-tail-shape.111.md
 ---
 
 # Present Pacing / Current PE Cadence Refresh After Prefix Tail Gate 113

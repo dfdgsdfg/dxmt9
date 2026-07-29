@@ -64,8 +64,4 @@ candidate/lookup CPU tax (H25), which is why the coupling is one-way. The
 - [index-cache-locality-offload-promotion-proof.20 - Offload+IndexCache Promotion Proof Passes Every Gate](index-cache-locality-offload-promotion-proof.20.md)
 - [index-cache-locality-offload-synergy.19 - Offload Absorbs The Index-Cache CPU Tax At FPS Parity](index-cache-locality-offload-synergy.19.md)
 - [index-cache-locality-cpucost.18 - Candidate Gate Shape Counters](index-cache-locality-cpucost.18.md)
-- [index-cache-locality-cpucost.17 - Strict LRU Candidate Builder Diagnostic](index-cache-locality-cpucost.17.md)
 - [index-cache-locality-cpucost.16 - Draw-Shape Prefilter Audit](index-cache-locality-cpucost.16.md)
-- [index-cache-locality-cpucost.15 - Persistent Rejected Verdict Refresh](index-cache-locality-cpucost.15.md)
-- [index-cache-locality-cpucost.14 - Candidate Upper-Bound Pre-Gate Rejection](index-cache-locality-cpucost.14.md)
-- [index-cache-locality-cpucost.13 - Bucketed Candidate Selector Rejection](index-cache-locality-cpucost.13.md)

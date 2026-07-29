@@ -7,12 +7,11 @@ title: Cbuf Residual Split
 date: 2026-06-06
 type: attribution-instrumentation
 status: accepted-attribution
-source: experiments/output/app-d3d9-3dmark05-cbuf-residual-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-cbuf-residual-split-r1/dxmt9-perf-counter-comparison-vs-cbuf-category-split.md, experiments/output/app-d3d9-3dmark05-cbuf-residual-split-r1/actual.png, docs/perfomance/baselines/baselines-visual-capture.01.md
 ---
 
 # Cbuf Residual Split
 
-**Question / hypothesis.** [state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) showed that
+**Question / hypothesis.** state-churn-encode-encode-phase.17 showed that
 the remaining cbuf-update parent was not mainly Metal `setBuffer` or transient
 upload. The inferred residual was larger than those visible leaves
 (`954.163ms` total, `618.150ms` VS residual). Which hidden child owns that
@@ -81,10 +80,10 @@ python3 scripts/tools/compare_3dmark05_perf_counters.py \
 ```
 
 The run finished with `status=pass` and processed more presents than
-[state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) (`1680 -> 1740`). GPU command-buffer
+state-churn-encode-encode-phase.17 (`1680 -> 1740`). GPU command-buffer
 time moved only `+66.747ms` (`+1.29%`), so the shape is suitable for CPU
 attribution. The `actual.png` artifact exists, but this leaf treats it only as
-smoke; [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md) rejects time-based GT1 screenshots as a
+smoke; baselines-visual-capture.01 rejects time-based GT1 screenshots as a
 visual correctness oracle.
 
 **Measured split.**
@@ -167,5 +166,5 @@ newly actionable cbuf target is the `hashConstantBufferBytes()` path.
    constants layout.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.17](state-churn-encode-encode-phase.17.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md) ·
+state-churn-encode-encode-phase.17 · baselines-visual-capture.01 ·
 [const-upload](../const-upload/index.md).

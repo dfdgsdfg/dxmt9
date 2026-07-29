@@ -35,10 +35,10 @@ AIR-visible shape.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | [shader-codegen-temps.01](shader-codegen-temps.01.md) |
-| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | [shader-codegen-scratch.01](shader-codegen-scratch.01.md) |
-| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | [shader-codegen-offline.01](shader-codegen-offline.01.md) |
-| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | [shader-codegen-offline.02](shader-codegen-offline.02.md) |
+| H1 | The conservative `float4 r[32]` translated temp array inflates the VS write bucket | rejected | shader-codegen-temps.01 |
+| H2 | The conservative `float4 outTexcoord[8]` output scratch inflates the bucket | rejected | shader-codegen-scratch.01 |
+| H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | shader-codegen-offline.01 |
+| H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | shader-codegen-offline.02 |
 
 ## Open Item — DEF Overlay Constant-Copy Removal (unmeasured)
 
@@ -79,8 +79,3 @@ shape — it is a compiler spill caused by an emitted local array, the class
 ## Recent Leaf Documents
 
 > 4 of the 4 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
-
-- [shader-codegen-offline.02 - Offline Live-VSOut Variant Codegen](shader-codegen-offline.02.md)
-- [shader-codegen-temps.01 - Vertex Temp Array Trim Probe](shader-codegen-temps.01.md)
-- [shader-codegen-scratch.01 - VS Output Scratch Array Trim Probe](shader-codegen-scratch.01.md)
-- [shader-codegen-offline.01 - Offline Metal Codegen Baseline](shader-codegen-offline.01.md)

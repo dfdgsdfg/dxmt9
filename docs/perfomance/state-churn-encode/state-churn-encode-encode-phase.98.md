@@ -98,5 +98,5 @@ next runtime gate is the same 120s no-gputrace scout after unlock.
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.97](state-churn-encode-encode-phase.97.md) ·
-[state-churn-encode-encode-phase.88](state-churn-encode-encode-phase.88.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+state-churn-encode-encode-phase.88 · [snapshot-cache](../snapshot-cache/index.md) ·
 [present-pacing](../present-pacing/index.md).

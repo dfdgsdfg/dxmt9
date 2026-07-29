@@ -8,7 +8,6 @@ date: 2026-06-20
 type: implementation-experiment
 status: accepted-current-attribution
 source: src/d3d9/d3d9_pe_device.cpp, scripts/run_apps/run_experiment.py, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-pe-body-current-r2/result.json, experiments/output/app-d3d9-3dmark05-pe-body-current-r2/3dmark05-perf-summary.md
-related: docs/perfomance/present-pacing/present-pacing-pe-between-call-body-current.119.md, docs/perfomance/present-pacing/present-pacing-pe-const-flush-source-audit.120.md, docs/perfomance/present-pacing/present-pacing-current-pe-cadence-wrapper.117.md
 ---
 
 # Present Pacing / PE Between-Call Body Coverage Residual 121

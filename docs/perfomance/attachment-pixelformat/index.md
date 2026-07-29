@@ -20,9 +20,3 @@ Latest tracked row: `H5` - Shader X8 alpha-fill + view suppression moves the tex
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
-
-- [attachment-pixelformat-x8.03 - X8 Shader Alpha-Fill Companion Probe](attachment-pixelformat-x8.03.md)
-- [attachment-pixelformat-x8.02 - X8 Sampler Binding Attribution](attachment-pixelformat-x8.02.md)
-- [attachment-pixelformat-x8.01 - Broad X8 Suppression Attempt](attachment-pixelformat-x8.01.md)
-- [attachment-pixelformat-r32f.01 - R32F RT PixelFormatView Suppression Probe](attachment-pixelformat-r32f.01.md)
-- [attachment-pixelformat-metadata.01 - Attachment Metadata Probe](attachment-pixelformat-metadata.01.md)

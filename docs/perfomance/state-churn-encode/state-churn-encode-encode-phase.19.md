@@ -132,4 +132,4 @@ cost. Do not spend more work on `hashConstantBufferBytes()` unless the legacy
 opt-in counter proves a non-zero path.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.18](state-churn-encode-encode-phase.18.md) · [baselines-visual-capture.01](../baselines/baselines-visual-capture.01.md).
+[state-churn-encode-encode-phase.18](state-churn-encode-encode-phase.18.md) · baselines-visual-capture.01.

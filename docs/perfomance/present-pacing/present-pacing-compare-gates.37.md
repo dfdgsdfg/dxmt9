@@ -8,7 +8,6 @@ date: 2026-06-15
 type: instrumentation
 status: accepted-tooling
 source: scripts/tools/compare_3dmark05_perf_counters.py, scripts/tools/run_3dmark05_perf_probe.sh, scripts/tools/finalize_3dmark05_perf_probe.sh, tests/scripts/test_compare_3dmark05_perf_counters.py, tests/scripts/test_3dmark05_probe_scripts.py, docs/perfomance/present-pacing/index.md
-related: docs/perfomance/present-pacing/present-pacing-systemtrace-p4-range.36.md, docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/present-pacing/present-pacing-lowoverhead-refresh.33.md
 ---
 
 # Present-Pacing 37 - P4 Completion-Overlap Compare Gates
@@ -72,7 +71,7 @@ flowchart TD
 ## Interpretation
 
 This is tooling, not a new performance result. It turns the accepted
-[present-pacing-pipeline-overlap.05](present-pacing-pipeline-overlap.05.md) and [present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md)
+present-pacing-pipeline-overlap.05 and present-pacing-systemtrace-p4-range.36
 model into an executable A/B check:
 
 - A CPU cleanup that lowers `encode_draw_cpu_ms` but leaves
@@ -94,6 +93,6 @@ another `.gputrace`.
 - `meson test -C build-arm64-nowine dxmt9-perf-docs-source-audit`
 - `git diff --check -- scripts/tools/compare_3dmark05_perf_counters.py scripts/tools/run_3dmark05_perf_probe.sh scripts/tools/finalize_3dmark05_perf_probe.sh tests/scripts/test_compare_3dmark05_perf_counters.py tests/scripts/test_3dmark05_probe_scripts.py docs/perfomance/present-pacing/index.md docs/perfomance/present-pacing/present-pacing-compare-gates.37.md`
 
-**Related.** [present-pacing-systemtrace-p4-range.36](present-pacing-systemtrace-p4-range.36.md) ·
-[present-pacing-pipeline-overlap.05](present-pacing-pipeline-overlap.05.md) ·
-[present-pacing-lowoverhead-refresh.33](present-pacing-lowoverhead-refresh.33.md).
+**Related.** present-pacing-systemtrace-p4-range.36 ·
+present-pacing-pipeline-overlap.05 ·
+present-pacing-lowoverhead-refresh.33.

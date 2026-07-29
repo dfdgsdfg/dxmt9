@@ -33,11 +33,11 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
-| H5 | Resetting dirty-range counters with the dirty bit cuts VS cbuf | accepted as CPU win (`-66.48%` argbuf, `4.6GB`→~`1.06GB`); GPU unmoved | [const-upload-dirtyrange.01](const-upload-dirtyrange.01.md) |
-| H6 | The post-fix top-pass GPU cost is still cbuf upload | rejected (cbuf down to `163KiB`/encoder; cost is memory-write/store) | [const-upload-dirtyrange.02](const-upload-dirtyrange.02.md) |
-| H7 | Splitting sparse const records cuts payload without inflating count | accepted as CPU mechanism (`-30.92%` bytes, `+0.13%` count) | [const-upload-sparse.01](const-upload-sparse.01.md) |
-| H8 | Sparse-const split moves the Xcode GPU bottleneck | rejected (VS write `1627.4→1627.3MiB` unchanged) | [const-upload-sparse.02](const-upload-sparse.02.md) |
-| H9 | Hash-based downstream cbuf slice reuse cuts the bucket | inconclusive (~`0.5%`; target is upstream record coalescing) | [const-upload-cache.01](const-upload-cache.01.md) |
+| H5 | Resetting dirty-range counters with the dirty bit cuts VS cbuf | accepted as CPU win (`-66.48%` argbuf, `4.6GB`→~`1.06GB`); GPU unmoved | const-upload-dirtyrange.01 |
+| H6 | The post-fix top-pass GPU cost is still cbuf upload | rejected (cbuf down to `163KiB`/encoder; cost is memory-write/store) | const-upload-dirtyrange.02 |
+| H7 | Splitting sparse const records cuts payload without inflating count | accepted as CPU mechanism (`-30.92%` bytes, `+0.13%` count) | const-upload-sparse.01 |
+| H8 | Sparse-const split moves the Xcode GPU bottleneck | rejected (VS write `1627.4→1627.3MiB` unchanged) | const-upload-sparse.02 |
+| H9 | Hash-based downstream cbuf slice reuse cuts the bucket | inconclusive (~`0.5%`; target is upstream record coalescing) | const-upload-cache.01 |
 
 ## Current Navigation
 
@@ -48,12 +48,3 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 ## Recent Leaf Documents
 
 > 8 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
-
-- [const-upload-sparse.02 - Sparse Const Split Xcode Validation](const-upload-sparse.02.md)
-- [const-upload-dirtyrange.02 - Dirty Range Reset Xcode Frame Capture](const-upload-dirtyrange.02.md)
-- [const-upload-volatility.01 - Cbuf Field Volatility Run](const-upload-volatility.01.md)
-- [const-upload-sparse.01 - Sparse Const Split Run-Level Probe](const-upload-sparse.01.md)
-- [const-upload-slice.01 - FFP VS Stable Slice Reuse Run](const-upload-slice.01.md)
-- [const-upload-range.01 - VS Float Range Run](const-upload-range.01.md)
-- [const-upload-dirtyrange.01 - Dirty Range Reset Run](const-upload-dirtyrange.01.md)
-- [const-upload-class.01 - Cbuf Class Breakdown Run](const-upload-class.01.md)

@@ -123,6 +123,6 @@ remaining FPS lever. The next proof still needs one of:
 
 **Related.** [state-churn-encode](index.md) ·
 [state-churn-encode-encode-phase.96](state-churn-encode-encode-phase.96.md) ·
-[state-churn-encode-encode-phase.65](state-churn-encode-encode-phase.65.md) ·
-[state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) · [snapshot-cache](../snapshot-cache/index.md) ·
+state-churn-encode-encode-phase.65 ·
+state-churn-encode-encode-phase.66 · [snapshot-cache](../snapshot-cache/index.md) ·
 [present-pacing](../present-pacing/index.md).

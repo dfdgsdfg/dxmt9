@@ -8,7 +8,6 @@ date: 2026-06-19
 type: sidecar-attribution
 status: accepted-root-cause
 source: scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_compare_3dmark05_perf_counters.py, traces/app-d3d9-3dmark05-h108-open-cb-limit128-r1/analysis/frame60-perf-counter-comparison.md, experiments/output/app-d3d9-3dmark05-h108-control-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/3dmark05-perf-encoders.csv
-related: docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.109.md, docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.108.md, docs/perfomance/present-pacing/present-pacing-open-cb-injected-command-buffer.107.md
 ---
 
 # Present Pacing / Open-CB Final-Pass Sidecar Attribution 110

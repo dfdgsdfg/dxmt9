@@ -138,6 +138,6 @@ histogram. It shows `<=16` VS rows are still common, but the `>64` tail is not a
 small artifact and the VS upload/changed-byte ratio is only `1.13x`.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·
+state-churn-encode-encode-phase.131 ·
 [state-churn-encode-encode-phase.134](state-churn-encode-encode-phase.134.md) ·
 [state-churn-encode-encode-phase.136](state-churn-encode-encode-phase.136.md).

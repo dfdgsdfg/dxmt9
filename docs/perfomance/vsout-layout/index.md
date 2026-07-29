@@ -20,11 +20,3 @@ Latest tracked row: `H7` - Half-precision varyings reduce hidden TVB/parameter s
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
-
-- [vsout-layout-varying.03 - Dump-First VSOut Liveness Replay (semantic-safe)](vsout-layout-varying.03.md)
-- [vsout-layout-varying.02 - VSOut Liveness Trim Hypothesis Rejection](vsout-layout-varying.02.md)
-- [vsout-layout-position.02 - Fragment-Only Constant-Color Probe](vsout-layout-position.02.md)
-- [vsout-layout-varying.01 - Trim-Varyings Xcode Recheck](vsout-layout-varying.01.md)
-- [vsout-layout-position.01 - Runtime Position-Only VSOut Probe](vsout-layout-position.01.md)
-- [vsout-layout-pointsize.01 - Point-Size-Only Pipeline Probe](vsout-layout-pointsize.01.md)
-- [vsout-layout-half.01 - Half VSOut Probe](vsout-layout-half.01.md)

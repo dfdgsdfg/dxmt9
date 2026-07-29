@@ -20,6 +20,3 @@ Latest tracked row: `H5` - Named tiled counters alone are a sufficient pass/fail
 - [Root 3DMark05 GT1 map](../overview-3dmark05-gt1.md)
 
 ## Recent Leaf Documents
-
-- [tvb-mechanism-proof-proof.02 - TVB / Parameter-Buffer Design Reference](tvb-mechanism-proof-proof.02.md)
-- [tvb-mechanism-proof-proof.01 - TVB Pressure Mechanism Proof](tvb-mechanism-proof-proof.01.md)

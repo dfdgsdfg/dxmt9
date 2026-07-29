@@ -8,7 +8,6 @@ date: 2026-06-16
 type: experiment-review
 status: accepted-local-cpu-win-p4-still-open
 source: experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/actual.png, traces/app-d3d9-3dmark05-argbuf-direct-cbuf-r1/analysis/direct-cbuf-vs-current-lowoverhead.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md
-related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md
 ---
 
 # Present Pacing 45 - Stage 2b Direct-Cbuf P4 Gate
@@ -97,4 +96,4 @@ validated with the compare gates from [present-pacing-compare-gates.37](present-
 counters alone.
 
 **Related.** [state-churn-encode-encode-phase.144](../state-churn-encode/state-churn-encode-encode-phase.144.md) ·
-[present-pacing-current-lowoverhead.43](present-pacing-current-lowoverhead.43.md) · [present-pacing](index.md).
+present-pacing-current-lowoverhead.43 · [present-pacing](index.md).

@@ -91,4 +91,4 @@ next code candidate should reduce one of those named rows, then a low-overhead
 average-FPS fix.
 
 **Related.** [state-churn-encode-encode-phase.103](state-churn-encode-encode-phase.103.md) ·
-[present-pacing-summary-triage-current.41](../present-pacing/present-pacing-summary-triage-current.41.md) · [state-churn-encode](index.md).
+present-pacing-summary-triage-current.41 · [state-churn-encode](index.md).

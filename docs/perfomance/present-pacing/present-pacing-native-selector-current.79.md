@@ -8,7 +8,6 @@ date: 2026-06-18
 type: experiment
 status: negative-scout
 source: traces/app-d3d9-3dmark05-p4-native-producer-current-r1-20260618/analysis/system-trace-record.log, traces/app-d3d9-3dmark05-p4-native-producer-current-r2-20260618/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-p4-native-producer-current-r2-20260618/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-p4-native-producer-current-r2-20260618/analysis/xctrace-metal-gpu-intervals-summary.md, experiments/output/app-d3d9-3dmark05-p4-native-producer-current-r2-20260618/result.json
-related: docs/perfomance/present-pacing/present-pacing-native-selector-xctrace.31.md, docs/perfomance/present-pacing/present-pacing-native-selector-xctrace.32.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.71.md, docs/perfomance/present-pacing/present-pacing-run-ahead-current-code.73.md
 ---
 
 # Present-Pacing 79 - Current native-producer System Trace scout
@@ -169,7 +168,7 @@ Instruments trim/save, where the partial bundle had already grown beyond the
 guard.
 
 **Related.** [present-pacing](index.md) ·
-[present-pacing-native-selector-xctrace.31](present-pacing-native-selector-xctrace.31.md) ·
-[present-pacing-native-selector-xctrace.32](present-pacing-native-selector-xctrace.32.md) ·
+present-pacing-native-selector-xctrace.31 ·
+present-pacing-native-selector-xctrace.32 ·
 [present-pacing-current-lowoverhead.71](present-pacing-current-lowoverhead.71.md) ·
-[present-pacing-run-ahead-current-code.73](present-pacing-run-ahead-current-code.73.md).
+present-pacing-run-ahead-current-code.73.

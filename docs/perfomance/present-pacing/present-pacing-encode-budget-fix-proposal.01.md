@@ -24,13 +24,13 @@ source: present-pacing-display-sync.01, present-pacing-frame-latency.01, present
 >    GT1, per-draw bind diversity is high enough that the shadow cache
 >    rarely hits; the equality comparisons added +12.7%
 >    `encode_chunk_cpu_ms` while leaving wallclock at baseline. See
->    [present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md). The bind-call attribution
+>    present-pacing-bind-cache-work-a.01. The bind-call attribution
 >    model in the synthesis below was wrong about which sub-component
 >    of `encode_draw_cpu_ms` is bound by cache hits.
 > 2. **"Only production path" was false.** A second production option
 >    landed in the same round — `DXMT9_DISABLE_VSYNC=1` (commit
 >    `901c145`) — and measured **+88% fps** on the full GT1 workload
->    with `status: pass`. See [present-pacing-vsync-off.01](present-pacing-vsync-off.01.md). The
+>    with `status: pass`. See present-pacing-vsync-off.01. The
 >    original synthesis assumed vsync stays on; that's not the only
 >    deployable shape.
 > 3. **Work B (draw-run break reduction) remains untested.** The
@@ -51,8 +51,8 @@ The two production-shippable mechanisms after this round:
 
 | Mechanism | fps Δ on GT1 | Trade-off | Status |
 |---|---:|---|---|
-| `DXMT9_DISABLE_VSYNC=1` | **+88%** (full workload) | tearing, no display sync, opt-in | **ACCEPTED**, shipping ([present-pacing-vsync-off.01](present-pacing-vsync-off.01.md)) |
-| Work A: bind-skip cache extension | 0% | +12.7% encode CPU (reverted, viewport/scissor) | REJECTED ([present-pacing-bind-cache-work-a.01](present-pacing-bind-cache-work-a.01.md)) |
+| `DXMT9_DISABLE_VSYNC=1` | **+88%** (full workload) | tearing, no display sync, opt-in | **ACCEPTED**, shipping (present-pacing-vsync-off.01) |
+| Work A: bind-skip cache extension | 0% | +12.7% encode CPU (reverted, viewport/scissor) | REJECTED (present-pacing-bind-cache-work-a.01) |
 | Work B: draw-run break reduction | unknown | unknown | OPEN (never tested) |
 
 The honest answer to the original question — "what is the production

@@ -68,6 +68,6 @@ run.
 
 **Related.** [index-cache-locality](index.md) · prev:
 [index-cache-locality-screenblend.04](index-cache-locality-screenblend.04.md) · next:
-[index-cache-locality-screenblend.06](index-cache-locality-screenblend.06.md) · [index-cache-locality-proofinput.01](index-cache-locality-proofinput.01.md) ·
+index-cache-locality-screenblend.06 · index-cache-locality-proofinput.01 ·
 [overview-3dmark05-gt1](../overview-3dmark05-gt1.md) ·
 [hidden-backend-storage](../hidden-backend-storage/index.md).

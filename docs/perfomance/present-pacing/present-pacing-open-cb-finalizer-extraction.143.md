@@ -8,7 +8,6 @@ date: 2026-06-20
 type: source-audit
 status: accepted-design-gate
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_queue.cpp, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/present-pacing/present-pacing-current-wall-baseline.142.md
-related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md, docs/perfomance/present-pacing/present-pacing-encode-session-finalizer-seam.133.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md, docs/perfomance/present-pacing/present-pacing-current-wall-baseline.142.md, docs/perfomance/present-pacing/present-pacing-open-cb-session-finalizer-api.144.md
 ---
 
 # Present-Pacing H143 - Open-CB Finalizer Extraction Gate

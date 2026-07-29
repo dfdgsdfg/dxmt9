@@ -19,7 +19,7 @@ related: docs/perfomance/snapshot-cache/index.md; docs/perfomance/snapshot-cache
 This domain owns the **D3D9 importer-side draw-state snapshot/rebuild** cost.
 It started as the single largest CPU consumer in GT1 (~21s per no-gputrace run),
 but after the accepted snapshot hash work it is no longer the top current CPU
-bucket: [snapshot-cache-snapshot.09](snapshot-cache-snapshot.09.md)
+bucket: snapshot-cache-snapshot.09
 (`outdated: evidence-missing`) reports
 `d3d9_snapshot_draw_submission_cpu_ms=7196.881` over `1740` presents, while
 backend `encode_draw_cpu_ms` is `17711.215`. Those are last measurements from a
@@ -53,8 +53,6 @@ write" owner ([hidden-backend-storage](../hidden-backend-storage/index.md)).
 > 2 of the 8 leaves listed below are marked `outdated:` and open with a banner naming the ground. They are history, not re-checkable evidence.
 
 - [snapshot-cache-snapshot.29 - Batch Miss Semantic Reuse Probe Rejects Small Recent-Key Cache](snapshot-cache-snapshot.29.md)
-- [snapshot-cache-snapshot.28 - Batch Miss Refreshes Hot State In Place](snapshot-cache-snapshot.28.md)
-- [snapshot-cache-snapshot.27 - Batch Miss Reuses Non-constant Uniform Payload Fields](snapshot-cache-snapshot.27.md)
 - [snapshot-cache-snapshot.26 - Replay / Snapshot Derived Ranking Re-centers P2/P3 After Direct Cbuf](snapshot-cache-snapshot.26.md)
 - [snapshot-cache-snapshot.25 - Batch-Miss Uniform Payload Reuse Gate](snapshot-cache-snapshot.25.md)
 - [snapshot-cache-snapshot.24 - Batch-Miss Reason Bucket Instrumentation](snapshot-cache-snapshot.24.md)

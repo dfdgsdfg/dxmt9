@@ -31,6 +31,5 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 - [mini-replay-bisection-texture.05 - Rank-3 Real-Texture Gate Is Also Color-Exact Owner-Masked](mini-replay-bisection-texture.05.md)
 - [mini-replay-bisection-texture.04 - Rank-2 Real-Texture Gate Is Color-Exact but Owner-Masked](mini-replay-bisection-texture.04.md)
 - [mini-replay-bisection-texture.03 - Ranked Real-Texture Semantic Gate Queue](mini-replay-bisection-texture.03.md)
-- [mini-replay-bisection-replay.03 - Wider Encoder2 Payload Capture](mini-replay-bisection-replay.03.md)
 - [mini-replay-bisection-texture.02 - Real-Texture Replay Rejects Exact 60/2 Cache-Opt Proof](mini-replay-bisection-texture.02.md)
 - [mini-replay-bisection-semantic.02 - Scoped 60/2 Depth-Read No-Blend Cache-Opt Replay](mini-replay-bisection-semantic.02.md)

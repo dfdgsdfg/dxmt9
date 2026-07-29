@@ -7,7 +7,7 @@ title: Large Alpha Blend Static-Equivalence Gate
 date: 2026-06-06
 type: validation
 status: accepted-gate
-source: traces/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/analysis/frame60-alpha-backend-candidates.md; traces/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/analysis/frame60-alpha-backend-candidates.csv; experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/3dmark05-perf-indexed-probe-draws.csv; traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/shaders/msl; scripts/tools/analyze_alpha_backend_candidates.py; docs/perfomance/backend-shape-classifiers/backend-shape-classifiers-alpha.03.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.09.md
+source: traces/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/analysis/frame60-alpha-backend-candidates.md; traces/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/analysis/frame60-alpha-backend-candidates.csv; experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-index-candidate-proxy-r1/3dmark05-perf-indexed-probe-draws.csv; traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/shaders/msl; scripts/tools/analyze_alpha_backend_candidates.py; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.09.md
 ---
 
 # Large Alpha Blend Static-Equivalence Gate
@@ -86,4 +86,4 @@ stateDiagram-v2
 
 **Related.** [hidden-backend-storage](index.md) ·
 [hidden-backend-storage-shape.09](hidden-backend-storage-shape.09.md) ·
-[backend-shape-classifiers-alpha.03](../backend-shape-classifiers/backend-shape-classifiers-alpha.03.md) · [index-cache-locality](../index-cache-locality/index.md).
+backend-shape-classifiers-alpha.03 · [index-cache-locality](../index-cache-locality/index.md).

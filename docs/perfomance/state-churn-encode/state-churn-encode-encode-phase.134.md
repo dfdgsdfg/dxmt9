@@ -7,7 +7,6 @@ title: Argbuf Payload Delta Component Split Instrumentation
 date: 2026-06-15
 type: tooling+experiment
 status: accepted-current-attribution
-source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-components-r2-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-components-r2-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-components-r2-20260615/actual.png, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.131.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.132.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.133.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.135.md, docs/perfomance/state-churn-encode/index.md
 ---
 
@@ -146,7 +145,7 @@ This probe is CPU attribution only; `.gputrace` is still needed for GPU backend
 storage questions, but the argbuf component split does not need Xcode replay.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.131](state-churn-encode-encode-phase.131.md) ·
+state-churn-encode-encode-phase.131 ·
 [state-churn-encode-encode-phase.132](state-churn-encode-encode-phase.132.md) ·
 [state-churn-encode-encode-phase.133](state-churn-encode-encode-phase.133.md) ·
 [state-churn-encode-encode-phase.135](state-churn-encode-encode-phase.135.md).

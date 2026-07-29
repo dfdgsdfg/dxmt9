@@ -36,7 +36,5 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 - [state-churn-encode-encode-phase.196 - Queue Lock Attribution Runtime](state-churn-encode-encode-phase.196.md)
 - [state-churn-encode-encode-phase.195 - Current Wall Review and Next Owner Split](state-churn-encode-encode-phase.195.md)
 - [state-churn-encode-encode-phase.194 - Forced Resource-Marking Flush Attribution](state-churn-encode-encode-phase.194.md)
-- [state-churn-encode-encode-phase.193 - Chunk-End Carry Runtime Gate](state-churn-encode-encode-phase.193.md)
-- [state-churn-encode-encode-phase.192 - Owned Chunk-End Carry Skeleton](state-churn-encode-encode-phase.192.md)
 - [state-churn-encode-encode-phase.191 - Forced Resource-Marking Submit Prerequisite](state-churn-encode-encode-phase.191.md)
 - [state-churn-encode-encode-phase.190 - Chunk-End Carry Feasibility Audit](state-churn-encode-encode-phase.190.md)

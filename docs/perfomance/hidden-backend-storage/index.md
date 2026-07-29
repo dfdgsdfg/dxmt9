@@ -36,7 +36,6 @@ therefore remains opt-in and provides no current GT2 performance win.
 - [hidden-backend-storage-shape.34 - Fragmentless Depth-Only Keep-VSOut Route Passes Equality but Fails Xcode Counter Gate](hidden-backend-storage-shape.34.md)
 - [hidden-backend-storage-shape.33 - Current Xcode/DXMT Attribution Narrows The Next Backend Gate](hidden-backend-storage-shape.33.md)
 - [hidden-backend-storage-shape.32 - Recovered Capture Layer Reconfirms Frame60 Hidden VS Write Dominance](hidden-backend-storage-shape.32.md)
-- [hidden-backend-storage-shape.31 - Current System Trace Refresh Reconfirms Vertex-Heavy Programmable Routes While Gputrace Remains Layer-Blocked](hidden-backend-storage-shape.31.md)
 - [hidden-backend-storage-shape.30 - GPU Efficiency Ceiling Is Separate From Wall-Clock FPS Ownership](hidden-backend-storage-shape.30.md)
 - [hidden-backend-storage-shape.29 - Encoder-Summary Route Counters Remove Indexed Per-Draw Requirement From Sidecars](hidden-backend-storage-shape.29.md)
 - [hidden-backend-storage-shape.28 - Seq-Range System Trace Sidecar Adds Route Verdicts Without Capture-Layer Startup Mutation](hidden-backend-storage-shape.28.md)

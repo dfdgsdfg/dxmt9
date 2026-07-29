@@ -15,7 +15,7 @@ related: docs/perfomance/present-pacing/present-pacing-prepublish-stage.07.md, d
 
 ## Question
 
-[present-pacing-prepublish-stage.07](present-pacing-prepublish-stage.07.md) proved that the app/Wine/PE side reaches
+present-pacing-prepublish-stage.07 proved that the app/Wine/PE side reaches
 unix `commit_chunk` quickly after a no-enqueue completion wait, but cumulative
 wait-end percentiles could not be subtracted safely: each stage has a different
 sample set and `CommitPublish` can occur before full chunk replay end. The open

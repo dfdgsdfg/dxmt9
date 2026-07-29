@@ -71,7 +71,7 @@ not add percentile rings yet; the first use is total attribution under the
 **Probe result.** The first no-gputrace run using these counters was
 `app-d3d9-3dmark05-draw-packet-actual-change-20260612`. It also enabled the
 draw-packet actual-change diagnostic from
-[state-churn-encode-encode-phase.28](state-churn-encode-encode-phase.28.md), but these submit counters are
+state-churn-encode-encode-phase.28, but these submit counters are
 observation-only and still useful for the submit split.
 
 | Counter | Value | Reading |
@@ -130,5 +130,5 @@ Current validation:
   snapshot/cache layer.
 
 **Related.** [state-churn-encode](index.md) ·
-[state-churn-encode-encode-phase.24](state-churn-encode-encode-phase.24.md) ·
+state-churn-encode-encode-phase.24 ·
 [state-churn-encode-encode-phase.25](state-churn-encode-encode-phase.25.md).

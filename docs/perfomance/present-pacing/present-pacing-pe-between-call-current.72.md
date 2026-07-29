@@ -187,5 +187,5 @@ This refresh confirms the current priority order:
    no-gputrace overlap/locality gate passes and needs GPU invariance proof.
 
 **Related.** [present-pacing-current-lowoverhead.71](present-pacing-current-lowoverhead.71.md) ·
-[present-pacing-pe-between-call-name.66](present-pacing-pe-between-call-name.66.md) ·
+present-pacing-pe-between-call-name.66 ·
 [present-pacing-run-ahead-design.68](present-pacing-run-ahead-design.68.md).

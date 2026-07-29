@@ -21,15 +21,4 @@ Latest tracked row: `H16` - Rifle muzzle fire correctness changes perf interpret
 
 ## Recent Leaf Documents
 
-- [backend-shape-classifiers-cull.04 - Row/Class-Scoped Cull Shape Probe](backend-shape-classifiers-cull.04.md)
 - [backend-shape-classifiers-alpha.04 - Rifle Muzzle Bloom Correctness Gate for Alpha/Effect Rows](backend-shape-classifiers-alpha.04.md)
-- [backend-shape-classifiers-cull.03 - Force-Cull-Back Probe](backend-shape-classifiers-cull.03.md)
-- [backend-shape-classifiers-alpha.03 - Scoped Alpha-Blend State-Shape Probe (large4096+alpha)](backend-shape-classifiers-alpha.03.md)
-- [backend-shape-classifiers-scissor.02 - Scissor State Classifier](backend-shape-classifiers-scissor.02.md)
-- [backend-shape-classifiers-cull.02 - Cull State Classifier](backend-shape-classifiers-cull.02.md)
-- [backend-shape-classifiers-alpha.02 - Scoped Screen-Blend Alpha Disable](backend-shape-classifiers-alpha.02.md)
-- [backend-shape-classifiers-visible.01 - Force-Visible Render-State Probe](backend-shape-classifiers-visible.01.md)
-- [backend-shape-classifiers-texture.01 - Texture Source Classifier](backend-shape-classifiers-texture.01.md)
-- [backend-shape-classifiers-scissor.01 - Probe Disable Scissor](backend-shape-classifiers-scissor.01.md)
-- [backend-shape-classifiers-fog.01 - Fog Source Classifier](backend-shape-classifiers-fog.01.md)
-- [backend-shape-classifiers-expand.01 - Force-Expand-Indexed Probe](backend-shape-classifiers-expand.01.md)
