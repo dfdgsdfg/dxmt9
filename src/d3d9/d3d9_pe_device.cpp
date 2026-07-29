@@ -9169,8 +9169,43 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return hr;
     }
 
-    template<typename WriteFn>
-    HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
+    // Phase timer handed to an appendRecordV2 emitter. The envelope owns the
+    // decimation sampling decision, so an emitter that has its own phases to
+    // attribute (the legacy adapter's resize and write) records them through
+    // this rather than re-deriving `phaseSampled`.
+    struct AppendPhaseTimer {
+        bool sampled = false;
+
+        static std::chrono::steady_clock::time_point now() noexcept {
+            return std::chrono::steady_clock::now();
+        }
+        void record(PeDecimatedScopeStats& stats,
+                    std::chrono::steady_clock::time_point t0) const noexcept {
+            if (!sampled) {
+                return;
+            }
+            PeDecimatedScopeTimer::recordSample(
+                stats, static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        now() - t0).count()));
+        }
+    };
+
+    // Append envelope. Owns the recorder mutex, the negotiation gate, the
+    // CapacityPre and CapacityPost flushes, and every append telemetry site;
+    // `emit` supplies only the record itself.
+    //
+    // `sizeHint` feeds the capacity precheck and therefore decides where
+    // chunks are cut. A caller that no longer builds a legacy record must
+    // still pass a value on the same scale as the legacy record it replaced,
+    // or chunk seal cadence shifts -- which no per-record test can observe.
+    //
+    // `emit` is invoked as HRESULT(CommandChunkV2Builder&, const AppendPhaseTimer&).
+    // It returns an HRESULT rather than bool so an emitter can distinguish
+    // E_OUTOFMEMORY from a malformed record.
+    template<typename EmitFn>
+    HRESULT appendRecordV2(uint32_t type, size_t sizeHint, EmitFn emit) {
+        const size_t bytes = sizeHint;
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!commandChunkNegotiated_ || bytes == 0u || bytes > 0xffffffffull) {
             return commandChunkNegotiated_ ? D3DERR_INVALIDCALL
@@ -9232,25 +9267,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             phaseRecord(peAppendPhaseFlush_, t0);
         }
         if (SUCCEEDED(hr)) {
-            const auto t0 = phaseNow();
-            try {
-                legacyV2RecordScratch_.resize(bytes);
-            } catch (...) {
-                hr = E_OUTOFMEMORY;
-            }
-            phaseRecord(peAppendPhaseResize_, t0);
-        }
-        if (SUCCEEDED(hr)) {
-            const auto t0 = phaseNow();
-            write(reinterpret_cast<std::uint8_t*>(
-                legacyV2RecordScratch_.data()));
-            phaseRecord(peAppendPhaseWrite_, t0);
-            const auto t1 = phaseNow();
-            if (!dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
-                    commandChunkV2_, legacyV2RecordScratch_)) {
-                hr = D3DERR_INVALIDCALL;
-            }
-            phaseRecord(peAppendPhaseEncode_, t1);
+            // The emitter records peAppendPhaseEncode_ itself, around its own
+            // record emission only. Timing the whole callable here instead
+            // would silently redefine `encode` to include the legacy adapter's
+            // resize and write, and `encode` is the figure the migration is
+            // measured against -- see
+            // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.01.md.
+            hr = emit(commandChunkV2_, AppendPhaseTimer{phaseSampled});
         }
         if (SUCCEEDED(hr) &&
             (commandChunkV2_.recordCount() >= maxRecords ||
@@ -9275,6 +9298,49 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 appendEntryNs);
         }
         return hr;
+    }
+
+    // Legacy adapter over appendRecordV2: build the record into the scratch
+    // buffer in the legacy wire format, then re-parse and re-encode it as V2.
+    //
+    // All three phase timers stay exactly where they were before the envelope
+    // was extracted -- resize around the scratch grow, write around the
+    // caller's writer, encode around appendLegacyCommandRecordAsV2 alone. A
+    // migrated emitter records encode around its direct V2 call, so `encode`
+    // keeps one meaning across the migration and the before/after numbers stay
+    // comparable.
+    //
+    // Every caller of this is a record family not yet migrated to a direct V2
+    // emitter. When the last one moves, this and appendLegacyCommandRecordAsV2
+    // go away together.
+    template<typename WriteFn>
+    HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
+        return appendRecordV2(
+            type, bytes,
+            [this, bytes, &write](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                                  const AppendPhaseTimer& phase) -> HRESULT {
+                {
+                    const auto t0 = AppendPhaseTimer::now();
+                    try {
+                        legacyV2RecordScratch_.resize(bytes);
+                    } catch (...) {
+                        phase.record(peAppendPhaseResize_, t0);
+                        return E_OUTOFMEMORY;
+                    }
+                    phase.record(peAppendPhaseResize_, t0);
+                }
+                {
+                    const auto t0 = AppendPhaseTimer::now();
+                    write(reinterpret_cast<std::uint8_t*>(
+                        legacyV2RecordScratch_.data()));
+                    phase.record(peAppendPhaseWrite_, t0);
+                }
+                const auto t0 = AppendPhaseTimer::now();
+                const bool encoded = dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
+                    builder, legacyV2RecordScratch_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return encoded ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     HRESULT appendCommandRecord(const void* data, size_t bytes) {
