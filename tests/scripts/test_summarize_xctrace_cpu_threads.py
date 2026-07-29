@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "tools" / "summarize_xctrace_cpu_threads.py"
+COMMIT_CHUNK_SOURCE = REPO_ROOT / "src" / "d3d9" / "device_c_chunk_replay.cpp"
+
+# Sample arguments used to render the runtime's printf format into a concrete
+# log line, keyed by conversion specifier.
+FORMAT_SPEC_SAMPLES = {
+    "%p": "0x600001f0",
+    "%llx": "5be7f0",
+    "%llu": "9",
+    "%u": "3",
+}
+
+
+def render_commit_chunk_entry_format(source: str, native_tid: str) -> str:
+    """Extract the unix_commit_chunk_entry logf format from the runtime source
+    and render it, so the test proves the emitted text -- not a hand-written
+    approximation of it -- is what the summarizer parses."""
+    marker = source.index("unix_commit_chunk_entry")
+    # Walk back to the opening quote of the first literal in the concatenated
+    # format string, then forward to the end of the argument list.
+    start = source.rindex('"', 0, marker)
+    end = source.index(");", marker)
+    call_text = source[start:end]
+    fmt = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', call_text))
+    for spec, sample in FORMAT_SPEC_SAMPLES.items():
+        replacement = native_tid[2:] if spec == "%llx" else sample
+        fmt = fmt.replace(spec, replacement)
+    return fmt.replace("\\n", "")
 
 
 class SummarizeXctraceCpuThreadsTests(unittest.TestCase):
@@ -625,6 +653,87 @@ class SummarizeXctraceCpuThreadsTests(unittest.TestCase):
             self.assertIn("0x5be7f0", verdict["producer_thread"])
             md = output_md.read_text(encoding="utf-8")
             self.assertIn("unix_commit_chunk_entry", md)
+
+    def test_runtime_emitted_commit_chunk_line_selects_native_producer(self) -> None:
+        """Contract gate between the unix emitter and this parser. The tool was
+        originally written against a log line no runtime code emitted, so assert
+        the real format string in device_c_chunk_replay.cpp still parses."""
+        source = COMMIT_CHUNK_SOURCE.read_text(encoding="utf-8")
+        self.assertIn(
+            "unix_commit_chunk_entry",
+            source,
+            "the unix commit-chunk entry point must emit the line the CPU"
+            " summarizer keys its producer selector on",
+        )
+        native_tid = "0x5be7f0"
+        emitted = render_commit_chunk_entry_format(source, native_tid)
+        self.assertIn(f"native_tid={native_tid}", emitted)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            time_profile = root / "time-profile.xml"
+            direct_log = root / "direct.log"
+            output_json = root / "verdict.json"
+
+            time_profile.write_text(
+                textwrap.dedent(
+                    """\
+                    <trace-query-result>
+                      <node>
+                        <row>
+                          <thread id="th1" fmt="3DMark05.exe (0x5be7f0) (3DMark05.exe, pid: 42)"/>
+                          <process id="p1" fmt="3DMark05.exe (42)"/>
+                          <thread-state id="running" fmt="Running">Running</thread-state>
+                          <weight id="w1" fmt="1.00 ms">1000000</weight>
+                          <tagged-backtrace id="bt1">
+                            <backtrace>
+                              <frame id="f1" name="OnMainThread">
+                                <binary id="b1" name="winemac.so"/>
+                              </frame>
+                            </backtrace>
+                          </tagged-backtrace>
+                        </row>
+                      </node>
+                    </trace-query-result>
+                    """
+                ),
+                encoding="utf-8",
+            )
+            direct_log.write_text(
+                "\n".join(
+                    [
+                        "[dxmt9-device] pe_present_call_return call=Clear thread_id=0xd0 hr=0x00000000",
+                        f"[dxmt9-device] {emitted}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--time-profile",
+                    str(time_profile),
+                    "--output-verdict-json",
+                    str(output_json),
+                    "--producer-thread-regex-from-pe-log",
+                    str(direct_log),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            verdict = json.loads(output_json.read_text(encoding="utf-8"))
+            self.assertEqual(verdict["producer_selection"], native_tid)
+            self.assertEqual(
+                verdict["producer_selection_source"], "native-log-commit-chunk-entry"
+            )
+            self.assertNotEqual(verdict["status"], "producer-thread-not-found")
 
     def test_pe_log_selector_not_found_reports_thread_id_domain_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:
