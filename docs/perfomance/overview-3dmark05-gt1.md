@@ -153,7 +153,7 @@ do not retry the remap on row `60/1`. Evidence:
 carried as H53 in
 [hidden-backend-storage](hidden-backend-storage/overview.md).
 
-**A shader-codegen fix landed and has no GPU measurement.** Commit `d63f7a65`
+**A shader-codegen fix landed and is now measured.** Commit `d63f7a65`
 stops 8 of GT1's 17 frame60 `enc1` vertex shader variants from copying
 `float4 cFloat[256]` — `4,096 B` of per-invocation stack traffic — merely to
 service a single `DEF`. Those variants carry `297,935` of `797,864` LRU64
@@ -215,7 +215,7 @@ flowchart TD
 | [primitive-reorder-diagnostics](primitive-reorder-diagnostics/index.md) | reverse/min-index/split reorder probes | Keeps frame-shape artifacts out of promotion claims. |
 | [mini-replay-bisection](mini-replay-bisection/index.md) | row-local replay and final-writer bisection | Supplies correctness/oracle evidence before Xcode spend. The `replay.03` `3.86x` hidden-density question is still open: the row `60/1` vertex-remap discriminator was an exact null and its positive control failed, so the encoder2 (`60/2`) dump is still required. |
 | [vsout-layout](vsout-layout/index.md) | visible varying / `VSOut` layout probes | Rejected as first-order hidden-write owner; keep as evidence, not next budget. |
-| [shader-codegen](shader-codegen/index.md) | MSL/AIR/temp/scratch probes | Rejected above-AIR explanations; owner is below source-visible shader shape. One open, unmeasured item: `d63f7a65` removes the `float4 cFloat[256]` DEF-overlay copy from 8 of 17 frame60 `enc1` VS variants; visual gate passed, no GPU measurement yet. |
+| [shader-codegen](shader-codegen/index.md) | MSL/AIR/temp/scratch probes | Rejected above-AIR explanations; owner is below source-visible shader shape and is now identified: `d63f7a65` removes the `float4 cFloat[256]` DEF-overlay copy from 8 of 17 frame60 `enc1` VS variants; visual gate passed, measured `-87.13%` frame GPU time and `+8.8%` scene fps ([shader-codegen-defselect.01](shader-codegen/shader-codegen-defselect.01.md)). |
 | [backend-shape-classifiers](backend-shape-classifiers/index.md) | alpha/depth/cull/scissor/fog/texture classifiers | Mostly rejected or secondary; still relevant to visual/perf coupling. |
 | [attachment-pixelformat](attachment-pixelformat/index.md) | R32F/X8 attachment format probes | Secondary texture/write path, not the central VS owner. |
 | [const-upload](const-upload/index.md) | cbuf/argbuf upload and constant traffic | CPU amplifier; accepted cleanups do not by themselves prove GPU/FPS promotion. |
