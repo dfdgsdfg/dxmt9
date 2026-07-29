@@ -13,6 +13,8 @@ related: docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attrib
 
 # Splitting Sparse Const Records Is A Null — GT2's Constant Cost Is Call Count, Not Bytes
 
+> **Corrected on 2026-07-29 by [attribution.04](../present-pacing/present-pacing-post-defselect-cpu-attribution.04.md).** The null verdict stands, but its stated reason does not: the constant path is `0.8%` of the frame, not `13%` — the difference was instrument bias — so there was never enough there to win. The `84.7%` redundant-register figure was also misread as an opportunity; `touchConstShadow` already skips unchanged registers, so that number is the existing filter working.
+
 **Question / hypothesis.**
 [attribution.03](../present-pacing/present-pacing-post-defselect-cpu-attribution.03.md)
 put dxmt9's PE-side recording at `30.5%` of GT2's critical thread, of which the

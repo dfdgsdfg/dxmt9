@@ -1608,6 +1608,44 @@ void testPeDecimatedScopeStats() {
           "decimated stats n=0 still increments events per helper contract");
   checkEq(offStats.sampled, std::uint64_t{0},
           "decimated stats n=0 never increments sampled");
+
+  // PeDecimatedBucketStats splits a scope's samples by per-call element count.
+  // Its purpose is to tell a scope whose cost is fixed per call apart from one
+  // that scales with work, so the boundaries are load-bearing, not cosmetic.
+  checkEq(PeDecimatedBucketStats::bucketFor(0), 0, "bucketFor(0) is the 1 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(1), 0, "bucketFor(1) is the 1 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(2), 1, "bucketFor(2) is its own bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(3), 2, "bucketFor(3) is the 3-4 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(4), 2, "bucketFor(4) is the 3-4 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(5), 3, "bucketFor(5) is the 5-8 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(8), 3, "bucketFor(8) is the 5-8 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(9), 4, "bucketFor(9) is the 9-16 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(16), 4, "bucketFor(16) is the 9-16 bucket");
+  checkEq(PeDecimatedBucketStats::bucketFor(17), 5, "bucketFor(17) is the >16 bucket");
+
+  PeDecimatedBucketStats buckets;
+  buckets.countEvent(3);
+  buckets.countEvent(3);
+  buckets.countEvent(20);
+  buckets.record(3, 50);
+  buckets.record(20, 900);
+  checkEq(buckets.bucket[2].events, std::uint64_t{2},
+          "bucket events land in the bucket for their count");
+  checkEq(buckets.bucket[2].sampled, std::uint64_t{1},
+          "bucket samples are counted separately from events");
+  checkEq(buckets.bucket[2].sampledNs, std::uint64_t{50},
+          "bucket ns accumulate per bucket");
+  checkEq(buckets.bucket[5].sampledNs, std::uint64_t{900},
+          "a large count lands in the >16 bucket");
+  checkEq(buckets.bucket[0].events, std::uint64_t{0},
+          "buckets that saw no events stay zero");
+
+  // The shared instrument-cost accumulator is a single process-wide instance;
+  // every scope's calibration sample must land in the same one, or the
+  // subtraction that turns a raw reading into an absolute one is per-scope
+  // inconsistent.
+  check(&peDecimatedNullScopeStats() == &peDecimatedNullScopeStats(),
+        "the null-scope calibration accumulator is a single shared instance");
 }
 
 }  // namespace

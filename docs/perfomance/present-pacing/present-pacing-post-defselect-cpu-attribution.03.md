@@ -6,12 +6,14 @@ order: 03
 title: dxmt9 Owns 30.5% Of GT2's Critical Thread, And Half Of That Is The Constant Path
 date: 2026-07-29
 type: experiment-run
-status: accepted-attribution
+status: superseded-by-attribution.04
 source: experiments/output/app-d3d9-3dmark05-gt2-pe-decim-64; experiments/output/app-d3d9-3dmark05-gt2-pe-decim-16
 related: docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attribution.02.md; docs/perfomance/const-upload/overview.md
 ---
 
 # dxmt9 Owns 30.5% Of GT2's Critical Thread, And Half Of That Is The Constant Path
+
+> **Superseded on 2026-07-29 by [attribution.04](present-pacing-post-defselect-cpu-attribution.04.md).** Every figure below carries an uncalibrated `186 ns`-per-sample instrument bias. Calibrated, PE recording is `16.1%` of the frame, not `30.5%`, and the constant path is `0.8%`, not `13%`. The relative ranking of `appendRecordDirect` survives; nothing else here does.
 
 **Question / hypothesis.**
 [attribution.02](present-pacing-post-defselect-cpu-attribution.02.md) established

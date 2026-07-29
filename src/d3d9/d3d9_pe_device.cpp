@@ -3839,6 +3839,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (decimationN != 0 &&
             PeDecimatedScopeTimer::shouldSample(peDrawPacketDecimatedStats_, decimationN)) {
             decimatedScope.stats = &peDrawPacketDecimatedStats_;
+            {
+                const auto n0 = std::chrono::steady_clock::now();
+                const auto n1 = std::chrono::steady_clock::now();
+                PeDecimatedScopeTimer::recordSample(
+                    peDecimatedNullScopeStats(),
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+            }
             decimatedScope.t0 = std::chrono::steady_clock::now();
         }
         if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
@@ -8937,13 +8945,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto& appendStats = peV2AppendDecimatedStats_;
         const auto& constSetterStats = peConstSetterDecimatedStats();
+        // Per-call register-count split of the const_setter scope. A flat
+        // ns/sample across buckets means the fixed per-call entry cost
+        // dominates; a slope means the per-element compare loop does.
+        std::string constSetterBucketText;
+        {
+            const auto& buckets = peConstSetterDecimatedBuckets();
+            static const char* const kNames[PeDecimatedBucketStats::kBuckets] = {
+                "1", "2", "3_4", "5_8", "9_16", "gt16"};
+            for (int i = 0; i < PeDecimatedBucketStats::kBuckets; ++i) {
+                const auto& b = buckets.bucket[i];
+                char buf[192];
+                std::snprintf(buf, sizeof(buf),
+                              " const_setter_n%s_events=%llu"
+                              " const_setter_n%s_sampled=%llu"
+                              " const_setter_n%s_sampled_ms=%.3f",
+                              kNames[i], static_cast<unsigned long long>(b.events),
+                              kNames[i], static_cast<unsigned long long>(b.sampled),
+                              kNames[i], static_cast<double>(b.sampledNs) / 1.0e6);
+                constSetterBucketText += buf;
+            }
+        }
         dxmt9DeviceInfoLog(
             "[dxmt9-pe-decimated] presents=%llu decimation=%u "
             "append_events=%llu append_sampled=%llu append_sampled_ms=%.3f "
             "const_setter_events=%llu const_setter_sampled=%llu const_setter_sampled_ms=%.3f "
             "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
             "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
-            "identity_getter_calls=%llu",
+            "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -8959,7 +8988,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(peDrawPacketDecimatedStats_.sampled),
             static_cast<double>(peDrawPacketDecimatedStats_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(
-                dxmt9::d3d9::pe::wireIdentityGetterCallCount()));
+                dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
+            static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
+            static_cast<double>(peDecimatedNullScopeStats().sampledNs) / 1.0e6,
+            constSetterBucketText.c_str());
     }
 
     // Present-cadence tick for the decimated dump: increments a cumulative
@@ -9100,6 +9132,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             PeDecimatedScopeTimer::shouldSample(
                 peV2AppendDecimatedStats_, decimationN)) {
             appendDecimatedScope.stats = &peV2AppendDecimatedStats_;
+            {
+                const auto n0 = std::chrono::steady_clock::now();
+                const auto n1 = std::chrono::steady_clock::now();
+                PeDecimatedScopeTimer::recordSample(
+                    peDecimatedNullScopeStats(),
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+            }
             appendDecimatedScope.t0 = std::chrono::steady_clock::now();
         }
         if (willFlushBeforeAppend) {
@@ -9688,6 +9728,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (decimationN != 0 &&
             PeDecimatedScopeTimer::shouldSample(peConstFlushDecimatedStats_, decimationN)) {
             decimatedScope.stats = &peConstFlushDecimatedStats_;
+            {
+                const auto n0 = std::chrono::steady_clock::now();
+                const auto n1 = std::chrono::steady_clock::now();
+                PeDecimatedScopeTimer::recordSample(
+                    peDecimatedNullScopeStats(),
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+            }
             decimatedScope.t0 = std::chrono::steady_clock::now();
         }
         if (!shadow.dirty()) return S_OK;

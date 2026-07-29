@@ -61,6 +61,22 @@ inline PeDecimatedScopeStats& peConstSetterDecimatedStats() {
     return stats;
 }
 
+// Companion to peConstSetterDecimatedStats(): the same samples split by the
+// call's register count, to separate fixed per-call overhead from the
+// per-element compare loop. Same ODR-single-instance reasoning as above.
+inline PeDecimatedBucketStats& peConstSetterDecimatedBuckets() {
+    static PeDecimatedBucketStats buckets{};
+    return buckets;
+}
+
+// Calibration for the two accumulators above. On every sampled call we also
+// time an immediately-adjacent empty region with the identical clock pair, so
+// its mean is the instrument's own cost per sample. Subtracting it from the
+// scope's mean is what turns a decimated reading into an absolute one:
+// N-variation cannot do that, because the extrapolation
+// `sampled_ms * N / presents` reduces to `events * (true + bias) / presents`
+// and is independent of N -- which is why N=64 and N=16 agreeing proved
+// stability, not accuracy.
 inline std::uint32_t peConstSetterDecimationN() {
     static const std::uint32_t n = []() -> std::uint32_t {
         const auto envValue =
@@ -81,6 +97,7 @@ inline void touchConstShadow(ConstShadow& shadow,
     // (including the early returns below) via RAII.
     struct DecimatedScopeGuard {
         PeDecimatedScopeStats* stats = nullptr;
+        std::uint32_t bucketCount = 0;
         std::chrono::steady_clock::time_point t0{};
         ~DecimatedScopeGuard() {
             if (stats) {
@@ -88,6 +105,8 @@ inline void touchConstShadow(ConstShadow& shadow,
                     std::chrono::steady_clock::now() - t0).count();
                 PeDecimatedScopeTimer::recordSample(
                     *stats, static_cast<std::uint64_t>(elapsedNs));
+                peConstSetterDecimatedBuckets().record(
+                    bucketCount, static_cast<std::uint64_t>(elapsedNs));
             }
         }
     } decimatedScope;
@@ -95,7 +114,20 @@ inline void touchConstShadow(ConstShadow& shadow,
     if (decimationN != 0 &&
         PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), decimationN)) {
         decimatedScope.stats = &peConstSetterDecimatedStats();
+        decimatedScope.bucketCount = count;
+        // Calibration sample: an empty region timed with the same clock pair.
+        {
+            const auto n0 = std::chrono::steady_clock::now();
+            const auto n1 = std::chrono::steady_clock::now();
+            PeDecimatedScopeTimer::recordSample(
+                peDecimatedNullScopeStats(),
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+        }
         decimatedScope.t0 = std::chrono::steady_clock::now();
+    }
+    if (decimationN != 0) {
+        peConstSetterDecimatedBuckets().countEvent(count);
     }
     const std::uint64_t needed64 =
         (static_cast<std::uint64_t>(start) + count) * elemSize;
