@@ -1,7 +1,7 @@
 #pragma once
 
 #include "d3d9_pe_const_shadow.hpp"
-#include "d3d9_pe.hpp"
+#include "dxmt9/device_c.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +10,21 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+
+// D3D9 constant mirrors. This header is compiled natively (no windows.h /
+// d3d9.h) so the sparse-state producer and its differential test can run
+// without Wine, so the values are inlined from the D3D9 SDK headers rather
+// than included. Verified against wine/include/d3d9types.h and d3d9.h;
+// core_constants.hpp's XFORM_WORLD_BASE block sets the precedent for
+// mirroring the D3DTS_WORLDMATRIX range this way.
+static constexpr std::uint32_t kD3dTsView = 2u;         // D3DTS_VIEW
+static constexpr std::uint32_t kD3dTsProjection = 3u;   // D3DTS_PROJECTION
+static constexpr std::uint32_t kD3dTsTexture0 = 16u;    // D3DTS_TEXTURE0
+static constexpr std::uint32_t kD3dTsTexture7 = 23u;    // D3DTS_TEXTURE7
+static constexpr std::uint32_t kD3dTsWorld = 256u;      // D3DTS_WORLDMATRIX(0)
+static constexpr std::uint32_t kD3dDmapSampler = 256u;  // D3DDMAPSAMPLER
+static constexpr std::uint32_t kD3dVertexTextureSampler0 = kD3dDmapSampler + 1u;
+static constexpr std::uint32_t kD3dVertexTextureSampler3 = kD3dDmapSampler + 4u;
 
 static constexpr std::uint32_t kPeRenderStateSlots = 256;
 static constexpr std::uint32_t kPeTextureStageSlots = 8;
@@ -191,41 +206,41 @@ struct FixedTransformTable {
         return slot >> 6;
     }
     static bool slotForState(std::uint32_t state, std::uint32_t& slot) noexcept {
-        if (state == static_cast<std::uint32_t>(D3DTS_VIEW)) {
+        if (state == kD3dTsView) {
             slot = 0;
             return true;
         }
-        if (state == static_cast<std::uint32_t>(D3DTS_PROJECTION)) {
+        if (state == kD3dTsProjection) {
             slot = 1;
             return true;
         }
-        if (state >= static_cast<std::uint32_t>(D3DTS_TEXTURE0) &&
-            state <= static_cast<std::uint32_t>(D3DTS_TEXTURE7)) {
+        if (state >= kD3dTsTexture0 &&
+            state <= kD3dTsTexture7) {
             slot = kPeTransformTextureBaseSlot +
-                   (state - static_cast<std::uint32_t>(D3DTS_TEXTURE0));
+                   (state - kD3dTsTexture0);
             return true;
         }
-        if (state >= static_cast<std::uint32_t>(D3DTS_WORLD) &&
-            state < static_cast<std::uint32_t>(D3DTS_WORLD) +
+        if (state >= kD3dTsWorld &&
+            state < kD3dTsWorld +
                         kPeTransformWorldSlots) {
             slot = kPeTransformWorldBaseSlot +
-                   (state - static_cast<std::uint32_t>(D3DTS_WORLD));
+                   (state - kD3dTsWorld);
             return true;
         }
         return false;
     }
     static std::uint32_t stateForSlot(std::uint32_t slot) noexcept {
         if (slot == 0) {
-            return static_cast<std::uint32_t>(D3DTS_VIEW);
+            return kD3dTsView;
         }
         if (slot == 1) {
-            return static_cast<std::uint32_t>(D3DTS_PROJECTION);
+            return kD3dTsProjection;
         }
         if (slot < kPeTransformWorldBaseSlot) {
-            return static_cast<std::uint32_t>(D3DTS_TEXTURE0) +
+            return kD3dTsTexture0 +
                    (slot - kPeTransformTextureBaseSlot);
         }
-        return static_cast<std::uint32_t>(D3DTS_WORLD) +
+        return kD3dTsWorld +
                (slot - kPeTransformWorldBaseSlot);
     }
     bool containsSlot(std::uint32_t slot) const noexcept {
@@ -306,20 +321,20 @@ struct FixedTransformTable {
     }
 };
 
-inline std::uint32_t textureStageSlot(DWORD stage) noexcept {
+inline std::uint32_t textureStageSlot(std::uint32_t stage) noexcept {
     return std::min<std::uint32_t>(stage, kPeTextureStageSlots - 1u);
 }
 
-inline bool vertexTextureSamplerSlot(DWORD sampler, std::uint32_t& slot) noexcept {
-    if (sampler < D3DVERTEXTEXTURESAMPLER0 || sampler > D3DVERTEXTEXTURESAMPLER3) {
+inline bool vertexTextureSamplerSlot(std::uint32_t sampler, std::uint32_t& slot) noexcept {
+    if (sampler < kD3dVertexTextureSampler0 || sampler > kD3dVertexTextureSampler3) {
         return false;
     }
     slot = kPeFragmentSamplerSlots +
-        static_cast<std::uint32_t>(sampler - D3DVERTEXTEXTURESAMPLER0);
+        static_cast<std::uint32_t>(sampler - kD3dVertexTextureSampler0);
     return true;
 }
 
-inline bool textureBindingSlot(DWORD stage, std::uint32_t& slot) noexcept {
+inline bool textureBindingSlot(std::uint32_t stage, std::uint32_t& slot) noexcept {
     if (stage < kPeFragmentSamplerSlots) {
         slot = static_cast<std::uint32_t>(stage);
         return true;
@@ -328,12 +343,12 @@ inline bool textureBindingSlot(DWORD stage, std::uint32_t& slot) noexcept {
 }
 
 inline std::uint32_t textureStageStateSlot(
-    D3DTEXTURESTAGESTATETYPE type) noexcept {
+    std::uint32_t type) noexcept {
     return std::min<std::uint32_t>(
         static_cast<std::uint32_t>(type), kPeTextureStageStateSlots - 1u);
 }
 
-inline bool samplerSlot(DWORD sampler, std::uint32_t& slot) noexcept {
+inline bool samplerSlot(std::uint32_t sampler, std::uint32_t& slot) noexcept {
     if (sampler < kPeFragmentSamplerSlots) {
         slot = static_cast<std::uint32_t>(sampler);
         return true;
@@ -341,7 +356,7 @@ inline bool samplerSlot(DWORD sampler, std::uint32_t& slot) noexcept {
     return vertexTextureSamplerSlot(sampler, slot);
 }
 
-inline bool samplerStateSlot(D3DSAMPLERSTATETYPE type,
+inline bool samplerStateSlot(std::uint32_t type,
                              std::uint32_t& slot) noexcept {
     slot = static_cast<std::uint32_t>(type);
     return slot < kPeSamplerStateSlots;
@@ -377,14 +392,14 @@ struct PeHotStateShadow {
     // True if SetVertexDeclaration was called between Begin/End. Same role
     // as stateBlockTransformRecorded but for the singleton vdecl slot.
     bool stateBlockVdeclRecorded = false;
-    DWORD pendingTextureMask = 0;
-    DWORD pendingStreamMask = 0;
+    std::uint32_t pendingTextureMask = 0;
+    std::uint32_t pendingStreamMask = 0;
     bool pendingFvf = false;
     bool pendingVs = false;
     bool pendingPs = false;
     bool pendingVdecl = false;
     bool pendingIb = false;
-    DWORD pendingRtMask = 0;
+    std::uint32_t pendingRtMask = 0;
     bool pendingDs = false;
     bool pendingViewport = false;
     bool pendingScissor = false;
@@ -400,15 +415,15 @@ struct PeHotStateShadow {
         samplerStateShadow{};
     bool pendingMaterial = false;
     D9CMaterial materialShadow{};
-    DWORD pendingClipPlaneMask = 0;
+    std::uint32_t pendingClipPlaneMask = 0;
     float clipPlaneShadow[6 * 4]{};
     FixedTransformTable pendingTransforms{};
     FixedTransformTable transformShadow{};
-    DWORD pendingLightSlotMask = 0;
+    std::uint32_t pendingLightSlotMask = 0;
     D9CLight lightShadow[D9C_DRAW_PACKET_MAX_LIGHTS]{};
-    DWORD pendingLightEnableValidMask = 0;
-    DWORD pendingLightEnableMask = 0;
-    DWORD lightEnableShadow = 0;
+    std::uint32_t pendingLightEnableValidMask = 0;
+    std::uint32_t pendingLightEnableMask = 0;
+    std::uint32_t lightEnableShadow = 0;
 
     bool hasPendingHotState() const noexcept {
         return !pendingRenderStates.empty() || pendingTextureMask != 0 ||
@@ -453,7 +468,7 @@ struct PeHotStateShadow {
         transformShadow.clear();
     }
 
-    bool renderStateEquals(DWORD state, DWORD value) const noexcept {
+    bool renderStateEquals(std::uint32_t state, std::uint32_t value) const noexcept {
         std::uint32_t shadowValue = 0;
         return renderStateShadow.get(state, shadowValue) && shadowValue == value;
     }
