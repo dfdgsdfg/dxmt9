@@ -7,11 +7,14 @@ title: Uniform Refresh Shader-Constant Fast Path
 date: 2026-06-12
 type: experiment
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-uniform-refresh-fast-20260612/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-refresh-fast-20260612/result.json, experiments/output/app-d3d9-3dmark05-uniform-refresh-fast-20260612/actual.png
 baseline: experiments/output/app-d3d9-3dmark05-draw-packet-actual-change-20260612/result.json
 ---
 
 # Uniform Refresh Shader-Constant Fast Path
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [state-churn-encode-encode-phase.28](../state-churn-encode/state-churn-encode-encode-phase.28.md)
 rejected broad redundant draw-packet invalidation, the remaining uniform-refresh

@@ -7,11 +7,14 @@ title: Current wallclock FPS owner is CPU cadence plus present-completion wait
 date: 2026-06-13
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-frames.csv
 related: docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.30.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Current wallclock FPS owner is CPU cadence plus present-completion wait
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [hidden-backend-storage-shape.30](../hidden-backend-storage/hidden-backend-storage-shape.30.md) split the
 GPU-efficiency question from the average wallclock-FPS question, the next gate

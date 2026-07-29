@@ -2,10 +2,13 @@
 title: Encode Phase 88 - Uniform Payload Split Default-Off Rejected
 date: 2026-06-15
 status: rejected-visual-timing-sensitive
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-uniform-payload-split-default-off-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-payload-split-default-off-r2-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-payload-split-optin-r1-20260615/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 88 - Uniform Payload Split Default-Off Rejected
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** The `draw_uniform_payload_*` child timers under
 `submit_draw_run_batch_append_uniform_cpu_ms` are hot-path attribution probes.

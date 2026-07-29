@@ -7,11 +7,14 @@ title: Open-CB Bounded Pending-Tail Wait
 date: 2026-06-20
 type: no-gputrace
 status: rejected-visual
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h146-open-cb-bounded-tailwait1ms-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h146-open-cb-bounded-tailwait1ms-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-h146-open-cb-bounded-tailwait1ms-r1/actual.png, experiments/output/app-d3d9-3dmark05-h146-open-cb-bounded-tailwait1ms-r1/result.json
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-limit128.145.md, docs/perfomance/present-pacing/present-pacing-open-cb-session-finalizer-api.144.md, docs/perfomance/present-pacing/present-pacing-open-cb-carry-safety-guard.140.md
 ---
 
 # Present-Pacing H146 - Open-CB Bounded Pending-Tail Wait
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

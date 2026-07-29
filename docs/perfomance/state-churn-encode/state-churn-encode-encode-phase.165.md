@@ -7,11 +7,14 @@ title: Compact Draw Submission Carrier
 date: 2026-06-19
 type: runtime-implementation
 status: accepted-carrier-shape-rejected-promotion
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h182-compact-carrier-current-default-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h183-compact-carrier-current-compact-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h183-compact-carrier-current-compact-r2/h182-vs-h183-compact-carrier-r2.md, include/dxmt9/core_snapshots.hpp, src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_command_queue.cpp
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.164.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.156.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 165 - Compact draw submission carrier
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

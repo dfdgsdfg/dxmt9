@@ -7,11 +7,14 @@ title: Current Materialization And Argbuf Owner Refresh
 date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-current-materialization-sites-r1-20260615/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.127.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.128.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.43.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 130 - Current Materialization And Argbuf Owner Refresh
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After queue-observation materialization was removed and cbuf
 content-history scanning became opt-in, is backend uniform materialization still

@@ -7,10 +7,13 @@ title: Depth-Content Sensitivity Probes
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14550-L14765
 ---
 
 # Depth-Content Sensitivity Probes
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The original `60/2` encoder is depth-enabled,
 depth-write-off, compare-func `4`, and inherits depth from earlier passes, while

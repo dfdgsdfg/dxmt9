@@ -7,10 +7,13 @@ title: Post-Visualfix Frame60 Baseline Refresh
 date: 2026-06-06
 type: validation
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/frame60-counters-xcode.csv, traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md, traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/frame60-shader-dump-report.md
 ---
 
 # Post-Visualfix Frame60 Baseline Refresh
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the cbuf/binding identity visual fixes and the
 then-current visual-anchor check, does current HEAD still show the same

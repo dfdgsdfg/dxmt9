@@ -7,11 +7,14 @@ title: Const And Apply-State Leaf Split Lowers The Inter-Append Owner
 date: 2026-06-16
 type: experiment
 status: accepted-pe-const-apply-leaf-split
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-const-apply-split-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-const-apply-split-r1-20260616/3dmark05-perf-summary.md
 related: docs/perfomance/present-pacing/present-pacing-pe-inter-append-pairs.59.md, docs/perfomance/present-pacing/present-pacing-pe-active-fill-split.58.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 60 - Const And Apply-State Leaf Split Lowers The Inter-Append Owner
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

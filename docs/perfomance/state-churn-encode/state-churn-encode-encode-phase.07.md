@@ -7,10 +7,13 @@ title: Binding Packet Cache Split Attribution
 date: 2026-06-06
 type: attribution
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-binding-packet-cache-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-binding-packet-cache-split-r1/dxmt9-perf-counter-comparison-vs-identity-smoke.md, experiments/output/app-d3d9-3dmark05-binding-packet-cache-split-r1/actual.png
 ---
 
 # Binding Packet Cache Split Attribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After category identity cbuf repoint removed the
 largest argbuf payload amplifier, the remaining named encode child was

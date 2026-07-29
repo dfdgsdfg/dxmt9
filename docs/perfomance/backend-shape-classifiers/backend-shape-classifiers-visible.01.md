@@ -7,10 +7,13 @@ title: Force-Visible Render-State Probe
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7528-L7594
 ---
 
 # Force-Visible Render-State Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Are the hidden vertex-stage writes coupled to fragment
 visibility? Force visibility/blend/write-mask behavior and check whether the VS

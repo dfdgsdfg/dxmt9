@@ -7,10 +7,13 @@ title: Probe Disable Alpha Blend (broad)
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2183-L2196
 ---
 
 # Probe Disable Alpha Blend (broad)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the global alpha-blend render state own the
 hidden ~1.6 GiB "VS Buffer Device Memory Bytes Written" bucket on the top GT1

@@ -7,11 +7,14 @@ title: Draw-Chunk Limit 256 Sweep
 date: 2026-06-16
 type: experiment
 status: rejected-threshold-sweep
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-drawchunk-limit256-lowoverhead-r1/result.json, experiments/output/app-d3d9-3dmark05-drawchunk-limit256-lowoverhead-r1/3dmark05-perf-summary.md, /tmp/drawchunk-limit256-compare.md
 related: docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 50 - Draw-Chunk Limit 256 Sweep
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [present-pacing-drawchunk-limit.48](present-pacing-drawchunk-limit.48.md) proved that
 `DXMT9_DRAW_CHUNK_COMMAND_LIMIT=64` can create completion overlap, but it

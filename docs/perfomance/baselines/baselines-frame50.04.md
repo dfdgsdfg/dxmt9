@@ -7,10 +7,13 @@ title: Watchdog-Cleanup No-Gputrace Scout
 date: 2026-06-06
 type: scout
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-watchdog-cleanup-smoke-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-watchdog-cleanup-smoke-r1/dxmt9-perf-counter-comparison.md
 ---
 
 # Watchdog-Cleanup No-Gputrace Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the 3DMark05 final-frame hang forced a
 manual kill, re-run the current no-gputrace baseline through the new

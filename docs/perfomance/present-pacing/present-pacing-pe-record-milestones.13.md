@@ -7,11 +7,14 @@ title: PE Record Milestones After Present
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, experiments/output/app-d3d9-3dmark05-present-pe-record-milestones-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-record-milestones-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-call-cadence.10.md, docs/perfomance/present-pacing/present-pacing-pe-chunk-cadence.11.md, docs/perfomance/present-pacing/present-pacing-pe-chunk-size-ab.12.md
 ---
 
 # Present-Pacing 13 - PE Record Milestones After Present
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

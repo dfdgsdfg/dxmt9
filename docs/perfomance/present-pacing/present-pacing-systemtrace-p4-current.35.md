@@ -7,11 +7,14 @@ title: Current P4 System Trace Sidecar
 date: 2026-06-15
 type: experiment
 status: producer-state-inconclusive
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-current-p4-sidecar-r1-20260615/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-current-p4-sidecar-r1-20260615/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-current-p4-sidecar-r1-20260615/analysis/xctrace-metal-gpu-intervals-summary.md, experiments/output/app-d3d9-3dmark05-current-p4-sidecar-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-current-p4-sidecar-r1-20260615/actual.png
 related: docs/perfomance/present-pacing/present-pacing-systemtrace-p4-smoke.34.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.91.md
 ---
 
 # Present-Pacing 35 - Current P4 System Trace Sidecar
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

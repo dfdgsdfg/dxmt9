@@ -7,10 +7,13 @@ title: Binding Override Encode Optimization
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3989-L4070
 ---
 
 # Binding Override Encode Optimization
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Do per-draw `DrawBindingOverride` payloads convert the
 historical stream/IB state-delta breaks into larger draw-runs and cut encode CPU

@@ -7,10 +7,13 @@ title: Batch Miss Child Split
 date: 2026-06-14
 type: experiment
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-cache-child-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-cache-child-split-r1/result.json, experiments/output/app-d3d9-3dmark05-snapshot-cache-child-split-r1/actual.png
 ---
 
 # Batch Miss Child Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.11](snapshot-cache-snapshot.11.md) showed that the
 current snapshot lookup residual belongs to the queued draw-submission batch

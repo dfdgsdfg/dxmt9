@@ -7,10 +7,13 @@ title: Dirty Cbuf Reopen Mask Attribution
 date: 2026-06-06
 type: attribution-ab
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-dirty-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-partial-repoint-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-reopen-mask-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-reopen-mask-r1/dxmt9-perf-counter-comparison.md
 ---
 
 # Dirty Cbuf Reopen Mask Attribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.03](state-churn-encode-encode-phase.03.md) proved that
 clean/no-op cbuf updates are not the load-bearing path. The next hypothesis was

@@ -7,10 +7,13 @@ title: Screen-Blend Run 71..188 Min-Index Rerun R2
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L16248-L16340
 ---
 
 # Screen-Blend Run 71..188 Min-Index Rerun R2
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Rerun the full-frame min-index / address-locality
 probe with real disk headroom and a complete Xcode export (`result.json`,

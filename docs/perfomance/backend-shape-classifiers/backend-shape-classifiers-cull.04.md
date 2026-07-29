@@ -7,10 +7,13 @@ title: Row/Class-Scoped Cull Shape Probe
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10531-L10642
 ---
 
 # Row/Class-Scoped Cull Shape Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Broad cull probes are noisy for the current hot-row
 shape. With a row/class-scoped cull override, does changing the effective cull

@@ -7,11 +7,14 @@ title: Uniform Scratch Zero-Fill Cleanup
 date: 2026-06-16
 type: implementation+experiment
 status: accepted-local-cpu-cleanup-fps-open
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.mm, experiments/output/app-d3d9-3dmark05-snapshot-state-elision-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-scratch-nozerofill-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-scratch-nozerofill-r1/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.121.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.144.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 145 - Uniform Scratch Zero-Fill Cleanup
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After compact uniform storage, the draw encoder still materializes
 legacy `DrawUniformPayload` scratch values for command-front and per-param

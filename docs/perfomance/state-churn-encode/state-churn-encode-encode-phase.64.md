@@ -2,10 +2,13 @@
 title: Encode Phase 64 - VS Cbuf Plan Shape
 date: 2026-06-14
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-cbuf-vs-plan-shape-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-cbuf-vs-plan-shape-r1-20260614/3dmark05-perf-encoders.csv
 ---
 
 # Encode Phase 64 - VS Cbuf Plan Shape
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) proved that
 argbuf table reopens are driven by VS/PS constant hashes, is the dirty VS cbuf

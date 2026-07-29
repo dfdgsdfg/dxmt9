@@ -2,10 +2,13 @@
 title: Encode Phase 81 - Encode-Slot PSO Resource-Shape Memo Default Promotion
 date: 2026-06-14
 status: accepted-default-cpu-cleanup
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-default-on-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 81 - Encode-Slot PSO Resource-Shape Memo Default Promotion
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.80](state-churn-encode-encode-phase.80.md) repeated the
 resource-shape memo CPU win twice, but still left it default-off. If the memo

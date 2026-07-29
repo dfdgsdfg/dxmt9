@@ -7,10 +7,13 @@ title: DXMT9_DISABLE_VSYNC=1 production-shippable A/B
 date: 2026-06-05
 type: ab-test
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experiments/output/app-d3d9-3dmark05-vsync-off-r1
 ---
 
 # DXMT9_DISABLE_VSYNC=1 production-shippable A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Steps 1-3 of the present-pacing
 investigation foreclosed the present-side knob space under the

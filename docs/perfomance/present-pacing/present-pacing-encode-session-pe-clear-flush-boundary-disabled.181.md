@@ -7,11 +7,14 @@ title: EncodeSession PE Clear-Flush Boundary-Disabled Scout
 date: 2026-06-28
 type: no-gputrace
 status: diagnostic-safe-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-encode-session-pe-clear-flush-boundary-disabled-h181-20260628/result.json, experiments/output/app-d3d9-3dmark05-encode-session-pe-clear-flush-boundary-disabled-h181-20260628/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-pe-clear-flush-boundary-disabled-h181-20260628/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-pe-clear-flush-boundary-disabled-h181-20260628/actual.png
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-boundary-disabled.180.md, docs/perfomance/present-pacing/present-pacing-pe-clear-flush.22.md
 ---
 
 # Present-Pacing H181 - EncodeSession PE Clear-Flush Boundary-Disabled Scout
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Pair-Local Mini-Replay Captures
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L15015-L15110
 ---
 
 # Pair-Local Mini-Replay Captures
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Inside the hot `window-014-027`
 ([mini-replay-bisection-bisect.01](mini-replay-bisection-bisect.01.md)), is the VS-write amplification owned by

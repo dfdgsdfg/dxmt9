@@ -7,10 +7,13 @@ title: Current Row 60/1 Opaque Reverse Rerun
 date: 2026-06-02
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11985-L12071
 ---
 
 # Current Row 60/1 Opaque Reverse Rerun
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the older `60/1` row reverse
 ([primitive-reorder-diagnostics-reverse.06](primitive-reorder-diagnostics-reverse.06.md), which had failed shape gates via

@@ -7,10 +7,13 @@ title: Binding-Only Miss Reason Recheck
 date: 2026-06-14
 type: code-inspection
 status: rejected-current-owner
+outdated: evidence-missing
 source: src/d3d9/core_draw.cpp, src/d3d9/core_state.cpp, src/d3d9/device_c_chunk_replay.cpp, experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Binding-Only Miss Reason Recheck
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** The current low-overhead summary still reports very high
 `d3d9_draw_state_cache_miss_after_stream` and

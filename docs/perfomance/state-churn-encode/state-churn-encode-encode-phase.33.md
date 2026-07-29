@@ -7,11 +7,14 @@ title: Submission Generation Compatibility Proof
 date: 2026-06-13
 type: analysis
 status: accepted-proof
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-submission-generation-counters-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-submission-generation-counters-20260613/result.json, experiments/output/app-d3d9-3dmark05-submission-generation-counters-20260613/actual.png, include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_command_queue.cpp
 baseline: experiments/output/app-d3d9-3dmark05-append-state-split-20260613/result.json
 ---
 
 # Submission Generation Compatibility Proof
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md) rejected
 slot-local full-state interning because it acted too late. The useful upstream

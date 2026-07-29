@@ -7,10 +7,13 @@ title: Geometry Amplification Audit + Draw Geometry Signature Instrumentation
 date: 2026-06-01
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3340-L3431
 ---
 
 # Geometry Amplification Audit + Draw Geometry Signature Instrumentation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Two sub-questions before measuring geometry shape:
 (a) is dxmt inflating GT1 geometry through its indexed-draw expansion path? and

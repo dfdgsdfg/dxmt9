@@ -7,10 +7,13 @@ title: Encode Draw Phase Attribution
 date: 2026-06-06
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-phase-attribution-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-phase-attribution-r1/dxmt9-perf-counter-comparison.md
 ---
 
 # Encode Draw Phase Attribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After broad bind-cache work failed to move GT1
 wallclock, split the old `encode_draw_cpu_ms` remainder with narrower timers.

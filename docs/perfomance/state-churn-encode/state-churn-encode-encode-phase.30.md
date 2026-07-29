@@ -7,11 +7,14 @@ title: Draw State Rvalue Append
 date: 2026-06-13
 type: experiment
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-append-state-rvalue-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-append-state-rvalue-20260613/result.json, experiments/output/app-d3d9-3dmark05-append-state-rvalue-20260613/actual.png
 baseline: experiments/output/app-d3d9-3dmark05-submit-append-split-20260613/result.json
 ---
 
 # Draw State Rvalue Append
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.29](state-churn-encode-encode-phase.29.md) showed that
 `submit_draw_run_batch_append_state_cpu_ms` is the largest append child. In the

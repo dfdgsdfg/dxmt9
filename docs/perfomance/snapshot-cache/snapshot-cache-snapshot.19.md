@@ -7,10 +7,13 @@ title: Batch-Miss Shader Layout Reuse
 date: 2026-06-14
 type: experiment
 status: accepted-micro-win-rejected-next-target
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-shader-layout-compat-counter-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-shader-layout-reuse-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-shader-layout-reuse-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Batch-Miss Shader Layout Reuse
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.12](snapshot-cache-snapshot.12.md) left batch-miss
 shader-layout rebuild as a named but smaller child after uniform and hot-state

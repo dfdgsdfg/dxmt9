@@ -7,11 +7,14 @@ title: Pre-Present Command-Limit Stage Trigger
 date: 2026-06-19
 type: implementation
 status: implemented-runtime-candidate-rejected-by-h99
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, agents/rules/environment_variables_present.rules.md, tests/native/backend/queue_completion_sources_spec.cpp
 related: docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/present-pacing/present-pacing-tail-present-prefix-selector.97.md, docs/perfomance/present-pacing/present-pacing-tail-present-merge-primitive.96.md, docs/perfomance/present-pacing/present-pacing-tail-present-staged-runtime.94.md
 ---
 
 # Present Pacing / Pre-Present Command-Limit Stage Trigger 98
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** With H96/H97 in place, can dxmt9 create earlier CPU-ready
 pre-Present heads without making them encode-visible as separate Metal command

@@ -2,10 +2,13 @@
 title: Encode Phase 71 - Encode-Slot PSO Prefetch Split
 date: 2026-06-14
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-prefetch-split-lowoverhead-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 71 - Encode-Slot PSO Prefetch Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.70](state-churn-encode-encode-phase.70.md) moved PSO prefetch from
 the serialized Present publish path to the encode worker, but left

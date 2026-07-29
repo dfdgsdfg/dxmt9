@@ -7,10 +7,13 @@ title: Low-Overhead Recovery Scout After FPS-Zero Observation
 date: 2026-06-13
 type: scout
 status: accepted-counter-sample
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260613/actual.png, experiments/output/app-d3d9-3dmark05-systemtrace-indexed-r6-range-20260613-212718/3dmark05-perf-frames.csv
 ---
 
 # Low-Overhead Recovery Scout After FPS-Zero Observation
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After a transient observation of roughly one draw
 every several seconds, did the current renderer regress to an FPS-zero state, or

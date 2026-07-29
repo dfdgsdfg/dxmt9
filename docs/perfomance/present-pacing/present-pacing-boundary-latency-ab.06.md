@@ -7,11 +7,14 @@ title: Explicit present boundary and max frame latency are not the current produ
 date: 2026-06-13
 type: attribution
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/result.json, experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-overlap-baseline-r2-20260613/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-boundary-disabled-overlap-r1-20260613/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-frame-latency6-overlap-r1-20260613/3dmark05-perf-frames.csv
 related: docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present-Pacing 06 — Boundary/Latency A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

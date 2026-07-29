@@ -7,11 +7,14 @@ title: Mixed Pending Plus Explicit Draw-Run Carrier Runtime
 date: 2026-06-20
 type: runtime-ab
 status: mechanism-accepted-runtime-rejected
+outdated: knob-removed
 source: src/d3d9/device_c_chunk_replay.cpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-h213-mixed-carrier-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h215-mixed-carrier-timerfix-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h215-mixed-carrier-timerfix-r1/result-perf-counter-comparison.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.182.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.178.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 183 - Mixed pending plus explicit draw-run carrier runtime
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

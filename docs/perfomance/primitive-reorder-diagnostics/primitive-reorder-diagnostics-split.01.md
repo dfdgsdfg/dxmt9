@@ -7,10 +7,13 @@ title: Bounded Split-Large Indexed Probe (tooling + row 60/3 opaque)
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10244-L10434
 ---
 
 # Bounded Split-Large Indexed Probe (tooling + row 60/3 opaque)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does an *order-preserving* draw partition — splitting
 one hot opaque depth-writing row's large indexed draws into smaller Metal draws,

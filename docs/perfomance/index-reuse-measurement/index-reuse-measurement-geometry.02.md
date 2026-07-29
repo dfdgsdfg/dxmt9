@@ -7,10 +7,13 @@ title: Geometry Signature / Dedup Result
 date: 2026-06-01
 type: measurement
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3409-L3431
 ---
 
 # Geometry Signature / Dedup Result
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the ~1.6 GiB top-frame VS-buffer-write bucket come
 from many unique geometry submissions, or from repeated (deletable) geometry

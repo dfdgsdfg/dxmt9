@@ -7,11 +7,14 @@ title: Chunk-End Flush Carry Probe
 date: 2026-06-20
 type: experiment
 status: opportunity-accepted-naive-carry-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h218-end-flush-probe-r1
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.183.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.187.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Encode Phase 188 - Chunk-end flush carry probe
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

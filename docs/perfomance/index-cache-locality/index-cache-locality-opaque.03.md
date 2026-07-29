@@ -7,10 +7,13 @@ title: Layout-Stride Opaque Opt-In Xcode Replay
 date: 2026-06-04
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1183-L1292
 ---
 
 # Layout-Stride Opaque Opt-In Xcode Replay
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the opaque-depth cache opt-in produce a real
 hardware-visible reduction on its target rows (50/0, 50/1) in an Xcode replay,

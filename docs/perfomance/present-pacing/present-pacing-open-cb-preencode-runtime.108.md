@@ -7,11 +7,14 @@ title: Open-CB Pre-Encode Tail-Present Runtime Candidate
 date: 2026-06-19
 type: implementation-note
 status: default-off-candidate-rejected-by-h109
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/render/backend_interface.hpp, src/dxmt9/render/tail_present_batch.cpp, agents/rules/environment_variables_present.rules.md
 related: docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.109.md, docs/perfomance/present-pacing/present-pacing-open-cb-injected-command-buffer.107.md, docs/perfomance/present-pacing/present-pacing-encoded-tail-record-merge.105.md, docs/perfomance/present-pacing/present-pacing-encoded-pending-tail-carrier.104.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.01.md
 ---
 
 # Present Pacing / Open-CB Pre-Encode Tail-Present Runtime Candidate 108
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Can the encoder consume the large pre-Present head during the
 completion-wait gap without committing a closed head command buffer before the

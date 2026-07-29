@@ -7,11 +7,14 @@ title: Persistent Pending Submission Scratch
 date: 2026-06-13
 type: experiment
 status: rejected-current
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-submission-scratch-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-submission-scratch-20260613/result.json, experiments/output/app-d3d9-3dmark05-submission-scratch-20260613/actual.png, experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/result.json, src/d3d9/device_c_chunk_replay.cpp, src/d3d9/device_c_common.hpp
 baseline: experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/result.json
 ---
 
 # Persistent Pending Submission Scratch
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.35](state-churn-encode-encode-phase.35.md) removed the
 per-draw temporary `DrawRunSubmission` move. The remaining F2 allocation

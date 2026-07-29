@@ -7,10 +7,13 @@ title: Sampler State Hash Reuse
 date: 2026-06-06
 type: accepted-experiment
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-fragment-direct-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-sampler-state-hash-r1/dxmt9-perf-counter-comparison-vs-fragment-direct-split.md, experiments/output/app-d3d9-3dmark05-sampler-state-hash-default-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-sampler-state-hash-default-r2/dxmt9-perf-counter-comparison-vs-sampler-prehandle.md, experiments/output/app-d3d9-3dmark05-sampler-state-hash-default-r2/actual.png
 ---
 
 # Sampler State Hash Reuse
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.14](state-churn-encode-encode-phase.14.md) moved skipped
 fragment sampler binds before `samplerStateFor()`, but the direct sampler lane

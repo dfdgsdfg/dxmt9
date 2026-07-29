@@ -7,10 +7,13 @@ title: Candidate Cache-Position Table
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-cachepos-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-cachepos-r1/result.json; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-cachepos-r1/analysis/buildsplit-r1-vs-cachepos-r1-run-counters.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-cachepos-r1/analysis/defaultgate-noenc-opaque-depth-r1-vs-cachepos-r1-run-counters.md
 ---
 
 # Candidate Cache-Position Table
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Since [index-cache-locality-cpucost.08](index-cache-locality-cpucost.08.md) showed
 `encode_draw_index_cache_candidate_select_cpu_ms` owns most of candidate build,

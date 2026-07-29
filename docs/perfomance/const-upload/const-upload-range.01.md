@@ -7,10 +7,13 @@ title: VS Float Range Run
 date: undated
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4474-L4558
 ---
 
 # VS Float Range Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Now that FFP-VS is cached ([const-upload-slice.01](const-upload-slice.01.md)),
 the remaining cbuf bucket is `VsConsts`. Is its size driven by how many float

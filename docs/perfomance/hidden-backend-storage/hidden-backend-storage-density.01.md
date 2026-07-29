@@ -7,10 +7,13 @@ title: VS Buffer Write Density
 date: undated
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5450-L5520
 ---
 
 # VS Buffer Write Density
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Per VS invocation, how many bytes does the hidden
 bucket cost, and is that explainable by visible varyings or by Xcode's named

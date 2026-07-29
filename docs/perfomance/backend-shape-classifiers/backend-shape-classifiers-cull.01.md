@@ -7,10 +7,13 @@ title: Probe Disable Cull
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3293-L3297
 ---
 
 # Probe Disable Cull
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the cull-state bit own the hidden top-three
 VS-buffer-write bucket?

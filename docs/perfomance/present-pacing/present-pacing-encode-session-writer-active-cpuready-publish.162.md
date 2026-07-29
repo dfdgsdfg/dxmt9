@@ -7,11 +7,14 @@ title: EncodeSession Writer-Active CpuReady Publish
 date: 2026-06-21
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-encode-session-writer-active-cpuready-publish-r1-20260621/result.json, experiments/output/app-d3d9-3dmark05-encode-session-writer-active-cpuready-publish-r1-20260621/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-writer-active-cpuready-publish-r1-20260621/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-writer-active-cpuready-publish-r1-20260621/actual.png
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-writer-active-slot-shape.161.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H162 - EncodeSession Writer-Active CpuReady Publish
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

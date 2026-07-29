@@ -7,10 +7,13 @@ title: Persistent Rejected Verdict Refresh
 date: 2026-06-06
 type: experiment-run
 status: accepted-as-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-noenc-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-noenc-r1/dxmt9-perf-counter-comparison.md; src/dxmt9/dxmt9_resource_pool.cpp; src/dxmt9/dxmt9_draw_encoder.mm
 ---
 
 # Persistent Rejected Verdict Refresh
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [index-cache-locality-cpucost.14](index-cache-locality-cpucost.14.md) ended by
 suggesting a cheaper persistent per-source-IB candidate verdict or earlier

@@ -7,10 +7,13 @@ title: Uniform Payload N-1 Elision Probe
 date: 2026-06-14
 type: experiment
 status: rejected-no-opportunity
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-cache-uniform-elision-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-cache-uniform-elision-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-snapshot-cache-uniform-elision-r1-20260614/actual.png
 ---
 
 # Uniform Payload N-1 Elision Probe
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.44](../state-churn-encode/state-churn-encode-encode-phase.44.md) proved that
 same `{stateGeneration,stateLane}` non-front draw submissions can avoid copying

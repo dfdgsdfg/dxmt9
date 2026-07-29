@@ -7,10 +7,13 @@ title: Run-Level Counters
 date: undated
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2017-L2041
 ---
 
 # Run-Level Counters
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What is the whole-run GT1 counter shape that
 per-frame captures sit inside? Provides the present/draw/state-delta context for

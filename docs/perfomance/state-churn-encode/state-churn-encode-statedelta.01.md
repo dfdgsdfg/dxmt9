@@ -7,10 +7,13 @@ title: Draw-Run State-Delta Bucket Run
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5521-L5601
 ---
 
 # Draw-Run State-Delta Bucket Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Of the state-delta draw-run breaks, which state group
 actually stops the scan — stream-only, IB-only, texture, shader, FVF/vdecl, or

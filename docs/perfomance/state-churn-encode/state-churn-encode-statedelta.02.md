@@ -7,10 +7,13 @@ title: Mixed State-Delta Pair Run
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5602-L5728
 ---
 
 # Mixed State-Delta Pair Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Inside the dominant *mixed* state-delta bucket, how
 many groups change together, and which category pair dominates? Split mixed by

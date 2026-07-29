@@ -7,11 +7,14 @@ title: Clear Flush Low-Overhead Refresh
 date: 2026-06-14
 type: perturbation-refresh
 status: rejected-current
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-pe-recorder-stats-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pe-recorder-stats-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-pe-recorder-stats-lowoverhead-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-pe-clear-flush-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pe-clear-flush-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-pe-clear-flush-lowoverhead-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-clear-flush.22.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.68.md
 ---
 
 # Present-Pacing 23 - Clear Flush Low-Overhead Refresh
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

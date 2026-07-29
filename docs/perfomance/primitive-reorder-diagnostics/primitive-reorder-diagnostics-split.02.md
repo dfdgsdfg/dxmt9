@@ -7,10 +7,13 @@ title: Bounded Split Row 60/1 Opaque
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10435-L10530
 ---
 
 # Bounded Split Row 60/1 Opaque
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The symmetric check after the `60/3` negative: does
 the other opaque 2048x2048 depth-write hot row, `60/1`, respond differently to

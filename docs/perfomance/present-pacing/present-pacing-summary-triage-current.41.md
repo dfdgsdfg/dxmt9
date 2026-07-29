@@ -7,11 +7,14 @@ title: Current Summary-Triage Scout
 date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-p4-summary-triage-current/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-p4-summary-triage-current/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-p4-summary-triage-current/result.json
 related: docs/perfomance/present-pacing/present-pacing-summary-triage.40.md, docs/perfomance/present-pacing/present-pacing-frame-sampling-current.39.md, docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md
 ---
 
 # Present-Pacing 41 - Current Summary-Triage Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

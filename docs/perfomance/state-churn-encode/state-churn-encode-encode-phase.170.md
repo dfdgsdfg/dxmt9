@@ -7,11 +7,14 @@ title: Batch-Miss Uniform Payload Path Counters
 date: 2026-06-19
 type: instrumentation
 status: accepted-runtime-attribution
+outdated: knob-removed
 source: src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.166.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.161.md, docs/perfomance/present-pacing/present-pacing-current-frontier.89.md
 ---
 
 # Encode Phase 170 - Batch-miss uniform payload path counters
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

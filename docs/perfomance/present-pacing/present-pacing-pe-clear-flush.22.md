@@ -7,11 +7,14 @@ title: Clear Flush Early Publish Probe
 date: 2026-06-14
 type: perturbation
 status: rejected-current
+outdated: knob-removed
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_recorder.hpp, agents/rules/environment_variables_bridge.rules.md, experiments/output/app-d3d9-3dmark05-present-pe-caller-stack-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-caller-stack-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-present-pe-flush-after-clear-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-flush-after-clear-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-caller-stack.20.md, docs/perfomance/present-pacing/present-pacing-completion-signal-delay.21.md
 ---
 
 # Present-Pacing 22 - Clear Flush Early Publish Probe
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

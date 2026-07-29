@@ -7,10 +7,13 @@ title: Large4096 Cross-Bucket Attribution
 date: 2026-06-02
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11165-L11250
 ---
 
 # Large4096 Cross-Bucket Attribution
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** A narrow `60/4` large-draw reverse probe was the first
 clean signal to move the first-order VS-write counter, but `60/4` is

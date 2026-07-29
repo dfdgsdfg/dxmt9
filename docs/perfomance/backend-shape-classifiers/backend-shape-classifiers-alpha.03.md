@@ -7,10 +7,13 @@ title: Scoped Alpha-Blend State-Shape Probe (large4096+alpha)
 date: 2026-06-02
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L15322-L15441
 ---
 
 # Scoped Alpha-Blend State-Shape Probe (large4096+alpha)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** With a precise class selector that hits the active
 large alpha class, does disabling alpha blend materially move the Apple hidden

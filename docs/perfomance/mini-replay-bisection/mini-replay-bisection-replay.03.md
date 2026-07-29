@@ -7,10 +7,13 @@ title: Wider Encoder2 Payload Capture
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14783-L14878
 ---
 
 # Wider Encoder2 Payload Capture
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** If depth/scissor are not the missing owner
 ([mini-replay-bisection-depth.01](mini-replay-bisection-depth.01.md)), does replaying the **whole** `60/2`

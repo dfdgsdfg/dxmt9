@@ -7,10 +7,13 @@ title: Uniform Payload Record In-Place Construction
 date: 2026-06-14
 type: implementation-ab
 status: accepted-cpu-cleanup
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-uniform-payload-emplace-r1-20260614/actual.png, experiments/output/app-d3d9-3dmark05-uniform-append-split-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Uniform Payload Record In-Place Construction
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.52](state-churn-encode-encode-phase.52.md) showed
 `draw_uniform_payload_append_copy_cpu_ms=813.196ms`, making the append miss path

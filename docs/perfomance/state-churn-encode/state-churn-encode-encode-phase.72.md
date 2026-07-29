@@ -2,10 +2,13 @@
 title: Encode Phase 72 - Encode-Slot PSO Handle Reuse Opportunity
 date: 2026-06-14
 status: accepted-opportunity
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-handle-reuse-opportunity-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 72 - Encode-Slot PSO Handle Reuse Opportunity
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.71](state-churn-encode-encode-phase.71.md) names the residual
 encode-slot prefetch cost as repeated draw PSO lookup/key work. How much of

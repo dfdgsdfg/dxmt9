@@ -7,10 +7,13 @@ title: Snapshot Submission Subphase Attribution
 date: 2026-06-06
 type: attribution
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-subphase-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-subphase-split-r1/dxmt9-perf-counter-comparison-vs-plan-direct.md, experiments/output/app-d3d9-3dmark05-snapshot-subphase-split-r1/actual.png
 ---
 
 # Snapshot Submission Subphase Attribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [state-churn-encode-encode-phase.08](../state-churn-encode/state-churn-encode-encode-phase.08.md) cut the
 binding-packet cache path, the largest named CPU bucket was still

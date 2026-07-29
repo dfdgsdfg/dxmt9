@@ -7,10 +7,13 @@ title: Layout-Stride Screen-Blend Cache No-Gputrace Scout
 date: 2026-06-04
 type: scout
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1293-L1376
 ---
 
 # Layout-Stride Screen-Blend Cache No-Gputrace Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The remaining hot row `50/2` is entirely depth-read and
 contains the screen-blend/scissor/textured subset. Can the strict screen-blend

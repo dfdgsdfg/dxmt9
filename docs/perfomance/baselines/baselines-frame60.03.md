@@ -7,10 +7,13 @@ title: Current Visual-Coupling Frame60 No-Gputrace Scout
 date: 2026-06-07
 type: scout
 status: accepted-counter-sample
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-visual-coupling-frame60-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-visual-coupling-frame60-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-current-residual-perf-after-oracle-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-current-residual-perf-after-oracle-r1/analysis/counter-comparison-vs-visual-coupling.md
 ---
 
 # Current Visual-Coupling Frame60 No-Gputrace Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After recent visual correctness changes around
 ship-engine glow / bloom-like lighting appeared to bring a small heuristic timing

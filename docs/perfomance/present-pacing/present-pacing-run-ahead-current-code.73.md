@@ -7,11 +7,14 @@ title: Current HEAD Has No Run-Ahead Runtime Knob
 date: 2026-06-18
 type: code-audit
 status: accepted-current-code
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp; src/dxmt9/dxmt9_queue.cpp; src/dxmt9/dxmt9_queue.hpp; agents/rules/environment_variables_present.rules.md; specs/backend/spec.md; specs/backend/gap.md; docs/perfomance/present-pacing/index.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md; docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md; docs/perfomance/present-pacing/present-pacing-run-ahead-cpu-ready.70.md
 ---
 
 # Present Pacing 73 - Current HEAD has no run-ahead runtime knob
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

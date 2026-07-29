@@ -7,10 +7,13 @@ title: Const-Upload Boundary Semantics
 date: undated
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3821-L3857
 ---
 
 # Const-Upload Boundary Semantics
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Why can't a draw-run simply cross a constant-upload
 record between two draws? Establish the correctness boundary and the safe

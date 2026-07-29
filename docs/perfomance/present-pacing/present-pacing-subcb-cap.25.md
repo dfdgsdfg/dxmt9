@@ -2,10 +2,13 @@
 title: Present Pacing 25 - Sub-Command Buffer Cap A/B
 date: 2026-06-14
 status: rejected-current-fps-lever
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-subcb-cap8-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-subcb-cap8-lowoverhead-r1-20260614/3dmark05-perf-frames.csv
 ---
 
 # Present Pacing 25 - Sub-Command Buffer Cap A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** Current low-overhead GT1 still spends large exposed time between
 `EncodeDequeue` and `commandBuffer.commit()`. The default mid-chunk policy

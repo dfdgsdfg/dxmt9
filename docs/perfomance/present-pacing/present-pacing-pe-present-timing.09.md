@@ -7,11 +7,14 @@ title: PE Present Timing Probe
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, experiments/output/app-d3d9-3dmark05-present-pe-timing-info-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-timing-info-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-present-pe-timing-info-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-present-pe-timing-info-r1-20260614/actual.png
 related: docs/perfomance/present-pacing/present-pacing-stage-delta.08.md, docs/perfomance/present-pacing/present-pacing-prepublish-stage.07.md
 ---
 
 # Present-Pacing 09 - PE Present Timing Probe
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Reverse Indexed Triangle-Order Classifier
 date: 2026-06-02
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9242-L9383
 ---
 
 # Reverse Indexed Triangle-Order Classifier
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does perturbing primitive/index *order* (not vertex
 expansion) move the hidden VS-buffer-write bucket? The probe keeps Metal indexed

@@ -7,11 +7,14 @@ title: Capture-Delay-Aware 120s Watchdog Scout
 date: 2026-06-12
 type: scout
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-post-uniform-120-result-20260612/result.json, experiments/output/app-d3d9-3dmark05-current-post-uniform-120-result-20260612/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-post-uniform-120-result-20260612/actual.png
 baseline: experiments/output/app-d3d9-3dmark05-uniform-refresh-fast-20260612/result.json
 ---
 
 # Capture-Delay-Aware 120s Watchdog Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After switching no-gputrace scouts to `--timeout
 120`, the first post-uniform-refresh scout proved the wrapper watchdog fired too

@@ -7,10 +7,13 @@ title: Dirty Range Reset Xcode Frame Capture
 date: 2026-06-01
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4635-L4704
 ---
 
 # Dirty Range Reset Xcode Frame Capture
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the dirty-range reset removed the multi-GB cbuf
 amplification ([const-upload-dirtyrange.01](const-upload-dirtyrange.01.md)), does the GPU frame bottleneck

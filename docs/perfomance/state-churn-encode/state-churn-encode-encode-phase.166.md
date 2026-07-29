@@ -7,11 +7,14 @@ title: Direct Compact Submission Snapshot
 date: 2026-06-19
 type: runtime-implementation
 status: accepted-cleanup-rejected-promotion
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h183-compact-carrier-current-compact-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h184-compact-direct-current-compact-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h184-compact-direct-current-compact-r1/h183-vs-h184-compact-direct.md, experiments/output/app-d3d9-3dmark05-h184-compact-direct-current-compact-r1/h182-vs-h184-compact-direct.md, include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.165.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.164.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 166 - Direct compact submission snapshot
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

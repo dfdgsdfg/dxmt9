@@ -2,10 +2,13 @@
 title: Present Pacing 33 - Current Low-Overhead Refresh
 date: 2026-06-15
 status: accepted-current-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-after-cleanup-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-after-cleanup-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-after-cleanup-r1-20260615/actual.png
 ---
 
 # Present Pacing 33 - Current Low-Overhead Refresh
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After the recent encode/copy cleanup and the rejected
 uniform-payload timer removal, what does a current low-overhead GT1 run say

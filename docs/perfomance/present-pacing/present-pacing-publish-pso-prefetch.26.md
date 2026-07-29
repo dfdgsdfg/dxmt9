@@ -2,10 +2,13 @@
 title: Present Pacing 26 - Publish-Time PSO Prefetch Placement
 date: 2026-06-14
 status: accepted-placement-signal
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-present-publish-split-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-publish-pso-prefetch-off-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-publish-pso-prefetch-off-lowoverhead-r2-20260614/3dmark05-perf-summary.md
 ---
 
 # Present Pacing 26 - Publish-Time PSO Prefetch Placement
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** If completion wait is followed by serialized P2/P3 work, can
 moving a known pre-publish CPU bucket change wall-clock FPS even when total CPU

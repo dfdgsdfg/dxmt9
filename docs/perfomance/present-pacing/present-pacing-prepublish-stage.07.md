@@ -7,11 +7,14 @@ title: No-enqueue completion gap reaches unix commit_chunk quickly, then waits i
 date: 2026-06-13
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-commit-entry-stage-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-commit-entry-stage-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-commit-entry-stage-r1-20260613/3dmark05-perf-frames.csv
 related: docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md, docs/perfomance/present-pacing/present-pacing-boundary-latency-ab.06.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Present-Pacing 07 — Pre-Publish Stage Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

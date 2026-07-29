@@ -7,11 +7,14 @@ title: Argbuf Source-Changed Fast Miss
 date: 2026-06-15
 type: runtime-scout
 status: accepted-local-cleanup-not-fps-proof
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-reopen-cbuf-probe-split-rerun/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-source-change-fast-miss-r1/actual.png, src/dxmt9/dxmt9_draw_encoder.mm
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.110.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 111 - Argbuf Source-Changed Fast Miss
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

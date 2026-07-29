@@ -7,10 +7,13 @@ title: PRESENT_ASYNC_ACQUIRE=1
 date: 2026-06-05
 type: ab-test
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-async-acquire-r1
 ---
 
 # PRESENT_ASYNC_ACQUIRE=1
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Step 1 attributed 100% of `completion_wait_ms`
 to Present-bearing CBs. Step 2 ruled out the queue-depth axis

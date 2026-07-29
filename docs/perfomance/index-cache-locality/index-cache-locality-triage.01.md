@@ -7,10 +7,13 @@ title: 50/2 Remaining Bottleneck Triage
 date: 2026-06-04
 type: measurement
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L20100-L20257
 ---
 
 # 50/2 Remaining Bottleneck Triage
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the opaque-depth win, row `50/2` is the unresolved
 full-frame owner. What splits it, and is texture/fragment material dependence the

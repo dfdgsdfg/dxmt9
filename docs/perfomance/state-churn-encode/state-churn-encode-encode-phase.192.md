@@ -7,11 +7,14 @@ title: Owned Chunk-End Carry Skeleton
 date: 2026-06-20
 type: implementation-experiment
 status: default-off-implemented
+outdated: knob-removed
 source: src/d3d9/device_c_chunk_replay.cpp, src/d3d9/device_c_common.hpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_perf.rules.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.190.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.191.md
 ---
 
 # Encode Phase 192 - Owned chunk-end carry skeleton
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

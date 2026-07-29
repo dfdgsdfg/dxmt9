@@ -7,10 +7,13 @@ title: Nonopaque Reverse Subset
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9519-L9663
 ---
 
 # Nonopaque Reverse Subset
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is the full-reverse win
 ([primitive-reorder-diagnostics-reverse.01](primitive-reorder-diagnostics-reverse.01.md)) owned by nonopaque visibility

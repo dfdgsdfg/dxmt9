@@ -7,11 +7,14 @@ title: FFP PS Direct Build Current Scout
 date: 2026-06-15
 type: runtime-smoke
 status: accepted-smoke-rejected-as-fps-owner
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/result.json, experiments/output/app-d3d9-3dmark05-ffp-ps-direct-build-current/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.104.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.107.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # State-Churn Encode 108 - FFP PS Direct Build Current Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

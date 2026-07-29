@@ -7,10 +7,13 @@ title: FFP VS Stable Slice Reuse Run
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4398-L4473
 ---
 
 # FFP VS Stable Slice Reuse Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Because `FfpVsConsts` is ~100% unchanged inside an
 encoder ([const-upload-volatility.01](const-upload-volatility.01.md)), defer it out of the generic argbuf

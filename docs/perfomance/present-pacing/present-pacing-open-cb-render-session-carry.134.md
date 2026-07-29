@@ -7,11 +7,14 @@ title: Open-CB Render Session Carry
 date: 2026-06-20
 type: implementation-candidate
 status: rejected-no-gputrace
+outdated: knob-removed
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, agents/rules/environment_variables_present.rules.md, docs/perfomance/present-pacing/present-pacing-encode-session-finalizer-seam.133.md
 related: docs/perfomance/present-pacing/present-pacing-encode-session-finalizer-seam.133.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md, docs/perfomance/present-pacing/present-pacing-open-cb-final-reopen.115.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-state-carry-audit.116.md
 ---
 
 # Present Pacing / Open-CB Render Session Carry 134
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Can the rejected H108 open-CB carrier be repaired by carrying the
 active render session, rather than only carrying the Metal command buffer?

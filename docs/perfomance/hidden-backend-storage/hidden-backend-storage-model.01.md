@@ -7,10 +7,13 @@ title: Hidden Apple GPU Backend Storage Model
 date: 2026-06-01
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2575-L3010
 ---
 
 # Hidden Apple GPU Backend Storage Model
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What is the part of Xcode's `VS Buffer Device Memory
 Bytes Written` bucket that dxmt's explicit CPU-side writers, source-visible MSL

@@ -7,10 +7,13 @@ title: Draw-Run Failure Shape
 date: undated
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3791-L3820
 ---
 
 # Draw-Run Failure Shape
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Why does the importer draw-run scanner almost never
 batch draws? Quantify what breaks the run scans so the per-draw encode hot path

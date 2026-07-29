@@ -7,11 +7,14 @@ title: Tail-Present Batch Runtime Carrier
 date: 2026-06-19
 type: implementation
 status: mechanism-accepted-fps-rejected-by-r4
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, src/dxmt9/render/tail_present_batch.cpp, src/dxmt9/render/tail_present_batch.hpp, src/dxmt9/render/traditional_backend.cpp, src/dxmt9/render/framegraph_backend.cpp, tests/native/backend/queue_completion_sources_spec.cpp, tests/native/backend/render_backend_batch_contract_spec.cpp, agents/rules/environment_variables_present.rules.md, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r1/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r2/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r2/h88-r2-vs-v003-baseline-compare.md, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r2/h88-r2-vs-r1-compare.md, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r3-prefetch/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r3-prefetch/h88-r3-vs-v003-baseline-compare.md, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r3-prefetch/h88-r3-vs-r2-compare.md, experiments/output/app-d3d9-3dmark05-h88-sameday-baseline-r4/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r4-sameday/result.json, experiments/output/app-d3d9-3dmark05-h88-tail-present-batch-r4-sameday/h88-r4-sameday-compare.md
 related: docs/perfomance/present-pacing/present-pacing-tail-present-staging-current.87.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md
 ---
 
 # Present-Pacing 88 - Tail-Present batch runtime carrier
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

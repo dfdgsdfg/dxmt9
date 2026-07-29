@@ -7,10 +7,13 @@ title: Encoder2 Bisection Analysis
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14879-L15014
 ---
 
 # Encoder2 Bisection Analysis
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Within the reproduced 113-draw encoder2 replay
 ([mini-replay-bisection-replay.03](mini-replay-bisection-replay.03.md)), is the ~1 GiB VS-write pressure owned by a

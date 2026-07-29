@@ -7,11 +7,14 @@ title: Pre-Present Command-Limit Runtime Gate
 date: 2026-06-19
 type: no-gputrace-runtime-gate
 status: rejected-runtime-p4-overlap
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h98-pre-present-limit128-r1/result.json, experiments/output/app-d3d9-3dmark05-h98-pre-present-limit128-r1/3dmark05-perf-summary.md, traces/app-d3d9-3dmark05-h98-pre-present-limit128-r1/analysis/frame60-perf-counter-comparison.md, experiments/output/app-d3d9-3dmark05-h98-pre-present-limit128-r1/actual.png
 related: docs/perfomance/present-pacing/present-pacing-pre-present-stage-trigger.98.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md, docs/perfomance/present-pacing/present-pacing-tail-present-staged-runtime.94.md
 ---
 
 # Present Pacing / Pre-Present Command-Limit Runtime Gate 99
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Does the H98 default-off carrier recover P4 overlap when it stages
 pre-Present chunks before the actual `Present` and releases them as one

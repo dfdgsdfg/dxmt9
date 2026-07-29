@@ -7,10 +7,13 @@ title: Commit Chunk Replay Split
 date: 2026-06-12
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-commit-chunk-stage-20260612-213220/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-commit-chunk-stage-20260612-213220/3dmark05-perf-frames.csv, src/d3d9/device_c_chunk_replay.cpp, src/dxmt9/dxmt9_perf_counters.cpp
 ---
 
 # Commit Chunk Replay Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The run-level `bridge_commit_latency_ns` counter is
 large enough to look like a bridge or ABI problem. Is it raw Wine PE/unix call

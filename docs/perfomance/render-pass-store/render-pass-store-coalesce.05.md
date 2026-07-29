@@ -7,10 +7,13 @@ title: Current Frame60 DAG Refresh Keeps H6 Coalesce Candidate Alive
 date: 2026-06-14
 type: observation
 status: accepted-structural-refresh
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/actual.png, traces/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/analysis/framegraph-dag-summary.md, traces/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/analysis/framegraph-dag-preopt-summary.md, traces/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/analysis/framegraph-dag-postopt-summary.md, traces/app-d3d9-3dmark05-framegraph-dag-passcoalesce-r1-20260614/analysis/framegraph-dag-candidates.csv
 ---
 
 # Current Frame60 DAG Refresh Keeps H6 Coalesce Candidate Alive
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the latest CPU copy-policy and indexed-path
 cleanup work, does the framegraph sidecar still see the same local

@@ -7,10 +7,13 @@ title: Multi-PSO Mini-Replay Harness
 date: undated
 type: tooling
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14235-L14360
 ---
 
 # Multi-PSO Mini-Replay Harness
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Extend `run_3dmark05_mini_replay.py` so it can replay a
 multi-shader screen-blend slice whose VS binds stream1 at Metal `buffer(6)` — the two

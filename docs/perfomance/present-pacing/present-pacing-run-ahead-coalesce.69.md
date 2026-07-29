@@ -7,11 +7,14 @@ title: Run-Ahead Coalescing Creates Overlap but Fails Locality
 date: 2026-06-16
 type: experiment-run
 status: accepted-mechanism-rejected-prototype-carrier
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-runahead-coalesce-baseline-r1/result.json; experiments/output/app-d3d9-3dmark05-runahead-coalesce-baseline-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-runahead-coalesce-on-r2/result.json; experiments/output/app-d3d9-3dmark05-runahead-coalesce-on-r2/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-runahead-coalesce-on-r2/analysis/frame60-perf-counter-comparison.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present Pacing 69 - Run-Ahead Coalescing Creates Overlap but Fails Locality
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 Current-code note (2026-06-18): this document is historical experiment
 evidence. The prototype implementation and env knobs were later reverted, and

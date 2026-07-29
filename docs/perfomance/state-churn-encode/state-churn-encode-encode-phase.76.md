@@ -2,10 +2,13 @@
 title: Encode Phase 76 - Encode-Slot PSO Semantic Miss Classifier
 date: 2026-06-14
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-exclusive-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 76 - Encode-Slot PSO Semantic Miss Classifier
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) proved that semantic
 key/probe/store overhead is not the next encode-slot PSO-prefetch owner. The

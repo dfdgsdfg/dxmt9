@@ -7,10 +7,13 @@ title: Layout-Stride PSO Prefetch Fix (frame50 replay)
 date: 2026-06-04
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L875-L985
 ---
 
 # Layout-Stride PSO Prefetch Fix (frame50 replay)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After binding-agnostic snapshot bypassed PSO prefetch
 for any override draw (pipeline-lookup CPU spiked to ~6.7s), preserve the

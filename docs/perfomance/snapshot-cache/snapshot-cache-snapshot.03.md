@@ -7,10 +7,13 @@ title: Snapshot Cache Miss-Reason Instrumentation
 date: 2026-06-04
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1732-L1817
 ---
 
 # Snapshot Cache Miss-Reason Instrumentation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the split left ~636k misses, classify *which*
 state delta causes each remaining cache miss via new

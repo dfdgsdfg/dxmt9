@@ -7,10 +7,13 @@ title: Cbuf Class Breakdown Run
 date: undated
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4232-L4313
 ---
 
 # Cbuf Class Breakdown Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Where does the multi-GB argbuf constant-buffer write
 traffic actually go? Split `argbuf_cbuf_bytes` by the four argbuf cbuf entries

@@ -7,10 +7,13 @@ title: Cached Index Min-Gain 0 Follow-Up
 date: 2026-06-04
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L20010-L20099
 ---
 
 # Cached Index Min-Gain 0 Follow-Up
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does lowering the production cached-index gain threshold
 from `10` to `0` (admitting more cached candidates) reduce Xcode VS invocations and

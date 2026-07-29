@@ -7,10 +7,13 @@ title: No-Mutate Indexed Draw Identity Scout
 date: 2026-06-03
 type: scout
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L13515-L13590
 ---
 
 # No-Mutate Indexed Draw Identity Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Cache-aware reorder runs perturbed hot-row shape and
 invalidated the locality signal. Can we record per-draw identity (handles, PSO,

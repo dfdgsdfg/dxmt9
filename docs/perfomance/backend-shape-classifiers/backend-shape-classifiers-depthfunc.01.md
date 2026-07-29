@@ -7,10 +7,13 @@ title: Depth-Func-Always Probe
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8916-L8975
 ---
 
 # Depth-Func-Always Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Separating depth-compare shape from depth-write:
 keep depth enable/write state but force the Metal depth compare function to

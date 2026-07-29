@@ -2,10 +2,13 @@
 title: Encode Phase 75 - Encode-Slot PSO Semantic Memo Split
 date: 2026-06-14
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-split-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 75 - Encode-Slot PSO Semantic Memo Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.74](state-churn-encode-encode-phase.74.md) accepted the default
 encode-slot semantic PSO memo, but did not split the memo's own cost. Is the

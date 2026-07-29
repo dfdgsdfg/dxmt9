@@ -7,10 +7,13 @@ title: Mini-Replay Readiness Planner
 date: undated
 type: tooling
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L13687-L14202
 ---
 
 # Mini-Replay Readiness Planner
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Before building a standalone row-local replay, what
 inputs already exist for the GT1 hot encoders, and what is missing? The goal was

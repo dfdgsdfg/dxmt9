@@ -7,10 +7,13 @@ title: No-Encoder Default-Policy Smoke
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-r1/analysis/defaultgate-noenc-baseline-r1-vs-opaque-depth-r1-run-counters.md; experiments/output/app-d3d9-3dmark05-defaultgate-noenc-baseline-r1/result.json; experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-r1/result.json
 ---
 
 # No-Encoder Default-Policy Smoke
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the opaque-depth index-cache opt-in still carry
 meaningful CPU cost when the standard perf wrapper runs without diagnostic

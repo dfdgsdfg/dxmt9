@@ -7,10 +7,13 @@ title: Binding Packet Plan-Direct Cache
 date: 2026-06-06
 type: implementation
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-binding-packet-plan-direct-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-binding-packet-plan-direct-r1/dxmt9-perf-counter-comparison-vs-identity-smoke.md, experiments/output/app-d3d9-3dmark05-binding-packet-plan-direct-r1/dxmt9-perf-counter-comparison-vs-packet-cache-split.md, experiments/output/app-d3d9-3dmark05-binding-packet-plan-direct-r1/actual.png
 ---
 
 # Binding Packet Plan-Direct Cache
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.07](state-churn-encode-encode-phase.07.md) showed the
 binding-packet cache was paying twice: first to build/copy a separate

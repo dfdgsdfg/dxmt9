@@ -7,11 +7,14 @@ title: Current gputrace and System Trace Preflight
 date: 2026-06-19
 type: workflow-validation
 status: file-route-exported-developertools-attach-blocked
+outdated: evidence-missing
 source: scripts/tools/run_3dmark05_perf_probe.sh --dry-run; scripts/tools/run_3dmark05_perf_probe.sh --xcode-attach-preflight-only; scripts/tools/run_3dmark05_system_trace_sidecar.sh --dry-run; df -m .; /usr/sbin/DevToolsSecurity -status
 related: docs/perfomance/baselines/baselines-gputrace-capture.01.md, docs/perfomance/baselines/index.md, agents/rules/metal_debugging.rules.md
 ---
 
 # gputrace/System Trace Preflight
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** Can the current machine start another 3DMark05 GT1 `.gputrace`
 or Metal System Trace sidecar immediately after cleaning `tmp`,

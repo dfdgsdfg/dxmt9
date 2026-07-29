@@ -7,11 +7,14 @@ title: Submission Carrier Counters
 date: 2026-06-19
 type: runtime-gate
 status: accepted-attribution
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h174-carrier-counter-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h174-carrier-counter-r1/actual.png, experiments/output/app-d3d9-3dmark05-h174-carrier-counter-compact-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h174-carrier-counter-compact-r1/actual.png, traces/app-d3d9-3dmark05-h174-carrier-counter-compact-r1/analysis/frame60-perf-counter-comparison.md, include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.161.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.154.md, docs/perfomance/snapshot-cache/index.md
 ---
 
 # Encode Phase 162 - Submission carrier counters
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,11 +7,14 @@ title: EncodeSession Completion-Wait Wakeup
 date: 2026-06-21
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-encode-session-completion-wait-wakeup-r2-20260621/result.json, experiments/output/app-d3d9-3dmark05-encode-session-completion-wait-wakeup-r2-20260621/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-completion-wait-wakeup-r2-20260621/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-completion-wait-wakeup-r2-20260621/actual.png
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-current-smoke.152.md, docs/perfomance/present-pacing/present-pacing-encode-session-wait-stage-durations.151.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H153 - EncodeSession Completion-Wait Wakeup
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

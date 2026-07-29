@@ -7,11 +7,14 @@ title: Current Compact Uniform Repeat
 date: 2026-06-19
 type: runtime-gate
 status: rejected-current-fps-lever
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h173-current-baseline-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h173-current-baseline-r1/actual.png, experiments/output/app-d3d9-3dmark05-h173-compact-uniform-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h173-compact-uniform-current-r1/actual.png, traces/app-d3d9-3dmark05-h173-compact-uniform-current-r1/analysis/frame60-perf-counter-comparison.md, src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.160.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.154.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md
 ---
 
 # Encode Phase 161 - Current compact uniform repeat
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

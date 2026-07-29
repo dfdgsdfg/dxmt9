@@ -7,11 +7,14 @@ title: Post Cbuf Observer Low-Overhead Baseline
 date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-20260615-r1/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.129.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 43 - Post Cbuf Observer Low-Overhead Baseline
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After making VS/FFPVS cbuf content-history scans opt-in, what is
 the current low-overhead owner split for 3DMark05 GT1?

@@ -7,10 +7,13 @@ title: Sparse Const Split Run-Level Probe
 date: 2026-06-01
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6078-L6165
 ---
 
 # Sparse Const Split Run-Level Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Splitting one merged min/max const-upload record into
 the actual changed-register runs should cut const-upload break payload bytes

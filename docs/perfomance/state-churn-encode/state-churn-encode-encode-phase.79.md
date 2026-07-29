@@ -2,10 +2,13 @@
 title: Encode Phase 79 - Encode-Slot PSO Resource-Shape Memo Paired A/B
 date: 2026-06-14
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-current-default-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-memo-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 79 - Encode-Slot PSO Resource-Shape Memo Paired A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.78](state-churn-encode-encode-phase.78.md) showed that the
 default-off resource-shape memo behavior is wired and visually safe in a

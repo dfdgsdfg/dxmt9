@@ -7,11 +7,14 @@ title: Compact Breakdown Timer Gate
 date: 2026-06-19
 type: implementation-runtime-gate
 status: accepted-instrumentation-hygiene-runtime-not-promoted
+outdated: knob-removed
 source: src/d3d9/core_draw.cpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-h170-compact-no-breakdown-r1/3dmark05-perf-summary.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.158.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.159.md
 ---
 
 # Encode Phase 160 - Compact breakdown timer gate
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Dirty Cbuf Identity Repoint Probe
 date: 2026-06-06
 type: rejected-experiment
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-dirty-identity-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-dirty-identity-r1/dxmt9-perf-counter-comparison-vs-fastappend.md, experiments/output/app-d3d9-3dmark05-argbuf-dirty-identity-r1/actual.png
 ---
 
 # Dirty Cbuf Identity Repoint Probe
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md), the
 remaining cbuf update bucket is mostly real dirty uploads:

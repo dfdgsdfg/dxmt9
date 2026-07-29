@@ -7,10 +7,13 @@ title: Candidate Build Phase Split
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-buildsplit-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-buildsplit-r1/result.json; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-buildsplit-r1/analysis/defaultgate-noenc-opaque-depth-r1-vs-buildsplit-r1-run-counters.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-buildsplit-r1/analysis/fastlookup-r1-vs-buildsplit-r1-run-counters.md
 ---
 
 # Candidate Build Phase Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After rejecting the pool lookup single-scan rewrite,
 is the remaining opaque-depth index-cache CPU side-effect caused by raw index

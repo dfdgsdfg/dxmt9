@@ -7,10 +7,13 @@ title: Snapshot Cache Split Implementation Status
 date: 2026-06-04
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1656-L1731
 ---
 
 # Snapshot Cache Split Implementation Status
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Splitting invalidation into full hot-state vs
 uniform-only should let const-only and draw-param-only packets reuse the hot

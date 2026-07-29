@@ -7,11 +7,14 @@ title: Current xctrace CPU Summary PE-Log Selector Scout
 date: 2026-06-14
 type: experiment
 status: inconclusive-id-mapping
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r2/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r2/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r2/analysis/xctrace-metal-gpu-intervals-summary.md, traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r2/analysis/pe-thread-id-summary.md
 related: docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-tooling.29.md, docs/perfomance/present-pacing/present-pacing-winemac-onmainthread.28.md, docs/perfomance/present-pacing/present-pacing-xctrace-threadstate.18.md
 ---
 
 # Present-Pacing 30 - Current xctrace CPU Summary PE-Log Selector Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,11 +7,14 @@ title: PE Wide Call Coverage Before Clear
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_device_child.hpp, src/d3d9/d3d9_pe_device_child_buffer.cpp, src/d3d9/d3d9_pe_device_child_misc.cpp, src/d3d9/d3d9_pe_device_child_surface.cpp, experiments/output/app-d3d9-3dmark05-present-pe-wide-call-coverage-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-wide-call-coverage-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-present-pe-child-return-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-child-return-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-clear-gate.15.md, docs/perfomance/present-pacing/present-pacing-pe-clear-nosampling.16.md
 ---
 
 # Present-Pacing 17 - PE Wide Call Coverage Before Clear
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

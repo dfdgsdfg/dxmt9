@@ -7,10 +7,13 @@ title: Current Sanity Frame50 No-Gputrace
 date: 2026-06-04
 type: scout
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1482-L1536
 ---
 
 # Current Sanity Frame50 No-Gputrace
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Confirm the frame50 runtime shape and counters are
 stable across code changes without paying for a `.gputrace`/Xcode export.

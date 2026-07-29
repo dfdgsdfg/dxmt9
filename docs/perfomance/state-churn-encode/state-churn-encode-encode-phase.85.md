@@ -2,10 +2,13 @@
 title: Encode Phase 85 - Argbuf Reopen Split Default-Off Cleanup
 date: 2026-06-15
 status: accepted-hot-path-cleanup-not-fps-proof
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-reopen-split-default-off-r1-20260615/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 85 - Argbuf Reopen Split Default-Off Cleanup
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.57](state-churn-encode-encode-phase.57.md) split the Stage 2 argbuf
 post-open path and showed the residual was distributed bookkeeping rather than

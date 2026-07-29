@@ -7,10 +7,13 @@ title: Cbuf Field Volatility Run
 date: undated
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4314-L4397
 ---
 
 # Cbuf Field Volatility Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Of the vertex-side cbuf rewrite bytes, how many
 actually change between consecutive uploads in the same render encoder? Split

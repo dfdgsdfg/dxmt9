@@ -7,11 +7,14 @@ title: In-Place Queued Submission Fill
 date: 2026-06-13
 type: optimization
 status: accepted-small-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/result.json, experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/actual.png, experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20260613/result.json, src/d3d9/device_c_chunk_replay.cpp
 baseline: experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20260613/result.json
 ---
 
 # In-Place Queued Submission Fill
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** F2 from [state-churn-encode-encode-phase.32](state-churn-encode-encode-phase.32.md)
 identified a direct value-traffic waste in `queueDraw*Submission()`:

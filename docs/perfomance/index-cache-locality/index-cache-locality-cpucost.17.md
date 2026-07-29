@@ -7,10 +7,13 @@ title: Strict LRU Candidate Builder Diagnostic
 date: 2026-06-06
 type: experiment-run
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-strict-lru-noenc-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-strict-lru-noenc-r1/dxmt9-perf-counter-comparison-vs-opaque-depth-noenc.md; experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-strict-lru-noenc-r1/image-comparison-vs-opaque-depth-noenc.md; experiments/output/app-d3d9-3dmark05-post-visualfix-opaque-depth-strict-lru-noenc-r1/image-comparison-vs-v001-capture40.md; src/dxmt9/dxmt9_draw_encoder.mm
 ---
 
 # Strict LRU Candidate Builder Diagnostic
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The candidate builder's simulated post-transform
 cache used a historical miss path that could duplicate the inserted index while

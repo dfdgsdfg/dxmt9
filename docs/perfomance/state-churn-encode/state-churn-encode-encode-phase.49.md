@@ -7,10 +7,13 @@ title: Binding Packet 2-Way Cache Rejected
 date: 2026-06-14
 type: implementation-ab
 status: rejected-current
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-binding-packet-cache-2way-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-binding-packet-cache-2way-r1-20260614/dxmt9-perf-counter-comparison-vs-phase08.md, experiments/output/app-d3d9-3dmark05-binding-packet-cache-2way-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-binding-packet-cache-2way-r1-20260614/actual.png
 ---
 
 # Binding Packet 2-Way Cache Rejected
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The current binding-packet cache is direct-mapped.
 The phase08 scout still reports `189,178` misses and `189,050` collisions, so

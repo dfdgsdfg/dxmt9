@@ -7,11 +7,14 @@ title: Probe Render-State Flat Entry Count
 date: 2026-06-13
 type: experiment
 status: accepted-proof
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-flat-state-entry-counters-r1-20260613/result.json, experiments/output/app-d3d9-3dmark05-flat-state-entry-counters-r1-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-flat-state-entry-counters-r1-20260613/actual.png, traces/app-d3d9-3dmark05-flat-state-entry-counters-r1-20260613/analysis/frame60-perf-counter-comparison.md, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp
 baseline: experiments/output/app-d3d9-3dmark05-tss-flat-compact-r3-20260613/result.json
 ---
 
 # Probe Render-State Flat Entry Count
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Phase 40 left render-state compaction open. Unlike
 sampler and texture-stage state, render states already occupy `62` default

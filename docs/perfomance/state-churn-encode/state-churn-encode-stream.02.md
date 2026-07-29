@@ -7,10 +7,13 @@ title: Encoder Delta Breakdown
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5049-L5110
 ---
 
 # Encoder Delta Breakdown
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Confirm with explicit delta sub-counters that stream
 Metal binds are caused by handle changes (not offsets), and that IB delta is

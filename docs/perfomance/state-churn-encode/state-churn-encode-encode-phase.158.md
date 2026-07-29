@@ -7,11 +7,14 @@ title: Compact Uniform Snapshot Breakdown
 date: 2026-06-19
 type: instrumentation-runtime-gate
 status: accepted-attribution-diagnostic-only
+outdated: knob-removed
 source: src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h168-compact-breakdown-r1/3dmark05-perf-summary.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.156.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.157.md
 ---
 
 # Encode Phase 158 - Compact uniform snapshot breakdown
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

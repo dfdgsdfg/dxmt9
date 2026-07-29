@@ -7,10 +7,13 @@ title: Min-Index Triangle Reorder Scout
 date: undated
 type: scout
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L13215-L13323
 ---
 
 # Min-Index Triangle Reorder Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After contiguous span-split failed, does changing
 triangle *order* inside hot draws — sorting triangle-list primitives by

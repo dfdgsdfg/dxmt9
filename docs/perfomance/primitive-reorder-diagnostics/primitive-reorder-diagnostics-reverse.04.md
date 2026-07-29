@@ -7,10 +7,13 @@ title: Row-Scoped Reverse Probe Tooling
 date: 2026-06-02
 type: tooling
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9664-L9790
 ---
 
 # Row-Scoped Reverse Probe Tooling
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The broad reverse subsets all drift frame shape. Add
 tooling to constrain a reverse probe to one `RenderPass[seq=...,enc=...]` row or

@@ -7,11 +7,14 @@ title: Shared Shader Bytecode Storage
 date: 2026-06-13
 type: experiment
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-shader-bytecode-shared-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-shader-bytecode-shared-20260613/result.json, experiments/output/app-d3d9-3dmark05-shader-bytecode-shared-20260613/actual.png, experiments/output/app-d3d9-3dmark05-submission-tls-scratch-r2-20260613/result.json, include/dxmt9/core_constants.hpp
 baseline: experiments/output/app-d3d9-3dmark05-submission-tls-scratch-r2-20260613/result.json
 ---
 
 # Shared Shader Bytecode Storage
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The F3 review found that `ShaderRef` carried
 `ShaderBytecode{std::vector<u8> bytes}` by value inside canonical draw-state and

@@ -7,11 +7,14 @@ title: Unused Full Uniform Carrier Lane Counter
 date: 2026-06-19
 type: runtime-attribution
 status: accepted
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h180-carrier-unused-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h181-carrier-unused-compact-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h181-carrier-unused-compact-r1/h180-vs-h181-carrier-unused.md, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.162.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.163.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 164 - Unused full uniform carrier lane counter
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

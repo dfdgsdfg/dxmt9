@@ -7,10 +7,13 @@ title: Point-Size-Only Pipeline Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7462-L7509
 ---
 
 # Point-Size-Only Pipeline Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does removing only the Metal `VSOut.pointSize`
 `point_size` field (the narrowest possible visible-width change) move the Xcode

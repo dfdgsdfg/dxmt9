@@ -7,10 +7,13 @@ title: Pass-Chain Split Measurement Run
 date: undated
 type: measurement
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4837-L4905
 ---
 
 # Pass-Chain Split Measurement Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is the same-key re-entry budget dominated by one
 attachment (so a single-attachment DontCare proof could suffice), and what

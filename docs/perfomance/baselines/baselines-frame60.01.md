@@ -7,10 +7,13 @@ title: Current-Source Frame60 Validation
 date: 2026-06-01
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5969-L6076
 ---
 
 # Current-Source Frame60 Validation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Rebuild the current source tree and capture frame60
 with full finalizer gates to validate per-encoder dxmt attribution + unique

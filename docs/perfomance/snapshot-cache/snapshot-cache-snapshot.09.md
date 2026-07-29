@@ -7,10 +7,13 @@ title: Snapshot FFP Known-Zero Constant Usage
 date: 2026-06-06
 type: implementation
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-reason2-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-ffp-zero-usage-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-ffp-zero-usage-r1/dxmt9-perf-counter-comparison-vs-reason2.md, experiments/output/app-d3d9-3dmark05-snapshot-ffp-zero-usage-r1/dxmt9-perf-counter-comparison-vs-usage-hash.md, experiments/output/app-d3d9-3dmark05-snapshot-ffp-zero-usage-r1/actual.png
 ---
 
 # Snapshot FFP Known-Zero Constant Usage
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.08](snapshot-cache-snapshot.08.md) accepted
 shader-usage/range-aware uniform payload hashing, but still left full constant

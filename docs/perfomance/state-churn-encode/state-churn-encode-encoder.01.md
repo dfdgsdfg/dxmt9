@@ -7,10 +7,13 @@ title: Encoder Breakdown Run
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4072-L4131
 ---
 
 # Encoder Breakdown Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What attribution buckets explain per-render-encoder
 CPU/write cost? Add `DXMT9_PERF_ENCODER_BREAKDOWN=1` to emit one

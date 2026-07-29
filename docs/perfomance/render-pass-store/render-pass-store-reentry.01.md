@@ -7,10 +7,13 @@ title: Same RT/Depth Re-entry Measurement Run
 date: undated
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4705-L4778
 ---
 
 # Same RT/Depth Re-entry Measurement Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the repeated RT/depth re-entry seen in the Xcode
 frame120 trace show up as a measurable run-level counter, and how much of the

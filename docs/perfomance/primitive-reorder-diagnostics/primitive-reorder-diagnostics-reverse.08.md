@@ -7,10 +7,13 @@ title: Row 60/4 Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10037-L10124
 ---
 
 # Row 60/4 Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Test the remaining baseline hot row `60/4` (the
 depth-read / textured / mostly-alpha-blended row) under strict shape gates.

@@ -7,10 +7,13 @@ title: Offline Live-VSOut Variant Codegen
 date: undated
 type: measurement
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7691-L7754
 ---
 
 # Offline Live-VSOut Variant Codegen
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the Metal compiler actually see structural VSOut
 reductions in the top translated VS rows? If it does, but runtime trims did not

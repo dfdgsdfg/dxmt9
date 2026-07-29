@@ -7,10 +7,13 @@ title: Row-Set Hotrows Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9941-L10036
 ---
 
 # Row-Set Hotrows Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Apply the row-set selector to the full baseline
 top-four hot rows `60/0,60/1,60/3,60/4` at once. Does reversing the whole hot set

@@ -7,10 +7,13 @@ title: Cross-Run VS Buffer Scaling Refresh
 date: undated
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8769-L8850
 ---
 
 # Cross-Run VS Buffer Scaling Refresh
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the scaling correlation on the curated
 classifier corpus (after adding `current-head-gputrace-r1`) to sharpen which

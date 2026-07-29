@@ -7,10 +7,13 @@ title: State-Set No-Op Guard Probe
 date: 2026-06-06
 type: implementation-probe
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-state-noop-guard-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-state-noop-guard-r1/dxmt9-perf-counter-comparison-vs-hash-reuse.md, experiments/output/app-d3d9-3dmark05-state-noop-guard-r1/actual.png
 ---
 
 # State-Set No-Op Guard Probe
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [snapshot-cache-snapshot.05](snapshot-cache-snapshot.05.md), the remaining
 snapshot path still spends about `12.4us` per uniform refresh or miss building

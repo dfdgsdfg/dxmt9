@@ -7,10 +7,13 @@ title: Opaque-Depth CPU Attribution Split
 date: 2026-06-05
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L251-L368
 ---
 
 # Opaque-Depth CPU Attribution Split
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The opt-in's `+25%` `encode_draw_stream_bind_cpu_ms` rise —
 is it real stream/IB/texture binding churn, or is it the indexed reorder/cache work?

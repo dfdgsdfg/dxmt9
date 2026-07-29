@@ -7,10 +7,13 @@ title: Fragment-Only Constant-Color Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7878-L7989
 ---
 
 # Fragment-Only Constant-Color Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Control for the position-only probe, which changed two
 things at once (16B VSOut **and** a constant fragment color). Does forcing only the

@@ -7,11 +7,14 @@ title: Compact Sampler State Capacity
 date: 2026-06-13
 type: experiment
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-sampler-state-compact-r2-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-sampler-state-compact-r2-20260613/result.json, experiments/output/app-d3d9-3dmark05-sampler-state-compact-r2-20260613/actual.png, experiments/output/app-d3d9-3dmark05-shader-bytecode-shared-20260613/result.json, include/dxmt9/core_constants.hpp, src/d3d9/d3d9_pe_state_shadow.hpp
 baseline: experiments/output/app-d3d9-3dmark05-shader-bytecode-shared-20260613/result.json
 ---
 
 # Compact Sampler State Capacity
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The F4 review found that `FlatStateSet` capacities
 were using D3D state-id space limits instead of the number of states that can

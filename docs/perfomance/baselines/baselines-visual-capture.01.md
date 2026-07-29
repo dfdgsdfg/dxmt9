@@ -7,10 +7,13 @@ title: GT1 Time-Based Screenshot Caveat
 date: 2026-06-06
 type: correctness-triage
 status: rejected-as-oracle
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-visual-no-argbuf-r1/actual.png, experiments/output/app-d3d9-3dmark05-visual-full-const-usage-r1/actual.png, experiments/output/app-d3d9-3dmark05-visual-default-capture40-r1/actual.png, experiments/output/app-d3d9-3dmark05-visual-full-binding-capture40-r1/actual.png, /tmp/dxmt9-recent-actual-contact-96.png
 ---
 
 # Baselines / Visual Capture 01 — GT1 time-based screenshots are not a stable correctness oracle
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Date.** 2026-06-06.
 

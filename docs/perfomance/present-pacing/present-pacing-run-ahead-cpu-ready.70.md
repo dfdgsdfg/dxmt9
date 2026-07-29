@@ -7,11 +7,14 @@ title: CPU-Ready Run-Ahead Restores Some CB Locality but Misses FPS and Correctn
 date: 2026-06-17
 type: experiment-run
 status: accepted-locality-refinement-rejected-correctness-and-promotion
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/result.json; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/3dmark05-perf-frames.csv; experiments/output/app-d3d9-3dmark05-cpu-ready-rback240-r1/actual.png; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison.md; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison-vs-singlecb.md; traces/app-d3d9-3dmark05-cpu-ready-rback240-r1/analysis/frame60-perf-counter-comparison-vs-on-r2.md
 related: docs/perfomance/present-pacing/present-pacing-run-ahead-coalesce.69.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing/index.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present Pacing 70 - CPU-Ready Run-Ahead Restores Some CB Locality but Misses FPS and Correctness Gates
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 Current-code note (2026-06-18): this document is historical experiment
 evidence. The CPU-ready run-ahead implementation and env knobs were later

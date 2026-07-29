@@ -7,11 +7,14 @@ title: PE Flush After Draw Diagnostic
 date: 2026-06-19
 type: experiment
 status: rejected-diagnostic
+outdated: knob-removed
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_recorder.hpp, agents/rules/environment_variables_bridge.rules.md, experiments/output/app-d3d9-3dmark05-h201-pe-drawflush-control-r1/result.json, experiments/output/app-d3d9-3dmark05-h201-pe-drawflush-candidate-r1/result.json, experiments/output/app-d3d9-3dmark05-h201-pe-drawflush-candidate-r1/h201-drawflush-compare.md
 related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md, docs/perfomance/present-pacing/present-pacing-present-prefix-tail-shape.112.md, docs/perfomance/present-pacing/present-pacing-pe-clear-flush.22.md
 ---
 
 # Present Pacing / PE Flush After Draw Diagnostic 114
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** H113 says most of the exposed pre-publish window is inter-replay
 producer gap. If the PE recorder flushes after every draw record, can unix replay

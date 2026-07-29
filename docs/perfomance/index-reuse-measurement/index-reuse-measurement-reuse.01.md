@@ -7,10 +7,13 @@ title: Indexed Unique Vertex / Index Reuse Probe
 date: 2026-06-02
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2320-L2467
 ---
 
 # Indexed Unique Vertex / Index Reuse Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the ~1.6 GiB top-3 VS-buffer-write bucket come
 from raw indexed-reference count, or from the smaller post-transform vertex

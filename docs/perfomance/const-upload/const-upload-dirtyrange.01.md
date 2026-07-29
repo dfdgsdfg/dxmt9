@@ -7,10 +7,13 @@ title: Dirty Range Reset Run
 date: undated
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4559-L4634
 ---
 
 # Dirty Range Reset Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The VS cbuf upload width is dominated by a stale dirty
 high-water (~`205` regs) far above actual shader use (~`31`)

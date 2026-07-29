@@ -7,10 +7,13 @@ title: TVB / Parameter-Buffer Design Reference
 date: 2026-06-03
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L18825-L18846, specs/perfomance.plan.md#L20005-L20008
 ---
 
 # TVB / Parameter-Buffer Design Reference
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What is the external architectural model that explains
 Xcode's large `VS Buffer Device Memory Bytes Written` bucket, and why is a

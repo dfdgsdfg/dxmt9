@@ -7,11 +7,14 @@ title: Current Low-Overhead Frame Sampling
 date: 2026-06-15
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-p4-frame-sampling-current/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-p4-frame-sampling-current/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-p4-frame-sampling-current/result.json
 related: docs/perfomance/present-pacing/present-pacing-serial-stage-compare-gates.38.md, docs/perfomance/present-pacing/present-pacing-systemtrace-p4-range.36.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.102.md
 ---
 
 # Present-Pacing 39 - Current Low-Overhead Frame Sampling
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

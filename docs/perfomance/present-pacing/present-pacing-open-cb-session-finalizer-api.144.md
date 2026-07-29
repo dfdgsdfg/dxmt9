@@ -7,11 +7,14 @@ title: Open-CB Encode Session Finalizer API
 date: 2026-06-20
 type: implementation
 status: implementation-prerequisite
+outdated: knob-removed
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_command_queue.cpp, tests/native/backend/queue_completion_sources_spec.cpp
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-open-cb-finalizer-extraction.143.md, docs/perfomance/present-pacing/present-pacing-open-cb-fail-open-contract.139.md, docs/perfomance/present-pacing/present-pacing-open-cb-tail-ready-prefix.141.md
 ---
 
 # Present-Pacing H144 - Open-CB Encode Session Finalizer API
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Attachment Metadata Probe
 date: 2026-06-01
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6859-L6928
 ---
 
 # Attachment Metadata Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The R32F suppression left a specific unresolved
 hint: Xcode's remaining lossless-compression warning was attached to `fmt2`

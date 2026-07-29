@@ -7,10 +7,13 @@ title: Index Setup Counter Scope Correction
 date: 2026-06-05
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L675-L787
 ---
 
 # Index Setup Counter Scope Correction
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is `encode_draw_index_setup_cpu_ms` the cost of resolving the
 *original* index buffer, or an outer indexed-draw-path scope? The `+309ms` full-run

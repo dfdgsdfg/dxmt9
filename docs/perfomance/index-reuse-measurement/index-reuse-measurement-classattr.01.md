@@ -7,10 +7,13 @@ title: Indexed Triangle State-Class Attribution
 date: 2026-06-02
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10125-L10240
 ---
 
 # Indexed Triangle State-Class Attribution
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The hot frame is not one homogeneous material; split
 the hot indexed triangle-list geometry by backend-relevant state class so the

@@ -7,10 +7,13 @@ title: Category Identity Current Smoke
 date: 2026-06-06
 type: smoke
 status: accepted-smoke
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-cbuf-identity-current-smoke-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-identity-current-smoke-r1/dxmt9-perf-counter-comparison-vs-identity-r1.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-identity-current-smoke-r1/actual.png, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-identity-current-smoke-r1/image-compare-vs-identity-r1.md
 ---
 
 # Category Identity Current Smoke
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.05](state-churn-encode-encode-phase.05.md) accepted
 category identity cbuf repoint as a CPU win, but cbuf reuse can affect rendered

@@ -7,10 +7,13 @@ title: Alpha-Test Discard Classifier
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8077-L8200
 ---
 
 # Alpha-Test Discard Classifier
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The force-fragment-color probe moved `seq=60 enc=2`
 VS invocations, clip/tiled counters, and VS writes while keeping VSOut key

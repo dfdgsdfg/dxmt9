@@ -7,11 +7,14 @@ title: Open-CB Carry State Counters
 date: 2026-06-20
 type: runtime-probe
 status: rejected-no-gputrace
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.hpp, src/dxmt9/dxmt9_perf_counters.cpp, scripts/tools/summarize_3dmark05_perf.py, experiments/output/app-d3d9-3dmark05-h219-open-cb-carry-state-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h219-open-cb-carry-state-r1/3dmark05-perf-frames.csv
 related: docs/perfomance/present-pacing/present-pacing-open-cb-render-session-carry.134.md, docs/perfomance/present-pacing/present-pacing-encode-session-finalizer-seam.133.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
 ---
 
 # Present Pacing / Open-CB Carry State Counters 135
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Does H134 fail because the open-CB render-session carrier reaches
 a Present tail and then fails finalization, or because the pending head never

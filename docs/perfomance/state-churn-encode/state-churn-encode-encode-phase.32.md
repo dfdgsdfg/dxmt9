@@ -7,11 +7,14 @@ title: Submission Generation Fast-Path Opportunity
 date: 2026-06-13
 type: analysis
 status: accepted-direction
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-append-state-intern-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-append-state-intern-20260613/result.json, experiments/output/app-d3d9-3dmark05-append-state-intern-20260613/actual.png, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_command_queue.cpp, src/d3d9/device_c_chunk_replay.cpp, include/dxmt9/core_snapshots.hpp
 baseline: experiments/output/app-d3d9-3dmark05-append-state-split-20260613/result.json
 ---
 
 # Submission Generation Fast-Path Opportunity
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.31](state-churn-encode-encode-phase.31.md) proved that
 the remaining state child is mostly `appendDrawState()` SoA storage. The first

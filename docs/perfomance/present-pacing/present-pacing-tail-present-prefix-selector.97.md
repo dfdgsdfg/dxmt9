@@ -7,11 +7,14 @@ title: Tail-Present Complete-Prefix Selector
 date: 2026-06-19
 type: implementation
 status: accepted-primitive-followed-by-h98
+outdated: knob-removed
 source: src/dxmt9/dxmt9_queue.hpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/render/tail_present_batch.hpp, src/dxmt9/render/tail_present_batch.cpp, tests/native/backend/queue_completion_sources_spec.cpp, tests/native/backend/render_backend_batch_contract_spec.cpp
 related: docs/perfomance/present-pacing/present-pacing-tail-present-merge-primitive.96.md, docs/perfomance/present-pacing/present-pacing-tail-present-multi-head-audit.95.md, docs/perfomance/present-pacing/present-pacing-tail-present-staged-runtime.94.md
 ---
 
 # Present Pacing / Tail-Present Complete-Prefix Selector 97
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** After H96 made multi-head `ChunkSlot` merge safe, can the queue
 dequeue selector prove that a complete `[head..., Present-only tail]` prefix is

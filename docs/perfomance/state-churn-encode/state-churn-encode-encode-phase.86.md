@@ -2,10 +2,13 @@
 title: Encode Phase 86 - Argbuf Cbuf Probe Timers Default-Off Cleanup
 date: 2026-06-15
 status: accepted-hot-path-cleanup-not-fps-proof
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.mm, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-argbuf-cbuf-probe-timers-default-off-r1-20260615b/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 86 - Argbuf Cbuf Probe Timers Default-Off Cleanup
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.61](state-churn-encode-encode-phase.61.md) used
 `DXMT9_PERF_ARGBUF_CBUF_PROBE_SPLIT=1` to split cached cbuf repoint and content

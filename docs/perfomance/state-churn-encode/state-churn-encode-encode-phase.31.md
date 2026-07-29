@@ -7,11 +7,14 @@ title: Draw State Append Inner Split
 date: 2026-06-13
 type: experiment
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-append-state-split-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-append-state-split-20260613/result.json, experiments/output/app-d3d9-3dmark05-append-state-split-20260613/actual.png
 baseline: experiments/output/app-d3d9-3dmark05-append-state-rvalue-20260613/result.json
 ---
 
 # Draw State Append Inner Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.30](state-churn-encode-encode-phase.30.md) cut the broad
 `submit_draw_run_batch_append_state_cpu_ms` child from `958.031ms` to

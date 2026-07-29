@@ -7,11 +7,14 @@ title: Compact Uniform Fixed-Payload Reuse Gate
 date: 2026-06-19
 type: implementation-runtime-gate
 status: accepted-bounded-cpu-improvement-default-off
+outdated: knob-removed
 source: include/dxmt9/core_snapshots.hpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_perf_counters.cpp, experiments/output/app-d3d9-3dmark05-h167-compact-fixed-reuse-r1/3dmark05-perf-summary.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.154.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.155.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.156.md
 ---
 
 # Encode Phase 157 - Compact uniform fixed-payload reuse gate
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

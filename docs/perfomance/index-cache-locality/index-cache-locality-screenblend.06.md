@@ -7,10 +7,13 @@ title: Current Screen-Blend Semantic Input Prepared
 date: 2026-06-06
 type: validation
 status: semantic-pass-movement-pending
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-post-streamib-frame60-60-2-screenblend-rank1-geometry-r1/analysis/frame60-mini-replay-60-2-screenblend-rank1-manifest.json; traces/app-d3d9-3dmark05-post-streamib-frame60-60-2-screenblend-rank1-geometry-r1/analysis/mini-replay-screenblend-rank1/cache-opt-lru32/mini-replay-summary.json; traces/app-d3d9-3dmark05-post-streamib-frame60-60-2-screenblend-rank1-geometry-r1/analysis/mini-replay-screenblend-rank1/image-comparison-original-vs-cache-opt-lru32-lsb1.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-60-2-screenblend-rank1-geometry-r1/analysis/mini-replay-screenblend-rank1/image-comparison-original-vs-cache-opt-lru32-lsb1.md; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-gate-with-screenblend-semantic-only.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-gate-with-screenblend-semantic-only.md; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/screenblend-proof-dry-run.txt
 ---
 
 # Current Screen-Blend Semantic Input Prepared
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the current frame60 screen-blend proof gap be
 narrowed from "missing all gate input" to "semantic input exists, Xcode movement

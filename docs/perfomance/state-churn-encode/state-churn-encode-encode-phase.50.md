@@ -7,10 +7,13 @@ title: Default Indexed Fast Path
 date: 2026-06-14
 type: implementation-ab
 status: accepted-cpu-cleanup
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-indexed-default-fastpath-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-indexed-default-fastpath-r1-20260614/dxmt9-perf-counter-comparison-vs-phase08.md, experiments/output/app-d3d9-3dmark05-indexed-default-fastpath-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-indexed-default-fastpath-r1-20260614/actual.png
 ---
 
 # Default Indexed Fast Path
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The phase08 low-overhead scout still spends
 `775.311ms` in `encode_draw_stream_bind_index_phase_cpu_ms` and `636.514ms` in

@@ -7,10 +7,13 @@ title: Tail-Present ChunkSlot Merge Primitive
 date: 2026-06-19
 type: implementation
 status: accepted-primitive-followed-by-h97
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_backend_types.hpp, src/dxmt9/render/tail_present_batch.cpp, tests/native/backend/render_backend_batch_contract_spec.cpp
 ---
 
 # Present Pacing / Tail-Present ChunkSlot Merge Primitive 96
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** Can the H95 design blocker be reduced by adding a deterministic
 `ChunkSlot` merge/remap primitive before exposing any earlier pre-Present staging

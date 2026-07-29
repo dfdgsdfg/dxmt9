@@ -7,10 +7,13 @@ title: Fast-Measure Xcode Proof
 date: 2026-06-05
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L576-L674
 ---
 
 # Fast-Measure Xcode Proof
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the current fast-measure opaque-depth opt-in still
 preserve the accepted hardware-visible mechanism — fewer VS invocations → less TVB

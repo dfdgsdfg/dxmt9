@@ -7,10 +7,13 @@ title: Candidate Frontier Cap Rejection
 date: 2026-06-05
 type: experiment-run
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-frontier64-r1/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-frontier32-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-frontier64-r1/analysis/selectvolume-r1-vs-frontier64-r1-run-counters.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-frontier32-r1/analysis/selectvolume-r1-vs-frontier32-r1-run-counters.md
 ---
 
 # Candidate Frontier Cap Rejection
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [index-cache-locality-cpucost.10](index-cache-locality-cpucost.10.md) proved that the
 candidate select bucket is dominated by rescoring volume. Can a simple hard cap

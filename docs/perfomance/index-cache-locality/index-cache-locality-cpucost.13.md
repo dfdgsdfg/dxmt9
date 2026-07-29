@@ -7,10 +7,13 @@ title: Bucketed Candidate Selector Rejection
 date: 2026-06-05
 type: experiment-run
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-bucketed-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-bucketed-r1/analysis/selectvolume-r1-vs-bucketed-r1-run-counters.md
 ---
 
 # Bucketed Candidate Selector Rejection
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [index-cache-locality-cpucost.12](index-cache-locality-cpucost.12.md) rejected a
 generic heap-backed lazy frontier. Can a more domain-specific selector reduce

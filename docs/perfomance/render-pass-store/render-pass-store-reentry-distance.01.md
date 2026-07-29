@@ -7,10 +7,13 @@ title: Same-Key Re-entry Distance Distribution
 date: 2026-06-07
 type: measurement
 status: accepted-counter-sample
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-pass-reentry-distance-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-shape-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-top-pairs-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-btop-pairs-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-deps-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-liveout-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-touch-distance-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-touch-distance-noenc-r1/3dmark05-perf-render-pass-reentry.csv, experiments/output/app-d3d9-3dmark05-pass-reentry-touch-distance-noenc-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-pass-action-reentry-no-gputrace-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-action-reentry-no-gputrace-r1/3dmark05-perf-render-pass-reentry.csv, experiments/output/app-d3d9-3dmark05-pass-action-reentry-no-gputrace-r1/3dmark05-perf-encoders.csv, experiments/output/app-d3d9-3dmark05-pass-reentry-prior-a-noenc-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pass-reentry-prior-a-noenc-r1/3dmark05-perf-render-pass-reentry.csv
 ---
 
 # Same-Key Re-entry Distance Distribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The previous re-entry measurements proved that same
 RT/depth pairs are reopened after intervening passes, but not whether this is a

@@ -7,10 +7,13 @@ title: Scissor Rectangle/Tiling Probe
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11810-L11900
 ---
 
 # Scissor Rectangle/Tiling Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The draw-sample diff
 ([primitive-reorder-diagnostics-reverse.15](primitive-reorder-diagnostics-reverse.15.md)) showed the only difference between

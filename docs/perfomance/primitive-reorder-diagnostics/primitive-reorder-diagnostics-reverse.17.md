@@ -7,10 +7,13 @@ title: Current Full Large4096 + Alpha Reorder Rerun
 date: 2026-06-02
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11901-L11984
 ---
 
 # Current Full Large4096 + Alpha Reorder Rerun
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the broader 16-draw `60/4 large4096 &&
 alpha-blend` reverse ([primitive-reorder-diagnostics-reverse.12](primitive-reorder-diagnostics-reverse.12.md)) on current

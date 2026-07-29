@@ -7,10 +7,13 @@ title: Per-draw D3D9 Detail Confirms the Re-entry Role Pair from the DAG Dump
 date: 2026-06-09
 type: measurement
 status: accepted-counter-sample
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-dagcheck-draws/analysis/dag/dag-frame50-chunk50-pre-opt.json, src/dxmt9/framegraph/fg_debug_export.cpp (draws_detail), specs/d3d9-renderer/requirements.md (R-BACK-39.7 DXMT9_RENDERER_DUMP_DAG_DRAWS)
 ---
 
 # Per-draw D3D9 Detail Confirms the Re-entry Role Pair from the DAG Dump
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [render-pass-store-reentry-distance.01](render-pass-store-reentry-distance.01.md) established
 H13/H14 — the same-key re-entry is a stable role pair (opaque-depth-write ↔

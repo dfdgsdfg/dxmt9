@@ -7,11 +7,14 @@ title: Draw-Run Preflush Merge Runtime A/B
 date: 2026-06-20
 type: runtime-experiment
 status: mechanism-accepted-promotion-rejected
+outdated: knob-removed
 source: src/d3d9/device_c_chunk_replay.cpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-h208-drawrun-preflush-merge-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h208-drawrun-preflush-merge-r1/actual.png, experiments/output/app-d3d9-3dmark05-h209-drawrun-preflush-merge-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h209-drawrun-preflush-merge-control-r1/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.177.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.176.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 178 - Draw-run preflush merge runtime A/B
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Full 16-Draw Multi-Shader Mini-Replay
 date: undated
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14321-L14459
 ---
 
 # Full 16-Draw Multi-Shader Mini-Replay
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Do the captured shader + stream0/stream1/index/cbuf
 payloads, replayed standalone, reproduce the original `60/2` hot encoder's

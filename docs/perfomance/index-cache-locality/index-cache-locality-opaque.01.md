@@ -7,10 +7,13 @@ title: Layout-Stride Indexed Candidate Preflight
 date: 2026-06-04
 type: scout
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1000-L1106
 ---
 
 # Layout-Stride Indexed Candidate Preflight
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** On the stable layout-stride frame50 baseline, how much
 LRU32 post-transform-cache locality is *available* on the hot indexed rows before

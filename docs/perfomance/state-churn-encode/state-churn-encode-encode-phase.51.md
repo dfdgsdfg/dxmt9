@@ -7,10 +7,13 @@ title: Uniform Lookup Prereserve Probe
 date: 2026-06-14
 type: implementation-ab
 status: rejected-current
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-uniform-lookup-prereserve-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-lookup-prereserve-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-uniform-lookup-prereserve-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-uniform-lookup-prereserve-r1-20260614/actual.png
 ---
 
 # Uniform Lookup Prereserve Probe
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** `submit_draw_run_batch_append_uniform_cpu_ms`
 remains a visible submit-side child after same-stamp state elision. Since

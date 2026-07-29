@@ -7,10 +7,13 @@ title: Scissor State Classifier
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8210-L8299
 ---
 
 # Scissor State Classifier
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Full Xcode-counter capture: was the earlier
 force-fragment movement in row `60/2` caused by scissor state itself, and does

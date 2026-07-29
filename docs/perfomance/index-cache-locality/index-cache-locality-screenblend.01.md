@@ -7,10 +7,13 @@ title: Screen-Blend Index-Order Optimization Validation
 date: 2026-06-02
 type: validation
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11517-L11650
 ---
 
 # Screen-Blend Index-Order Optimization Validation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the earlier diagnostic `large4096 && alpha-blend &&
 scissor` reverse-order signal be promoted to an env-gated optimization that rewrites

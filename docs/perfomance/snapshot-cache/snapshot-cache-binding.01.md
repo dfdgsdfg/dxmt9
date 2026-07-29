@@ -7,10 +7,13 @@ title: Binding-Agnostic Snapshot & Override Compatibility
 date: 2026-06-04
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1818-L1915
 ---
 
 # Binding-Agnostic Snapshot & Override Compatibility
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The stream/IB-dominant miss profile motivated a
 binding-agnostic snapshot: clear stream buffers / offset / stride / index buffer /

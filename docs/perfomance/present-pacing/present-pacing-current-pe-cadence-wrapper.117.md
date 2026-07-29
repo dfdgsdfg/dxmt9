@@ -7,11 +7,14 @@ title: Wrapper-Forwarded Current PE Cadence Refresh
 date: 2026-06-19
 type: experiment
 status: accepted-current-pe-cadence-refresh
+outdated: knob-removed
 source: scripts/tools/run_3dmark05_perf_probe.sh, experiments/output/app-d3d9-3dmark05-h205-pe-cadence-refresh-r1/result.json, experiments/output/app-d3d9-3dmark05-h205-pe-cadence-refresh-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h205-pe-cadence-refresh-r1/dxmt9.log, experiments/output/app-d3d9-3dmark05-h205-pe-cadence-refresh-r1/h203-vs-h205-perf-counters.md
 related: docs/perfomance/present-pacing/present-pacing-current-pe-cadence.113.md, docs/perfomance/present-pacing/present-pacing-pe-draw-flush.114.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-state-carry-audit.116.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.173.md
 ---
 
 # Present Pacing / Wrapper-Forwarded Current PE Cadence Refresh 117
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** After the H203 shader-hash memo opportunity was rejected and H116
 closed another cheap open-CB threshold path, does a fresh PE-recorder run still

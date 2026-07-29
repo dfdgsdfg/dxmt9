@@ -7,10 +7,13 @@ title: Candidate Builder Split + Dense Adjacency
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L426-L490
 ---
 
 # Candidate Builder Split + Dense Adjacency
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Within the cold candidate path, is the CPU owner the reorder
 *builder* or the gain *gate*? And can the builder be sped up without changing which

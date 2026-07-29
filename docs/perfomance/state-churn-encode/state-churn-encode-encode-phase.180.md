@@ -7,11 +7,14 @@ title: Current Compact-Uniform Carrier Repeat
 date: 2026-06-20
 type: runtime-experiment
 status: mechanism-accepted-promotion-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h211-drawrun-canonical-fastpath-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h211-drawrun-canonical-fastpath-control-r1/actual.png, experiments/output/app-d3d9-3dmark05-h212-compact-uniform-current-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h212-compact-uniform-current-r1/actual.png, experiments/output/app-d3d9-3dmark05-h212-compact-uniform-current-r1/h212-vs-h211-compare.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.179.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.166.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.161.md, docs/perfomance/present-pacing/present-pacing-current-frontier.89.md
 ---
 
 # Encode Phase 180 - Current compact-uniform carrier repeat
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

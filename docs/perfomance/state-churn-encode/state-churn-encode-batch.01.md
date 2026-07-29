@@ -7,10 +7,13 @@ title: Current HEAD Recheck After Submission-Batch Work
 date: 2026-06-02
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8624-L8745
 ---
 
 # Current HEAD Recheck After Submission-Batch Work
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the draw-submission batching and binding-override
 work landed, do the new CPU-side batching structures change the Xcode GPU

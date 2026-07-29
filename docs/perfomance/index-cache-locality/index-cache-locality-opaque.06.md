@@ -7,10 +7,13 @@ title: Fast-Measure Opt-in vs Baseline Gate
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L491-L575
 ---
 
 # Fast-Measure Opt-in vs Baseline Gate
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the dense-adjacency / LRU32-only candidate CPU
 cleanup ([index-cache-locality-cpucost.03](index-cache-locality-cpucost.03.md)), is the opt-in's CPU side-effect now

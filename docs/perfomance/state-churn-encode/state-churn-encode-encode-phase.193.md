@@ -7,11 +7,14 @@ title: Chunk-End Carry Runtime Gate
 date: 2026-06-20
 type: runtime-ab
 status: mechanism-accepted-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h222-end-carry-control-r1/result.json, experiments/output/app-d3d9-3dmark05-h223-end-carry-on-r1/result.json, experiments/output/app-d3d9-3dmark05-h223-end-carry-on-r1/h222-vs-h223-counter-comparison.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.192.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
 ---
 
 # Encode Phase 193 - Chunk-end carry runtime gate
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -7,10 +7,13 @@ title: Current System Trace Refresh Reconfirms Vertex-Heavy Programmable Routes 
 date: 2026-06-15
 type: analysis
 status: accepted-sidecar-refresh
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-gputrace-current-refresh-r1-20260615/dxmt9.log; experiments/output/app-d3d9-3dmark05-gputrace-current-refresh-r1-20260615/actual.png; experiments/output/app-d3d9-3dmark05-systemtrace-current-refresh-r1-20260615/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-systemtrace-current-refresh-r1-20260615/actual.png; traces/app-d3d9-3dmark05-systemtrace-current-refresh-r1-20260615/analysis/xctrace-metal-gpu-intervals-summary.md; traces/app-d3d9-3dmark05-systemtrace-current-refresh-r1-20260615/analysis/xctrace-metal-gpu-intervals-summary.csv
 ---
 
 # Current System Trace Refresh Reconfirms Vertex-Heavy Programmable Routes While Gputrace Remains Layer-Blocked
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the latest CPU/profile cleanup work, can the
 current tree produce a usable 3DMark05 GT1 `.gputrace`, or must GPU timing still

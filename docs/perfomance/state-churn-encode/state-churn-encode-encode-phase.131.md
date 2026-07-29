@@ -7,11 +7,14 @@ title: Current Argbuf Payload Delta Recheck
 date: 2026-06-15
 type: experiment
 status: accepted-negative-primary-lever
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_argbuf_hybrid.cpp, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/result.json, experiments/output/app-d3d9-3dmark05-argbuf-payload-delta-current-r1-20260615/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.63.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.130.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 131 - Current Argbuf Payload Delta Recheck
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After the compact-uniform and argbuf-open cleanup work, is the
 current `reopenArgbuf` pressure still partly caused by broad uniform-payload

@@ -7,10 +7,13 @@ title: Per-CB Encode Budget Sizing and Superseded Bind Attribution
 date: 2026-06-05
 type: attribution
 status: inconclusive
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experiments/output/app-d3d9-3dmark05-display-sync-off-r1
 ---
 
 # Per-CB Encode Budget Sizing and Superseded Bind Attribution
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 > Current status: the **budget sizing** in this note remains useful
 > (`encode_chunk_cpu_p50_ms` exceeded the 16.67 ms slot), but the specific

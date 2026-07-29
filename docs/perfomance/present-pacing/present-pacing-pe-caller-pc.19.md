@@ -7,11 +7,14 @@ title: PE Caller PC for the Clear Front Gate
 date: 2026-06-14
 type: attribution
 status: accepted-lower-layer-superseded
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, src/d3d9/d3d9_pe_device_child.hpp, src/d3d9/d3d9_pe_device_child_buffer.cpp, src/d3d9/d3d9_pe_device_child_misc.cpp, src/d3d9/d3d9_pe_device_child_surface.cpp, experiments/output/app-d3d9-3dmark05-present-pe-caller-pc-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-caller-pc-r1-20260614/dxmt9.log, experiments/output/app-d3d9-3dmark05-present-pe-caller-module-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-caller-module-r1-20260614/dxmt9.log, experiments/output/app-d3d9-3dmark05-present-pe-caller-pc-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-wide-call-coverage.17.md, docs/perfomance/present-pacing/present-pacing-xctrace-threadstate.18.md, docs/perfomance/present-pacing/present-pacing-pe-caller-stack.20.md
 ---
 
 # Present-Pacing 19 - PE Caller PC for the Clear Front Gate
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

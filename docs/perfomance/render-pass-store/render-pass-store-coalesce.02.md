@@ -7,10 +7,13 @@ title: passcoalesce Removes 100% of Distance-1 Re-entries on Real GT1 Frames (ob
 date: 2026-06-09
 type: experiment-run
 status: accepted-analysis
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-dagcheck-coalesce/analysis/dag/ (dag-frame40..60-chunk*-{pre,post}-opt.json), experiments/output/app-d3d9-3dmark05-dagcheck-coalesce/3dmark05-perf-summary.md, src/dxmt9/render/dag_observer.cpp, specs/d3d9-renderer/requirements.md (R-BACK-39.7 DXMT9_RENDERER_DUMP_DAG_OPTIMIZE)
 ---
 
 # passcoalesce Removes 100% of Distance-1 Re-entries on Real GT1 Frames (observe-time)
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [render-pass-store-coalesce.01](render-pass-store-coalesce.01.md) showed the DAG makes
 the H6 re-entry coalesce *machine-decidable* on one frame. Run on a **real

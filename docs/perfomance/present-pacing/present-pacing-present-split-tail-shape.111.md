@@ -7,11 +7,14 @@ title: PresentSplitBefore Tail-Shape Attribution
 date: 2026-06-19
 type: runtime-attribution
 status: accepted-carrier-blocker
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_perf_counters.cpp, src/dxmt9/dxmt9_perf_counters.hpp, scripts/tools/summarize_3dmark05_perf.py, scripts/tools/compare_3dmark05_perf_counters.py, tests/scripts/test_summarize_3dmark05_perf.py, tests/scripts/test_compare_3dmark05_perf_counters.py, experiments/output/app-d3d9-3dmark05-h185-open-cb-tailshape-r1/3dmark05-perf-summary.md
 related: docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md, docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.109.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-trigger.98.md
 ---
 
 # Present Pacing / PresentSplitBefore Tail-Shape Attribution 111
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Can the current `DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT` open-CB
 path be rescued by choosing a better command threshold, or is it cutting

@@ -7,11 +7,14 @@ title: Tail-Present Staged Carrier Runtime A/B
 date: 2026-06-19
 type: experiment
 status: rejected-promotion
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h93-control-current-r1/result.json, experiments/output/app-d3d9-3dmark05-h93-staged-tail-present-r1/result.json, experiments/output/app-d3d9-3dmark05-h93-staged-tail-present-r1/h93-control-vs-staged-compare.md, experiments/output/app-d3d9-3dmark05-h93-control-current-r1/actual.png, experiments/output/app-d3d9-3dmark05-h93-staged-tail-present-r1/actual.png
 related: docs/perfomance/present-pacing/present-pacing-tail-present-staged-carrier.93.md, docs/perfomance/present-pacing/present-pacing-tail-present-staging-code-audit.92.md, docs/perfomance/present-pacing/present-pacing-tail-present-batch-current.88.md
 ---
 
 # Present Pacing 94 - Tail-Present staged carrier runtime A/B
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

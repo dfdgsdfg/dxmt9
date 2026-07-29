@@ -7,11 +7,14 @@ title: EncodeSession Producer CpuReady Command Limit
 date: 2026-06-27
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-encode-session-cpuready-command-limit48-r2-20260627/result.json, experiments/output/app-d3d9-3dmark05-encode-session-cpuready-command-limit48-r2-20260627/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-cpuready-command-limit48-r2-20260627/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-cpuready-command-limit48-r2-20260627/actual.png
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-writer-active-cpuready-publish.162.md, docs/perfomance/present-pacing/present-pacing-encode-session-writer-active-slot-shape.161.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H163 - EncodeSession Producer CpuReady Command Limit
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

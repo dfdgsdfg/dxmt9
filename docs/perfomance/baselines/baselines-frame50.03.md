@@ -7,10 +7,13 @@ title: Current Timeout No-Gputrace Scout
 date: 2026-06-05
 type: scout
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L34-L99
 ---
 
 # Current Timeout No-Gputrace Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the current tree through the standard wrapper
 without `.gputrace` as a timeout-policy + run-level counter scout — refresh the

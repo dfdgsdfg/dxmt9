@@ -7,10 +7,13 @@ title: Candidate Upper-Bound Pre-Gate Rejection
 date: 2026-06-06
 type: experiment-run
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-upperbound-r1/3dmark05-perf-summary.md; traces/app-d3d9-3dmark05-defaultgate-noenc-opaque-depth-upperbound-r1/analysis/selectvolume-r1-vs-upperbound-r1-run-counters.md
 ---
 
 # Candidate Upper-Bound Pre-Gate Rejection
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [index-cache-locality-cpucost.13](index-cache-locality-cpucost.13.md) closed the
 generic active-frontier/container family: cap, lazy heap, and cached-count

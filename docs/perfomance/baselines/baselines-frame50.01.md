@@ -7,10 +7,13 @@ title: Current Normal Frame50 Gputrace/Xcode Replay (canonical baseline)
 date: 2026-06-04
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1916-L2015
 ---
 
 # Current Normal Frame50 Gputrace/Xcode Replay (canonical baseline)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Establish the canonical current-source frame50
 GPU/counter baseline that the frame50 A/B locality experiments are measured

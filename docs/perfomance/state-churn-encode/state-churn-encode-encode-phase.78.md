@@ -2,10 +2,13 @@
 title: Encode Phase 78 - Encode-Slot PSO Resource-Shape Memo Behavior
 date: 2026-06-14
 status: accepted-default-off-smoke
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-memo-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 78 - Encode-Slot PSO Resource-Shape Memo Behavior
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.77](state-churn-encode-encode-phase.77.md) proves that a
 texture-handle-blind resource-shape memo can validate to the same final

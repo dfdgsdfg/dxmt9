@@ -7,10 +7,13 @@ title: Opaque Large4096 Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11219-L11516
 ---
 
 # Opaque Large4096 Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The positive `60/4 large4096` target
 ([primitive-reorder-diagnostics-reverse.11](primitive-reorder-diagnostics-reverse.11.md)) is entirely depth-read/alpha/

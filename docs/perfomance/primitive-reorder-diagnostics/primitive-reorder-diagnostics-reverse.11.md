@@ -7,10 +7,13 @@ title: Row/Class 60/4 Large4096 Reverse
 date: 2026-06-02
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11083-L11218
 ---
 
 # Row/Class 60/4 Large4096 Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the primitive-size/locality component inside the
 same `60/4` depth-read/textured/mostly-alpha row own the broad primitive-order

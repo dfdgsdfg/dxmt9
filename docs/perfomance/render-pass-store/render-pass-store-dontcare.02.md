@@ -7,10 +7,13 @@ title: Color Next-Clear StoreActionDontCare Run
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4779-L4835
 ---
 
 # Color Next-Clear StoreActionDontCare Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Will the conservative color next-clear look-ahead proof
 actually fire on GT1 and reduce the re-entry Store/Load preservation budget?

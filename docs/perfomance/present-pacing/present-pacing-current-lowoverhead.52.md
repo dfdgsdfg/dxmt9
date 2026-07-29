@@ -7,11 +7,14 @@ title: Current Low-Overhead Scout With State-Elision Active
 date: 2026-06-16
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/actual.png
 related: docs/perfomance/present-pacing/present-pacing-current-lowoverhead.49.md, docs/perfomance/present-pacing/present-pacing-overlap-locality-gates.51.md, docs/perfomance/state-churn-encode/index.md, docs/perfomance/snapshot-cache/index.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 52 - Current Low-Overhead Scout With State-Elision Active
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

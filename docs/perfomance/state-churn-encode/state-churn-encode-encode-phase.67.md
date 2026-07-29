@@ -2,10 +2,13 @@
 title: Encode Phase 67 - Disable Argbuf Hybrid Scout
 date: 2026-06-14
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-disable-argbuf-hybrid-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-disable-argbuf-hybrid-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-disable-argbuf-hybrid-r1-20260614/actual.png, experiments/output/app-d3d9-3dmark05-cbuf-const-sparsity-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 67 - Disable Argbuf Hybrid Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.63](state-churn-encode-encode-phase.63.md) through
 [state-churn-encode-encode-phase.66](state-churn-encode-encode-phase.66.md) closed the cheap cbuf-width and

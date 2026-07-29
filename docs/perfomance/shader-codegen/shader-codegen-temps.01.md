@@ -7,10 +7,13 @@ title: Vertex Temp Array Trim Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3554-L3600
 ---
 
 # Vertex Temp Array Trim Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the conservative 32-slot `float4 r[]` temp array
 emitted by translated vertex shaders inflate the hidden Xcode

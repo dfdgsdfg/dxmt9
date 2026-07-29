@@ -7,11 +7,14 @@ title: Xcode System Trace CPU Thread State
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/metal-system.trace, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/toc.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/time-profile.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/time-sample.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/runloop-events.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/ca-client-present-request.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/ca-client-presented-handler.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/metal-application-command-buffer-submissions.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/metal-command-buffer-completed.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/process-info.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/dyld-library-load.xml, traces/app-d3d9-3dmark05-phase43-xctrace-system-r1-20260613/analysis/os-log.xml
 related: docs/perfomance/present-pacing/present-pacing-pe-wide-call-coverage.17.md, docs/perfomance/present-pacing/present-pacing-pipeline-overlap.05.md
 ---
 
 # Present-Pacing 18 - Xcode System Trace CPU Thread State
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

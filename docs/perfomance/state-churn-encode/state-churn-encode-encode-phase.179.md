@@ -7,11 +7,14 @@ title: Canonical Imported Draw-Run Submit Fast Path
 date: 2026-06-20
 type: runtime-experiment
 status: rejected-current
+outdated: knob-removed
 source: src/d3d9/core_draw.cpp, src/d3d9/device_c_chunk_replay.cpp, include/dxmt9/core_snapshots.hpp, tests/native/core/core_device_coverage_spec.cpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-h210-drawrun-canonical-fastpath-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h210-drawrun-canonical-fastpath-r1/actual.png, experiments/output/app-d3d9-3dmark05-h211-drawrun-canonical-fastpath-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h211-drawrun-canonical-fastpath-control-r1/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.178.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.177.md, docs/perfomance/overview-3dmark05-gt1.md
 ---
 
 # Encode Phase 179 - Canonical imported draw-run submit fast path
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

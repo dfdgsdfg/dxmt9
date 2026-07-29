@@ -7,10 +7,13 @@ title: MAX_FRAME_LATENCY=3 + CAP_FRAME_LATENCY_TO_BACKBUFFERS=0
 date: 2026-06-05
 type: ab-test
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-frame-latency-3-r1
 ---
 
 # MAX_FRAME_LATENCY=3 + CAP_FRAME_LATENCY_TO_BACKBUFFERS=0
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Display sync (`DXMT9_LAYER_DISPLAY_SYNC=0`)
 disabled gave +199% scene throughput in

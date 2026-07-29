@@ -7,10 +7,13 @@ title: Tail-Present Multi-Head Staging Audit
 date: 2026-06-19
 type: source-audit
 status: accepted-design-blocker-followed-by-h96-h97-h98
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/render/tail_present_batch.cpp, src/dxmt9/dxmt9_backend_types.hpp, tests/native/backend/render_backend_batch_contract_spec.cpp, tests/native/backend/queue_completion_sources_spec.cpp
 ---
 
 # Present Pacing / Tail-Present Multi-Head Staging Audit 95
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** After H94 rejected `DXMT9_STAGE_TAIL_PRESENT_CHUNK=1` as a
 runtime win, can the next P4 carrier simply stage earlier PE/replay chunks and

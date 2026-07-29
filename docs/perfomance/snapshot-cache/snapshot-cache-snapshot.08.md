@@ -7,10 +7,13 @@ title: Snapshot Usage-Aware Uniform Payload Hash
 date: 2026-06-06
 type: implementation
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-r1/dxmt9-perf-counter-comparison-vs-payload-split.md, experiments/output/app-d3d9-3dmark05-snapshot-usage-hash-r1/actual.png
 ---
 
 # Snapshot Usage-Aware Uniform Payload Hash
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.07](snapshot-cache-snapshot.07.md) proved that the
 remaining payload-build owner was the first full `hashDrawUniformPayload()` pass:

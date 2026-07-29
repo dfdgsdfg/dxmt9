@@ -7,11 +7,14 @@ title: Open-CB Injected Command Buffer
 date: 2026-06-19
 type: implementation-note
 status: accepted-primitive
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, tests/native/backend/render_backend_batch_contract_spec.cpp
 related: docs/perfomance/present-pacing/present-pacing-open-cb-encode-options.106.md, docs/perfomance/present-pacing/present-pacing-encoded-tail-record-merge.105.md
 ---
 
 # Present Pacing / Open-CB Injected Command Buffer 107
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** What is the next minimal encoder-side gate after H106's split
 guards?

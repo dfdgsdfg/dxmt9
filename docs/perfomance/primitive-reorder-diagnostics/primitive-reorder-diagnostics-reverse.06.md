@@ -7,10 +7,13 @@ title: Row 60/1 Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9858-L9940
 ---
 
 # Row 60/1 Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Repeat the single-row reverse against hot row `60/1`
 (opaque depth-writing). Does it reduce the hidden VS-write bucket?

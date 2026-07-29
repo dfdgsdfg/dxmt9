@@ -7,10 +7,13 @@ title: Texture Source Classifier
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8505-L8622
 ---
 
 # Texture Source Classifier
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is fragment texture sampling the narrow source feature
 behind the force-fragment-color movement or the hidden VS-buffer-write bucket?

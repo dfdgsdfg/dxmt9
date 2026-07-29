@@ -2,10 +2,13 @@
 title: Encode Phase 84 - Argbuf Table Shadow Direct Slot Check
 date: 2026-06-15
 status: accepted-cleanup-rejected-fps-lever
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_draw_encoder.hpp, experiments/output/app-d3d9-3dmark05-argbuf-table-shadow-direct-r1-20260615/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 84 - Argbuf Table Shadow Direct Slot Check
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After [state-churn-encode-encode-phase.83](state-churn-encode-encode-phase.83.md) closed the PSO
 memo scratch lane, the next average-FPS work should return to P2/P3 argbuf /

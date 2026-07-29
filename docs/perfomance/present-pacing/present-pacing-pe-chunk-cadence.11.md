@@ -7,11 +7,14 @@ title: PE Chunk Cadence After Present
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, experiments/output/app-d3d9-3dmark05-present-pe-chunk-cadence-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-chunk-cadence-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-present-pe-chunk-cadence-r1-20260614/3dmark05-perf-summary.md
 related: docs/perfomance/present-pacing/present-pacing-pe-call-cadence.10.md, docs/perfomance/present-pacing/present-pacing-stage-delta.08.md
 ---
 
 # Present-Pacing 11 - PE Chunk Cadence After Present
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

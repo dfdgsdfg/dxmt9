@@ -7,10 +7,13 @@ title: Split Row 60/4 Large4096
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11355-L11516
 ---
 
 # Split Row 60/4 Large4096
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The positive `60/4 large4096 reverse` classifier moved
 the VS-write bucket. Was that win due to "large draw split reduces backend

@@ -7,10 +7,13 @@ title: Cache-Aware Triangle Reorder Scout
 date: undated
 type: scout
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L13324-L13520
 ---
 
 # Cache-Aware Triangle Reorder Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The min-index scout proved index-range order is the
 wrong axis. Does a greedy vertex-cache-aware triangle order — same draw count,

@@ -7,10 +7,13 @@ title: Row/Class 60/4 Large4096 + Alpha + Scissor Reverse
 date: 2026-06-02
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10874-L11009
 ---
 
 # Row/Class 60/4 Large4096 + Alpha + Scissor Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the narrowest intersection
 `large4096 && alpha-blend && scissor` — only 4 of 253 `60/4` draws — own the

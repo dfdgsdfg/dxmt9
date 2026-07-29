@@ -7,10 +7,13 @@ title: Layout-Stride Screen-Blend Cache Xcode Replay
 date: 2026-06-04
 type: validation
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1377-L1469
 ---
 
 # Layout-Stride Screen-Blend Cache Xcode Replay
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the screen-blend index-cache produce a real Xcode
 mechanism reduction on row `50/2` — fewer VS invocations, lower hidden VS write —

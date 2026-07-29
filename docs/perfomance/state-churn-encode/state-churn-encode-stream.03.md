@@ -7,10 +7,13 @@ title: Encoder Unique Handle Breakdown
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5111-L5178
 ---
 
 # Encoder Unique Handle Breakdown
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is per-draw stream/IB handle churn caused by per-draw
 object *creation* (e.g. lock/rename), or by repeated *alternation* among a

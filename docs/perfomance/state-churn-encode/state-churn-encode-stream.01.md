@@ -7,10 +7,13 @@ title: Encoder Stream Breakdown Re-run
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4132-L4231
 ---
 
 # Encoder Stream Breakdown Re-run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is the stream/IB draw-run failure an offset-only
 compatibility problem or true handle churn? Emit `[dxmt9-perf-encoder-stream]`

@@ -7,11 +7,14 @@ title: Open-CB Pre-Encode Tail-Present Runtime Gate
 date: 2026-06-19
 type: no-gputrace-runtime-gate
 status: rejected-runtime-promotion
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h108-control-r1/result.json, experiments/output/app-d3d9-3dmark05-h108-control-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h108-control-r1/actual.png, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/result.json, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h108-open-cb-limit128-r1/actual.png, traces/app-d3d9-3dmark05-h108-open-cb-limit128-r1/analysis/frame60-perf-counter-comparison.md
 related: docs/perfomance/present-pacing/present-pacing-open-cb-final-pass-sidecar.110.md, docs/perfomance/present-pacing/present-pacing-open-cb-preencode-runtime.108.md, docs/perfomance/present-pacing/present-pacing-open-cb-injected-command-buffer.107.md, docs/perfomance/present-pacing/present-pacing-pre-present-stage-runtime.99.md, docs/perfomance/snapshot-cache/snapshot-cache-visual.01.md
 ---
 
 # Present Pacing / Open-CB Pre-Encode Tail-Present Runtime Gate 109
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** Does the H108 open-command-buffer carrier turn the pre-Present
 prefix into useful producer/encode overlap while preserving the normal

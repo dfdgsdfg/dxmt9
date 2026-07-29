@@ -7,10 +7,13 @@ title: v0.0.1 Historical Screenshot Diff Triage
 date: 2026-06-06
 type: correctness-triage
 status: superseded-by-v0.0.3
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-visual-v001-capture40-r1/actual.png, experiments/output/app-d3d9-3dmark05-visual-current-capture40-r2/actual.png, experiments/output/app-d3d9-3dmark05-visual-current-capture40-r2/image-comparison-vs-v001-capture40.md, experiments/output/app-d3d9-3dmark05-visual-current-capture40-r2/image-diff-vs-v001-capture40.png
 ---
 
 # Baselines / Visual Capture 02 - `v0.0.1` historical screenshot diff triage
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Date.** 2026-06-06.
 

@@ -7,10 +7,13 @@ title: Hidden Vertex Backend Shape (probe agenda)
 date: undated
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L8851-L8950
 ---
 
 # Hidden Vertex Backend Shape (probe agenda)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Once broad state toggles and visible-VSOut width are
 all rejected as the sole owner of the hidden `~1.6GiB` top-three VS-buffer-write

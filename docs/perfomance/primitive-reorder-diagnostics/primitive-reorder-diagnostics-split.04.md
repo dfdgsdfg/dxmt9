@@ -7,10 +7,13 @@ title: Global Split-Large Indexed Draw Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6725-L6791
 ---
 
 # Global Split-Large Indexed Draw Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Is the `~1.6GiB` top-frame Xcode VS Buffer Device
 Memory Bytes Written bucket caused primarily by very large indexed

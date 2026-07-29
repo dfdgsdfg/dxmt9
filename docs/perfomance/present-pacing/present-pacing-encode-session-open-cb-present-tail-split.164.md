@@ -7,11 +7,14 @@ title: EncodeSession Open-CB Present-Tail Split
 date: 2026-06-27
 type: no-gputrace
 status: mechanism-observed-runtime-rejected
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-encode-session-open-cb-present-tail-split-r1-20260627/result.json, experiments/output/app-d3d9-3dmark05-encode-session-open-cb-present-tail-split-r1-20260627/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-session-open-cb-present-tail-split-r1-20260627/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-encode-session-open-cb-present-tail-split-r1-20260627/actual.png
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/present-pacing/present-pacing-encode-session-producer-cpuready-command-limit.163.md, specs/backend/spec.md, specs/backend/requirements.md
 ---
 
 # Present-Pacing H164 - EncodeSession Open-CB Present-Tail Split
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

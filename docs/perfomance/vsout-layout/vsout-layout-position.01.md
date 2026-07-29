@@ -7,10 +7,13 @@ title: Runtime Position-Only VSOut Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7756-L7876
 ---
 
 # Runtime Position-Only VSOut Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** As an extreme lower bound, force `VSOut` to position-only
 (`16B`) and a constant fragment result. If visible VSOut width owns the VS-write

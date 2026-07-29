@@ -7,10 +7,13 @@ title: Row/Class 60/4 Large4096 + Alpha Reverse
 date: 2026-06-02
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10798-L10872
 ---
 
 # Row/Class 60/4 Large4096 + Alpha Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the AND-list intersection `large4096 && alpha-blend`
 (16 of the 19 `large4096` draws) reproduce the full `60/4 large4096` signal

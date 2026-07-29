@@ -7,10 +7,13 @@ title: Disable Auto Expand Indexed Experiment
 date: undated
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5179-L5218
 ---
 
 # Disable Auto Expand Indexed Experiment
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Indexed-draw auto expansion contributes the entire
 ~1.056GB per-encoder transient vertex-write bucket. Does disabling it remove that

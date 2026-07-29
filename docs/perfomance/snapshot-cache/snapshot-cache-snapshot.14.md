@@ -7,10 +7,13 @@ title: Batch Miss Non-Constant Hash Reuse
 date: 2026-06-14
 type: experiment
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-snapshot-cache-nonconst-hash-reuse-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-snapshot-cache-nonconst-hash-reuse-r1/result.json, experiments/output/app-d3d9-3dmark05-snapshot-cache-nonconst-hash-reuse-r1/actual.png
 ---
 
 # Batch Miss Non-Constant Hash Reuse
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [snapshot-cache-snapshot.13](snapshot-cache-snapshot.13.md) named the batch-miss
 uniform-build hash as the local owner, led by non-constant component hashing.

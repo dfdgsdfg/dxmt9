@@ -7,10 +7,13 @@ title: Current Screen-Blend Full Proof Demoted By Aggregate GPU Gate
 date: 2026-06-06
 type: validation
 status: target-movement-pass-aggregate-gpu-fail
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-xcode-dxmt-comparison.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-index-cache-runtime-summary.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-semantic-image-policy-lsb1-compare.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-semantic-image-policy-lsb1-compare.csv
 ---
 
 # Current Screen-Blend Full Proof Demoted By Aggregate GPU Gate
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the current `60/2` screen-blend index-cache
 path now clear the full proof gate once it has both same-input `lsb1` semantic

@@ -7,10 +7,13 @@ title: Force-Expand-Indexed Probe
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9116-L9228
 ---
 
 # Force-Expand-Indexed Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Primitive-pressure classifier: does the hidden
 VS-buffer-write bucket react to vertex/primitive *submission* pressure? Expand

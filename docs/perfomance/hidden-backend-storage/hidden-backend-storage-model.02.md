@@ -7,10 +7,13 @@ title: External Apple GPU Model Refresh
 date: 2026-06-04
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3011-L3072
 ---
 
 # External Apple GPU Model Refresh
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does public Apple / Asahi / Mesa / MoltenVK material
 support the hidden-backend-storage model from

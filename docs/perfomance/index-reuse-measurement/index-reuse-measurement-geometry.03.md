@@ -7,10 +7,13 @@ title: Indexed Draw-Size Histogram Probe
 date: 2026-06-01
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3432-L3476
 ---
 
 # Indexed Draw-Size Histogram Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After the dedup probe, the last ambiguity: is the hot
 VS bucket driven by many *tiny repeated* draws, or by *large indexed* draws that

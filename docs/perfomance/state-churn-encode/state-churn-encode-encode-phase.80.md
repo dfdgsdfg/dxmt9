@@ -2,10 +2,13 @@
 title: Encode Phase 80 - Encode-Slot PSO Resource-Shape Memo Repeat A/B
 date: 2026-06-14
 status: accepted-repeat-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-current-default-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-memo-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-current-default-r2-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-resource-shape-memo-r2-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 80 - Encode-Slot PSO Resource-Shape Memo Repeat A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.79](state-churn-encode-encode-phase.79.md) accepted the first
 current-code default-vs-enabled pair as a local CPU win, but kept the behavior

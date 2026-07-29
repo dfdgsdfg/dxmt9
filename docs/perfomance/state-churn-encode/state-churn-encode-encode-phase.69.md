@@ -2,10 +2,13 @@
 title: Encode Phase 69 - Publish-Time PSO Prefetch Placement
 date: 2026-06-14
 status: accepted-diagnostic-placement
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-present-publish-split-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-publish-pso-prefetch-off-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-publish-pso-prefetch-off-lowoverhead-r2-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 69 - Publish-Time PSO Prefetch Placement
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** The replay detail split names `D9C_COMMAND_RECORD_PRESENT` as
 almost all non-draw replay CPU. Is this a drawable/present-boundary wait, or

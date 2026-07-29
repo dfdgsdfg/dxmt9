@@ -7,11 +7,14 @@ title: Mixed Pending Plus Explicit Draw-Run Carrier Audit
 date: 2026-06-20
 type: source-audit
 status: accepted-design-gate
+outdated: knob-removed
 source: src/d3d9/device_c_chunk_replay.cpp, src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_backend_types.hpp, experiments/output/app-d3d9-3dmark05-h208-drawrun-preflush-merge-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h209-drawrun-preflush-merge-control-r1/3dmark05-perf-summary.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.178.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.177.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.181.md
 ---
 
 # Encode Phase 182 - Mixed pending plus explicit draw-run carrier audit
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

@@ -2,10 +2,13 @@
 title: Present Pacing 24 - Low-Overhead Serial Cadence
 date: 2026-06-14
 status: accepted-attribution
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-argbuf-stage1-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-stage1-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-pe-recorder-stats-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-pe-clear-flush-lowoverhead-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Present Pacing 24 - Low-Overhead Serial Cadence
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** After the latest copy-policy and argbuf experiments, is current
 GT1 average FPS still best explained as a hidden app/Wine wait, or as serialized

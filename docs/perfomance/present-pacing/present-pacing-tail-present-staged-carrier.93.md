@@ -7,11 +7,14 @@ title: Tail-Present Staged Carrier Implementation
 date: 2026-06-19
 type: implementation
 status: implemented-followed-by-h94
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, tests/native/backend/queue_completion_sources_spec.cpp, agents/rules/environment_variables_present.rules.md
 related: docs/perfomance/present-pacing/present-pacing-tail-present-staging-code-audit.92.md, docs/perfomance/present-pacing/present-pacing-tail-present-batch-current.88.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md
 ---
 
 # Present Pacing 93 - Tail-Present staged carrier implementation
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

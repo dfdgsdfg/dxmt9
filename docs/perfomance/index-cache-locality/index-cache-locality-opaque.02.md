@@ -7,10 +7,13 @@ title: Layout-Stride Opaque Opt-In No-Gputrace Check
 date: 2026-06-04
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1107-L1182
 ---
 
 # Layout-Stride Opaque Opt-In No-Gputrace Check
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the production-shaped opaque-depth cache opt-in
 still apply *only* to the accepted safe rows on the layout-stride code, before

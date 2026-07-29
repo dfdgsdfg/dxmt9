@@ -2,10 +2,13 @@
 title: Encode Phase 83 - Encode-Slot PSO Memo Scratch Epochs
 date: 2026-06-15
 status: accepted-hot-path-cleanup
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_command_queue.cpp, experiments/output/app-d3d9-3dmark05-encode-slot-pso-memo-all-scratch-r1-20260615/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 83 - Encode-Slot PSO Memo Scratch Epochs
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.82](state-churn-encode-encode-phase.82.md) removed the new
 resource-shape memo heap allocation after default promotion. Can the remaining

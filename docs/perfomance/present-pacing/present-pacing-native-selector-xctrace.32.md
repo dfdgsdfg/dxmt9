@@ -7,11 +7,14 @@ title: Default-On Resource-Shape Native-Selector xctrace Scout
 date: 2026-06-15
 type: experiment
 status: negative-scout
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-default-on-native-selector-xctrace-r1-20260615/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-default-on-native-selector-xctrace-r1-20260615/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-default-on-native-selector-xctrace-r1-20260615/analysis/xctrace-metal-gpu-intervals-summary.md, experiments/output/app-d3d9-3dmark05-default-on-native-selector-xctrace-r1-20260615/result.json
 related: docs/perfomance/present-pacing/present-pacing-native-selector-xctrace.31.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.81.md
 ---
 
 # Present-Pacing 32 - Default-On Resource-Shape Native-Selector xctrace Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

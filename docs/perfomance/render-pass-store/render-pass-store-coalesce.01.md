@@ -7,10 +7,13 @@ title: DAG WAR/WAW Edges Make the H6 Re-entry Coalesce Machine-Decidable (frame5
 date: 2026-06-09
 type: measurement
 status: accepted-tooling
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-dagcheck-trad/analysis/dag/dag-frame50-chunk50-pre-opt.json, traces/app-d3d9-3dmark05-dagcheck-trad/analysis/dag/dag-frame50-chunk50-post-opt.json, traces/app-d3d9-3dmark05-dagcheck-trad/analysis/dag/dag-frame50-chunk50-post-opt.mermaid, specs/d3d9-renderer/requirements.md (R-BACK-32.9, R-BACK-39.7), src/dxmt9/framegraph/fg_builder.cpp (addDependencyEdges)
 ---
 
 # DAG WAR/WAW Edges Make the H6 Re-entry Coalesce Machine-Decidable (frame50)
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [render-pass-store-passchain.01](render-pass-store-passchain.01.md) left H6
 (*dependency-aware pass reordering/coalescing is the real lever*) **OPEN**, and

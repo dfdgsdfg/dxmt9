@@ -7,10 +7,13 @@ title: Snapshot Cache No-Gputrace Probe
 date: 2026-06-04
 type: measurement
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L1537-L1655
 ---
 
 # Snapshot Cache No-Gputrace Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Separate D3D9 frontend draw-state snapshot/build cost
 from Metal backend encode cost. New `d3d9_draw_state_cache_*` and

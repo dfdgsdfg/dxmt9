@@ -7,10 +7,13 @@ title: Per-Draw Scissor Fix
 date: undated
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14460-L14549
 ---
 
 # Per-Draw Scissor Fix
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The full16 replay's fragment-dominated shape
 ([mini-replay-bisection-replay.01](mini-replay-bisection-replay.01.md)) was suspected to be a replay artifact: the

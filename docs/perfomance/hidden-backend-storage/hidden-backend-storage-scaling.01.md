@@ -7,10 +7,13 @@ title: Multi-Capture VS Buffer Scaling
 date: 2026-06-01
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3189-L3313
 ---
 
 # Multi-Capture VS Buffer Scaling
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Across many frame60 captures, which encoder-row
 metric does the VS-buffer-write bucket correlate with — submitted geometry / VS

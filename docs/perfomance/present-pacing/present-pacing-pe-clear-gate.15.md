@@ -7,11 +7,14 @@ title: PE Clear Gate After Present
 date: 2026-06-14
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: src/d3d9/d3d9_pe_device.cpp, experiments/output/app-d3d9-3dmark05-present-pe-call-return-r2-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-call-return-r2-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-call-sequence.14.md, docs/perfomance/present-pacing/present-pacing-pe-record-milestones.13.md
 ---
 
 # Present-Pacing 15 - PE Clear Gate After Present
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

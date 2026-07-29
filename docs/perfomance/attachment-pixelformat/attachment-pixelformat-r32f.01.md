@@ -7,10 +7,13 @@ title: R32F RT PixelFormatView Suppression Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6792-L6858
 ---
 
 # R32F RT PixelFormatView Suppression Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the `PixelFormatView` usage on R32F render
 targets (and its swizzled shader-read view) own the GT1 frame60 GPU cost?

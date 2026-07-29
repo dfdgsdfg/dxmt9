@@ -7,11 +7,14 @@ title: PE All-Chunk Cadence Explains Inter-Replay Gap
 date: 2026-06-16
 type: experiment
 status: accepted-pe-chunk-fill-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r3-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r3-20260616/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-noenqueue-pe-chunk-cadence-r2-20260616/result.json
 related: docs/perfomance/present-pacing/present-pacing-noenqueue-inter-replay-gap.55.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 56 - PE All-Chunk Cadence Explains Inter-Replay Gap
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

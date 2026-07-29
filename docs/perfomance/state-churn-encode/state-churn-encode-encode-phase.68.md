@@ -2,10 +2,13 @@
 title: Encode Phase 68 - Argbuf Hybrid Low-Overhead FPS Gate
 date: 2026-06-14
 status: rejected-fps-policy
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-stage2-lowoverhead-r1-20260614/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-argbuf-stage1-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-stage1-lowoverhead-r1-20260614/3dmark05-perf-frames.csv
 ---
 
 # Encode Phase 68 - Argbuf Hybrid Low-Overhead FPS Gate
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.67](state-churn-encode-encode-phase.67.md) proved that disabling the
 Stage 2 constants-only argument-buffer hybrid removes a large encode CPU bucket.

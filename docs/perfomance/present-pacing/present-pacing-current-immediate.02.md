@@ -7,10 +7,13 @@ title: Current GT1 direct path already uses immediate presents
 date: 2026-06-12
 type: revalidation
 status: accepted-refinement
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-present-schedule-default-20260612-205557b, experiments/output/app-d3d9-3dmark05-present-schedule-vsync-off-20260612-205557b
 ---
 
 # Current GT1 direct path already uses immediate presents
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-check whether `DXMT9_DISABLE_VSYNC=1`
 is still a load-bearing GT1 perf knob after the visual-coupling and

@@ -7,10 +7,13 @@ title: Same-Frame Xcode Validation (no-auto-expand)
 date: 2026-06-01
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5219-L5283
 ---
 
 # Same-Frame Xcode Validation (no-auto-expand)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does disabling auto-expand reduce the *Xcode-reported*
 top-pass buffer/device writes at the same frame, or is its benefit only CPU-side?

@@ -7,10 +7,13 @@ title: Work A First Landing — bind-skip cache extended to five new classes (no
 date: 2026-06-05
 type: measurement
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1, experiments/output/app-d3d9-3dmark05-bind-cache-work-a-r3
 ---
 
 # Work A First Landing — bind-skip cache extended to five new classes (no measurable wallclock win)
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The
 [present-pacing-encode-budget-fix-proposal.01](present-pacing-encode-budget-fix-proposal.01.md) synthesis identified

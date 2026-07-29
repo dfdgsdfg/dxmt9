@@ -7,10 +7,13 @@ title: Texture Sampler Phase Split
 date: 2026-06-06
 type: attribution
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-texture-sampler-phase-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-texture-sampler-phase-split-r1/dxmt9-perf-counter-comparison-vs-stream-split.md, experiments/output/app-d3d9-3dmark05-texture-sampler-phase-split-r1/actual.png
 ---
 
 # Texture Sampler Phase Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.12](state-churn-encode-encode-phase.12.md) identified
 texture/sampler binding as the largest child of `stream_bind`

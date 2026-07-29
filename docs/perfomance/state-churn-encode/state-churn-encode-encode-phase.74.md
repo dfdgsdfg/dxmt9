@@ -2,10 +2,13 @@
 title: Encode Phase 74 - Encode-Slot PSO Semantic Memo
 date: 2026-06-14
 status: accepted-cpu-cleanup
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-encode-slot-pso-semantic-memo-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 74 - Encode-Slot PSO Semantic Memo
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.73](state-churn-encode-encode-phase.73.md) removed most repeated
 global draw PSO cache lookup, but left resolved-key/source-context construction

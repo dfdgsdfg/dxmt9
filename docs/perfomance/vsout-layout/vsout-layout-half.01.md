@@ -7,10 +7,13 @@ title: Half VSOut Probe
 date: 2026-06-05
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L22497-L22660
 ---
 
 # Half VSOut Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** A non-reorder compiler/backend-shape axis: does
 requesting *half-precision* user varyings in the shared `VSOut` reduce

@@ -7,10 +7,13 @@ title: Dump-First VSOut Liveness Replay (semantic-safe)
 date: undated
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3072-L3114
 ---
 
 # Dump-First VSOut Liveness Replay (semantic-safe)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the existing payload dump exercise a pair-local
 `VSOut` liveness trim *without changing pixels* — i.e. is the trim semantically

@@ -7,10 +7,13 @@ title: Stream/IB State Churn (hypothesis)
 date: undated
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3987-L4071
 ---
 
 # Stream/IB State Churn (hypothesis)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The draw-run scanner fails to batch because each draw
 carries stream/IB deltas. Hypothesis: handle churn (not offset/stride) dominates,

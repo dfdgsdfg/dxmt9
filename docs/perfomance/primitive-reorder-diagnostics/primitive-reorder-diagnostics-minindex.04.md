@@ -7,10 +7,13 @@ title: Screen-Blend Min-Index Full-Frame Rerun
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L14710-L14782
 ---
 
 # Screen-Blend Min-Index Full-Frame Rerun
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Run min-index ordering on a *geometry-locked* 16-draw
 depth-input replay that preserves draw count, submitted vertex count, primitive

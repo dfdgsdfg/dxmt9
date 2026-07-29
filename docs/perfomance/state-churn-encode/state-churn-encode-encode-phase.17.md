@@ -7,10 +7,13 @@ title: Cbuf Category Operation Split
 date: 2026-06-06
 type: attribution-instrumentation
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-cbuf-category-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-cbuf-category-split-r1/dxmt9-perf-counter-comparison-vs-texture-preresolve-removed-default.md, experiments/output/app-d3d9-3dmark05-cbuf-category-split-r1/actual.png
 ---
 
 # Cbuf Category Operation Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [state-churn-encode-encode-phase.16](state-churn-encode-encode-phase.16.md) removed
 the rejected texture pre-resolve branch, the remaining named backend CPU bucket

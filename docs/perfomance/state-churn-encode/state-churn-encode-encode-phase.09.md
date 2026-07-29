@@ -7,10 +7,13 @@ title: Argbuf Open Subphase Split
 date: 2026-06-06
 type: instrumentation
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-open-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-open-split-r1/dxmt9-perf-counter-comparison-vs-snapshot09.md, experiments/output/app-d3d9-3dmark05-argbuf-open-split-r1/actual.png
 ---
 
 # Argbuf Open Subphase Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [snapshot-cache-snapshot.09](../snapshot-cache/snapshot-cache-snapshot.09.md), backend
 `encode_draw_cpu_ms` is again the larger CPU bucket. `encode_draw_argbuf_setup`

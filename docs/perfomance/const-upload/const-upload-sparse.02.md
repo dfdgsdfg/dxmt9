@@ -7,10 +7,13 @@ title: Sparse Const Split Xcode Validation
 date: 2026-06-01
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6166-L6252
 ---
 
 # Sparse Const Split Xcode Validation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the sparse-const candidate
 ([const-upload-sparse.01](const-upload-sparse.01.md)) with a same-frame `.gputrace` + exported Xcode

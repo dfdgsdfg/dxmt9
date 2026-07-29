@@ -7,10 +7,13 @@ title: Cbuf Slice Cache Experiment
 date: undated
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L4907-L4961
 ---
 
 # Cbuf Slice Cache Experiment
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Keep the fresh resource-array argbuf table per draw,
 but when the uniform payload hash is unchanged and no cbuf dirty bits are

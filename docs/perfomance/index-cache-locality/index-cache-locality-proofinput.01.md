@@ -7,10 +7,13 @@ title: Current Experiment Purpose And Proof-Input Recipes
 date: 2026-06-06
 type: validation
 status: opaque-proof-passed-screenblend-target-pass-aggregate-variance
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-perf-gates.md; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/frame60-current-gate-with-screenblend-semantic-only.md; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/cleanup-candidates.md; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/opaque-proof-dry-run.txt; traces/app-d3d9-3dmark05-post-streamib-frame60-gate-r1/analysis/screenblend-proof-dry-run.txt; traces/app-d3d9-3dmark05-post-streamib-frame60-opaque-proof-r1/analysis/frame60-xcode-dxmt-comparison.md; traces/app-d3d9-3dmark05-post-streamib-frame60-opaque-proof-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md; traces/app-d3d9-3dmark05-post-streamib-frame60-opaque-proof-r1/analysis/frame60-index-cache-runtime-summary.md; traces/app-d3d9-3dmark05-post-streamib-frame60-60-2-screenblend-rank1-geometry-r1/analysis/mini-replay-screenblend-rank1/image-comparison-original-vs-cache-opt-lru32-lsb1.csv; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-xcode-dxmt-comparison.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-xcode-dxmt-bottleneck-report.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-index-cache-runtime-summary.md; traces/app-d3d9-3dmark05-post-streamib-frame60-screenblend-proof-r1/analysis/frame60-semantic-image-policy-lsb1-compare.md; traces/app-d3d9-3dmark05-post-visualfix-frame60-baseline-r1/analysis/frame60-xcode-dxmt-joined-summary.csv; traces/app-d3d9-3dmark05-stream-ib-stage-60-2-xcode-r1/analysis/frame60-xcode-dxmt-joined-summary.csv; traces/app-d3d9-3dmark05-frame60-trim-varyings-60-0-scoped-xcode-r1/analysis/frame60-xcode-dxmt-joined-summary.csv
 ---
 
 # Current Experiment Purpose And Proof-Input Recipes
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What does the current continued experiment buy us,
 given that the main bottleneck is already believed to be hidden Apple

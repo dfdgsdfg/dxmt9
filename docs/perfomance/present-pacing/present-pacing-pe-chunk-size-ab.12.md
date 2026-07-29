@@ -7,11 +7,14 @@ title: PE Chunk Size A/B
 date: 2026-06-14
 type: ablation
 status: rejected
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-present-pe-chunk-cadence-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-chunk-cadence-r1-20260614/3dmark05-direct.log, experiments/output/app-d3d9-3dmark05-present-pe-chunk32-r1-20260614/result.json, experiments/output/app-d3d9-3dmark05-present-pe-chunk32-r1-20260614/3dmark05-direct.log
 related: docs/perfomance/present-pacing/present-pacing-pe-chunk-cadence.11.md, docs/perfomance/present-pacing/present-pacing-stage-delta.08.md
 ---
 
 # Present-Pacing 12 - PE Chunk Size A/B
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

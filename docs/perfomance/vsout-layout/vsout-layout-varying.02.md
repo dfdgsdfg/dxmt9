@@ -7,10 +7,13 @@ title: VSOut Liveness Trim Hypothesis Rejection
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L15096-L15110
 ---
 
 # VSOut Liveness Trim Hypothesis Rejection
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does an *actual-FS-read* liveness manifest (trimming
 `VSOut` to only the fields the paired fragment shader genuinely reads) reduce the

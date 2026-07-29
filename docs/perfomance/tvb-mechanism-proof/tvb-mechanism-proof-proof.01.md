@@ -7,10 +7,13 @@ title: TVB Pressure Mechanism Proof
 date: 2026-06-03
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L18817-L19154
 ---
 
 # TVB Pressure Mechanism Proof
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does reducing post-transform VS invocation count (via
 an index-cache LRU32 reorder) linearly reduce the firmware-owned TVB / Parameter

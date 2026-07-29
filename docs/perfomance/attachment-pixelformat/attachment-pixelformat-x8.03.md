@@ -7,10 +7,13 @@ title: X8 Shader Alpha-Fill Companion Probe
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L7080-L7256
 ---
 
 # X8 Shader Alpha-Fill Companion Probe
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Move the D3D X8 alpha-fill contract out of the Metal
 `PixelFormatView` and into shader code, so an X8 RT can drop its shader-read

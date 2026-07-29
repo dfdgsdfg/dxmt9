@@ -7,11 +7,14 @@ title: Between-Calls Family Split Shows Producer Work, Not Idle Wait
 date: 2026-06-16
 type: experiment
 status: accepted-between-call-family-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-family-r1-20260616/result.json, experiments/output/app-d3d9-3dmark05-noenqueue-pe-between-call-family-r1-20260616/3dmark05-perf-summary.md
 related: docs/perfomance/present-pacing/present-pacing-pe-gap-tail-split.64.md, docs/perfomance/present-pacing/present-pacing-pe-gap-phase-split.63.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 65 - Between-Calls Family Split Shows Producer Work, Not Idle Wait
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

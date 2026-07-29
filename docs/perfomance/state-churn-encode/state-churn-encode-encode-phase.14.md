@@ -7,10 +7,13 @@ title: Sampler Pre-Handle Skip
 date: 2026-06-06
 type: accepted-experiment
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-sampler-prehandle-skip-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-sampler-prehandle-skip-r1/dxmt9-perf-counter-comparison-vs-texture-split.md, experiments/output/app-d3d9-3dmark05-sampler-prehandle-skip-r1/actual.png
 ---
 
 # Sampler Pre-Handle Skip
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.13](state-churn-encode-encode-phase.13.md) showed that
 GT1 skips ~92% of fragment sampler binds, but the old path still materialized

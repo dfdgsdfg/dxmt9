@@ -7,10 +7,13 @@ title: Frame 120 Xcode Counter Snapshot
 date: 2026-05-31
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2042-L2091
 ---
 
 # Frame 120 Xcode Counter Snapshot
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** What does the original GPU-limited 3DMark05 GT1 frame
 actually cost, and which counters dominate? This is the capture that first

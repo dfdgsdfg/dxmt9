@@ -7,10 +7,13 @@ title: Order-Preserving Vertex Payload Canonicalization Check
 date: undated
 type: measurement
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3142-L3187
 ---
 
 # Order-Preserving Vertex Payload Canonicalization Check
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Could VS invocations be cut without reordering
 triangles, by canonicalizing equal vertex payloads to the same index? That would

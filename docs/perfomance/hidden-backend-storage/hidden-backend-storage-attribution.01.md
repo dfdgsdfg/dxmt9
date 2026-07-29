@@ -7,10 +7,13 @@ title: Current Source Encoder Attribution
 date: 2026-06-01
 type: measurement
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L2093-L2212
 ---
 
 # Current Source Encoder Attribution
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** With the current normal perf profile (no
 correctness-invalid toggles), how is the top-three render-encoder cost

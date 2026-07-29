@@ -7,11 +7,14 @@ title: Native-Selector xctrace CPU Scout
 date: 2026-06-14
 type: experiment
 status: negative-scout
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r3/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r3/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r3/analysis/xctrace-metal-gpu-intervals-summary.md, experiments/output/app-d3d9-3dmark05-winemac-onmainthread-xctrace-r3/result.json
 related: docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-current.30.md, docs/perfomance/present-pacing/present-pacing-xctrace-cpu-summary-tooling.29.md, docs/perfomance/present-pacing/present-pacing-winemac-onmainthread.28.md
 ---
 
 # Present-Pacing 31 - Native-Selector xctrace CPU Scout
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

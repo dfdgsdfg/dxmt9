@@ -7,11 +7,14 @@ title: Open-CB Encode Split Guard Options
 date: 2026-06-19
 type: implementation-note
 status: accepted-primitive
+outdated: knob-removed
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm
 related: docs/perfomance/present-pacing/present-pacing-encoded-tail-record-merge.105.md, docs/perfomance/present-pacing/present-pacing-open-cb-feasibility.103.md
 ---
 
 # Present Pacing / Open-CB Encode Split Guard Options 106
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** What must be prevented before a pre-Present head can be encoded
 early and still remain an open command buffer for the Present tail?

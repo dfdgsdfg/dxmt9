@@ -7,10 +7,13 @@ title: Row 60/3 Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L9791-L9857
 ---
 
 # Row 60/3 Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** First single-row reverse clean enough for same-frame
 interpretation. Does reversing only hot row `60/3` (an opaque depth-writing

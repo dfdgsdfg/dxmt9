@@ -7,10 +7,13 @@ title: Transient Arena Fast Append
 date: 2026-06-06
 type: implementation
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-argbuf-reserve-fastappend-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-reserve-fastappend-r1/dxmt9-perf-counter-comparison-vs-open-split.md, experiments/output/app-d3d9-3dmark05-argbuf-reserve-fastappend-r1/actual.png
 ---
 
 # Transient Arena Fast Append
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.09](state-churn-encode-encode-phase.09.md) showed that
 `encode_draw_argbuf_open_cpu_ms` is not dominated by

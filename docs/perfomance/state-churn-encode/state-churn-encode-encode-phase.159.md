@@ -7,11 +7,14 @@ title: Compact Fixed Payload Direct Compare
 date: 2026-06-19
 type: implementation-runtime-gate
 status: accepted-bounded-cpu-cleanup-default-off
+outdated: knob-removed
 source: src/d3d9/core_draw.cpp, tests/native/core/core_device_com_spec.cpp, experiments/output/app-d3d9-3dmark05-h169-compact-fixed-direct-compare-r1/3dmark05-perf-summary.md
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.157.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.158.md
 ---
 
 # Encode Phase 159 - Compact fixed payload direct compare
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

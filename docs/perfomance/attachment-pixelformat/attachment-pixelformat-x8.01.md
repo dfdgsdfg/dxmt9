@@ -7,10 +7,13 @@ title: Broad X8 Suppression Attempt
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L6929-L6988
 ---
 
 # Broad X8 Suppression Attempt
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the Xcode `fmt2` lossless-compression hint be
 removed by suppressing the shader-read view on all `X8R8G8B8`/`X8B8G8R8` render

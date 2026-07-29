@@ -2,10 +2,13 @@
 title: Encode Phase 70 - Encode-Slot PSO Prefetch Default
 date: 2026-06-14
 status: accepted-default
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-present-publish-split-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-prefetch-lowoverhead-r1-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-prefetch-lowoverhead-r2-20260614/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-encode-slot-pso-prefetch-default-lowoverhead-r1-20260614/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 70 - Encode-Slot PSO Prefetch Default
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.69](state-churn-encode-encode-phase.69.md) proved that publish-time
 PSO prefetch owns the Present replay bucket, but the first A/B either moved

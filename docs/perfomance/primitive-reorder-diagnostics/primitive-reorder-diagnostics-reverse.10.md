@@ -7,10 +7,13 @@ title: Row/Class 60/4 Alpha Reverse
 date: 2026-06-02
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11010-L11082
 ---
 
 # Row/Class 60/4 Alpha Reverse
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** First class-scoped Xcode candidate. Is the `60/4`
 alpha-blended subset the owner of the primitive-order signal? `60/4` is the

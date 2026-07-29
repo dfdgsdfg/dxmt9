@@ -7,11 +7,14 @@ title: Current Low-Overhead Scout After Capture-Layer Repair
 date: 2026-06-16
 type: experiment
 status: accepted-current-baseline
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/result.json, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/3dmark05-perf-frames.csv, experiments/output/app-d3d9-3dmark05-current-lowoverhead-post-capture-r2/actual.png
 related: docs/perfomance/present-pacing/present-pacing-current-p2p3.46.md, docs/perfomance/present-pacing/present-pacing-noenqueue-beforepublish.47.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit.48.md, docs/perfomance/present-pacing/index.md
 ---
 
 # Present Pacing 49 - Current Low-Overhead Scout After Capture-Layer Repair
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** After the file `.gputrace` capture route was repaired and Xcode
 counter export worked again, does the normal no-gputrace path still show the

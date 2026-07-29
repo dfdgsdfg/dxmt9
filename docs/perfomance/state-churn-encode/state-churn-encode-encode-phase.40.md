@@ -7,11 +7,14 @@ title: Split Texture-Stage Flat Capacity
 date: 2026-06-13
 type: experiment
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-tss-flat-compact-r3-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-tss-flat-compact-r3-20260613/result.json, experiments/output/app-d3d9-3dmark05-tss-flat-compact-r3-20260613/actual.png, traces/app-d3d9-3dmark05-tss-flat-compact-r3-20260613/analysis/frame60-perf-counter-comparison.md, include/dxmt9/core_constants.hpp, include/dxmt9/core_snapshots.hpp
 baseline: experiments/output/app-d3d9-3dmark05-sampler-state-compact-r2-20260613/result.json
 ---
 
 # Split Texture-Stage Flat Capacity
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Phase 39 kept texture-stage state at `64` because
 dxmt9 uses internal key `TSS_TEXTURE_TYPE=63`. That is true for the

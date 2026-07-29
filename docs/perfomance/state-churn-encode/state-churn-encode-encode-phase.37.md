@@ -7,11 +7,14 @@ title: Thread-Local Draw Binding Snapshot Scratch
 date: 2026-06-13
 type: experiment
 status: accepted-small
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-submission-tls-scratch-r2-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-submission-tls-scratch-r2-20260613/result.json, experiments/output/app-d3d9-3dmark05-submission-tls-scratch-r2-20260613/actual.png, experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/result.json, src/dxmt9/dxmt9_command_queue.cpp
 baseline: experiments/output/app-d3d9-3dmark05-submission-emplace-20260613/result.json
 ---
 
 # Thread-Local Draw Binding Snapshot Scratch
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The F6 review found a hot-path hygiene bug:
 `submitDrawRunBatch()` entered `DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE` and then created

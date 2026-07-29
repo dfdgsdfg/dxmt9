@@ -7,11 +7,14 @@ title: Tail-Present Staging Needs Encoder-Invisible CPU-Ready Slots
 date: 2026-06-19
 type: code-audit
 status: accepted-design-gate
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-h171-current-pe-cadence-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-h172-pe-chunk128-512k-r1/3dmark05-perf-summary.md, src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/render/tail_present_batch.cpp, src/dxmt9/render/backend_interface.hpp, src/d3d9/device_c_chunk_replay.cpp
 related: docs/perfomance/present-pacing/present-pacing-pe-chunk-large-current.91.md, docs/perfomance/present-pacing/present-pacing-tail-present-batch-current.88.md, docs/perfomance/present-pacing/present-pacing-tail-present-staging-current.87.md, docs/perfomance/present-pacing/present-pacing-run-ahead-design.68.md, docs/perfomance/present-pacing/present-pacing-drawchunk-limit-sweep.50.md
 ---
 
 # Present Pacing 92 - Tail-Present staging needs encoder-invisible CPU-ready slots
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

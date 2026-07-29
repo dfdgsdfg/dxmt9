@@ -7,11 +7,14 @@ title: Tail-Present Staging Current Design Gate
 date: 2026-06-19
 type: code-audit-and-contract
 status: accepted-design-gate
+outdated: knob-removed
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_command_queue.hpp, src/dxmt9/dxmt9_queue.cpp, src/dxmt9/dxmt9_queue.hpp, src/dxmt9/render/backend_interface.hpp, tests/native/backend/render_backend_batch_contract_spec.cpp, specs/backend/spec.md, agents/rules/environment_variables_present.rules.md, docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md
 related: docs/perfomance/present-pacing/present-pacing-pre-present-opportunity.86.md, docs/perfomance/present-pacing/present-pacing-batch-carrier-current.82.md, docs/perfomance/present-pacing/present-pacing-run-ahead-current-code.73.md
 ---
 
 # Present-Pacing 87 - Tail-Present staging current design gate
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

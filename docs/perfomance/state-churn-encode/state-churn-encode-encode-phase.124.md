@@ -7,11 +7,14 @@ title: Argbuf Open Completed-Seq Snapshot
 date: 2026-06-15
 type: experiment
 status: accepted-local-cleanup-rejected-fps-owner
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_command_queue.cpp, src/dxmt9/dxmt9_command_queue.hpp, src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, src/dxmt9/dxmt9_argbuf_hybrid.cpp, src/dxmt9/dxmt9_argbuf_hybrid.hpp, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-reuse-base-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-uniform-backend-materialize-reuse-base-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-open-completed-snapshot-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-argbuf-open-completed-snapshot-r1/result.json, experiments/output/app-d3d9-3dmark05-argbuf-open-completed-snapshot-r1/actual.png
 related: docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.122.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.123.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Encode Phase 124 - Argbuf Open Completed-Seq Snapshot
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** Can per-draw `openArgbuf()` table reservation avoid rereading
 `CommandQueue::completedSeqId_` under the queue mutex on every draw?

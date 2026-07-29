@@ -7,10 +7,13 @@ title: Exact Stream+IB State-Delta Bucket
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5806-L5878
 ---
 
 # Exact Stream+IB State-Delta Bucket
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The `mixed_pair_stream_ib` counter overstates the
 target because group3/4 stops can also include the stream+IB pair. Add an

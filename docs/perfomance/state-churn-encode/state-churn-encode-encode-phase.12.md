@@ -7,10 +7,13 @@ title: Stream Bind Phase Split
 date: 2026-06-06
 type: attribution
 status: accepted-attribution
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-stream-bind-phase-split-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-stream-bind-phase-split-r1/dxmt9-perf-counter-comparison-vs-fastappend.md, experiments/output/app-d3d9-3dmark05-stream-bind-phase-split-r1/actual.png
 ---
 
 # Stream Bind Phase Split
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [state-churn-encode-encode-phase.10](state-churn-encode-encode-phase.10.md) and
 the rejected dirty-identity probe in [state-churn-encode-encode-phase.11](state-churn-encode-encode-phase.11.md),

@@ -7,10 +7,13 @@ title: Batch Miss Reuses Non-constant Uniform Payload Fields
 date: 2026-06-16
 type: cpu-optimization
 status: accepted-cpu-win-fps-flat
+outdated: evidence-missing
 source: src/d3d9/core_draw.cpp; experiments/output/app-d3d9-3dmark05-current-lowoverhead-continuation-r1-20260616/result.json; experiments/output/app-d3d9-3dmark05-snapshot-nonconst-payload-reuse-r1-20260616/result.json; experiments/output/app-d3d9-3dmark05-snapshot-nonconst-payload-reuse-r1-20260616/3dmark05-perf-summary.md; experiments/output/app-d3d9-3dmark05-snapshot-nonconst-payload-reuse-r1-20260616/actual.png
 ---
 
 # Batch Miss Reuses Non-constant Uniform Payload Fields
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After non-constant uniform component hashes were
 reused, batch-miss uniform build still rebuilt the non-constant payload fields

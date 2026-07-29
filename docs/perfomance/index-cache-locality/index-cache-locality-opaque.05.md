@@ -7,10 +7,13 @@ title: Current Non-Diagnostic Opaque-Depth Smoke
 date: 2026-06-05
 type: experiment-run
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L179-L250
 ---
 
 # Current Non-Diagnostic Opaque-Depth Smoke
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does the opt-in carry an obvious profile-level runtime
 cost *outside* the diagnostic path? Re-run the baseline/opt-in pair without

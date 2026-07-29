@@ -7,11 +7,14 @@ title: Submission Generation Compat Fast Path
 date: 2026-06-13
 type: optimization
 status: accepted-cpu-win
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20260613/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20260613/result.json, experiments/output/app-d3d9-3dmark05-submission-generation-fastpath-20260613/actual.png, experiments/output/app-d3d9-3dmark05-submission-generation-counters-20260613/result.json, src/dxmt9/dxmt9_command_queue.cpp
 baseline: experiments/output/app-d3d9-3dmark05-submission-generation-counters-20260613/result.json
 ---
 
 # Submission Generation Compat Fast Path
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.33](state-churn-encode-encode-phase.33.md) proved that
 GT1 adjacent submissions with the same stable state generation and snapshot

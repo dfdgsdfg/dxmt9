@@ -7,10 +7,13 @@ title: Trim-Varyings Xcode Recheck
 date: undated
 type: experiment-run
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5361-L5398
 ---
 
 # Trim-Varyings Xcode Recheck
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Does collapsing the visible MSL `VSOut` width by trimming
 unused varyings reduce the dominant Xcode "VS Buffer Device Memory Bytes Written"

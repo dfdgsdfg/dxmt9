@@ -7,10 +7,13 @@ title: Current Diagnostic 60/4 4-Draw Rerun
 date: 2026-06-02
 type: validation
 status: rejected
+outdated: retired-journal
 source: specs/perfomance.plan.md#L11652-L11809
 ---
 
 # Current Diagnostic 60/4 4-Draw Rerun
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Re-run the historical 4-draw
 `large4096 && alpha-blend && scissor` diagnostic

@@ -7,11 +7,14 @@ title: Short System Trace P4 Smoke
 date: 2026-06-15
 type: experiment
 status: negative-scout
+outdated: evidence-missing
 source: traces/app-d3d9-3dmark05-systemtrace-p4-smoke-r1/analysis/xctrace-cpu-thread-summary.md, traces/app-d3d9-3dmark05-systemtrace-p4-smoke-r1/analysis/xctrace-cpu-thread-verdict.json, traces/app-d3d9-3dmark05-systemtrace-p4-smoke-r1/analysis/xctrace-metal-gpu-intervals-summary.md, experiments/output/app-d3d9-3dmark05-systemtrace-p4-smoke-r1/result.json
 related: docs/perfomance/present-pacing/present-pacing-native-selector-xctrace.32.md, docs/perfomance/present-pacing/present-pacing-lowoverhead-refresh.33.md
 ---
 
 # Present-Pacing 34 - Short System Trace P4 Smoke
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 ## Question
 

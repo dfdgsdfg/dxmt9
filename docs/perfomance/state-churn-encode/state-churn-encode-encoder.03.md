@@ -7,10 +7,13 @@ title: Label-Join Xcode Validation
 date: 2026-06-01
 type: validation
 status: accepted
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5284-L5360
 ---
 
 # Label-Join Xcode Validation
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can the per-encoder dxmt attribution be joined to
 Xcode GPU counters directly (no row-order guessing), and does that prove the

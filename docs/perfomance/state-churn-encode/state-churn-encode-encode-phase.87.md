@@ -2,10 +2,13 @@
 title: Encode Phase 87 - Encode-Slot PSO Semantic Split Default-Off Cleanup
 date: 2026-06-15
 status: accepted-hot-path-cleanup-not-fps-proof
+outdated: evidence-missing
 source: src/dxmt9/dxmt9_command_queue.cpp, agents/rules/environment_variables_perf.rules.md, experiments/output/app-d3d9-3dmark05-pso-semantic-split-default-off-r1-20260615/3dmark05-perf-summary.md
 ---
 
 # Encode Phase 87 - Encode-Slot PSO Semantic Split Default-Off Cleanup
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question.** [state-churn-encode-encode-phase.75](state-churn-encode-encode-phase.75.md) split the default
 encode-slot PSO semantic memo into key/probe/store child timers and classified

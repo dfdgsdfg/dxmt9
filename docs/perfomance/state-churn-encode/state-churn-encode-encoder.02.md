@@ -7,10 +7,13 @@ title: Encoder Binding/Bytes Breakdown Run
 date: undated
 type: measurement
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L5730-L5805
 ---
 
 # Encoder Binding/Bytes Breakdown Run
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Extend the per-encoder breakdown to split stream/IB
 binding churn, argbuf table/cbuf, `setVertexBytes`, and *geometry* transient

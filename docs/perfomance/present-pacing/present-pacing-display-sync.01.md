@@ -7,10 +7,13 @@ title: Display-Sync Attribution of `completion_wait_ms`
 date: 2026-06-05
 type: measurement
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-display-sync-off-r1, experiments/output/app-d3d9-3dmark05-current-nondiag-baseline-r1
 ---
 
 # Display-Sync Attribution of `completion_wait_ms`
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** The 2026-06-04 perf summary observed 8-22 fps on
 3DMark05 GT1 while GPU `gpu_command_buffer_time_ms` was only ~4 s. The

@@ -7,10 +7,13 @@ title: Geometry Payload Smoke Scout
 date: undated
 type: scout
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L13723-L14202
 ---
 
 # Geometry Payload Smoke Scout
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Close the geometry-bytes gap from
 [mini-replay-bisection-harness.01](mini-replay-bisection-harness.01.md): can the runtime dump raw index + referenced

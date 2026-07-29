@@ -7,11 +7,14 @@ title: PE Producer-Cadence Source Audit After Fixed Uniform Carry
 date: 2026-06-20
 type: source-audit
 status: accepted-direction
+outdated: knob-removed
 source: src/d3d9/d3d9_pe_device.cpp, docs/perfomance/present-pacing/present-pacing-current-pe-cadence-fixed-carry.137.md, docs/perfomance/present-pacing/present-pacing-pe-between-call-body-coverage.121.md, docs/perfomance/present-pacing/present-pacing-pe-const-flush-source-audit.120.md, docs/perfomance/present-pacing/present-pacing-pe-draw-flush.114.md, docs/perfomance/present-pacing/present-pacing-current-visual-p4.136.md
 related: docs/perfomance/present-pacing/index.md, docs/perfomance/overview-3dmark05-gt1.md, docs/perfomance/state-churn-encode/index.md
 ---
 
 # Present Pacing / PE Producer-Cadence Source Audit 138
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 ## Question
 

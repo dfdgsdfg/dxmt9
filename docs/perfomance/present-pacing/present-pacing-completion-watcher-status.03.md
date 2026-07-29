@@ -7,10 +7,13 @@ title: Completion watcher pops immediately and waits on Committed command buffer
 date: 2026-06-12
 type: attribution
 status: accepted
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-completion-status-20260612-211546
 ---
 
 # Completion watcher pops immediately and waits on Committed command buffers
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** After [present-pacing-current-immediate.02](present-pacing-current-immediate.02.md)
 proved that current GT1 direct already uses immediate presents, the next

@@ -7,11 +7,14 @@ title: EncodeChunk Session Injection API
 date: 2026-06-20
 type: implementation-scaffold
 status: accepted-prerequisite
+outdated: knob-removed
 source: src/dxmt9/dxmt9_draw_encoder.hpp, src/dxmt9/dxmt9_draw_encoder.mm, tests/native/backend/queue_completion_sources_spec.cpp, docs/perfomance/present-pacing/present-pacing-encode-session-state-scaffold.129.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md
 related: docs/perfomance/present-pacing/present-pacing-encode-session-state-scaffold.129.md, docs/perfomance/present-pacing/present-pacing-render-pass-carry-contract.128.md, docs/perfomance/present-pacing/present-pacing-open-cb-render-state-carry-audit.116.md
 ---
 
 # Present Pacing / Encode Session Injection API 130
+
+> **Outdated — the knob or code path this experiment measured no longer exists in `src/`.** It cannot be re-run. Kept as history; do not cite it as current evidence.
 
 **Question.** After H129 grouped `encodeChunk()`'s render-session locals, what
 is the next behavior-preserving step toward an opt-in render-pass carry path?

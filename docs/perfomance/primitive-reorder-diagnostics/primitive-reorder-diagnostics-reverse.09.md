@@ -7,10 +7,13 @@ title: Reverse Material-Class Probe Tooling
 date: 2026-06-02
 type: tooling
 status: tooling
+outdated: retired-journal
 source: specs/perfomance.plan.md#L10643-L11009
 ---
 
 # Reverse Material-Class Probe Tooling
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Single-row reverse moves a row's whole material set.
 Add a material/state-class filter so a reverse probe can keep both the encoder

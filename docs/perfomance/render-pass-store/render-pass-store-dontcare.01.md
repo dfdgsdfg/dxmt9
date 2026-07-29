@@ -7,10 +7,13 @@ title: Render-Pass Store Action DontCare Opt-In (design)
 date: undated
 type: conceptual-model
 status: model
+outdated: retired-journal
 source: specs/perfomance.plan.md#L3898-L3940
 ---
 
 # Render-Pass Store Action DontCare Opt-In (design)
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Can a color/depth live-out proof let a render pass
 choose `StoreActionDontCare` when its stored contents are dead before the next

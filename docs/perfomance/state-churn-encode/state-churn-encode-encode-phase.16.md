@@ -7,10 +7,13 @@ title: Texture Pre-Resolve Skip
 date: 2026-06-06
 type: rejected-experiment
 status: removed-from-hot-path
+outdated: evidence-missing
 source: experiments/output/app-d3d9-3dmark05-sampler-state-hash-default-r2/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-skip-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-skip-r1/dxmt9-perf-counter-comparison-vs-sampler-state-hash.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-skip-r1/actual.png, experiments/output/app-d3d9-3dmark05-texture-preresolve-gated-default-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-gated-default-r1/dxmt9-perf-counter-comparison-vs-sampler-state-hash.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-gated-default-r1/actual.png, experiments/output/app-d3d9-3dmark05-texture-preresolve-removed-default-r1/3dmark05-perf-summary.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-removed-default-r1/dxmt9-perf-counter-comparison-vs-sampler-state-hash.md, experiments/output/app-d3d9-3dmark05-texture-preresolve-removed-default-r1/actual.png
 ---
 
 # Texture Pre-Resolve Skip
+
+> **Outdated — every artifact this leaf cites in `source:` is gone from disk.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** [state-churn-encode-encode-phase.15](state-churn-encode-encode-phase.15.md) closed the
 sampler-side direct-lane hash tax. The next plausible texture-side bet was to

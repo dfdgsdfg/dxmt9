@@ -7,10 +7,13 @@ title: Current-Head Geometry Payload Min-Index Rerun
 date: undated
 type: experiment-run
 status: inconclusive
+outdated: retired-journal
 source: specs/perfomance.plan.md#L15191-L15321
 ---
 
 # Current-Head Geometry Payload Min-Index Rerun
+
+> **Outdated — this leaf's only `source:` is the retired `specs/perfomance.plan.md` journal, which was deleted.** The numbers below cannot be re-derived or re-checked. Kept as history; do not cite it as current evidence.
 
 **Question / hypothesis.** Run min-index ordering through the row-local *mini
 replay* harness (a reduced 3-draw `60/2` top-group bundle) under Xcode counters.
