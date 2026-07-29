@@ -1539,6 +1539,31 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
   if (!d || !chunk) {
     return commitChunkFail("bad-header");
   }
+#if defined(__APPLE__)
+  // The Metal System Trace CPU sidecar
+  // (scripts/tools/summarize_xctrace_cpu_threads.py) resolves the P4 producer
+  // thread by scanning the run log for this line. Its only other selector is
+  // the PE fallback, which reports a Win32 thread id; xctrace reports native
+  // Mach thread ids, so that namespace mismatch makes the producer wait/hold
+  // verdict unresolvable. pthread_threadid_np yields the same 64-bit id
+  // Instruments displays, which is what closes the correlation.
+  //
+  // commit_chunk runs thousands of times per second, so this is latched once
+  // per thread and gated on the already-computed log level: with Info logging
+  // off the hot-path cost is one thread-local load plus one level check, and
+  // the log itself cannot perturb the timing the sidecar exists to measure.
+  static thread_local bool loggedNativeThreadId = false;
+  if (!loggedNativeThreadId &&
+      dxmt9::util::shouldLog(dxmt9::util::LogLevel::Info)) {
+    loggedNativeThreadId = true;
+    std::uint64_t nativeThreadId = 0;
+    pthread_threadid_np(nullptr, &nativeThreadId);
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-device",
+                      "unix_commit_chunk_entry device=%p native_tid=0x%llx",
+                      static_cast<const void*>(d),
+                      static_cast<unsigned long long>(nativeThreadId));
+  }
+#endif
   if (chunk->version != D9C_COMMAND_CHUNK_VERSION_V2) {
     dxmt9::perf::countCommandChunkV2Reject();
     return commitChunkFail("unsupported-wire-version", chunk->version);
