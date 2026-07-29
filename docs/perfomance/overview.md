@@ -5,7 +5,7 @@ title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
 updated: 2026-07-29
-source: docs/perfomance/index.md; 2; 4}-20260719; 2; 3}-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; solo-clean-r1-20260712; at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 

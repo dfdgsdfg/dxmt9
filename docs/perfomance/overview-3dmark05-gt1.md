@@ -5,7 +5,7 @@ title: "3DMark05 GT1 Performance — Investigation Map"
 type: root-overview
 status: current
 updated: 2026-07-29
-source: 2; 3}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
+source: experiments/output/app-d3d9-3dmark05-release-default-gt1-r1-20260725; docs/perfomance/index-cache-locality/index-cache-locality-scope-merge.21.md; docs/perfomance/mini-replay-bisection/mini-replay-bisection-vertexremap.01.md; docs/perfomance/hidden-backend-storage/overview.md
 related: docs/perfomance/log.md; docs/perfomance/overview.md; specs/backend/gap.md
 ---
 

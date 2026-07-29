@@ -5,7 +5,7 @@ title: "3DMark05 GT3 Performance — Current Baseline"
 type: root-overview
 status: current
 updated: 2026-07-25
-source: 2}-20260719; experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725; 2; 3; 4; 5}-{v1; v2}; v2}-exact
+source: experiments/output/app-d3d9-3dmark05-current-v2-gt3-r3-retry1-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt3-r1-20260725
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md
 ---
 
