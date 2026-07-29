@@ -40,7 +40,8 @@ Commercial / 3rd-party titles (require external prefix):
 
 - `app-d3d9-anno-1404.sh` — Anno 1404 Gold (Heroic prefix).
 - `app-d3d9-sfiv-benchmark.sh` — SFIV benchmark (Heroic + CrossOver
-  oracle lanes — see `scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh`
+  oracle lanes (the CrossOver oracle wrapper was removed on 2026-07-29;
+  `agents/rules/test_wild.rules.md` rejects CrossOver as a runtime)
   for installer-extraction wrapper).
 
 ## Synthetic perf probes (no app source — shared probe binary, parameter-driven)

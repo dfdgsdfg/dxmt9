@@ -35,10 +35,39 @@ handshake OK` log and passed. The `Wine-11.6-DXMT` runtime had drifted
 from upstream Wine in a way that masked or simulated wow64 dispatch
 differently — the dxmt9 bridge was fine, the runtime was the variable.
 
-## How to Apply
+## Rule: one way to run a catalogue app
 
-When adding or editing a runner script under `scripts/run_apps/`,
-`scripts/run_suites/`, or `scripts/tools/`:
+**Every wild app is run through `run_experiment.py`.** There is one invocation,
+and it is the same for GT1/GT2/GT3, SFIV, Anno, and everything else:
+
+```sh
+python3 scripts/run_apps/run_experiment.py run <app-id>
+```
+
+Per-app shell wrappers under `scripts/run_apps/` are **legacy — do not add
+new ones.** Three were removed on 2026-07-29 and each shows why:
+
+| Removed | Why |
+|---|---|
+| `run_app-d3d9-sfiv-benchmark_experiment.sh` | Forwarded every argument unchanged. It added nothing except a second name for the same command, and its README description had drifted to describe behaviour it no longer had. |
+| `run_app-d3d9-anno-1404_experiment.sh` | Hardcoded a Heroic `Wine-11.7` root and a prefix path, overriding the entry's `wine_id`. This is the anti-pattern below, shipped. |
+| `run_suites/run_sfiv_benchmark_crossover_oracle.sh` | Passed `--host crossover`, which `run_experiment.py` does not accept, so it had been failing at argument parsing. CrossOver is a rejected runtime (table above). |
+
+The cost of a second invocation path is not the wrapper; it is that the two
+paths drift. SFIV's wrapper did not set `DXMT_EXPERIMENT_PROFILE`, so it
+silently measured the `debug` profile — validation layer on, debug logging —
+and produced `11.3` sampled fps against a real `43.02`. That was investigated
+as a 4x renderer regression before the profile was found. The profile now
+defaults to `perf` and is recorded in the run output, but the general lesson
+is the rule above: one path.
+
+Two supervised wrappers under `scripts/tools/` are **not** covered by this and
+stay, because they add real supervision rather than renaming a command:
+`run_3dmark05_perf_probe.sh` (timeouts, watchdog, capture preflight, proof
+gates) and `run_app-d3d9-3dmark05-verify_direct.sh` (direct-prefix runs with a
+process-group kill).
+
+## How to Apply
 
 In `experiments/CATALOGUE.toml` the per-app default is the manifest id, not a path:
 
@@ -47,10 +76,10 @@ In `experiments/CATALOGUE.toml` the per-app default is the manifest id, not a pa
 wine_id = "heroic-11.7"
 ```
 
-On the command line, `--wine-id` overrides the CATALOGUE default (forward-looking — lands in a later round of `specs/experiments/runtime/`):
+On the command line, `--wine-id` overrides the CATALOGUE default:
 
 ```sh
-bash scripts/run_apps/run_<name>_experiment.sh --wine-id heroic-11.7
+python3 scripts/run_apps/run_experiment.py run <app-id> --wine-id heroic-11.7
 ```
 
 What to avoid — never hardcode a Wine path or default to a non-vanilla variant. Both bypass the manifest:

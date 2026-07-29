@@ -91,9 +91,8 @@ Wrappers that still need extra setup (default-prefix injection or installer
 extraction) remain as shell scripts:
 
 ```sh
-bash scripts/run_apps/run_app-d3d9-anno-1404_experiment.sh
-bash scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
-bash scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
+python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404
+python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
 Permanent-prefix installer for Heroic:

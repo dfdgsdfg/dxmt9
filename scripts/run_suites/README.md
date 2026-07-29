@@ -12,8 +12,6 @@ artifacts. None are wired to Meson tests.
 - `run_dx9_performance_suite.sh` — performance probe sweep.
 - `run_dx9_regression_suite.sh` — regression sweep over the conformance
   manifest.
-- `run_sfiv_benchmark_crossover_oracle.sh` — Street Fighter IV under
-  CrossOver, used as a reference oracle.
 - `run_d3d9_conformance_render_modes.sh` — CI conformance gate that runs
   `scripts/tools/run_d3d9_conformance.py` once per renderer
   (`DXMT9_RENDER_MODE=traditional` and `=framegraph`), forces the explicit

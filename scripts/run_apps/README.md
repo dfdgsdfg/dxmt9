@@ -12,11 +12,25 @@ wired to Meson tests; they are evidence-gathering tools.
   - `python3 run_experiment.py run <name> --build` — first run the app's
     `build_script` field from `experiments/CATALOGUE.toml`, then run. Errors if
     the app has no `build_script` declared.
-- `run_app-d3d9-anno-1404_experiment.sh` — Anno 1404 Gold launcher (injects default
-  Heroic `--wine-root` and `--prefix`; no build step).
-- `run_app-d3d9-sfiv-benchmark_experiment.sh` — Street Fighter IV benchmark (extracts
-  the public installer's MSI, installs prefix-native `d3dx9_41`, picks the
-  Heroic vs CrossOver host lane).
+Per-app shell wrappers are legacy. `run_app-d3d9-anno-1404_experiment.sh`,
+`run_app-d3d9-sfiv-benchmark_experiment.sh`, and
+`scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh` were removed on
+2026-07-29: the SFIV one forwarded every argument unchanged and added nothing,
+the Anno one hardcoded a Heroic Wine root and prefix — the exact pattern
+`agents/rules/test_wild.rules.md` names as bypassing the manifest — and the
+CrossOver oracle passed a `--host` flag `run_experiment.py` does not accept, so
+it had been failing at argument parsing. Run these apps the same way every
+other catalogue entry is run:
+
+```sh
+python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
+python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404
+```
+
+The Wine runtime comes from the entry's `wine_id` in
+`experiments/CATALOGUE.toml`; override it per run with `--wine-id`, never by
+reintroducing a hardcoded `--wine-root` default in a wrapper.
+
 - `run_app-d3d9-3dmark05-verify_direct.sh` — direct foreground runner for the
   existing 3DMark05 verify prefix. It enables `DXMT_3DMARK05_DIRECT=1` on the
   regular 3DMark05 launcher and uses `DXMT_3DMARK05_ARGS` when a manual

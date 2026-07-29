@@ -22,10 +22,8 @@ from the parent spec rather than redefined here.
 |---|---|
 | `scripts/run_apps/run_experiment.py` | The domain's core. Loads `experiments/CATALOGUE.toml`, resolves the Wine manifest entry and prefix, optionally runs `stage_dxmt9()` (`build-stage`), spawns the catalogue launcher subprocess and captures the on-screen frame (`run-capture`), and writes `result.json`. |
 | `scripts/run_apps/run_app-d3d9-3dmark05-verify_direct.sh` | Direct (non-catalogue-supervised) wrapper around `experiments/launchers/app-d3d9-3dmark05.sh`, for standalone debugging outside `run_experiment.py`'s supervision. Applies its own `DXMT_3DMARK05_DIRECT_TIMEOUT` (default `120`) watchdog and kills the process group on timeout. |
-| `scripts/run_apps/run_app-d3d9-anno-1404_experiment.sh` | Thin `run_experiment.py run app-d3d9-anno-1404` wrapper. Defaults `--wine-root`/`--prefix` to the documented Anno 1404 host locations unless the caller already passed those flags. |
-| `scripts/run_apps/run_app-d3d9-sfiv-benchmark_experiment.sh` | Thin `run_experiment.py run app-d3d9-sfiv-benchmark` wrapper forwarding all CLI arguments through. |
 | `experiments/launchers/*.sh` | One launcher per catalogue app (e.g. `app-d3d9-3dmark05.sh`, `conf-d3d9-fast-sanity.sh`, `perf-d3d9-present-loop.sh`), plus shared `common.sh`. These are the processes `run_experiment.py` spawns for `run-capture`; they start Wine and the target binary. |
-| `scripts/run_suites/*.sh` | Batch drivers invoking `run_experiment.py` (or the catalogue launchers) over a fixed app list: `run_dx9_fast_sanity_suite.sh`, `run_dx9_regression_suite.sh`, `run_dx9_performance_suite.sh`, `run_dx9_builtin_oracle_suite.sh`, `run_dx9_oracle_compare_suite.sh`, `run_d3d9_conformance_render_modes.sh`, `run_boundary_audit_suite.sh`, `run_sfiv_benchmark_crossover_oracle.sh`. |
+| `scripts/run_suites/*.sh` | Batch drivers invoking `run_experiment.py` (or the catalogue launchers) over a fixed app list: `run_dx9_fast_sanity_suite.sh`, `run_dx9_regression_suite.sh`, `run_dx9_performance_suite.sh`, `run_dx9_builtin_oracle_suite.sh`, `run_dx9_oracle_compare_suite.sh`, `run_d3d9_conformance_render_modes.sh`, `run_boundary_audit_suite.sh`. |
 
 `build-stage`'s actual dxmt9-into-Wine install step is delegated to
 `scripts/install/install_heroic_wine.sh`, invoked by `stage_dxmt9()`.

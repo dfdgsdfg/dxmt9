@@ -272,7 +272,7 @@ digraph migrate_sfiv {
   s3[shape=box, label="extend CATALOGUE.toml entry\nfor app-d3d9-sfiv-benchmark"];
   s4[shape=box, label="add to .gitignore"];
   s5[shape=box, label="implement scripts/wine/resolve.py\n+ scripts/wine/bootstrap_prefix.sh"];
-  s6[shape=box, label="rewrite run_app-d3d9-sfiv-benchmark_experiment.sh\nto use resolve + bootstrap"];
+  s6[shape=box, label="run SFIV through run_experiment.py\n(resolve + bootstrap; per-app wrapper removed 2026-07-29)"];
   s7[shape=box, label="user: install SFIV into\nexperiments/apps_3rd/sfiv"];
   s8[shape=box, label="run --rebuild-prefix"];
   s9[shape=box, label="verify: actual.png shows render,\nperf-frame lines emitted"];
