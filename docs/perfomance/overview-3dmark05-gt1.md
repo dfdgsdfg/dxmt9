@@ -147,8 +147,11 @@ Hidden write volume on that row tracks VS invocation count at `~1591.9 B` per
 invocation, which a permutation cannot change. The design's own sanity gate then
 failed: the `sort-min-index` control measured `1623.4 B/inv`, not the `442.6`
 that would show the row reproduces `replay.03`'s `3.86x` density spread. So the
-`replay.03` question is **still open** and needs the encoder2 (row `60/2`) dump;
-do not retry the remap on row `60/1`. Evidence:
+`replay.03` question is **now moot**: the metric it was measured on, hidden VS
+buffer device writes, is identically `0` since `d63f7a65` removed the
+DEF-overlay register-file copy that produced it, so there is no density spread
+left to attribute and the encoder2 (row `60/2`) dump is no longer needed. Do not
+retry the remap on any row. Evidence:
 [mini-replay-bisection-vertexremap.01](mini-replay-bisection/mini-replay-bisection-vertexremap.01.md),
 carried as H53 in
 [hidden-backend-storage](hidden-backend-storage/overview.md).
@@ -161,11 +164,11 @@ invocations (`37.3%`), and the copy accounts for `~96%` of the `1,265,398,976 B`
 of VS device-memory writes measured on that encoder. It passed a GT1 visual gate
 (character models present and correctly skinned at matching frame ordinals; 81 of
 92 GT1 shaders byte-identical, exactly the 11 register-file shaders changed).
-**No GPU measurement exists yet** — the invocation and byte figures above are the
-pre-fix attribution that motivated it, not a measured result. Treat this as an
-open item, not a win, until a paired frame60 `.gputrace` or encoder-counter export
-shows VS device writes, VS invocations, and GPU time moving together. Owner
-domain: [shader-codegen](shader-codegen/overview.md).
+**Measured.** A same-frame A/B differing only in emission puts frame `GPU Time`
+at `31.414 -> 4.044 ms` (`-87.13%`) and `VS Buffer Device Memory Bytes Written`
+at `1,593,314,944 -> 0`, with VS invocations and primitives bit-identical; GT2
+gains `+110%` scene fps. GT1 itself gains only `+8.8%` because it is not
+GPU-bound. Owner domain: [shader-codegen](shader-codegen/overview.md).
 
 ## Promotion Gates
 
