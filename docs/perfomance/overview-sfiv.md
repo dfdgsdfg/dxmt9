@@ -64,7 +64,10 @@ and is not visual evidence. The debug capture's `14.45` instantaneous and
 `11.41` average overlay is also not a performance baseline because verbose
 logging generated about 1.5 GB before compression. These runs therefore add
 default-policy correctness/stability evidence without replacing the
-duration-matched `44.668` sampled-FPS baseline.
+duration-matched `44.668` sampled-FPS baseline. Since 2026-07-29 the experiment
+profile defaults to `perf` and every run records the profile it resolved in
+`result.json:profile`, so a debug-profile figure like the `11.41` above is
+identifiable from the artifact itself rather than re-derived from its log size.
 
 The 2026-07-20 direct-cbuf generality gate
 adds a quiet same-build ABBA pair. Sampled FPS is flat-positive

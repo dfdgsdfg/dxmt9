@@ -43,8 +43,43 @@ exp_wine_unix_dir() {
   fi
 }
 
+# Render one profile-record field. An empty profile default (e.g. the debug
+# profile's WINEDEBUG) is reported as the explicit token `unset` so the record
+# never has a hole a reader could mistake for "not reported".
+exp_profile_record_value() {
+  if [[ -z "${1:-}" ]]; then
+    printf 'unset'
+  else
+    printf '%s' "$1"
+  fi
+}
+
 exp_resolve_profile_defaults() {
-  EXP_PROFILE_NAME=$(printf '%s' "${DXMT_EXPERIMENT_PROFILE:-${DXMT_PROFILE:-debug}}" | tr '[:upper:]' '[:lower:]')
+  # `perf` is the default because an experiment run is a measurement first:
+  # the debug profile's Metal validation layer and debug-level logging cost
+  # roughly 4x throughput (SFIV: 11.3 vs 43.0 sampled fps, 1.0 GB vs 22 MB of
+  # log), which has already been misread once as a renderer regression.
+  #
+  # The trade-off this makes: the previous `debug` default meant every wild run
+  # carried the Metal validation layer, so an API misuse was caught by whichever
+  # run happened to hit it. That safety net is now opt-in. Anyone diagnosing a
+  # wild failure — black screen, GPU fault, suspected API misuse — should set
+  # `DXMT_EXPERIMENT_PROFILE=debug`, which is where the validation layer and
+  # debug logging now live. A run that measures anything must not. Concretely,
+  # the runner's `scan_log_for_failures` "Metal API Validation" / "validation
+  # error" markers can now only fire on a `debug` run.
+  local exp_profile_raw
+  if [[ -n "${DXMT_EXPERIMENT_PROFILE:-}" ]]; then
+    exp_profile_raw=$DXMT_EXPERIMENT_PROFILE
+    EXP_PROFILE_SOURCE=DXMT_EXPERIMENT_PROFILE
+  elif [[ -n "${DXMT_PROFILE:-}" ]]; then
+    exp_profile_raw=$DXMT_PROFILE
+    EXP_PROFILE_SOURCE=DXMT_PROFILE
+  else
+    exp_profile_raw=perf
+    EXP_PROFILE_SOURCE=default
+  fi
+  EXP_PROFILE_NAME=$(printf '%s' "$exp_profile_raw" | tr '[:upper:]' '[:lower:]')
 
   case "$EXP_PROFILE_NAME" in
     debug)
@@ -72,6 +107,24 @@ exp_resolve_profile_defaults() {
       exit 2
       ;;
   esac
+
+  # Record the configuration this run resolved, in the run's own output. The
+  # runner captures launcher stdout/stderr into the run log, and
+  # `run_experiment.py::extract_experiment_profile` parses this line back into
+  # `result.json`'s `profile` object. A measurement artifact that does not say
+  # what configuration produced it is how a profile mistake becomes a
+  # multi-hour regression hunt.
+  #
+  # Values are the *effective* ones — `exp_run_wine_binary` lets a caller
+  # override any single knob (`${DXMT_LOG_LEVEL:-$EXP_DEFAULT_DXMT_LOG_LEVEL}`),
+  # so reporting the profile default alone could still misdescribe the run.
+  exp_log "profile: name=$EXP_PROFILE_NAME source=$EXP_PROFILE_SOURCE"\
+" validate=$(exp_profile_record_value "${DXMT_VALIDATE:-$EXP_DEFAULT_DXMT_VALIDATE}")"\
+" log_level=$(exp_profile_record_value "${DXMT_LOG_LEVEL:-$EXP_DEFAULT_DXMT_LOG_LEVEL}")"\
+" winedebug=$(exp_profile_record_value "${WINEDEBUG:-$EXP_DEFAULT_WINEDEBUG}")"\
+" perf_counters=$(exp_profile_record_value "${DXMT_PERF_COUNTERS:-$EXP_DEFAULT_DXMT_PERF_COUNTERS}")"\
+" offload_commit_replay=$(exp_profile_record_value "${DXMT9_OFFLOAD_COMMIT_REPLAY:-$EXP_DEFAULT_DXMT9_OFFLOAD_COMMIT_REPLAY}")"\
+" optimize_opaque_depth_index_cache=$(exp_profile_record_value "${DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE:-$EXP_DEFAULT_DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE}")"
 }
 
 exp_stage_dxmt9() {

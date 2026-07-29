@@ -86,6 +86,14 @@ VALID_WSI_LAYER_ACQUISITION_PATHS = (
     "fallback_nil",
     "unavailable",
 )
+# The launcher records the experiment profile it resolved
+# (`experiments/launchers/common.sh::exp_resolve_profile_defaults`) as one
+# machine-readable line, e.g.:
+#   [experiment] profile: name=perf source=default validate=0 log_level=warn ...
+# so `result.json` can state the configuration the run actually used. The
+# `debug` profile costs ~4x throughput; a measurement that does not name its
+# profile has already been misread once as a renderer regression.
+EXPERIMENT_PROFILE_PATTERN = re.compile(r"^\[experiment\]\s+profile:\s+(.*)$")
 _DRIVE_LETTER_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
 
@@ -666,6 +674,41 @@ def extract_wsi_layer_acquisition(log_path: Path) -> str:
     return "unavailable"
 
 
+def parse_experiment_profile_line(line: str) -> dict[str, str]:
+    """Parse one `[experiment] profile: ...` record into its fields.
+
+    Values stay strings: this is a record of a configuration, not a
+    measurement, and `validate=0` must not be confused with a counter.
+    """
+    match = EXPERIMENT_PROFILE_PATTERN.match(line)
+    if not match:
+        return {}
+    return dict(PERF_COUNTER_VALUE_PATTERN.findall(match.group(1)))
+
+
+def extract_experiment_profile(log_path: Path) -> dict[str, str]:
+    """Return the experiment profile the launcher resolved for this run.
+
+    Parses the `[experiment] profile: name=<profile> source=<var|default> ...`
+    line emitted by `experiments/launchers/common.sh::exp_resolve_profile_defaults`.
+    The reported values are the effective ones, including any single-knob env
+    override the caller applied on top of the profile.
+
+    If the log is absent or the line was never emitted (e.g. a launcher that
+    never reached `exp_resolve_profile_defaults`), returns the `"unavailable"`
+    sentinel so a reader can distinguish "not recorded" from a recorded
+    selection — the same convention as `extract_wsi_layer_acquisition`.
+    """
+    unavailable = {"name": "unavailable", "source": "unavailable"}
+    if not log_path.exists():
+        return unavailable
+    for line in log_path.read_text(errors="replace").splitlines():
+        parsed = parse_experiment_profile_line(line)
+        if parsed:
+            return parsed
+    return unavailable
+
+
 def extract_perf_probe_timings(log_path: Path) -> dict[str, int | float | str]:
     if not log_path.exists():
         return {}
@@ -1040,6 +1083,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "failures": [],
             "timed_out": timed_out,
             "performance": performance,
+            # State the configuration this measurement ran under. The `debug`
+            # profile (Metal validation layer + debug logging) costs ~4x
+            # throughput, so an fps or log-size number is only interpretable
+            # alongside the profile that produced it.
+            "profile": extract_experiment_profile(log_path),
         }
         # R-RT-6.2: record the resolved manifest entry and the prefix
         # bootstrap result for diagnostic cross-reference.
@@ -1135,6 +1183,11 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         print(f"status: {result['status']}")
         print(f"output: {output_dir}")
         print(f"prefix: {prefix}")
+        profile_record = result["profile"]
+        print(
+            f"profile: {profile_record.get('name', 'unavailable')} "
+            f"(source: {profile_record.get('source', 'unavailable')})"
+        )
         if "ssim" in result:
             print(f"ssim: {result['ssim']:.4f}")
         if result["failures"]:

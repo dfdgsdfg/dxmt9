@@ -6751,6 +6751,23 @@ def write_markdown(
     lines.append("")
     lines.append(f"- Output: `{run_dir}`")
     lines.append(f"- Status: `{result.get('status', 'unknown')}`")
+    # Which experiment profile produced these numbers. `debug` enables the Metal
+    # validation layer and debug logging and costs ~4x throughput, so a summary
+    # that does not name its profile is not a comparable measurement.
+    profile = result.get("profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    profile_name = profile.get("name", "unavailable")
+    profile_source = profile.get("source", "unavailable")
+    profile_line = f"- Profile: `{profile_name}` (source `{profile_source}`)"
+    profile_detail = " ".join(
+        f"{key}=`{profile[key]}`"
+        for key in ("validate", "log_level", "winedebug", "perf_counters")
+        if key in profile
+    )
+    if profile_detail:
+        profile_line = f"{profile_line} — {profile_detail}"
+    lines.append(profile_line)
     lines.append(f"- Capture error: `{result.get('capture_error')}`")
     lines.append(f"- Encoder lines: `{len(encoders)}`")
     lines.append(f"- Stream lines: `{len(streams)}`")
