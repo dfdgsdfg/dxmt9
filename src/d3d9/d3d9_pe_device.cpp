@@ -3385,6 +3385,45 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // draw_packet's stats are mutable because buildDrawPrimitivePacket()
     // is a const method.
     PeDecimatedScopeStats peV2AppendDecimatedStats_{};
+    // Phase split of appendCommandRecordDirect, sampled on the same calls the
+    // parent scope samples. CAVEAT: each phase costs one clock pair, so on a
+    // sampled call the parent `append_sampled_ms` is inflated by roughly four
+    // pairs. Read the phases against each other, not against the parent, and
+    // do not quote the parent's absolute figure from a run with these enabled
+    // -- a 2026-07-29 GT2 run read 4,180 ns for the parent here against
+    // 2,851 ns with the phases off. The record is built in the legacy wire format and
+    // then re-parsed and re-encoded into V2, so "build" and "encode" are two
+    // halves of a serialize -> parse -> re-serialize round trip; this tells us
+    // what that round trip actually costs.
+    // Per-record-type append census. Counting only -- no clock reads -- so it
+    // can run alongside the decimated timers without adding to the bias that
+    // 2026-07-29 showed dominates short scopes. Tells us which encode path in
+    // appendLegacyCommandRecordAsV2 is worth opening.
+    static constexpr std::size_t kPeAppendTypeBuckets = 8;
+    std::uint64_t peAppendTypeCounts_[kPeAppendTypeBuckets]{};
+    std::uint64_t peAppendTypeBytes_[kPeAppendTypeBuckets]{};
+    static std::size_t peAppendTypeBucket(std::uint32_t type) {
+        switch (type) {
+            case D9C_COMMAND_RECORD_DRAW_PRIMITIVE: return 0;
+            case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: return 1;
+            case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+            case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: return 2;
+            case D9C_COMMAND_RECORD_APPLY_STATE: return 3;
+            case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+            case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+            case D9C_COMMAND_RECORD_SET_VS_CONST_B: return 4;
+            case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+            case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+            case D9C_COMMAND_RECORD_SET_PS_CONST_B: return 5;
+            case D9C_COMMAND_RECORD_CLEAR: return 6;
+            default: return 7;
+        }
+    }
+
+    PeDecimatedScopeStats peAppendPhaseResize_{};
+    PeDecimatedScopeStats peAppendPhaseWrite_{};
+    PeDecimatedScopeStats peAppendPhaseEncode_{};
+    PeDecimatedScopeStats peAppendPhaseFlush_{};
     PeDecimatedScopeStats peConstFlushDecimatedStats_{};
     mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
     std::uint64_t peStatsDecimationPresents_ = 0;
@@ -8966,13 +9005,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 constSetterBucketText += buf;
             }
         }
+        std::string appendTypeText;
+        {
+            static const char* const kTypeNames[kPeAppendTypeBuckets] = {
+                "draw", "drawidx", "drawup", "applystate",
+                "vsconst", "psconst", "clear", "other"};
+            for (std::size_t i = 0; i < kPeAppendTypeBuckets; ++i) {
+                if (peAppendTypeCounts_[i] == 0) continue;
+                char buf[128];
+                std::snprintf(buf, sizeof(buf),
+                              " append_%s_calls=%llu append_%s_bytes=%llu",
+                              kTypeNames[i],
+                              static_cast<unsigned long long>(peAppendTypeCounts_[i]),
+                              kTypeNames[i],
+                              static_cast<unsigned long long>(peAppendTypeBytes_[i]));
+                appendTypeText += buf;
+            }
+        }
         dxmt9DeviceInfoLog(
             "[dxmt9-pe-decimated] presents=%llu decimation=%u "
             "append_events=%llu append_sampled=%llu append_sampled_ms=%.3f "
             "const_setter_events=%llu const_setter_sampled=%llu const_setter_sampled_ms=%.3f "
             "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
             "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
-            "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f%s",
+            "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f "
+            "append_resize_sampled=%llu append_resize_ms=%.3f "
+            "append_write_sampled=%llu append_write_ms=%.3f "
+            "append_encode_sampled=%llu append_encode_ms=%.3f "
+            "append_flush_sampled=%llu append_flush_ms=%.3f%s%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -8991,7 +9051,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
             static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
             static_cast<double>(peDecimatedNullScopeStats().sampledNs) / 1.0e6,
-            constSetterBucketText.c_str());
+            static_cast<unsigned long long>(peAppendPhaseResize_.sampled),
+            static_cast<double>(peAppendPhaseResize_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peAppendPhaseWrite_.sampled),
+            static_cast<double>(peAppendPhaseWrite_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peAppendPhaseEncode_.sampled),
+            static_cast<double>(peAppendPhaseEncode_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peAppendPhaseFlush_.sampled),
+            static_cast<double>(peAppendPhaseFlush_.sampledNs) / 1.0e6,
+            constSetterBucketText.c_str(),
+            appendTypeText.c_str());
     }
 
     // Present-cadence tick for the decimated dump: increments a cumulative
@@ -9142,28 +9211,53 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             appendDecimatedScope.t0 = std::chrono::steady_clock::now();
         }
+        if (decimationN != 0) {
+            const auto typeBucket = peAppendTypeBucket(type);
+            ++peAppendTypeCounts_[typeBucket];
+            peAppendTypeBytes_[typeBucket] += bytes;
+        }
+        const bool phaseSampled = appendDecimatedScope.stats != nullptr;
+        const auto phaseNow = [] { return std::chrono::steady_clock::now(); };
+        const auto phaseRecord = [&](PeDecimatedScopeStats& stats,
+                                     std::chrono::steady_clock::time_point t0) {
+            if (!phaseSampled) return;
+            PeDecimatedScopeTimer::recordSample(
+                stats, static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        phaseNow() - t0).count()));
+        };
         if (willFlushBeforeAppend) {
+            const auto t0 = phaseNow();
             hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
+            phaseRecord(peAppendPhaseFlush_, t0);
         }
         if (SUCCEEDED(hr)) {
+            const auto t0 = phaseNow();
             try {
                 legacyV2RecordScratch_.resize(bytes);
             } catch (...) {
                 hr = E_OUTOFMEMORY;
             }
+            phaseRecord(peAppendPhaseResize_, t0);
         }
         if (SUCCEEDED(hr)) {
+            const auto t0 = phaseNow();
             write(reinterpret_cast<std::uint8_t*>(
                 legacyV2RecordScratch_.data()));
+            phaseRecord(peAppendPhaseWrite_, t0);
+            const auto t1 = phaseNow();
             if (!dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
                     commandChunkV2_, legacyV2RecordScratch_)) {
                 hr = D3DERR_INVALIDCALL;
             }
+            phaseRecord(peAppendPhaseEncode_, t1);
         }
         if (SUCCEEDED(hr) &&
             (commandChunkV2_.recordCount() >= maxRecords ||
              commandChunkV2_.payloadBytes() >= maxBytes)) {
+            const auto t0 = phaseNow();
             hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
+            phaseRecord(peAppendPhaseFlush_, t0);
         }
         const auto appendReturnNs =
             dxmt9SteadyClockNs(std::chrono::steady_clock::now());

@@ -777,11 +777,23 @@ bool appendLegacySparseRecord(CommandChunkV2Builder& builder,
   std::span<const std::byte> upIndexData;
   std::span<const std::byte> upVertexData;
 
-  D9CCommandRecordDrawPrimitive primitive{};
-  D9CCommandRecordDrawIndexedPrimitive indexedPrimitive{};
-  D9CCommandRecordDrawPrimitiveUP primitiveUp{};
-  D9CCommandRecordDrawIndexedPrimitiveUP indexedPrimitiveUp{};
-  D9CCommandRecordApplyState apply{};
+  // Deliberately NOT value-initialized. These five aggregates total 24,524
+  // bytes and only the one matching `type` is ever used, so `{}` zeroed about
+  // 19.6 KB of stack per call for nothing -- measured as the bulk of this
+  // function's 1,464 ns on 3DMark05 GT2, where drawidx records are 61.3% of
+  // 2,720 appends per present.
+  //
+  // Leaving them uninitialized is safe because of loadLegacy's contract: it
+  // returns false when `bytes` is smaller than the destination and otherwise
+  // memcpy's exactly sizeof(T) over it, so on every path that reads one of
+  // these the whole object has been overwritten, and on every path that does
+  // not, the function has already returned false. Do not add `{}` back without
+  // changing that contract first.
+  D9CCommandRecordDrawPrimitive primitive;
+  D9CCommandRecordDrawIndexedPrimitive indexedPrimitive;
+  D9CCommandRecordDrawPrimitiveUP primitiveUp;
+  D9CCommandRecordDrawIndexedPrimitiveUP indexedPrimitiveUp;
+  D9CCommandRecordApplyState apply;
   switch (type) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
       if (!loadLegacy(bytes, primitive)) return false;
