@@ -1,7 +1,7 @@
 # Boundary-Isolated Benchmarking — gap analysis and proposal
 
 dxmt9 today measures performance through two separate channels: **wild-app
-end-to-end** runs (SFIV, Anno1404, DX9 SDK samples) and **synthetic
+end-to-end** runs (SFIV, DX9 SDK samples) and **synthetic
 probes** (`dxmt9-perf-{ffp-only,multi-rt,depth-heavy,skeletal}`). The
 G-axis A/B for R-BACK-2.33 (U1, 2026-05-10) showed the wild path is
 load-bearing for fps numbers but **scene-dependent and noisy**: SFIV
@@ -41,7 +41,7 @@ flowchart LR
 | **B5** | Metal driver → GPU | Implicit in frame timing | `gpu_command_buffer_time_ms` P50/P95/P99 (M4), `gpu_command_buffer_errors` (M5) | GPU-only fixed-CB replay (low ROI — Xcode Instruments better) |
 | **B6** | GPU → Presenter | `run_dx9_present_policy_ab.py` (multi-mode), CAMetalLayer present timing | `present_acquire_wait_ms`, `present_preacquire_*`, `present_boundary_*` | Drawable-acquire isolation (no encode work) |
 
-Wild apps (SFIV / Anno1404) test the whole pipeline simultaneously and
+Wild apps (SFIV, DX9 SDK samples) test the whole pipeline simultaneously and
 serve as oracles, but **none of B1-B6 can be measured without the
 others**, which is the diagnosis the V1 task is asking us to fix.
 
@@ -195,7 +195,7 @@ without breaking present-policy A/B.
   granularity for catalogue + reproducibility.
 - Do **not** replace `run_dx9_present_policy_ab.py` with a new harness.
   Its A/B + CV-gate machinery is reused.
-- Do **not** drop wild-app benchmarks. SFIV / Anno / SDK samples remain
+- Do **not** drop wild-app benchmarks. SFIV / SDK samples remain
   the end-to-end oracle. The boundary probes complement, not replace.
 
 ## 7. Implementation cost summary

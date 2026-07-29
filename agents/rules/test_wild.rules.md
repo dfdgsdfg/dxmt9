@@ -1,7 +1,7 @@
 # Wild Testing Rules — Wine Runtime Selection
 
 Rules for running dxmt9 against real D3D9 binaries (catalogue experiments,
-SFIV, Anno 1404, etc.) in `experiments/`. They cover the host Wine
+SFIV, 3DMark05, etc.) in `experiments/`. They cover the host Wine
 runtime, not the dxmt9 build itself.
 
 > **Spec:** the mechanics of the manifest, prefix bootstrap, and apps_3rd
@@ -38,19 +38,21 @@ differently — the dxmt9 bridge was fine, the runtime was the variable.
 ## Rule: one way to run a catalogue app
 
 **Every wild app is run through `run_experiment.py`.** There is one invocation,
-and it is the same for GT1/GT2/GT3, SFIV, Anno, and everything else:
+and it is the same for GT1/GT2/GT3, SFIV, and everything else:
 
 ```sh
 python3 scripts/run_apps/run_experiment.py run <app-id>
 ```
 
 Per-app shell wrappers under `scripts/run_apps/` are **legacy — do not add
-new ones.** Three were removed on 2026-07-29 and each shows why:
+new ones.** Three were removed on 2026-07-29; two of them show why (the third
+belonged to an app that has since left the catalogue, and its lesson — a
+hardcoded Wine root overriding the entry's `wine_id` — is the anti-pattern
+spelled out under [How to Apply](#how-to-apply) below):
 
 | Removed | Why |
 |---|---|
 | `run_app-d3d9-sfiv-benchmark_experiment.sh` | Forwarded every argument unchanged. It added nothing except a second name for the same command, and its README description had drifted to describe behaviour it no longer had. |
-| `run_app-d3d9-anno-1404_experiment.sh` | Hardcoded a Heroic `Wine-11.7` root and a prefix path, overriding the entry's `wine_id`. This is the anti-pattern below, shipped. |
 | `run_suites/run_sfiv_benchmark_crossover_oracle.sh` | Passed `--host crossover`, which `run_experiment.py` does not accept, so it had been failing at argument parsing. CrossOver is a rejected runtime (table above). |
 
 The cost of a second invocation path is not the wrapper; it is that the two
@@ -98,17 +100,20 @@ case both must still be unpatched Wine builds.
 
 ## Documented Exceptions
 
-The list of apps that legitimately need a non-vanilla runtime is small;
-adding one is a deliberate decision and must be justified inline:
+**There are currently none.** Every catalogue app runs on a Wine root
+accepted by the table above. The one entry that had a standing exception —
+a commercial title that needed a `-DXMT` build because vanilla Wine tripped
+its `d3dx10_43` path — was removed from `experiments/CATALOGUE.toml` on
+2026-07-29 along with the exception itself; it was never re-run after the
+manifest landed, so the exception had no live evidence behind it.
 
-| App | Required runtime | Reason |
-|-----|------------------|--------|
-| `app-d3d9-anno-1404` | `Wine-*-DXMT` (any current DXMT build) | Vanilla Wine trips `d3dx10_43` / `D3DX10SaveTextureToMemory` before the game reaches a usable baseline. Documented in `experiments/README.md`. |
-
-If you find another app that genuinely requires a patched Wine build,
-add a row here with the failure mode and a link to evidence. Do not
-silently flip a runner's default — that hides what the patched runtime
-is compensating for.
+If you find an app that genuinely requires a patched Wine build, add a
+table here (App / Required runtime / Reason) with the failure mode and a
+link to evidence, and set the app's `wine_id` to the patched manifest entry
+so the runtime warning in `specs/experiments/runtime/requirements.md`
+R-RT-6.3 is a pre-approved exception rather than a surprise. Do not
+silently flip a runner's default — that hides what the patched runtime is
+compensating for.
 
 ## Diagnostic Checklist When a "Wild" Run Fails
 

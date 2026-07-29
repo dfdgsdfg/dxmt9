@@ -8,7 +8,7 @@ current `dxmt9` runtime.
 | Subdir | Committed? | Purpose |
 |---|---|---|
 | `apps/` | yes | Small fixture EXEs (D9VK, sample-d3d9-basic-hlsl). |
-| `apps_3rd/` | no | External installs (SFIV, Anno 1404, etc.). |
+| `apps_3rd/` | no | External installs (SFIV, etc.). |
 | `prefixs/` | no | Per-experiment Wine prefixes. |
 | `wine/` | mixed | `manifest.toml` + README committed; bundles ignored. |
 | `launchers/` | yes | Per-app launcher scripts. |
@@ -28,9 +28,7 @@ python3 scripts/run_apps/run_experiment.py run sample-d3d9-tutorial07 --wine-roo
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-hdr-formats --wine-root "$WINE_ROOT"
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-dxut-simple --wine-root "$WINE_ROOT"
 python3 scripts/run_apps/run_experiment.py run sample-d3d9-irrlicht-lights --wine-root "$WINE_ROOT"
-python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404 --wine-root "$WINE_ROOT" --prefix "$HOME/Games/_Prefixes/Anno 1404 Gold Edition"
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
-python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark-crossover-oracle --wine-root "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver" --wine-bin "$HOME/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine" --prefix "$HOME/Library/Application Support/CrossOver/Bottles/Heroic" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
 DX9 regression suite:
@@ -91,7 +89,6 @@ Wrappers that still need extra setup (default-prefix injection or installer
 extraction) remain as shell scripts:
 
 ```sh
-python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --binary "~/Downloads/StreetFighterIV_Benchmark.exe"
 ```
 
@@ -160,16 +157,6 @@ Current verified host:
 
 - Heroic Wine 11.6 builtin path
 
-Current exploratory commercial target:
-
-- `app-d3d9-anno-1404`
-  - local Heroic install
-  - supported runtime: `Wine-11.6-DXMT`
-  - plain `Wine-11.6` is research-only because the game currently trips Wine's
-    `d3dx10_43` / `D3DX10SaveTextureToMemory` path before it becomes a usable
-    baseline
-  - reference-free exploratory capture for real-game bring-up
-
 Current exploratory feature targets:
 
 - `conf-d3d9-srgb-texture`
@@ -191,7 +178,7 @@ conf-d3d9-intent-probe notes:
 - `sample-d3d9-water-rt`
   - repo-local DX9 sample
   - render-to-texture + projected UV + alpha blend
-  - intended as the first focused proxy for `Anno 1404` water rendering bugs
+  - intended as the first focused proxy for render-to-texture water rendering bugs
   - builtin-oracle compare now matches and can be used as a regression gate
 - `sample-d3d9-multitexture-terrain`
   - repo-local DX9 sample
@@ -219,7 +206,3 @@ Current exploratory commercial-oracle candidate:
     or `winetricks` experiments, recreate the prefix instead of trying to
     salvage it
   - wrapper now installs prefix-native `d3dx9_41` and mirrors the 32-bit DLL next to the extracted benchmark binary
-- `app-d3d9-sfiv-benchmark-crossover-oracle`
-  - CrossOver `Heroic` bottle oracle lane
-  - uses builtin `d3d9` / `d3dx9_41` for commercial visual comparison
-  - current automatic capture is not trustworthy yet; use this lane as a manual visual oracle host until window capture is stabilized

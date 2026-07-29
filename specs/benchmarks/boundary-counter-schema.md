@@ -12,7 +12,7 @@ pipeline boundary owns a fixed list of perf counters; A/B reports
 emitted by `scripts/tools/run_dx9_present_policy_ab.py --boundary
 <Bn>` surface only that boundary's keys.
 
-A regression on the wild oracle (SFIV / Anno1404) is then attributable:
+A regression on the wild oracle (SFIV / 3DMark05) is then attributable:
 diff per-boundary summaries, the boundary whose keys moved is the
 boundary that regressed.
 
@@ -68,7 +68,7 @@ See:
   expected-range gates in `experiments/CATALOGUE.toml` should match the
   probe's owning boundary only.
 - **Don't drop wild-app benchmarks.** The boundary suite complements
-  SFIV / Anno / SDK samples; it does not replace them. End-to-end fps
+  SFIV / SDK samples; it does not replace them. End-to-end fps
   remains the user-visible regression sentinel.
 
 ## Workflow

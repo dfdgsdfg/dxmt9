@@ -9,7 +9,7 @@ tags: [specs, experiments, runtime, requirements]
 
 This spec governs how dxmt9 manages the **non-source artifacts** that wild
 experiments need to run: the Wine runtime binary, the per-experiment Wine
-prefix, and the externally-installed app binaries (e.g. SFIV, Anno 1404).
+prefix, and the externally-installed app binaries (e.g. SFIV, 3DMark05).
 
 It is a sibling to `specs/experiments/requirements.md` (which covers what an
 experiment is and how its pass criteria are evaluated). This document covers
@@ -56,7 +56,7 @@ Reason: keeps the experiment namespace cohesive and matches existing
 | Path | Committed? | Purpose |
 |---|---|---|
 | `experiments/apps/` | yes | Existing — small fixture EXEs (D9VK, BasicHLSL). Unchanged. |
-| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, Anno 1404, etc.). One subdirectory per app. |
+| `experiments/apps_3rd/` | no (gitignored) | New — externally-installed app binaries (SFIV, 3DMark05, etc.). One subdirectory per app. |
 | `experiments/prefixs/` | no (gitignored) | New — per-experiment Wine prefixes. One subdirectory per app. |
 | `experiments/wine/` | mixed | New — manifest committed; downloaded Wine bundles gitignored. |
 | `experiments/wine/manifest.toml` | yes | New — Wine root catalogue (see §3). |
@@ -213,17 +213,21 @@ each run and is allowed to wipe it on next run of the same experiment.
 **R-RT-7.1** Existing prefixes at `~/Games/_Prefixes/<name>/` are not
 migrated automatically. Each affected experiment is converted by:
 1. Re-installing the game into `experiments/apps_3rd/<name>/`.
-2. Running `scripts/run_apps/run_<name>_experiment.sh --rebuild-prefix`.
+2. Running `python3 scripts/run_apps/run_experiment.py run <name> --rebuild-prefix`.
 3. Verifying the run.
 
 **R-RT-7.2** SFIV is the first experiment converted (this spec's driving
 case) and serves as the migration template.
 
-**R-RT-7.3** Anno 1404 follows next. Its documented Wine-DXMT exception in
-`agents/rules/test_wild.rules.md` is preserved by setting
-`wine_id = "heroic-11.7-dxmt"` in its CATALOGUE entry — the rule of "default
-must be vanilla" is encoded as a *warning at run time*, not a hard refusal,
-so the documented exception can default to its required runtime.
+**R-RT-7.3** *(Retired 2026-07-29. ID retained, not reused.)* This requirement
+staged the migration of the one commercial catalogue entry that carried a
+documented Wine-DXMT exception, and fixed its `wine_id` to the patched
+manifest entry. That app was removed from `experiments/CATALOGUE.toml`; no
+catalogue entry now requires a non-vanilla Wine root, and
+`agents/rules/test_wild.rules.md` records no documented exceptions. The
+general mechanism the requirement relied on is unaffected and still normative:
+`wine_alternatives` (R-RT-5.3) plus the run-start warning rather than a hard
+refusal (R-RT-6.3). See `specs/experiments/log.md`.
 
 **R-RT-7.4** No deletion of old `~/Games/_Prefixes/<name>/` is mandatory.
 A maintainer may keep the old prefix for comparison until the new lane is

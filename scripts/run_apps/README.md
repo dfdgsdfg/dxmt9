@@ -12,19 +12,17 @@ wired to Meson tests; they are evidence-gathering tools.
   - `python3 run_experiment.py run <name> --build` — first run the app's
     `build_script` field from `experiments/CATALOGUE.toml`, then run. Errors if
     the app has no `build_script` declared.
-Per-app shell wrappers are legacy. `run_app-d3d9-anno-1404_experiment.sh`,
-`run_app-d3d9-sfiv-benchmark_experiment.sh`, and
-`scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh` were removed on
-2026-07-29: the SFIV one forwarded every argument unchanged and added nothing,
-the Anno one hardcoded a Heroic Wine root and prefix — the exact pattern
-`agents/rules/test_wild.rules.md` names as bypassing the manifest — and the
-CrossOver oracle passed a `--host` flag `run_experiment.py` does not accept, so
-it had been failing at argument parsing. Run these apps the same way every
-other catalogue entry is run:
+Per-app shell wrappers are legacy. Three were removed on 2026-07-29:
+`run_app-d3d9-sfiv-benchmark_experiment.sh` forwarded every argument unchanged
+and added nothing; `scripts/run_suites/run_sfiv_benchmark_crossover_oracle.sh`
+passed a `--host` flag `run_experiment.py` does not accept, so it had been
+failing at argument parsing; and a third hardcoded a Heroic Wine root and
+prefix — the exact pattern `agents/rules/test_wild.rules.md` names as bypassing
+the manifest — for an app that has since left the catalogue. Run these apps the
+same way every other catalogue entry is run:
 
 ```sh
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
-python3 scripts/run_apps/run_experiment.py run app-d3d9-anno-1404
 ```
 
 The Wine runtime comes from the entry's `wine_id` in

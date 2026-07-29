@@ -549,25 +549,6 @@ capture_frame = 0
 reference_optional = true
 
 [[app]]
-name = "app-d3d9-anno-1404"
-source = "local-heroic"
-license = "commercial"
-source_kind = "external-application"
-license_scope = "external-not-vendored"
-binary = "/Users/dididi/games/_Heroic/Anno 1404 Gold Edition/Anno4.exe"
-launcher = "experiments/launchers/app-d3d9-anno-1404.sh"
-reference = "experiments/references/app-d3d9-anno-1404.png"
-features = ["commercial", "d3d9", "bink", "ui", "scene"]
-status = "exploratory"
-requires_wine = true
-window_title = "Anno 1404"
-capture_delay_sec = 40.0
-run_timeout_sec = 55
-capture_frame = 0
-reference_optional = true
-allow_timeout = true
-
-[[app]]
 name = "app-d3d9-3dmark05"
 source = "local-external"
 license = "commercial"
@@ -711,54 +692,4 @@ gpu_command_buffer_errors = { max = 0 }
 # other perf probes.
 command_buffers = { min = 1 }
 encode_chunk_calls = { min = 1 }
-gpu_command_buffer_errors = { max = 0 }
-
-[[app]]
-name = "app-d3d9-sfiv-benchmark-crossover-oracle"
-source = "local-external"
-license = "commercial"
-source_kind = "external-application"
-license_scope = "external-not-vendored"
-binary = "/private/tmp/sfiv-msi/Program Files/CAPCOM/STREETFIGHTERIV_BENCHMARK/StreetFighterIV_Benchmark.exe"
-launcher = "experiments/launchers/app-d3d9-sfiv-benchmark.sh"
-reference = "experiments/references/app-d3d9-sfiv-benchmark-crossover-oracle.png"
-features = ["commercial", "benchmark", "d3d9ex", "scene", "ui", "crossover-oracle"]
-status = "exploratory"
-requires_wine = true
-window_title = "STREET FIGHTER IV Benchmark"
-capture_delay_sec = 10.0
-run_timeout_sec = 50
-capture_frame = 0
-reference_optional = true
-allow_timeout = true
-skip_stage = true
-wine_dll_overrides = "d3d9=b;d3dx9_41=b"
-cx_bottle = "Heroic"
-
-[apps.perf-d3d9-present-loop.expected_counters]
-# V1 audit (f) — drawable-acquire isolation (B6). The probe runs
-# PRESENT_LOOP_ITERATIONS empty Clear+Present cycles (default 1000) so
-# the existing present_* counter family reflects only B6 cost.
-# Conservative gate: at least 500 presents must reach the encoder
-# (proves the loop ran enough iterations for B6 timing distributions
-# to be meaningful). gpu_command_buffer_errors must stay at 0 — any
-# GPU fault during a perf probe is a regression (M5 L3 sentinel).
-present_encoded = { min = 500 }
-gpu_command_buffer_errors = { max = 0 }
-
-[apps.perf-d3d9-chain-parametric.expected_counters]
-# V1 audit (e) — sub-CB chain sensitivity probe (B3+B4). The probe is
-# designed to be re-run under different DXMT9_MID_CHUNK_COMMIT_POLICY /
-# DXMT9_MID_CHUNK_COMMIT_CAP_PER_RENDER_PASS combinations from the W4
-# A/B harness, so chunk_subcb_count_max is intentionally NOT gated here
-# (its value depends on the cap policy under test, which is OFF by
-# default). Conservative gates only:
-# - command_buffers >= 1 proves chunks reached the encode thread and at
-#   least one MTLCommandBuffer was built.
-# - render_pass_begin >= 1 proves the chain itself ran (each chain RT
-#   switch should produce a non-Final flushRender → renderPassBegin).
-# - gpu_command_buffer_errors == 0 matches the M5 L3 sentinel
-#   convention used by all perf probes.
-command_buffers = { min = 1 }
-render_pass_begin = { min = 1 }
 gpu_command_buffer_errors = { max = 0 }

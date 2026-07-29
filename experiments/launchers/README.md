@@ -38,7 +38,7 @@ Self-authored apps:
 
 Commercial / 3rd-party titles (require external prefix):
 
-- `app-d3d9-anno-1404.sh` — Anno 1404 Gold (Heroic prefix).
+- `app-d3d9-3dmark05.sh` — 3DMark05 (external prefix; GT1/GT2/GT3).
 - `app-d3d9-sfiv-benchmark.sh` — SFIV benchmark (Heroic + CrossOver
   oracle lanes (the CrossOver oracle wrapper was removed on 2026-07-29;
   `agents/rules/test_wild.rules.md` rejects CrossOver as a runtime)

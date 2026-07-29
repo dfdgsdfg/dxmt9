@@ -25,7 +25,7 @@ experiments/
 ├── apps/                  # existing — committed fixture EXEs (D9VK, BasicHLSL)
 ├── apps_3rd/              # NEW   — gitignored, externally-installed apps
 │   ├── sfiv/              #          (one subdir per [[app]].name in CATALOGUE)
-│   └── app-d3d9-anno-1404/
+│   └── app-d3d9-3dmark05/
 ├── prefixs/               # NEW   — gitignored, per-experiment Wine prefixes
 │   ├── sfiv/
 │   │   ├── drive_c/
@@ -33,7 +33,7 @@ experiments/
 │   │   │   ├── c: -> ../drive_c
 │   │   │   └── d: -> ../../apps_3rd/sfiv      ← junction to install
 │   │   └── system.reg
-│   └── app-d3d9-anno-1404/
+│   └── app-d3d9-3dmark05/
 ├── wine/                  # NEW   — manifest committed; wine bundles gitignored
 │   ├── manifest.toml      #          committed (Wine root catalogue)
 │   ├── README.md          #          committed (workflow doc)
@@ -276,9 +276,8 @@ digraph migrate_sfiv {
   s7[shape=box, label="user: install SFIV into\nexperiments/apps_3rd/sfiv"];
   s8[shape=box, label="run --rebuild-prefix"];
   s9[shape=box, label="verify: actual.png shows render,\nperf-frame lines emitted"];
-  s10[shape=box, label="repeat for app-d3d9-anno-1404\n(wine_id=heroic-11.7-dxmt)"];
 
-  s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7 -> s8 -> s9 -> s10;
+  s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7 -> s8 -> s9;
 }
 ```
 

@@ -31,19 +31,22 @@ wine_alternatives    = []              # no alternates; vanilla-only
 install_drive_letter = "d"             # default
 
 # ─── Example 2: wild experiment with documented exception ──────────────
-# app-d3d9-anno-1404 needs Wine-*-DXMT (vanilla trips d3dx10_43 / D3DX10).
-# wine_id points at the patched entry. The harness emits a warning at
-# run-start unless the chosen ID is one of wine_alternatives — but since
-# this exception is the *default*, we silence the warning by listing the
+# Shape for an app that needs a patched (non-vanilla) Wine root: wine_id
+# points at the patched manifest entry. The harness emits a warning at
+# run-start unless the chosen ID is one of wine_alternatives — but when
+# the exception is the *default*, the warning is silenced by listing the
 # chosen ID in alternatives too. (Equivalent to "pre-approved exception".)
+# No catalogue entry currently needs this; the Documented Exceptions
+# section of agents/rules/test_wild.rules.md is empty, and adding one is a
+# deliberate decision that must be justified there first.
 [[app]]
-name         = "app-d3d9-anno-1404"
-source       = "ubisoft"
+name         = "some-patched-runtime-d3d9-game"
+source       = "..."
 license      = "proprietary"
 source_kind  = "third-party-game"
 license_scope = "third-party-game"
-binary       = "D:/Anno1404.exe"
-launcher     = "experiments/launchers/app-d3d9-anno-1404.sh"
+binary       = "D:/Game.exe"
+launcher     = "experiments/launchers/some-patched-runtime-d3d9-game.sh"
 features     = ["wild", "wine"]
 status       = "passing"
 requires_wine = true
