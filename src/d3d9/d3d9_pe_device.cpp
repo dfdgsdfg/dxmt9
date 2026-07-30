@@ -3936,8 +3936,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // the same reason it does on the fat-packet forwarder: it has to cover the
     // COM-to-wire binding translation, not just the section fill.
     // Not const: buildSparseStateV2 takes the const shadow by non-const
-    // reference because the inline-delta path drains dirty ranges from it.
-    // Claiming const here and casting it away would hide that.
+    // reference. It does not currently write to it -- see that function's
+    // comment -- but the signature reserves the right, so this must not claim
+    // const and cast it away.
     bool buildSparseStateForRecord(
         std::uint32_t recordType,
         dxmt9::d3d9::pe::PeDrawParams params,

@@ -143,6 +143,7 @@ D9CTexture tex0, tex1;
 D9CBuffer vb0, vb1;
 D9CShader vsObj, psObj;
 D9CSurface rt0, ds0;
+D9CVertexDecl vdecl0;
 
 // --- fixtures --------------------------------------------------------------
 
@@ -206,10 +207,19 @@ LaneResult runLegacyLane(const Fixture& fixture) {
   return finishLane(builder, ok);
 }
 
+// Production reuses ONE PeSparseScratch device member across every build, so a
+// section that fails to reset an entry inherits the previous build's value. A
+// fresh local scratch per lane hides that entirely, so this is a shared static
+// -- deliberately mirroring the device.
+pe::PeSparseScratch& sharedScratch() {
+  static pe::PeSparseScratch scratch{};
+  return scratch;
+}
+
 LaneResult runDirectLane(const Fixture& fixture) {
   pe::CommandChunkV2Builder builder;
   PeConstShadowBlock constants = fixture.constants;  // lanes must not share
-  pe::PeSparseScratch scratch{};
+  pe::PeSparseScratch& scratch = sharedScratch();
   pe::SparseStateV2Input state{};
   D9CCommandChunkWireDrawHeaderV2 header{};
   if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
@@ -296,7 +306,7 @@ void everyCategoryDirty() {
   f.shadow.pendingLightEnableMask = 0x1u;
   f.shadow.pendingTss.set(0u, 1u, 42u);
   f.shadow.pendingSamplerStates.set(0u, 1u, 7u);
-  f.shadow.pendingTransforms.set(0u, identityTransformMatrix());
+  f.shadow.pendingTransforms.set(kD3dTsView, identityTransformMatrix());
   f.bindings.textures[0] = publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
   f.bindings.streams[0].buffer =
       publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
@@ -400,6 +410,82 @@ void allSlotsDirtyTriggersSnapshotFlagHeuristic() {
   requireLanesAgree(f);
 }
 
+
+// --- gaps the Tasks 5-7 review found in this corpus ------------------------
+
+// FVF-only. Nothing exercised the FVF wire kind before, so a producer emitting
+// DECLARATION here went unnoticed. Runs AFTER a declaration build on purpose:
+// the scratch is shared, so a stale vdecl ref left in the reused entry makes
+// vertexInputPrepare reject the record (`return !object.object;`).
+void fvfOnlyAfterDeclaration() {
+  {
+    Fixture decl;
+    decl.name = "vertex declaration bound (primes the shared scratch)";
+    decl.shadow.pendingVdecl = true;
+    decl.bindings.vdecl =
+        publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+    requireLanesAgree(decl);
+  }
+  Fixture f;
+  f.name = "FVF only, after a declaration build (stale-scratch guard)";
+  f.shadow.pendingFvf = true;
+  f.bindings.fvf = 0x1C4u;
+  requireLanesAgree(f);
+}
+
+// Snapshot mode selects the FULL shadow for the TSS / sampler / transform
+// tables. Only renderStateShadow was populated before, so dropping the snapshot
+// source on the other three was undetectable.
+void snapshotDrainsEveryTable() {
+  Fixture f;
+  f.name = "snapshot drains tss, sampler, transform and light shadows";
+  f.forceFullSnapshot = true;
+  f.shadow.renderStateShadow.set(3u, 9u);
+  f.shadow.tssShadow.set(0u, 1u, 11u);
+  f.shadow.tssShadow.set(2u, 4u, 22u);
+  f.shadow.samplerStateShadow.set(1u, 2u, 33u);
+  // FixedTransformTable::set takes a STATE, not a slot: 0 and 1 are not valid
+  // D3DTRANSFORMSTATETYPE values, so slotForState rejects them and the set is a
+  // silent no-op. Use the real mirrored constants (VIEW=2, PROJECTION=3).
+  f.shadow.transformShadow.set(kD3dTsView, identityTransformMatrix());
+  f.shadow.transformShadow.set(kD3dTsProjection, identityTransformMatrix());
+  // lightEnableShadow is the snapshot source; pendingLightEnableMask is the
+  // delta source. Make them DIFFER so reading the wrong one is visible.
+  f.shadow.lightEnableShadow = 0x5u;
+  f.shadow.pendingLightEnableMask = 0xAu;
+  f.bindings.vdecl = publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+  for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_TEXTURES; ++i) {
+    f.bindings.textures[i] =
+        publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  }
+  for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_STREAMS; ++i) {
+    f.bindings.streams[i].buffer =
+        publishedRef(&vb1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  }
+  f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  for (std::uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++i) {
+    f.bindings.renderTargets[i] =
+        publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+  }
+  f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+  requireLanesAgree(f);
+}
+
+// Distinct objects per slot, so the builder cannot dedupe them to one handle
+// and the per-slot handle mapping is actually exercised.
+void distinctObjectPerTextureSlot() {
+  Fixture f;
+  f.name = "four texture slots with four distinct objects";
+  static D9CTexture slotTex[4];
+  f.shadow.pendingTextureMask = 0xFu;
+  for (std::uint32_t i = 0; i < 4u; ++i) {
+    f.bindings.textures[i] =
+        publishedRef(&slotTex[i], D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  }
+  requireLanesAgree(f);
+}
+
 // --- fixed-seed randomized corpus -----------------------------------------
 
 void randomizedApplyStateSequences() {
@@ -419,7 +505,13 @@ void randomizedApplyStateSequences() {
         rng() & ((1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u);
     f.shadow.pendingVs = (rng() & 1u) != 0u;
     f.shadow.pendingPs = (rng() & 1u) != 0u;
+    // Independently: either, both, or neither -- this is what exercises the
+    // FVF wire kind and the declaration-wins rule.
     f.shadow.pendingVdecl = (rng() & 1u) != 0u;
+    f.shadow.pendingFvf = (rng() & 1u) != 0u;
+    f.bindings.vdecl = publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+    f.shadow.lightEnableShadow = rng() & 0xFFu;
+    f.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
     f.shadow.pendingViewport = (rng() & 1u) != 0u;
     f.shadow.pendingScissor = (rng() & 1u) != 0u;
     f.shadow.pendingMaterial = (rng() & 1u) != 0u;
@@ -465,6 +557,9 @@ int main() {
     unpublishedHandleFailsLegacyLane();
     fullSnapshotMode();
     allSlotsDirtyTriggersSnapshotFlagHeuristic();
+    fvfOnlyAfterDeclaration();
+    snapshotDrainsEveryTable();
+    distinctObjectPerTextureSlot();
     randomizedApplyStateSequences();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()

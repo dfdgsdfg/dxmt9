@@ -50,13 +50,16 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 // `primitiveType` is the D3DPRIMITIVETYPE value widened to uint32_t; this TU
 // cannot see the D3D9 enum. Callers cast.
 // Fills SparseStateV2Input directly from the shadows and the binding view, with
-// no fat packet in between. `constants` is non-const because, like
-// foldConstShadowIntoDeltaSection, the producer drains dirty ranges when the
-// inline-delta path is active.
+// no fat packet in between.
 //
 // NOTE: no PeChunkContext. Destination-chunk re-emission is a draw-site step
 // applied after this function -- see the header comment in
 // d3d9_pe_producer_views.hpp.
+// `constants` is currently UNREAD: this producer emits no constant sections, so
+// callers must flush them as standalone SET_CONST records first. It is in the
+// signature because the draw sites can skip that flush under
+// DXMT9_PE_INLINE_CONST_DELTA=1 and fold the ranges into the record instead --
+// whoever migrates them owns that decision. Non-const for the same reason.
 bool buildSparseStateV2(const PeHotStateShadow& shadow,
                         PeConstShadowBlock& constants,
                         const PeBindingView& bindings,

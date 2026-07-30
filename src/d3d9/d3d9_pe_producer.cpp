@@ -3,6 +3,7 @@
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 #include "dxmt9/assert.hpp"
+#include "util/log/log.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -101,7 +102,12 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   std::size_t vertexInputCount = 0;
   if (snapshot || shadow.pendingVdecl || shadow.pendingFvf) {
     auto& entry = scratch.vertexInputs[vertexInputCount++];
-    entry.wire = D9CCommandChunkWireVertexInputV2{};
+    // Reset BOTH halves. PeSparseScratch is a reused device member, so the FVF
+    // branch below must not inherit a vdecl ref left by an earlier
+    // DECLARATION build: vertexInputPrepare rejects an FVF entry whose object
+    // is non-null (`return !object.object;`) and fails the whole record through
+    // failActiveRecord() with no log line.
+    entry = SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>{};
     entry.wire.valid = 1u;
     entry.wire.value = bindings.fvf;
     // In snapshot mode the fat-packet producer set BOTH vdeclValid and
@@ -252,10 +258,16 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   out.lightEnables = std::span(scratch.lightEnables).first(lightEnableCount);
 
   // --- constants -----------------------------------------------------------
-  // Only the inline-delta path folds constants into the record. On the default
-  // path (DXMT9_PE_INLINE_CONST_DELTA unset) flushPendingConsts has already
-  // emitted standalone SET_CONST records, so draining here would duplicate
-  // them and change the wire stream.
+  // This producer emits NO constant sections, on either env setting. Callers
+  // must have flushed constants as standalone SET_CONST records first --
+  // chunkBarrierFlush does exactly that via flushPendingConsts().
+  //
+  // `constants` is therefore currently unread. It stays in the signature
+  // because the draw sites are the ones that can skip flushPendingConsts under
+  // DXMT9_PE_INLINE_CONST_DELTA=1 and fold the dirty ranges into the record
+  // instead; whoever migrates them must either implement that drain here or
+  // keep those sites flushing. Wiring a draw site to this function as-is under
+  // that env would drop the constants entirely.
   (void)constants;
 
   // --- payloads and draw header -------------------------------------------
@@ -271,23 +283,47 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // immediate, located abort.
   // DXMT_ASSERT compiles to ((void)0) in release, so both the parameter and
   // the loop variable would otherwise read as unused there.
-  const auto assertUsableRefs = [](auto sections,
-                                   [[maybe_unused]] std::uint32_t kind) {
-    for ([[maybe_unused]] const auto& entry : sections) {
-      DXMT_ASSERT(entry.object.object == nullptr ||
-                  entry.object.valid(kind));
+  // Release-safe, not just DXMT_ASSERT: every lane that runs under Wine is a
+  // release build (b_ndebug=if-release), so an assert-only guard would compile
+  // out of precisely the configuration where this bug class manifests --
+  // populateBindingView lives in the TU no native test can compile. Logged once
+  // per process so a hot path cannot flood the log.
+  const auto reportUnusableRef = [](const char* section) {
+    static bool reported = false;
+    if (reported) {
+      return;
+    }
+    reported = true;
+    dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-pe",
+                      "buildSparseStateV2: %s section carries a bound object "
+                      "with an unusable wire identity; appendHandle will reject "
+                      "the record and the caller will see a bare "
+                      "D3DERR_INVALIDCALL. The binding view was filled without "
+                      "identity.",
+                      section);
+  };
+  const auto checkUsableRefs = [&](auto sections, std::uint32_t kind,
+                                   const char* section) {
+    for (const auto& entry : sections) {
+      if (entry.object.object != nullptr && !entry.object.valid(kind)) {
+        reportUnusableRef(section);
+        DXMT_ASSERT(false);
+      }
     }
   };
-  assertUsableRefs(out.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE);
-  assertUsableRefs(out.streams, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  assertUsableRefs(out.shaders, D9C_CHUNK_HANDLE_KIND_SHADER);
-  assertUsableRefs(out.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  assertUsableRefs(out.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE);
-  assertUsableRefs(out.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE);
-  for ([[maybe_unused]] const auto& entry : out.vertexInputs) {
-    DXMT_ASSERT(entry.wire.kind != D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION ||
-                entry.object.object == nullptr ||
-                entry.object.valid(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL));
+  checkUsableRefs(out.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, "texture");
+  checkUsableRefs(out.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, "stream");
+  checkUsableRefs(out.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, "shader");
+  checkUsableRefs(out.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, "index buffer");
+  checkUsableRefs(out.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, "render target");
+  checkUsableRefs(out.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, "depth stencil");
+  for (const auto& entry : out.vertexInputs) {
+    if (entry.wire.kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION &&
+        entry.object.object != nullptr &&
+        !entry.object.valid(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)) {
+      reportUnusableRef("vertex declaration");
+      DXMT_ASSERT(false);
+    }
   }
 
   out.upIndexData = payloads.upIndex;
