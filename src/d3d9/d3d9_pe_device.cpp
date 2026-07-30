@@ -9618,19 +9618,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             return D3DERR_INVALIDCALL;
         }
 
-        D9CCommandRecordSetConst header{};
-        header.header.type = recordType;
-        header.header.size = static_cast<std::uint32_t>(sizeof(header) + payloadBytes);
-        header.start = start;
-        header.count = count;
-
-        return appendCommandRecordDirect(
-            header.header.type, header.header.size,
-            [&header, data, payloadBytes](std::uint8_t* record) {
-                std::memcpy(record, &header, sizeof(header));
-                if (payloadBytes != 0) {
-                    std::memcpy(record + sizeof(header), data, payloadBytes);
-                }
+        // sizeHint keeps the legacy header+payload size the capacity precheck
+        // saw before, so chunk seal cadence is unchanged. Both guards above are
+        // untouched, which is why flushConstShadow's DXMT9_SPLIT_SPARSE_CONST_
+        // RECORDS diagnostic path and its telemetry need no changes: this is
+        // the single emitter behind all six VS/PS constant kinds.
+        return appendRecordV2(
+            recordType,
+            sizeof(D9CCommandRecordSetConst) + payloadBytes,
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendSetConstantsV2(
+                    builder, recordType, start, count,
+                    std::span<const std::byte>(
+                        reinterpret_cast<const std::byte*>(data), payloadBytes));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
             });
     }
 

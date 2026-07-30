@@ -494,21 +494,6 @@ bool legacyRange(std::span<const std::byte> bytes, std::uint32_t offset,
   return true;
 }
 
-std::uint32_t legacyConstantElementSize(std::uint32_t type) noexcept {
-  switch (type) {
-    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
-      return 16u;
-    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
-      return 4u;
-    default:
-      return 0u;
-  }
-}
-
 struct LegacySparseStorage {
   std::array<D9CCommandChunkWireRenderStateV2,
              D9C_DRAW_PACKET_MAX_RENDER_STATES>
@@ -892,27 +877,6 @@ bool appendLegacyCommandRecordAsV2(
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
     case D9C_COMMAND_RECORD_APPLY_STATE:
       return appendLegacySparseRecord(builder, header.type, bytes);
-    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
-    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_B: {
-      D9CCommandRecordSetConst record{};
-      if (!loadLegacy(bytes, record)) return false;
-      const auto elementSize = legacyConstantElementSize(header.type);
-      const auto payloadSize = static_cast<std::uint64_t>(record.count) *
-                               elementSize;
-      if (payloadSize > std::numeric_limits<std::uint32_t>::max()) {
-        return false;
-      }
-      std::span<const std::byte> values;
-      return legacyRange(bytes, sizeof(record),
-                         static_cast<std::uint32_t>(payloadSize), values) &&
-             sizeof(record) + payloadSize == bytes.size() &&
-             appendSetConstantsV2(builder, header.type, record.start,
-                                  record.count, values);
-    }
     default:
       return false;
   }
