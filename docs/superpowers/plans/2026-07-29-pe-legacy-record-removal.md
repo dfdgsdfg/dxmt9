@@ -1581,6 +1581,72 @@ value. Confirmed failing against a stub first."
 draw-site step applied after the producer. The differential grows a second lane
 pair mirroring that composition — producer, then context — on both sides.
 
+### Three hazards found before starting, from the Tasks 5-7 review
+
+All three were verified against source. Resolve each explicitly; none is a
+detail that can be worked out while editing.
+
+**H1. `PeChunkContext` cannot express the index-buffer retention leg.**
+Production derives the emitted `ibValid` from *two* independent conditions:
+
+- at the call site, `pendingIb || !submittedIndexBufferKnown_ ||
+  submittedIndexBufferWireValue_ != ibWireValue`; and
+- afterwards, in the writer lambda, `populateDrawPacketIndexDependency`
+  (`d3d9_pe_draw_packet.hpp:41-47`) sets `ibValid` when the handle is non-null
+  **and the destination chunk does not already reference it** —
+  `if (!retained && !wireHandleIsNull(packet.ibHandle)) packet.ibValid = 1u;`
+
+`PeChunkContext` carries `retainedStreamMask` for streams but has no
+counterpart for the index buffer, so the predicate this plan sketched
+(`!chunk.indexBufferKnown || submittedIndexBufferWire != wireValueOf(...)`)
+reproduces only the first condition. Dropping the second means a fresh chunk's
+first indexed draw with a known, unchanged IB emits no index section, so that
+chunk never retains the buffer — the in-flight-free hazard the re-emit exists
+to prevent. **Add an `indexBufferRetained` flag to `PeChunkContext`** and give
+it its own differential fixtures (retained / not-retained x known / unknown).
+
+**H2. `PeBindingView.streams` is authoritative only for *pending* slots.**
+`populateBindingView` deliberately fills a stream slot only when its pending
+bit is set (that masking is what kept the Task 4 cost regression out). But
+stream re-emission needs *every currently bound* stream: production reads a
+separately captured `currentDrawStreamSources()` (`d3d9_pe_device.cpp:9292`,
+`:9352`), not the view. A non-pending view slot holds whatever the last build
+that touched it left there, which coincides with the current binding in steady
+state but not after `clearPeStateTracking()` / `Reset`, which clears
+`streamOff_` / `streamStr_` and the shadow but not `peBindingView_`.
+
+So `addChunkContextSections(chunk, bindings, ...)` as sketched is wrong: the
+`bindings` it receives cannot answer "what is bound in slot N". Either pass the
+stream sources explicitly, or make the view fill authoritative for all slots in
+the draw path and re-measure the `raw*` cost that masking was protecting. Decide
+which before writing the function; do not let it read stale view slots.
+
+**H3. The constant decision this plan deferred is now due.**
+`buildSparseStateV2` emits no constant sections at all — its body is
+`(void)constants;`. That is correct for APPLY_STATE because
+`chunkBarrierFlush` always calls `flushPendingConsts()` first. But the draw
+sites **skip** that flush under `DXMT9_PE_INLINE_CONST_DELTA=1`
+(`d3d9_pe_device.cpp:9280`, `:9342`) and fold the dirty ranges into the record
+instead — and the fold writes into `packet.constDeltaSections` of a fat packet
+that will not exist once these sites migrate. Wiring a draw site to the current
+producer under that env drops the constants silently.
+
+Pick one and say so in the task report:
+1. implement the drain in `buildSparseStateV2` (it already takes `constants`
+   non-const for exactly this), with differential fixtures covering all six
+   ranges under the env; or
+2. make the migrated draw sites always `flushPendingConsts()`, retiring the
+   inline-delta fold — a behaviour change to a documented env knob, so it needs
+   saying out loud rather than happening by omission.
+
+**Also carried forward:** the producer writes into shared members
+(`peSparseScratch_` / `peSparseState_`) that now live across the CapacityPre
+flush window inside `appendRecordV2`, where the old code used stack locals.
+`recorderMutex_` is recursive, so any reentrant path that rebuilds between build
+and emit would corrupt the in-flight record. The Task 7 review found one real
+bug of this shape already (a stale vertex-input ref in reused scratch); assume
+more, and keep the differential's scratch shared so it can see them.
+
 - [ ] **Step 1: Extend the differential with draw lanes**
 
 Generalize `runLegacyLane` / `runDirectLane` to switch on
@@ -1736,13 +1802,21 @@ header.indexFormat = params.indexFormat;
 // appendSparseRecordV2. Leave them zero.
 ```
 
-`addChunkContextSections` adds stream bindings for
-`boundStreamMask(bindings) & ~chunk.retainedStreamMask` that
-`buildSparseStateV2` did not already emit, and an index binding when
-`!chunk.indexBufferKnown ||
-chunk.submittedIndexBufferWire != wireValueOf(bindings.indexBuffer)`.
-Both must keep the sections in ascending slot order after merging, or
-`orderedSlot` rejects the record.
+`addChunkContextSections` adds stream bindings for the bound-but-not-retained
+set that `buildSparseStateV2` did not already emit, and an index binding when
+either leg of H1 fires:
+
+```
+!chunk.indexBufferKnown ||
+chunk.submittedIndexBufferWire != wireValueOf(bindings.indexBuffer) ||
+(!chunk.indexBufferRetained && bindings.indexBuffer.object != nullptr)
+```
+
+The third clause is the retention leg H1 describes; omitting it is silent and
+only shows up as a use-after-free under load. Which source answers "what is
+bound in slot N" for the stream set depends on the H2 decision. Both must keep
+sections in ascending slot order after merging, or `orderedSlot` rejects the
+record.
 
 - [ ] **Step 4: Run the differential to verify it passes**
 
@@ -2116,6 +2190,28 @@ golden test pinning the new producer's output."
 the `appendRecordV2` envelope (Task 3), retention/count comparison in
 `LaneResult`, failure paths in `renderStatesOverCapFailBothLanes` and
 `unpublishedHandleBehavior`. §7's deletions → Task 10.
+
+**Corrections from the Tasks 5-7 review**, recorded so the remaining tasks are
+read against what the code now does:
+
+- `buildSparseStateV2` gained a `forceFullSnapshot` parameter. The signature in
+  this plan omitted it, and snapshot mode silently emitted a delta (2548 bytes
+  against 136) until the differential caught it.
+- `populateBindingView` fills the FULL `PeWireObjectRef` via the `D3D9PeWire*`
+  accessors, identity included. Filling only `object` made every record with a
+  bound object fail through `failActiveRecord()` with no log line — GT1 died with
+  "IDirect3DDevice9::Clear failed: Invalid call" while the harness still reported
+  `status=pass`, because it does not gate on the rendered image. Task 4's review
+  predicted this exactly; treat "the harness passed" as evidence of nothing on
+  its own.
+- The differential's scratch is SHARED, mirroring the reused device member. A
+  fresh per-lane scratch hid a real stale-entry defect.
+- `DXMT_ASSERT` is not a usable guard for anything that only manifests under
+  Wine: all three PE/unix lanes are `buildtype=release` with
+  `b_ndebug=if-release`, so it compiles to nothing there. Use a release-safe
+  log-once.
+- Task 8's three open hazards are written up in its own section. Read those
+  before starting it.
 
 **Corrections applied during execution, from the Tasks 1-3 implementation
 review.** Recorded here so the remaining tasks are read against the corrected
