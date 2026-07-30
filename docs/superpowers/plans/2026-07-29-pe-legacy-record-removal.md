@@ -1581,10 +1581,40 @@ value. Confirmed failing against a stub first."
 draw-site step applied after the producer. The differential grows a second lane
 pair mirroring that composition — producer, then context — on both sides.
 
-### H4. The indexed draw site regresses GT1 and the cause is NOT yet found
+### H4. RESOLVED -- the indexed draw site regressed GT1 on a by-value stamp
 
-**Status: the mechanism (`321f67dc`) is committed and proven; the two draw call
-sites are NOT wired.** An attempt to wire them was reverted. What is known:
+**Resolved in `7b198453`.** Both draw sites are wired and GT1/GT2/GT3/SFIV are
+visually verified.
+
+**Cause.** `buildSparseStateForRecord` took a separate `recordType` argument and
+stamped it onto `params` -- but `params` came in BY VALUE, so the stamp landed on
+the local copy and the call sites' own `params` still carried `recordType == 0`.
+`addChunkContextSections` reads exactly that one field, and on a non-indexed
+verdict it does not merely skip the index section: it rebuilds the span as
+`first(0)`, wiping the section `buildSparseStateV2` had already emitted for
+`pendingIb`. `SetIndices` records nothing standalone in chunk mode, so every
+indexed draw replayed against a stale index buffer.
+
+**Fix.** `params.recordType` is now the only record-type input -- two sources of
+truth for one value, one of them silently write-only, collapsed to one. Guards at
+both ends refuse `0`: the producer with a release-safe log-once, the device
+forwarder as the choke point covering `chunkBarrierFlush`'s APPLY_STATE, which
+never reaches the producer guard. Pinned in `pe_producer_views_spec`.
+
+**Two corrections to what this section originally claimed.** The "ruled out by
+experiment" list below was partly wrong. The probe that supposedly cleared the
+emit decision set `emitIndex = indexedDraw && ibBound` -- still ANDed with the
+broken predicate, so it tested nothing, and the 27.0 -> 43.0 luma move read as
+"still corrupt" was frame-phase noise. A probe that cannot fail for the reason
+under test is not evidence. And the divergence was NOT invisible to the
+differential in principle: forcing `indexedDraw = false` in the producer fails 20
+fixtures immediately. It was invisible because the defect lived in the device
+forwarder's by-value seam, which no fixture threaded. Blind spot 3 below
+(cross-record sequencing) was never implicated; blind spot 2 (the derivation of
+`PeChunkContext`) was the right neighbourhood but not the bug.
+
+The original record follows, kept because the bisection was sound even where the
+conclusions drawn from it were not:
 
 | state | GT1 |
 |---|---|
