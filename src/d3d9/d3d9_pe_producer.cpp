@@ -468,6 +468,38 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   // Three independent reasons, matching production's two sites. The third
   // clause is the retention leg; without it the chunk can end up replaying a
   // draw against a buffer it never retained.
+  //
+  // Fail loudly on an unstamped recordType instead of silently deciding "not
+  // indexed". D9C_COMMAND_RECORD_* starts at 1, so 0 is never a real record.
+  // This is not hypothetical: the first wiring of the draw call sites reached
+  // here with recordType == 0, because the device forwarder stamped it onto a
+  // by-value copy of params. The rebuild below then WIPED the index section
+  // buildSparseStateV2 had already emitted for pendingIb, and since SetIndices
+  // records nothing standalone in chunk mode, every indexed draw replayed
+  // against a stale index buffer -- GT1 rendered sliver triangles with garbled
+  // HUD digits while the harness still reported status=pass. The offline
+  // differential passed byte-equality throughout, because its fixtures stamp
+  // params themselves and so never reproduce the device's threading of it.
+  // Refusing the record (the caller turns this into D3DERR_INVALIDCALL) beats
+  // rendering garbage. Release-safe rather than DXMT_ASSERT-only: every lane
+  // that runs under Wine is a release build (b_ndebug=if-release), which is
+  // exactly the configuration where this manifested.
+  if (params.recordType == 0u) {
+    static bool reported = false;
+    if (!reported) {
+      reported = true;
+      dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-pe",
+                        "addChunkContextSections: params.recordType is 0. The "
+                        "caller did not stamp it, so the index-buffer section "
+                        "would be suppressed and every indexed draw would "
+                        "replay against a stale index buffer.");
+    }
+    // Deliberately no DXMT_ASSERT: the native build is debugoptimized with
+    // b_ndebug=if-release, so an assert here is LIVE and would abort the very
+    // test that pins this guard. A testable hard failure beats an abort that
+    // only exists in the configuration that never sees the bug.
+    return false;
+  }
   const bool indexedDraw =
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;

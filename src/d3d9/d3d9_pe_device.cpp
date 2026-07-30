@@ -3170,7 +3170,6 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
 
 static D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return D3D9PeRawSurface(p); }
 static D9CBuffer*    rawVBuf(IDirect3DVertexBuffer9* p)     { return D3D9PeRawVertexBuffer(p); }
-static D9CBuffer*    rawIBuf(IDirect3DIndexBuffer9* p)      { return D3D9PeRawIndexBuffer(p); }
 static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
 
 /* R-FORMAT-11 — RESZ MSAA depth-resolve trigger. RESZ is a *command*, not
@@ -3939,6 +3938,42 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // translation as well as the packet fill. Timing only the producer would
     // have made the figure read lower while the work moved outside it, and that
     // figure is what docs/perfomance/ cites for PE recording cost.
+    // Destination-chunk retention, as data. MUST be read after any CapacityPre
+    // flush has resealed the chunk -- that is why the draw sites build it inside
+    // the append emitter and not before.
+    dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const {
+        dxmt9::d3d9::pe::PeChunkContext chunk{};
+        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            if (pendingChunkReferencesBuffer(
+                    toWireHandle(peBindingView_.streams[slot].buffer.object))) {
+                chunk.retainedStreamMask |= 1u << slot;
+            }
+        }
+        chunk.indexBufferKnown = submittedIndexBufferKnown_;
+        chunk.submittedIndexBufferWire = submittedIndexBufferWireValue_;
+        chunk.indexBufferRetained = pendingChunkReferencesBuffer(
+            toWireHandle(peBindingView_.indexBuffer.object));
+        return chunk;
+    }
+
+    // Bytes the drained constant ranges contribute, so the capacity precheck
+    // sees a value on the same scale as the legacy record's
+    // d9c_command_record_draw_*_total_size(), which included the folded const
+    // payload. Without this, enabling DXMT9_PE_INLINE_CONST_DELTA would move
+    // chunk boundaries.
+    std::size_t sparseConstPayloadBytes() const {
+        const dxmt9::d3d9::pe::SparseConstantRangeV2Input* ranges[] = {
+            &peSparseState_.vsFloatConstants, &peSparseState_.vsIntConstants,
+            &peSparseState_.vsBoolConstants,  &peSparseState_.psFloatConstants,
+            &peSparseState_.psIntConstants,   &peSparseState_.psBoolConstants,
+        };
+        std::size_t total = 0;
+        for (const auto* range : ranges) {
+            total += range->registerBytes.size();
+        }
+        return total;
+    }
+
     // Sparse-state counterpart to buildDrawPrimitivePacket. Fills the reused
     // peSparseState_ / peSparseHeader_ from the shadows and the binding view --
     // no fat packet in between. The decimated draw_packet scope lives here for
@@ -3948,11 +3983,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // reference. It does not currently write to it -- see that function's
     // comment -- but the signature reserves the right, so this must not claim
     // const and cast it away.
+    // params.recordType is the ONLY record-type input, deliberately: this used
+    // to take a separate recordType argument and stamp it onto params. Because
+    // params was taken by value, the stamp landed on the local copy only, so
+    // every caller that later handed its own params to addChunkContextSections
+    // passed recordType == 0. That reads as "not an indexed draw", and the
+    // context step does not merely skip the index section -- it rebuilds the
+    // span as first(0), wiping the one buildSparseStateV2 had already emitted
+    // for pendingIb. SetIndices records nothing standalone in chunk mode, so
+    // every indexed draw then replayed against a stale index buffer: GT1 came
+    // out as sliver triangles with garbled HUD digits. Two sources of truth for
+    // one value, one of them silently write-only. Now there is one.
     bool buildSparseStateForRecord(
-        std::uint32_t recordType,
-        dxmt9::d3d9::pe::PeDrawParams params,
+        const dxmt9::d3d9::pe::PeDrawParams& params,
         bool forceFullSnapshot = false,
         bool inlineConstDelta = false) {
+        const std::uint32_t recordType = params.recordType;
+        // Choke point for all three callers. addChunkContextSections carries the
+        // same guard and the full story of what an unstamped recordType did, but
+        // it is only reached by draws -- the chunkBarrierFlush APPLY_STATE path
+        // would slip past it and be misclassified as a draw by isDraw below.
+        // Returning false surfaces as a failed HRESULT, not silent corruption.
+        if (recordType == 0u) {
+            return false;
+        }
         DxmtPeDecimatedScopeGuard decimatedScope;
         const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
         if (decimationN != 0 &&
@@ -3969,7 +4023,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
             decimatedScope.t0 = std::chrono::steady_clock::now();
         }
-        params.recordType = recordType;
         const bool needAllSlots =
             forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
         const bool isDraw =
@@ -9296,48 +9349,38 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const HRESULT constHr = flushPendingConsts();
             if (FAILED(constHr)) return constHr;
         }
-        D9CCommandRecordDrawPrimitive record{};
-        record.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
-        if (!buildDrawPrimitivePacket(type, startVertex, count, record.packet)) {
+        dxmt9::d3d9::pe::PeDrawParams params{};
+        params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+        params.primitiveType = static_cast<std::uint32_t>(type);
+        params.startVertex = startVertex;
+        params.primitiveCount = count;
+        // Under inlineConstDelta the const shadows are still dirty here and the
+        // producer drains them into the record's constant-range sections; the
+        // legacy shape folded them into packet.constDeltaSections instead.
+        if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
+                                       inlineConstDelta)) {
             return D3DERR_INVALIDCALL;
         }
-        const auto streamSources = currentDrawStreamSources();
-        HRESULT hr;
-        if (inlineConstDelta) {
-            // R-BACK-2.52(b): fold the pending const shadows into
-            // record.packet.constDeltaSections + a trailing payload region
-            // instead of standalone records. Must run AFTER
-            // buildDrawPrimitivePacket, which resets `record.packet`
-            // (clobbering constDeltaSections) before filling it in.
-            std::uint32_t payloadBytes = 0;
-            const HRESULT foldHr =
-                foldPendingConstsIntoDrawPacket(record.packet, payloadBytes);
-            if (FAILED(foldHr)) return foldHr;
-            record.header.size =
-                d9c_command_record_draw_primitive_total_size(&record.packet);
-            hr = appendCommandRecordDirect(
-                record.header.type, record.header.size,
-                [this, &record, &streamSources, payloadBytes](std::uint8_t* dst) {
-                    populatePendingChunkDrawStreamDependencies(
-                        record.packet, streamSources);
-                    std::memcpy(dst, &record, sizeof(record));
-                    if (payloadBytes != 0) {
-                        std::memcpy(dst + sizeof(record),
-                                    constDeltaPayloadScratch_.data(),
-                                    payloadBytes);
-                    }
-                });
-        } else {
-            record.header.size = sizeof(record);
-            hr = appendCommandRecordDirect(
-                record.header.type, record.header.size,
-                [this, &record, &streamSources](std::uint8_t* dst) {
-                    populatePendingChunkDrawStreamDependencies(
-                        record.packet, streamSources);
-                    std::memcpy(dst, &record, sizeof(record));
-                });
-        }
-        return hr;
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+            sizeof(D9CCommandRecordDrawPrimitive) + sparseConstPayloadBytes(),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                // Inside the emitter on purpose: CapacityPre may have sealed the
+                // old chunk, and the retention answers are about the chunk this
+                // record actually lands in.
+                if (!dxmt9::d3d9::pe::addChunkContextSections(
+                        currentChunkContext(), peState_, peBindingView_, params,
+                        peSparseScratch_, peSparseState_)) {
+                    return D3DERR_INVALIDCALL;
+                }
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                    builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, peSparseHeader_,
+                    peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     HRESULT appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
@@ -9356,64 +9399,45 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             const HRESULT constHr = flushPendingConsts();
             if (FAILED(constHr)) return constHr;
         }
-        D9CCommandRecordDrawIndexedPrimitive record{};
-        record.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-        if (!buildDrawPrimitivePacket(type, 0, count, record.packet.state)) {
+        dxmt9::d3d9::pe::PeDrawParams params{};
+        params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+        params.primitiveType = static_cast<std::uint32_t>(type);
+        params.baseVertex = baseVertex;
+        params.minVertex = minVertex;
+        params.numVertices = numVertices;
+        params.startIndex = startIndex;
+        params.primitiveCount = count;
+        if (!buildSparseStateForRecord(params, /*forceFullSnapshot=*/false,
+                                       inlineConstDelta)) {
             return D3DERR_INVALIDCALL;
         }
-        const auto streamSources = currentDrawStreamSources();
-        record.packet.baseVertex = baseVertex;
-        record.packet.minVertex = minVertex;
-        record.packet.numVertices = numVertices;
-        record.packet.startIndex = startIndex;
-        record.packet.primitiveCount = count;
-        // Preserve the semantic IB delta. The append-time dependency
-        // checkpoint below additionally emits an unchanged IB when the new
-        // chunk has not retained it yet.
-        record.packet.ibHandle = toWireHandle(rawIBuf(indexBuf_));
         const std::uint64_t ibWireValue =
-            d9cWireHandleValue(record.packet.ibHandle);
-        record.packet.ibValid =
-            (peState_.pendingIb || !submittedIndexBufferKnown_ ||
-             submittedIndexBufferWireValue_ != ibWireValue) ? 1u : 0u;
-        HRESULT hr;
-        if (inlineConstDelta) {
-            // R-BACK-2.52(b): see appendDrawPrimitiveRecord. Folds into
-            // record.packet.state.constDeltaSections — the shared
-            // D9CDrawPrimitivePacket embedded in the indexed packet.
-            std::uint32_t payloadBytes = 0;
-            const HRESULT foldHr = foldPendingConstsIntoDrawPacket(
-                record.packet.state, payloadBytes);
-            if (FAILED(foldHr)) return foldHr;
-            record.header.size =
-                d9c_command_record_draw_indexed_primitive_total_size(
-                    &record.packet.state);
-            hr = appendCommandRecordDirect(
-                record.header.type, record.header.size,
-                [this, &record, &streamSources, payloadBytes](std::uint8_t* dst) {
-                    populatePendingChunkDrawStreamDependencies(
-                        record.packet.state, streamSources);
-                    populatePendingChunkDrawIndexDependency(record.packet);
-                    std::memcpy(dst, &record, sizeof(record));
-                    if (payloadBytes != 0) {
-                        std::memcpy(dst + sizeof(record),
-                                    constDeltaPayloadScratch_.data(),
-                                    payloadBytes);
-                    }
-                });
-        } else {
-            record.header.size = sizeof(record);
-            hr = appendCommandRecordDirect(
-                record.header.type, record.header.size,
-                [this, &record, &streamSources](std::uint8_t* dst) {
-                    populatePendingChunkDrawStreamDependencies(
-                        record.packet.state, streamSources);
-                    populatePendingChunkDrawIndexDependency(record.packet);
-                    std::memcpy(dst, &record, sizeof(record));
-                });
-        }
+            d9cWireHandleValue(toWireHandle(peBindingView_.indexBuffer.object));
+        // Whether the index section was actually emitted decides the tracking
+        // update, exactly as the legacy code keyed it on the final ibValid --
+        // which the append-time dependency checkpoint could itself set.
+        bool indexSectionEmitted = false;
+        const HRESULT hr = appendRecordV2(
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+            sizeof(D9CCommandRecordDrawIndexedPrimitive) +
+                sparseConstPayloadBytes(),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                if (!dxmt9::d3d9::pe::addChunkContextSections(
+                        currentChunkContext(), peState_, peBindingView_, params,
+                        peSparseScratch_, peSparseState_)) {
+                    return D3DERR_INVALIDCALL;
+                }
+                indexSectionEmitted = !peSparseState_.indexBuffers.empty();
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                    builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                    peSparseHeader_, peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (SUCCEEDED(hr)) {
-            if (record.packet.ibValid != 0) {
+            if (indexSectionEmitted) {
                 submittedIndexBufferWireValue_ = ibWireValue;
                 submittedIndexBufferKnown_ = true;
             }
@@ -9970,8 +9994,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const std::int64_t buildEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
-        if (buildSparseStateForRecord(D9C_COMMAND_RECORD_APPLY_STATE,
-                                      dxmt9::d3d9::pe::PeDrawParams{})) {
+        dxmt9::d3d9::pe::PeDrawParams applyParams{};
+        applyParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+        if (buildSparseStateForRecord(applyParams)) {
             recordPeApplyStateBuildCpu(buildEntryNs);
             // sizeHint stays sizeof(D9CCommandRecordApplyState): it is what the
             // capacity precheck saw before, so seal cadence is unchanged.

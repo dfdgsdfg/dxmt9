@@ -5,12 +5,14 @@
 // nothing from them past the call. Scratch capacity must match the V2 section
 // caps, or a full-width delta silently truncates.
 
+#include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_producer_views.hpp"
 
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <span>
 #include <string_view>
 #include <type_traits>
 
@@ -116,6 +118,78 @@ void scratchCapacityMatchesSectionCaps() {
         "light enable scratch must match the light cap");
 }
 
+// Regression pin for the GT1 indexed-draw corruption. addChunkContextSections
+// decides "is this an indexed draw" solely from params.recordType, and on a
+// non-indexed verdict it does not merely skip the index section -- it rebuilds
+// the span as first(0), wiping whatever buildSparseStateV2 already emitted for
+// pendingIb. The device forwarder used to stamp recordType onto a by-value copy
+// of params, so the live call arrived with 0, and every indexed draw shipped
+// with no index binding. SetIndices records nothing standalone in chunk mode, so
+// draws replayed against a stale index buffer: sliver triangles, garbled HUD.
+//
+// The offline differential could not catch it -- its fixtures stamp params
+// themselves, so they never reproduce the device's threading of the value. This
+// pins the producer's half of the contract instead: 0 is refused outright, an
+// indexed draw with a dirty IB keeps its section, and a non-indexed draw still
+// gets none.
+void unstampedRecordTypeIsRefused() {
+  PeHotStateShadow shadow{};
+  pe::PeBindingView bindings{};
+  pe::PeSparseScratch scratch{};
+  pe::SparseStateV2Input out{};
+  int indexObject = 0;
+  bindings.indexBuffer.object = &indexObject;
+  bindings.indexBuffer.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
+  bindings.indexBuffer.identity.generation = 1u;
+  bindings.indexBuffer.identity.objectId = 7u;
+  shadow.pendingIb = true;
+
+  pe::PeDrawParams unstamped{};  // recordType stays 0
+  check(!pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
+                                     unstamped, scratch, out),
+        "an unstamped recordType must be refused, not treated as non-indexed");
+}
+
+void indexedDrawKeepsItsIndexSection() {
+  PeHotStateShadow shadow{};
+  pe::PeBindingView bindings{};
+  pe::PeSparseScratch scratch{};
+  int indexObject = 0;
+  bindings.indexBuffer.object = &indexObject;
+  bindings.indexBuffer.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
+  bindings.indexBuffer.identity.generation = 1u;
+  bindings.indexBuffer.identity.objectId = 7u;
+  shadow.pendingIb = true;
+
+  // Seed the section the way buildSparseStateV2 would have, so a rebuild that
+  // wrongly drops it is visible rather than merely absent.
+  pe::SparseStateV2Input out{};
+  scratch.indexBuffers[0] = pe::SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>{};
+  scratch.indexBuffers[0].wire.valid = 1u;
+  scratch.indexBuffers[0].object = bindings.indexBuffer;
+  out.indexBuffers = std::span(scratch.indexBuffers).first(1);
+
+  pe::PeDrawParams indexed{};
+  indexed.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
+                                    indexed, scratch, out),
+        "an indexed draw with a dirty IB must succeed");
+  check(out.indexBuffers.size() == 1,
+        "an indexed draw with a dirty IB must keep its index section");
+  check(out.indexBuffers[0].object.object == &indexObject,
+        "the retained index section must name the bound index buffer");
+
+  // Same inputs, non-indexed record: no section at all is the correct answer.
+  pe::SparseStateV2Input nonIndexedOut{};
+  pe::PeDrawParams nonIndexed{};
+  nonIndexed.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
+                                    nonIndexed, scratch, nonIndexedOut),
+        "a non-indexed draw must succeed");
+  check(nonIndexedOut.indexBuffers.empty(),
+        "a non-indexed draw must carry no index section");
+}
+
 int main() {
   try {
     viewsAreTriviallyCopyable();
@@ -125,6 +199,8 @@ int main() {
     defaultDrawParamsAreZero();
     baseVertexIsSigned();
     scratchCapacityMatchesSectionCaps();
+    unstampedRecordTypeIsRefused();
+    indexedDrawKeepsItsIndexSection();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_views_spec FAILED: " << failure.what() << "\n";
     return 1;
