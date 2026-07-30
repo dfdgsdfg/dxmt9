@@ -9214,22 +9214,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             });
     }
 
-    HRESULT appendCommandRecordRetained(const void* data,
-                                        size_t bytes,
-                                        D9CSurface* surface0 = nullptr,
-                                        D9CSurface* surface1 = nullptr,
-                                        D9CTexture* texture0 = nullptr,
-                                        D9CTexture* texture1 = nullptr) {
-        std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        if (!data || bytes == 0 || bytes > 0xffffffffull) {
-            return D3DERR_INVALIDCALL;
-        }
-        (void)surface0;
-        (void)surface1;
-        (void)texture0;
-        (void)texture1;
-        return appendCommandRecord(data, bytes);
-    }
 
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
@@ -10117,8 +10101,21 @@ public:
     bool IsChunkRecorderEnabledForChild() const override {
         return true;
     }
-    HRESULT AppendRecordForChild(const void* data, size_t bytes) noexcept override {
-        return appendCommandRecord(data, bytes);
+
+    HRESULT AppendQueryIssueForChild(
+        std::uint32_t flags,
+        const dxmt9::d3d9::pe::PeWireObjectRef& query) noexcept override {
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_QUERY_ISSUE,
+            sizeof(D9CCommandRecordQueryIssue),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendQueryIssueV2(
+                    builder, flags, query);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     // PE-shadow stateblock support.
@@ -10657,16 +10654,28 @@ public:
             return barrierHr;
         }
 
-        D9CCommandRecordPresent record{};
-        record.header.type = D9C_COMMAND_RECORD_PRESENT;
-        record.header.size = sizeof(record);
-        record.hwnd = (uint64_t)(uintptr_t)wnd;
-        record.flags = 0;
-        record.hasSrc = src ? 1u : 0u;
-        record.hasDst = dst ? 1u : 0u;
-        if (src) record.src = cs;
-        if (dst) record.dst = cd;
-        const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+        // sizeHint stays sizeof(D9CCommandRecordPresent) even though no legacy
+        // record is built: it is what the capacity precheck saw before, so
+        // chunk seal cadence is unchanged.
+        const D9CCommandChunkWirePresentV2 presentWire{
+            .hwnd = (uint64_t)(uintptr_t)wnd,
+            .flags = 0,
+            .hasSrc = src ? 1u : 0u,
+            .hasDst = dst ? 1u : 0u,
+            .reserved0 = 0u,
+            .src = src ? cs : D9CRect{},
+            .dst = dst ? cd : D9CRect{},
+        };
+        const HRESULT appendHr = appendRecordV2(
+            D9C_COMMAND_RECORD_PRESENT, sizeof(D9CCommandRecordPresent),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok =
+                    dxmt9::d3d9::pe::appendPresentV2(builder, presentWire);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (recordPresentTiming) {
             presentTimingAppendEnd = std::chrono::steady_clock::now();
             presentTimingFlushEnd = presentTimingAppendEnd;
@@ -11165,19 +11174,28 @@ public:
         // so callers may release their D3D9 wrappers immediately.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        auto* const srcRaw = rawSurf(src);
-        auto* const dstRaw = rawSurf(dst);
-        D9CCommandRecordUpdateSurface record{};
-        record.header.type = D9C_COMMAND_RECORD_UPDATE_SURFACE;
-        record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
-        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
-        record.hasSrcRect = srcRect ? 1u : 0u;
-        record.hasDstPoint = dstPt ? 1u : 0u;
-        record.srcRect = cs;
-        record.dstPoint = cd;
-        return appendCommandRecordRetained(&record, sizeof(record),
-                                           srcRaw, dstRaw);
+        // Handle indices are assigned by appendUpdateSurfaceV2 as it appends
+        // the refs, so they stay zero here.
+        const D9CCommandChunkWireUpdateSurfaceV2 wire{
+            .srcHandleIndex = 0u,
+            .dstHandleIndex = 0u,
+            .hasSrcRect = srcRect ? 1u : 0u,
+            .hasDstPoint = dstPt ? 1u : 0u,
+            .srcRect = cs,
+            .dstPoint = cd,
+        };
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_UPDATE_SURFACE,
+            sizeof(D9CCommandRecordUpdateSurface),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendUpdateSurfaceV2(
+                    builder, wire, D3D9PeWireSurface(src),
+                    D3D9PeWireSurface(dst));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* src,
@@ -11202,18 +11220,19 @@ public:
         }
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        auto* const srcRaw = rawTex(src);
-        auto* const dstRaw = rawTex(dst);
-        D9CCommandRecordUpdateTexture record{};
-        record.header.type = D9C_COMMAND_RECORD_UPDATE_TEXTURE;
-        record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
-        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
         // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
         // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
-        (void)0;
-        const HRESULT appendHr = appendCommandRecordRetained(
-            &record, sizeof(record), nullptr, nullptr, srcRaw, dstRaw);
+        const HRESULT appendHr = appendRecordV2(
+            D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+            sizeof(D9CCommandRecordUpdateTexture),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendUpdateTextureV2(
+                    builder, D3D9PeWireTexture(src), D3D9PeWireTexture(dst));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (FAILED(appendHr) || !palettizedUpdate) {
             return appendHr;
         }
@@ -11269,15 +11288,16 @@ public:
         // the actual readback HRESULT back to PE.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        auto* const rtRaw = rawSurf(rt);
-        auto* const dstRaw = rawSurf(dst);
-        D9CCommandRecordReadback record{};
-        record.header.type = D9C_COMMAND_RECORD_READBACK;
-        record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(rtRaw);
-        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
-        const HRESULT appendHr = appendCommandRecordRetained(&record, sizeof(record),
-                                                             rtRaw, dstRaw);
+        const HRESULT appendHr = appendRecordV2(
+            D9C_COMMAND_RECORD_READBACK, sizeof(D9CCommandRecordReadback),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendReadbackV2(
+                    builder, D3D9PeWireSurface(rt), D3D9PeWireSurface(dst));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (FAILED(appendHr)) return appendHr;
         // Sync semantics: commit the chunk now and wait for completion.
         // flushPendingCommandChunk routes through commit_chunk -> server's
@@ -11381,20 +11401,28 @@ public:
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        auto* const srcRaw = rawSurf(src);
-        auto* const dstRaw = rawSurf(dst);
-        D9CCommandRecordStretchRect record{};
-        record.header.type = D9C_COMMAND_RECORD_STRETCH_RECT;
-        record.header.size = sizeof(record);
-        record.srcWire = reinterpret_cast<uint64_t>(srcRaw);
-        record.dstWire = reinterpret_cast<uint64_t>(dstRaw);
-        record.hasSrcRect = srcRect ? 1u : 0u;
-        record.hasDstRect = dstRect ? 1u : 0u;
-        record.filter = (uint32_t)filter;
-        if (srcRect) record.srcRect = cs;
-        if (dstRect) record.dstRect = cd;
-        return appendCommandRecordRetained(&record, sizeof(record),
-                                           srcRaw, dstRaw);
+        const D9CCommandChunkWireStretchRectV2 wire{
+            .srcHandleIndex = 0u,
+            .dstHandleIndex = 0u,
+            .hasSrcRect = srcRect ? 1u : 0u,
+            .hasDstRect = dstRect ? 1u : 0u,
+            .filter = (uint32_t)filter,
+            .reserved0 = 0u,
+            .srcRect = srcRect ? cs : D9CRect{},
+            .dstRect = dstRect ? cd : D9CRect{},
+        };
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_STRETCH_RECT,
+            sizeof(D9CCommandRecordStretchRect),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendStretchRectV2(
+                    builder, wire, D3D9PeWireSurface(src),
+                    D3D9PeWireSurface(dst));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* pSurf,
@@ -11420,15 +11448,23 @@ public:
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        auto* const surfRaw = rawSurf(pSurf);
-        D9CCommandRecordColorFill record{};
-        record.header.type = D9C_COMMAND_RECORD_COLOR_FILL;
-        record.header.size = sizeof(record);
-        record.surfaceWire = reinterpret_cast<uint64_t>(surfRaw);
-        record.colorARGB = (uint32_t)color;
-        record.hasRect = pRect ? 1u : 0u;
-        if (pRect) record.rect = cr;
-        return appendCommandRecordRetained(&record, sizeof(record), surfRaw);
+        const D9CCommandChunkWireColorFillV2 wire{
+            .surfaceHandleIndex = 0u,
+            .colorARGB = (uint32_t)color,
+            .hasRect = pRect ? 1u : 0u,
+            .reserved0 = 0u,
+            .rect = pRect ? cr : D9CRect{},
+        };
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_COLOR_FILL, sizeof(D9CCommandRecordColorFill),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendColorFillV2(
+                    builder, wire, D3D9PeWireSurface(pSurf));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
     }
 
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w, UINT h,
@@ -11711,23 +11747,30 @@ public:
         if (FAILED(barrierHr)) return finishPeCall(barrierHr);
 
         const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
-        D9CCommandRecordClear header{};
-        header.header.type = D9C_COMMAND_RECORD_CLEAR;
-        header.header.size = static_cast<std::uint32_t>(sizeof(header) + rectBytes);
-        header.flags = (uint32_t)flags;
-        header.colorARGB = (uint32_t)color;
-        header.z = z;
-        header.stencil = (uint32_t)stencil;
-        header.rectCount = (uint32_t)count;
-        header.rectOffset = sizeof(header);
-
-        const HRESULT hr = appendCommandRecordDirect(
-            header.header.type, header.header.size,
-            [&header, pRects, rectBytes](std::uint8_t* record) {
-                std::memcpy(record, &header, sizeof(header));
-                if (rectBytes != 0 && pRects) {
-                    std::memcpy(record + header.rectOffset, pRects, rectBytes);
-                }
+        // rectCount / rectOffset are computed by appendClearV2 from the span,
+        // so they stay zero here. sizeHint keeps the legacy header+payload size
+        // the capacity precheck saw before, so seal cadence is unchanged.
+        const D9CCommandChunkWireClearV2 clearWire{
+            .flags = (uint32_t)flags,
+            .colorARGB = (uint32_t)color,
+            .z = z,
+            .stencil = (uint32_t)stencil,
+            .rectCount = 0u,
+            .rectOffset = 0u,
+        };
+        const std::span<const D9CRect> rects(
+            reinterpret_cast<const D9CRect*>(pRects),
+            pRects ? static_cast<std::size_t>(count) : 0u);
+        const HRESULT hr = appendRecordV2(
+            D9C_COMMAND_RECORD_CLEAR,
+            sizeof(D9CCommandRecordClear) + rectBytes,
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok =
+                    dxmt9::d3d9::pe::appendClearV2(builder, clearWire, rects);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
             });
         return finishPeCall(hr);
     }
@@ -12184,14 +12227,18 @@ public:
         // them via the same wireValuePtr path.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        D9CCommandRecordReszDepthResolve record{};
-        record.header.type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE;
-        record.header.size = sizeof(record);
-        record.msaaDepthHandle = reinterpret_cast<uint64_t>(depthSrcRaw);
-        record.intzDestHandle = reinterpret_cast<uint64_t>(intzDstRaw);
-        const HRESULT appendHr = appendCommandRecordRetained(
-            &record, sizeof(record), depthSrcRaw, /*surface1=*/nullptr,
-            intzDstRaw);
+        const HRESULT appendHr = appendRecordV2(
+            D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+            sizeof(D9CCommandRecordReszDepthResolve),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendReszDepthResolveV2(
+                    builder, D3D9PeWireSurface(dsSurface_),
+                    D3D9PeWireTexture(textures_[0]));
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (FAILED(appendHr)) return appendHr;
         return S_OK;
     }

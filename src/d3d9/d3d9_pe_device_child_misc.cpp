@@ -217,12 +217,8 @@ public:
     // with surrounding draws within the same chunk; legacy path
     // falls back to flush+bridge.
     if (recorder_ && recorder_->IsChunkRecorderEnabledForChild()) {
-      D9CCommandRecordQueryIssue record{};
-      record.header.type = D9C_COMMAND_RECORD_QUERY_ISSUE;
-      record.header.size = sizeof(record);
-      record.queryWire = reinterpret_cast<uint64_t>(q_);
-      record.flags = static_cast<uint32_t>(flags);
-      return recorder_->AppendRecordForChild(&record, sizeof(record));
+      return recorder_->AppendQueryIssueForChild(
+          static_cast<std::uint32_t>(flags), wireObject());
     }
     const HRESULT flushHr = flushChildRecorder(recorder_);
     if (FAILED(flushHr))

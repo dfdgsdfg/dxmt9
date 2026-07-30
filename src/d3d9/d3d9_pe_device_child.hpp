@@ -61,7 +61,14 @@ struct D3D9PeRecorderFlush {
   virtual void AddDefaultPoolResourceRefForChild() = 0;
   virtual void ReleaseDefaultPoolResourceRefForChild() = 0;
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
-  virtual HRESULT AppendRecordForChild(const void *data, size_t bytes) = 0;
+  // Query::Issue is the only child-side record. It takes a PeWireObjectRef
+  // rather than opaque bytes because opaque legacy-record bytes cannot express
+  // a V2 handle reference -- the builder needs the ref to append and retain it.
+  // The former byte-oriented AppendRecordForChild died with the last legacy
+  // child record.
+  virtual HRESULT AppendQueryIssueForChild(
+      std::uint32_t flags,
+      const dxmt9::d3d9::pe::PeWireObjectRef &query) = 0;
   virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
   virtual D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
       const char *callName, const void *callerPc = nullptr) noexcept {
