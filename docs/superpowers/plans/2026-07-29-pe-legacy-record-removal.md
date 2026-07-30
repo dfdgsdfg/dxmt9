@@ -2300,6 +2300,47 @@ fixed ~68 s timeline that hangs post-scene until the timeout kill, and SIGKILL
 loses the final counter flush. Set `DXMT9_PERF_FRAME_SAMPLING=1` and compute
 scene fps from the per-frame `wall_ms` samples.
 
+### Step 7 is DEFERRED, and the numbers taken for it are not evidence
+
+Task 10's code work is complete through stage D (`20d3528a`). The paired GT2 A/B
+was attempted and is **deferred**: the machine was thermally throttling, so the
+runs do not measure the change.
+
+What was run, recorded so nobody repeats it thinking it is a baseline. GT2,
+`perf` profile, `DXMT9_PERF_FRAME_SAMPLING=1`, no gputrace, scene fps from the
+median of per-frame `wall_ms` over the steady body (frames >= 30, <= 200 ms):
+
+| run | median wall | scene fps |
+|---|---|---|
+| after (`20d3528a`) | 57.232 ms | 17.47 |
+| before (`3276bf6e`) run 1 | 59.564 ms | 16.79 |
+| before run 2 | 59.392 ms | 16.84 |
+| before run 3 | 60.125 ms | 16.63 |
+
+That reads as +4.1%, and it should not be believed, for a reason stronger than
+"noisy": **the ordering is confounded with the thermal state.** The single after
+run was taken first, on a cool machine; the three before runs followed, back to
+back, on a machine that had been building four lanes and running Wine all
+session. Throttling biases that ordering in exactly the direction the result
+points. The before runs' tight spread (16.63-16.84) shows only that three
+consecutive hot runs agree with each other, not that the comparison is sound.
+
+When this is re-run, on a cool machine and ideally with the machine idle:
+
+- Interleave the sides (A B A B A B), do not batch them. Ordering is the
+  confound here, not variance.
+- At least three runs per side, and report the spread, not just a midpoint.
+- Keep computing scene fps from per-frame `wall_ms`. Do NOT use `result.json`
+  presents: GT2 is a fixed ~68 s timeline that hangs post-scene until the
+  timeout kill, and SIGKILL loses the final counter flush (~8% undercount, H231).
+- Baseline is `3276bf6e`, the last commit before Task 1. Both sides need all four
+  lanes rebuilt, and `run_experiment.py` restages, so PATH must include
+  `/opt/homebrew/opt/llvm/bin` or staging dies with exit 127 on `llvm-ar`.
+
+The structural work does not depend on this measurement: nothing in Tasks 1-10
+was justified by a perf claim. Reopen it as a perf investigation against the new
+structure rather than as a gate on the refactor.
+
 - [ ] **Step 7: Measure, and report honestly**
 
 Paired GT2 A/B against the pre-Task-1 commit, both on the `perf` profile, frame
