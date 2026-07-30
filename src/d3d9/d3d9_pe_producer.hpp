@@ -85,10 +85,19 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
 // resealed the chunk -- the retention answers are about the DESTINATION chunk.
 // `bindings.streams` must be authoritative for every slot, not just pending
 // ones; see populateBindingView's allStreams parameter.
+// forceFullSnapshot must be the SAME value the paired buildSparseStateV2 call
+// received. Under snapshot that call emits all 16 stream sections, including null
+// unbinds, and this function must then leave them alone: legacy's
+// populateDrawPacketStreamDependencies only ever ADDED mask bits, so an all-ones
+// snapshot mask survived the dependency checkpoint untouched. Rebuilding the span
+// here would drop every bound-but-retained-and-clean slot and every null unbind,
+// breaking the self-contained-record contract DXMT9_PE_DRAW_FULL_SNAPSHOT exists
+// to provide.
 bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeHotStateShadow& shadow,
                              const PeBindingView& bindings,
                              const PeDrawParams& params,
+                             bool forceFullSnapshot,
                              PeSparseScratch& scratch,
                              SparseStateV2Input& out) noexcept;
 

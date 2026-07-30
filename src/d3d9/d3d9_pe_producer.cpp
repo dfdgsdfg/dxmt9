@@ -441,16 +441,69 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   return true;
 }
 
+namespace {
+
+// Fail loudly on an unstamped recordType instead of silently deciding "not
+// indexed". D9C_COMMAND_RECORD_* starts at 1, so 0 is never a real record.
+// This is not hypothetical: the first wiring of the draw call sites reached
+// addChunkContextSections with recordType == 0, because the device forwarder
+// stamped it onto a by-value copy of params. The stream/index rebuild then WIPED
+// the index section buildSparseStateV2 had already emitted for pendingIb, and
+// since SetIndices records nothing standalone in chunk mode, every indexed draw
+// replayed against a stale index buffer -- GT1 rendered sliver triangles with
+// garbled HUD digits while the harness still reported status=pass. The offline
+// differential passed byte-equality throughout, because its fixtures stamp
+// params themselves and so never reproduce the device's threading of it.
+// Refusing the record (the caller turns this into D3DERR_INVALIDCALL) beats
+// rendering garbage.
+//
+// Release-safe rather than DXMT_ASSERT-only: every lane that runs under Wine is
+// a release build (b_ndebug=if-release), which is exactly the configuration
+// where this manifested. And deliberately no DXMT_ASSERT alongside it: the
+// native build is debugoptimized, so an assert here is LIVE and would abort the
+// very test that pins this guard.
+bool validRecordType(const PeDrawParams& params, const char* where) noexcept {
+  if (params.recordType != 0u) {
+    return true;
+  }
+  static bool reported = false;
+  if (!reported) {
+    reported = true;
+    dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-pe",
+                      "%s: params.recordType is 0. The caller did not stamp it, "
+                      "so the index-buffer section would be suppressed and every "
+                      "indexed draw would replay against a stale index buffer.",
+                      where);
+  }
+  return false;
+}
+
+}  // namespace
+
 bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeHotStateShadow& shadow,
                              const PeBindingView& bindings,
                              const PeDrawParams& params,
+                             bool forceFullSnapshot,
                              PeSparseScratch& scratch,
                              SparseStateV2Input& out) noexcept {
+  if (!validRecordType(params, "addChunkContextSections")) {
+    return false;
+  }
+  // Snapshot mode: buildSparseStateV2 already emitted all 16 stream sections,
+  // null unbinds included, and legacy's add-only mask semantics left an all-ones
+  // mask untouched here. The rebuild below is a REPLACEMENT, so running it under
+  // snapshot silently drops every bound-but-retained-and-clean slot and every
+  // null unbind -- pinned by the differential's "draw under snapshot keeps every
+  // stream section" fixture (legacy 2396 bytes / 3 handles against a rebuilt
+  // 1916 / 2). The emitted set is already a superset of anything retention could
+  // add, so there is nothing to do.
+  const bool snapshot = forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
   // Streams: dirty, OR bound and not yet retained by this chunk. One ascending
   // pass so the section order is correct by construction.
   std::size_t streamCount = 0;
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+  for (std::uint32_t slot = 0; !snapshot && slot < D9C_DRAW_PACKET_MAX_STREAMS;
+       ++slot) {
     const bool dirty = (shadow.pendingStreamMask & (1u << slot)) != 0u;
     const bool bound = bindings.streams[slot].buffer.object != nullptr;
     const bool retained = (chunk.retainedStreamMask & (1u << slot)) != 0u;
@@ -466,7 +519,9 @@ bool addChunkContextSections(const PeChunkContext& chunk,
     entry.wire.frequency = 0u;
     entry.object = bindings.streams[slot].buffer;
   }
-  out.streams = std::span(scratch.streams).first(streamCount);
+  if (!snapshot) {
+    out.streams = std::span(scratch.streams).first(streamCount);
+  }
 
   // Index buffer: INDEXED RECORDS ONLY. A non-indexed draw has no index
   // binding at all -- the legacy packet's ibValid field lives on
@@ -477,38 +532,6 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   // Three independent reasons, matching production's two sites. The third
   // clause is the retention leg; without it the chunk can end up replaying a
   // draw against a buffer it never retained.
-  //
-  // Fail loudly on an unstamped recordType instead of silently deciding "not
-  // indexed". D9C_COMMAND_RECORD_* starts at 1, so 0 is never a real record.
-  // This is not hypothetical: the first wiring of the draw call sites reached
-  // here with recordType == 0, because the device forwarder stamped it onto a
-  // by-value copy of params. The rebuild below then WIPED the index section
-  // buildSparseStateV2 had already emitted for pendingIb, and since SetIndices
-  // records nothing standalone in chunk mode, every indexed draw replayed
-  // against a stale index buffer -- GT1 rendered sliver triangles with garbled
-  // HUD digits while the harness still reported status=pass. The offline
-  // differential passed byte-equality throughout, because its fixtures stamp
-  // params themselves and so never reproduce the device's threading of it.
-  // Refusing the record (the caller turns this into D3DERR_INVALIDCALL) beats
-  // rendering garbage. Release-safe rather than DXMT_ASSERT-only: every lane
-  // that runs under Wine is a release build (b_ndebug=if-release), which is
-  // exactly the configuration where this manifested.
-  if (params.recordType == 0u) {
-    static bool reported = false;
-    if (!reported) {
-      reported = true;
-      dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-pe",
-                        "addChunkContextSections: params.recordType is 0. The "
-                        "caller did not stamp it, so the index-buffer section "
-                        "would be suppressed and every indexed draw would "
-                        "replay against a stale index buffer.");
-    }
-    // Deliberately no DXMT_ASSERT: the native build is debugoptimized with
-    // b_ndebug=if-release, so an assert here is LIVE and would abort the very
-    // test that pins this guard. A testable hard failure beats an abort that
-    // only exists in the configuration that never sees the bug.
-    return false;
-  }
   // DRAW_INDEXED_PRIMITIVE only -- deliberately NOT the _UP variant. An
   // indexed-UP draw carries its indices inline in the record payload and binds
   // no index buffer, and the shim proves it: appendLegacySparseRecord sets its

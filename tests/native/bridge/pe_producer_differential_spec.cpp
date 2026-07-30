@@ -416,8 +416,8 @@ LaneResult runDirectDrawLane(const Fixture& fixture) {
     return LaneResult{};
   }
   if (!pe::addChunkContextSections(fixture.chunk, fixture.shadow,
-                                   fixture.bindings, fixture.params, scratch,
-                                   state)) {
+                                   fixture.bindings, fixture.params,
+                                   fixture.forceFullSnapshot, scratch, state)) {
     return LaneResult{};
   }
   const bool ok =
@@ -1051,11 +1051,57 @@ void upIndexedDrawUnderFullSnapshot() {
   requireLanesAgree(f);
 }
 
-void randomizedApplyStateSequences() {
+// --- draw records under forceFullSnapshot ----------------------------------
+//
+// The composition no named fixture covered before: a non-UP draw (so the chunk
+// context step runs) in snapshot mode (so buildSparseStateV2 emitted all 16
+// stream sections including null unbinds). Legacy's
+// populateDrawPacketStreamDependencies only ever ADDED mask bits, so an all-ones
+// snapshot mask survived it untouched.
+void snapshotDrawKeepsEveryStreamSection() {
+  Fixture f = baseDraw("draw under snapshot keeps every stream section",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.forceFullSnapshot = true;
+  // Bound, retained by the destination chunk, and NOT dirty: the exact slot the
+  // context step's rebuild would drop.
+  f.shadow.pendingStreamMask = 0u;
+  f.chunk.retainedStreamMask = 0x1u;
+  requireLanesAgree(f);
+}
+
+void snapshotIndexedDrawKeepsEveryStreamSection() {
+  Fixture f = baseDraw("indexed draw under snapshot keeps every stream section",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.forceFullSnapshot = true;
+  f.params.minVertex = 4u;
+  f.params.numVertices = 64u;
+  f.shadow.pendingStreamMask = 0u;
+  f.chunk.retainedStreamMask = 0x1u;
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.chunk.indexBufferKnown = false;
+  requireLanesAgree(f);
+}
+
+// Randomized corpus over EVERY migrated record type, not just APPLY_STATE.
+// The record type, the chunk context, and forceFullSnapshot are all drawn from
+// the rng, because the defects this migration actually produced lived in the
+// cross-product -- an unstamped record type, and a snapshot draw whose chunk
+// context rebuilt the stream set -- and no single-axis fixture reaches those.
+void randomizedRecordSequences() {
+  static const std::uint32_t kRecordTypes[] = {
+      D9C_COMMAND_RECORD_APPLY_STATE,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+  };
   std::mt19937 rng(0xD9C0DEu);  // pinned: CI must be deterministic
   for (int iteration = 0; iteration < 256; ++iteration) {
     Fixture f;
-    f.name = "randomized applystate " + std::to_string(iteration);
+    const std::uint32_t recordType =
+        kRecordTypes[rng() % (sizeof(kRecordTypes) / sizeof(kRecordTypes[0]))];
+    f.name = "randomized record " + std::to_string(iteration) + " type " +
+             std::to_string(recordType);
     const std::uint32_t stateCount =
         rng() % D9C_DRAW_PACKET_MAX_RENDER_STATES;
     for (std::uint32_t k = 0; k < stateCount; ++k) {
@@ -1074,7 +1120,40 @@ void randomizedApplyStateSequences() {
     f.shadow.pendingFvf = (rng() & 1u) != 0u;
     f.bindings.vdecl = publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
     f.shadow.lightEnableShadow = rng() & 0xFFu;
-    f.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+    f.params.recordType = recordType;
+    f.forceFullSnapshot = (rng() & 1u) != 0u;
+    // Draw scalars. Kept small and valid so primitiveVertexCount and the byte
+    // math stay in range; the point of the loop is state/context breadth.
+    f.params.primitiveType = 4u;  // D3DPT_TRIANGLELIST
+    f.params.primitiveCount = 1u + rng() % 8u;
+    f.params.startVertex = rng() % 64u;
+    f.params.baseVertex = static_cast<std::int32_t>(rng() % 128u) - 64;
+    f.params.minVertex = rng() % 16u;
+    f.params.numVertices = 1u + rng() % 64u;
+    f.params.startIndex = rng() % 32u;
+    f.params.stride = 4u * (1u + rng() % 8u);
+    f.params.indexFormat = (rng() & 1u) ? 101u : 102u;  // INDEX16 / INDEX32
+    // Chunk context: every leg of the retention predicates, independently.
+    f.chunk.retainedStreamMask =
+        rng() & ((1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u);
+    f.chunk.indexBufferKnown = (rng() & 1u) != 0u;
+    f.chunk.indexBufferRetained = (rng() & 1u) != 0u;
+    // Half the time claim the SAME index buffer the bindings hold, so the
+    // "known and unchanged" leg actually fires rather than always differing.
+    f.chunk.submittedIndexBufferWire =
+        (rng() & 1u) ? d9cWireHandleValue(toWireHandle(&ib0)) : (rng() | 1u);
+    f.shadow.pendingIb = (rng() & 1u) != 0u;
+    f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    if (isUpRecord(recordType)) {
+      // UP records carry geometry inline. Vary the payload sizes, including
+      // empty, and keep them consistent for both lanes.
+      f.payloads.upVertex = std::span<const std::byte>(
+          upVertexBytes.data(), (rng() % (upVertexBytes.size() + 1u)) & ~3u);
+      if (recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
+        f.payloads.upIndex = std::span<const std::byte>(
+            upIndexBytes.data(), (rng() % (upIndexBytes.size() + 1u)) & ~3u);
+      }
+    }
     f.shadow.pendingViewport = (rng() & 1u) != 0u;
     f.shadow.pendingScissor = (rng() & 1u) != 0u;
     f.shadow.pendingMaterial = (rng() & 1u) != 0u;
@@ -1144,7 +1223,9 @@ int main() {
     upIndexedDrawIgnoresDirtyIndexBuffer();
     upDrawUnderFullSnapshot();
     upIndexedDrawUnderFullSnapshot();
-    randomizedApplyStateSequences();
+    snapshotDrawKeepsEveryStreamSection();
+    snapshotIndexedDrawKeepsEveryStreamSection();
+    randomizedRecordSequences();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()
               << "\n";

@@ -9371,7 +9371,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 // record actually lands in.
                 if (!dxmt9::d3d9::pe::addChunkContextSections(
                         currentChunkContext(), peState_, peBindingView_, params,
-                        peSparseScratch_, peSparseState_)) {
+                        /*forceFullSnapshot=*/false, peSparseScratch_,
+                        peSparseState_)) {
                     return D3DERR_INVALIDCALL;
                 }
                 const auto t0 = AppendPhaseTimer::now();
@@ -9425,7 +9426,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 const AppendPhaseTimer& phase) -> HRESULT {
                 if (!dxmt9::d3d9::pe::addChunkContextSections(
                         currentChunkContext(), peState_, peBindingView_, params,
-                        peSparseScratch_, peSparseState_)) {
+                        /*forceFullSnapshot=*/false, peSparseScratch_,
+                        peSparseState_)) {
                     return D3DERR_INVALIDCALL;
                 }
                 indexSectionEmitted = !peSparseState_.indexBuffers.empty();

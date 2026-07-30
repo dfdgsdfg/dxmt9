@@ -146,7 +146,8 @@ void unstampedRecordTypeIsRefused() {
 
   pe::PeDrawParams unstamped{};  // recordType stays 0
   check(!pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                     unstamped, scratch, out),
+                                     unstamped, /*forceFullSnapshot=*/false,
+                                     scratch, out),
         "an unstamped recordType must be refused, not treated as non-indexed");
 }
 
@@ -172,7 +173,8 @@ void indexedDrawKeepsItsIndexSection() {
   pe::PeDrawParams indexed{};
   indexed.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                    indexed, scratch, out),
+                                    indexed, /*forceFullSnapshot=*/false,
+                                    scratch, out),
         "an indexed draw with a dirty IB must succeed");
   check(out.indexBuffers.size() == 1,
         "an indexed draw with a dirty IB must keep its index section");
@@ -184,7 +186,8 @@ void indexedDrawKeepsItsIndexSection() {
   pe::PeDrawParams nonIndexed{};
   nonIndexed.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
   check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,
-                                    nonIndexed, scratch, nonIndexedOut),
+                                    nonIndexed, /*forceFullSnapshot=*/false,
+                                    scratch, nonIndexedOut),
         "a non-indexed draw must succeed");
   check(nonIndexedOut.indexBuffers.empty(),
         "a non-indexed draw must carry no index section");
