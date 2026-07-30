@@ -234,8 +234,5 @@ bool appendReszDepthResolveV2(CommandChunkV2Builder& builder,
                               const PeWireObjectRef& msaaDepth,
                               const PeWireObjectRef& intzDest) noexcept;
 
-bool appendLegacyCommandRecordAsV2(
-    CommandChunkV2Builder& builder,
-    std::span<const std::byte> recordBytes) noexcept;
 
 }  // namespace dxmt9::d3d9::pe

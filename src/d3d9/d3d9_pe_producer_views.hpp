@@ -20,7 +20,6 @@
 // CommandChunkV2Builder so a native differential test can drive it.
 
 #include "d3d9_pe_chunk_v2_builder.hpp"
-#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_v2_schema.hpp"
 #include "dxmt9/device_c.h"
@@ -32,6 +31,14 @@
 #include <tuple>
 
 namespace dxmt9::d3d9::pe {
+
+// Per-render-target "was this slot explicitly set" flags. A bool array rather
+// than a bitmask, matching the device's currentRtExplicitMask(). This lived in
+// d3d9_pe_draw_packet.hpp until Task 10 deleted that header: it was the only
+// declaration there that outlived the fat packet, and it belongs next to the
+// PeBindingView field that holds it.
+using PeRtExplicitMask =
+    std::array<bool, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>;
 
 // The wire form of the device's streamSrc_ / streamOff_ / streamStr_ triple.
 struct PeStreamBinding {

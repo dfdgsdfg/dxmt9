@@ -2,27 +2,26 @@
 
 // The PE draw-packet / sparse-state producer.
 //
-// buildDrawPacketFromViews is d3d9_pe_device.cpp's former
-// buildDrawPrimitivePacket, rehosted here against explicit POD inputs so it
-// compiles and runs on a native host. Its body is unchanged: member accesses
-// became parameter accesses, and the COM-to-wire translation the device used to
-// do inline now happens when the device fills PeBindingView.
+// buildSparseStateV2 is the PE recorder's sole state producer: it reads the
+// hot-state shadow, the constant shadow, the binding view and the draw payloads,
+// and fills a SparseStateV2Input plus the record's draw header. addChunkContextSections
+// then adds the sections that depend on what the DESTINATION chunk already
+// retains, which is why it is separate -- that input is not available until
+// after the capacity precheck has sealed the previous chunk.
 //
-// It is a pure read of {shadow, bindings}: no instrumentation, no side effects,
-// and it does NOT clear pending bits -- callers do that on success. The
-// DXMT9_PE_STATS_DECIMATION `draw_packet` scope stays on the device side, in
-// the forwarder, because that scope historically covered the COM-to-wire
-// binding translation too. Timing only this function would quietly shrink the
-// measured figure while the real work moved outside it.
-//
-// Being side-effect-free also means the differential test can call it without
-// controlling for instrumentation state.
+// buildSparseStateV2 is a pure read of its inputs apart from draining the
+// constant shadow's dirty ranges when asked to fold them inline. It does NOT
+// clear pending hot-state bits; callers do that on success. The
+// DXMT9_PE_STATS_DECIMATION `draw_packet` scope stays on the device side, in the
+// forwarder, because that scope historically covered the COM-to-wire binding
+// translation too. Timing only this function would quietly shrink the measured
+// figure while the real work moved outside it.
 //
 // Why this is a separate translation unit: d3d9_pe_device.cpp includes
-// windows.h and d3d9.h, so no meson test can compile it. Moving the producer
-// out is what lets a native differential test call the real function instead of
-// mirroring it, which is the whole gate for the later rewrite. See
-// docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §4.
+// windows.h and d3d9.h, so no meson test can compile it. Moving the producer out
+// is what lets native tests call the real function instead of mirroring it --
+// which is how the golden corpus in pe_producer_differential_spec can be trusted.
+// See docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §4.
 
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -101,12 +100,5 @@ bool addChunkContextSections(const PeChunkContext& chunk,
                              PeSparseScratch& scratch,
                              SparseStateV2Input& out) noexcept;
 
-bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
-                const PeBindingView& bindings,
-                std::uint32_t primitiveType,
-                std::uint32_t startVertex,
-                std::uint32_t primitiveCount,
-                bool forceFullSnapshot,
-                D9CDrawPrimitivePacket& packet) noexcept;
 
 }  // namespace dxmt9::d3d9::pe

@@ -13,14 +13,20 @@ pe_retainer_spec = executable(
 test('dxmt9-pe-retainer-spec', pe_retainer_spec)
 
 # Regression guard for DXMT9_PE_DRAW_FULL_SNAPSHOT (Phase 16 debug knob).
-# Proves that the delta-mode packet stream and the full-snapshot-mode
-# packet stream produce identical unix-side effective state for
-# representative D3D9 draw scenarios. See header comment in the spec
-# source for the equivalence claim and the modelling boundary.
+# Runs the real producer in both modes over identical inputs and proves the
+# snapshot record is self-contained and the delta record is a subset of it. See
+# the header comment in the spec source for what this covers, and for what the
+# earlier mirror-based version covered that this does not.
 pe_full_snapshot_equivalence_spec = executable(
   'dxmt9-pe-full-snapshot-equivalence-spec',
-  'pe_full_snapshot_equivalence_spec.cpp',
-  include_directories: dxmt9_inc,
+  [
+    'pe_full_snapshot_equivalence_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )

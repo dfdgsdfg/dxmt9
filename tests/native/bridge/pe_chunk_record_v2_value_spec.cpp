@@ -1,6 +1,5 @@
 #include "d3d9_pe_chunk_v2_builder.hpp"
 #include "d3d9_pe_const_shadow.hpp"
-#include "d3d9_pe_draw_packet.hpp"
 #include "device_c_chunk_v2_validate.hpp"
 
 #include <algorithm>
@@ -620,52 +619,14 @@ void testSparseDrawAndApplyProducerMatrix() {
         "noncanonical sparse input rolls back transactionally");
 }
 
-void testPeStateStagingFeedsV2Producer() {
-  constexpr std::uint64_t kStream0 = 0x2122232425262728ull;
-  constexpr std::uint64_t kStream1 = 0x3132333435363738ull;
-  constexpr std::uint64_t kRt0 = 0x7172737475767778ull;
-  constexpr std::uint64_t kRt3 = 0x8182838485868788ull;
-
-  D9CDrawPrimitivePacket packet{};
-  dxmt9::d3d9::pe::PeRtWireHandles rtHandles{};
-  rtHandles[0] = wireHandle(kRt0);
-  rtHandles[3] = wireHandle(kRt3);
-  dxmt9::d3d9::pe::populateDrawPacketAttachmentDelta(
-      packet, (1u << 0u) | (1u << 1u) | (1u << 3u), rtHandles, true,
-      D9CWireHandle{});
-  check(packet.rtMask == ((1u << 0u) | (1u << 1u) | (1u << 3u)) &&
-            packet.rtHandles[0].lo == wireHandle(kRt0).lo &&
-            packet.rtHandles[1].lo == 0u && packet.dsValid == 1u,
-        "attachment staging preserves slots and explicit nulls");
-
-  dxmt9::d3d9::pe::PeStreamSources streams{};
-  streams[0] = D9CDrawPacketStreamSource{
-      .buffer = wireHandle(kStream0), .offset = 4u, .stride = 24u};
-  streams[1] = D9CDrawPacketStreamSource{
-      .buffer = wireHandle(kStream1), .offset = 8u, .stride = 32u};
-  dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(packet, streams, 0u);
-  check((packet.streamSourceMask & 3u) == 3u &&
-            packet.streamSources[0].offset == 4u &&
-            packet.streamSources[1].stride == 32u,
-        "first staged draw checkpoints its stream dependencies");
-
-  D9CDrawPrimitivePacket repeated{};
-  dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(
-      repeated, streams, (1u << 0u) | (1u << 1u));
-  check(repeated.streamSourceMask == 0u,
-        "retained streams stay absent from later staged draws");
-
-  D9CDrawIndexedPrimitivePacket indexed{};
-  indexed.ibHandle = wireHandle(kStream0);
-  dxmt9::d3d9::pe::populateDrawPacketIndexDependency(indexed, false);
-  check(indexed.ibValid == 1u,
-        "first indexed draw checkpoints its index dependency");
-  D9CDrawIndexedPrimitivePacket indexedRepeated{};
-  indexedRepeated.ibHandle = wireHandle(kStream0);
-  dxmt9::d3d9::pe::populateDrawPacketIndexDependency(indexedRepeated, true);
-  check(indexedRepeated.ibValid == 0u,
-        "retained index dependency stays absent from later draws");
-}
+// testPeStateStagingFeedsV2Producer lived here. It tested only the fat-packet
+// staging helpers (populateDrawPacketAttachmentDelta / ...StreamDependencies /
+// ...IndexDependency), which Task 10 deleted along with the format they staged.
+// The properties it asserted did not disappear with it: "retained streams stay
+// absent from later staged draws" and "the first indexed draw checkpoints its
+// index dependency" are now addChunkContextSections' contract, covered by
+// pe_producer_differential_spec's stream-retention and six index-buffer fixtures,
+// which exercise the real production path rather than a staging helper.
 
 void testConstShadowFeedsV2ConstantSections() {
   const std::array<float, 8> values{
@@ -712,7 +673,6 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
-    testPeStateStagingFeedsV2Producer();
     testConstShadowFeedsV2ConstantSections();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_v2_value_spec failed: " << error.what()

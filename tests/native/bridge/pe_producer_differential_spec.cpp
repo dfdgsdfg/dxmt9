@@ -20,7 +20,6 @@
 #include "d3d9_pe_chunk_v2_builder.hpp"
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_const_shadow.hpp"
-#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
@@ -203,95 +202,9 @@ pe::PeSparseScratch& sharedScratch() {
   return scratch;
 }
 
-// PeStreamSources as currentDrawStreamSources() builds it: wire handle plus
-// offset and stride per slot. A translation of the view, not a reimplementation
-// of any decision.
-pe::PeStreamSources streamSourcesFrom(const pe::PeBindingView& bindings) {
-  pe::PeStreamSources sources{};
-  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    sources[slot].buffer = toWireHandle(bindings.streams[slot].buffer.object);
-    sources[slot].offset = bindings.streams[slot].offset;
-    sources[slot].stride = bindings.streams[slot].stride;
-  }
-  return sources;
-}
-
 bool isUpRecord(std::uint32_t type) {
   return type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP ||
          type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
-}
-
-// The real legacy UP path. Two things differ from the buffer-backed draws and
-// both are load-bearing:
-//   - No chunk-dependency checkpoint. UP draws carry their geometry inline, so
-//     neither populateDrawPacketStreamDependencies nor
-//     populateDrawPacketIndexDependency ran at these call sites, and the shim
-//     leaves its `indexed` pointer null for UP records -- so an indexed-UP
-//     record gets NO index-buffer section however dirty the IB shadow is.
-//   - The payload rides after the record: index bytes then vertex bytes, at the
-//     offsets the header declares.
-// inlineConstDelta is not modelled: production's UP sites always flush pending
-// constants first and never fold, and the UP const-delta base depends on the
-// payload offsets, so a folded UP fixture would test a shape production cannot
-// emit.
-LaneResult runLegacyUpLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
-  D9CDrawPrimitivePacket packet{};
-  if (!pe::buildDrawPacketFromViews(
-          fixture.shadow, fixture.bindings, fixture.params.primitiveType,
-          /*startVertex=*/0u, fixture.params.primitiveCount,
-          fixture.forceFullSnapshot, packet)) {
-    return LaneResult{};
-  }
-  const auto indexBytes =
-      static_cast<std::uint32_t>(fixture.payloads.upIndex.size());
-  const auto vertexBytes =
-      static_cast<std::uint32_t>(fixture.payloads.upVertex.size());
-  std::vector<std::byte> recordBytes;
-  if (fixture.params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
-    D9CCommandRecordDrawIndexedPrimitiveUP record{};
-    record.header.type = fixture.params.recordType;
-    record.packet.state = packet;
-    record.packet.minVertex = fixture.params.minVertex;
-    record.packet.numVertices = fixture.params.numVertices;
-    record.packet.primitiveCount = fixture.params.primitiveCount;
-    record.packet.indexFormat = fixture.params.indexFormat;
-    record.packet.stride = fixture.params.stride;
-    record.packet.indexDataOffset = sizeof(record);
-    record.packet.indexDataSize = indexBytes;
-    record.packet.vertexDataOffset = record.packet.indexDataOffset + indexBytes;
-    record.packet.vertexDataSize = vertexBytes;
-    record.header.size = static_cast<std::uint32_t>(sizeof(record)) +
-                         indexBytes + vertexBytes;
-    recordBytes.resize(record.header.size);
-    std::memcpy(recordBytes.data(), &record, sizeof(record));
-    if (indexBytes != 0u) {
-      std::memcpy(recordBytes.data() + record.packet.indexDataOffset,
-                  fixture.payloads.upIndex.data(), indexBytes);
-    }
-    if (vertexBytes != 0u) {
-      std::memcpy(recordBytes.data() + record.packet.vertexDataOffset,
-                  fixture.payloads.upVertex.data(), vertexBytes);
-    }
-  } else {
-    D9CCommandRecordDrawPrimitiveUP record{};
-    record.header.type = fixture.params.recordType;
-    record.packet.state = packet;
-    record.packet.primitiveCount = fixture.params.primitiveCount;
-    record.packet.stride = fixture.params.stride;
-    record.packet.vertexDataOffset = sizeof(record);
-    record.packet.vertexDataSize = vertexBytes;
-    record.header.size =
-        static_cast<std::uint32_t>(sizeof(record)) + vertexBytes;
-    recordBytes.resize(record.header.size);
-    std::memcpy(recordBytes.data(), &record, sizeof(record));
-    if (vertexBytes != 0u) {
-      std::memcpy(recordBytes.data() + record.packet.vertexDataOffset,
-                  fixture.payloads.upVertex.data(), vertexBytes);
-    }
-  }
-  const bool ok = pe::appendLegacyCommandRecordAsV2(builder, recordBytes);
-  return finishLane(builder, ok);
 }
 
 // The direct UP lane: state build plus payload spans, and NO chunk-context step,
@@ -311,98 +224,6 @@ LaneResult runDirectUpLane(const Fixture& fixture) {
   }
   const bool ok = pe::appendSparseRecordV2(
       builder, fixture.params.recordType, header, state);
-  return finishLane(builder, ok);
-}
-
-bool isIndexedRecord(std::uint32_t type) {
-  return type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
-         type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
-}
-
-// The real legacy DRAW path: fat packet, then the two chunk-dependency helpers
-// the call sites run inside their writer lambda, then serialize and let the shim
-// re-encode. Both helpers are the production free functions from
-// d3d9_pe_draw_packet.hpp -- nothing here reimplements their decisions.
-LaneResult runLegacyDrawLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
-  D9CDrawIndexedPrimitivePacket indexed{};
-  if (!pe::buildDrawPacketFromViews(
-          fixture.shadow, fixture.bindings, fixture.params.primitiveType,
-          fixture.params.startVertex, fixture.params.primitiveCount,
-          fixture.forceFullSnapshot, indexed.state)) {
-    return LaneResult{};
-  }
-  // The inline-const fold, as the draw sites run it, into the fat packet.
-  std::vector<std::uint8_t> constPayload(64u * 1024u);
-  std::uint32_t constPayloadBytes = 0u;
-  if (fixture.inlineConstDelta) {
-    PeConstShadowBlock constants = fixture.constants;
-    ConstShadow* shadows[6] = {&constants.vsConstF, &constants.vsConstI,
-                               &constants.vsConstB, &constants.psConstF,
-                               &constants.psConstI, &constants.psConstB};
-    const std::size_t elemSizes[6] = {16u, 16u, 4u, 16u, 16u, 4u};
-    for (std::uint32_t kind = 0; kind < 6u; ++kind) {
-      if (!foldConstShadowIntoDeltaSection(
-              *shadows[kind], kind, elemSizes[kind],
-              indexed.state.constDeltaSections[kind], constPayload.data(),
-              constPayload.size(), constPayloadBytes)) {
-        return LaneResult{};
-      }
-    }
-  }
-  indexed.baseVertex = fixture.params.baseVertex;
-  indexed.minVertex = fixture.params.minVertex;
-  indexed.numVertices = fixture.params.numVertices;
-  indexed.startIndex = fixture.params.startIndex;
-  indexed.primitiveCount = fixture.params.primitiveCount;
-
-  const bool indexedDraw = isIndexedRecord(fixture.params.recordType);
-  const auto sources = streamSourcesFrom(fixture.bindings);
-  if (indexedDraw) {
-    indexed.ibHandle = toWireHandle(fixture.bindings.indexBuffer.object);
-    const std::uint64_t ibWire = d9cWireHandleValue(indexed.ibHandle);
-    indexed.ibValid = (fixture.shadow.pendingIb ||
-                       !fixture.chunk.indexBufferKnown ||
-                       fixture.chunk.submittedIndexBufferWire != ibWire)
-                          ? 1u
-                          : 0u;
-  }
-  // The two append-time dependency checkpoints, production code.
-  pe::populateDrawPacketStreamDependencies(indexed.state, sources,
-                                           fixture.chunk.retainedStreamMask);
-  if (indexedDraw) {
-    pe::populateDrawPacketIndexDependency(indexed,
-                                          fixture.chunk.indexBufferRetained);
-  }
-
-  std::vector<std::byte> recordBytes;
-  if (indexedDraw) {
-    D9CCommandRecordDrawIndexedPrimitive record{};
-    record.header.type = fixture.params.recordType;
-    record.packet = indexed;
-    record.header.size = static_cast<std::uint32_t>(sizeof(record) +
-                                                    constPayloadBytes);
-    recordBytes.resize(record.header.size);
-    std::memcpy(recordBytes.data(), &record, sizeof(record));
-    if (constPayloadBytes != 0u) {
-      std::memcpy(recordBytes.data() + sizeof(record), constPayload.data(),
-                  constPayloadBytes);
-    }
-  } else {
-    D9CCommandRecordDrawPrimitive record{};
-    record.header.type = fixture.params.recordType;
-    record.packet = indexed.state;
-    record.packet.primitiveCount = fixture.params.primitiveCount;
-    record.header.size = static_cast<std::uint32_t>(sizeof(record) +
-                                                    constPayloadBytes);
-    recordBytes.resize(record.header.size);
-    std::memcpy(recordBytes.data(), &record, sizeof(record));
-    if (constPayloadBytes != 0u) {
-      std::memcpy(recordBytes.data() + sizeof(record), constPayload.data(),
-                  constPayloadBytes);
-    }
-  }
-  const bool ok = pe::appendLegacyCommandRecordAsV2(builder, recordBytes);
   return finishLane(builder, ok);
 }
 
@@ -427,29 +248,6 @@ LaneResult runDirectDrawLane(const Fixture& fixture) {
   const bool ok =
       pe::appendSparseRecordV2(builder, fixture.params.recordType, header,
                                state);
-  return finishLane(builder, ok);
-}
-
-// The real legacy path for APPLY_STATE: build the fat packet, serialize it as
-// a legacy record, and let the shim re-parse and re-encode it. chunkBarrierFlush
-// applies no chunk-context step and no constant folding, so neither appears
-// here.
-LaneResult runLegacyLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
-  D9CDrawPrimitivePacket packet;
-  if (!pe::buildDrawPacketFromViews(
-          fixture.shadow, fixture.bindings, fixture.params.primitiveType,
-          fixture.params.startVertex, fixture.params.primitiveCount,
-          fixture.forceFullSnapshot, packet)) {
-    return LaneResult{};
-  }
-  D9CCommandRecordApplyState record{};
-  record.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-  record.header.size = sizeof(record);
-  record.packet = packet;
-  std::vector<std::byte> recordBytes(sizeof(record));
-  std::memcpy(recordBytes.data(), &record, sizeof(record));
-  const bool ok = pe::appendLegacyCommandRecordAsV2(builder, recordBytes);
   return finishLane(builder, ok);
 }
 
@@ -604,79 +402,33 @@ void requireMatchesGolden(const std::string& name, const LaneResult& direct) {
             shape(want) + "\n    actual: " + shape(actual));
 }
 
-void requireLanesAgree(const Fixture& f) {
+// The legacy lane is gone with the shim (Task 10 stage C), so this no longer
+// compares two producers -- it pins one against goldens that a passing
+// differential certified as legacy-equivalent at capture time (`043d101a`).
+// The name stays: the corpus, the fixtures, and the property they encode are the
+// same, and renaming it would detach the goldens from the history that gives them
+// their meaning.
+void requirePinnedOutput(const Fixture& f) {
   const bool draw = f.params.recordType != D9C_COMMAND_RECORD_APPLY_STATE &&
                     f.params.recordType != 0u;
   const bool up = isUpRecord(f.params.recordType);
-  const LaneResult legacy = up ? runLegacyUpLane(f)
-                               : (draw ? runLegacyDrawLane(f)
-                                       : runLegacyLane(f));
   const LaneResult direct = up ? runDirectUpLane(f)
                                : (draw ? runDirectDrawLane(f)
                                        : runDirectLane(f));
-  check(legacy.ok == direct.ok, f.name + ": lanes must agree on success");
-  // Pin the direct lane whether or not the legacy lane succeeded, so a fixture
-  // that legitimately fails both stays pinned as failing.
   requireMatchesGolden(f.name, direct);
-  if (!legacy.ok) {
-    return;  // both failed; failure reasons may legitimately differ
-  }
-  const auto shape = [](const LaneResult& r) {
-    return "bytes=" + std::to_string(r.bytes.size()) +
-           " records=" + std::to_string(r.recordCount) +
-           " handles=" + std::to_string(r.handleCount) +
-           " payload=" + std::to_string(r.payloadBytes) +
-           " retained=" + std::to_string(r.retainedObjectCount);
-  };
-  check(legacy.bytes.size() == direct.bytes.size(),
-        f.name + ": chunk byte length must match\n    legacy: " +
-            shape(legacy) + "\n    direct: " + shape(direct));
-  if (std::memcmp(legacy.bytes.data(), direct.bytes.data(),
-                  legacy.bytes.size()) != 0) {
-    std::size_t at = 0;
-    while (at < legacy.bytes.size() && legacy.bytes[at] == direct.bytes[at]) {
-      ++at;
-    }
-    std::string dump = f.name + ": chunk bytes must be identical; first differ at byte " +
-                       std::to_string(at) + "\n    legacy:";
-    for (std::size_t k = at; k < legacy.bytes.size() && k < at + 24; ++k) {
-      char buf[8];
-      std::snprintf(buf, sizeof(buf), " %02x",
-                    static_cast<unsigned>(std::to_integer<std::uint8_t>(legacy.bytes[k])));
-      dump += buf;
-    }
-    dump += "\n    direct:";
-    for (std::size_t k = at; k < direct.bytes.size() && k < at + 24; ++k) {
-      char buf[8];
-      std::snprintf(buf, sizeof(buf), " %02x",
-                    static_cast<unsigned>(std::to_integer<std::uint8_t>(direct.bytes[k])));
-      dump += buf;
-    }
-    check(false, dump);
-  }
-  check(legacy.recordCount == direct.recordCount,
-        f.name + ": record count must match");
-  check(legacy.handleCount == direct.handleCount,
-        f.name + ": handle count must match");
-  check(legacy.payloadBytes == direct.payloadBytes,
-        f.name + ": payload bytes must match");
-  check(legacy.retainedObjectCount == direct.retainedObjectCount,
-        f.name + ": retained object count must match");
 }
-
-// --- deterministic corpus --------------------------------------------------
 
 void emptyDelta() {
   Fixture f;
   f.name = "empty delta";
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void singleRenderStateDirty() {
   Fixture f;
   f.name = "one render state dirty";
   f.shadow.pendingRenderStates.set(7u, 1u);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void scalarCategoriesDirty() {
@@ -687,7 +439,7 @@ void scalarCategoriesDirty() {
   f.shadow.pendingMaterial = true;
   f.shadow.viewportShadow = D9CViewport{0u, 0u, 640u, 480u, 0.0f, 1.0f};
   f.shadow.scissorShadow = D9CRect{1, 2, 3, 4};
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void everyCategoryDirty() {
@@ -717,7 +469,7 @@ void everyCategoryDirty() {
   f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
   f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
   f.bindings.fvf = 0x142u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void attachmentsDirty() {
@@ -728,7 +480,7 @@ void attachmentsDirty() {
   f.bindings.renderTargets[0] =
       publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
   f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void renderStatesAtCap() {
@@ -738,10 +490,10 @@ void renderStatesAtCap() {
        ++slot) {
     f.shadow.pendingRenderStates.set(slot, slot + 1u);
   }
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
-void renderStatesOverCapFailBothLanes() {
+void renderStatesOverCapFails() {
   Fixture f;
   f.name = "render states over cap";
   // The pending table holds kPeRenderStateSlots (256) slots while the V2
@@ -751,22 +503,31 @@ void renderStatesOverCapFailBothLanes() {
        ++slot) {
     f.shadow.pendingRenderStates.set(slot, slot + 1u);
   }
-  check(!runLegacyLane(f).ok, "over-cap must fail on the legacy lane");
-  check(!runDirectLane(f).ok, "over-cap must fail on the direct lane");
+  // Over-cap must be refused, never silently truncated -- a truncated section
+  // would drop render states the app set.
+  check(!runDirectLane(f).ok, "over-cap must fail");
 }
 
-void unpublishedHandleFailsLegacyLane() {
+// This used to assert an asymmetry: the legacy lane resolved packet handles
+// through lookupCachedWireObjectRef and failed on an unpublished ref, while the
+// direct lane holds the wrapper and can succeed. With the legacy lane gone, only
+// the surviving half is assertable -- so pin that half explicitly rather than
+// deleting the case and losing the record that the producer tolerates a bound
+// but unpublished texture.
+void unpublishedHandleStillEncodes() {
   Fixture f;
   f.name = "texture bound but never published";
   f.shadow.pendingTextureMask = 0x1u;
   f.bindings.textures[0] =
       unpublishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
-  // The legacy lane resolves packet handles through lookupCachedWireObjectRef
-  // and must fail. The direct lane holds the wrapper ref and can legitimately
-  // succeed, so this asserts the observed asymmetry rather than assuming the
-  // lanes agree: only conditions BOTH lanes can see are required to match.
-  check(!runLegacyLane(f).ok,
-        "an unpublished handle must fail the legacy lane's cache lookup");
+  // Deliberately NOT goldened. The legacy lane failed on this input by design, so
+  // it never produced bytes here and there is no legacy-equivalent sequence to
+  // certify. A golden captured now would be indistinguishable from the 291
+  // certified ones while carrying none of their authority, which is worse than no
+  // golden at all. Assert the property that survives: it encodes.
+  check(runDirectLane(f).ok,
+        "the producer holds the wrapper ref and must still encode an "
+        "unpublished handle");
 }
 
 void fullSnapshotMode() {
@@ -789,7 +550,7 @@ void fullSnapshotMode() {
         publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
   }
   f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // The FULL_SNAPSHOT draw flag is derived inside the shim being deleted, from
@@ -809,7 +570,7 @@ void allSlotsDirtyTriggersSnapshotFlagHeuristic() {
     f.bindings.streams[i].buffer =
         publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   }
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 
@@ -826,13 +587,13 @@ void fvfOnlyAfterDeclaration() {
     decl.shadow.pendingVdecl = true;
     decl.bindings.vdecl =
         publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
-    requireLanesAgree(decl);
+    requirePinnedOutput(decl);
   }
   Fixture f;
   f.name = "FVF only, after a declaration build (stale-scratch guard)";
   f.shadow.pendingFvf = true;
   f.bindings.fvf = 0x1C4u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // Snapshot mode selects the FULL shadow for the TSS / sampler / transform
@@ -871,7 +632,7 @@ void snapshotDrainsEveryTable() {
         publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
   }
   f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // Distinct objects per slot, so the builder cannot dedupe them to one handle
@@ -885,7 +646,7 @@ void distinctObjectPerTextureSlot() {
     f.bindings.textures[i] =
         publishedRef(&slotTex[i], D9C_CHUNK_HANDLE_KIND_TEXTURE);
   }
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 
@@ -910,7 +671,7 @@ Fixture baseDraw(const char* name, std::uint32_t recordType) {
 void nonIndexedDraw() {
   Fixture f = baseDraw("non-indexed draw", D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.params.startVertex = 32u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void indexedDrawWithBaseVertex() {
@@ -922,7 +683,7 @@ void indexedDrawWithBaseVertex() {
   f.params.startIndex = 12u;
   f.shadow.pendingIb = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void indexedDrawNegativeBaseVertex() {
@@ -931,7 +692,7 @@ void indexedDrawNegativeBaseVertex() {
   f.params.baseVertex = -32;  // int32_t on the wire; must not wrap
   f.shadow.pendingIb = true;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // H2: a stream that is BOUND but neither dirty nor retained must be re-emitted,
@@ -941,7 +702,7 @@ void streamBoundNotDirtyNotRetained() {
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.shadow.pendingStreamMask = 0u;   // not dirty
   f.chunk.retainedStreamMask = 0u;   // not retained
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void streamBoundNotDirtyButRetained() {
@@ -949,7 +710,7 @@ void streamBoundNotDirtyButRetained() {
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.shadow.pendingStreamMask = 0u;
   f.chunk.retainedStreamMask = 0x1u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void streamDirtyAndRetained() {
@@ -957,7 +718,7 @@ void streamDirtyAndRetained() {
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.shadow.pendingStreamMask = 0x1u;
   f.chunk.retainedStreamMask = 0x1u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void multipleStreamsMixedRetention() {
@@ -972,7 +733,7 @@ void multipleStreamsMixedRetention() {
     f.bindings.streams[i].offset = 16u * i;
     f.bindings.streams[i].stride = 32u;
   }
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // H1: the retention leg. Known, unchanged, but NOT retained by this chunk --
@@ -986,7 +747,7 @@ void indexBufferKnownUnchangedNotRetained() {
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
   f.chunk.indexBufferRetained = false;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void indexBufferKnownUnchangedAndRetained() {
@@ -998,7 +759,7 @@ void indexBufferKnownUnchangedAndRetained() {
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
   f.chunk.indexBufferRetained = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void indexBufferChanged() {
@@ -1010,7 +771,7 @@ void indexBufferChanged() {
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(&ib1));  // a different buffer
   f.chunk.indexBufferRetained = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void indexBufferUnknown() {
@@ -1019,7 +780,7 @@ void indexBufferUnknown() {
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   f.shadow.pendingIb = false;
   f.chunk.indexBufferKnown = false;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // The four emit legs overlap, so a fixture that leaves several true cannot tell
@@ -1035,7 +796,7 @@ void indexBufferUnknownButRetained() {
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
   f.chunk.indexBufferRetained = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // Mirror image: pendingIb alone. Known, unchanged, retained -- only the dirty
@@ -1049,7 +810,7 @@ void indexBufferPendingOnly() {
   f.chunk.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
   f.chunk.indexBufferRetained = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // H3: inline-const delta. Each range dirty with a distinct start/count so a
@@ -1079,7 +840,7 @@ void inlineConstDeltaAllSixRanges() {
     spec.shadow->dirtyEnd = spec.shadow->dirtyStart + 2u + (seed % 2u);
     ++seed;
   }
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void inlineConstDeltaSingleRange() {
@@ -1094,7 +855,7 @@ void inlineConstDeltaSingleRange() {
   }
   sh.dirtyStart = 5u;
   sh.dirtyEnd = 9u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // --- fixed-seed randomized corpus -----------------------------------------
@@ -1136,14 +897,14 @@ Fixture baseUpDraw(const char* name, std::uint32_t recordType) {
 void upDrawCarriesVertexPayload() {
   Fixture f = baseUpDraw("UP draw, inline vertex payload",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void upDrawWithDirtyState() {
   Fixture f = baseUpDraw("UP draw, inline payload plus dirty render state",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
   f.shadow.pendingRenderStates.set(7u, 3u);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void upIndexedDrawCarriesBothPayloads() {
@@ -1153,7 +914,7 @@ void upIndexedDrawCarriesBothPayloads() {
   f.params.numVertices = 4u;
   f.params.indexFormat = 101u;  // D3DFMT_INDEX16
   f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // The pin that matters: a dirty IB shadow must NOT produce an index-buffer
@@ -1171,14 +932,14 @@ void upIndexedDrawIgnoresDirtyIndexBuffer() {
   // record type can suppress the section.
   f.chunk.indexBufferKnown = false;
   f.chunk.indexBufferRetained = false;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void upDrawUnderFullSnapshot() {
   Fixture f = baseUpDraw("UP draw under forceFullSnapshot",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
   f.forceFullSnapshot = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void upIndexedDrawUnderFullSnapshot() {
@@ -1189,7 +950,7 @@ void upIndexedDrawUnderFullSnapshot() {
   f.params.indexFormat = 101u;
   f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
   f.forceFullSnapshot = true;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // --- draw records under forceFullSnapshot ----------------------------------
@@ -1207,7 +968,7 @@ void snapshotDrawKeepsEveryStreamSection() {
   // context step's rebuild would drop.
   f.shadow.pendingStreamMask = 0u;
   f.chunk.retainedStreamMask = 0x1u;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 void snapshotIndexedDrawKeepsEveryStreamSection() {
@@ -1220,7 +981,7 @@ void snapshotIndexedDrawKeepsEveryStreamSection() {
   f.chunk.retainedStreamMask = 0x1u;
   f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
   f.chunk.indexBufferKnown = false;
-  requireLanesAgree(f);
+  requirePinnedOutput(f);
 }
 
 // Randomized corpus over EVERY migrated record type, not just APPLY_STATE.
@@ -1322,7 +1083,7 @@ void randomizedRecordSequences() {
     }
     f.bindings.depthStencil = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
     f.bindings.fvf = rng();
-    requireLanesAgree(f);
+    requirePinnedOutput(f);
   }
 }
 
@@ -1337,8 +1098,8 @@ int main() {
     everyCategoryDirty();
     attachmentsDirty();
     renderStatesAtCap();
-    renderStatesOverCapFailBothLanes();
-    unpublishedHandleFailsLegacyLane();
+    renderStatesOverCapFails();
+    unpublishedHandleStillEncodes();
     fullSnapshotMode();
     allSlotsDirtyTriggersSnapshotFlagHeuristic();
     fvfOnlyAfterDeclaration();

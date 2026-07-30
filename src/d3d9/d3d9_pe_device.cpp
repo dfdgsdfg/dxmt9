@@ -26,7 +26,6 @@
 #include "d3d9_pe_chunk_v2_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_producer.hpp"
-#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
@@ -3691,30 +3690,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                streamOff_[stream] == offset && streamStr_[stream] == stride;
     }
 
-    dxmt9::d3d9::pe::PeRtWireHandles currentRtWireHandles() const {
-        dxmt9::d3d9::pe::PeRtWireHandles handles{};
-        for (DWORD slot = 0; slot < 4; ++slot) {
-            handles[slot] = toWireHandle(rawSurf(rtSlots_[slot]));
-        }
-        return handles;
-    }
-
     dxmt9::d3d9::pe::PeRtExplicitMask currentRtExplicitMask() const {
         dxmt9::d3d9::pe::PeRtExplicitMask explicitMask{};
         for (DWORD slot = 0; slot < 4; ++slot) {
             explicitMask[slot] = rtSlotExplicit_[slot];
         }
         return explicitMask;
-    }
-
-    dxmt9::d3d9::pe::PeStreamSources currentDrawStreamSources() const {
-        dxmt9::d3d9::pe::PeStreamSources sources{};
-        for (DWORD slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            sources[slot].buffer = toWireHandle(rawVBuf(streamSrc_[slot]));
-            sources[slot].offset = streamOff_[slot];
-            sources[slot].stride = streamStr_[slot];
-        }
-        return sources;
     }
 
     std::uint64_t currentVertexShaderHash() const noexcept {
@@ -4029,35 +4010,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             peState_, peConsts_, peBindingView_, peSparsePayloads_, params,
             forceFullSnapshot, inlineConstDelta, peSparseScratch_,
             peSparseHeader_, peSparseState_);
-    }
-
-    bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
-                                  UINT startVertex,
-                                  UINT count,
-                                  D9CDrawPrimitivePacket& packet,
-                                  bool forceFullSnapshot = false) const {
-        DxmtPeDecimatedScopeGuard decimatedScope;
-        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-        if (decimationN != 0 &&
-            PeDecimatedScopeTimer::shouldSample(
-                peDrawPacketDecimatedStats_, decimationN)) {
-            decimatedScope.stats = &peDrawPacketDecimatedStats_;
-            {
-                const auto n0 = std::chrono::steady_clock::now();
-                const auto n1 = std::chrono::steady_clock::now();
-                PeDecimatedScopeTimer::recordSample(
-                    peDecimatedNullScopeStats(),
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-            }
-            decimatedScope.t0 = std::chrono::steady_clock::now();
-        }
-        const bool needAllSlots =
-            forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
-        populateBindingView(peBindingView_, needAllSlots);
-        return dxmt9::d3d9::pe::buildDrawPacketFromViews(
-            peState_, peBindingView_, static_cast<std::uint32_t>(type),
-            startVertex, count, forceFullSnapshot, packet);
     }
 
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {
@@ -9396,30 +9348,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         return commandChunkV2_.referencesObject(reinterpret_cast<void*>(
             static_cast<std::uintptr_t>(value)));
-    }
-
-    void populatePendingChunkDrawStreamDependencies(
-        D9CDrawPrimitivePacket& packet,
-        const dxmt9::d3d9::pe::PeStreamSources& streamSources) const {
-        std::uint32_t retainedStreamMask = 0u;
-        for (DWORD slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            if (pendingChunkReferencesBuffer(streamSources[slot].buffer)) {
-                retainedStreamMask |= 1u << slot;
-            }
-        }
-        // CapacityPre has already sealed the old chunk before the writer is
-        // called. Therefore this deterministic transform checkpoints only
-        // streams absent from the actual destination chunk. The serialized
-        // packet remains the sole source of retention semantics
-        // (R-CORE-11.17), while later draws can still coalesce.
-        dxmt9::d3d9::pe::populateDrawPacketStreamDependencies(
-            packet, streamSources, retainedStreamMask);
-    }
-
-    void populatePendingChunkDrawIndexDependency(
-        D9CDrawIndexedPrimitivePacket& packet) const {
-        dxmt9::d3d9::pe::populateDrawPacketIndexDependency(
-            packet, pendingChunkReferencesBuffer(packet.ibHandle));
     }
 
     HRESULT appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
