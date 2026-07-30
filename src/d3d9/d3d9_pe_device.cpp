@@ -3361,7 +3361,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     mutable dxmt9::d3d9::pe::PeDrawPayloads peSparsePayloads_{};
     bool dsSurfaceExplicit_ = false;
     dxmt9::d3d9::pe::CommandChunkV2Builder commandChunkV2_{};
-    std::vector<std::byte> legacyV2RecordScratch_{};
     bool commandChunkNegotiated_ = false;
     std::uint64_t commandChunkCommits_ = 0;
     std::uint64_t commandChunkRecords_ = 0;
@@ -3374,7 +3373,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // draw_packet's stats are mutable because buildDrawPrimitivePacket()
     // is a const method.
     PeDecimatedScopeStats peV2AppendDecimatedStats_{};
-    // Phase split of appendCommandRecordDirect, sampled on the same calls the
+    // Phase split of the record append, sampled on the same calls the
     // parent scope samples. CAVEAT: each phase costs one clock pair, so on a
     // sampled call the parent `append_sampled_ms` is inflated by roughly four
     // pairs. Read the phases against each other, not against the parent, and
@@ -3409,8 +3408,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
     }
 
-    PeDecimatedScopeStats peAppendPhaseResize_{};
-    PeDecimatedScopeStats peAppendPhaseWrite_{};
     PeDecimatedScopeStats peAppendPhaseEncode_{};
     PeDecimatedScopeStats peAppendPhaseFlush_{};
     PeDecimatedScopeStats peConstFlushDecimatedStats_{};
@@ -8990,8 +8987,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
             "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
             "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f "
-            "append_resize_sampled=%llu append_resize_ms=%.3f "
-            "append_write_sampled=%llu append_write_ms=%.3f "
             "append_encode_sampled=%llu append_encode_ms=%.3f "
             "append_flush_sampled=%llu append_flush_ms=%.3f%s%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
@@ -9012,10 +9007,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
             static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
             static_cast<double>(peDecimatedNullScopeStats().sampledNs) / 1.0e6,
-            static_cast<unsigned long long>(peAppendPhaseResize_.sampled),
-            static_cast<double>(peAppendPhaseResize_.sampledNs) / 1.0e6,
-            static_cast<unsigned long long>(peAppendPhaseWrite_.sampled),
-            static_cast<double>(peAppendPhaseWrite_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(peAppendPhaseEncode_.sampled),
             static_cast<double>(peAppendPhaseEncode_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(peAppendPhaseFlush_.sampled),
@@ -9285,56 +9276,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // keeps one meaning across the migration and the before/after numbers stay
     // comparable.
     //
-    // Every caller of this is a record family not yet migrated to a direct V2
-    // emitter. When the last one moves, this and appendLegacyCommandRecordAsV2
-    // go away together.
-    template<typename WriteFn>
-    HRESULT appendCommandRecordDirect(uint32_t type, size_t bytes, WriteFn write) {
-        return appendRecordV2(
-            type, bytes,
-            [this, bytes, &write](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
-                                  const AppendPhaseTimer& phase) -> HRESULT {
-                {
-                    const auto t0 = AppendPhaseTimer::now();
-                    try {
-                        legacyV2RecordScratch_.resize(bytes);
-                    } catch (...) {
-                        phase.record(peAppendPhaseResize_, t0);
-                        return E_OUTOFMEMORY;
-                    }
-                    phase.record(peAppendPhaseResize_, t0);
-                }
-                {
-                    const auto t0 = AppendPhaseTimer::now();
-                    write(reinterpret_cast<std::uint8_t*>(
-                        legacyV2RecordScratch_.data()));
-                    phase.record(peAppendPhaseWrite_, t0);
-                }
-                const auto t0 = AppendPhaseTimer::now();
-                const bool encoded = dxmt9::d3d9::pe::appendLegacyCommandRecordAsV2(
-                    builder, legacyV2RecordScratch_);
-                phase.record(peAppendPhaseEncode_, t0);
-                return encoded ? S_OK : D3DERR_INVALIDCALL;
-            });
-    }
-
-    HRESULT appendCommandRecord(const void* data, size_t bytes) {
-        if (!data) {
-            return D3DERR_INVALIDCALL;
-        }
-        uint32_t type = 0;
-        if (bytes >= sizeof(D9CCommandRecordHeader)) {
-            D9CCommandRecordHeader legacyHeader{};
-            std::memcpy(&legacyHeader, data, sizeof(legacyHeader));
-            type = legacyHeader.type;
-        }
-        return appendCommandRecordDirect(
-            type, bytes, [data, bytes](std::uint8_t* dst) {
-                std::memcpy(dst, data, bytes);
-            });
-    }
-
-
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         // Hold the recorder lock across the const-flush/fold + draw-record
@@ -10040,140 +9981,150 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return drainOversizedPendingStateAsApplyStateRecords();
     }
 
+    // One APPLY_STATE record carrying exactly one category's batch. The
+    // sizeHint stays sizeof(D9CCommandRecordApplyState), which is what the
+    // capacity precheck saw when this drained legacy records, so seal cadence is
+    // unchanged. flags stay 0: these are batches, never snapshots.
+    template <typename Fill>
+    HRESULT appendSingleCategoryApplyStateV2(Fill fill) {
+        peSparseState_ = dxmt9::d3d9::pe::SparseStateV2Input{};
+        fill();
+        return appendRecordV2(
+            D9C_COMMAND_RECORD_APPLY_STATE,
+            sizeof(D9CCommandRecordApplyState),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                    builder, /*flags=*/0u, peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
+    }
+
     HRESULT drainOversizedPendingStateAsApplyStateRecords() {
         // Drain the four cappable collections (renderStates, tss,
-        // samplerStates, transforms) in batches of cap-size. Each batch
-        // becomes one APPLY_STATE record carrying ONLY that collection's
-        // batch (other fields zero / unset). Server's applyDrawPacketState
-        // is idempotent for unset fields so empty validX/maskX are safe.
-        auto drainTable = [&](auto& pendingTable, auto cap, auto fillEntry,
-                              auto packetCountField) -> HRESULT {
+        // samplerStates, transforms) in batches of cap-size. Each batch becomes
+        // one APPLY_STATE record carrying ONLY that collection's batch; the
+        // server applies unset categories idempotently, so an otherwise-empty
+        // sparse record is safe.
+        //
+        // Section order is ascending by construction: every popFirst walks its
+        // bitmap from the lowest set bit and its rows in order. appendPlainSection
+        // does not enforce ordering for these four categories, but emitting them
+        // out of order would still be a change in wire shape for no reason.
+        auto drainTable = [&](auto& pendingTable, std::uint32_t cap,
+                              auto fillEntry) -> HRESULT {
             while (!pendingTable.empty()) {
-                D9CCommandRecordApplyState rec{};
-                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-                rec.header.size = sizeof(rec);
                 std::uint32_t n = 0;
-                uint32_t key = 0;
-                uint32_t value = 0;
-                while (n < cap && pendingTable.popFirst(key, value)) {
-                    fillEntry(rec.packet, n, key, value);
-                    ++n;
-                }
-                packetCountField(rec.packet) = n;
-                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                std::uint32_t key = 0;
+                std::uint32_t value = 0;
+                const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+                    while (n < cap && pendingTable.popFirst(key, value)) {
+                        fillEntry(n, key, value);
+                        ++n;
+                    }
+                });
                 if (FAILED(hr)) return hr;
             }
             return S_OK;
         };
-        auto drainTransformTable = [&](auto& pendingTable, auto cap, auto fillEntry,
-                                       auto packetCountField) -> HRESULT {
+        auto drainMatrix = [&](auto& pendingTable, std::uint32_t cap,
+                               auto fillEntry) -> HRESULT {
             while (!pendingTable.empty()) {
-                D9CCommandRecordApplyState rec{};
-                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-                rec.header.size = sizeof(rec);
                 std::uint32_t n = 0;
-                uint32_t key = 0;
-                D9CMatrix value{};
-                while (n < cap && pendingTable.popFirst(key, value)) {
-                    fillEntry(rec.packet, n, key, value);
-                    ++n;
-                }
-                packetCountField(rec.packet) = n;
-                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
+                std::uint32_t row = 0;
+                std::uint32_t key = 0;
+                std::uint32_t value = 0;
+                const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+                    while (n < cap && pendingTable.popFirst(row, key, value)) {
+                        fillEntry(n, row, key, value);
+                        ++n;
+                    }
+                });
                 if (FAILED(hr)) return hr;
             }
             return S_OK;
         };
-        auto drainMatrix = [&](auto& pendingMatrix, auto cap, auto fillEntry,
-                               auto packetCountField) -> HRESULT {
-            while (!pendingMatrix.empty()) {
-                D9CCommandRecordApplyState rec{};
-                rec.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-                rec.header.size = sizeof(rec);
-                std::uint32_t n = 0;
-                uint32_t row = 0;
-                uint32_t key = 0;
-                uint32_t value = 0;
-                while (n < cap && pendingMatrix.popFirst(row, key, value)) {
-                    fillEntry(rec.packet, n, row, key, value);
+        if (auto hr = drainTable(
+                peState_.pendingRenderStates,
+                (std::uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
+                [&](std::uint32_t i, std::uint32_t k, std::uint32_t v) {
+                    peSparseScratch_.renderStates[i] =
+                        D9CCommandChunkWireRenderStateV2{k, v};
+                    peSparseState_.renderStates =
+                        std::span(peSparseScratch_.renderStates).first(i + 1u);
+                });
+            FAILED(hr)) return hr;
+        if (auto hr = drainMatrix(
+                peState_.pendingTss, (std::uint32_t)D9C_DRAW_PACKET_MAX_TSS,
+                [&](std::uint32_t i, std::uint32_t row, std::uint32_t k,
+                    std::uint32_t v) {
+                    peSparseScratch_.textureStageStates[i] =
+                        D9CDrawPacketTextureStageState{row, k, v};
+                    peSparseState_.textureStageStates =
+                        std::span(peSparseScratch_.textureStageStates)
+                            .first(i + 1u);
+                });
+            FAILED(hr)) return hr;
+        if (auto hr = drainMatrix(
+                peState_.pendingSamplerStates,
+                (std::uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
+                [&](std::uint32_t i, std::uint32_t row, std::uint32_t k,
+                    std::uint32_t v) {
+                    peSparseScratch_.samplerStates[i] =
+                        D9CDrawPacketSamplerState{row, k, v};
+                    peSparseState_.samplerStates =
+                        std::span(peSparseScratch_.samplerStates).first(i + 1u);
+                });
+            FAILED(hr)) return hr;
+        while (!peState_.pendingTransforms.empty()) {
+            std::uint32_t n = 0;
+            std::uint32_t key = 0;
+            D9CMatrix value{};
+            const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+                while (n < (std::uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS &&
+                       peState_.pendingTransforms.popFirst(key, value)) {
+                    peSparseScratch_.transforms[n] =
+                        D9CDrawPacketTransform{key, 0u, value};
+                    peSparseState_.transforms =
+                        std::span(peSparseScratch_.transforms).first(n + 1u);
                     ++n;
                 }
-                packetCountField(rec.packet) = n;
-                const HRESULT hr = appendCommandRecord(&rec, sizeof(rec));
-                if (FAILED(hr)) return hr;
-            }
-            return S_OK;
-        };
-        if (auto hr = drainTable(peState_.pendingRenderStates,
-                                 (uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
-                                 [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                    uint32_t k, uint32_t v) {
-                                     p.renderStates[i].state = k;
-                                     p.renderStates[i].value = v;
-                                 },
-                                 [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                     return p.renderStateCount;
-                                 });
-            FAILED(hr)) return hr;
-        if (auto hr = drainMatrix(peState_.pendingTss,
-                                  (uint32_t)D9C_DRAW_PACKET_MAX_TSS,
-                                  [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                     uint32_t row, uint32_t k, uint32_t v) {
-                                      p.tss[i].stage = row;
-                                      p.tss[i].type = k;
-                                      p.tss[i].value = v;
-                                  },
-                                  [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                      return p.tssCount;
-                                  });
-            FAILED(hr)) return hr;
-        if (auto hr = drainMatrix(peState_.pendingSamplerStates,
-                                  (uint32_t)D9C_DRAW_PACKET_MAX_SAMPLER,
-                                  [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                     uint32_t row, uint32_t k, uint32_t v) {
-                                      p.samplerStates[i].sampler = row;
-                                      p.samplerStates[i].type = k;
-                                      p.samplerStates[i].value = v;
-                                  },
-                                  [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                      return p.samplerStateCount;
-                                  });
-            FAILED(hr)) return hr;
-        if (auto hr = drainTransformTable(peState_.pendingTransforms,
-                                          (uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS,
-                                          [](D9CDrawPrimitivePacket& p, std::uint32_t i,
-                                             uint32_t k, const D9CMatrix& v) {
-                                              p.transforms[i].state = k;
-                                              p.transforms[i].reserved = 0;
-                                              p.transforms[i].matrix = v;
-                                          },
-                                          [](D9CDrawPrimitivePacket& p) -> std::uint32_t& {
-                                              return p.transformCount;
-                                          });
-            FAILED(hr)) return hr;
-        // Remaining scalar pending bits (texture / stream / vs / ps /
-        // vdecl / RT / DS / viewport / scissor / fvf / material / clip
-        // / lights / lightEnable) all fit in one packet. After draining
-        // the four cappable collections above, buildDrawPrimitivePacket
-        // succeeds.
+            });
+            if (FAILED(hr)) return hr;
+        }
+        // Remaining scalar pending bits (texture / stream / vs / ps / vdecl / RT
+        // / DS / viewport / scissor / fvf / material / clip / lights /
+        // lightEnable) all fit in one record. After draining the four cappable
+        // collections above, the sparse build succeeds.
         if (!hasPendingHotState()) {
             return S_OK;
         }
-        D9CCommandRecordApplyState tail{};
-        tail.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-        tail.header.size = sizeof(tail);
-        if (!buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, tail.packet)) {
-            // Truly should never happen — the four cappable collections
-            // are now empty. Defensive: log + return failure rather than
-            // silently leaving pending state dirty (which would let the
-            // upcoming barrier observe stale server state).
+        dxmt9::d3d9::pe::PeDrawParams tailParams{};
+        tailParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+        if (!buildSparseStateForRecord(tailParams)) {
+            // Truly should never happen -- the four cappable collections are now
+            // empty. Defensive: log + return failure rather than silently leaving
+            // pending state dirty (which would let the upcoming barrier observe
+            // stale server state).
             dxmt9DeviceDebugLog(
                 "ERR: drainOversizedPendingStateAsApplyStateRecords could "
-                "not build tail APPLY_STATE — pending state lost. Caller "
+                "not build tail APPLY_STATE - pending state lost. Caller "
                 "should treat as recorder failure.");
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT hr = appendCommandRecord(&tail, sizeof(tail));
+        const HRESULT hr = appendRecordV2(
+            D9C_COMMAND_RECORD_APPLY_STATE,
+            sizeof(D9CCommandRecordApplyState),
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                    builder, peSparseHeader_.flags, peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
+            });
         if (FAILED(hr)) return hr;
         clearPendingHotState();
         return S_OK;
