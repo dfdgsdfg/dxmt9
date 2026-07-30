@@ -212,6 +212,104 @@ pe::PeStreamSources streamSourcesFrom(const pe::PeBindingView& bindings) {
   return sources;
 }
 
+bool isUpRecord(std::uint32_t type) {
+  return type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP ||
+         type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+}
+
+// The real legacy UP path. Two things differ from the buffer-backed draws and
+// both are load-bearing:
+//   - No chunk-dependency checkpoint. UP draws carry their geometry inline, so
+//     neither populateDrawPacketStreamDependencies nor
+//     populateDrawPacketIndexDependency ran at these call sites, and the shim
+//     leaves its `indexed` pointer null for UP records -- so an indexed-UP
+//     record gets NO index-buffer section however dirty the IB shadow is.
+//   - The payload rides after the record: index bytes then vertex bytes, at the
+//     offsets the header declares.
+// inlineConstDelta is not modelled: production's UP sites always flush pending
+// constants first and never fold, and the UP const-delta base depends on the
+// payload offsets, so a folded UP fixture would test a shape production cannot
+// emit.
+LaneResult runLegacyUpLane(const Fixture& fixture) {
+  pe::CommandChunkV2Builder builder;
+  D9CDrawPrimitivePacket packet{};
+  if (!pe::buildDrawPacketFromViews(
+          fixture.shadow, fixture.bindings, fixture.params.primitiveType,
+          /*startVertex=*/0u, fixture.params.primitiveCount,
+          fixture.forceFullSnapshot, packet)) {
+    return LaneResult{};
+  }
+  const auto indexBytes =
+      static_cast<std::uint32_t>(fixture.payloads.upIndex.size());
+  const auto vertexBytes =
+      static_cast<std::uint32_t>(fixture.payloads.upVertex.size());
+  std::vector<std::byte> recordBytes;
+  if (fixture.params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
+    D9CCommandRecordDrawIndexedPrimitiveUP record{};
+    record.header.type = fixture.params.recordType;
+    record.packet.state = packet;
+    record.packet.minVertex = fixture.params.minVertex;
+    record.packet.numVertices = fixture.params.numVertices;
+    record.packet.primitiveCount = fixture.params.primitiveCount;
+    record.packet.indexFormat = fixture.params.indexFormat;
+    record.packet.stride = fixture.params.stride;
+    record.packet.indexDataOffset = sizeof(record);
+    record.packet.indexDataSize = indexBytes;
+    record.packet.vertexDataOffset = record.packet.indexDataOffset + indexBytes;
+    record.packet.vertexDataSize = vertexBytes;
+    record.header.size = static_cast<std::uint32_t>(sizeof(record)) +
+                         indexBytes + vertexBytes;
+    recordBytes.resize(record.header.size);
+    std::memcpy(recordBytes.data(), &record, sizeof(record));
+    if (indexBytes != 0u) {
+      std::memcpy(recordBytes.data() + record.packet.indexDataOffset,
+                  fixture.payloads.upIndex.data(), indexBytes);
+    }
+    if (vertexBytes != 0u) {
+      std::memcpy(recordBytes.data() + record.packet.vertexDataOffset,
+                  fixture.payloads.upVertex.data(), vertexBytes);
+    }
+  } else {
+    D9CCommandRecordDrawPrimitiveUP record{};
+    record.header.type = fixture.params.recordType;
+    record.packet.state = packet;
+    record.packet.primitiveCount = fixture.params.primitiveCount;
+    record.packet.stride = fixture.params.stride;
+    record.packet.vertexDataOffset = sizeof(record);
+    record.packet.vertexDataSize = vertexBytes;
+    record.header.size =
+        static_cast<std::uint32_t>(sizeof(record)) + vertexBytes;
+    recordBytes.resize(record.header.size);
+    std::memcpy(recordBytes.data(), &record, sizeof(record));
+    if (vertexBytes != 0u) {
+      std::memcpy(recordBytes.data() + record.packet.vertexDataOffset,
+                  fixture.payloads.upVertex.data(), vertexBytes);
+    }
+  }
+  const bool ok = pe::appendLegacyCommandRecordAsV2(builder, recordBytes);
+  return finishLane(builder, ok);
+}
+
+// The direct UP lane: state build plus payload spans, and NO chunk-context step,
+// mirroring what the migrated UP call sites do.
+LaneResult runDirectUpLane(const Fixture& fixture) {
+  pe::CommandChunkV2Builder builder;
+  PeConstShadowBlock constants = fixture.constants;
+  pe::PeSparseScratch& scratch = sharedScratch();
+  pe::SparseStateV2Input state{};
+  D9CCommandChunkWireDrawHeaderV2 header{};
+  if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
+                              fixture.payloads, fixture.params,
+                              fixture.forceFullSnapshot,
+                              /*inlineConstDelta=*/false, scratch, header,
+                              state)) {
+    return LaneResult{};
+  }
+  const bool ok = pe::appendSparseRecordV2(
+      builder, fixture.params.recordType, header, state);
+  return finishLane(builder, ok);
+}
+
 bool isIndexedRecord(std::uint32_t type) {
   return type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
          type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
@@ -371,8 +469,13 @@ LaneResult runDirectLane(const Fixture& fixture) {
 void requireLanesAgree(const Fixture& f) {
   const bool draw = f.params.recordType != D9C_COMMAND_RECORD_APPLY_STATE &&
                     f.params.recordType != 0u;
-  const LaneResult legacy = draw ? runLegacyDrawLane(f) : runLegacyLane(f);
-  const LaneResult direct = draw ? runDirectDrawLane(f) : runDirectLane(f);
+  const bool up = isUpRecord(f.params.recordType);
+  const LaneResult legacy = up ? runLegacyUpLane(f)
+                               : (draw ? runLegacyDrawLane(f)
+                                       : runLegacyLane(f));
+  const LaneResult direct = up ? runDirectUpLane(f)
+                               : (draw ? runDirectDrawLane(f)
+                                       : runDirectLane(f));
   check(legacy.ok == direct.ok, f.name + ": lanes must agree on success");
   if (!legacy.ok) {
     return;  // both failed; failure reasons may legitimately differ
@@ -855,6 +958,99 @@ void inlineConstDeltaSingleRange() {
 
 // --- fixed-seed randomized corpus -----------------------------------------
 
+// --- UP draw records -------------------------------------------------------
+//
+// UP draws carry geometry inline instead of binding app buffers. The legacy call
+// sites therefore ran no chunk-dependency checkpoint, and the shim leaves its
+// `indexed` pointer null for both UP record types -- so an indexed-UP record
+// carries NO index-buffer section no matter how dirty the IB shadow is. These
+// fixtures pin that, and the pendingIb one is the case that would otherwise let
+// the producer emit a section production never emitted.
+
+alignas(16) std::array<std::byte, 96> upVertexBytes{};
+alignas(16) std::array<std::byte, 24> upIndexBytes{};
+
+Fixture baseUpDraw(const char* name, std::uint32_t recordType) {
+  Fixture f;
+  f.name = name;
+  f.params.recordType = recordType;
+  f.params.primitiveType = 4u;  // D3DPT_TRIANGLELIST
+  f.params.primitiveCount = 4u;
+  f.params.stride = 24u;
+  for (std::size_t i = 0; i < upVertexBytes.size(); ++i) {
+    upVertexBytes[i] = static_cast<std::byte>(0x40u + (i & 0x3fu));
+  }
+  for (std::size_t i = 0; i < upIndexBytes.size(); ++i) {
+    upIndexBytes[i] = static_cast<std::byte>(i);
+  }
+  f.payloads.upVertex = std::span<const std::byte>(upVertexBytes);
+  // UP draws bind no vertex buffer, so the shadow carries no dirty stream.
+  f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.shadow.pendingVs = true;
+  f.shadow.pendingPs = true;
+  return f;
+}
+
+void upDrawCarriesVertexPayload() {
+  Fixture f = baseUpDraw("UP draw, inline vertex payload",
+                         D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
+  requireLanesAgree(f);
+}
+
+void upDrawWithDirtyState() {
+  Fixture f = baseUpDraw("UP draw, inline payload plus dirty render state",
+                         D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
+  f.shadow.pendingRenderStates.set(7u, 3u);
+  requireLanesAgree(f);
+}
+
+void upIndexedDrawCarriesBothPayloads() {
+  Fixture f = baseUpDraw("indexed UP draw, inline index and vertex payloads",
+                         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP);
+  f.params.minVertex = 2u;
+  f.params.numVertices = 4u;
+  f.params.indexFormat = 101u;  // D3DFMT_INDEX16
+  f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
+  requireLanesAgree(f);
+}
+
+// The pin that matters: a dirty IB shadow must NOT produce an index-buffer
+// section on an indexed-UP record, because the shim never produced one.
+void upIndexedDrawIgnoresDirtyIndexBuffer() {
+  Fixture f = baseUpDraw("indexed UP draw ignores a dirty index buffer",
+                         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP);
+  f.params.minVertex = 2u;
+  f.params.numVertices = 4u;
+  f.params.indexFormat = 101u;
+  f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
+  f.shadow.pendingIb = true;
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  // Every chunk-context reason to emit is true as well, so nothing but the
+  // record type can suppress the section.
+  f.chunk.indexBufferKnown = false;
+  f.chunk.indexBufferRetained = false;
+  requireLanesAgree(f);
+}
+
+void upDrawUnderFullSnapshot() {
+  Fixture f = baseUpDraw("UP draw under forceFullSnapshot",
+                         D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
+  f.forceFullSnapshot = true;
+  requireLanesAgree(f);
+}
+
+void upIndexedDrawUnderFullSnapshot() {
+  Fixture f = baseUpDraw("indexed UP draw under forceFullSnapshot",
+                         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP);
+  f.params.minVertex = 2u;
+  f.params.numVertices = 4u;
+  f.params.indexFormat = 101u;
+  f.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
+  f.forceFullSnapshot = true;
+  requireLanesAgree(f);
+}
+
 void randomizedApplyStateSequences() {
   std::mt19937 rng(0xD9C0DEu);  // pinned: CI must be deterministic
   for (int iteration = 0; iteration < 256; ++iteration) {
@@ -942,6 +1138,12 @@ int main() {
     indexBufferPendingOnly();
     inlineConstDeltaAllSixRanges();
     inlineConstDeltaSingleRange();
+    upDrawCarriesVertexPayload();
+    upDrawWithDirtyState();
+    upIndexedDrawCarriesBothPayloads();
+    upIndexedDrawIgnoresDirtyIndexBuffer();
+    upDrawUnderFullSnapshot();
+    upIndexedDrawUnderFullSnapshot();
     randomizedApplyStateSequences();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()

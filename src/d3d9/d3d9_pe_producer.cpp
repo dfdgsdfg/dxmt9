@@ -127,9 +127,18 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // Only indexed draws carry one. APPLY_STATE never does, matching the shim,
   // which emitted this section only when `indexed && indexed->ibValid`.
   std::size_t indexBufferCount = 0;
+  // DRAW_INDEXED_PRIMITIVE only -- deliberately NOT the _UP variant. An
+  // indexed-UP draw carries its indices inline in the record payload and binds
+  // no index buffer, and the shim proves it: appendLegacySparseRecord sets its
+  // `indexed` packet pointer only for DRAW_INDEXED_PRIMITIVE, leaving it null
+  // for _UP, so populateLegacySparseState's `indexed && indexed->ibValid` gate
+  // never fired and no index-buffer section was produced. Including _UP here
+  // emits a section production never emitted, plus a retained handle the record
+  // does not need. Pinned by the differential's "indexed UP draw ignores a dirty
+  // index buffer" fixture, which caught this before the UP call sites were
+  // wired: 3 handles / 408 bytes against legacy's 2 / 368.
   const bool indexedDraw =
-      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
-      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   if (indexedDraw && shadow.pendingIb) {
     auto& entry = scratch.indexBuffers[indexBufferCount++];
     entry.wire = D9CCommandChunkWireIndexBindingV2{};
@@ -500,9 +509,18 @@ bool addChunkContextSections(const PeChunkContext& chunk,
     // only exists in the configuration that never sees the bug.
     return false;
   }
+  // DRAW_INDEXED_PRIMITIVE only -- deliberately NOT the _UP variant. An
+  // indexed-UP draw carries its indices inline in the record payload and binds
+  // no index buffer, and the shim proves it: appendLegacySparseRecord sets its
+  // `indexed` packet pointer only for DRAW_INDEXED_PRIMITIVE, leaving it null
+  // for _UP, so populateLegacySparseState's `indexed && indexed->ibValid` gate
+  // never fired and no index-buffer section was produced. Including _UP here
+  // emits a section production never emitted, plus a retained handle the record
+  // does not need. Pinned by the differential's "indexed UP draw ignores a dirty
+  // index buffer" fixture, which caught this before the UP call sites were
+  // wired: 3 handles / 408 bytes against legacy's 2 / 368.
   const bool indexedDraw =
-      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
-      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   const std::uint64_t ibWire =
       d9cWireHandleValue(toWireHandle(bindings.indexBuffer.object));
   const bool ibBound = bindings.indexBuffer.object != nullptr;

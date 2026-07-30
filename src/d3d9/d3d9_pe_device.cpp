@@ -9502,8 +9502,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
-        D9CCommandRecordDrawPrimitiveUP header{};
-        header.header.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+        // Payload sizing moved AHEAD of the state build, because the producer
+        // reads the payload spans while building. It is pure input validation --
+        // type/count/stride/data only, nothing the state build produces -- and
+        // consumes no pending state, so failing here instead of after the build
+        // returns the same D3DERR_INVALIDCALL from the same inputs.
+        std::uint32_t vertexBytes = 0;
+        if (!checkedByteCount(primitiveVertexCount(type, count), stride, vertexBytes) ||
+            (vertexBytes != 0 && !data)) {
+            return D3DERR_INVALIDCALL;
+        }
         const DWORD savedFvf = fvf_;
         IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
         IDirect3DVertexShader9* savedVs = vs_;
@@ -9520,20 +9528,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = nullptr;
             peState_.pendingVs = true;
         }
-        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state,
-                forceFullSnapshot)) {
-            if (overrideFvf) {
-                fvf_ = savedFvf;
-                vdecl_ = savedVdecl;
-                peState_.pendingFvf = savedPendingFvf;
-                peState_.pendingVdecl = savedPendingVdecl;
-            }
-            if (overrideVertexShaderNull) {
-                vs_ = savedVs;
-                peState_.pendingVs = savedPendingVs;
-            }
-            return D3DERR_INVALIDCALL;
-        }
+        // The override window has to cover populateBindingView, which reads
+        // fvf_ / vdecl_ / vs_, so it wraps the whole state build exactly as it
+        // wrapped buildDrawPrimitivePacket before.
+        dxmt9::d3d9::pe::PeDrawParams params{};
+        params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+        params.primitiveType = static_cast<std::uint32_t>(type);
+        params.primitiveCount = count;
+        params.stride = stride;
+        // Borrowed for this call only; cleared below so no later build can read
+        // a dangling span. Nothing else assigns peSparsePayloads_, so empty is
+        // the invariant every non-UP record relies on.
+        peSparsePayloads_.upVertex = std::span<const std::byte>(
+            static_cast<const std::byte*>(data), vertexBytes);
+        const bool built =
+            buildSparseStateForRecord(params, forceFullSnapshot);
         if (overrideFvf) {
             fvf_ = savedFvf;
             vdecl_ = savedVdecl;
@@ -9544,26 +9553,29 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = savedVs;
             peState_.pendingVs = savedPendingVs;
         }
-
-        std::uint32_t vertexBytes = 0;
-        if (!checkedByteCount(primitiveVertexCount(type, count), stride, vertexBytes) ||
-            (vertexBytes != 0 && !data)) {
+        if (!built) {
+            peSparsePayloads_ = dxmt9::d3d9::pe::PeDrawPayloads{};
             return D3DERR_INVALIDCALL;
         }
-        header.packet.primitiveCount = count;
-        header.packet.stride = stride;
-        header.packet.vertexDataOffset = sizeof(D9CCommandRecordDrawPrimitiveUP);
-        header.packet.vertexDataSize = vertexBytes;
-        header.header.size = sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes;
 
-        const HRESULT hr = appendCommandRecordDirect(
-            header.header.type, header.header.size,
-            [&header, data, vertexBytes](std::uint8_t* record) {
-                std::memcpy(record, &header, sizeof(header));
-                if (vertexBytes != 0) {
-                    std::memcpy(record + header.packet.vertexDataOffset, data, vertexBytes);
-                }
+        // sizeHint stays the legacy header+payload size the capacity precheck
+        // saw before, so chunk seal cadence is unchanged. No chunk-context step:
+        // a UP draw binds no app buffer, so there is nothing for the destination
+        // chunk to have retained -- matching both legacy UP call sites, which ran
+        // neither dependency checkpoint.
+        const HRESULT hr = appendRecordV2(
+            D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+            sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes,
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                    builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+                    peSparseHeader_, peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
             });
+        peSparsePayloads_ = dxmt9::d3d9::pe::PeDrawPayloads{};
         if (SUCCEEDED(hr)) {
             recordDrawPrimitiveUPCopy(vertexBytes);
         }
@@ -9602,8 +9614,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         const HRESULT constHr = flushPendingConsts();
         if (FAILED(constHr)) return constHr;
-        D9CCommandRecordDrawIndexedPrimitiveUP header{};
-        header.header.type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+        // Payload sizing moved AHEAD of the state build; see the non-indexed UP
+        // site for why that is behaviour-preserving.
+        const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
+        std::uint32_t indexBytes = 0;
+        std::uint32_t vertexBytes = 0;
+        if (minVertex > 0xffffffffu - numVertices) {
+            return D3DERR_INVALIDCALL;
+        }
+        if (!checkedByteCount(primitiveVertexCount(type, count), indexSize, indexBytes) ||
+            !checkedByteCount(minVertex + numVertices, stride, vertexBytes) ||
+            (indexBytes != 0 && !indexData) ||
+            (vertexBytes != 0 && !vertexData)) {
+            return D3DERR_INVALIDCALL;
+        }
         const DWORD savedFvf = fvf_;
         IDirect3DVertexDeclaration9* savedVdecl = vdecl_;
         IDirect3DVertexShader9* savedVs = vs_;
@@ -9620,20 +9644,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = nullptr;
             peState_.pendingVs = true;
         }
-        if (!buildDrawPrimitivePacket(type, 0, count, header.packet.state,
-                forceFullSnapshot)) {
-            if (overrideFvf) {
-                fvf_ = savedFvf;
-                vdecl_ = savedVdecl;
-                peState_.pendingFvf = savedPendingFvf;
-                peState_.pendingVdecl = savedPendingVdecl;
-            }
-            if (overrideVertexShaderNull) {
-                vs_ = savedVs;
-                peState_.pendingVs = savedPendingVs;
-            }
-            return D3DERR_INVALIDCALL;
-        }
+        dxmt9::d3d9::pe::PeDrawParams params{};
+        params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+        params.primitiveType = static_cast<std::uint32_t>(type);
+        params.minVertex = minVertex;
+        params.numVertices = numVertices;
+        params.primitiveCount = count;
+        params.stride = stride;
+        params.indexFormat = static_cast<std::uint32_t>(indexFormat);
+        // Borrowed for this call only; cleared below. Index bytes precede vertex
+        // bytes in the record, and appendSparseRecordV2 lays them out in that
+        // order from these two spans.
+        peSparsePayloads_.upIndex = std::span<const std::byte>(
+            static_cast<const std::byte*>(indexData), indexBytes);
+        peSparsePayloads_.upVertex = std::span<const std::byte>(
+            static_cast<const std::byte*>(vertexData), vertexBytes);
+        const bool built =
+            buildSparseStateForRecord(params, forceFullSnapshot);
         if (overrideFvf) {
             fvf_ = savedFvf;
             vdecl_ = savedVdecl;
@@ -9644,43 +9671,29 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             vs_ = savedVs;
             peState_.pendingVs = savedPendingVs;
         }
-
-        const UINT indexSize = indexFormat == D3DFMT_INDEX32 ? 4u : 2u;
-        std::uint32_t indexBytes = 0;
-        std::uint32_t vertexBytes = 0;
-        if (minVertex > 0xffffffffu - numVertices) {
-            return D3DERR_INVALIDCALL;
-        }
-        if (!checkedByteCount(primitiveVertexCount(type, count), indexSize, indexBytes) ||
-            !checkedByteCount(minVertex + numVertices, stride, vertexBytes) ||
-            (indexBytes != 0 && !indexData) ||
-            (vertexBytes != 0 && !vertexData)) {
+        if (!built) {
+            peSparsePayloads_ = dxmt9::d3d9::pe::PeDrawPayloads{};
             return D3DERR_INVALIDCALL;
         }
 
-        header.packet.minVertex = minVertex;
-        header.packet.numVertices = numVertices;
-        header.packet.primitiveCount = count;
-        header.packet.indexFormat = static_cast<std::uint32_t>(indexFormat);
-        header.packet.stride = stride;
-        header.packet.indexDataOffset = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP);
-        header.packet.indexDataSize = indexBytes;
-        header.packet.vertexDataOffset = header.packet.indexDataOffset + indexBytes;
-        header.packet.vertexDataSize = vertexBytes;
-        header.header.size = sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) +
-                             indexBytes + vertexBytes;
-
-        const HRESULT hr = appendCommandRecordDirect(
-            header.header.type, header.header.size,
-            [&header, indexData, indexBytes, vertexData, vertexBytes](std::uint8_t* record) {
-                std::memcpy(record, &header, sizeof(header));
-                if (indexBytes != 0) {
-                    std::memcpy(record + header.packet.indexDataOffset, indexData, indexBytes);
-                }
-                if (vertexBytes != 0) {
-                    std::memcpy(record + header.packet.vertexDataOffset, vertexData, vertexBytes);
-                }
+        // No chunk-context step and, critically, no index-buffer section: an
+        // indexed UP draw carries its indices inline and binds no index buffer.
+        // dxmt9_pe_producer.cpp's indexedDraw predicate excludes _UP for exactly
+        // this reason.
+        const HRESULT hr = appendRecordV2(
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+            sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) + indexBytes +
+                vertexBytes,
+            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                const AppendPhaseTimer& phase) -> HRESULT {
+                const auto t0 = AppendPhaseTimer::now();
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                    builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+                    peSparseHeader_, peSparseState_);
+                phase.record(peAppendPhaseEncode_, t0);
+                return ok ? S_OK : D3DERR_INVALIDCALL;
             });
+        peSparsePayloads_ = dxmt9::d3d9::pe::PeDrawPayloads{};
         if (SUCCEEDED(hr)) {
             recordDrawIndexedPrimitiveUPCopy(vertexBytes, indexBytes);
         }
