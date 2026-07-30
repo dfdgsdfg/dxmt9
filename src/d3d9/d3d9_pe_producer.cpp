@@ -3,7 +3,6 @@
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -16,7 +15,6 @@ bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
                               std::uint32_t startVertex,
                               std::uint32_t primitiveCount,
                               bool forceFullSnapshot,
-                              PeDecimatedScopeStats& stats,
                               D9CDrawPrimitivePacket& packet) noexcept {
     // populateDrawPacketAttachment{Delta,Snapshot} take PeRtWireHandles
     // (std::array<D9CWireHandle, 4>); the view carries PeWireObjectRef, so
@@ -25,25 +23,6 @@ bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
     PeRtWireHandles rtWire{};
     for (std::size_t slot = 0; slot < rtWire.size(); ++slot) {
         rtWire[slot] = toWireHandle(bindings.renderTargets[slot].object);
-    }
-    // Decimated timing (draw_packet scope): sample only every Nth call
-    // so the CPU cost of measuring is itself negligible. Independent of
-    // DXMT9_PE_RECORDER_STATS. Guard covers every exit path (including
-    // the early returns below) via RAII.
-    DxmtPeDecimatedScopeGuard decimatedScope;
-    const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-    if (decimationN != 0 &&
-        PeDecimatedScopeTimer::shouldSample(stats, decimationN)) {
-        decimatedScope.stats = &stats;
-        {
-            const auto n0 = std::chrono::steady_clock::now();
-            const auto n1 = std::chrono::steady_clock::now();
-            PeDecimatedScopeTimer::recordSample(
-                peDecimatedNullScopeStats(),
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-        }
-        decimatedScope.t0 = std::chrono::steady_clock::now();
     }
     if (shadow.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
         return false;

@@ -340,7 +340,8 @@ static std::array<char, 2048> dxmt9PeFormatCallerStack(
 // Off (default) keeps the delta optimization that makes run-coalescing
 // detection cheap (packetHasNoStateDelta == "all valid bits zero").
 //
-// SOLE APPLICATION SITE: buildDrawPrimitivePacket() below, after the
+// SOLE APPLICATION SITE: buildDrawPacketFromViews() in
+// d3d9_pe_producer.cpp, after the
 // delta block populates valid/mask fields from pending-* PE state. When
 // enabled, the snapshot block overrides every delta field with the full
 // shadow contents (render-state table, every populated texture slot,
@@ -354,10 +355,9 @@ static std::array<char, 2048> dxmt9PeFormatCallerStack(
 // applyDrawPacketStateDirect() yields identical effective state. The
 // regression guard is tests/native/bridge/
 // pe_full_snapshot_equivalence_spec.cpp.
-static bool dxmt9PeFullSnapshotEnabled() {
-    static const bool enabled = dxmt9::util::getenvFlag("DXMT9_PE_DRAW_FULL_SNAPSHOT");
-    return enabled;
-}
+// dxmt9PeFullSnapshotEnabled() now lives in d3d9_pe_producer.hpp beside the
+// producer that reads it. Keeping a second copy here would be exactly the
+// drift hazard that motivated sharing toWireHandle.
 
 static bool isValidD3DStateBlockType(D3DSTATEBLOCKTYPE type) {
     return type == D3DSBT_ALL || type == D3DSBT_PIXELSTATE || type == D3DSBT_VERTEXSTATE;
@@ -3853,29 +3853,53 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // rather than a local so the ~850-byte view is not zero-initialized on
     // every draw.
     //
+    // `needAllSlots` mirrors the producer's own snapshot gate. It matters for
+    // cost, not correctness: rawTex() is not a cast -- D3D9PeRawTexture makes a
+    // virtual GetType() call per bound texture -- so translating all 20 texture
+    // and 16 stream slots unconditionally would do roughly 45 raw* calls per
+    // draw where the delta path historically did about 9. At GT2's ~1,700
+    // packet builds per present that is tens of thousands of extra virtual
+    // calls, on the same hot path aefde46f had just cleaned up. So the delta
+    // fill translates exactly the pending slots the old inline code did, and
+    // only the snapshot path drains everything.
+    //
     // Only `object` is populated. `identity` is what CommandChunkV2Builder::
-    // appendHandle needs and is filled when the sparse producer starts calling
-    // it; until then nothing reads it, and PeWireObjectRef::valid() rejects a
-    // zero identity loudly rather than silently emitting a bad handle.
-    void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view) const {
+    // appendHandle needs; nothing on today's paths reads it. Do NOT assume a
+    // missing identity is self-announcing: appendHandle fails the record
+    // through failActiveRecord() with no log line, so the draw fails by
+    // HRESULT and nothing says why. Whoever routes draws through
+    // appendSparseRecordV2 must fill identity in the same change.
+    void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
+                             bool needAllSlots) const {
         for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-            view.textures[stage].object = rawTex(textures_[stage]);
+            if (needAllSlots ||
+                (peState_.pendingTextureMask & (1u << stage)) != 0) {
+                view.textures[stage].object = rawTex(textures_[stage]);
+            }
         }
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            if (!needAllSlots &&
+                (peState_.pendingStreamMask & (1u << slot)) == 0) {
+                continue;
+            }
             view.streams[slot].buffer.object = rawVBuf(streamSrc_[slot]);
             view.streams[slot].offset = streamOff_[slot];
             view.streams[slot].stride = streamStr_[slot];
         }
+        // These were read unconditionally by the old inline code on both paths.
         view.vs.object = rawVS(vs_);
         view.ps.object = rawPS(ps_);
         view.vdecl.object = rawVD(vdecl_);
-        view.indexBuffer.object = rawIBuf(indexBuf_);
         view.depthStencil.object = rawSurf(dsSurface_);
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
             view.renderTargets[slot].object = rawSurf(rtSlots_[slot]);
         }
         view.rtExplicitMask = currentRtExplicitMask();
         view.fvf = fvf_;
+        // Deliberately NOT filled: view.indexBuffer. The draw packet has no
+        // index-binding field, so nothing reads it today and rawIBuf() would be
+        // a per-draw call bought for a future consumer. Fill it in the change
+        // that starts reading it.
     }
 
     // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
@@ -3884,16 +3908,39 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // forceFullSnapshot, and what they do on failure -- keep working verbatim.
     // Rewriting them individually would have been six hand edits in a
     // translation unit no meson test can compile; this is one function.
+    //
+    // The DXMT9_PE_STATS_DECIMATION `draw_packet` scope lives HERE, not in the
+    // producer, because it historically covered the COM-to-wire binding
+    // translation as well as the packet fill. Timing only the producer would
+    // have made the figure read lower while the work moved outside it, and that
+    // figure is what docs/perfomance/ cites for PE recording cost.
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
                                   UINT startVertex,
                                   UINT count,
                                   D9CDrawPrimitivePacket& packet,
                                   bool forceFullSnapshot = false) const {
-        populateBindingView(peBindingView_);
+        DxmtPeDecimatedScopeGuard decimatedScope;
+        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+        if (decimationN != 0 &&
+            PeDecimatedScopeTimer::shouldSample(
+                peDrawPacketDecimatedStats_, decimationN)) {
+            decimatedScope.stats = &peDrawPacketDecimatedStats_;
+            {
+                const auto n0 = std::chrono::steady_clock::now();
+                const auto n1 = std::chrono::steady_clock::now();
+                PeDecimatedScopeTimer::recordSample(
+                    peDecimatedNullScopeStats(),
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+            }
+            decimatedScope.t0 = std::chrono::steady_clock::now();
+        }
+        const bool needAllSlots =
+            forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
+        populateBindingView(peBindingView_, needAllSlots);
         return dxmt9::d3d9::pe::buildDrawPacketFromViews(
             peState_, peBindingView_, static_cast<std::uint32_t>(type),
-            startVertex, count, forceFullSnapshot,
-            peDrawPacketDecimatedStats_, packet);
+            startVertex, count, forceFullSnapshot, packet);
     }
 
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {

@@ -18,15 +18,15 @@
 #include <cstdint>
 
 inline D9CWireHandle toWireHandle(const void* handle) {
-    const auto value = static_cast<std::uint64_t>(
-        reinterpret_cast<std::uintptr_t>(handle));
-    return D9CWireHandle{
-        static_cast<std::uint32_t>(value & 0xffffffffull),
-        static_cast<std::uint32_t>(value >> 32),
-    };
+  const auto value = static_cast<std::uint64_t>(
+    reinterpret_cast<std::uintptr_t>(handle));
+  return D9CWireHandle{
+    static_cast<std::uint32_t>(value & 0xffffffffull),
+    static_cast<std::uint32_t>(value >> 32),
+  };
 }
 
 inline std::uint64_t d9cWireHandleValue(const D9CWireHandle& handle) {
-    return static_cast<std::uint64_t>(handle.lo) |
-           (static_cast<std::uint64_t>(handle.hi) << 32);
+  return static_cast<std::uint64_t>(handle.lo) |
+       (static_cast<std::uint64_t>(handle.hi) << 32);
 }

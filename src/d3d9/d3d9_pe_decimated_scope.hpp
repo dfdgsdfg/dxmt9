@@ -24,12 +24,12 @@
 // dxmt9PeRecorderStatsEnabled() -- this works whether or not that flag is set.
 // Unset / "0" / unparseable = off.
 inline std::uint32_t dxmt9PeStatsDecimationN() {
-    static const std::uint32_t n = []() -> std::uint32_t {
-        const auto envValue =
-            dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
-        return envValue.value_or(0);
-    }();
-    return n;
+  static const std::uint32_t n = []() -> std::uint32_t {
+    const auto envValue =
+      dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
+    return envValue.value_or(0);
+  }();
+  return n;
 }
 
 // RAII scope timer for the decimated PE scopes. Covers every exit path of the
@@ -37,15 +37,15 @@ inline std::uint32_t dxmt9PeStatsDecimationN() {
 // its destructor. `stats` stays null (no-op destructor) unless
 // PeDecimatedScopeTimer::shouldSample() selected this call for timing.
 struct DxmtPeDecimatedScopeGuard {
-    PeDecimatedScopeStats* stats = nullptr;
-    std::chrono::steady_clock::time_point t0{};
-    ~DxmtPeDecimatedScopeGuard() {
-        if (stats) {
-            const auto elapsedNs =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - t0).count();
-            PeDecimatedScopeTimer::recordSample(
-                *stats, static_cast<std::uint64_t>(elapsedNs));
-        }
+  PeDecimatedScopeStats* stats = nullptr;
+  std::chrono::steady_clock::time_point t0{};
+  ~DxmtPeDecimatedScopeGuard() {
+    if (stats) {
+      const auto elapsedNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - t0).count();
+      PeDecimatedScopeTimer::recordSample(
+        *stats, static_cast<std::uint64_t>(elapsedNs));
     }
+  }
 };

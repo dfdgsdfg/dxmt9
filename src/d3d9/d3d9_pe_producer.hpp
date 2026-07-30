@@ -8,9 +8,15 @@
 // became parameter accesses, and the COM-to-wire translation the device used to
 // do inline now happens when the device fills PeBindingView.
 //
-// It is a pure read of {shadow, bindings} apart from `stats`, which the
-// DXMT9_PE_STATS_DECIMATION instrumentation accumulates into. It does NOT clear
-// pending bits -- callers do that on success.
+// It is a pure read of {shadow, bindings}: no instrumentation, no side effects,
+// and it does NOT clear pending bits -- callers do that on success. The
+// DXMT9_PE_STATS_DECIMATION `draw_packet` scope stays on the device side, in
+// the forwarder, because that scope historically covered the COM-to-wire
+// binding translation too. Timing only this function would quietly shrink the
+// measured figure while the real work moved outside it.
+//
+// Being side-effect-free also means the differential test can call it without
+// controlling for instrumentation state.
 //
 // Why this is a separate translation unit: d3d9_pe_device.cpp includes
 // windows.h and d3d9.h, so no meson test can compile it. Moving the producer
@@ -18,7 +24,6 @@
 // mirroring it, which is the whole gate for the later rewrite. See
 // docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §4.
 
-#include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "dxmt9/device_c.h"
@@ -37,20 +42,19 @@ namespace dxmt9::d3d9::pe {
 // matching full-snapshot sequence yields identical effective state. The
 // regression guard is tests/native/bridge/pe_full_snapshot_equivalence_spec.cpp.
 inline bool dxmt9PeFullSnapshotEnabled() {
-    static const bool enabled =
-        dxmt9::util::getenvFlag("DXMT9_PE_DRAW_FULL_SNAPSHOT");
-    return enabled;
+  static const bool enabled =
+    dxmt9::util::getenvFlag("DXMT9_PE_DRAW_FULL_SNAPSHOT");
+  return enabled;
 }
 
 // `primitiveType` is the D3DPRIMITIVETYPE value widened to uint32_t; this TU
 // cannot see the D3D9 enum. Callers cast.
 bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
-                              const PeBindingView& bindings,
-                              std::uint32_t primitiveType,
-                              std::uint32_t startVertex,
-                              std::uint32_t primitiveCount,
-                              bool forceFullSnapshot,
-                              PeDecimatedScopeStats& stats,
-                              D9CDrawPrimitivePacket& packet) noexcept;
+                const PeBindingView& bindings,
+                std::uint32_t primitiveType,
+                std::uint32_t startVertex,
+                std::uint32_t primitiveCount,
+                bool forceFullSnapshot,
+                D9CDrawPrimitivePacket& packet) noexcept;
 
 }  // namespace dxmt9::d3d9::pe
