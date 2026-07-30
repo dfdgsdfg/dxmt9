@@ -82,9 +82,22 @@ It compared a draw packet's declared state bits against the unix-side
 premise was the fat `D9CDrawPrimitivePacket`, which the PE legacy-record removal
 deleted: there is no packet delta to compare any more, only sparse V2 sections
 that carry exactly what the producer decided to emit. Removed together with its
-`drawPacketActualChangeMask` implementation, the
-`draw_packet_actual_change_*` counters, and the wrapper's
-`--probe-draw-packet-actual-change` flag; `summarize_3dmark05_perf.py` keeps its
-tolerant rows so historical `result.json` files still parse. Do not schedule new
+`drawPacketActualChangeMask` implementation, every `draw_packet_*` counter it
+fed, and the wrapper's `--probe-draw-packet-actual-change` flag;
+`summarize_3dmark05_perf.py` keeps its tolerant rows so historical `result.json`
+files still parse.
+
+Deleting the writer left the counters behind at first -- eighteen `draw_packet_*`
+fields with live `kCounterTable` rows and nothing writing them, reporting `0` on
+every `[dxmt9-perf]` line. Neither existing audit could see it: the table audit
+passed because the rows were present, and the callsite audit had nothing to check
+because the `count*()` declaration had gone with the function. A sweep for the
+same shape found **165** such fields in total, most of them orphaned when the
+legacy replay path was deleted (`commitChunkReplay*Record*`,
+`commitChunkDrawDelta*`, `commandChunkV1*`). All are gone, and
+`scripts/check/audit_perf_counter_table.py` now checks the second direction --
+a field with a table row that no writer anywhere names -- so the shape cannot
+come back. A counter stuck at zero is worse than a missing one: it reads as
+*measured and negligible* rather than *not measured*. Do not schedule new
 runs with this env unless an equivalent sparse-section diagnostic is
 intentionally written, and update this file in the same change.

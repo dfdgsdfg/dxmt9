@@ -95,9 +95,6 @@ struct Counters {
   std::atomic<std::uint64_t> chunkReject{0};
   // Retired schema fields kept at zero so existing perf-result parsers retain
   // a stable column set across the V1 removal.
-  std::atomic<std::uint64_t> commandChunkV1Chunks{0};
-  std::atomic<std::uint64_t> commandChunkV1Records{0};
-  std::atomic<std::uint64_t> commandChunkV1Bytes{0};
   std::atomic<std::uint64_t> commandChunkV2Chunks{0};
   std::atomic<std::uint64_t> commandChunkV2Records{0};
   std::atomic<std::uint64_t> commandChunkV2Bytes{0};
@@ -418,19 +415,6 @@ struct Counters {
   // Historical V1 importer/replay detail columns remain in the JSON schema
   // at zero for result-parser compatibility. Fields in this block that still
   // have a count* entry are shared by the V2 replay path.
-  std::atomic<std::uint64_t> commitChunkDrawRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawIndexed{0};
-  std::atomic<std::uint64_t> commitChunkDrawNoDelta{0};
-  std::atomic<std::uint64_t> commitChunkDrawStateDelta{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunScans{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunSubmits{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideStreamRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideIbRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBindingOverrideAlphaRecords{0};
-  std::atomic<std::uint64_t> commitChunkDrawBatchConstUploadPassthrough{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchMaxRecords{0};
@@ -441,59 +425,6 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize9To16{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize17To32{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize33Plus{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunScanCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunScanCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBuildCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBuildCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunSubmitCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunSubmitCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunFinalBindCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunFinalBindCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionEmplaceCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionSnapshotCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkQueueDrawSubmissionSnapshotCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkIndexBindCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkIndexBindCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordFlushes{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunFlushes{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackFlushes{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureFlushes{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndFlushes{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushBeforeRecordRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawRunRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushDrawFallbackRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushFailureRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayPendingFlushEndRecords{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayDrawRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayNonDrawRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayConstRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayConstRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayApplyStateRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayApplyStateRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayClearRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayClearRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPresentRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayPresentRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplaySurfaceRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplaySurfaceRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayQueryRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayQueryRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayOtherRecordCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayOtherRecordCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkConstUploadCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkConstUploadCpuMaxNs{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHits{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMisses{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheHitWithIndex{0};
@@ -566,107 +497,6 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterReset{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterSwapChain{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterTextureLod{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakFirstDelta{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDelta{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakType{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakEnd{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakInvalid{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUpload{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUploadBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstantUploadRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsF{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsFBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsFRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsI{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsIBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsIRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsB{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsBBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstVsBRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsF{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsFBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsFRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsI{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsIBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsIRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsB{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsBBytes{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeConstPsBRegisters{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeStateApply{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeDrawUp{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeClear{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypePresent{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeSurfaceOp{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeQueryIssue{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeReadback{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakTypeOther{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaStreamOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaIbOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaTextureOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaShaderOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaFvfVdeclOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaOtherOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixed{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup2{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup3{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedGroup4Plus{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaStreamIbOnly{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithStream{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithIb{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithTexture{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithShader{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedWithOther{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamIb{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamShader{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbTexture{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbShader{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairTextureShader{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaRenderState{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaTexture{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaStream{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaFvf{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaShader{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaVertexDecl{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaRenderTarget{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaDepthStencil{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaViewport{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaScissor{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaTextureStageState{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaSamplerState{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaMaterial{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaClipPlane{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaTransform{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaLight{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaLightEnable{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBuffer{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamHandle{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamOffset{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaStreamStride{0};
-  std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBufferHandle{0};
-  std::atomic<std::uint64_t> drawPacketDeclaredAny{0};
-  std::atomic<std::uint64_t> drawPacketActualAny{0};
-  std::atomic<std::uint64_t> drawPacketRedundantAny{0};
-  std::atomic<std::uint64_t> drawPacketDeclaredNonbinding{0};
-  std::atomic<std::uint64_t> drawPacketActualNonbinding{0};
-  std::atomic<std::uint64_t> drawPacketRedundantNonbinding{0};
-  std::atomic<std::uint64_t> drawPacketDeclaredUniform{0};
-  std::atomic<std::uint64_t> drawPacketActualUniform{0};
-  std::atomic<std::uint64_t> drawPacketRedundantUniform{0};
-  std::atomic<std::uint64_t> drawPacketRedundantTexture{0};
-  std::atomic<std::uint64_t> drawPacketRedundantShader{0};
-  std::atomic<std::uint64_t> drawPacketRedundantRenderState{0};
-  std::atomic<std::uint64_t> drawPacketRedundantFvfVdecl{0};
-  std::atomic<std::uint64_t> drawPacketRedundantRtDepth{0};
-  std::atomic<std::uint64_t> drawPacketRedundantViewportScissor{0};
-  std::atomic<std::uint64_t> drawPacketRedundantTssSampler{0};
-  std::atomic<std::uint64_t> drawPacketRedundantFfp{0};
-  std::atomic<std::uint64_t> drawPacketRedundantClip{0};
   std::atomic<std::uint64_t> drawCalls{0};
   std::atomic<std::uint64_t> drawIndexedCalls{0};
   std::atomic<std::uint64_t> drawExpandedIndexedCalls{0};
@@ -1533,18 +1363,8 @@ struct Counters {
   std::atomic<std::uint64_t> bridgeCommitLatencyNs{0};
   std::atomic<std::uint64_t> bridgeCommitLatencyMaxNs{0};
   // Retired V1 importer phase columns kept at zero for stable perf output.
-  std::atomic<std::uint64_t> commitChunkImportCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkImportCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkHandleCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkHandleCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkReplayCpuMaxNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkDrawBatchSubmitCpuMaxNs{0};
   // The raw-enqueue V1 phase columns are retired; the V2 offload counters
   // beginning at offloadReplayCpuNs remain live.
-  std::atomic<std::uint64_t> commitChunkRawEnqueueCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkRawEnqueueCpuMaxNs{0};
   std::atomic<std::uint64_t> offloadReplayCpuNs{0};
   std::atomic<std::uint64_t> offloadReplayCpuMaxNs{0};
   std::atomic<std::uint64_t> offloadReplayQueueDepthSamples{0};
@@ -2196,9 +2016,6 @@ struct CounterEntry {
 constexpr CounterEntry kCounterTable[] = {
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
-    {"command_chunk_v1_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Chunks, nullptr, nullptr, 0.0},
-    {"command_chunk_v1_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Records, nullptr, nullptr, 0.0},
-    {"command_chunk_v1_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV1Bytes, nullptr, nullptr, 0.0},
     {"command_chunk_v2_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Chunks, nullptr, nullptr, 0.0},
     {"command_chunk_v2_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Records, nullptr, nullptr, 0.0},
     {"command_chunk_v2_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Bytes, nullptr, nullptr, 0.0},
@@ -2538,19 +2355,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
     {"hazard_bloom_false_positive", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomFalsePositive, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawIndexed, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_no_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawNoDelta, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawStateDelta, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_scans", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunScans, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunSubmits, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_binding_override_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_binding_override_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_binding_override_stream_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideStreamRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_binding_override_ib_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideIbRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_binding_override_alpha_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBindingOverrideAlphaRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_batch_const_upload_passthrough", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawBatchConstUploadPassthrough, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_submits", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSubmits, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchRecords, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_max_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchMaxRecords, nullptr, nullptr, 0.0},
@@ -2561,95 +2365,42 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_submission_batch_size_9_16", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize9To16, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_17_32", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize17To32, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_33_plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize33Plus, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_scan_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunScanCpuRing, 0.5},
     {"commit_chunk_draw_run_scan_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunScanCpuRing, 0.95},
-    {"commit_chunk_draw_run_build_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunBuildCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_build_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunBuildCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_build_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunBuildCpuRing, 0.5},
     {"commit_chunk_draw_run_build_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunBuildCpuRing, 0.95},
-    {"commit_chunk_draw_run_submit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunSubmitCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_submit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunSubmitCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_submit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunSubmitCpuRing, 0.5},
     {"commit_chunk_draw_run_submit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunSubmitCpuRing, 0.95},
-    {"commit_chunk_draw_run_final_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunFinalBindCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_final_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunFinalBindCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_final_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunFinalBindCpuRing, 0.5},
     {"commit_chunk_draw_run_final_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunFinalBindCpuRing, 0.95},
-    {"commit_chunk_queue_draw_submission_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_queue_draw_submission_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_queue_draw_submission_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.5},
     {"commit_chunk_queue_draw_submission_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionCpuRing, 0.95},
-    {"commit_chunk_queue_draw_submission_emplace_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_queue_draw_submission_emplace_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_queue_draw_submission_emplace_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.5},
     {"commit_chunk_queue_draw_submission_emplace_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionEmplaceCpuRing, 0.95},
-    {"commit_chunk_queue_draw_submission_snapshot_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_queue_draw_submission_snapshot_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_queue_draw_submission_snapshot_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuRing, 0.5},
     {"commit_chunk_queue_draw_submission_snapshot_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkQueueDrawSubmissionSnapshotCpuRing, 0.95},
-    {"commit_chunk_index_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkIndexBindCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_index_bind_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkIndexBindCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_index_bind_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkIndexBindCpuRing, 0.5},
     {"commit_chunk_index_bind_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkIndexBindCpuRing, 0.95},
-    {"commit_chunk_replay_pending_flush_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_pending_flush_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.5},
     {"commit_chunk_replay_pending_flush_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPendingFlushCpuRing, 0.95},
-    {"commit_chunk_replay_pending_flush_before_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushBeforeRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_run_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushDrawRunCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_fallback_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushDrawFallbackCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_failure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushFailureCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_end_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPendingFlushEndCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_before_record_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushBeforeRecordFlushes, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_run_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawRunFlushes, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_fallback_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackFlushes, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_failure_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureFlushes, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_end_flushes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndFlushes, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_before_record_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushBeforeRecordRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_run_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawRunRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_draw_fallback_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushDrawFallbackRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_failure_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushFailureRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_pending_flush_end_records", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkReplayPendingFlushEndRecords, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.5},
     {"commit_chunk_replay_draw_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayDrawRecordCpuRing, 0.95},
-    {"commit_chunk_replay_non_draw_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayNonDrawRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_non_draw_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayNonDrawRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_non_draw_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayNonDrawRecordCpuRing, 0.5},
     {"commit_chunk_replay_non_draw_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayNonDrawRecordCpuRing, 0.95},
-    {"commit_chunk_replay_const_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayConstRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_const_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayConstRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_const_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayConstRecordCpuRing, 0.5},
     {"commit_chunk_replay_const_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayConstRecordCpuRing, 0.95},
-    {"commit_chunk_replay_apply_state_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayApplyStateRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_apply_state_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayApplyStateRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_apply_state_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayApplyStateRecordCpuRing, 0.5},
     {"commit_chunk_replay_apply_state_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayApplyStateRecordCpuRing, 0.95},
-    {"commit_chunk_replay_clear_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayClearRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_clear_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayClearRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_clear_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayClearRecordCpuRing, 0.5},
     {"commit_chunk_replay_clear_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayClearRecordCpuRing, 0.95},
-    {"commit_chunk_replay_present_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPresentRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_present_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayPresentRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_present_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPresentRecordCpuRing, 0.5},
     {"commit_chunk_replay_present_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayPresentRecordCpuRing, 0.95},
-    {"commit_chunk_replay_surface_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplaySurfaceRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_surface_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplaySurfaceRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_surface_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplaySurfaceRecordCpuRing, 0.5},
     {"commit_chunk_replay_surface_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplaySurfaceRecordCpuRing, 0.95},
-    {"commit_chunk_replay_query_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayQueryRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_query_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayQueryRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_query_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayQueryRecordCpuRing, 0.5},
     {"commit_chunk_replay_query_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayQueryRecordCpuRing, 0.95},
-    {"commit_chunk_replay_other_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayOtherRecordCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_other_record_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayOtherRecordCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_other_record_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayOtherRecordCpuRing, 0.5},
     {"commit_chunk_replay_other_record_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayOtherRecordCpuRing, 0.95},
-    {"commit_chunk_const_upload_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_const_upload_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkConstUploadCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_const_upload_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.5},
     {"commit_chunk_const_upload_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkConstUploadCpuRing, 0.95},
     {"d3d9_draw_state_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheHits, nullptr, nullptr, 0.0},
@@ -2724,107 +2475,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"d3d9_draw_state_cache_miss_after_reset", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterReset, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_swap_chain", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterSwapChain, nullptr, nullptr, 0.0},
     {"d3d9_draw_state_cache_miss_after_texture_lod", CounterEntry::Kind::UnsignedCount, &Counters::d3d9DrawStateCacheMissAfterTextureLod, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_first_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakFirstDelta, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDelta, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakType, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_end", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakEnd, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_invalid", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakInvalid, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_upload", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUpload, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_upload_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUploadBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_upload_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstantUploadRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_f", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsF, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_f_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsFBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_f_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsFRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_i", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsI, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_i_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsIBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_i_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsIRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_b", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsB, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_b_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsBBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_vs_b_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstVsBRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_f", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsF, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_f_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsFBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_f_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsFRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_i", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsI, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_i_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsIBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_i_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsIRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_b", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsB, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_b_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsBBytes, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_const_ps_b_registers", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeConstPsBRegisters, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_apply_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeStateApply, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_draw_up", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeDrawUp, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_clear", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeClear, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_present", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypePresent, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_surface_op", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeSurfaceOp, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_query_issue", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeQueryIssue, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_readback", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeReadback, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_type_other", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakTypeOther, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_stream_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaStreamOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_ib_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaIbOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_texture_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaTextureOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_shader_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaShaderOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_fvf_vdecl_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaFvfVdeclOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_other_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaOtherOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixed, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_group2", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup2, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_group3", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup3, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_group4plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedGroup4Plus, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_stream_ib_only", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaStreamIbOnly, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithStream, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithIb, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithTexture, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithShader, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithFvfVdecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_with_other", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedWithOther, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamIb, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamTexture, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamShader, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_stream_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairStreamFvfVdecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbTexture, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbShader, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_ib_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairIbFvfVdecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_texture_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairTextureShader, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_texture_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairTextureFvfVdecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_run_break_state_delta_mixed_pair_shader_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawRunBreakStateDeltaMixedPairShaderFvfVdecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_render_state", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderState, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_texture", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTexture, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_stream", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStream, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_fvf", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaFvf, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_shader", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaShader, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaVertexDecl, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_rt", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaRenderTarget, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_ds", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaDepthStencil, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_viewport", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaViewport, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_scissor", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaScissor, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_tss", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTextureStageState, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_sampler", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaSamplerState, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_material", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaMaterial, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_clip", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaClipPlane, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_transform", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaTransform, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_light", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLight, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_light_enable", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaLightEnable, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_ib", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBuffer, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_stream_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamHandle, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_stream_offset", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamOffset, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_stream_stride", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamStride, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_delta_ib_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBufferHandle, nullptr, nullptr, 0.0},
-    {"draw_packet_declared_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredAny, nullptr, nullptr, 0.0},
-    {"draw_packet_actual_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualAny, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantAny, nullptr, nullptr, 0.0},
-    {"draw_packet_declared_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredNonbinding, nullptr, nullptr, 0.0},
-    {"draw_packet_actual_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualNonbinding, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_nonbinding", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantNonbinding, nullptr, nullptr, 0.0},
-    {"draw_packet_declared_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredUniform, nullptr, nullptr, 0.0},
-    {"draw_packet_actual_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualUniform, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_uniform", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantUniform, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_texture", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantTexture, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_shader", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantShader, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_render_state", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantRenderState, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_fvf_vdecl", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantFvfVdecl, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_rt_depth", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantRtDepth, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_viewport_scissor", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantViewportScissor, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_tss_sampler", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantTssSampler, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_ffp", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantFfp, nullptr, nullptr, 0.0},
-    {"draw_packet_redundant_clip", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantClip, nullptr, nullptr, 0.0},
     {"draw_calls", CounterEntry::Kind::UnsignedCount, &Counters::drawCalls, nullptr, nullptr, 0.0},
     {"draw_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawIndexedCalls, nullptr, nullptr, 0.0},
     {"draw_expanded_indexed", CounterEntry::Kind::UnsignedCount, &Counters::drawExpandedIndexedCalls, nullptr, nullptr, 0.0},
@@ -3713,29 +3363,19 @@ constexpr CounterEntry kCounterTable[] = {
     {"bridge_commit_latency_p50_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.5},
     {"bridge_commit_latency_p95_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.95},
     {"bridge_commit_latency_p99_ns", CounterEntry::Kind::PercentileNs, nullptr, nullptr, &Counters::bridgeCommitLatencyRing, 0.99},
-    {"commit_chunk_import_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkImportCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_import_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkImportCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_import_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.5},
     {"commit_chunk_import_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.95},
     {"commit_chunk_import_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkImportCpuRing, 0.99},
-    {"commit_chunk_handle_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkHandleCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_handle_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkHandleCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_handle_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.5},
     {"commit_chunk_handle_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.95},
     {"commit_chunk_handle_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkHandleCpuRing, 0.99},
-    {"commit_chunk_replay_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_replay_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkReplayCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_replay_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.5},
     {"commit_chunk_replay_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.95},
     {"commit_chunk_replay_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkReplayCpuRing, 0.99},
-    {"commit_chunk_draw_batch_submit_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawBatchSubmitCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_draw_batch_submit_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawBatchSubmitCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_batch_submit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.5},
     {"commit_chunk_draw_batch_submit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.95},
     {"commit_chunk_draw_batch_submit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawBatchSubmitCpuRing, 0.99},
     // Commit-replay offload path (DXMT9_OFFLOAD_COMMIT_REPLAY).
-    {"commit_chunk_raw_enqueue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkRawEnqueueCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_raw_enqueue_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkRawEnqueueCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_raw_enqueue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.5},
     {"commit_chunk_raw_enqueue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.95},
     {"commit_chunk_raw_enqueue_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkRawEnqueueCpuRing, 0.99},

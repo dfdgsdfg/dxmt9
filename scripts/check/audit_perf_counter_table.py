@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""Audit dxmt9_perf_counters.cpp for missing kCounterTable entries.
+"""Audit dxmt9_perf_counters.cpp for counter fields that are wired only halfway.
 
-Detects the silent-miss regression: a new field added to the `Counters`
-struct that is never referenced from the `kCounterTable`. Such a field
-would never appear in the `[dxmt9-perf]` line and would break tests that
-look for it.
+Two directions, because each catches a different silent failure:
+
+1. FIELD -> TABLE. A field in `Counters` never referenced from `kCounterTable`
+   never appears in the `[dxmt9-perf]` line, so the counter increments into
+   nothing.
+
+2. TABLE -> WRITER. A field referenced from `kCounterTable` that no `add()` or
+   `store()` in this file ever writes reports 0.000 forever. That is worse than
+   a missing row: the metric looks measured and negligible instead of absent.
+   This direction was added after Task 10 deleted countDrawPacketActualChange
+   and left fifteen `draw_packet_*` fields and their table rows behind. Neither
+   existing audit saw it -- the table audit passed because the rows were present,
+   and the callsite audit had nothing to check because the count*() declaration
+   had gone with the function.
 
 Parsing is text-based (no clang/AST dependency) so this runs as a
 deterministic Meson test target.
@@ -34,6 +44,15 @@ RING_FIELD_RE = re.compile(
 # Reference to a Counters member from the table: `&Counters::NAME`.
 COUNTER_REF_RE = re.compile(r"&Counters::([A-Za-z_][A-Za-z0-9_]*)")
 
+# Occurrences of a field name anywhere in the file. Deliberately NOT a
+# write-idiom match: the writers here use many shapes (add(), addMax(), direct
+# .store/.fetch_add, PercentileRing .add, helpers taking the field by
+# reference), and a regex over those produced hundreds of false positives when
+# tried. What holds regardless of shape is that a writer must NAME the field. A
+# field that occurs exactly twice -- its declaration and its one table row --
+# therefore has no writer at all.
+FIELD_NAME_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
 
 def parse_counters_struct(text: str) -> tuple[set[str], set[str]]:
     """Return (atomic field names, percentile ring field names)."""
@@ -53,6 +72,15 @@ def parse_counters_struct(text: str) -> tuple[set[str], set[str]]:
 def parse_table_references(text: str) -> set[str]:
     """Return the set of Counters member names referenced from any table row."""
     return set(COUNTER_REF_RE.findall(text))
+
+
+def field_mentions(text: str, name: str) -> int:
+    """How many times `name` appears as a whole word in the file."""
+    pattern = FIELD_NAME_RE_CACHE.get(name)
+    if pattern is None:
+        pattern = re.compile(r"\b" + re.escape(name) + r"\b")
+        FIELD_NAME_RE_CACHE[name] = pattern
+    return len(pattern.findall(text))
 
 
 def main() -> int:
@@ -86,9 +114,34 @@ def main() -> int:
         )
         return 1
 
+    # Direction 2: a table row whose field nothing ever writes reports 0 forever.
+    # Declaration + table row = 2 mentions; a writer would make a third.
+    never_written = sorted(
+        name for name in (all_fields & referenced)
+        if field_mentions(text, name) <= 2
+    )
+    if never_written:
+        print(
+            "audit: the following Counters fields have a kCounterTable row but\n"
+            "       are never written by any count*() implementation:",
+            file=sys.stderr,
+        )
+        for name in never_written:
+            print(f"  {name}", file=sys.stderr)
+        print(
+            f"\naudit: {len(never_written)} field(s) will report 0 on every\n"
+            f"[dxmt9-perf] line. That reads as \"measured, negligible\" rather than\n"
+            f"\"not measured\", which is why this is an error and not a warning.\n"
+            f"Either restore the writer or delete the field and its table row.\n"
+        f"(Detected by name-occurrence: declaration + table row and nothing\n"
+        f"else, so no writer of any shape mentions the field.)",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"audit: ok — {len(atomic_fields)} atomic + {len(ring_fields)} "
-        f"PercentileRing fields all referenced from kCounterTable "
+        f"PercentileRing fields all referenced from kCounterTable and written "
         f"(total references: {len(referenced)})"
     )
     return 0
