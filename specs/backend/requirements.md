@@ -505,10 +505,10 @@ rows) and an on/off replay-equivalence spec following the
 code must not advertise, negotiate, produce, import, or replay wire version 1.
 Any outer chunk version other than V2 must be rejected before validation,
 retention, state mutation, or queue submission. V1 envelope/record fixtures
-must not be compiled as active conformance evidence. Shared
-`D9CCommandRecord*` semantic value structs may remain temporarily as PE-local
-staging inputs only when they are converted directly into V2 and never
-serialized as a V1 chunk.
+must not be compiled as active conformance evidence. The transitional allowance for `D9CCommandRecord*` semantic value structs as
+PE-local staging inputs is **discharged**: those structs no longer exist, the PE
+recorder emits V2 sparse state directly, and `dxmt9c_device_commit_chunk`
+rejects any wire version other than 2.
 
 **R-BACK-2.54** *(V2 stable handle-index ABI.)* Wire version 2 must replace all
 payload-embedded server-wrapper addresses with `uint32_t` handle-table indices.

@@ -874,11 +874,11 @@ Wire V1 was retired from production after V2 promotion. PE and unix advertise
 only V2, the PE recorder always emits V2, and commit/offload replay rejects any
 outer version other than V2. The native V1 envelope/import/replay/parity fixture
 corpus was removed on 2026-07-19; layout, malformed-input, hazard, replay,
-marshalling, and allocation evidence now uses typed V2 fixtures. The shared
-`D9CCommandRecord*` semantic value structs remain temporarily as PE-local
-staging inputs to `appendLegacyCommandRecordAsV2`; the adapter emits V2 directly
-and never constructs a V1 wire chunk. These declarations are not a supported
-runtime ABI or positive-path fixture grammar.
+marshalling, and allocation evidence now uses typed V2 fixtures. The shared `D9CCommandRecord*` semantic value
+structs and `appendLegacyCommandRecordAsV2` are both **gone** as of the PE
+legacy-record removal: the recorder builds `SparseStateV2Input` directly, so
+there is no staging form left to convert. Nothing constructs a V1 wire chunk,
+and `dxmt9c_device_commit_chunk` rejects any wire version other than 2.
 
 V1 had a sound bounds-checkable outer shape, but its
 resource representation is transitional: payload fields and

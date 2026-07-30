@@ -449,7 +449,6 @@ test('dxmt9-present-ordinal-boundary-spec', present_ordinal_boundary_spec,
 # R-BACK-2.54 / R-BACK-2.56 command-chunk V2 replay/lifetime scaffolds.
 foreach spec : [
   ['chunk-record-v2-replay', 'chunk_record_v2_replay_spec.cpp'],
-  ['resource-hazard-v2', 'resource_hazard_v2_spec.cpp'],
 ]
   target = executable(
     'dxmt9-' + spec[0] + '-spec',

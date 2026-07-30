@@ -878,12 +878,6 @@ typedef struct D9CCommandChunkWireReszDepthResolveV2 {
     uint32_t intzDestHandleIndex;
 } D9CCommandChunkWireReszDepthResolveV2;
 
-typedef struct D9CChunkHandleEntry {
-    uint32_t kind;
-    uint32_t reserved;
-    uint64_t handle;
-} D9CChunkHandleEntry;
-
 enum {
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE = 1,
     D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE = 2,
@@ -961,10 +955,11 @@ enum {
     D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE = 29,
 };
 
-/* Variable-size header for const-array uploads. The element payload follows
- * immediately after this struct. `kind` selects which dxmt9c_device_set_*_const_*
- * to call; PE side encodes it as the matching D9C_COMMAND_RECORD_SET_*_CONST_*
- * type so the decoder can validate header.size against count*kElemSize. */
+/* Const-array upload semantics. `kind` selects which dxmt9c_device_set_*_const_*
+ * the importer calls; the PE side encodes it as the matching
+ * D9C_COMMAND_RECORD_SET_*_CONST_* record type. The fixed-size header struct
+ * this annotated is gone -- the payload is a V2 constant section now -- but the
+ * type-selects-the-setter contract is unchanged. */
 
 /* R-BACK-2.52: inline const-delta encode/decode helpers. These compute
  * where a Draw* record's six optional const-delta sections' payload bytes
@@ -974,18 +969,11 @@ enum {
  * "Inline Const Delta (opt-in)" and specs/backend/requirements.md
  * R-BACK-2.52 for those call sites.
  *
- * Const-delta payload placement mirrors each Draw* record kind's existing
- * trailing-region convention: DrawPrimitive / DrawIndexedPrimitive have no
- * other trailing region, so their const-delta payload area begins
- * immediately after the fixed record (like D9CCommandRecordClear::rectOffset
- * begins immediately after D9CCommandRecordClear). DrawPrimitiveUP /
- * DrawIndexedPrimitiveUP already carry a trailing vertex-data region (and
- * IndexedUP an index-data region before that); the const-delta payload area
- * is chained immediately after whichever trailing region is last
- * (vertexDataOffset + vertexDataSize), exactly the way
- * D9CDrawIndexedPrimitiveUPPacket::vertexDataOffset itself already chains
- * after the index-data region in appendDrawIndexedPrimitiveUPRecordWithFvf
- * (d3d9_pe_device.cpp). */
+ * Payload placement is no longer chained by hand. The fixed-size Draw* records
+ * that used to carry const-delta sections after their trailing vertex/index
+ * region were deleted with the legacy format; constants now ride the V2 sparse
+ * constant sections, which appendSparseRecordV2 lays out with every other
+ * section. What survives here is the range arithmetic these helpers do. */
 
 /* Register-file cap for a const-delta section kind
  * (D9C_DRAW_PACKET_CONST_DELTA_*). Returns 0 for an unrecognized kind,
@@ -1002,22 +990,6 @@ static inline uint32_t d9c_draw_packet_const_delta_section_cap(uint32_t kind) {
     }
 }
 
-/* Bytes per register for a const-delta section kind — mirrors
- * D9CCommandRecordSetConst: float4/int4 = 16 bytes/register, bool = 4
- * bytes/register. Returns 0 for an unrecognized kind. */
-static inline uint32_t d9c_draw_packet_const_delta_section_elem_size(uint32_t kind) {
-    switch (kind) {
-    case D9C_DRAW_PACKET_CONST_DELTA_VS_F:
-    case D9C_DRAW_PACKET_CONST_DELTA_PS_F:
-    case D9C_DRAW_PACKET_CONST_DELTA_VS_I:
-    case D9C_DRAW_PACKET_CONST_DELTA_PS_I:
-        return 16u;
-    case D9C_DRAW_PACKET_CONST_DELTA_VS_B:
-    case D9C_DRAW_PACKET_CONST_DELTA_PS_B:
-        return 4u;
-    default: return 0u;
-    }
-}
 
 /* R-BACK-2.52(c): validates one section's register range against the D3D9
  * register-file cap for its kind, overflow-safe. A `valid=1` section MUST
@@ -1032,6 +1004,18 @@ static inline int d9c_draw_packet_const_delta_section_range_valid(
     if (cap == 0u || registerCount == 0u) return 0;
     return startRegister <= cap && registerCount <= cap - startRegister;
 }
+
+/* ── Record-kind semantics ───────────────────────────────────────────────────
+ *
+ * The paragraphs below documented the fixed-size D9CCommandRecord* structs,
+ * which went with the legacy format. The record KINDS they describe are live
+ * D9C_COMMAND_RECORD_* values whose payloads are now V2 wire structs and sparse
+ * sections. The prose is kept because the semantics are the contract -- who
+ * drains what before the record is appended, which pointers are server-side
+ * casts, which records are ordering barriers and which block on a result -- and
+ * none of that is recoverable from an enum value. Where a paragraph names a
+ * deleted struct field, read it as naming the same field on the V2 wire struct.
+ * ─────────────────────────────────────────────────────────────────────────── */
 
 /* Standalone clear record. Variable-size: rect array (D9CRect[count])
  * follows the fixed header at rectOffset. count==0 → full-target clear. */

@@ -356,7 +356,7 @@ re-deriving each row's semantics, which already live in
 | `--dump-framegraph-dag` / `--framegraph-dag-*` (6 sub-flags) | `DXMT9_RENDERER_DUMP_DAG*`; writes `analysis/dag/*.{json,dot,mmd}`. |
 | `--frame-sampling` | `DXMT9_PERF_FRAME_SAMPLING=1`; per-Present `wall_ms`/fps in the log, consumed by `reduce`-domain summarizers, not by this domain. |
 | `--present-boundary-deferred` / `--draw-chunk-command-limit` | `DXMT9_PRESENT_BOUNDARY_DEFERRED`/`DXMT9_DRAW_CHUNK_COMMAND_LIMIT`. |
-| `--probe-draw-packet-actual-change` / `--probe-vs-const-setter-range` | `DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE`/`_VS_CONST_SETTER_RANGE`. |
+| `--probe-vs-const-setter-range` | `DXMT9_PERF_VS_CONST_SETTER_RANGE`. (`--probe-draw-packet-actual-change` was **retired** with the fat packet it measured; the wrapper now rejects it, pinned by `tests/scripts/test_3dmark05_probe_scripts.py`.) |
 | `--render-pass-reentry-top` | `DXMT9_PERF_RENDER_PASS_REENTRY_TOP`. |
 | `--measure-index-reuse` / `--measure-index-cache-opt-candidate` | `DXMT9_MEASURE_INDEX_REUSE`/`_CACHE_OPT_CANDIDATE`. |
 | `--allow-3dmark05` (via `--with-wine-capture-layer` wrapper) | Bypasses the wrapper script's own 3DMark05-command refusal (§4); this domain's core script always passes it. |

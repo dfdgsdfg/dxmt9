@@ -882,7 +882,9 @@ materialShadow\|viewportShadow\|lightShadow\|lightEnableShadow\|\
 clipPlaneShadow" src/d3d9/d3d9_pe_state_shadow.hpp
 
 # 4. Chunk packet wire fields.
-grep -n "D9CDrawPrimitivePacket\|D9CDrawPacketRenderState\|\
+# D9CDrawPrimitivePacket and D9CDrawPacketRenderState were deleted with the
+# legacy record format; render states now ride D9CCommandChunkWireRenderStateV2.
+grep -n "D9CCommandChunkWireRenderStateV2\|\
 D9CDrawPacketTextureStageState\|D9CDrawPacketSamplerState\|\
 D9CDrawPacketTransform\|D9CMaterial\|D9CLight\|D9CViewport" \
   include/dxmt9/device_c.h
