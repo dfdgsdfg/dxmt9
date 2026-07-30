@@ -2149,6 +2149,65 @@ pinning the *new* producer's output per fixture, capturing the goldens from the
 last commit before this one. State in the report that the old-vs-new property
 ends here and what replaced it.
 
+### Task 10 staging and what Step 1 actually found
+
+Task 10 is being landed in stages, because its file list was written before Tasks
+5-9 and Step 1 falsified several of its premises. Stage A is committed
+(`3bc4fbed`).
+
+**Step 1 result — the "zero-reference" list was wrong.** Every one of
+`validateCommandRecord`, `importedRecordIsDrawRunCandidate`,
+`drawPacketStateDeltaEquals`, `collectDrawPacketResourceHazards`,
+`packetHasNoStateDelta`, `makeRunParam`, and `applyDrawPacketState*` still has
+live callers inside the unix-side legacy-record replay path. They are *unreachable*
+rather than *unreferenced*, and the reason is one line:
+`device_c_chunk_replay.cpp:1567` rejects any chunk whose version is not
+`D9C_COMMAND_CHUNK_VERSION_V2`, and the PE side sets exactly that, at one site.
+So the whole legacy replay subgraph is dead by unreachability, and deleting it
+means deleting a connected component, not picking off leaves. Confirmed
+separately: the unix V2 files (`device_c_chunk_v2_{draw,hazard,nondraw,validate}.cpp`)
+contain **zero** references to the fat packet, so nothing on the V2 path depends
+on it. `replayInfoForCommandRecordType` is the exception the plan already called
+out and it stays -- `device_c_chunk_v2_hazard.cpp:192` uses it.
+
+**Step 2 result — the bridge layer is mixed.** `bridge_codegen` in `meson.build`
+generates the ops header, client, server dispatch and entries from
+`include/dxmt9/device_c.h`, so removing the two op declarations there regenerates
+those four files; do not hand-edit them. But `winemetal_bridge.cpp`,
+`device_c_provider_macros.hpp`, and `device_c_provider_undefs.hpp` are tracked and
+hand-maintained, so those three need manual edits. Both fat-packet ops
+(`dxmt9c_device_draw_primitive_packet`, `..._chunk`) have **no PE caller**.
+
+**Stage A (done, `3bc4fbed`): stop emitting legacy records.** The oversized-state
+drain now emits sparse APPLY_STATE; `appendCommandRecord`,
+`appendCommandRecordDirect`, and `legacyV2RecordScratch_` are deleted. This is the
+substantive half -- the legacy format is no longer produced anywhere in
+production. What is left is removing code that is already dead.
+
+**Stage B (next): retire the differential's legacy lane.** Must come before any
+shim deletion, because those lanes are now the only callers of
+`appendLegacyCommandRecordAsV2`. Per this task's preamble: capture goldens from
+the last commit before the deletion and convert the corpus to pin the new
+producer's output per fixture. Note the corpus is larger than when that was
+written -- 256 randomized cases now span all five record types, plus the UP lane
+and snapshot fixtures added in Task 9 and `c3e18446`. State in the report that the
+old-vs-new property ends at Stage B.
+
+**Stage C: delete the PE-side shim** -- `appendLegacyCommandRecordAsV2`,
+`loadLegacy`, `legacyRange`, the builder-header declaration,
+`buildDrawPacketFromViews`, and `d3d9_pe_draw_packet.hpp`.
+
+**Stage D: delete the unreachable unix component** -- the legacy-record replay
+subgraph named under Step 1, the two fat-packet bridge ops, and the legacy record
+structs plus both packet types in `device_c.h`; then regenerate the bridge and fix
+`bridge_ops_spec.cpp`'s opcode count. Keep `D9CDrawPacketTextureStageState`,
+`D9CDrawPacketSamplerState`, `D9CDrawPacketTransform` -- `SparseStateV2Input` uses
+them, and Stage A's drain now writes them directly.
+
+Stages C and D are each a connected-component deletion; do one per commit with all
+four lanes plus `meson test` between, and do not begin one without room to finish
+and verify it.
+
 - [ ] **Step 1: Re-verify every zero-reference claim**
 
 ```sh
