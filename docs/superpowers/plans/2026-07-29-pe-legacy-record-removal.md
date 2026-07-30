@@ -1581,6 +1581,36 @@ value. Confirmed failing against a stub first."
 draw-site step applied after the producer. The differential grows a second lane
 pair mirroring that composition — producer, then context — on both sides.
 
+### H5. Task 10's deletion list conflicts with keeping the differential alive
+
+Tasks 8 and 9 deliberately did NOT delete the shim's draw/UP cases,
+`appendLegacySparseRecord`, or `populateLegacySparseState`, even though both
+tasks' step 5 called for it. They cannot be deleted while the differential
+exists: its legacy lanes feed real draw and UP records through
+`appendLegacyCommandRecordAsV2`, which is the whole reason the comparison means
+anything. Task 9's plan text claiming "after this task appendLegacySparseRecord
+has no callers" is now false -- the tests are the callers.
+
+So Task 10 has to choose, explicitly:
+
+1. **Keep the shim as test-only code**, moved or clearly marked as such, and keep
+   the differential as a standing regression gate. The cost is that the legacy
+   record structs and the fat packet cannot be deleted either, since the shim
+   parses them -- which is most of what Task 10 set out to remove.
+2. **Delete the shim and retire the differential**, replacing it with pins that
+   assert the sparse output directly rather than against a legacy oracle. The
+   cost is losing the oracle exactly when the last of the migration lands, and
+   every fixture becomes a snapshot of current behaviour rather than a
+   comparison.
+
+Option 1 defeats the purpose; option 2 removes the safety net at the riskiest
+moment. A plausible middle path is to delete the production shim call sites and
+the fat packet from the PE record path while keeping the legacy structs plus
+`appendLegacyCommandRecordAsV2` compiled only into the test target, and to say so
+in one place so the next reader does not think it is dead code awaiting deletion.
+
+Decide before writing Task 10, not during it.
+
 ### H4. RESOLVED -- the indexed draw site regressed GT1 on a by-value stamp
 
 **Resolved in `7b198453`.** Both draw sites are wired and GT1/GT2/GT3/SFIV are
