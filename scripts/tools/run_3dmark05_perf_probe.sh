@@ -36,7 +36,6 @@ capture_gputrace=1
 dry_run=0
 dump_shaders=0
 frame_sampling=${DXMT9_PERF_FRAME_SAMPLING:-0}
-draw_packet_actual_change=${DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE:-0}
 vs_const_setter_range=${DXMT9_PERF_VS_CONST_SETTER_RANGE:-0}
 pe_recorder_stats=${DXMT9_PE_RECORDER_STATS:-0}
 pe_recorder_chunk_log=${DXMT9_PE_RECORDER_CHUNK_LOG:-0}
@@ -703,11 +702,6 @@ Options:
   --draw-chunk-command-limit N
                       Set DXMT9_DRAW_CHUNK_COMMAND_LIMIT=N for ordinary
                       draw-limit source-boundary probes.
-  --probe-draw-packet-actual-change
-                      Set DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1. Counts
-                      declared draw-packet state deltas whose values do or do
-                      not actually change the unix-side DeviceState before
-                      snapshot invalidation.
   --probe-vs-const-setter-range
                       Set DXMT9_PERF_VS_CONST_SETTER_RANGE=1. Aggregates
                       SetVertexShaderConstantF app-call ranges and flushed VS
@@ -1731,10 +1725,6 @@ while (($#)); do
     --draw-chunk-command-limit)
       draw_chunk_command_limit=${2:?missing value for --draw-chunk-command-limit}
       shift 2
-      ;;
-    --probe-draw-packet-actual-change)
-      draw_packet_actual_change=1
-      shift
       ;;
     --probe-vs-const-setter-range)
       vs_const_setter_range=1
@@ -4239,10 +4229,6 @@ fi
 
 if [[ -n "$draw_chunk_command_limit" ]]; then
   env_args+=("DXMT9_DRAW_CHUNK_COMMAND_LIMIT=$draw_chunk_command_limit")
-fi
-
-if [[ "$draw_packet_actual_change" != "0" && -n "$draw_packet_actual_change" ]]; then
-  env_args+=("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=$draw_packet_actual_change")
 fi
 
 if [[ "$vs_const_setter_range" != "0" && -n "$vs_const_setter_range" ]]; then

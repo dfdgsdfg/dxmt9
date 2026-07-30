@@ -20,7 +20,6 @@ perf-probe toolkit.
 | `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ` | Optional numeric filter for `DXMT9_PERF_ENCODER_BREAKDOWN=1`; when set, emit encoder breakdown rows only for one render-pass sequence id such as frame-capture `seq=60`, keeping 3DMark05 no-gputrace logs bounded during per-frame attribution probes | unset |
 | `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MIN` / `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ_MAX` | Optional inclusive numeric range filter for `DXMT9_PERF_ENCODER_BREAKDOWN=1`; used by Metal System Trace sidecars to log only the xctrace wall-clock seq window instead of all frames. Ignored when `DXMT9_PERF_ENCODER_BREAKDOWN_SEQ` is set | unset |
 | `DXMT9_PERF_RENDER_PASS_REENTRY_TOP` | Optional top-N per-frame same-key render-pass re-entry diagnostic. Emits `[dxmt9-perf-render-pass-reentry]` rows with A/B attachment handles, true B->A encoder path, read-relation bits, store-proof owners, touch distances, and preservation bytes. Use with `DXMT9_PERF_ENCODER_BREAKDOWN=1` or wrapper `--render-pass-reentry-top N` when joining re-entry role pairs to encoder load/store/clear action shape | unset |
-| `DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE` | Opt-in commit_chunk draw-packet diagnostic. Before applying a packet delta, compare the declared state bits to the current unix-side `DeviceState` and count actual-changing vs redundant non-binding/uniform buckets. Wrapper flag: `run_3dmark05_perf_probe.sh --probe-draw-packet-actual-change` | `0` |
 | `DXMT9_PERF_BATCH_MISS_SEMANTIC_REUSE_PROBE` | Heavy opt-in D3D9 snapshot-cache batch-miss opportunity probe. On each binding-agnostic batch miss, hashes the cleared `FlatDrawStateKey` and exact-compares it against the previous eight miss keys, counting hit/miss and reuse distance. It does not change rendering behavior; use only for no-gputrace CPU attribution scouts because it adds key hash/equality work on the batch-miss path | `0` |
 | `DXMT9_PERF_BATCH_MISS_SHADER_HASH_MEMO_PROBE` | Heavy opt-in D3D9 snapshot-cache batch-miss shader-constant hash memo opportunity probe. On each binding-agnostic batch miss, checks whether a currently rebuilt VS/PS constant hash has appeared in the small per-stage `(constant generation, usage)` memo ring, then records probe/hit/miss/store counters. It does not reuse hashes or change rendering behavior; use only for no-gputrace CPU attribution scouts because it adds ring scans and counter writes on the batch-miss path | `0` |
 | `DXMT9_DISABLE_DRAW_SUBMISSION_STATE_ELISION` | Diagnostic opt-out for producer-side draw-submission state-copy elision. Binding-agnostic snapshots still carry stream/IB bindings through `DrawBindingOverride`, but each submission materializes its own canonical state instead of reusing the previous same-generation/lane state. Use only for `v0.0.3` visual-gate A/B runs that isolate correctness regressions in the state-elision path; it intentionally restores several GiB/run of producer-side state copies | `0` |
@@ -74,3 +73,18 @@ perf-probe toolkit.
 | `DXMT_3DMARK05_SYSTEM_TRACE_CPU_PRODUCER_THREAD_REGEX` | Default for `run_3dmark05_system_trace_sidecar.sh --cpu-producer-thread-regex`; when set, the xctrace CPU summary verdict treats the matching thread as the P4 producer instead of auto-selecting the highest-weight target-process thread | unset |
 | `DXMT_3DMARK05_SYSTEM_TRACE_CPU_PRODUCER_FROM_PE_LOG` | Default for `run_3dmark05_system_trace_sidecar.sh --cpu-producer-from-pe-log`; forces PE recorder stats/log info when no explicit regex is set, passes the wrapped probe's `3dmark05-direct.log` to the CPU summarizer, and lets it prefer unix-side `unix_commit_chunk_entry native_tid=0x...` selectors before falling back to PE `pe_present_* thread_id=0x...` selectors. PE ids are Win32 thread ids, so a PE-source `producer-thread-not-found` verdict means native Mach/pthread mapping is still needed | `0` |
 | `DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB` | Free-space guard for `run_3dmark05_system_trace_sidecar.sh` before launching xctrace. Defaults to `4096` because a 10s all-processes 3DMark05 Metal System Trace has failed during Instruments trim with about `2.4GiB` free. Set `0` only for deliberate partial-run risk; dry-runs print a warning instead of failing | `4096` |
+
+## Retired perf diagnostics
+
+`DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE` is **not honored by the current HEAD**.
+It compared a draw packet's declared state bits against the unix-side
+`DeviceState` and bucketed actual-changing versus redundant deltas. The whole
+premise was the fat `D9CDrawPrimitivePacket`, which the PE legacy-record removal
+deleted: there is no packet delta to compare any more, only sparse V2 sections
+that carry exactly what the producer decided to emit. Removed together with its
+`drawPacketActualChangeMask` implementation, the
+`draw_packet_actual_change_*` counters, and the wrapper's
+`--probe-draw-packet-actual-change` flag; `summarize_3dmark05_perf.py` keeps its
+tolerant rows so historical `result.json` files still parse. Do not schedule new
+runs with this env unless an equivalent sparse-section diagnostic is
+intentionally written, and update this file in the same change.

@@ -1640,11 +1640,6 @@ DXMT9_NODISCARD D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
-DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive_packet(D9CDevice*,
-                                              const D9CDrawPrimitivePacket*);
-DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive_chunk(D9CDevice*,
-                                             const D9CDrawPrimitivePacket* packets,
-                                             uint32_t packetCount);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_indexed_primitive(D9CDevice*, uint32_t type,
                                                int32_t baseVertex, uint32_t minVertex,
                                                uint32_t numVertices, uint32_t startIndex,

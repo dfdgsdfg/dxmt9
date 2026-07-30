@@ -3508,7 +3508,11 @@ OUT
         self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1", result.stdout)
         self.assertIn("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY_MAX_REFS=96", result.stdout)
 
-    def test_wrapper_dry_run_includes_draw_packet_actual_change_probe_env(self) -> None:
+    def test_wrapper_rejects_retired_draw_packet_actual_change_flag(self) -> None:
+        # --probe-draw-packet-actual-change was retired with the fat packet: it
+        # compared a draw packet's declared state bits against the unix-side
+        # DeviceState, and there is no packet delta any more. Pinned as REJECTED
+        # rather than deleted, so the flag cannot quietly come back as a no-op.
         result = self.run_script(
             RUN_WRAPPER,
             "--no-gputrace",
@@ -3516,8 +3520,8 @@ OUT
             "--dry-run",
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_PERF_DRAW_PACKET_ACTUAL_CHANGE=1", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown argument", result.stderr + result.stdout)
 
     def test_wrapper_dry_run_includes_vs_const_setter_range_probe_env(self) -> None:
         result = self.run_script(

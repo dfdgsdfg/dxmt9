@@ -441,8 +441,6 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize9To16{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize17To32{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSize33Plus{0};
-  std::atomic<std::uint64_t> commitChunkApplyDrawStateCpuNs{0};
-  std::atomic<std::uint64_t> commitChunkApplyDrawStateCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkDrawRunScanCpuNs{0};
   std::atomic<std::uint64_t> commitChunkDrawRunScanCpuMaxNs{0};
   std::atomic<std::uint64_t> commitChunkDrawRunBuildCpuNs{0};
@@ -651,7 +649,6 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkDrawDeltaStreamOffset{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaStreamStride{0};
   std::atomic<std::uint64_t> commitChunkDrawDeltaIndexBufferHandle{0};
-  std::atomic<std::uint64_t> drawPacketActualChangeSamples{0};
   std::atomic<std::uint64_t> drawPacketDeclaredAny{0};
   std::atomic<std::uint64_t> drawPacketActualAny{0};
   std::atomic<std::uint64_t> drawPacketRedundantAny{0};
@@ -1904,7 +1901,6 @@ struct Counters {
   PercentileRing commitChunkDrawBatchSubmitCpuRing;
   PercentileRing commitChunkRawEnqueueCpuRing;
   PercentileRing offloadReplayCpuRing;
-  PercentileRing commitChunkApplyDrawStateCpuRing;
   PercentileRing commitChunkDrawRunScanCpuRing;
   PercentileRing commitChunkDrawRunBuildCpuRing;
   PercentileRing commitChunkDrawRunSubmitCpuRing;
@@ -2565,10 +2561,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_submission_batch_size_9_16", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize9To16, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_17_32", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize17To32, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_submission_batch_size_33_plus", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawSubmissionBatchSize33Plus, nullptr, nullptr, 0.0},
-    {"commit_chunk_apply_draw_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkApplyDrawStateCpuNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_apply_draw_state_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkApplyDrawStateCpuMaxNs, nullptr, nullptr, 0.0},
-    {"commit_chunk_apply_draw_state_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkApplyDrawStateCpuRing, 0.5},
-    {"commit_chunk_apply_draw_state_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkApplyDrawStateCpuRing, 0.95},
     {"commit_chunk_draw_run_scan_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_scan_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkDrawRunScanCpuMaxNs, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_run_scan_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commitChunkDrawRunScanCpuRing, 0.5},
@@ -2815,7 +2807,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"commit_chunk_draw_delta_stream_offset", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamOffset, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_stream_stride", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaStreamStride, nullptr, nullptr, 0.0},
     {"commit_chunk_draw_delta_ib_handle", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkDrawDeltaIndexBufferHandle, nullptr, nullptr, 0.0},
-    {"draw_packet_actual_change_samples", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualChangeSamples, nullptr, nullptr, 0.0},
     {"draw_packet_declared_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketDeclaredAny, nullptr, nullptr, 0.0},
     {"draw_packet_actual_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketActualAny, nullptr, nullptr, 0.0},
     {"draw_packet_redundant_any", CounterEntry::Kind::UnsignedCount, &Counters::drawPacketRedundantAny, nullptr, nullptr, 0.0},
@@ -5125,98 +5116,6 @@ void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
   }
 }
 
-void countDrawPacketActualChange(std::uint32_t declaredMask,
-                                 std::uint32_t actualMask) {
-  auto& c = counters();
-  add(c.drawPacketActualChangeSamples);
-  if (declaredMask != 0) {
-    add(c.drawPacketDeclaredAny);
-  }
-  if (actualMask != 0) {
-    add(c.drawPacketActualAny);
-  } else if (declaredMask != 0) {
-    add(c.drawPacketRedundantAny);
-  }
-
-  constexpr std::uint32_t bindingMask =
-      CommitChunkDrawDeltaStream |
-      CommitChunkDrawDeltaIndexBuffer;
-  constexpr std::uint32_t uniformMask =
-      CommitChunkDrawDeltaRenderState |
-      CommitChunkDrawDeltaTextureStageState |
-      CommitChunkDrawDeltaSamplerState |
-      CommitChunkDrawDeltaMaterial |
-      CommitChunkDrawDeltaClipPlane |
-      CommitChunkDrawDeltaTransform |
-      CommitChunkDrawDeltaLight |
-      CommitChunkDrawDeltaLightEnable |
-      CommitChunkDrawDeltaViewport |
-      CommitChunkDrawDeltaScissor;
-  constexpr std::uint32_t textureMask =
-      CommitChunkDrawDeltaTexture |
-      CommitChunkDrawDeltaTextureStageState |
-      CommitChunkDrawDeltaSamplerState;
-  constexpr std::uint32_t shaderMask = CommitChunkDrawDeltaShader;
-  constexpr std::uint32_t renderStateMask = CommitChunkDrawDeltaRenderState;
-  constexpr std::uint32_t fvfVdeclMask =
-      CommitChunkDrawDeltaFvf |
-      CommitChunkDrawDeltaVertexDecl;
-  constexpr std::uint32_t rtDepthMask =
-      CommitChunkDrawDeltaRenderTarget |
-      CommitChunkDrawDeltaDepthStencil;
-  constexpr std::uint32_t viewportScissorMask =
-      CommitChunkDrawDeltaViewport |
-      CommitChunkDrawDeltaScissor;
-  constexpr std::uint32_t tssSamplerMask =
-      CommitChunkDrawDeltaTextureStageState |
-      CommitChunkDrawDeltaSamplerState;
-  constexpr std::uint32_t ffpMask =
-      CommitChunkDrawDeltaMaterial |
-      CommitChunkDrawDeltaTransform |
-      CommitChunkDrawDeltaLight |
-      CommitChunkDrawDeltaLightEnable;
-  constexpr std::uint32_t clipMask = CommitChunkDrawDeltaClipPlane;
-
-  const std::uint32_t declaredNonbinding = declaredMask & ~bindingMask;
-  const std::uint32_t actualNonbinding = actualMask & ~bindingMask;
-  if (declaredNonbinding != 0) {
-    add(c.drawPacketDeclaredNonbinding);
-    if (actualNonbinding == 0) {
-      add(c.drawPacketRedundantNonbinding);
-    }
-  }
-  if (actualNonbinding != 0) {
-    add(c.drawPacketActualNonbinding);
-  }
-
-  const std::uint32_t declaredUniform = declaredMask & uniformMask;
-  const std::uint32_t actualUniform = actualMask & uniformMask;
-  if (declaredUniform != 0) {
-    add(c.drawPacketDeclaredUniform);
-    if (actualUniform == 0) {
-      add(c.drawPacketRedundantUniform);
-    }
-  }
-  if (actualUniform != 0) {
-    add(c.drawPacketActualUniform);
-  }
-
-  auto addRedundantClass = [&](std::uint32_t mask,
-                               std::atomic<std::uint64_t>& counter) {
-    if ((declaredMask & mask) != 0 && (actualMask & mask) == 0) {
-      add(counter);
-    }
-  };
-  addRedundantClass(textureMask, c.drawPacketRedundantTexture);
-  addRedundantClass(shaderMask, c.drawPacketRedundantShader);
-  addRedundantClass(renderStateMask, c.drawPacketRedundantRenderState);
-  addRedundantClass(fvfVdeclMask, c.drawPacketRedundantFvfVdecl);
-  addRedundantClass(rtDepthMask, c.drawPacketRedundantRtDepth);
-  addRedundantClass(viewportScissorMask, c.drawPacketRedundantViewportScissor);
-  addRedundantClass(tssSamplerMask, c.drawPacketRedundantTssSampler);
-  addRedundantClass(ffpMask, c.drawPacketRedundantFfp);
-  addRedundantClass(clipMask, c.drawPacketRedundantClip);
-}
 
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
   auto& c = counters();
@@ -5240,12 +5139,6 @@ void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
   }
 }
 
-void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.commitChunkApplyDrawStateCpuNs, nanoseconds);
-  updateMax(c.commitChunkApplyDrawStateCpuMaxNs, nanoseconds);
-  recordRing(c.commitChunkApplyDrawStateCpuRing, nanoseconds);
-}
 
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
   auto& c = counters();

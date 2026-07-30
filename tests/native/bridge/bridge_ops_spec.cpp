@@ -45,7 +45,10 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 158u,
+  // 156 since Task 10 stage D removed dxmt9c_device_draw_primitive_packet and
+  // ..._chunk, the two direct fat-packet ops. They had no PE caller and the wire
+  // has rejected non-V2 chunks for far longer.
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 156u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
@@ -89,19 +92,11 @@ void testDodChunkBridgeOpsStaySingleCallShape() {
 
   const auto commitChunk =
       opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_commit_chunk);
-  const auto drawChunk =
-      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive_chunk);
-  const auto drawPacket =
-      opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive_packet);
   const auto legacyDraw =
       opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_device_draw_primitive);
 
   check(commitChunk >= first && commitChunk < first + count,
         "DOD commit chunk opcode is inside generated bridge range");
-  check(drawChunk >= first && drawChunk < first + count,
-        "DOD draw chunk opcode is inside generated bridge range");
-  checkEq(drawChunk, drawPacket + 1u,
-          "DOD draw chunk opcode remains adjacent to draw packet bridge op");
   check(commitChunk != legacyDraw,
         "DOD commit chunk remains distinct from legacy per-draw bridge op");
 }

@@ -117,12 +117,6 @@ PeWireObjectRef wireRef(void* object, std::uint32_t kind,
   };
 }
 
-D9CWireHandle wireHandle(std::uint64_t value) {
-  return D9CWireHandle{
-      .lo = static_cast<std::uint32_t>(value),
-      .hi = static_cast<std::uint32_t>(value >> 32u),
-  };
-}
 
 void testCachedIdentityBuilderAndSeal() {
   getterCalls = 0u;

@@ -269,16 +269,6 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* arg0, const D9CCommandC
   return dxmt9p_device_commit_chunk(arg0, chunk);
 }
 
-extern "C" int32_t dxmt9c_device_draw_primitive_packet(D9CDevice* arg0, const D9CDrawPrimitivePacket* packet) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
-  return dxmt9p_device_draw_primitive_packet(arg0, packet);
-}
-
-extern "C" int32_t dxmt9c_device_draw_primitive_chunk(D9CDevice* arg0, const D9CDrawPrimitivePacket* packets, uint32_t packetCount) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
-  return dxmt9p_device_draw_primitive_chunk(arg0, packets, packetCount);
-}
-
 extern "C" int32_t dxmt9c_device_draw_indexed_primitive(D9CDevice* arg0, uint32_t type, int32_t baseVertex, uint32_t minVertex, uint32_t numVertices, uint32_t startIndex, uint32_t count) {
   dxmt9::d3d9::drainDeferredReplay(arg0);
   return dxmt9p_device_draw_indexed_primitive(arg0, type, baseVertex, minVertex, numVertices, startIndex, count);

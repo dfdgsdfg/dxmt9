@@ -305,30 +305,7 @@ void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
-enum CommitChunkDrawDeltaBits : std::uint32_t {
-  CommitChunkDrawDeltaRenderState = 1u << 0,
-  CommitChunkDrawDeltaTexture = 1u << 1,
-  CommitChunkDrawDeltaStream = 1u << 2,
-  CommitChunkDrawDeltaFvf = 1u << 3,
-  CommitChunkDrawDeltaShader = 1u << 4,
-  CommitChunkDrawDeltaVertexDecl = 1u << 5,
-  CommitChunkDrawDeltaRenderTarget = 1u << 6,
-  CommitChunkDrawDeltaDepthStencil = 1u << 7,
-  CommitChunkDrawDeltaViewport = 1u << 8,
-  CommitChunkDrawDeltaScissor = 1u << 9,
-  CommitChunkDrawDeltaTextureStageState = 1u << 10,
-  CommitChunkDrawDeltaSamplerState = 1u << 11,
-  CommitChunkDrawDeltaMaterial = 1u << 12,
-  CommitChunkDrawDeltaClipPlane = 1u << 13,
-  CommitChunkDrawDeltaTransform = 1u << 14,
-  CommitChunkDrawDeltaLight = 1u << 15,
-  CommitChunkDrawDeltaLightEnable = 1u << 16,
-  CommitChunkDrawDeltaIndexBuffer = 1u << 17,
-};
-void countDrawPacketActualChange(std::uint32_t declaredMask,
-                                 std::uint32_t actualMask);
 void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
-void countCommitChunkApplyDrawStateCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
 void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
                                            std::uint64_t bytes);

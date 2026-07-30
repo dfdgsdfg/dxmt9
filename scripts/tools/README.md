@@ -26,9 +26,7 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   runtime-visible draw telemetry before spending another `.gputrace`. Future
   rows also include `stream_extra_bindings` (`sN:0xhandle@offset/stride`) so
   stream1+ handle alternation can be joined to draw windows rather than only
-  encoder-level totals. Use
-  `run_3dmark05_perf_probe.sh --probe-draw-packet-actual-change` when snapshot
-  cache misses need declared-vs-actual draw-packet delta evidence.
+  encoder-level totals.
 - `compare_3dmark05_perf_counters.py` — compare two
   `run_3dmark05_perf_probe.sh` output directories by dxmt9 perf counters. Use
   it through wrapper/finalizer `--compare-baseline-output <baseline-output>`

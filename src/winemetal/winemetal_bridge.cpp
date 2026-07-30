@@ -98,8 +98,6 @@ enum class BridgeDetail : std::size_t {
   SetFVF,
   CommitChunk,
   DrawPrimitive,
-  DrawPrimitivePacket,
-  DrawPrimitiveChunk,
   DrawIndexedPrimitive,
   DrawPrimitiveUP,
   DrawIndexedPrimitiveUP,
@@ -201,8 +199,6 @@ const char* bridgeDetailName(BridgeDetail detail) {
   case BridgeDetail::SetFVF: return "set_fvf";
   case BridgeDetail::CommitChunk: return "commit_chunk";
   case BridgeDetail::DrawPrimitive: return "draw_primitive";
-  case BridgeDetail::DrawPrimitivePacket: return "draw_primitive_packet";
-  case BridgeDetail::DrawPrimitiveChunk: return "draw_primitive_chunk";
   case BridgeDetail::DrawIndexedPrimitive: return "draw_indexed_primitive";
   case BridgeDetail::DrawPrimitiveUP: return "draw_primitive_up";
   case BridgeDetail::DrawIndexedPrimitiveUP: return "draw_indexed_primitive_up";
@@ -316,8 +312,6 @@ BridgeClass classifyBridgeClass(unsigned int code) {
 
   case BridgeOpcode::dxmt9c_device_commit_chunk:
   case BridgeOpcode::dxmt9c_device_draw_primitive:
-  case BridgeOpcode::dxmt9c_device_draw_primitive_packet:
-  case BridgeOpcode::dxmt9c_device_draw_primitive_chunk:
   case BridgeOpcode::dxmt9c_device_draw_indexed_primitive:
   case BridgeOpcode::dxmt9c_device_draw_primitive_up:
   case BridgeOpcode::dxmt9c_device_draw_indexed_primitive_up:
@@ -454,12 +448,6 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     return true;
   case BridgeOpcode::dxmt9c_device_draw_primitive:
     detail = BridgeDetail::DrawPrimitive;
-    return true;
-  case BridgeOpcode::dxmt9c_device_draw_primitive_packet:
-    detail = BridgeDetail::DrawPrimitivePacket;
-    return true;
-  case BridgeOpcode::dxmt9c_device_draw_primitive_chunk:
-    detail = BridgeDetail::DrawPrimitiveChunk;
     return true;
   case BridgeOpcode::dxmt9c_device_draw_indexed_primitive:
     detail = BridgeDetail::DrawIndexedPrimitive;
