@@ -829,14 +829,21 @@ there should be exactly the view-fill helper and the six call-site rewrites.
 
 ```sh
 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
-DXMT_3DMARK05_ARGS=-gt2 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
-DXMT_3DMARK05_ARGS=-gt3 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
+DXMT_3DMARK05_ARGS="-gt2 -nosplash -nosysteminfo -noscreens" \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
+DXMT_3DMARK05_ARGS="-gt3 -nosplash -nosysteminfo -noscreens" \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
 ```
 
-The launcher defaults to `-gt1` only
-(`experiments/launchers/app-d3d9-3dmark05.sh:9`); `DXMT_3DMARK05_ARGS` selects
-the others. The design's §4 gate names all four.
+`DXMT_3DMARK05_ARGS` replaces the launcher's **whole** argument list, not just
+its test selection: `default_3dmark05_args` is
+`"$default_3dmark05_selection_args $default_3dmark05_runner_args"`, so passing
+`-gt2` alone drops `-nosplash -nosysteminfo -noscreens` and the run sits on the
+splash / system-info screens, never reaches the scene, and fails with
+`missing_capture`. That failure looks exactly like a render regression and is
+not one. Always carry the runner args. The design's §4 gate names all four
+workloads.
 
 For each: `status: pass` (a timeout-finalized 3DMark05 run with the expected
 artifacts is acceptable), `gpu_command_buffer_errors = 0`, scene matches the
@@ -2035,8 +2042,10 @@ matters here specifically because this task rebuilds the unix provider.
 
 ```sh
 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
-DXMT_3DMARK05_ARGS=-gt2 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
-DXMT_3DMARK05_ARGS=-gt3 python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
+DXMT_3DMARK05_ARGS="-gt2 -nosplash -nosysteminfo -noscreens" \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
+DXMT_3DMARK05_ARGS="-gt3 -nosplash -nosysteminfo -noscreens" \
+  python3 scripts/run_apps/run_experiment.py run app-d3d9-3dmark05
 python3 scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark
 ```
 

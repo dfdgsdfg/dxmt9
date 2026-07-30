@@ -24,6 +24,8 @@
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
 #include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_decimated_scope.hpp"
+#include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -124,18 +126,8 @@ static std::int64_t dxmt9SteadyClockNs(std::chrono::steady_clock::time_point t) 
         t.time_since_epoch()).count();
 }
 
-// DXMT9_PE_STATS_DECIMATION: numeric N for the decimated (every-Nth-event)
-// PE-recorder scope timers (see d3d9_pe_stats_decimation.hpp). Fully
-// independent of DXMT9_PE_RECORDER_STATS / dxmt9PeRecorderStatsEnabled() —
-// this works whether or not that flag is set. Unset/"0"/unparseable = off.
-static std::uint32_t dxmt9PeStatsDecimationN() {
-    static const std::uint32_t n = []() -> std::uint32_t {
-        const auto envValue =
-            dxmt9::util::getenvU32("DXMT9_PE_STATS_DECIMATION");
-        return envValue.value_or(0);
-    }();
-    return n;
-}
+// dxmt9PeStatsDecimationN() now lives in d3d9_pe_decimated_scope.hpp so the
+// natively-built producer TU can time its own scope.
 
 namespace {
 // Shared RAII guard for the two decimated-timing sites owned directly by
@@ -143,18 +135,7 @@ namespace {
 // guarded function, including early returns, by recording the elapsed time
 // in its destructor. `stats` stays null (no-op destructor) unless
 // PeDecimatedScopeTimer::shouldSample() selected this call for timing.
-struct DxmtPeDecimatedScopeGuard {
-    PeDecimatedScopeStats* stats = nullptr;
-    std::chrono::steady_clock::time_point t0{};
-    ~DxmtPeDecimatedScopeGuard() {
-        if (stats) {
-            const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - t0).count();
-            PeDecimatedScopeTimer::recordSample(
-                *stats, static_cast<std::uint64_t>(elapsedNs));
-        }
-    }
-};
+// DxmtPeDecimatedScopeGuard now lives in d3d9_pe_decimated_scope.hpp.
 }  // namespace
 
 static std::uint32_t dxmt9PeCurrentThreadId() noexcept {
@@ -3370,6 +3351,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DSurface9* rtSlots_[4]{};
     bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
+
+    // Reused across draws so populateBindingView() does not zero ~850 bytes
+    // per call. Mutable because buildDrawPrimitivePacket() is const.
+    mutable dxmt9::d3d9::pe::PeBindingView peBindingView_{};
     bool dsSurfaceExplicit_ = false;
     dxmt9::d3d9::pe::CommandChunkV2Builder commandChunkV2_{};
     std::vector<std::byte> legacyV2RecordScratch_{};
@@ -3864,242 +3849,51 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         vsConstSetterRangePerf_ = VsConstSetterRangePerf{};
     }
 
+    // Fill the producer's binding view from the COM members. Reuses a member
+    // rather than a local so the ~850-byte view is not zero-initialized on
+    // every draw.
+    //
+    // Only `object` is populated. `identity` is what CommandChunkV2Builder::
+    // appendHandle needs and is filled when the sparse producer starts calling
+    // it; until then nothing reads it, and PeWireObjectRef::valid() rejects a
+    // zero identity loudly rather than silently emitting a bad handle.
+    void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view) const {
+        for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
+            view.textures[stage].object = rawTex(textures_[stage]);
+        }
+        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            view.streams[slot].buffer.object = rawVBuf(streamSrc_[slot]);
+            view.streams[slot].offset = streamOff_[slot];
+            view.streams[slot].stride = streamStr_[slot];
+        }
+        view.vs.object = rawVS(vs_);
+        view.ps.object = rawPS(ps_);
+        view.vdecl.object = rawVD(vdecl_);
+        view.indexBuffer.object = rawIBuf(indexBuf_);
+        view.depthStencil.object = rawSurf(dsSurface_);
+        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+            view.renderTargets[slot].object = rawSurf(rtSlots_[slot]);
+        }
+        view.rtExplicitMask = currentRtExplicitMask();
+        view.fvf = fvf_;
+    }
+
+    // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
+    // is deliberately unchanged so all six call sites -- which differ only in
+    // which packet field they pass, whether they thread a live
+    // forceFullSnapshot, and what they do on failure -- keep working verbatim.
+    // Rewriting them individually would have been six hand edits in a
+    // translation unit no meson test can compile; this is one function.
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
                                   UINT startVertex,
                                   UINT count,
                                   D9CDrawPrimitivePacket& packet,
                                   bool forceFullSnapshot = false) const {
-        // Decimated timing (draw_packet scope): sample only every Nth call
-        // so the CPU cost of measuring is itself negligible. Independent of
-        // DXMT9_PE_RECORDER_STATS. Guard covers every exit path (including
-        // the early returns below) via RAII.
-        DxmtPeDecimatedScopeGuard decimatedScope;
-        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-        if (decimationN != 0 &&
-            PeDecimatedScopeTimer::shouldSample(peDrawPacketDecimatedStats_, decimationN)) {
-            decimatedScope.stats = &peDrawPacketDecimatedStats_;
-            {
-                const auto n0 = std::chrono::steady_clock::now();
-                const auto n1 = std::chrono::steady_clock::now();
-                PeDecimatedScopeTimer::recordSample(
-                    peDecimatedNullScopeStats(),
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-            }
-            decimatedScope.t0 = std::chrono::steady_clock::now();
-        }
-        if (peState_.pendingRenderStates.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-            return false;
-        }
-
-        packet = D9CDrawPrimitivePacket{};
-        peState_.pendingRenderStates.forEach([&](uint32_t state, uint32_t value) {
-            auto& entry = packet.renderStates[packet.renderStateCount++];
-            entry.state = state;
-            entry.value = value;
-        });
-
-        packet.textureMask = peState_.pendingTextureMask;
-        for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-            if ((peState_.pendingTextureMask & (1u << stage)) != 0) {
-                packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
-            }
-        }
-
-        packet.streamSourceMask = peState_.pendingStreamMask;
-        for (DWORD stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-            if ((peState_.pendingStreamMask & (1u << stream)) == 0) {
-                continue;
-            }
-            auto& source = packet.streamSources[stream];
-            source.buffer = toWireHandle(rawVBuf(streamSrc_[stream]));
-            source.offset = streamOff_[stream];
-            source.stride = streamStr_[stream];
-        }
-
-        packet.fvfValid = peState_.pendingFvf ? 1u : 0u;
-        packet.fvf = fvf_;
-        // Phase 12: shader-handle delta. Server-side applyDrawPacketState
-        // dispatches dxmt9c_device_set_vertex_shader / set_pixel_shader
-        // when valid=1, mirroring the renderState/texture/stream pattern.
-        packet.vsValid = peState_.pendingVs ? 1u : 0u;
-        packet.vsHandle = toWireHandle(rawVS(vs_));
-        packet.psValid = peState_.pendingPs ? 1u : 0u;
-        packet.psHandle = toWireHandle(rawPS(ps_));
-        packet.vdeclValid = peState_.pendingVdecl ? 1u : 0u;
-        packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
-        // RT / DS delta — emit a handle for every pending bit. A set bit
-        // with a zero wire handle is a deliberate detach.
-        dxmt9::d3d9::pe::populateDrawPacketAttachmentDelta(
-            packet, peState_.pendingRtMask, currentRtWireHandles(),
-            peState_.pendingDs, toWireHandle(rawSurf(dsSurface_)));
-        packet.viewportValid = peState_.pendingViewport ? 1u : 0u;
-        packet.viewport = peState_.viewportShadow;
-        packet.scissorValid = peState_.pendingScissor ? 1u : 0u;
-        packet.scissor = peState_.scissorShadow;
-        // Phase 12: drain TSS / SamplerState pending tables into packet
-        // delta arrays. The cap check inside Set* already flushes the
-        // chunk if a single Set would push beyond the per-packet limit;
-        // here we just emit what's pending.
-        if (peState_.pendingTss.size() > D9C_DRAW_PACKET_MAX_TSS ||
-            peState_.pendingSamplerStates.size() > D9C_DRAW_PACKET_MAX_SAMPLER) {
-            return false;
-        }
-        packet.tssCount = static_cast<uint32_t>(peState_.pendingTss.size());
-        uint32_t tssIdx = 0;
-        peState_.pendingTss.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
-            packet.tss[tssIdx].stage = stage;
-            packet.tss[tssIdx].type = state;
-            packet.tss[tssIdx].value = value;
-            ++tssIdx;
-        });
-        packet.samplerStateCount = static_cast<uint32_t>(peState_.pendingSamplerStates.size());
-        uint32_t ssIdx = 0;
-        peState_.pendingSamplerStates.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
-            packet.samplerStates[ssIdx].sampler = sampler;
-            packet.samplerStates[ssIdx].type = state;
-            packet.samplerStates[ssIdx].value = value;
-            ++ssIdx;
-        });
-        // Phase 12: material + clip-plane deltas. Material rides as a
-        // single struct + valid flag; clip planes ride as a 6-bit mask
-        // + flat 6×4 float array (only set bits' slots are
-        // semantically meaningful, but the array is fixed-size so the
-        // packet layout stays simple).
-        packet.materialValid = peState_.pendingMaterial ? 1u : 0u;
-        packet.material = peState_.materialShadow;
-        packet.clipPlaneMask = peState_.pendingClipPlaneMask;
-        std::memcpy(packet.clipPlanes, peState_.clipPlaneShadow, sizeof(packet.clipPlanes));
-        // Phase 12: Transform delta — drain pending transform table
-        // (per-frame typically a handful: View, Projection, a few
-        // World/Texture transforms). Cap check: > MAX_TRANSFORMS forces
-        // chunk seal upstream.
-        if (peState_.pendingTransforms.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
-            return false;
-        }
-        packet.transformCount = static_cast<uint32_t>(peState_.pendingTransforms.size());
-        uint32_t txIdx = 0;
-        peState_.pendingTransforms.forEach([&](uint32_t state, const D9CMatrix& matrix) {
-            packet.transforms[txIdx].state = state;
-            packet.transforms[txIdx].reserved = 0;
-            packet.transforms[txIdx].matrix = matrix;
-            ++txIdx;
-        });
-        // Phase 12: Light + LightEnable deltas. Light slot mask carries
-        // the per-slot full D9CLight payload (set bit ⇒ lights[slot] is
-        // semantically meaningful). LightEnable delta is two parallel
-        // masks: ValidMask says "this slot has a fresh enable" and
-        // LightEnableMask carries the new value.
-        packet.lightSlotMask = peState_.pendingLightSlotMask;
-        for (uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-            if ((peState_.pendingLightSlotMask & (1u << slot)) != 0) {
-                packet.lights[slot] = peState_.lightShadow[slot];
-            }
-        }
-        packet.lightEnableValidMask = peState_.pendingLightEnableValidMask;
-        packet.lightEnableMask = peState_.pendingLightEnableMask;
-        // Phase 16: full-snapshot mode — override every delta field with
-        // the complete shadow snapshot. The importer applies whatever
-        // valid bits are set, so flipping every bit + populating from
-        // the existing PE shadow gives a self-contained packet without
-        // requiring any importer changes. We respect the per-array caps;
-        // a shadow that overflows (e.g. > 64 distinct render states)
-        // returns false to force the chunk to seal.
-        //
-        // Triggered exclusively by DXMT9_PE_DRAW_FULL_SNAPSHOT=1 (see
-        // dxmt9PeFullSnapshotEnabled() above for the env-flag contract
-        // and equivalence guarantee). Branch is delta-vs-snapshot only —
-        // both produce a D9CDrawPrimitivePacket with the same wire layout
-        // (no schema change), and the unix-side applier in
-        // device_c_chunk_replay.cpp::applyDrawPacketStateDirect() applies
-        // either packet by the same valid/mask iteration.
-        if (forceFullSnapshot || dxmt9PeFullSnapshotEnabled()) {
-            // Render states: drain the entire shadow table.
-            if (peState_.renderStateShadow.size() > D9C_DRAW_PACKET_MAX_RENDER_STATES) {
-                return false;
-            }
-            packet.renderStateCount = 0;
-            peState_.renderStateShadow.forEach([&](uint32_t state, uint32_t value) {
-                auto& entry = packet.renderStates[packet.renderStateCount++];
-                entry.state = state;
-                entry.value = value;
-            });
-            // A self-contained snapshot must also encode null unbinds. If a
-            // prior server state has a texture/stream in a slot that is null
-            // in this PE shadow, omitting the bit would preserve stale state.
-            packet.textureMask = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
-            for (DWORD stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
-                packet.textures[stage] = toWireHandle(rawTex(textures_[stage]));
-            }
-            packet.streamSourceMask = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
-            for (DWORD stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
-                auto& s = packet.streamSources[stream];
-                s.buffer = toWireHandle(rawVBuf(streamSrc_[stream]));
-                s.offset = streamOff_[stream];
-                s.stride = streamStr_[stream];
-            }
-            dxmt9::d3d9::pe::populateDrawPacketAttachmentSnapshot(
-                packet, currentRtWireHandles(), currentRtExplicitMask(), true,
-                toWireHandle(rawSurf(dsSurface_)));
-            // Scalar valid bits: emit shadow contents unconditionally.
-            packet.fvfValid = 1u;
-            packet.fvf = fvf_;
-            packet.vsValid = 1u;
-            packet.vsHandle = toWireHandle(rawVS(vs_));
-            packet.psValid = 1u;
-            packet.psHandle = toWireHandle(rawPS(ps_));
-            packet.vdeclValid = 1u;
-            packet.vdeclHandle = toWireHandle(rawVD(vdecl_));
-            packet.viewportValid = 1u;
-            packet.viewport = peState_.viewportShadow;
-            packet.scissorValid = 1u;
-            packet.scissor = peState_.scissorShadow;
-            // TSS / SamplerState — drain shadow tables fully.
-            if (peState_.tssShadow.size() > D9C_DRAW_PACKET_MAX_TSS ||
-                peState_.samplerStateShadow.size() > D9C_DRAW_PACKET_MAX_SAMPLER ||
-                peState_.transformShadow.size() > D9C_DRAW_PACKET_MAX_TRANSFORMS) {
-                return false;
-            }
-            packet.tssCount = 0;
-            peState_.tssShadow.forEach([&](uint32_t stage, uint32_t state, uint32_t value) {
-                auto& e = packet.tss[packet.tssCount++];
-                e.stage = stage;
-                e.type = state;
-                e.value = value;
-            });
-            packet.samplerStateCount = 0;
-            peState_.samplerStateShadow.forEach([&](uint32_t sampler, uint32_t state, uint32_t value) {
-                auto& e = packet.samplerStates[packet.samplerStateCount++];
-                e.sampler = sampler;
-                e.type = state;
-                e.value = value;
-            });
-            packet.materialValid = 1u;
-            packet.material = peState_.materialShadow;
-            // Clip planes: emit every slot with mask = 0x3F (all 6).
-            packet.clipPlaneMask = 0x3Fu;
-            std::memcpy(packet.clipPlanes, peState_.clipPlaneShadow,
-                        sizeof(packet.clipPlanes));
-            // Transforms: drain shadow.
-            packet.transformCount = 0;
-            peState_.transformShadow.forEach([&](uint32_t state, const D9CMatrix& matrix) {
-                auto& t = packet.transforms[packet.transformCount++];
-                t.state = state;
-                t.reserved = 0;
-                t.matrix = matrix;
-            });
-            // Lights: emit every slot.
-            packet.lightSlotMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
-            for (uint32_t i = 0; i < D9C_DRAW_PACKET_MAX_LIGHTS; ++i) {
-                packet.lights[i] = peState_.lightShadow[i];
-            }
-            packet.lightEnableValidMask = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
-            packet.lightEnableMask = peState_.lightEnableShadow;
-        }
-        packet.primitiveType = static_cast<uint32_t>(type);
-        packet.startVertex = startVertex;
-        packet.primitiveCount = count;
-        return true;
+        populateBindingView(peBindingView_);
+        return dxmt9::d3d9::pe::buildDrawPacketFromViews(
+            peState_, peBindingView_, static_cast<std::uint32_t>(type),
+            startVertex, count, forceFullSnapshot,
+            peDrawPacketDecimatedStats_, packet);
     }
 
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {

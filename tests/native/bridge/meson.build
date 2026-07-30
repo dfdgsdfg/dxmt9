@@ -162,7 +162,10 @@ test('dxmt9-pe-shadow-native-spec',
 
 pe_producer_views_spec = executable(
   'dxmt9-pe-producer-views-spec',
-  ['pe_producer_views_spec.cpp'],
+  [
+    'pe_producer_views_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
+  ],
   include_directories: [
     dxmt9_inc,
     include_directories('../../../src/d3d9'),

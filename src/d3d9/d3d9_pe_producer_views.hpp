@@ -20,6 +20,7 @@
 // CommandChunkV2Builder so a native differential test can drive it.
 
 #include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_v2_schema.hpp"
 #include "dxmt9/device_c.h"
@@ -52,7 +53,11 @@ struct PeBindingView {
   PeWireObjectRef depthStencil{};
   std::array<PeWireObjectRef, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>
       renderTargets{};
-  std::uint32_t rtExplicitMask = 0u;
+  // Per-slot bool array, NOT a bitmask: this mirrors the device's
+  // currentRtExplicitMask(), whose type is PeRtExplicitMask
+  // (std::array<bool, 4>), and populateDrawPacketAttachmentSnapshot binds it
+  // by const reference.
+  PeRtExplicitMask rtExplicitMask{};
   std::uint32_t fvf = 0u;
 };
 

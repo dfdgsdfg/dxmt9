@@ -57,7 +57,9 @@ void defaultBindingViewIsAllNull() {
   check(bindings.vdecl.object == nullptr, "default vdecl must be null");
   check(bindings.indexBuffer.object == nullptr, "default ib must be null");
   check(bindings.depthStencil.object == nullptr, "default ds must be null");
-  check(bindings.rtExplicitMask == 0u, "default rt mask must be zero");
+  for (const bool explicitRt : bindings.rtExplicitMask) {
+    check(!explicitRt, "default rt explicit flags must all be false");
+  }
   check(bindings.fvf == 0u, "default fvf must be zero");
 }
 
