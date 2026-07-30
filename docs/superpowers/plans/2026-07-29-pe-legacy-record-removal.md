@@ -527,7 +527,9 @@ struct PeSparseScratch {
              D9C_DRAW_PACKET_MAX_STREAMS> streams{};
   std::array<SparseBindingV2Input<D9CCommandChunkWireShaderBindingV2>, 2>
       shaders{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 2>
+  // ONE vertex input, not two: the section is V2SectionRuleSingle with
+  // maxCount 1, and FVF versus declaration is the entry's `kind` field.
+  std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 1>
       vertexInputs{};
   std::array<SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>, 1>
       indexBuffers{};
@@ -587,10 +589,21 @@ output storage sized to the V2 section caps."
 - Consumes: nothing.
 - Produces:
   ```cpp
-  // Emit is invoked as: bool(dxmt9::d3d9::pe::CommandChunkV2Builder&)
+  // Emit is invoked as:
+  //   HRESULT(dxmt9::d3d9::pe::CommandChunkV2Builder&, const AppendPhaseTimer&)
   template <typename Emit>
   HRESULT appendRecordV2(std::uint32_t type, std::size_t sizeHint, Emit&& emit);
   ```
+  **The emitter returns HRESULT, not bool, and this is enforced by a
+  `static_assert` inside `appendRecordV2`.** `HRESULT` is `long`, so a lambda
+  with no trailing return type wrapping a `bool`-returning V2 emitter would
+  deduce `bool` and convert `false` to `0 == S_OK`: a failed append reported as
+  success, CapacityPost run, and `notePeChunkAppendBoundary` counting a record
+  that never landed. Every emitter below spells out
+  `? S_OK : D3DERR_INVALIDCALL`. The `AppendPhaseTimer` second parameter exists
+  because the envelope owns the decimation sampling decision; an emitter records
+  `peAppendPhaseEncode_` around its own emission so `encode` keeps one meaning
+  across the migration.
   Tasks 5-9 call this instead of `appendCommandRecordDirect`.
 
 **Why this task exists.** `appendCommandRecordDirect` owns the recorder mutex,
@@ -628,7 +641,8 @@ HRESULT appendRecordV2(std::uint32_t type, std::size_t sizeHint, Emit&& emit) {
 template <typename Write>
 HRESULT appendCommandRecordDirect(std::uint32_t type, std::size_t bytes,
                                   Write&& write) {
-    return appendRecordV2(type, bytes, [&](auto& builder) {
+    return appendRecordV2(type, bytes,
+        [&](auto& builder, const auto& phase) -> HRESULT {
         const auto t0 = phaseNow();
         if (legacyV2RecordScratch_.size() < bytes) {
             legacyV2RecordScratch_.resize(bytes);
@@ -947,14 +961,17 @@ Present, at `:10740-10748`, becomes:
 ```cpp
 const HRESULT appendHr = appendRecordV2(
     D9C_COMMAND_RECORD_PRESENT, sizeof(D9CCommandRecordPresent),
-    [&](auto& builder) {
-        return dxmt9::d3d9::pe::appendPresentV2(
+    [&](auto& builder, const auto& phase) -> HRESULT {
+        const auto t0 = decltype(phase)::now();
+        const bool ok = dxmt9::d3d9::pe::appendPresentV2(
             builder,
             D9CCommandChunkWirePresentV2{
                 .hwnd = hwnd, .flags = flags,
                 .hasSrc = hasSrc, .hasDst = hasDst,
                 .reserved0 = 0u, .src = src, .dst = dst,
             });
+        phase.record(peAppendPhaseEncode_, t0);
+        return ok ? S_OK : D3DERR_INVALIDCALL;
     });
 ```
 
@@ -1100,11 +1117,14 @@ HRESULT appendSetConstRecord(uint32_t recordType, UINT start, UINT count,
     }
     return appendRecordV2(
         recordType, sizeof(D9CCommandRecordSetConst) + payloadBytes,
-        [&](auto& builder) {
-            return dxmt9::d3d9::pe::appendSetConstantsV2(
+        [&](auto& builder, const auto& phase) -> HRESULT {
+            const auto t0 = decltype(phase)::now();
+            const bool ok = dxmt9::d3d9::pe::appendSetConstantsV2(
                 builder, recordType, start, count,
                 std::span<const std::byte>(
                     reinterpret_cast<const std::byte*>(data), payloadBytes));
+            phase.record(peAppendPhaseEncode_, t0);
+            return ok ? S_OK : D3DERR_INVALIDCALL;
         });
 }
 ```
@@ -2087,6 +2107,24 @@ golden test pinning the new producer's output."
 the `appendRecordV2` envelope (Task 3), retention/count comparison in
 `LaneResult`, failure paths in `renderStatesOverCapFailBothLanes` and
 `unpublishedHandleBehavior`. §7's deletions → Task 10.
+
+**Corrections applied during execution, from the Tasks 1-3 implementation
+review.** Recorded here so the remaining tasks are read against the corrected
+text, not the original:
+
+- The emitter contract is `HRESULT(builder, AppendPhaseTimer)`, enforced by a
+  `static_assert`, not `bool(builder)`. The bool form silently converts a failed
+  append to `S_OK`. Every emitter snippet in Tasks 5-9 was rewritten.
+- Each emitter records `peAppendPhaseEncode_` around its own emission. Timing it
+  centrally in the envelope would redefine `encode` to include the legacy
+  adapter's resize and write, breaking the Task 10 A/B's comparability.
+- `PeSparseScratch::vertexInputs` is **1**, not 2 — the section is
+  `V2SectionRuleSingle` with `maxCount 1`, and FVF-versus-declaration is the
+  entry's `kind` field. A 2-entry span is rejected by `validSectionCount` and
+  the draw is dropped. Every scratch capacity is now `static_assert`ed against
+  `v2SectionRule(kind)->maxCount` instead of a copied macro.
+- Line-number citations in the new headers were replaced with symbol names. The
+  numbers in *this plan* drift as tasks land; re-locate by symbol.
 
 **Changes from this plan's first draft, all from its review:**
 

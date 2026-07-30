@@ -9203,8 +9203,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // `emit` is invoked as HRESULT(CommandChunkV2Builder&, const AppendPhaseTimer&).
     // It returns an HRESULT rather than bool so an emitter can distinguish
     // E_OUTOFMEMORY from a malformed record.
+    //
+    // The return type is asserted, not merely documented, because HRESULT is
+    // LONG: an emitter that returned the V2 emitters' natural `bool` would
+    // convert `false` to 0 == S_OK, so a failed append would be reported as a
+    // success. CapacityPost would run, notePeChunkAppendBoundary would count a
+    // record that was never appended, and the record would vanish with no
+    // error. Emitters must spell out `? S_OK : D3DERR_INVALIDCALL`.
     template<typename EmitFn>
     HRESULT appendRecordV2(uint32_t type, size_t sizeHint, EmitFn emit) {
+        static_assert(
+            std::is_same_v<
+                decltype(emit(std::declval<dxmt9::d3d9::pe::CommandChunkV2Builder&>(),
+                              std::declval<const AppendPhaseTimer&>())),
+                HRESULT>,
+            "appendRecordV2 emitters must return HRESULT, not bool: a bool "
+            "false would silently convert to S_OK");
         const size_t bytes = sizeHint;
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
         if (!commandChunkNegotiated_ || bytes == 0u || bytes > 0xffffffffull) {

@@ -329,28 +329,25 @@ inline bool vertexTextureSamplerSlot(std::uint32_t sampler, std::uint32_t& slot)
     if (sampler < kD3dVertexTextureSampler0 || sampler > kD3dVertexTextureSampler3) {
         return false;
     }
-    slot = kPeFragmentSamplerSlots +
-        static_cast<std::uint32_t>(sampler - kD3dVertexTextureSampler0);
+    slot = kPeFragmentSamplerSlots + (sampler - kD3dVertexTextureSampler0);
     return true;
 }
 
 inline bool textureBindingSlot(std::uint32_t stage, std::uint32_t& slot) noexcept {
     if (stage < kPeFragmentSamplerSlots) {
-        slot = static_cast<std::uint32_t>(stage);
+        slot = stage;
         return true;
     }
     return vertexTextureSamplerSlot(stage, slot);
 }
 
-inline std::uint32_t textureStageStateSlot(
-    std::uint32_t type) noexcept {
-    return std::min<std::uint32_t>(
-        static_cast<std::uint32_t>(type), kPeTextureStageStateSlots - 1u);
+inline std::uint32_t textureStageStateSlot(std::uint32_t type) noexcept {
+    return std::min<std::uint32_t>(type, kPeTextureStageStateSlots - 1u);
 }
 
 inline bool samplerSlot(std::uint32_t sampler, std::uint32_t& slot) noexcept {
     if (sampler < kPeFragmentSamplerSlots) {
-        slot = static_cast<std::uint32_t>(sampler);
+        slot = sampler;
         return true;
     }
     return vertexTextureSamplerSlot(sampler, slot);
@@ -358,7 +355,7 @@ inline bool samplerSlot(std::uint32_t sampler, std::uint32_t& slot) noexcept {
 
 inline bool samplerStateSlot(std::uint32_t type,
                              std::uint32_t& slot) noexcept {
-    slot = static_cast<std::uint32_t>(type);
+    slot = type;
     return slot < kPeSamplerStateSlots;
 }
 

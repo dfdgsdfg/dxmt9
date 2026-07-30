@@ -4,22 +4,31 @@
 //
 // The producer is pure over (a) bindings, (b) the constant shadow, and
 // (c) draw payloads. Destination-chunk state (d) is NOT a producer input:
-// production applies it in the draw call sites' writer lambdas, after the
-// producer runs, and never for APPLY_STATE
-// (d3d9_pe_device.cpp:9349/9363/9422/9437 versus the barrier path at :10000).
-// It is therefore an input to addChunkContextSections instead. See
+// production applies it inside the draw call sites' writer lambdas, after the
+// producer runs, and never on the barrier path. Compare the four callers of
+// d3d9_pe_device.cpp's populatePendingChunkDrawStreamDependencies against
+// chunkBarrierFlush, which builds an APPLY_STATE packet with no chunk-context
+// step at all. Chunk context is therefore an input to
+// addChunkContextSections instead. See
 // docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §3.
+//
+// References here name symbols rather than line numbers on purpose: this
+// migration moves large blocks of d3d9_pe_device.cpp, so line citations go
+// stale within a task or two.
 //
 // PeChunkContext is passed as data rather than reached for through
 // CommandChunkV2Builder so a native differential test can drive it.
 
 #include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_state_shadow.hpp"
+#include "device_c_chunk_v2_schema.hpp"
 #include "dxmt9/device_c.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <tuple>
 
 namespace dxmt9::d3d9::pe {
 
@@ -48,12 +57,14 @@ struct PeBindingView {
 };
 
 // (d) Destination-chunk history, consumed by addChunkContextSections only.
-// Mirrors what d3d9_pe_device.cpp:9462-9484 computes today.
+// Mirrors what d3d9_pe_device.cpp's populatePendingChunkDrawStreamDependencies
+// and populatePendingChunkDrawIndexDependency compute today.
 //
-// submittedIndexBufferWire holds the POINTER-valued wire, as
-// d9cWireHandleValue(toWireHandle(rawIBuf(indexBuf_))) does at :9401-9406 --
-// not an objectId. Comparing the wrong one makes the predicate always differ,
-// so every indexed draw re-emits its index binding.
+// submittedIndexBufferWire holds the POINTER-valued wire, matching what the
+// device stores in submittedIndexBufferWireValue_ via
+// d9cWireHandleValue(toWireHandle(rawIBuf(indexBuf_))) -- not an objectId.
+// Comparing the wrong one makes the predicate always differ, so every indexed
+// draw re-emits its index binding.
 struct PeChunkContext {
   std::uint32_t retainedStreamMask = 0u;
   bool indexBufferKnown = false;
@@ -86,12 +97,19 @@ struct PeDrawParams {
 
 // Device-owned, reused output storage. The SparseStateV2Input spans the
 // producer fills point into these arrays, so the scratch must outlive the
-// append that consumes them. Capacities match the V2 section caps exactly;
-// the producer returns false rather than truncating.
+// append that consumes them. The producer returns false rather than
+// truncating.
+//
+// Every capacity is asserted against the V2 schema's own maxCount below, not
+// against a hand-copied D9C_DRAW_PACKET_MAX_* value. Oversizing a category is
+// not a harmless slack: appendSparseRecordV2 rejects a span longer than
+// maxCount through validSectionCount(), so the draw would be dropped at
+// runtime. Undersizing truncates. Both are caught at compile time now.
 //
 // Single-element arrays are used for the scalar sections (viewport, scissor,
-// material, index buffer, depth stencil) so every category is addressed the
-// same way and SparseStateV2Input's spans can point at them uniformly.
+// material, index buffer, depth stencil, vertex input) so every category is
+// addressed the same way and SparseStateV2Input's spans can point at them
+// uniformly.
 struct PeSparseScratch {
   std::array<D9CCommandChunkWireRenderStateV2,
              D9C_DRAW_PACKET_MAX_RENDER_STATES> renderStates{};
@@ -99,11 +117,15 @@ struct PeSparseScratch {
              D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
   std::array<SparseBindingV2Input<D9CCommandChunkWireStreamBindingV2>,
              D9C_DRAW_PACKET_MAX_STREAMS> streams{};
-  // Two shader stages (vertex, pixel) and two vertex-input kinds (FVF,
-  // declaration); neither has a D9C_DRAW_PACKET_MAX_* cap of its own.
+  // Two shader stages (vertex, pixel).
   std::array<SparseBindingV2Input<D9CCommandChunkWireShaderBindingV2>, 2>
       shaders{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 2>
+  // ONE vertex input, not two. The section is V2SectionRuleSingle with
+  // maxCount 1: FVF and vertex declaration are the two values of the entry's
+  // `kind` field, not two entries. Declaration wins when both are dirty, and
+  // `value` carries the FVF either way -- see the shim at
+  // d3d9_pe_chunk_v2_draw.cpp's populateLegacySparseState.
+  std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 1>
       vertexInputs{};
   std::array<SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>, 1>
       indexBuffers{};
@@ -126,5 +148,50 @@ struct PeSparseScratch {
   std::array<D9CCommandChunkWireLightEnableV2, D9C_DRAW_PACKET_MAX_LIGHTS>
       lightEnables{};
 };
+
+// Tie every scratch capacity to the V2 schema rather than to a copied macro,
+// so a schema change breaks the build here instead of dropping draws at
+// runtime. v2SectionRule is constexpr, so this costs nothing.
+namespace detail {
+
+constexpr std::uint32_t sectionMaxCount(std::uint16_t kind) {
+  const auto* rule = v2SectionRule(kind);
+  return rule != nullptr ? rule->maxCount : 0u;
+}
+
+#define DXMT9_ASSERT_SCRATCH_CAP(member, sectionKind)                        \
+  static_assert(std::tuple_size_v<decltype(PeSparseScratch::member)> ==      \
+                    sectionMaxCount(sectionKind),                            \
+                "PeSparseScratch::" #member                                  \
+                " must equal the V2 schema maxCount for " #sectionKind)
+
+DXMT9_ASSERT_SCRATCH_CAP(renderStates, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(textures, D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE);
+DXMT9_ASSERT_SCRATCH_CAP(streams, D9C_COMMAND_CHUNK_V2_SECTION_STREAM);
+DXMT9_ASSERT_SCRATCH_CAP(shaders, D9C_COMMAND_CHUNK_V2_SECTION_SHADER);
+DXMT9_ASSERT_SCRATCH_CAP(vertexInputs, D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT);
+DXMT9_ASSERT_SCRATCH_CAP(indexBuffers, D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER);
+DXMT9_ASSERT_SCRATCH_CAP(renderTargets, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET);
+DXMT9_ASSERT_SCRATCH_CAP(depthStencils, D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL);
+DXMT9_ASSERT_SCRATCH_CAP(viewports, D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT);
+DXMT9_ASSERT_SCRATCH_CAP(scissors, D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR);
+DXMT9_ASSERT_SCRATCH_CAP(materials, D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL);
+DXMT9_ASSERT_SCRATCH_CAP(clipPlanes, D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE);
+DXMT9_ASSERT_SCRATCH_CAP(textureStageStates,
+                         D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(samplerStates, D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(transforms, D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM);
+DXMT9_ASSERT_SCRATCH_CAP(lights, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT);
+DXMT9_ASSERT_SCRATCH_CAP(lightEnables, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE);
+
+#undef DXMT9_ASSERT_SCRATCH_CAP
+
+// PeBindingView::textures indexes the PE shadow's texture slots, so the two
+// must agree; today both are 20 but nothing else ties them together.
+static_assert(std::tuple_size_v<decltype(PeBindingView::textures)> ==
+                  kPeTextureSlots,
+              "PeBindingView::textures must cover every PE texture slot");
+
+}  // namespace detail
 
 }  // namespace dxmt9::d3d9::pe
