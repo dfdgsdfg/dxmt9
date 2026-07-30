@@ -204,36 +204,3 @@ inline void touchConstShadow(ConstShadow& shadow,
 // payload wouldn't fit in the caller-supplied `payloadCapacity` (defensive;
 // callers size their scratch buffer to the sum of every section's
 // register-file cap, so this should also be unreachable).
-inline bool foldConstShadowIntoDeltaSection(
-    ConstShadow& shadow,
-    std::uint32_t kind,
-    std::size_t elemSize,
-    D9CDrawPacketConstDeltaSection& section,
-    std::uint8_t* payload,
-    std::size_t payloadCapacity,
-    std::uint32_t& payloadBytesInOut) {
-    section.valid = 0;
-    section.startRegister = 0;
-    section.registerCount = 0;
-    if (!shadow.dirty()) {
-        return true;
-    }
-    const std::uint32_t start = shadow.dirtyStart;
-    const std::uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
-    if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
-        return false;
-    }
-    const std::uint32_t bytes = static_cast<std::uint32_t>(count * elemSize);
-    if (payload == nullptr ||
-        static_cast<std::size_t>(payloadBytesInOut) + bytes > payloadCapacity) {
-        return false;
-    }
-    section.valid = 1;
-    section.startRegister = start;
-    section.registerCount = count;
-    const auto offset = static_cast<std::size_t>(start) * elemSize;
-    std::memcpy(payload + payloadBytesInOut, shadow.values.data() + offset, bytes);
-    payloadBytesInOut += bytes;
-    shadow.clear();
-    return true;
-}

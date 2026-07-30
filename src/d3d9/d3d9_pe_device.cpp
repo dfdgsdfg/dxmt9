@@ -3333,15 +3333,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // A fixed member array (not a per-draw heap allocation) keeps the fold
     // path allocation-free on the hot path per the DOD conventions; it only
     // participates in memory traffic when DXMT9_PE_INLINE_CONST_DELTA=1.
-    static constexpr std::size_t kMaxInlineConstDeltaPayloadBytes =
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_F) * 16u +
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_I) * 16u +
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_VS_B) * 4u +
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_F) * 16u +
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_I) * 16u +
-        static_cast<std::size_t>(D9C_DRAW_PACKET_MAX_CONST_PS_B) * 4u;
-    std::array<std::uint8_t, kMaxInlineConstDeltaPayloadBytes>
-        constDeltaPayloadScratch_{};
     VsConstSetterRangePerf vsConstSetterRangePerf_{};
     IDirect3DSurface9* rtSlots_[4]{};
     bool rtSlotExplicit_[4]{};
@@ -9114,6 +9105,38 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // success. CapacityPost would run, notePeChunkAppendBoundary would count a
     // record that was never appended, and the record would vanish with no
     // error. Emitters must spell out `? S_OK : D3DERR_INVALIDCALL`.
+    // Chunk seal cadence is a behavioural contract, not a size. appendRecordV2's
+    // sizeHint is what the capacity precheck compares against, so changing it
+    // moves where chunks seal and therefore which draws share a chunk. These are
+    // the sizes of the legacy records each site used to build, preserved verbatim
+    // so cadence stays bit-identical to the pre-migration recorder.
+    //
+    // Frozen deliberately. Their origin -- sizeof() of a legacy record struct --
+    // is deleted by this commit, so nothing regenerates them and nothing should:
+    // the number IS the contract now. Every sparse record is far smaller than its
+    // legacy counterpart, so each of these is an over-estimate, which is the safe
+    // direction (seal earlier, never overrun a chunk).
+    //
+    // Worth revisiting, but NOT here: now that the legacy format is gone, cadence
+    // no longer has to match the legacy era -- it only has to be sensible. Using
+    // true sparse sizes would seal chunks far less often, which is a perf change
+    // needing paired GT1/GT2 evidence, not a side effect of a deletion commit.
+    static constexpr std::size_t kLegacyApplyStateSizeHint = 4888u;
+    static constexpr std::size_t kLegacyClearSizeHint = 32u;
+    static constexpr std::size_t kLegacyColorFillSizeHint = 40u;
+    static constexpr std::size_t kLegacyDrawIndexedPrimitiveSizeHint = 4920u;
+    static constexpr std::size_t kLegacyDrawIndexedPrimitiveUPSizeHint = 4924u;
+    static constexpr std::size_t kLegacyDrawPrimitiveSizeHint = 4888u;
+    static constexpr std::size_t kLegacyDrawPrimitiveUPSizeHint = 4904u;
+    static constexpr std::size_t kLegacyPresentSizeHint = 64u;
+    static constexpr std::size_t kLegacyQueryIssueSizeHint = 24u;
+    static constexpr std::size_t kLegacyReadbackSizeHint = 24u;
+    static constexpr std::size_t kLegacyReszDepthResolveSizeHint = 24u;
+    static constexpr std::size_t kLegacySetConstSizeHint = 16u;
+    static constexpr std::size_t kLegacyStretchRectSizeHint = 72u;
+    static constexpr std::size_t kLegacyUpdateSurfaceSizeHint = 64u;
+    static constexpr std::size_t kLegacyUpdateTextureSizeHint = 24u;
+
     template<typename EmitFn>
     HRESULT appendRecordV2(uint32_t type, size_t sizeHint, EmitFn emit) {
         static_assert(
@@ -9256,7 +9279,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         return appendRecordV2(
             D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-            sizeof(D9CCommandRecordDrawPrimitive) + sparseConstPayloadBytes(),
+            kLegacyDrawPrimitiveSizeHint + sparseConstPayloadBytes(),
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 // Inside the emitter on purpose: CapacityPre may have sealed the
@@ -9313,7 +9336,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         bool indexSectionEmitted = false;
         const HRESULT hr = appendRecordV2(
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-            sizeof(D9CCommandRecordDrawIndexedPrimitive) +
+            kLegacyDrawIndexedPrimitiveSizeHint +
                 sparseConstPayloadBytes(),
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
@@ -9436,7 +9459,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // neither dependency checkpoint.
         const HRESULT hr = appendRecordV2(
             D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-            sizeof(D9CCommandRecordDrawPrimitiveUP) + vertexBytes,
+            kLegacyDrawPrimitiveUPSizeHint + vertexBytes,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -9553,7 +9576,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // this reason.
         const HRESULT hr = appendRecordV2(
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-            sizeof(D9CCommandRecordDrawIndexedPrimitiveUP) + indexBytes +
+            kLegacyDrawIndexedPrimitiveUPSizeHint + indexBytes +
                 vertexBytes,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
@@ -9585,7 +9608,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     HRESULT appendSetConstRecord(uint32_t recordType, UINT start, UINT count,
                                  const void* data, std::size_t elemSize) {
         const std::uint64_t payload64 = static_cast<std::uint64_t>(count) * elemSize;
-        if (payload64 > 0xffffffffull - sizeof(D9CCommandRecordSetConst)) {
+        if (payload64 > 0xffffffffull - kLegacySetConstSizeHint) {
             return D3DERR_INVALIDCALL;
         }
         const std::uint32_t payloadBytes = static_cast<std::uint32_t>(payload64);
@@ -9600,7 +9623,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // the single emitter behind all six VS/PS constant kinds.
         return appendRecordV2(
             recordType,
-            sizeof(D9CCommandRecordSetConst) + payloadBytes,
+            kLegacySetConstSizeHint + payloadBytes,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -9809,43 +9832,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // chunk as a standalone record placed before the draw record — the
     // draw record is not appended by this function, so chunk order still
     // ends up "consts → draw" for the fallback case.
-    HRESULT foldPendingConstsIntoDrawPacket(D9CDrawPrimitivePacket& packet,
-                                            std::uint32_t& payloadBytes) {
-        payloadBytes = 0;
-        struct FoldEntry {
-            ConstShadow* shadow;
-            uint32_t kind;
-            uint32_t recordType;
-            std::size_t elemSize;
-        };
-        const std::array<FoldEntry, D9C_DRAW_PACKET_CONST_DELTA_COUNT> entries{{
-            {&peConsts_.vsConstF, D9C_DRAW_PACKET_CONST_DELTA_VS_F,
-             D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4},
-            {&peConsts_.vsConstI, D9C_DRAW_PACKET_CONST_DELTA_VS_I,
-             D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4},
-            {&peConsts_.vsConstB, D9C_DRAW_PACKET_CONST_DELTA_VS_B,
-             D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t)},
-            {&peConsts_.psConstF, D9C_DRAW_PACKET_CONST_DELTA_PS_F,
-             D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4},
-            {&peConsts_.psConstI, D9C_DRAW_PACKET_CONST_DELTA_PS_I,
-             D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4},
-            {&peConsts_.psConstB, D9C_DRAW_PACKET_CONST_DELTA_PS_B,
-             D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t)},
-        }};
-        for (const auto& entry : entries) {
-            auto& section = packet.constDeltaSections[entry.kind];
-            const bool folded = foldConstShadowIntoDeltaSection(
-                *entry.shadow, entry.kind, entry.elemSize, section,
-                constDeltaPayloadScratch_.data(),
-                constDeltaPayloadScratch_.size(), payloadBytes);
-            if (!folded) {
-                const HRESULT hr = flushConstShadow(
-                    *entry.shadow, entry.recordType, entry.elemSize);
-                if (FAILED(hr)) return hr;
-            }
-        }
-        return S_OK;
-    }
 
     // Phase 28: chunk-mode barrier flush. Replaces flushPendingHotState's
     // bridge-emit path with a chunk-record path that preserves the
@@ -9882,11 +9868,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         applyParams.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
         if (buildSparseStateForRecord(applyParams)) {
             recordPeApplyStateBuildCpu(buildEntryNs);
-            // sizeHint stays sizeof(D9CCommandRecordApplyState): it is what the
+            // sizeHint stays kLegacyApplyStateSizeHint: it is what the
             // capacity precheck saw before, so seal cadence is unchanged.
             const HRESULT appendHr = appendRecordV2(
                 D9C_COMMAND_RECORD_APPLY_STATE,
-                sizeof(D9CCommandRecordApplyState),
+                kLegacyApplyStateSizeHint,
                 [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                     const AppendPhaseTimer& phase) -> HRESULT {
                     const auto t0 = AppendPhaseTimer::now();
@@ -9910,7 +9896,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     // One APPLY_STATE record carrying exactly one category's batch. The
-    // sizeHint stays sizeof(D9CCommandRecordApplyState), which is what the
+    // sizeHint stays kLegacyApplyStateSizeHint, which is what the
     // capacity precheck saw when this drained legacy records, so seal cadence is
     // unchanged. flags stay 0: these are batches, never snapshots.
     template <typename Fill>
@@ -9919,7 +9905,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         fill();
         return appendRecordV2(
             D9C_COMMAND_RECORD_APPLY_STATE,
-            sizeof(D9CCommandRecordApplyState),
+            kLegacyApplyStateSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -10044,7 +10030,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const HRESULT hr = appendRecordV2(
             D9C_COMMAND_RECORD_APPLY_STATE,
-            sizeof(D9CCommandRecordApplyState),
+            kLegacyApplyStateSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -10107,7 +10093,7 @@ public:
         const dxmt9::d3d9::pe::PeWireObjectRef& query) noexcept override {
         return appendRecordV2(
             D9C_COMMAND_RECORD_QUERY_ISSUE,
-            sizeof(D9CCommandRecordQueryIssue),
+            kLegacyQueryIssueSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -10654,7 +10640,7 @@ public:
             return barrierHr;
         }
 
-        // sizeHint stays sizeof(D9CCommandRecordPresent) even though no legacy
+        // sizeHint stays kLegacyPresentSizeHint even though no legacy
         // record is built: it is what the capacity precheck saw before, so
         // chunk seal cadence is unchanged.
         const D9CCommandChunkWirePresentV2 presentWire{
@@ -10667,7 +10653,7 @@ public:
             .dst = dst ? cd : D9CRect{},
         };
         const HRESULT appendHr = appendRecordV2(
-            D9C_COMMAND_RECORD_PRESENT, sizeof(D9CCommandRecordPresent),
+            D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11186,7 +11172,7 @@ public:
         };
         return appendRecordV2(
             D9C_COMMAND_RECORD_UPDATE_SURFACE,
-            sizeof(D9CCommandRecordUpdateSurface),
+            kLegacyUpdateSurfaceSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11224,7 +11210,7 @@ public:
         // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
         const HRESULT appendHr = appendRecordV2(
             D9C_COMMAND_RECORD_UPDATE_TEXTURE,
-            sizeof(D9CCommandRecordUpdateTexture),
+            kLegacyUpdateTextureSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11289,7 +11275,7 @@ public:
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
         const HRESULT appendHr = appendRecordV2(
-            D9C_COMMAND_RECORD_READBACK, sizeof(D9CCommandRecordReadback),
+            D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11413,7 +11399,7 @@ public:
         };
         return appendRecordV2(
             D9C_COMMAND_RECORD_STRETCH_RECT,
-            sizeof(D9CCommandRecordStretchRect),
+            kLegacyStretchRectSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11456,7 +11442,7 @@ public:
             .rect = pRect ? cr : D9CRect{},
         };
         return appendRecordV2(
-            D9C_COMMAND_RECORD_COLOR_FILL, sizeof(D9CCommandRecordColorFill),
+            D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -11763,7 +11749,7 @@ public:
             pRects ? static_cast<std::size_t>(count) : 0u);
         const HRESULT hr = appendRecordV2(
             D9C_COMMAND_RECORD_CLEAR,
-            sizeof(D9CCommandRecordClear) + rectBytes,
+            kLegacyClearSizeHint + rectBytes,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
@@ -12229,7 +12215,7 @@ public:
         if (FAILED(barrierHr)) return barrierHr;
         const HRESULT appendHr = appendRecordV2(
             D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
-            sizeof(D9CCommandRecordReszDepthResolve),
+            kLegacyReszDepthResolveSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();

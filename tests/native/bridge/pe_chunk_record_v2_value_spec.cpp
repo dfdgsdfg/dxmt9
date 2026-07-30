@@ -630,23 +630,22 @@ void testConstShadowFeedsV2ConstantSections() {
   check(shadow.dirty() && shadow.dirtyStart == 4u && shadow.dirtyEnd == 6u,
         "constant shadow tracks the merged dirty range");
 
-  D9CDrawPacketConstDeltaSection section{};
-  std::array<std::uint8_t, 64> payload{};
-  std::uint32_t payloadBytes = 0u;
-  check(foldConstShadowIntoDeltaSection(
-            shadow, D9C_DRAW_PACKET_CONST_DELTA_VS_F, sizeof(float) * 4u,
-            section, payload.data(), payload.size(), payloadBytes) &&
-            section.valid == 1u && section.startRegister == 4u &&
-            section.registerCount == 2u && payloadBytes == sizeof(values) &&
-            std::memcmp(payload.data(), values.data(), sizeof(values)) == 0,
-        "constant staging produces the exact V2 section range and bytes");
-  check(!shadow.dirty(), "successful fold clears the staged dirty range");
+  // The dirty range IS the sparse section range. This used to go through
+  // foldConstShadowIntoDeltaSection, which staged the range into a fat-packet
+  // D9CDrawPacketConstDeltaSection first; Task 10 deleted both, and
+  // buildSparseStateV2 now drains the shadow into a sparse range directly. The
+  // property under test is unchanged: the shadow's merged range and the bytes it
+  // covers must land in the record exactly.
+  const std::uint32_t startRegister = shadow.dirtyStart;
+  const std::uint32_t registerCount = shadow.dirtyEnd - shadow.dirtyStart;
+  check(startRegister == 4u && registerCount == 2u,
+        "the merged dirty range is the exact V2 section range");
 
   CommandChunkV2Builder builder;
   SparseStateV2Input state{
       .vsFloatConstants = {
-          section.startRegister,
-          section.registerCount,
+          startRegister,
+          registerCount,
           std::as_bytes(std::span(values)),
       },
   };
