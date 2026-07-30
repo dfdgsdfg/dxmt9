@@ -25,9 +25,13 @@
 #include "d3d9_pe_wire_handle.hpp"
 
 #include <array>
+#include <fstream>
+#include <map>
+#include <sstream>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <random>
@@ -466,6 +470,140 @@ LaneResult runDirectLane(const Fixture& fixture) {
   return finishLane(builder, ok);
 }
 
+// --- goldens ---------------------------------------------------------------
+//
+// The legacy lane is going away with the shim (Task 10 stage C). Its value is a
+// property -- "the sparse producer emits what the legacy format did" -- and a
+// property cannot survive the deletion of one of its two sides. So each fixture's
+// direct-lane output is also pinned to a golden, and the goldens are captured
+// while BOTH lanes still run and agree. That certification is what carries the
+// old-vs-new property forward: after stage C these goldens are no longer
+// "current behaviour, snapshotted", they are "the legacy-equivalent bytes, as
+// verified on the commit that captured them".
+//
+// Regenerate deliberately with DXMT9_UPDATE_PE_PRODUCER_GOLDEN=1. Doing that
+// after the legacy lane is gone re-baselines against whatever the producer does
+// today and silently discards the certification -- so once stage C lands, a
+// golden diff is a finding, not a chore.
+struct Golden {
+  std::size_t bytes = 0;
+  std::size_t records = 0;
+  std::size_t handles = 0;
+  std::size_t payload = 0;
+  std::size_t retained = 0;
+  std::uint64_t hash = 0;
+  bool ok = false;
+};
+
+// FNV-1a 64. Not a security hash -- it only has to make a changed record byte
+// change the digest, and it keeps the golden file diffable and dependency-free.
+std::uint64_t hashBytes(const std::vector<std::byte>& bytes) {
+  std::uint64_t h = 0xcbf29ce484222325ull;
+  for (const std::byte b : bytes) {
+    h ^= static_cast<std::uint64_t>(b);
+    h *= 0x100000001b3ull;
+  }
+  return h;
+}
+
+Golden goldenOf(const LaneResult& r) {
+  return Golden{r.bytes.size(), r.recordCount,  r.handleCount,
+                r.payloadBytes, r.retainedObjectCount,
+                hashBytes(r.bytes), r.ok};
+}
+
+const char* goldenPath() { return DXMT9_PE_GOLDEN_PATH; }
+
+bool updatingGoldens() {
+  const char* v = std::getenv("DXMT9_UPDATE_PE_PRODUCER_GOLDEN");
+  return v && v[0] != '\0' && std::strcmp(v, "0") != 0;
+}
+
+std::map<std::string, Golden>& goldens() {
+  static std::map<std::string, Golden> table;
+  return table;
+}
+
+void loadGoldens() {
+  std::ifstream in(goldenPath());
+  if (!in) {
+    return;
+  }
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    // name is last so it may contain spaces; the six numerics precede it.
+    std::istringstream ls(line);
+    Golden g{};
+    int okFlag = 0;
+    if (!(ls >> okFlag >> g.bytes >> g.records >> g.handles >> g.payload >>
+          g.retained >> std::hex >> g.hash >> std::dec)) {
+      continue;
+    }
+    g.ok = okFlag != 0;
+    std::string name;
+    std::getline(ls, name);
+    if (!name.empty() && name[0] == ' ') {
+      name.erase(0, 1);
+    }
+    goldens()[name] = g;
+  }
+}
+
+std::vector<std::pair<std::string, Golden>>& capturedGoldens() {
+  static std::vector<std::pair<std::string, Golden>> captured;
+  return captured;
+}
+
+void writeGoldens() {
+  std::ofstream out(goldenPath(), std::ios::trunc);
+  if (!out) {
+    throw TestFailure(std::string("cannot write goldens to ") + goldenPath());
+  }
+  out << "# pe_producer_differential goldens: the sparse producer's emitted "
+         "chunk per fixture.\n"
+      << "# Captured while the legacy lane still ran and agreed, so these are "
+         "the\n"
+      << "# legacy-equivalent bytes -- see the Golden comment in the spec "
+         "before\n"
+      << "# regenerating. Columns: ok bytes records handles payload retained "
+         "hash name\n";
+  for (const auto& [name, g] : capturedGoldens()) {
+    out << (g.ok ? 1 : 0) << ' ' << g.bytes << ' ' << g.records << ' '
+        << g.handles << ' ' << g.payload << ' ' << g.retained << ' '
+        << std::hex << g.hash << std::dec << ' ' << name << '\n';
+  }
+}
+
+void requireMatchesGolden(const std::string& name, const LaneResult& direct) {
+  const Golden actual = goldenOf(direct);
+  if (updatingGoldens()) {
+    capturedGoldens().emplace_back(name, actual);
+    return;
+  }
+  const auto it = goldens().find(name);
+  check(it != goldens().end(),
+        name + ": no golden. Fixtures must be pinned; regenerate with "
+               "DXMT9_UPDATE_PE_PRODUCER_GOLDEN=1 and review the diff.");
+  const Golden& want = it->second;
+  const auto shape = [](const Golden& g) {
+    std::ostringstream os;
+    os << "ok=" << (g.ok ? 1 : 0) << " bytes=" << g.bytes
+       << " records=" << g.records << " handles=" << g.handles
+       << " payload=" << g.payload << " retained=" << g.retained << " hash="
+       << std::hex << g.hash;
+    return os.str();
+  };
+  check(want.ok == actual.ok && want.bytes == actual.bytes &&
+            want.records == actual.records && want.handles == actual.handles &&
+            want.payload == actual.payload &&
+            want.retained == actual.retained && want.hash == actual.hash,
+        name + ": producer output does not match its golden\n    golden: " +
+            shape(want) + "\n    actual: " + shape(actual));
+}
+
 void requireLanesAgree(const Fixture& f) {
   const bool draw = f.params.recordType != D9C_COMMAND_RECORD_APPLY_STATE &&
                     f.params.recordType != 0u;
@@ -477,6 +615,9 @@ void requireLanesAgree(const Fixture& f) {
                                : (draw ? runDirectDrawLane(f)
                                        : runDirectLane(f));
   check(legacy.ok == direct.ok, f.name + ": lanes must agree on success");
+  // Pin the direct lane whether or not the legacy lane succeeded, so a fixture
+  // that legitimately fails both stays pinned as failing.
+  requireMatchesGolden(f.name, direct);
   if (!legacy.ok) {
     return;  // both failed; failure reasons may legitimately differ
   }
@@ -1189,6 +1330,7 @@ void randomizedRecordSequences() {
 
 int main() {
   try {
+    loadGoldens();
     emptyDelta();
     singleRenderStateDirty();
     scalarCategoriesDirty();
@@ -1226,6 +1368,13 @@ int main() {
     snapshotDrawKeepsEveryStreamSection();
     snapshotIndexedDrawKeepsEveryStreamSection();
     randomizedRecordSequences();
+    if (updatingGoldens()) {
+      writeGoldens();
+      std::cout << "pe_producer_differential_spec: wrote "
+                << capturedGoldens().size() << " goldens to " << goldenPath()
+                << "\n";
+      return 0;
+    }
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()
               << "\n";

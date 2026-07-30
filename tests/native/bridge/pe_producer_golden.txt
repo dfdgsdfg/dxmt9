@@ -1,0 +1,295 @@
+# pe_producer_differential goldens: the sparse producer's emitted chunk per fixture.
+# Captured while the legacy lane still ran and agreed, so these are the
+# legacy-equivalent bytes -- see the Golden comment in the spec before
+# regenerating. Columns: ok bytes records handles payload retained hash name
+1 136 1 0 56 0 563865b5e51c9ba empty delta
+1 160 1 0 80 0 ba8a5f7ac4f11525 one render state dirty
+1 292 1 0 212 0 cfb8429a8b015a20 viewport, scissor and material dirty
+1 896 1 4 752 4 b9c7c2ab63321a69 every category dirty
+1 224 1 2 112 2 aa70b40e3a11ad17 render target and depth stencil dirty
+1 664 1 0 584 0 3eccdeb8ff08b2dc render states at the section cap
+1 2548 1 6 2372 6 e84d1be7cdb71516 forced full snapshot
+1 968 1 2 856 2 94b33df30988bd33 all texture and stream slots dirty (snapshot flag heuristic)
+1 184 1 1 88 1 40b3bf82ae262e13 vertex declaration bound (primes the shared scratch)
+1 168 1 0 88 0 1acfbb168c5b1ea9 FVF only, after a declaration build (stale-scratch guard)
+1 2792 1 7 2600 7 a30a0935101e36b5 snapshot drains tss, sampler, transform and light shadows
+1 280 1 4 136 4 2630fc109691c951 four texture slots with four distinct objects
+1 196 1 1 100 1 640f17b71d45c82e non-indexed draw
+1 236 1 2 124 2 5be71eb25fe8de35 indexed draw, base vertex and index range
+1 236 1 2 124 2 300e0c3b0f8c49e9 indexed draw, negative base vertex
+1 196 1 1 100 1 db13f13d943a140e stream bound, not dirty, not retained: must re-emit
+1 136 1 0 56 0 c643d8c3c1138a8f stream bound, not dirty, already retained: no re-emit
+1 196 1 1 100 1 db13f13d943a140e stream dirty and retained: dirty still wins
+1 284 1 3 156 3 7287ca63ec9f2e44 four streams, mixed dirty/retained
+1 236 1 2 124 2 2c287bff457b42da IB known and unchanged but not retained: must re-emit
+1 196 1 1 100 1 c0a7bab18416fb8d IB known, unchanged and retained: no re-emit
+1 236 1 2 124 2 2c287bff457b42da IB known but changed: must re-emit
+1 236 1 2 124 2 2c287bff457b42da IB not yet known to the chunk: must emit
+1 236 1 2 124 2 2c287bff457b42da IB not known but already retained: not-known leg alone
+1 236 1 2 124 2 2c287bff457b42da IB dirty only: pendingIb leg alone
+1 560 1 2 448 2 e89b2c14db427e42 inline const delta, all six ranges dirty
+1 284 1 1 188 1 d5099590d63a6b16 inline const delta, only vs float dirty
+1 328 1 2 216 2 573bd5a9240a7328 UP draw, inline vertex payload
+1 352 1 2 240 2 dd4b4c96040262c5 UP draw, inline payload plus dirty render state
+1 368 1 2 256 2 f3f379fae5604cec indexed UP draw, inline index and vertex payloads
+1 368 1 2 256 2 f3f379fae5604cec indexed UP draw ignores a dirty index buffer
+1 2492 1 2 2380 2 7948ecd7f81deb40 UP draw under forceFullSnapshot
+1 2532 1 2 2420 2 4840cfb50c3b5fa2 indexed UP draw under forceFullSnapshot
+1 2396 1 3 2268 3 fd74c0b4ac0ba738 draw under snapshot keeps every stream section
+1 2436 1 4 2292 4 56f2f466d04ef55e indexed draw under snapshot keeps every stream section
+1 1692 1 4 1548 4 ecdb5c6639de9ca8 randomized record 0 type 4
+1 2540 1 7 2348 7 156858b63e9d0464 randomized record 1 type 1
+1 2540 1 7 2348 7 272d3d8360eceb3b randomized record 2 type 1
+1 2640 1 7 2448 7 19897f5889f7d829 randomized record 3 type 3
+1 1816 1 4 1672 4 cf01477e6109002b randomized record 4 type 3
+1 1636 1 6 1460 6 a3d42226eddb308c randomized record 5 type 1
+1 1596 1 4 1452 4 21341001e6af109b randomized record 6 type 4
+1 1644 1 6 1468 6 1a094ee754c3539a randomized record 7 type 4
+1 2664 1 7 2472 7 e18277eec513a2a0 randomized record 8 type 4
+1 2580 1 8 2372 8 b208a20df2bfe531 randomized record 9 type 2
+1 1496 1 5 1336 5 9251523b52031798 randomized record 10 type 1
+1 2540 1 7 2348 7 dfeed5784882870a randomized record 11 type 1
+1 2540 1 7 2348 7 43da27ac677ec89a randomized record 12 type 1
+1 2592 1 7 2400 7 502b1323664949e1 randomized record 13 type 4
+1 2580 1 8 2372 8 5ebc8fe4cedb2efa randomized record 14 type 2
+1 2664 1 7 2472 7 53bf3e9fc54d3c86 randomized record 15 type 4
+1 1912 1 7 1720 7 bfa7348878df8919 randomized record 16 type 3
+1 1640 1 4 1496 4 c8d557f95e5441d7 randomized record 17 type 3
+1 1772 1 4 1628 4 143b6232d882d750 randomized record 18 type 4
+1 2596 1 7 2404 7 3d02446a51e50f89 randomized record 19 type 3
+1 2580 1 8 2372 8 7cca2a237bb19b5 randomized record 20 type 2
+1 1496 1 6 1320 6 b50ccae434cebf49 randomized record 21 type 3
+1 2580 1 8 2372 8 ef20b7226f00f9de randomized record 22 type 2
+1 2580 1 7 2388 7 6370bcda9d8c740b randomized record 23 type 3
+1 2580 1 8 2372 8 3a4c10ba10d44929 randomized record 24 type 2
+1 2652 1 7 2460 7 a29eb8515990a6b5 randomized record 25 type 4
+1 2580 1 8 2372 8 8d6a02f7e826cb5c randomized record 26 type 2
+1 1436 1 5 1276 5 51a72878d44e9cd3 randomized record 27 type 1
+1 1776 1 7 1584 7 a41deab51171d866 randomized record 28 type 2
+1 1616 1 6 1440 6 c272ff091287d728 randomized record 29 type 3
+1 2568 1 7 2376 7 b9771ee7a5da4b87 randomized record 30 type 4
+1 2620 1 7 2428 7 3194f793a2862b99 randomized record 31 type 4
+1 2620 1 7 2428 7 54a06122731b4866 randomized record 32 type 3
+1 2580 1 8 2372 8 94c3ea36eaee4d4d randomized record 33 type 2
+1 2608 1 7 2416 7 909a936661301c43 randomized record 34 type 4
+1 2612 1 7 2420 7 f53d4bbd24330447 randomized record 35 type 3
+1 2584 1 7 2392 7 457c87f54b186e47 randomized record 36 type 3
+1 2540 1 7 2348 7 e71845dce327b253 randomized record 37 type 1
+1 2540 1 7 2348 7 c5bf8ab70cd7d8f2 randomized record 38 type 1
+1 2636 1 7 2444 7 8b0c9630d366e2d3 randomized record 39 type 3
+1 2128 1 5 1968 5 a804ae5b2c814a36 randomized record 40 type 1
+1 2580 1 8 2372 8 84b60224a2931881 randomized record 41 type 2
+1 2540 1 7 2348 7 2ec7c0459e373447 randomized record 42 type 3
+1 2580 1 8 2372 8 9bf89a3df4184d0d randomized record 43 type 2
+1 2540 1 7 2348 7 4fa2cda8b915d2e9 randomized record 44 type 1
+1 1004 1 4 860 4 d87b4d9d3581cb75 randomized record 45 type 28
+1 2672 1 7 2480 7 2f4c437bb74316d5 randomized record 46 type 4
+1 2540 1 7 2348 7 efb98cc182314243 randomized record 47 type 3
+1 2540 1 7 2348 7 d19d72d809d2ded2 randomized record 48 type 28
+1 2580 1 8 2372 8 ff7c6ea5d0848bfe randomized record 49 type 2
+1 1896 1 4 1752 4 20bb4b00e4516491 randomized record 50 type 3
+1 1820 1 4 1676 4 bbc4a342434f2bbd randomized record 51 type 1
+1 1860 1 4 1716 4 524a6d4938cf1671 randomized record 52 type 4
+1 2580 1 8 2372 8 599f752774520a09 randomized record 53 type 2
+1 2580 1 8 2372 8 4d763255a7aee803 randomized record 54 type 2
+1 2144 1 5 1984 5 82b4160d830b09b0 randomized record 55 type 2
+1 2640 1 7 2448 7 404aa668464e601c randomized record 56 type 3
+1 2540 1 7 2348 7 87d2ab676b9250ef randomized record 57 type 28
+1 2612 1 7 2420 7 1d40744ae7c517e7 randomized record 58 type 3
+1 2684 1 7 2492 7 a868b9693c92ad5c randomized record 59 type 4
+1 2632 1 7 2440 7 b890743a4d6f4f8 randomized record 60 type 4
+1 2540 1 7 2348 7 790396a46a5d77ab randomized record 61 type 28
+1 2020 1 5 1860 5 d4bb9586b6c23212 randomized record 62 type 4
+1 1700 1 5 1540 5 588831d0178d8e10 randomized record 63 type 2
+1 1680 1 5 1520 5 a18b4cf67a72c2a7 randomized record 64 type 3
+1 2540 1 7 2348 7 c4e172b7ee0a7359 randomized record 65 type 1
+1 1860 1 6 1684 6 943742e15bd86f0e randomized record 66 type 3
+1 2600 1 7 2408 7 a57ea44416edfeb4 randomized record 67 type 3
+1 1464 1 5 1304 5 21147f565950d573 randomized record 68 type 3
+1 1700 1 7 1508 7 adb97ca714eabdf3 randomized record 69 type 1
+1 1972 1 5 1812 5 be5a9ae0ac8f7d67 randomized record 70 type 28
+1 1664 1 7 1472 7 dce5bac1b16c2f23 randomized record 71 type 2
+1 2616 1 7 2424 7 dbb9839f06d47f1c randomized record 72 type 4
+1 1440 1 6 1264 6 ad1a3779fed44e41 randomized record 73 type 28
+1 2540 1 7 2348 7 17e05d66be529318 randomized record 74 type 28
+1 2648 1 7 2456 7 7003b8a0bf9fb15a randomized record 75 type 4
+1 1508 1 4 1364 4 6321cba7bc722d61 randomized record 76 type 1
+1 2540 1 7 2348 7 fe1d692ce725f0fe randomized record 77 type 1
+1 1840 1 6 1664 6 aa64f9fccf8bd8a2 randomized record 78 type 28
+1 2644 1 7 2452 7 7405fbbd14ca316c randomized record 79 type 3
+1 2592 1 7 2400 7 4a8d89d9de015d2c randomized record 80 type 4
+1 2540 1 7 2348 7 1015f6ca5450b174 randomized record 81 type 28
+1 2540 1 7 2348 7 5b54281578227443 randomized record 82 type 1
+1 1668 1 4 1524 4 cd34b3823b90e232 randomized record 83 type 3
+1 1776 1 4 1632 4 52e92383977c5ec7 randomized record 84 type 3
+1 1896 1 6 1720 6 65d7e8e5bae4283f randomized record 85 type 3
+1 1572 1 4 1428 4 620e67bafa1559dc randomized record 86 type 1
+1 2580 1 8 2372 8 78770b59928979e7 randomized record 87 type 2
+1 1800 1 5 1640 5 6ed91a2735f610e9 randomized record 88 type 4
+1 2592 1 7 2400 7 bc4c6f81441e8aac randomized record 89 type 4
+1 1724 1 6 1548 6 e4e3b96478824745 randomized record 90 type 1
+1 2580 1 8 2372 8 39a8f36ff28577ad randomized record 91 type 2
+1 1392 1 7 1200 7 488733e237282459 randomized record 92 type 2
+1 2628 1 7 2436 7 1f98b376175cd59b randomized record 93 type 3
+1 1996 1 5 1836 5 26162f837458bf8d randomized record 94 type 2
+1 1756 1 5 1596 5 f230922a1cfa40ab randomized record 95 type 1
+1 1908 1 5 1748 5 e89c0dcc030bd60c randomized record 96 type 3
+1 2540 1 7 2348 7 fc81d4b153a07a8e randomized record 97 type 1
+1 1488 1 6 1312 6 cba33899bdf2df0d randomized record 98 type 4
+1 1976 1 5 1816 5 69ea9cd061d1237f randomized record 99 type 2
+1 2068 1 4 1924 4 db0ab6518dadc1e5 randomized record 100 type 1
+1 1596 1 5 1436 5 f16ab50be937dc99 randomized record 101 type 2
+1 1752 1 5 1592 5 867e63d649244ee7 randomized record 102 type 1
+1 2540 1 7 2348 7 ff821ad647849e6a randomized record 103 type 1
+1 1596 1 5 1436 5 71d9571ee1e818ba randomized record 104 type 4
+1 2580 1 8 2372 8 7c5827da15134896 randomized record 105 type 2
+1 2072 1 5 1912 5 2562d757fa491739 randomized record 106 type 3
+1 1436 1 5 1276 5 d10ba946962783c5 randomized record 107 type 2
+1 2540 1 7 2348 7 83fde3c3d6675dd7 randomized record 108 type 1
+1 1644 1 5 1484 5 ccec0ec91b238b23 randomized record 109 type 2
+1 1640 1 7 1448 7 a21fce4092328ecf randomized record 110 type 2
+1 2304 1 7 2112 7 ca358e46d59f0361 randomized record 111 type 3
+1 1732 1 7 1540 7 c526947058ef5aa6 randomized record 112 type 4
+1 2580 1 8 2372 8 a8726ebf58e23128 randomized record 113 type 2
+1 2608 1 7 2416 7 75bd761495fcd1b4 randomized record 114 type 3
+1 1824 1 5 1664 5 c1151d58782a11f1 randomized record 115 type 3
+1 1492 1 4 1348 4 cfa5be07aa76409d randomized record 116 type 1
+1 2364 1 5 2204 5 17e517e43d4b5751 randomized record 117 type 4
+1 2096 1 5 1936 5 bb8f7c4b414c4942 randomized record 118 type 1
+1 1552 1 5 1392 5 a165340b1b50369a randomized record 119 type 28
+1 1808 1 5 1648 5 7ce631531ecce18a randomized record 120 type 3
+1 2580 1 8 2372 8 937b331b57481713 randomized record 121 type 2
+1 2644 1 7 2452 7 59ddde20b2af4d95 randomized record 122 type 3
+1 2076 1 6 1900 6 fbf1696de0825300 randomized record 123 type 4
+1 1992 1 6 1816 6 fbb8daec2578c6f3 randomized record 124 type 2
+1 2664 1 7 2472 7 44195b749d2e6b8c randomized record 125 type 4
+1 2580 1 7 2388 7 a42c9962484301d randomized record 126 type 3
+1 2540 1 7 2348 7 31d296019057f846 randomized record 127 type 28
+1 2600 1 7 2408 7 46469407d2cf38bd randomized record 128 type 3
+1 2580 1 8 2372 8 940020c40ee269c9 randomized record 129 type 2
+1 2580 1 8 2372 8 456d9a5a5b9beeb9 randomized record 130 type 2
+1 2540 1 7 2348 7 f67eb62bab7ec4fe randomized record 131 type 28
+1 1516 1 5 1356 5 c40fb968f3dc6d52 randomized record 132 type 4
+1 2588 1 7 2396 7 bf02ed3f65fbf6c randomized record 133 type 4
+1 2540 1 7 2348 7 c89377819ccb2327 randomized record 134 type 28
+1 1524 1 5 1364 5 727d083c6cebf7dc randomized record 135 type 1
+1 2580 1 8 2372 8 9c65571f03f56f3c randomized record 136 type 2
+1 1436 1 8 1228 8 7eeb7729375573a9 randomized record 137 type 2
+1 1792 1 5 1632 5 bdc3345649f140dd randomized record 138 type 4
+1 1712 1 6 1536 6 b14adf31693d9b8c randomized record 139 type 4
+1 1672 1 4 1528 4 d8712e1ea2a765b3 randomized record 140 type 4
+1 2568 1 7 2376 7 ef7f46905406c414 randomized record 141 type 3
+1 2540 1 7 2348 7 4ec38bb99998862d randomized record 142 type 1
+1 1816 1 6 1640 6 f5b9adae7d66a034 randomized record 143 type 2
+1 2540 1 7 2348 7 2f441627a2bf5e29 randomized record 144 type 28
+1 2596 1 7 2404 7 42abd66d29ef0973 randomized record 145 type 4
+1 2596 1 7 2404 7 c342767d6db2e51e randomized record 146 type 3
+1 1948 1 6 1772 6 240156d9bf7889f randomized record 147 type 2
+1 2632 1 7 2440 7 43908aaccc7272e6 randomized record 148 type 4
+1 2580 1 8 2372 8 9a0c48f2eb58e24c randomized record 149 type 2
+1 1884 1 4 1740 4 c32d9d99b9e49cd0 randomized record 150 type 4
+1 1780 1 3 1652 3 77d44ef729e15e6e randomized record 151 type 4
+1 1236 1 5 1076 5 7b22aac4f484099d randomized record 152 type 28
+1 2540 1 7 2348 7 e3a59570d5889342 randomized record 153 type 1
+1 2540 1 7 2348 7 cb5a0cda47aef77c randomized record 154 type 28
+1 1520 1 6 1344 6 9a278f112f12226e randomized record 155 type 28
+1 2580 1 8 2372 8 97ae6176bbedca1e randomized record 156 type 2
+1 2580 1 8 2372 8 9ba00d6aa264be5b randomized record 157 type 2
+1 2636 1 7 2444 7 d7cc9a261480aa24 randomized record 158 type 3
+1 2620 1 7 2428 7 965bf39a060c61e7 randomized record 159 type 4
+1 1604 1 5 1444 5 80f05056ccf8220e randomized record 160 type 1
+1 2652 1 7 2460 7 274bd985231bff8b randomized record 161 type 4
+1 1676 1 4 1532 4 a5008f2469247a24 randomized record 162 type 3
+1 2652 1 7 2460 7 473da949673bd1ef randomized record 163 type 3
+1 1764 1 5 1604 5 6fc302c3947b861a randomized record 164 type 2
+1 1920 1 5 1760 5 4b5180bebc4ab968 randomized record 165 type 28
+1 2540 1 7 2348 7 cb0860a4e41691f7 randomized record 166 type 28
+1 1500 1 4 1356 4 632c4193b1291087 randomized record 167 type 3
+1 2540 1 7 2348 7 9936794073d09afc randomized record 168 type 28
+1 1660 1 5 1500 5 379962572f6f891 randomized record 169 type 4
+1 2648 1 7 2456 7 6600dea559ccb35a randomized record 170 type 4
+1 2560 1 7 2368 7 a4d3520d0a6023bf randomized record 171 type 3
+1 1580 1 6 1404 6 4ae7737cab30412 randomized record 172 type 28
+1 1792 1 6 1616 6 3213a8f5bbdccb0c randomized record 173 type 2
+1 1808 1 5 1648 5 88ce101411a5965f randomized record 174 type 3
+1 2540 1 7 2348 7 40a4561369468e40 randomized record 175 type 28
+1 2044 1 6 1868 6 78248296ee43803e randomized record 176 type 2
+1 2540 1 7 2348 7 4a214eff768cf7e5 randomized record 177 type 1
+1 1704 1 6 1528 6 907531b2c771433a randomized record 178 type 28
+1 1052 1 3 924 3 7fffeae26e6ab550 randomized record 179 type 4
+1 2576 1 7 2384 7 6b05946a4975be55 randomized record 180 type 3
+1 2580 1 8 2372 8 af583e17b825efa5 randomized record 181 type 2
+1 2648 1 7 2456 7 feeee39f1a18efeb randomized record 182 type 3
+1 2540 1 7 2348 7 7bce86ca5c68450c randomized record 183 type 28
+1 2592 1 7 2400 7 a8802d0d6836a7f0 randomized record 184 type 4
+1 1504 1 4 1360 4 6030e916f49dc58a randomized record 185 type 28
+1 1560 1 3 1432 3 b315753861e07d8a randomized record 186 type 2
+1 2540 1 7 2348 7 d04980c258ceb982 randomized record 187 type 28
+1 2540 1 7 2348 7 77389bcf0a32f45a randomized record 188 type 1
+1 2540 1 7 2348 7 50b6307423c2cb6e randomized record 189 type 28
+1 2540 1 7 2348 7 96e64c53d6f33201 randomized record 190 type 28
+1 1860 1 6 1684 6 537ea2adf6715cc1 randomized record 191 type 3
+1 2540 1 7 2348 7 51041e64a17e673e randomized record 192 type 28
+1 2636 1 7 2444 7 c91527a9b0c08e4f randomized record 193 type 4
+1 1724 1 4 1580 4 fb4829fbf93b0ef0 randomized record 194 type 1
+1 2640 1 7 2448 7 4c2f989528b1cee2 randomized record 195 type 4
+1 2540 1 7 2348 7 6ce29af780904252 randomized record 196 type 28
+1 2540 1 7 2348 7 78e5c0fb87fe8ee7 randomized record 197 type 28
+1 2668 1 7 2476 7 62c9069498fef25c randomized record 198 type 4
+1 2580 1 8 2372 8 8e20478424f8d04a randomized record 199 type 2
+1 2580 1 8 2372 8 4aa150c39efb6ee8 randomized record 200 type 2
+1 2576 1 7 2384 7 b1f336760661d8e5 randomized record 201 type 3
+1 2084 1 5 1924 5 abfaa90a4f839664 randomized record 202 type 1
+1 1548 1 6 1372 6 5af002b0acbe05d8 randomized record 203 type 28
+1 1624 1 5 1464 5 b83c0df68812d256 randomized record 204 type 1
+1 1888 1 6 1712 6 808951e479d3c42d randomized record 205 type 2
+1 1680 1 4 1536 4 11ebe919c0cec8ff randomized record 206 type 3
+1 2540 1 7 2348 7 309fb71ef84b1066 randomized record 207 type 28
+1 1436 1 6 1260 6 78e6e8e008b01901 randomized record 208 type 28
+1 1448 1 5 1288 5 7d8c2681dc51ac47 randomized record 209 type 1
+1 2540 1 7 2348 7 d3b92d2b5d2ce740 randomized record 210 type 28
+1 1408 1 5 1248 5 a3042877d26c06b6 randomized record 211 type 3
+1 1832 1 7 1640 7 34953a5cae5a18d6 randomized record 212 type 2
+1 2628 1 7 2436 7 add436cb95a05457 randomized record 213 type 4
+1 1824 1 5 1664 5 8859f34055b626b2 randomized record 214 type 2
+1 2540 1 7 2348 7 d1402a9acb52fb38 randomized record 215 type 1
+1 2540 1 7 2348 7 fb7863e0564ba5d6 randomized record 216 type 28
+1 2540 1 7 2348 7 53d7fc973ccd58d8 randomized record 217 type 1
+1 1256 1 6 1080 6 f5a0c33f5e7884cc randomized record 218 type 3
+1 1904 1 6 1728 6 671e78f62e3de299 randomized record 219 type 1
+1 2580 1 8 2372 8 6cdd78acbf6761ca randomized record 220 type 2
+1 2076 1 7 1884 7 d74dd59c16cbee9a randomized record 221 type 2
+1 1792 1 4 1648 4 6cc797964b1e8984 randomized record 222 type 3
+1 1568 1 5 1408 5 eafc646c5a57674a randomized record 223 type 3
+1 2580 1 8 2372 8 c605208ce2dda457 randomized record 224 type 2
+1 2584 1 7 2392 7 289b712626b0c13f randomized record 225 type 3
+1 1576 1 5 1416 5 1c4ee7a0fb04fd90 randomized record 226 type 2
+1 2560 1 7 2368 7 73bfe57009d38865 randomized record 227 type 3
+1 2580 1 8 2372 8 27cad1a81bd1ae88 randomized record 228 type 2
+1 1668 1 5 1508 5 59e1ef05bcfeb5c8 randomized record 229 type 3
+1 1656 1 6 1480 6 6c739593731475b0 randomized record 230 type 1
+1 1672 1 5 1512 5 1987865b7679da71 randomized record 231 type 2
+1 1988 1 4 1844 4 c76631e37ae9b1e randomized record 232 type 4
+1 2632 1 7 2440 7 fd9e24d874a8a645 randomized record 233 type 4
+1 2624 1 7 2432 7 eeb26b21b6fabf13 randomized record 234 type 4
+1 2000 1 4 1856 4 acd73d02fecf5a1c randomized record 235 type 3
+1 1648 1 5 1488 5 4a828376f3e15d10 randomized record 236 type 2
+1 2540 1 7 2348 7 99dadcc62b92f8cf randomized record 237 type 1
+1 1324 1 4 1180 4 7438304ba763c89e randomized record 238 type 28
+1 2560 1 7 2368 7 2d41ecd91a785b73 randomized record 239 type 3
+1 2580 1 8 2372 8 4f2924e24e6bfb33 randomized record 240 type 2
+1 2580 1 8 2372 8 62b83d253a8bea1a randomized record 241 type 2
+1 2600 1 7 2408 7 9afce383ec45e49d randomized record 242 type 4
+1 2580 1 8 2372 8 e5d847b4d14e94cd randomized record 243 type 2
+1 2580 1 8 2372 8 ac70b7145b9884ab randomized record 244 type 2
+1 2596 1 7 2404 7 931639804cd3b9cc randomized record 245 type 3
+1 1660 1 4 1516 4 cda9532e9c1f0d66 randomized record 246 type 3
+1 1792 1 3 1664 3 5e10df35eafdea17 randomized record 247 type 4
+1 1532 1 5 1372 5 eea3c05f578df65 randomized record 248 type 2
+1 1564 1 6 1388 6 eb1c57bb98eaf78d randomized record 249 type 1
+1 1804 1 4 1660 4 ff8a3d914528b944 randomized record 250 type 1
+1 1160 1 3 1032 3 675c822a92dbfbc0 randomized record 251 type 3
+1 2580 1 8 2372 8 abf0f9c3dc7928f1 randomized record 252 type 2
+1 2580 1 8 2372 8 5f8ae8a70d4d4c10 randomized record 253 type 2
+1 1988 1 6 1812 6 9ea0da54bf815cee randomized record 254 type 3
+1 2612 1 7 2420 7 4bcb3dc11d03ec0f randomized record 255 type 3

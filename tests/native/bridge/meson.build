@@ -191,6 +191,10 @@ pe_producer_differential_spec = executable(
     include_directories('../../../src/d3d9'),
   ],
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: [
+    '-DDXMT9_PE_GOLDEN_PATH="' + meson.current_source_dir() +
+    '/pe_producer_golden.txt"',
+  ],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-producer-differential-spec',
