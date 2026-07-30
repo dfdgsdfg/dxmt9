@@ -1581,6 +1581,56 @@ value. Confirmed failing against a stub first."
 draw-site step applied after the producer. The differential grows a second lane
 pair mirroring that composition — producer, then context — on both sides.
 
+### H4. The indexed draw site regresses GT1 and the cause is NOT yet found
+
+**Status: the mechanism (`321f67dc`) is committed and proven; the two draw call
+sites are NOT wired.** An attempt to wire them was reverted. What is known:
+
+| state | GT1 |
+|---|---|
+| mechanism only, no wiring (`321f67dc`) | correct, luma 61-85 |
+| non-indexed site migrated, indexed legacy | **correct** |
+| both sites migrated | **CORRUPT** — luma 27.0, geometry smeared into long stretched triangles, HUD digits garbled |
+
+So the defect is isolated to `appendDrawIndexedPrimitiveRecord`, and it is NOT:
+
+- **the index-section emit decision.** Forcing `emitIndex` unconditionally true
+  for indexed draws left the corruption unchanged (luma 43.0, same smearing).
+- **the tracking update.** With always-emit, `indexSectionEmitted` is always
+  true, so `submittedIndexBuffer*` is always refreshed — still corrupt.
+- **a missing index format.** `D9CCommandChunkWireIndexBindingV2` is
+  `{valid, handleIndex}` only; format rides on the buffer object.
+- **an unusable wire ref.** The release-safe log-once added in Task 7 never
+  fired, so every emitted ref had a valid identity.
+- **reentrancy into the shared scratch.** `flushPendingCommandChunk` does not
+  reach `buildSparseStateForRecord` or `chunkBarrierFlush`, and the recorder lock
+  is held throughout.
+- **record content.** The differential compares emitted chunk BYTES for indexed
+  draws, across 20 named fixtures including every chunk-context leg in isolation,
+  and passes. Whatever differs is at the call site, not in the producer.
+
+`status: pass` reported nothing again, for the third time in this migration. Only
+`mean_luma` (27.0 against a 61-85 baseline) and the screenshot showed it.
+
+**What the differential structurally cannot see, and so where to look next:**
+
+1. `sizeHint` is the one call-site input with no test coverage. The indexed site
+   passes `sizeof(D9CCommandRecordDrawIndexedPrimitive) + sparseConstPayloadBytes()`.
+   If that moves a chunk boundary the record content stays identical while the
+   chunk *stream* changes — invisible to a per-record byte diff, and a wrong
+   boundary is exactly the kind of thing that makes a later draw replay against
+   state a previous chunk owned.
+2. The differential drives `PeChunkContext` from fixture values;
+   `currentChunkContext()` derives it from `commandChunkV2_.referencesObject`.
+   A wrong *derivation* passes every fixture.
+3. Cross-record sequencing. Each fixture builds ONE record into a fresh builder.
+   Nothing exercises "draw N's decisions given what draws 1..N-1 put in this
+   chunk", which is precisely what the retention legs are about.
+
+A runtime differential — build both records at the live call site and compare
+bytes, behind an env flag — is the tool that would settle it, and is the
+recommended next step rather than more inspection.
+
 ### Three hazards found before starting, from the Tasks 5-7 review
 
 All three were verified against source. Resolve each explicitly; none is a
