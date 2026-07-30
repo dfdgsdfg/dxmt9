@@ -176,3 +176,23 @@ pe_producer_views_spec = executable(
 test('dxmt9-pe-producer-views-spec',
      pe_producer_views_spec,
      env: dxmt9_native_test_env)
+
+pe_producer_differential_spec = executable(
+  'dxmt9-pe-producer-differential-spec',
+  [
+    'pe_producer_differential_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-producer-differential-spec',
+     pe_producer_differential_spec,
+     env: dxmt9_native_test_env)

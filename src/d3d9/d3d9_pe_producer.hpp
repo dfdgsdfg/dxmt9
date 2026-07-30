@@ -49,6 +49,24 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 
 // `primitiveType` is the D3DPRIMITIVETYPE value widened to uint32_t; this TU
 // cannot see the D3D9 enum. Callers cast.
+// Fills SparseStateV2Input directly from the shadows and the binding view, with
+// no fat packet in between. `constants` is non-const because, like
+// foldConstShadowIntoDeltaSection, the producer drains dirty ranges when the
+// inline-delta path is active.
+//
+// NOTE: no PeChunkContext. Destination-chunk re-emission is a draw-site step
+// applied after this function -- see the header comment in
+// d3d9_pe_producer_views.hpp.
+bool buildSparseStateV2(const PeHotStateShadow& shadow,
+                        PeConstShadowBlock& constants,
+                        const PeBindingView& bindings,
+                        const PeDrawPayloads& payloads,
+                        const PeDrawParams& params,
+                        bool forceFullSnapshot,
+                        PeSparseScratch& scratch,
+                        D9CCommandChunkWireDrawHeaderV2& header,
+                        SparseStateV2Input& out) noexcept;
+
 bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
                 const PeBindingView& bindings,
                 std::uint32_t primitiveType,

@@ -3171,9 +3171,6 @@ static bool executeSimpleProcessVertexShader(const std::vector<DWORD>& words,
 static D9CSurface*   rawSurf(IDirect3DSurface9* p)          { return D3D9PeRawSurface(p); }
 static D9CBuffer*    rawVBuf(IDirect3DVertexBuffer9* p)     { return D3D9PeRawVertexBuffer(p); }
 static D9CBuffer*    rawIBuf(IDirect3DIndexBuffer9* p)      { return D3D9PeRawIndexBuffer(p); }
-static D9CShader*    rawVS(IDirect3DVertexShader9* p)       { return D3D9PeRawVertexShader(p); }
-static D9CShader*    rawPS(IDirect3DPixelShader9* p)        { return D3D9PeRawPixelShader(p); }
-static D9CVertexDecl* rawVD(IDirect3DVertexDeclaration9* p) { return D3D9PeRawVertexDecl(p); }
 static D9CTexture*   rawTex(IDirect3DBaseTexture9* p)       { return D3D9PeRawTexture(p); }
 
 /* R-FORMAT-11 — RESZ MSAA depth-resolve trigger. RESZ is a *command*, not
@@ -3355,6 +3352,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Reused across draws so populateBindingView() does not zero ~850 bytes
     // per call. Mutable because buildDrawPrimitivePacket() is const.
     mutable dxmt9::d3d9::pe::PeBindingView peBindingView_{};
+
+    // Reused sparse-producer storage. The SparseStateV2Input spans point into
+    // peSparseScratch_, so both must outlive the append that consumes them --
+    // they are members for that reason as well as to avoid per-draw zeroing.
+    mutable dxmt9::d3d9::pe::PeSparseScratch peSparseScratch_{};
+    mutable dxmt9::d3d9::pe::SparseStateV2Input peSparseState_{};
+    mutable D9CCommandChunkWireDrawHeaderV2 peSparseHeader_{};
+    mutable dxmt9::d3d9::pe::PeDrawPayloads peSparsePayloads_{};
     bool dsSurfaceExplicit_ = false;
     dxmt9::d3d9::pe::CommandChunkV2Builder commandChunkV2_{};
     std::vector<std::byte> legacyV2RecordScratch_{};
@@ -3863,18 +3868,30 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // fill translates exactly the pending slots the old inline code did, and
     // only the snapshot path drains everything.
     //
-    // Only `object` is populated. `identity` is what CommandChunkV2Builder::
-    // appendHandle needs; nothing on today's paths reads it. Do NOT assume a
-    // missing identity is self-announcing: appendHandle fails the record
-    // through failActiveRecord() with no log line, so the draw fails by
-    // HRESULT and nothing says why. Whoever routes draws through
-    // appendSparseRecordV2 must fill identity in the same change.
+    // Fills the FULL PeWireObjectRef -- identity as well as object -- via the
+    // D3D9PeWire* accessors, which return each wrapper's cached ref.
+    //
+    // Identity is not optional: CommandChunkV2Builder::appendHandle rejects a
+    // ref whose identity is zero (PeWireObjectRef::valid checks kind,
+    // generation and objectId) and fails the whole record through
+    // failActiveRecord() with NO log line. An earlier revision filled only
+    // `object`, on the reasoning that nothing read identity yet; the moment
+    // APPLY_STATE started going through appendApplyStateV2 that turned into
+    // "IDirect3DDevice9::Clear failed: Invalid call" with nothing explaining
+    // why, and the harness still reported status=pass because it does not gate
+    // on the rendered image.
+    //
+    // These accessors are also cheaper than the raw* pair they replaced for
+    // surfaces and buffers: wireObject() is a member read where rawSurf() went
+    // through a cast and rawTex()/D3D9PeRawTexture made a virtual GetType()
+    // call. D3D9PeWireTexture still switches on GetType(), so the texture loop
+    // keeps its pending-mask guard.
     void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
                              bool needAllSlots) const {
         for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
             if (needAllSlots ||
                 (peState_.pendingTextureMask & (1u << stage)) != 0) {
-                view.textures[stage].object = rawTex(textures_[stage]);
+                view.textures[stage] = D3D9PeWireTexture(textures_[stage]);
             }
         }
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
@@ -3882,24 +3899,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 (peState_.pendingStreamMask & (1u << slot)) == 0) {
                 continue;
             }
-            view.streams[slot].buffer.object = rawVBuf(streamSrc_[slot]);
+            view.streams[slot].buffer = D3D9PeWireVertexBuffer(streamSrc_[slot]);
             view.streams[slot].offset = streamOff_[slot];
             view.streams[slot].stride = streamStr_[slot];
         }
         // These were read unconditionally by the old inline code on both paths.
-        view.vs.object = rawVS(vs_);
-        view.ps.object = rawPS(ps_);
-        view.vdecl.object = rawVD(vdecl_);
-        view.depthStencil.object = rawSurf(dsSurface_);
+        view.vs = D3D9PeWireVertexShader(vs_);
+        view.ps = D3D9PeWirePixelShader(ps_);
+        view.vdecl = D3D9PeWireVertexDecl(vdecl_);
+        view.depthStencil = D3D9PeWireSurface(dsSurface_);
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-            view.renderTargets[slot].object = rawSurf(rtSlots_[slot]);
+            view.renderTargets[slot] = D3D9PeWireSurface(rtSlots_[slot]);
         }
         view.rtExplicitMask = currentRtExplicitMask();
         view.fvf = fvf_;
-        // Deliberately NOT filled: view.indexBuffer. The draw packet has no
-        // index-binding field, so nothing reads it today and rawIBuf() would be
-        // a per-draw call bought for a future consumer. Fill it in the change
-        // that starts reading it.
+        // indexBuffer is filled by the indexed-draw sites, which are the only
+        // consumers; buildSparseStateV2 emits the index section only for the
+        // indexed record types.
     }
 
     // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
@@ -3914,6 +3930,44 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // translation as well as the packet fill. Timing only the producer would
     // have made the figure read lower while the work moved outside it, and that
     // figure is what docs/perfomance/ cites for PE recording cost.
+    // Sparse-state counterpart to buildDrawPrimitivePacket. Fills the reused
+    // peSparseState_ / peSparseHeader_ from the shadows and the binding view --
+    // no fat packet in between. The decimated draw_packet scope lives here for
+    // the same reason it does on the fat-packet forwarder: it has to cover the
+    // COM-to-wire binding translation, not just the section fill.
+    // Not const: buildSparseStateV2 takes the const shadow by non-const
+    // reference because the inline-delta path drains dirty ranges from it.
+    // Claiming const here and casting it away would hide that.
+    bool buildSparseStateForRecord(
+        std::uint32_t recordType,
+        dxmt9::d3d9::pe::PeDrawParams params,
+        bool forceFullSnapshot = false) {
+        DxmtPeDecimatedScopeGuard decimatedScope;
+        const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+        if (decimationN != 0 &&
+            PeDecimatedScopeTimer::shouldSample(
+                peDrawPacketDecimatedStats_, decimationN)) {
+            decimatedScope.stats = &peDrawPacketDecimatedStats_;
+            {
+                const auto n0 = std::chrono::steady_clock::now();
+                const auto n1 = std::chrono::steady_clock::now();
+                PeDecimatedScopeTimer::recordSample(
+                    peDecimatedNullScopeStats(),
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+            }
+            decimatedScope.t0 = std::chrono::steady_clock::now();
+        }
+        params.recordType = recordType;
+        const bool needAllSlots =
+            forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
+        populateBindingView(peBindingView_, needAllSlots);
+        return dxmt9::d3d9::pe::buildSparseStateV2(
+            peState_, peConsts_, peBindingView_, peSparsePayloads_, params,
+            forceFullSnapshot, peSparseScratch_, peSparseHeader_,
+            peSparseState_);
+    }
+
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
                                   UINT startVertex,
                                   UINT count,
@@ -9897,18 +9951,28 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!hasPendingHotState()) {
             return S_OK;
         }
-        D9CCommandRecordApplyState record{};
-        record.header.type = D9C_COMMAND_RECORD_APPLY_STATE;
-        record.header.size = sizeof(record);
         // Fast path: single APPLY_STATE record covers all pending
         // state. After Phase 31 cap-checks at every Set* fast path,
         // this is the only path that runs in practice.
         const std::int64_t buildEntryNs = dxmt9PeRecorderStatsEnabled()
             ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
             : 0;
-        if (buildDrawPrimitivePacket(D3DPT_POINTLIST, 0, 0, record.packet)) {
+        if (buildSparseStateForRecord(D9C_COMMAND_RECORD_APPLY_STATE,
+                                      dxmt9::d3d9::pe::PeDrawParams{})) {
             recordPeApplyStateBuildCpu(buildEntryNs);
-            const HRESULT appendHr = appendCommandRecord(&record, sizeof(record));
+            // sizeHint stays sizeof(D9CCommandRecordApplyState): it is what the
+            // capacity precheck saw before, so seal cadence is unchanged.
+            const HRESULT appendHr = appendRecordV2(
+                D9C_COMMAND_RECORD_APPLY_STATE,
+                sizeof(D9CCommandRecordApplyState),
+                [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                    const AppendPhaseTimer& phase) -> HRESULT {
+                    const auto t0 = AppendPhaseTimer::now();
+                    const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                        builder, peSparseHeader_.flags, peSparseState_);
+                    phase.record(peAppendPhaseEncode_, t0);
+                    return ok ? S_OK : D3DERR_INVALIDCALL;
+                });
             if (FAILED(appendHr)) return appendHr;
             clearPendingHotState();
             return S_OK;
