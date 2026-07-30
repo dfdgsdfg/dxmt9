@@ -66,9 +66,31 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
                         const PeDrawPayloads& payloads,
                         const PeDrawParams& params,
                         bool forceFullSnapshot,
+                        bool inlineConstDelta,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeaderV2& header,
                         SparseStateV2Input& out) noexcept;
+
+// Applies destination-chunk re-emission on top of a buildSparseStateV2 result.
+// Draw sites only: the barrier path never calls this, matching production.
+//
+// It REBUILDS the stream and index spans rather than appending to them. The
+// emitted set is the union of "dirty" and "bound but not retained by this
+// chunk", and V2 sections must be in strictly ascending slot order
+// (appendSparseRecordV2's orderedSlot); merging two independently-ordered
+// subsets is easy to get wrong, so one ascending pass over the union is the
+// whole point.
+//
+// Must be called INSIDE the append emitter, after any CapacityPre flush has
+// resealed the chunk -- the retention answers are about the DESTINATION chunk.
+// `bindings.streams` must be authoritative for every slot, not just pending
+// ones; see populateBindingView's allStreams parameter.
+bool addChunkContextSections(const PeChunkContext& chunk,
+                             const PeHotStateShadow& shadow,
+                             const PeBindingView& bindings,
+                             const PeDrawParams& params,
+                             PeSparseScratch& scratch,
+                             SparseStateV2Input& out) noexcept;
 
 bool buildDrawPacketFromViews(const PeHotStateShadow& shadow,
                 const PeBindingView& bindings,

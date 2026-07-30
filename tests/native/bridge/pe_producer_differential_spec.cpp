@@ -19,11 +19,15 @@
 
 #include "d3d9_pe_chunk_v2_builder.hpp"
 #include "d3d9_pe_producer.hpp"
+#include "d3d9_pe_const_shadow.hpp"
+#include "d3d9_pe_draw_packet.hpp"
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_wire_handle.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <random>
@@ -144,6 +148,7 @@ D9CBuffer vb0, vb1;
 D9CShader vsObj, psObj;
 D9CSurface rt0, ds0;
 D9CVertexDecl vdecl0;
+D9CBuffer ib0, ib1;
 
 // --- fixtures --------------------------------------------------------------
 
@@ -156,6 +161,7 @@ struct Fixture {
   pe::PeDrawPayloads payloads{};
   pe::PeDrawParams params{};
   bool forceFullSnapshot = false;
+  bool inlineConstDelta = false;
 };
 
 struct LaneResult {
@@ -184,6 +190,144 @@ LaneResult finishLane(pe::CommandChunkV2Builder& builder, bool ok) {
   return result;
 }
 
+// Production reuses ONE PeSparseScratch device member across every build, so a
+// section that fails to reset an entry inherits the previous build's value. A
+// fresh local scratch per lane hides that entirely, so this is a shared static
+// -- deliberately mirroring the device.
+pe::PeSparseScratch& sharedScratch() {
+  static pe::PeSparseScratch scratch{};
+  return scratch;
+}
+
+// PeStreamSources as currentDrawStreamSources() builds it: wire handle plus
+// offset and stride per slot. A translation of the view, not a reimplementation
+// of any decision.
+pe::PeStreamSources streamSourcesFrom(const pe::PeBindingView& bindings) {
+  pe::PeStreamSources sources{};
+  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    sources[slot].buffer = toWireHandle(bindings.streams[slot].buffer.object);
+    sources[slot].offset = bindings.streams[slot].offset;
+    sources[slot].stride = bindings.streams[slot].stride;
+  }
+  return sources;
+}
+
+bool isIndexedRecord(std::uint32_t type) {
+  return type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
+         type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+}
+
+// The real legacy DRAW path: fat packet, then the two chunk-dependency helpers
+// the call sites run inside their writer lambda, then serialize and let the shim
+// re-encode. Both helpers are the production free functions from
+// d3d9_pe_draw_packet.hpp -- nothing here reimplements their decisions.
+LaneResult runLegacyDrawLane(const Fixture& fixture) {
+  pe::CommandChunkV2Builder builder;
+  D9CDrawIndexedPrimitivePacket indexed{};
+  if (!pe::buildDrawPacketFromViews(
+          fixture.shadow, fixture.bindings, fixture.params.primitiveType,
+          fixture.params.startVertex, fixture.params.primitiveCount,
+          fixture.forceFullSnapshot, indexed.state)) {
+    return LaneResult{};
+  }
+  // The inline-const fold, as the draw sites run it, into the fat packet.
+  std::vector<std::uint8_t> constPayload(64u * 1024u);
+  std::uint32_t constPayloadBytes = 0u;
+  if (fixture.inlineConstDelta) {
+    PeConstShadowBlock constants = fixture.constants;
+    ConstShadow* shadows[6] = {&constants.vsConstF, &constants.vsConstI,
+                               &constants.vsConstB, &constants.psConstF,
+                               &constants.psConstI, &constants.psConstB};
+    const std::size_t elemSizes[6] = {16u, 16u, 4u, 16u, 16u, 4u};
+    for (std::uint32_t kind = 0; kind < 6u; ++kind) {
+      if (!foldConstShadowIntoDeltaSection(
+              *shadows[kind], kind, elemSizes[kind],
+              indexed.state.constDeltaSections[kind], constPayload.data(),
+              constPayload.size(), constPayloadBytes)) {
+        return LaneResult{};
+      }
+    }
+  }
+  indexed.baseVertex = fixture.params.baseVertex;
+  indexed.minVertex = fixture.params.minVertex;
+  indexed.numVertices = fixture.params.numVertices;
+  indexed.startIndex = fixture.params.startIndex;
+  indexed.primitiveCount = fixture.params.primitiveCount;
+
+  const bool indexedDraw = isIndexedRecord(fixture.params.recordType);
+  const auto sources = streamSourcesFrom(fixture.bindings);
+  if (indexedDraw) {
+    indexed.ibHandle = toWireHandle(fixture.bindings.indexBuffer.object);
+    const std::uint64_t ibWire = d9cWireHandleValue(indexed.ibHandle);
+    indexed.ibValid = (fixture.shadow.pendingIb ||
+                       !fixture.chunk.indexBufferKnown ||
+                       fixture.chunk.submittedIndexBufferWire != ibWire)
+                          ? 1u
+                          : 0u;
+  }
+  // The two append-time dependency checkpoints, production code.
+  pe::populateDrawPacketStreamDependencies(indexed.state, sources,
+                                           fixture.chunk.retainedStreamMask);
+  if (indexedDraw) {
+    pe::populateDrawPacketIndexDependency(indexed,
+                                          fixture.chunk.indexBufferRetained);
+  }
+
+  std::vector<std::byte> recordBytes;
+  if (indexedDraw) {
+    D9CCommandRecordDrawIndexedPrimitive record{};
+    record.header.type = fixture.params.recordType;
+    record.packet = indexed;
+    record.header.size = static_cast<std::uint32_t>(sizeof(record) +
+                                                    constPayloadBytes);
+    recordBytes.resize(record.header.size);
+    std::memcpy(recordBytes.data(), &record, sizeof(record));
+    if (constPayloadBytes != 0u) {
+      std::memcpy(recordBytes.data() + sizeof(record), constPayload.data(),
+                  constPayloadBytes);
+    }
+  } else {
+    D9CCommandRecordDrawPrimitive record{};
+    record.header.type = fixture.params.recordType;
+    record.packet = indexed.state;
+    record.packet.primitiveCount = fixture.params.primitiveCount;
+    record.header.size = static_cast<std::uint32_t>(sizeof(record) +
+                                                    constPayloadBytes);
+    recordBytes.resize(record.header.size);
+    std::memcpy(recordBytes.data(), &record, sizeof(record));
+    if (constPayloadBytes != 0u) {
+      std::memcpy(recordBytes.data() + sizeof(record), constPayload.data(),
+                  constPayloadBytes);
+    }
+  }
+  const bool ok = pe::appendLegacyCommandRecordAsV2(builder, recordBytes);
+  return finishLane(builder, ok);
+}
+
+LaneResult runDirectDrawLane(const Fixture& fixture) {
+  pe::CommandChunkV2Builder builder;
+  PeConstShadowBlock constants = fixture.constants;
+  pe::PeSparseScratch& scratch = sharedScratch();
+  pe::SparseStateV2Input state{};
+  D9CCommandChunkWireDrawHeaderV2 header{};
+  if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
+                              fixture.payloads, fixture.params,
+                              fixture.forceFullSnapshot,
+                              fixture.inlineConstDelta, scratch, header,
+                              state)) {
+    return LaneResult{};
+  }
+  if (!pe::addChunkContextSections(fixture.chunk, fixture.shadow,
+                                   fixture.bindings, fixture.params, scratch,
+                                   state)) {
+    return LaneResult{};
+  }
+  const bool ok =
+      pe::appendSparseRecordV2(builder, fixture.params.recordType, header,
+                               state);
+  return finishLane(builder, ok);
+}
+
 // The real legacy path for APPLY_STATE: build the fat packet, serialize it as
 // a legacy record, and let the shim re-parse and re-encode it. chunkBarrierFlush
 // applies no chunk-context step and no constant folding, so neither appears
@@ -207,15 +351,6 @@ LaneResult runLegacyLane(const Fixture& fixture) {
   return finishLane(builder, ok);
 }
 
-// Production reuses ONE PeSparseScratch device member across every build, so a
-// section that fails to reset an entry inherits the previous build's value. A
-// fresh local scratch per lane hides that entirely, so this is a shared static
-// -- deliberately mirroring the device.
-pe::PeSparseScratch& sharedScratch() {
-  static pe::PeSparseScratch scratch{};
-  return scratch;
-}
-
 LaneResult runDirectLane(const Fixture& fixture) {
   pe::CommandChunkV2Builder builder;
   PeConstShadowBlock constants = fixture.constants;  // lanes must not share
@@ -224,7 +359,8 @@ LaneResult runDirectLane(const Fixture& fixture) {
   D9CCommandChunkWireDrawHeaderV2 header{};
   if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
                               fixture.payloads, fixture.params,
-                              fixture.forceFullSnapshot, scratch, header,
+                              fixture.forceFullSnapshot,
+                              fixture.inlineConstDelta, scratch, header,
                               state)) {
     return LaneResult{};
   }
@@ -233,8 +369,10 @@ LaneResult runDirectLane(const Fixture& fixture) {
 }
 
 void requireLanesAgree(const Fixture& f) {
-  const LaneResult legacy = runLegacyLane(f);
-  const LaneResult direct = runDirectLane(f);
+  const bool draw = f.params.recordType != D9C_COMMAND_RECORD_APPLY_STATE &&
+                    f.params.recordType != 0u;
+  const LaneResult legacy = draw ? runLegacyDrawLane(f) : runLegacyLane(f);
+  const LaneResult direct = draw ? runDirectDrawLane(f) : runDirectLane(f);
   check(legacy.ok == direct.ok, f.name + ": lanes must agree on success");
   if (!legacy.ok) {
     return;  // both failed; failure reasons may legitimately differ
@@ -249,9 +387,29 @@ void requireLanesAgree(const Fixture& f) {
   check(legacy.bytes.size() == direct.bytes.size(),
         f.name + ": chunk byte length must match\n    legacy: " +
             shape(legacy) + "\n    direct: " + shape(direct));
-  check(std::memcmp(legacy.bytes.data(), direct.bytes.data(),
-                    legacy.bytes.size()) == 0,
-        f.name + ": chunk bytes must be identical");
+  if (std::memcmp(legacy.bytes.data(), direct.bytes.data(),
+                  legacy.bytes.size()) != 0) {
+    std::size_t at = 0;
+    while (at < legacy.bytes.size() && legacy.bytes[at] == direct.bytes[at]) {
+      ++at;
+    }
+    std::string dump = f.name + ": chunk bytes must be identical; first differ at byte " +
+                       std::to_string(at) + "\n    legacy:";
+    for (std::size_t k = at; k < legacy.bytes.size() && k < at + 24; ++k) {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), " %02x",
+                    static_cast<unsigned>(std::to_integer<std::uint8_t>(legacy.bytes[k])));
+      dump += buf;
+    }
+    dump += "\n    direct:";
+    for (std::size_t k = at; k < direct.bytes.size() && k < at + 24; ++k) {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), " %02x",
+                    static_cast<unsigned>(std::to_integer<std::uint8_t>(direct.bytes[k])));
+      dump += buf;
+    }
+    check(false, dump);
+  }
   check(legacy.recordCount == direct.recordCount,
         f.name + ": record count must match");
   check(legacy.handleCount == direct.handleCount,
@@ -486,6 +644,215 @@ void distinctObjectPerTextureSlot() {
   requireLanesAgree(f);
 }
 
+
+// --- draw records, chunk context, and inline constants ---------------------
+
+Fixture baseDraw(const char* name, std::uint32_t recordType) {
+  Fixture f;
+  f.name = name;
+  f.params.recordType = recordType;
+  f.params.primitiveType = 4u;  // D3DPT_TRIANGLELIST
+  f.params.primitiveCount = 12u;
+  f.params.stride = 32u;
+  f.shadow.pendingStreamMask = 0x1u;
+  f.bindings.streams[0].buffer = publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.streams[0].offset = 64u;
+  f.bindings.streams[0].stride = 32u;
+  f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  return f;
+}
+
+void nonIndexedDraw() {
+  Fixture f = baseDraw("non-indexed draw", D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.params.startVertex = 32u;
+  requireLanesAgree(f);
+}
+
+void indexedDrawWithBaseVertex() {
+  Fixture f = baseDraw("indexed draw, base vertex and index range",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.params.baseVertex = 64;
+  f.params.minVertex = 8u;
+  f.params.numVertices = 256u;
+  f.params.startIndex = 12u;
+  f.shadow.pendingIb = true;
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  requireLanesAgree(f);
+}
+
+void indexedDrawNegativeBaseVertex() {
+  Fixture f = baseDraw("indexed draw, negative base vertex",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.params.baseVertex = -32;  // int32_t on the wire; must not wrap
+  f.shadow.pendingIb = true;
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  requireLanesAgree(f);
+}
+
+// H2: a stream that is BOUND but neither dirty nor retained must be re-emitted,
+// or the destination chunk never retains the buffer.
+void streamBoundNotDirtyNotRetained() {
+  Fixture f = baseDraw("stream bound, not dirty, not retained: must re-emit",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.shadow.pendingStreamMask = 0u;   // not dirty
+  f.chunk.retainedStreamMask = 0u;   // not retained
+  requireLanesAgree(f);
+}
+
+void streamBoundNotDirtyButRetained() {
+  Fixture f = baseDraw("stream bound, not dirty, already retained: no re-emit",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.shadow.pendingStreamMask = 0u;
+  f.chunk.retainedStreamMask = 0x1u;
+  requireLanesAgree(f);
+}
+
+void streamDirtyAndRetained() {
+  Fixture f = baseDraw("stream dirty and retained: dirty still wins",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.shadow.pendingStreamMask = 0x1u;
+  f.chunk.retainedStreamMask = 0x1u;
+  requireLanesAgree(f);
+}
+
+void multipleStreamsMixedRetention() {
+  Fixture f = baseDraw("four streams, mixed dirty/retained",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  static D9CBuffer slotVb[4];
+  f.shadow.pendingStreamMask = 0x5u;   // slots 0 and 2 dirty
+  f.chunk.retainedStreamMask = 0x3u;   // slots 0 and 1 retained
+  for (std::uint32_t i = 0; i < 4u; ++i) {
+    f.bindings.streams[i].buffer =
+        publishedRef(&slotVb[i], D9C_CHUNK_HANDLE_KIND_BUFFER);
+    f.bindings.streams[i].offset = 16u * i;
+    f.bindings.streams[i].stride = 32u;
+  }
+  requireLanesAgree(f);
+}
+
+// H1: the retention leg. Known, unchanged, but NOT retained by this chunk --
+// the section must still be emitted or the chunk never retains the buffer.
+void indexBufferKnownUnchangedNotRetained() {
+  Fixture f = baseDraw("IB known and unchanged but not retained: must re-emit",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = false;
+  f.chunk.indexBufferKnown = true;
+  f.chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  f.chunk.indexBufferRetained = false;
+  requireLanesAgree(f);
+}
+
+void indexBufferKnownUnchangedAndRetained() {
+  Fixture f = baseDraw("IB known, unchanged and retained: no re-emit",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = false;
+  f.chunk.indexBufferKnown = true;
+  f.chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  f.chunk.indexBufferRetained = true;
+  requireLanesAgree(f);
+}
+
+void indexBufferChanged() {
+  Fixture f = baseDraw("IB known but changed: must re-emit",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = false;
+  f.chunk.indexBufferKnown = true;
+  f.chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(&ib1));  // a different buffer
+  f.chunk.indexBufferRetained = true;
+  requireLanesAgree(f);
+}
+
+void indexBufferUnknown() {
+  Fixture f = baseDraw("IB not yet known to the chunk: must emit",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = false;
+  f.chunk.indexBufferKnown = false;
+  requireLanesAgree(f);
+}
+
+// The four emit legs overlap, so a fixture that leaves several true cannot tell
+// which one fired: dropping the not-known leg survived the corpus until this
+// case isolated it. Here pendingIb is false and the buffer IS retained, so
+// not-known is the ONLY reason to emit.
+void indexBufferUnknownButRetained() {
+  Fixture f = baseDraw("IB not known but already retained: not-known leg alone",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = false;
+  f.chunk.indexBufferKnown = false;
+  f.chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  f.chunk.indexBufferRetained = true;
+  requireLanesAgree(f);
+}
+
+// Mirror image: pendingIb alone. Known, unchanged, retained -- only the dirty
+// bit justifies the section.
+void indexBufferPendingOnly() {
+  Fixture f = baseDraw("IB dirty only: pendingIb leg alone",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.shadow.pendingIb = true;
+  f.chunk.indexBufferKnown = true;
+  f.chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  f.chunk.indexBufferRetained = true;
+  requireLanesAgree(f);
+}
+
+// H3: inline-const delta. Each range dirty with a distinct start/count so a
+// producer that swaps two kinds, or mis-slices, is visible.
+void inlineConstDeltaAllSixRanges() {
+  Fixture f = baseDraw("inline const delta, all six ranges dirty",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.inlineConstDelta = true;
+  f.shadow.pendingIb = true;
+  f.bindings.indexBuffer = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+
+  struct Spec { ConstShadow* shadow; std::size_t elemSize; std::uint32_t regs; };
+  const Spec specs[6] = {
+      {&f.constants.vsConstF, 16u, 256u}, {&f.constants.vsConstI, 16u, 16u},
+      {&f.constants.vsConstB, 4u, 16u},   {&f.constants.psConstF, 16u, 224u},
+      {&f.constants.psConstI, 16u, 16u},  {&f.constants.psConstB, 4u, 16u},
+  };
+  std::uint32_t seed = 1u;
+  for (const auto& spec : specs) {
+    spec.shadow->values.assign(spec.regs * spec.elemSize, 0u);
+    spec.shadow->dirtyElems.assign(spec.regs, 0u);
+    for (std::size_t i = 0; i < spec.shadow->values.size(); ++i) {
+      spec.shadow->values[i] = static_cast<std::uint8_t>((i * seed) & 0xFFu);
+    }
+    // Distinct dirty window per kind.
+    spec.shadow->dirtyStart = seed % 3u;
+    spec.shadow->dirtyEnd = spec.shadow->dirtyStart + 2u + (seed % 2u);
+    ++seed;
+  }
+  requireLanesAgree(f);
+}
+
+void inlineConstDeltaSingleRange() {
+  Fixture f = baseDraw("inline const delta, only vs float dirty",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.inlineConstDelta = true;
+  auto& sh = f.constants.vsConstF;
+  sh.values.assign(256u * 16u, 0u);
+  sh.dirtyElems.assign(256u, 0u);
+  for (std::size_t i = 0; i < sh.values.size(); ++i) {
+    sh.values[i] = static_cast<std::uint8_t>(i & 0xFFu);
+  }
+  sh.dirtyStart = 5u;
+  sh.dirtyEnd = 9u;
+  requireLanesAgree(f);
+}
+
 // --- fixed-seed randomized corpus -----------------------------------------
 
 void randomizedApplyStateSequences() {
@@ -560,6 +927,21 @@ int main() {
     fvfOnlyAfterDeclaration();
     snapshotDrainsEveryTable();
     distinctObjectPerTextureSlot();
+    nonIndexedDraw();
+    indexedDrawWithBaseVertex();
+    indexedDrawNegativeBaseVertex();
+    streamBoundNotDirtyNotRetained();
+    streamBoundNotDirtyButRetained();
+    streamDirtyAndRetained();
+    multipleStreamsMixedRetention();
+    indexBufferKnownUnchangedNotRetained();
+    indexBufferKnownUnchangedAndRetained();
+    indexBufferChanged();
+    indexBufferUnknown();
+    indexBufferUnknownButRetained();
+    indexBufferPendingOnly();
+    inlineConstDeltaAllSixRanges();
+    inlineConstDeltaSingleRange();
     randomizedApplyStateSequences();
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()

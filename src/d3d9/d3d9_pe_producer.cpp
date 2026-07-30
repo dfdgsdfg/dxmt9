@@ -24,6 +24,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
                         const PeDrawPayloads& payloads,
                         const PeDrawParams& params,
                         bool forceFullSnapshot,
+                        bool inlineConstDelta,
                         PeSparseScratch& scratch,
                         D9CCommandChunkWireDrawHeaderV2& header,
                         SparseStateV2Input& out) noexcept {
@@ -258,17 +259,61 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   out.lightEnables = std::span(scratch.lightEnables).first(lightEnableCount);
 
   // --- constants -----------------------------------------------------------
-  // This producer emits NO constant sections, on either env setting. Callers
-  // must have flushed constants as standalone SET_CONST records first --
-  // chunkBarrierFlush does exactly that via flushPendingConsts().
+  // Under DXMT9_PE_INLINE_CONST_DELTA the draw sites deliberately do NOT call
+  // flushPendingConsts, and the dirty ranges ride inside the draw record
+  // instead. The legacy shape folded them into the fat packet's
+  // constDeltaSections; V2 expresses the same thing natively as constant-range
+  // sections, so this drains straight into them.
   //
-  // `constants` is therefore currently unread. It stays in the signature
-  // because the draw sites are the ones that can skip flushPendingConsts under
-  // DXMT9_PE_INLINE_CONST_DELTA=1 and fold the dirty ranges into the record
-  // instead; whoever migrates them must either implement that drain here or
-  // keep those sites flushing. Wiring a draw site to this function as-is under
-  // that env would drop the constants entirely.
-  (void)constants;
+  // DRAINING MUTATES: each range is cleared once emitted, exactly as
+  // foldConstShadowIntoDeltaSection did. That is why `constants` is non-const,
+  // and it means a caller must not build a record it then throws away -- the
+  // dirty ranges are gone. Off the inline path the shadows are already clean
+  // (the caller flushed them as standalone records) so this is a no-op.
+  //
+  // registerBytes points into the shadow's own storage, which is device-owned
+  // and outlives the append that consumes the span.
+  if (inlineConstDelta) {
+    struct ConstRange {
+      ConstShadow* shadow;
+      SparseConstantRangeV2Input* out;
+      std::size_t elemSize;
+    };
+    const ConstRange ranges[D9C_DRAW_PACKET_CONST_DELTA_COUNT] = {
+        {&constants.vsConstF, &out.vsFloatConstants, 16u},
+        {&constants.vsConstI, &out.vsIntConstants, 16u},
+        {&constants.vsConstB, &out.vsBoolConstants, 4u},
+        {&constants.psConstF, &out.psFloatConstants, 16u},
+        {&constants.psConstI, &out.psIntConstants, 16u},
+        {&constants.psConstB, &out.psBoolConstants, 4u},
+    };
+    for (std::uint32_t kind = 0u; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT;
+         ++kind) {
+      auto& shadowRange = *ranges[kind].shadow;
+      if (!shadowRange.dirty()) {
+        continue;
+      }
+      const std::uint32_t start = shadowRange.dirtyStart;
+      const std::uint32_t count = shadowRange.dirtyEnd - shadowRange.dirtyStart;
+      if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
+        return false;
+      }
+      const auto offset = static_cast<std::size_t>(start) * ranges[kind].elemSize;
+      const auto bytes = static_cast<std::size_t>(count) * ranges[kind].elemSize;
+      if (shadowRange.values.size() < offset + bytes) {
+        return false;
+      }
+      *ranges[kind].out = SparseConstantRangeV2Input{
+          .startRegister = start,
+          .registerCount = count,
+          .registerBytes = std::span<const std::byte>(
+              reinterpret_cast<const std::byte*>(shadowRange.values.data()) +
+                  offset,
+              bytes),
+      };
+      shadowRange.clear();
+    }
+  }
 
   // --- payloads and draw header -------------------------------------------
   // Every ref that reached a section must carry a usable identity. Without
@@ -329,16 +374,52 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   out.upIndexData = payloads.upIndex;
   out.upVertexData = payloads.upVertex;
 
+  // The draw header carries a DIFFERENT SUBSET per record type, and the fields
+  // a type does not use must stay zero or the emitted bytes differ. This
+  // mirrors appendLegacySparseRecord's per-case fill exactly:
+  //
+  //   DRAW_PRIMITIVE            primitiveType, startVertex, primitiveCount
+  //   DRAW_INDEXED_PRIMITIVE    primitiveType, baseVertex, minVertex,
+  //                             numVertices, startIndex, primitiveCount
+  //   DRAW_PRIMITIVE_UP         primitiveType, primitiveCount, stride
+  //   DRAW_INDEXED_PRIMITIVE_UP primitiveType, minVertex, numVertices,
+  //                             primitiveCount, stride, indexFormat
+  //
+  // Note what is NOT shared: stride belongs to the UP variants only (their
+  // vertex data is inline), startVertex to the non-indexed non-UP case only,
+  // startIndex to the indexed non-UP case only, and indexFormat to the indexed
+  // UP case only. Setting all of them unconditionally is what a first cut does,
+  // and the differential catches it as a one-word byte difference.
   header = D9CCommandChunkWireDrawHeaderV2{};
   header.primitiveType = params.primitiveType;
-  header.baseVertex = params.baseVertex;
-  header.minVertex = params.minVertex;
-  header.numVertices = params.numVertices;
-  header.startVertex = params.startVertex;
-  header.startIndex = params.startIndex;
-  header.primitiveCount = params.primitiveCount;
-  header.stride = params.stride;
-  header.indexFormat = params.indexFormat;
+  switch (params.recordType) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+      header.startVertex = params.startVertex;
+      header.primitiveCount = params.primitiveCount;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+      header.baseVertex = params.baseVertex;
+      header.minVertex = params.minVertex;
+      header.numVertices = params.numVertices;
+      header.startIndex = params.startIndex;
+      header.primitiveCount = params.primitiveCount;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+      header.primitiveCount = params.primitiveCount;
+      header.stride = params.stride;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+      header.minVertex = params.minVertex;
+      header.numVertices = params.numVertices;
+      header.primitiveCount = params.primitiveCount;
+      header.stride = params.stride;
+      header.indexFormat = params.indexFormat;
+      break;
+    default:
+      // APPLY_STATE and the unset type carry no draw parameters;
+      // appendApplyStateV2 takes only the flags.
+      break;
+  }
   // The shim set FULL_SNAPSHOT from all-ones texture and stream masks, which
   // means it also fires for a delta that happens to touch every slot. Keep the
   // heuristic exactly, or the emitted flags differ.
@@ -348,6 +429,64 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
                    shadow.pendingStreamMask == allStreams)) {
     header.flags |= D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT;
   }
+  return true;
+}
+
+bool addChunkContextSections(const PeChunkContext& chunk,
+                             const PeHotStateShadow& shadow,
+                             const PeBindingView& bindings,
+                             const PeDrawParams& params,
+                             PeSparseScratch& scratch,
+                             SparseStateV2Input& out) noexcept {
+  // Streams: dirty, OR bound and not yet retained by this chunk. One ascending
+  // pass so the section order is correct by construction.
+  std::size_t streamCount = 0;
+  for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    const bool dirty = (shadow.pendingStreamMask & (1u << slot)) != 0u;
+    const bool bound = bindings.streams[slot].buffer.object != nullptr;
+    const bool retained = (chunk.retainedStreamMask & (1u << slot)) != 0u;
+    if (!dirty && !(bound && !retained)) {
+      continue;
+    }
+    auto& entry = scratch.streams[streamCount++];
+    entry = SparseBindingV2Input<D9CCommandChunkWireStreamBindingV2>{};
+    entry.wire.slot = slot;
+    entry.wire.valid = 1u;
+    entry.wire.offset = bindings.streams[slot].offset;
+    entry.wire.stride = bindings.streams[slot].stride;
+    entry.wire.frequency = 0u;
+    entry.object = bindings.streams[slot].buffer;
+  }
+  out.streams = std::span(scratch.streams).first(streamCount);
+
+  // Index buffer: INDEXED RECORDS ONLY. A non-indexed draw has no index
+  // binding at all -- the legacy packet's ibValid field lives on
+  // D9CDrawIndexedPrimitivePacket and the call sites ran
+  // populateDrawPacketIndexDependency only for indexed draws. Emitting one here
+  // for a non-indexed draw adds a section production never produced.
+  //
+  // Three independent reasons, matching production's two sites. The third
+  // clause is the retention leg; without it the chunk can end up replaying a
+  // draw against a buffer it never retained.
+  const bool indexedDraw =
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
+      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+  const std::uint64_t ibWire =
+      d9cWireHandleValue(toWireHandle(bindings.indexBuffer.object));
+  const bool ibBound = bindings.indexBuffer.object != nullptr;
+  const bool emitIndex =
+      indexedDraw &&
+      (shadow.pendingIb || !chunk.indexBufferKnown ||
+       chunk.submittedIndexBufferWire != ibWire ||
+       (!chunk.indexBufferRetained && ibBound));
+  std::size_t indexCount = 0;
+  if (emitIndex) {
+    auto& entry = scratch.indexBuffers[indexCount++];
+    entry = SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>{};
+    entry.wire.valid = 1u;
+    entry.object = bindings.indexBuffer;
+  }
+  out.indexBuffers = std::span(scratch.indexBuffers).first(indexCount);
   return true;
 }
 

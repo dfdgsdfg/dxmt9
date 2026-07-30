@@ -74,6 +74,13 @@ struct PeChunkContext {
   std::uint32_t retainedStreamMask = 0u;
   bool indexBufferKnown = false;
   std::uint64_t submittedIndexBufferWire = 0u;
+  // Whether the DESTINATION chunk already references the currently bound index
+  // buffer. This is a second, independent reason to emit the index section:
+  // populateDrawPacketIndexDependency sets ibValid when the handle is non-null
+  // and the chunk has not retained it, regardless of pendingIb / known /
+  // changed. Omitting it lets a fresh chunk's first indexed draw with an
+  // unchanged IB emit no section, so that chunk never retains the buffer.
+  bool indexBufferRetained = false;
 };
 
 // (c) Draw payloads. Borrowed for the producer call and the append that

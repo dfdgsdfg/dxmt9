@@ -3886,8 +3886,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // through a cast and rawTex()/D3D9PeRawTexture made a virtual GetType()
     // call. D3D9PeWireTexture still switches on GetType(), so the texture loop
     // keeps its pending-mask guard.
+    // `allStreams` makes the stream half authoritative for EVERY slot, not just
+    // pending ones. Draw sites need that: chunk-context re-emission asks "what
+    // is bound in slot N", and a non-pending slot otherwise holds whatever the
+    // last build that touched it left behind -- stale after
+    // clearPeStateTracking()/Reset, which clears streamOff_/streamStr_ and the
+    // shadow but not this view. It costs what production already paid: the draw
+    // sites called currentDrawStreamSources(), which reads all 16 slots.
     void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
-                             bool needAllSlots) const {
+                             bool needAllSlots,
+                             bool allStreams = false) const {
         for (std::uint32_t stage = 0; stage < D9C_DRAW_PACKET_MAX_TEXTURES; ++stage) {
             if (needAllSlots ||
                 (peState_.pendingTextureMask & (1u << stage)) != 0) {
@@ -3895,7 +3903,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             }
         }
         for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            if (!needAllSlots &&
+            if (!needAllSlots && !allStreams &&
                 (peState_.pendingStreamMask & (1u << slot)) == 0) {
                 continue;
             }
@@ -3913,9 +3921,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         view.rtExplicitMask = currentRtExplicitMask();
         view.fvf = fvf_;
-        // indexBuffer is filled by the indexed-draw sites, which are the only
-        // consumers; buildSparseStateV2 emits the index section only for the
-        // indexed record types.
+        // Filled unconditionally now: addChunkContextSections needs it to answer
+        // the retention question, and buildSparseStateV2 emits the index section
+        // only for the indexed record types anyway.
+        view.indexBuffer = D3D9PeWireIndexBuffer(indexBuf_);
     }
 
     // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
@@ -3942,7 +3951,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     bool buildSparseStateForRecord(
         std::uint32_t recordType,
         dxmt9::d3d9::pe::PeDrawParams params,
-        bool forceFullSnapshot = false) {
+        bool forceFullSnapshot = false,
+        bool inlineConstDelta = false) {
         DxmtPeDecimatedScopeGuard decimatedScope;
         const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
         if (decimationN != 0 &&
@@ -3962,11 +3972,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         params.recordType = recordType;
         const bool needAllSlots =
             forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
-        populateBindingView(peBindingView_, needAllSlots);
+        const bool isDraw =
+            recordType != D9C_COMMAND_RECORD_APPLY_STATE;
+        populateBindingView(peBindingView_, needAllSlots, isDraw);
         return dxmt9::d3d9::pe::buildSparseStateV2(
             peState_, peConsts_, peBindingView_, peSparsePayloads_, params,
-            forceFullSnapshot, peSparseScratch_, peSparseHeader_,
-            peSparseState_);
+            forceFullSnapshot, inlineConstDelta, peSparseScratch_,
+            peSparseHeader_, peSparseState_);
     }
 
     bool buildDrawPrimitivePacket(D3DPRIMITIVETYPE type,
