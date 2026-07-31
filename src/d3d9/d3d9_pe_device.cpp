@@ -9166,9 +9166,21 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             appendedRecordCount >= maxRecords || appendedPayloadBytes >= maxBytes;
         const bool noFlushAppend =
             !willFlushBeforeAppend && !willFlushAfterAppend;
-        const auto appendEntryNs =
-            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
-        recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
+        // Gate the clock reads, not just their consumers. All four users of
+        // these two timestamps (recordPeChunkInterAppendGap, recordPeAppendCpu,
+        // notePeChunkAppendBoundary, logPeRecordMilestoneAfterPresent) early-out
+        // on this same flag, which is off in every perf/production run -- so the
+        // two steady_clock::now() calls were being paid per append and thrown
+        // away. At GT2's 2,707 appends/present and the ~187ns/call this codebase
+        // measured for its own null scope, that is ~1.0ms/present, about 1.9% of
+        // the frame. The flag is a cached static bool, so the branch is free.
+        const bool peStatsEnabled = dxmt9PeRecorderStatsEnabled();
+        const std::int64_t appendEntryNs =
+            peStatsEnabled ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+                           : 0;
+        if (peStatsEnabled) {
+            recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
+        }
         HRESULT hr = S_OK;
         DxmtPeDecimatedScopeGuard appendDecimatedScope;
         const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
@@ -9222,34 +9234,37 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
             phaseRecord(peAppendPhaseFlush_, t0);
         }
-        const auto appendReturnNs =
-            dxmt9SteadyClockNs(std::chrono::steady_clock::now());
-        if (appendReturnNs > appendEntryNs) {
-            recordPeAppendCpu(
-                static_cast<std::uint64_t>(appendReturnNs - appendEntryNs),
-                noFlushAppend);
-        }
-        if (SUCCEEDED(hr)) {
-            notePeChunkAppendBoundary(appendReturnNs, type);
-            logPeRecordMilestoneAfterPresent(
-                type, appendedRecordCount,
-                static_cast<std::uint32_t>(std::min<std::size_t>(
-                    appendedPayloadBytes, std::numeric_limits<std::uint32_t>::max())),
-                appendEntryNs);
+        if (peStatsEnabled) {
+            const auto appendReturnNs =
+                dxmt9SteadyClockNs(std::chrono::steady_clock::now());
+            if (appendReturnNs > appendEntryNs) {
+                recordPeAppendCpu(
+                    static_cast<std::uint64_t>(appendReturnNs - appendEntryNs),
+                    noFlushAppend);
+            }
+            if (SUCCEEDED(hr)) {
+                notePeChunkAppendBoundary(appendReturnNs, type);
+                logPeRecordMilestoneAfterPresent(
+                    type, appendedRecordCount,
+                    static_cast<std::uint32_t>(std::min<std::size_t>(
+                        appendedPayloadBytes,
+                        std::numeric_limits<std::uint32_t>::max())),
+                    appendEntryNs);
+            }
         }
         return hr;
     }
 
-    // Legacy adapter over appendRecordV2: build the record into the scratch
-    // buffer in the legacy wire format, then re-parse and re-encode it as V2.
+    // Non-indexed draw: fold or flush pending constants, then emit one sparse
+    // V2 draw record through the appendRecordV2 envelope.
     //
-    // All three phase timers stay exactly where they were before the envelope
-    // was extracted -- resize around the scratch grow, write around the
-    // caller's writer, encode around the record encode alone. A
-    // migrated emitter records encode around its direct V2 call, so `encode`
-    // keeps one meaning across the migration and the before/after numbers stay
-    // comparable.
-    //
+    // (This comment used to describe the legacy adapter that stood here --
+    // build into a scratch buffer in the legacy wire format, then re-parse and
+    // re-encode as V2. That adapter is gone; the recorder emits V2 directly.
+    // The `encode` phase timer inside the envelope still means the same thing
+    // it did then -- the record emission alone -- which is why the pre- and
+    // post-migration numbers in state-churn-encode-append-decomposition.03
+    // are comparable.)
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         // Hold the recorder lock across the const-flush/fold + draw-record
