@@ -64,6 +64,16 @@ synchronous validation/import/handle-marking half is the part that scales, and
 it has never been decomposed. That, not the flush count, is where a flush-side
 win would have to come from.
 
+> **Decomposed the same day** in
+> [append-decomposition.05](state-churn-encode-append-decomposition.05.md),
+> which also closes the accounting for the regression above. The call is half
+> PE-side (`seal` + bridge crossing) and half unix commit; `69%` of the unix
+> half is fixed per call (`22.3 us` + `0.276 us`/record). Cap `256` really did
+> save `0.697 ms/present` of that — and paid `2.708 ms` in drain-fence wait,
+> because each drain wait grew by `2.91x` against a `2.9x` chunk. Commit
+> frequency *is* the pipeline's synchronization granularity, which is the
+> measured form of the argument made here.
+
 **Scope.** Two runs per side on one workload. The disjoint spreads make the
 direction solid at this size, but `-4.0%` is a point estimate, not a
 characterised curve; no intermediate caps were tested because the sign of the
