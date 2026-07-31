@@ -433,4 +433,18 @@ void drainDeferredReplay(D9CSurface* s, const char* site) {
   drainDeferredReplay(s->device, site);
 }
 
+void drainDeferredReplay(D9CQuery* q, const char* site) {
+  if (!q) {
+    return;
+  }
+  drainDeferredReplay(q->device, site);
+}
+
+void drainDeferredReplay(D9CStateBlock* sb, const char* site) {
+  if (!sb) {
+    return;
+  }
+  drainDeferredReplay(sb->device, site);
+}
+
 }  // namespace dxmt9::d3d9

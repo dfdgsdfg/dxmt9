@@ -63,18 +63,53 @@ what you would expect — a DISCARD arrives when the app is mid-frame writing ne
 geometry, which is when the queue has work. **Estimating the recoverable share
 from the all-locks mix, as .206 did, was the wrong denominator.**
 
-**Verdict — and the ceiling narrows again, downward.** The MANAGED half is
-recoverable and the code already says why. `Pool::mapWaitSeqId` returns `0` for
-managed buffers, with **R-BACK-5.11** stated inline:
+**Verdict — the MANAGED half is the exemption candidate, but the number below is
+a loose upper bound, not a measurement.**
 
-> the core Buffer's CPU shadow is authoritative for every MANAGED lock.
-> Read-only locks only inspect it; writable locks publish it into an idle/fresh
-> backing at unlock, so neither needs a GPU wait here.
+> ## Corrected 2026-07-31, same day: two errors in this section
+>
+> **1. The safety argument did not discriminate.** This section originally
+> reasoned: `Pool::mapWaitSeqId` returns `0` for managed buffers under
+> R-BACK-5.11, so "managed locks already wait on nothing at the pool level —
+> the drain fence is the only thing making them block" ⇒ recoverable.
+> **`mapWaitSeqId` also returns `0` for NOOVERWRITE (`:1281`) and for
+> DISCARD dynamic rename (`:1296`)**, and the counters confirm it empirically:
+> `map_buffer_no_wait_seq == map_buffer_calls == 84.09/present`. *No GT2 lock of
+> any class ever waits at the pool level* — including the DISCARD half this leaf
+> calls unrecoverable. The premise is true of everything and therefore explains
+> nothing.
+>
+> The real distinction, which this leaf only gestured at: a managed lock returns
+> a pointer into the core CPU shadow (`Buffer::lock`) and nothing in chunk
+> replay writes that shadow, so its *contents* genuinely cannot observe replay.
+> DISCARD differs because it rotates the rename ring **at lock time** against
+> `lastUsedSeqId`, which queued-unreplayed draws have not bumped. That hazard
+> analysis is the argument; `mapWaitSeqId == 0` is not.
+>
+> **2. The ceiling ignores this document's own predecessor.**
+> [.206](present-pacing-drain-fence-attribution.206.md) established that **the
+> fence self-clears** — the first fenced lock in a replay window drains it for
+> every lock after, which is why only `13.1%` block. Computing "recoverable =
+> plain share of fence time" assumes exempting MANAGED deletes those windows. It
+> does not: DISCARD locks, interleaved in the same frames, inherit part of them.
+> Blocked time actually removed is **less than** `plainNs`, by an unmeasured
+> amount. Two leaves three paragraphs apart applied contradictory models to the
+> same mechanism and this one used the wrong one.
+>
+> Two further caveats on the magnitude: these runs carry the classifier and Info
+> logging, and their fence is `2.36-2.61 ms/present` against `2.17-2.34` in the
+> Warn-level baselines — the same shares give `~1.34-1.45` under baseline
+> conditions. And `plain == pool_managed` is a **marginal-count identity**:
+> `noteBlockedLockClass` counts flags and pool independently, with no
+> (flags x pool) cell and no per-pool nanoseconds, so "MANAGED = 61.7-64.7% of
+> fence time" is `plainNs` re-labeled. The identity holds at every emission in
+> both runs and has a structural backstop (D3D9 forbids DYNAMIC on MANAGED), so
+> it is very probably right — but it is inferred, not measured.
 
-So managed locks already wait on nothing at the pool level — **the drain fence
-is the only thing making them block.** That is `61.7-64.7%` of the fence, or
-**`1.4-1.7 ms/present`, `2.6-3.2%` of the GT2 frame**, against .206's
-`1.7-2.15 ms`.
+**Honest form of the claim:** an exemption of MANAGED locks removes **at most**
+`~1.34-1.45 ms/present` under baseline conditions (`~2.5-2.7%` of frame), before
+subtracting whatever the surviving DISCARD locks inherit from the freed windows.
+Nothing has been implemented or tested.
 
 The DEFAULT DISCARD half is not recoverable by exemption: those rotate a backing
 that queued draws reference, which is the hazard the fence exists for.

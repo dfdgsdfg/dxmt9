@@ -82,10 +82,12 @@ extern "C" int32_t dxmt9c_query_get_wire_identity(
 }
 
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* arg0, uint32_t flags) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_query_issue");
   return dxmt9p_query_issue(arg0, flags);
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* arg0, void* data, uint32_t size, uint32_t flags) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_query_get_data");
   return dxmt9p_query_get_data(arg0, data, size, flags);
 }
 
@@ -106,9 +108,11 @@ extern "C" uint32_t dxmt9c_stateblock_release(D9CStateBlock* arg0) {
 }
 
 extern "C" int32_t dxmt9c_stateblock_capture(D9CStateBlock* arg0) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_stateblock_capture");
   return dxmt9p_stateblock_capture(arg0);
 }
 
 extern "C" int32_t dxmt9c_stateblock_apply(D9CStateBlock* arg0) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_stateblock_apply");
   return dxmt9p_stateblock_apply(arg0);
 }

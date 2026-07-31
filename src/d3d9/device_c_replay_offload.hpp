@@ -20,6 +20,8 @@ struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CTexture;    // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSurface;    // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CQuery;      // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CStateBlock; // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
@@ -217,6 +219,8 @@ void drainDeferredReplay(D9CSwapChain* s, const char* site = nullptr);
 // cannot reach `->device` themselves. Null-safe on the wrapper.
 void drainDeferredReplay(D9CTexture* t, const char* site = nullptr);
 void drainDeferredReplay(D9CSurface* s, const char* site = nullptr);
+void drainDeferredReplay(D9CQuery* q, const char* site = nullptr);
+void drainDeferredReplay(D9CStateBlock* sb, const char* site = nullptr);
 
 // Emits one [dxmt9-drain-site] line per blocking entry point at Info level.
 // No-op unless DXMT9_PERF_DRAIN_FENCE_SITES is set. `presents` is the

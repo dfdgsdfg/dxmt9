@@ -1054,6 +1054,19 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     // reordered or parallelized) and (d). No-op when the offload is off or the
     // queue is empty, so the non-readback path pays one pointer test.
     dxmt9::d3d9::drainDeferredReplay(d, "dxmt9c_device_commit_chunk_inline");
+    // The drain is stop-aware: waitDrained() returns immediately once the queue
+    // has been stopped, even with chunks still queued. After a worker fail-stop
+    // those chunks were dropped unreplayed, so "drained" here does not mean
+    // "caught up" -- replaying now would run against state missing everything
+    // the worker discarded and hand back D3D_OK, which for a READBACK chunk is
+    // wrong data reported as success. The offload lane already poisons later
+    // commits on failed(); this lane has to as well, or it escapes the
+    // fail-stop contract the offload's safety story rests on.
+    if (d->replayOffload && d->replayOffload->failed()) {
+      dxmt9::d3d9::releaseRetainedWrappers(raw);
+      dxmt9::perf::countCommandChunkV2Reject();
+      return commitChunkFail("v2-offload-worker-failed-inline");
+    }
     const int32_t hr = replayResolvedV2Chunk(
         d, raw, /*pacedByPresentOrdinal=*/false);
     dxmt9::d3d9::releaseRetainedWrappers(raw);

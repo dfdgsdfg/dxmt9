@@ -1191,6 +1191,15 @@ bool QueueLifecycleController::commitCurrentChunk(
   // above never has this problem because it re-reads `slots[*writeIndex]`
   // after its wait instead of holding a reference across it.
   const size_t writingSlotIndexBeforeWait = **writingSlot;
+  // The index alone is not enough to prove the slot is still ours. An acquired
+  // writing slot always equals `writeIndex`, and `writeIndex` advances by one
+  // per publish (mod slots.size()), so an unchanged index after the wait means
+  // either nothing happened OR exactly slots.size() publishes did and a new
+  // writer re-acquired the same index -- ABA. Publishing then would push a
+  // foreign, possibly empty, in-progress chunk and stamp the wrong seq on the
+  // present boundary. `nextSeqId` increments on every publish and on no other
+  // path, so pairing the two makes the check exact rather than probabilistic.
+  const u64 nextSeqIdBeforeWait = *nextSeqId;
   const bool waitNeeded = *inflightCount >= inflightLimit;
   if (waitNeeded) {
     observeCommitWait(writingSlotIndexBeforeWait, slot.seqId, inflightLimit);
@@ -1209,7 +1218,9 @@ bool QueueLifecycleController::commitCurrentChunk(
   // parked, whoever moved it owns that chunk's commit and this call has nothing
   // left to publish. Returning false is the same answer this function already
   // gives for "no writing slot" at entry.
-  if (!writingSlot->has_value() || **writingSlot != writingSlotIndexBeforeWait) {
+  if (!writingSlot->has_value() ||
+      **writingSlot != writingSlotIndexBeforeWait ||
+      *nextSeqId != nextSeqIdBeforeWait) {
     return false;
   }
 

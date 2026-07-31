@@ -7,7 +7,8 @@
 // that skips the fence observes them out of program order.
 //
 // Fence:      lock/unlock (both halves -- unlock is where a write publishes),
-//             mip generation, direct sampling, and resource creation.
+//             mip generation, direct sampling, palette upload, LOD clamp
+//             (it notifies the owner), and resource creation.
 // Do not:     addref/release, wire-identity, and desc/level/container getters.
 //             These read wrapper-cached metadata the replay never touches, and
 //             fencing them would drain the pipeline for a refcount bump.
@@ -123,6 +124,7 @@ extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* arg0) {
 }
 
 extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* arg0, uint32_t lod) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_set_lod");
   return dxmt9p_texture_set_lod(arg0, lod);
 }
 
@@ -136,6 +138,7 @@ extern "C" int32_t dxmt9c_texture_sample_2d(D9CTexture* arg0, uint32_t level,
 extern "C" int32_t dxmt9c_texture_set_palette(D9CTexture* arg0,
                                                const uint32_t* argbEntries,
                                                uint32_t entryCount) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_set_palette");
   return dxmt9p_texture_set_palette(arg0, argbEntries, entryCount);
 }
 

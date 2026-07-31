@@ -213,8 +213,18 @@ separates the critical thread from what runs beside it.
 | | ms | share of `53.4 ms` |
 |---|---:|---:|
 | dxmt9 PE recording (four decimated scopes — a **floor**, see §4.2) | `8.07` | `15.1%` |
-| dxmt9-side producer waits (§3) | `~3.0` | `~5.6%` |
-| everything else — app code, Wine thunking, and dxmt9 code not in those scopes | `~42` | `~79%` |
+| dxmt9-side producer waits (§3), **less the `~0.58` already inside the row above** | `~2.4` | `~4.5%` |
+| everything else — app code, Wine thunking, and dxmt9 code not in those scopes | `~43` | `~80%` |
+
+> **These rows are not cleanly disjoint.** The decimated append scope spans
+> `flushPendingCommandChunk`, which is the synchronous bridge call into
+> `commit_chunk` and therefore into `markResolvedV2Resources` and its mutex
+> acquire. With `41.4` of `47.4` commits/present coming from capacity flushes,
+> `~0.58` of the `0.67 ms` queue-mutex wait sits **inside** the `8.07`. The
+> waits row above already subtracts it. The drain fence and the present-ordinal
+> wait are genuinely outside (buffer-lock path; Present flush issued outside the
+> append envelope), so those do not double-count. A first version of this table
+> presented all three rows as a clean split.
 
 **Beside it, not additive with the above:** GPU `9.7 ms`, encode thread
 `20.28 ms`, replay worker idling `39.67 ms`.
@@ -313,8 +323,8 @@ is forced and what is a choice before touching it.
   | section encode | `2.41` | `4.5%` |
   | append envelope | `1.86` | `3.5%` |
   | queue-mutex contention | `0.67` | `1.3%` |
-  | buffer lock / shadow path | `~1.4` | `~2.6%` |
-  | **sum** | **`8.5`** | **`~16%`** |
+  | buffer lock path (`d3d9_buffer_lock_ms`) | `0.95` | `1.8%` |
+  | **sum** | **`8.1`** | **`~15%`** |
 
   Not all of it is removable, and some overlaps. But it is not `1-2%`.
 

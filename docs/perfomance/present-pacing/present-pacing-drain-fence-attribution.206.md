@@ -154,13 +154,15 @@ test says "aliased" and they keep blocking.
 The instrument cannot settle this because it does not record the flags or pool
 of the *blocked* subset.
 
-> **Measured in [.207](present-pacing-drain-fence-attribution.207.md).** The
+> **Refined in [.207](present-pacing-drain-fence-attribution.207.md).** The
 > estimate above used the all-locks mix, which is the wrong denominator: the
 > blocked subset is skewed `7x` toward DISCARD (`40%` of blocked against `5.6%`
-> of all locks) and READONLY is only `46-48%` of it, not `73.7%`. Measured
-> recoverable share — the MANAGED half, which `Pool::mapWaitSeqId` already
-> exempts from GPU waits under R-BACK-5.11 — is `1.4-1.7 ms/present`,
-> narrower than the `1.7-2.15` guessed here.
+> of all locks) and READONLY is only `46-48%` of it, not `73.7%`. The MANAGED
+> half is the exemption candidate at **at most `~1.34-1.45 ms/present`** under
+> baseline conditions — an upper bound, not a measurement, and one that does
+> **not** yet subtract what surviving DISCARD locks inherit from the freed
+> windows under the self-clearing behaviour described just above. .207 first
+> stated this as a measured `1.4-1.7` and is corrected in place.
 
 **Scope, and four presentation corrections.**
 
