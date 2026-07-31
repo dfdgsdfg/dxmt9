@@ -116,39 +116,86 @@ from what is a choice. Three different things are involved:
 `rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId)` — a monotonic max on a
 `u64`, the textbook lock-free case. The mutex is not held for this.
 
-**2. What it does protect is a real invariant, but a one-directional one.**
-The lock keeps the `nextSeqId_` snapshot from going stale while marking, so no
-resource is pinned below a sequence that will use it. `lastUsedSeqId` gates
-release — `dxmt9_resource_pool.cpp` asserts `record.lastUsedSeqId <=
-completedSeqId` before freeing — so **over-pinning is safe** (the resource is
-merely held longer) and only under-pinning is the hazard. `nextSeqId_` is
-monotonically increasing. A conservative atomic read plus lock-free max
-therefore satisfies the invariant without the queue's global mutex. Possible is
-not the same as worthwhile, but it is not impossible.
+**2. ~~What it does protect is a real invariant~~ — WRONG, corrected 2026-07-31.**
+This section claimed the lock keeps the `nextSeqId_` snapshot fresh so that no
+resource is pinned below a sequence that will use it. **That invariant is not
+this lock's.** The chunk's actual usage sequences are allocated *later*, by the
+replay worker, after intervening publishes have advanced `nextSeqId_` — so the
+bulk mark is systematically a **lower bound relative to actual use, lock or no
+lock**. Correctness is carried by two other marking layers, both correctly
+ordered:
 
-**3. The placement, however, is a requirement, not an accident.**
+- **Replay-time per-draw marks** (`submitDrawRun`, `submitClear`, …) mark with
+  `nextSeqId_` in the *same* `mutex_` critical section as the append, so the
+  marked seq equals the slot's eventual publish seq. Exact.
+- **Publish-time full-slot walk** (`prepareSlotForPublish` →
+  `markSlotResourcesUnlocked`) re-marks every command's resources with the final
+  `slot.seqId`, including the Present source that no submit-time path marks.
+
+The repo's own record already said this and the original text contradicted it:
+`specs/backend/gap.md` describes the sync bulk mark as covering "liveness only".
+And that liveness window is independently covered by wrapper retention —
+`prepareV2OffloadChunk` addrefs every chunk-referenced wrapper until post-replay
+release, so `destroyPending` cannot be set for one in that window at all. The
+bulk mark appears to be belt-and-suspenders, and it is the belt costing
+`0.67 ms/present`.
+
+What *is* true: `lastUsedSeqId` gates release (`dxmt9_resource_pool.cpp` asserts
+`record.lastUsedSeqId <= completedSeqId` before freeing), so an inflated stamp
+is a deferral, never an assert or a use-after-free. Two costs go unstated
+though: a stamp can name a sequence that is never allocated (an all-state chunk
+appends nothing), making the "delay" unbounded until some later publish; and
+`markBufferUse` also bumps the active rename-ring entry, so a bulk mark extends
+the current DISCARD backing's lifetime and converts into allocation pressure.
+
+**3. The placement is a requirement — but the cheapest fix does not touch it.**
 `R-BACK-2.51(a)` mandates that "wire header/range validation, import, and
 handle-marking" stay "synchronous on the app thread before any record is handed
-off." Moving the marking onto the replay worker — which would remove the
-producer from this mutex entirely — is a spec change needing its own hazard
-argument and TLA work, not a local optimisation. **The `0.67 ms/present` is the
-measured price of that clause**, which is a more useful way to hold it than
-"a lock nobody optimised."
+off." *Deleting* the bulk mark is therefore a spec change needing its own hazard
+argument and TLA work.
+
+But this section originally stopped there, treating the requirement as the end
+of analysis. It is not. **Making `nextSeqId_` a `std::atomic<u64>` and dropping
+`mutex_` from `markChunkResources` keeps the marking synchronous, on the app
+thread, before handoff — fully compliant — and removes the entire `13.9 us`
+acquire.** The stamped value's semantics are unchanged: it is a lower bound with
+the lock held, and remains one without it (per point 2, safety is carried
+elsewhere).
+
+Two corrections to the original lock-free argument, which was right about the
+conclusion and wrong about the reasoning:
+
+- **"A conservative (larger) snapshot" does not exist.** `nextSeqId_` is a plain
+  `std::uint64_t` written under `mutex_`; a racy read is UB until it becomes
+  atomic, and it can only be stale-**low** — the under-pin direction. Lock-free
+  is safe because the mark is redundant, *not* because over-pinning is safe.
+- **"Lock-free max" is a misnomer.** `Pool::mark*Use` goes through
+  `HandleArena::update`, which takes the arena's `shared_mutex` exclusively per
+  handle. No pool-side atomics are needed or possible; the only change is
+  `nextSeqId_`'s type. The residual `5.4 us` of marking work still contends on
+  that arena lock — it moves off the queue-wide lock, it does not vanish.
 
 One asymmetry worth carrying forward: the producer *waits* `13.9 us` and *holds*
 only `5.4 us`, so it is mostly waiting on other holders rather than on its own
-work. Shrinking only its critical section would not recover the wait; removing
-it from the contention set would also stop its hold from making others wait.
-For contrast, [encode-phase.196](state-churn-encode-encode-phase.196.md) measured
-the *worker's* acquisition of the same mutex in `submitDrawRunBatch` at
-`0.018 ms/present` — `37x` cheaper than the producer's. Different callers, same
-lock; that gap is a scheduling-phase question, not a lock-design one, and it is
-the thing to look at first if this is ever picked up.
+work. But note what that measurement is and is not — **acquire time is a
+thread's own waiting, not the waiting it causes**, so comparing it to
+[encode-phase.196](state-churn-encode-encode-phase.196.md)'s `0.018 ms/present`
+for the *worker's* acquire (as the original text did, calling it "`37x`
+cheaper") does not exonerate the worker. The hold-time suspects, visible in the
+code and unmeasured, are the worker's `submitDrawRunBatchImpl` (compat scan +
+binding prep + snapshot + mark + append, all under `mutex_`) and the **finish
+thread's pool GC**, which holds `mutex_` across three full arena scans per
+completed seqId. Instrument holds, not acquires, if this is picked up.
 
-The practical conclusion is a bound rather than a lever: everything identified
-on the flush side, contention included, totals `1-2%` of the GT2 frame. That
-sizes the whole remaining PE-side opportunity, and it argues for stopping here
-rather than for a lock rewrite.
+~~The practical conclusion is a bound … totals `1-2%` of the GT2 frame.~~
+**Withdrawn 2026-07-31.** That figure was arithmetically false — flush alone is
+`5.1%` of frame, section encode `4.5%`, envelope `3.5%` — and it was reached by
+applying the unestablished "3x Rosetta discount" and silently excluding the
+`4.1%` drain-fence wait. See
+[frame-lifecycle](../frame-lifecycle.md#5-what-the-numbers-say-to-do) for the
+corrected accounting. This document sizes one item at `1.25%` of frame; it does
+not size the remaining opportunity, and it should not have been read as an
+argument for stopping.
 
 **A correction to .05.** Its fixed term (`22.3 us`) is confirmed exactly, but its
 per-record term of `276 ns` was too high: the two-point fit could not separate

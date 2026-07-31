@@ -25,8 +25,29 @@ owns is the *joined* view and the measured numbers.
 **All figures are 3DMark05 GT2 at `890d78b1`-`8364aff2`**, `perf` profile, on a
 16 GB M1 MacBook Air under the Sikarugir-CX 24.0.7 Wine runtime. GT2 is the
 CPU-heaviest of the four tracked workloads; GT1, GT3, and SFIV have different
-mixes and none of the per-stage numbers transfer. Frame `53.4 ms`
-(`17.085` sampled avg FPS, [overview](overview.md)).
+mixes and none of the per-stage numbers transfer. Frame `53.4 ms` **median**
+(the `17.085` sampled *average* in [overview](overview.md) implies a `58.5 ms`
+mean; shares below use the median denominator throughout, and are ~9% smaller
+against the mean).
+
+> ## Corrected 2026-07-31, same day as first written
+>
+> An adversarial review found the measurements reproduce but several
+> conclusions built on them did not. Corrected in place, with what was wrong
+> stated rather than quietly edited:
+>
+> 1. **"Only the app thread is on the critical path" overstated its evidence.**
+>    The producer *does* block, `~3 ms/present`. §3.
+> 2. **The §4.1 frame table was incoherent accounting** — it summed App + PE +
+>    GPU to 100% while §3 says GPU overlaps, making the "66% app" a residual of
+>    an inconsistent equation rather than a measurement. §4.1.
+> 3. **`15.1%` is a floor for four scopes, not dxmt9's share.** A `~1.9%`-of-frame
+>    item was found in the hot path the same day, half of it structurally
+>    outside those scopes. §4.2.
+> 4. **"Everything on the flush side totals 1-2%" was arithmetically false** by
+>    this document's own numbers. §5.
+> 5. **The "3x Rosetta discount" is not established** and was applied to things
+>    it cannot apply to, including a lock wait. §5.
 
 ---
 
@@ -118,14 +139,32 @@ touched this month:
 
 ## 3. Concurrency — who runs beside whom
 
-**One application thread is saturated and everything else has slack.** This is
-the single most important fact about the current shape, and it is measured, not
-assumed: the producer thread runs at `94.9%` of one core across a 25 s window
-([attribution.01](present-pacing/present-pacing-post-defselect-cpu-attribution.01.md))
-and is *Running* in `24,935` of `24,936` sampled stacks, with one blocked sample
-and zero wait-keyword hits
-([attribution.02](present-pacing/present-pacing-post-defselect-cpu-attribution.02.md)).
-GT2's residual is producer CPU, not a serialization stall.
+**One application thread sets frame time and everything else has slack.** That
+much is solid. What was overstated is *how completely* it is CPU rather than
+waiting.
+
+The two xctrace windows behind the original claim **disagree with each other**
+on the central quantity: `94.9%` of one core in
+[attribution.01](present-pacing/present-pacing-post-defselect-cpu-attribution.01.md)
+against `24,935/24,936` Running samples (`99.7%`) in
+[attribution.02](present-pacing/present-pacing-post-defselect-cpu-attribution.02.md).
+This document originally quoted the second and concluded "there is no
+producer-side wait for dxmt9 to shorten." `time-profile` samples *running*
+stacks, so it is structurally blind to exactly what was being ruled out —
+attribution.02's own footnote says so.
+
+**The counters, present in every GT2 run, contradict it:**
+
+| Producer-side wait | ms/present | mechanism |
+|---|---:|---|
+| `offload_drain_fence_wait_ms` | `2.09-2.34` | `condition_variable::wait` in `ReplayOffloadQueue::waitDrained` |
+| queue-mutex acquire in the bulk mark | `0.66-0.68` | `unique_lock` on the CommandQueue mutex |
+| `waitPresentOrdinalBoundary` | `0.21-0.27` | blocking |
+
+`~3 ms/present` ≈ **`5.5%` of the frame**, all of it dxmt9-side coupling. A
+thread blocked 5.5% of a 25 s window should show ~1,300 blocked samples at
+~1 kHz, not one — and `94.9%` on-CPU is `~2.7 ms/present` off-CPU, which
+*matches the counters*. The headline rested on the outlier window.
 
 | Thread | Busy per present | Serial with the frame? |
 |---|---:|---|
@@ -165,15 +204,29 @@ decimated sampling
 
 ### 4.1 The frame at the top level
 
-| | ms | share |
-|---|---:|---:|
-| App's own CPU (Rosetta guest + Wine thunking) | `~35` | `~66%` |
-| **dxmt9 PE recording** | **`8.07`** | **`15.1%`** |
-| GPU | `9.7` | `18.2%` |
+**The table that stood here summed App + PE + GPU to 100% of the frame while §3
+says the GPU overlaps and is not serial.** Both cannot be true. What follows
+separates the critical thread from what runs beside it.
 
-The `~66%` is the game's own translated code. H212 attributed it directly:
-guest blob `73.5%`, wow64 layer `19.8%`, winemetal unix `1.4%` of the producer
-wall. It is not addressable from here.
+**On the critical thread (this is the frame):**
+
+| | ms | share of `53.4 ms` |
+|---|---:|---:|
+| dxmt9 PE recording (four decimated scopes — a **floor**, see §4.2) | `8.07` | `15.1%` |
+| dxmt9-side producer waits (§3) | `~3.0` | `~5.6%` |
+| everything else — app code, Wine thunking, and dxmt9 code not in those scopes | `~42` | `~79%` |
+
+**Beside it, not additive with the above:** GPU `9.7 ms`, encode thread
+`20.28 ms`, replay worker idling `39.67 ms`.
+
+**On "the game's own code".** The `~79%` residual is *not* a measurement, and
+the original text's `66%` was the same residual computed from an equation that
+double-counted GPU. The attribution it cited (H212: guest blob `73.5%`, wow64
+`19.8%`) is real but was borrowed across two gaps: it is **GT1**, three weeks
+and one order-of-magnitude GT2 change (`d63f7a65`) earlier, and H212's own text
+says the guest blob is "game x86 code **plus our 32-bit PE d3d9.dll recording
+path**". Quoting it as "the game's own translated code, not addressable from
+here" inverted the source. No GT2 equivalent exists.
 
 ### 4.2 Inside dxmt9's `8.07 ms`
 
@@ -187,6 +240,17 @@ wall. It is not addressable from here.
 The constant path is `0.48 ms` total — `0.9%` of the frame — across `31,799`
 calls. It looks like a target and is not one; `touchConstShadow` already
 compares each register against the shadow and skips unchanged ones.
+
+**`8.07 ms` is a floor, not dxmt9's PE cost.** It is the sum of four
+instrumented scopes, and the same day this was written a `~1.9%`-of-frame item
+was found *in the same function* — two ungated `steady_clock::now()` calls per
+append, of which the entry-side read sits **outside** the decimated scope and so
+never entered this number at all
+([.07](state-churn-encode/state-churn-encode-append-decomposition.07.md)). The
+PE `DeviceState` validate/mutate layer (stage A2 in §1), COM dispatch, and the
+buffer lock/shadow path (`~1.4 ms/present` from `result.json` counters) are
+dxmt9 code measured by none of these scopes. Treat any "dxmt9 is only X%" claim
+built on this table as a lower bound.
 
 ### 4.3 Inside `appendRecordDirect`
 
@@ -238,27 +302,61 @@ is forced and what is a choice before touching it.
 
 ## 5. What the numbers say to do
 
-Read together, the model bounds the remaining dxmt9-side opportunity rather
-than pointing at a lever:
+- **The producer thread is the frame.** This survives. The encode thread and
+  replay worker have slack, and no single identified dxmt9 item is worth more
+  than ~5% alone.
+- **Identified, plausibly-addressable dxmt9-side cost, at face value:**
 
-- **The producer thread is the frame**, and two-thirds of it is the game's own
-  Rosetta-translated code. dxmt9's whole share is `15.1%`.
-- **Everything identified on the flush side totals `1-2%` of the frame.** The
-  contention, the fixed per-commit cost, the section encode — all of it is in
-  that band.
-- **Rosetta discounts CPU wins by roughly `3x` on the way to wall clock.** Three
-  independent instances now: H193, H214, and the legacy-record removal itself
-  ([.02](state-churn-encode/state-churn-encode-append-decomposition.02.md), a
-  `3.62 ms` design bound that delivered `1.14 ms`). Apply the discount when
-  estimating, not after measuring.
+  | item | ms/present | % of `53.4 ms` |
+  |---|---:|---:|
+  | drain-fence wait | `2.17` | `4.1%` |
+  | section encode | `2.41` | `4.5%` |
+  | append envelope | `1.86` | `3.5%` |
+  | queue-mutex contention | `0.67` | `1.3%` |
+  | buffer lock / shadow path | `~1.4` | `~2.6%` |
+  | **sum** | **`8.5`** | **`~16%`** |
+
+  Not all of it is removable, and some overlaps. But it is not `1-2%`.
+
+**Two claims that stood here were wrong and are withdrawn:**
+
+**"Everything identified on the flush side totals 1-2%."** False by this
+document's own numbers — flush alone is `5.1%`, section encode `4.5%`, envelope
+`3.5%`. The `1-2%` was reached by applying the discount below *and* silently
+excluding the drain fence.
+
+**"Rosetta discounts CPU wins by roughly 3x."** Not established. Of the three
+cited instances: H193 divided an unmeasured removal by a noise-band result;
+H214's numerator was measured with the **uncalibrated** instrument, so ~`0.9 ms`
+of its "2.4-2.8 ms removed" was the instrument's own `186 ns`/sample bias,
+discovered three weeks later and never back-applied; and the `.02` instance
+compared the realized gain against a **design upper bound** the design itself
+said would not be fully realized — against the *measured* removal (`8.59 ->
+8.07 ms`) the ratio exceeds 1, the opposite direction. The `.05` cap experiment
+closes its accounting only *because* producer time converts at ~1:1. The
+discount was also applied to a **lock wait**, which is not translated CPU at all
+and has no mechanism by which such a discount would act.
+
+The attempt to settle this properly — gate a known ~1 ms of pure producer CPU
+and measure the wall response — was **underpowered** and settled nothing
+([.07](state-churn-encode/state-churn-encode-append-decomposition.07.md)): the
+mechanism landed (`-12%` per append) but within-side spread was twice the
+predicted effect. Until a properly powered run exists, **estimate at 1:1 and say
+so**, rather than discounting by an unestablished factor.
+
 - **Two obvious-looking levers are already closed.** Raising the chunk cap
   ([.04](state-churn-encode/state-churn-encode-append-decomposition.04.md),
   `-4.0%` FPS) and the constant path (`0.9%` of frame) both look larger than
   they are.
 
-The honest summary is that the current shape is not a ceiling, but what remains
-on dxmt9's side of the line is worth single-digit percentages, and it is now
-priced item by item rather than estimated.
+**Honest summary.** GT2 is producer-thread-limited and the majority of that
+thread is very likely the game plus Wine emulation — but "very likely" is a
+residual, not a measurement, and dxmt9's measured share is a floor. The
+identified remainder is mid-to-high single digits at 1:1 conversion, several
+times the `+2.1%` the legacy-record removal delivered. This is **not** "at the
+ceiling"; it is "the next several levers are each small, and their sum has only
+now been priced honestly." The largest unexplored one is the drain fence
+(`4.1%`), which no leaf has attributed by call site.
 
 ---
 

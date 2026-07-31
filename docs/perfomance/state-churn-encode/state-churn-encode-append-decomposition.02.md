@@ -91,14 +91,33 @@ independent facts point the same way (median, p95, frame count), and the
 protocol removed the two confounds that voided the first attempt, but a claim
 stronger than "small and consistent" needs more runs.
 
-**It is about a third of the predicted ceiling, which is the expected shape.**
-The design's §1 put the removable cost at *at most* `3.62 ms` of a `53.2 ms`
-frame (`6.8%`), noting a fraction would survive because section encoding
-remains. The realized wall saving is `1.14 ms`, `2.1%` — roughly `30%` of that
-bound. This is the third instance of the pattern H193 and H214 record: under
-Rosetta, PE CPU-ms removed over-credits wall-clock value by roughly `3x`. It is
-now predictive rather than anecdotal, and should be applied as a discount to the
-next PE-side estimate before the work is scheduled, not after it is measured.
+**It is about a third of the predicted *bound*, which is unsurprising.** The
+design's §1 put the removable cost at *at most* `3.62 ms` of a `53.2 ms` frame
+(`6.8%`), noting a fraction would survive because section encoding remains. The
+realized wall saving is `1.14 ms`, `2.1%` — roughly `30%` of that bound.
+
+> **Corrected 2026-07-31.** This paragraph originally read that ratio as "the
+> third instance of the pattern H193 and H214 record: under Rosetta, PE CPU-ms
+> removed over-credits wall-clock value by roughly `3x`… now predictive rather
+> than anecdotal." **That was a category error and the rule is withdrawn.**
+> `3.62 ms` is a design *upper bound* the design itself said would not be fully
+> realized — dividing a realized gain by an unrealized ceiling measures nothing
+> about CPU-to-wall conversion. Against the **measured** removal, which
+> [.03](state-churn-encode-append-decomposition.03.md) reports as PE total
+> `8.59 -> 8.07 ms`, this change removed `~0.5-0.75 ms` of CPU and gained
+> `1.14 ms` of wall — a ratio **greater than 1**, the opposite direction.
+>
+> The other two instances do not survive either: H193 divided an unmeasured
+> removal ("~0.3-1 ms at most", its own words) by a noise-band result, and
+> H214's numerator came from the **uncalibrated** decimated instrument, whose
+> `186 ns`/sample bias was found three weeks later and never back-applied to it.
+> The `.05` cap experiment, meanwhile, closes its accounting only *because*
+> producer time converts at ~1:1.
+>
+> The attempt to settle it deliberately — gate a known ~1 ms of pure producer
+> CPU and measure the wall response — was underpowered and settled nothing
+> ([.07](state-churn-encode-append-decomposition.07.md)). **Estimate at 1:1 and
+> say so** until a properly powered run exists.
 
 **What this does not say.** Nothing here was measured on GT1, GT3, or SFIV;
 those workloads have different PE call mixes and this A/B says nothing about
