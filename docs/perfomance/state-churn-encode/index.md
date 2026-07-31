@@ -26,6 +26,8 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.02 - Retiring The Legacy Record Format Buys +2.1% GT2 Scene FPS](state-churn-encode-append-decomposition.02.md)
+- [state-churn-encode-append-decomposition.01 - appendRecordDirect Is A Serialize-Parse-Reserialize Round Trip](state-churn-encode-append-decomposition.01.md)
 - [state-churn-encode-encode-phase.203 - Direct-Cbuf Payload-Source Dirty-Rebind Regression](state-churn-encode-encode-phase.203.md)
 - [state-churn-encode-encode-phase.201 - Uniform Append Residual After Fixed Handle Carry](state-churn-encode-encode-phase.201.md)
 - [state-churn-encode-encode-phase.200 - Uniform Fixed Payload Handle Carry](state-churn-encode-encode-phase.200.md)

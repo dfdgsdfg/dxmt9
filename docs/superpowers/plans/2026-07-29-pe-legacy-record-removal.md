@@ -2348,7 +2348,27 @@ per run (`pmset -g thermlog` or thermal pressure) so "cool machine" is checkable
 rather than asserted. `--keep-frontmost` belongs in the recipe too, per
 `metal_debugging.rules.md`, whenever FPS is the evidence.
 
-### Step 7 is DEFERRED, and the numbers taken for it are not evidence
+### Step 7 was re-run 2026-07-31 and is DONE: +2.1% GT2 scene fps
+
+Result, evidence, and the honest strength of the claim live in
+[state-churn-encode-append-decomposition.02](../../perfomance/state-churn-encode/state-churn-encode-append-decomposition.02.md).
+Headline: base `18.348` -> head `18.740` median scene fps, spreads disjoint
+(`18.138-18.360` vs `18.727-19.039`), p95 improved and also disjoint, exact
+permutation `p = 1/20 = 0.05` — the floor of a 3-vs-3 design, so "small and
+consistent", not "demonstrated". The realized `1.14 ms` is about `30%` of the
+design's `3.62 ms` bound, a third confirmation of the H193/H214 rule that
+Rosetta PE CPU-ms over-credits wall value by ~`3x`.
+
+Two protocol additions were needed and are worth reusing:
+`run_3dmark05_perf_probe.sh --build-root` (`deda6fbe`) stages from a second
+prebuilt worktree so interleaving needs no rebuild, and **both** trees must be
+verified `ninja -n` clean before launch — the first fixed attempt still had a
+stale HEAD tree whose first staging compiled 26 objects, reproducing the same
+asymmetry one step later.
+
+The section below is retained because it records what must not be repeated.
+
+### The first attempt was DEFERRED, and its numbers are not evidence
 
 Task 10's code work is complete through stage D (`20d3528a`). The paired GT2 A/B
 was attempted and is **deferred**: the machine was thermally throttling, so the
@@ -2389,18 +2409,30 @@ The structural work does not depend on this measurement: nothing in Tasks 1-10
 was justified by a perf claim. Reopen it as a perf investigation against the new
 structure rather than as a gate on the refactor.
 
-- [ ] **Step 7: Measure, and report honestly**
+- [x] **Step 7: Measure, and report honestly** — done 2026-07-31, `+2.14%`
 
-Paired GT2 A/B against the pre-Task-1 commit, both on the `perf` profile, frame
-sampling on, no gputrace. Capture the baseline first:
+The `git checkout` recipe originally written here is **not** what should be run;
+it forces a rebuild at every interleave switch. The recipe that was actually
+used, and that later A/Bs across two commits should copy:
 
 ```sh
-git stash && git checkout <pre-task-1-sha>
-bash scripts/tools/run_3dmark05_perf_probe.sh --suffix legacy-removal-before \
-  --frame 50 --no-gputrace --timeout 120 --keep-frontmost
-git checkout - && git stash pop
-bash scripts/tools/run_3dmark05_perf_probe.sh --suffix legacy-removal-after \
-  --frame 50 --no-gputrace --timeout 120 --keep-frontmost
+# once: a second checkout at the baseline, all three lanes built
+git worktree add ../dxmt9-perfbase <pre-task-1-sha>
+PATH="$PATH:/Users/dididi/llvm-mingw/bin:/opt/homebrew/opt/llvm/bin"   # append
+#   meson setup + compile the three lanes there, per docs/build.md
+
+# precondition, not optional: BOTH trees must report "no work to do"
+ninja -C <tree>/build-{x86_64-builtin,win32-x64-builtin,win32-x86-builtin} -n
+
+# then A/B/A/B/A/B, equal cooldown before every run, switching env-only
+DXMT_3DMARK05_ARGS="-gt2 -nosplash -nosysteminfo -noscreens" \
+bash scripts/tools/run_3dmark05_perf_probe.sh --suffix step7-<side>-r<n> \
+  --frame 50 --no-gputrace --timeout 120 --keep-frontmost \
+  --frame-sampling --no-encoder-breakdown \
+  --build-root <this-checkout | ../dxmt9-perfbase>
+
+# and verify what was staged, rather than trusting the flag
+shasum -a256 experiments/prefixs/app-d3d9-3dmark05/drive_c/windows/system32/d3d9.dll
 ```
 
 The design's §1 expectation is at most `3.62 ms` of a `53.2 ms` frame (`6.8%`),
@@ -2413,6 +2445,10 @@ Record the result as a new leaf under `docs/perfomance/state-churn-encode/`,
 following the frontmatter and `source:` conventions of the existing leaves, with
 `source:` pointing at the actual `experiments/output/...` directories the runs
 produced.
+
+**Outcome:** `1.14 ms` of the `3.62 ms` bound reached wall clock — about `30%`,
+which is the H193/H214 Rosetta discount showing up a third time. Recorded in
+[state-churn-encode-append-decomposition.02](../../perfomance/state-churn-encode/state-churn-encode-append-decomposition.02.md).
 
 - [ ] **Step 8: Commit**
 
