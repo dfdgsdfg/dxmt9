@@ -3400,6 +3400,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeDecimatedScopeStats peAppendPhaseEncode_{};
     PeDecimatedScopeStats peAppendPhaseFlush_{};
     PeDecimatedScopeStats peConstFlushDecimatedStats_{};
+    // D3D9 ENTRY-level scopes. The four original scopes measure what the
+    // recorder does; these measure the whole call the app made, so
+    // `entry - (inner scopes it contains)` is the PE layer nothing has ever
+    // measured: argument validation, DeviceState mutation and dirty
+    // bookkeeping, and the finishPeCall tail. That residual is why
+    // frame-lifecycle calls 15.1% a floor, and
+    // present-pacing-post-defselect-cpu-attribution.05 established it cannot
+    // be recovered by profiling from outside -- both the game and our PE
+    // d3d9.dll are unattributed translated code to xctrace. Inside is the
+    // only direction left.
+    PeDecimatedScopeStats peEntryConstDecimatedStats_{};
+    PeDecimatedScopeStats peEntryDrawDecimatedStats_{};
+    PeDecimatedScopeStats peEntryStateDecimatedStats_{};
     mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
     std::uint64_t peStatsDecimationPresents_ = 0;
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
@@ -8930,7 +8943,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
             "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f "
             "append_encode_sampled=%llu append_encode_ms=%.3f "
-            "append_flush_sampled=%llu append_flush_ms=%.3f%s%s",
+            "append_flush_sampled=%llu append_flush_ms=%.3f "
+            "entry_const_events=%llu entry_const_sampled=%llu entry_const_ms=%.3f "
+            "entry_draw_events=%llu entry_draw_sampled=%llu entry_draw_ms=%.3f "
+            "entry_state_events=%llu entry_state_sampled=%llu entry_state_ms=%.3f%s%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -8953,6 +8969,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<double>(peAppendPhaseEncode_.sampledNs) / 1.0e6,
             static_cast<unsigned long long>(peAppendPhaseFlush_.sampled),
             static_cast<double>(peAppendPhaseFlush_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peEntryConstDecimatedStats_.events),
+            static_cast<unsigned long long>(peEntryConstDecimatedStats_.sampled),
+            static_cast<double>(peEntryConstDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peEntryDrawDecimatedStats_.events),
+            static_cast<unsigned long long>(peEntryDrawDecimatedStats_.sampled),
+            static_cast<double>(peEntryDrawDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peEntryStateDecimatedStats_.events),
+            static_cast<unsigned long long>(peEntryStateDecimatedStats_.sampled),
+            static_cast<double>(peEntryStateDecimatedStats_.sampledNs) / 1.0e6,
             constSetterBucketText.c_str(),
             appendTypeText.c_str());
     }
@@ -12238,6 +12263,8 @@ public:
     /* ── render states ── */
     HRESULT STDMETHODCALLTYPE SetRenderState(D3DRENDERSTATETYPE state,
                                               DWORD value) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryStateDecimatedStats_);
         notePeDeviceCallAfterPresent("SetRenderState");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::RenderState);
@@ -12424,6 +12451,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetTextureStageState(DWORD stage,
                                                     D3DTEXTURESTAGESTATETYPE type,
                                                     DWORD value) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryStateDecimatedStats_);
         notePeDeviceCallAfterPresent("SetTextureStageState");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::TextureStageSampler);
@@ -12474,6 +12503,8 @@ public:
     HRESULT STDMETHODCALLTYPE SetSamplerState(DWORD sampler,
                                                D3DSAMPLERSTATETYPE type,
                                                DWORD value) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryStateDecimatedStats_);
         notePeDeviceCallAfterPresent("SetSamplerState");
         PeHotStateSetterTimer hotSetter(
             *this, PeHotStateSetterFamily::TextureStageSampler);
@@ -12649,6 +12680,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetTexture(DWORD stage,
                                           IDirect3DBaseTexture9* pTex) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryStateDecimatedStats_);
         notePeDeviceCallAfterPresent("SetTexture");
         PeHotStateSetterTimer hotSetter(*this, PeHotStateSetterFamily::Texture);
         dxmt9DeviceDebugLog("device_set_texture device=%p stage=%u tex=%p",
@@ -12913,6 +12946,8 @@ public:
 
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start, const float* pData,
                                                         UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         const auto peCall =
             notePeDeviceCallAfterPresent(
                 "SetVertexShaderConstantF", DXMT9_PE_CALLSITE_PC());
@@ -12955,6 +12990,8 @@ public:
         return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantI(UINT start, const INT* pData,
                                                         UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetVertexShaderConstantI");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -12972,6 +13009,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantB(UINT start, const BOOL* pData,
                                                         UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetVertexShaderConstantB");
         dxmt9DeviceDebugLog("device_set_vertex_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -13148,6 +13187,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantF(UINT start, const float* pData,
                                                        UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         const auto peCall =
             notePeDeviceCallAfterPresent(
                 "SetPixelShaderConstantF", DXMT9_PE_CALLSITE_PC());
@@ -13178,6 +13219,8 @@ public:
         return S_OK;    }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantI(UINT start, const INT* pData,
                                                        UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetPixelShaderConstantI");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_i device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -13195,6 +13238,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetPixelShaderConstantB(UINT start, const BOOL* pData,
                                                        UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryConstDecimatedStats_);
         notePeDeviceCallAfterPresent("SetPixelShaderConstantB");
         dxmt9DeviceDebugLog("device_set_pixel_shader_constant_b device=%p start=%u count=%u data=%p",
                             this, start, count, pData);
@@ -13215,6 +13260,8 @@ public:
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,
                                              UINT startVertex,
                                              UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
         const auto peCall = notePeDeviceCallAfterPresent(
             "DrawPrimitive", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
@@ -13273,6 +13320,8 @@ public:
                                                     UINT minVertex, UINT numVertices,
                                                     UINT startIndex,
                                                     UINT count) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
         const auto peCall = notePeDeviceCallAfterPresent(
             "DrawIndexedPrimitive", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
@@ -13344,6 +13393,8 @@ public:
                                                UINT count,
                                                const void* pData,
                                                UINT stride) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
         const auto peCall = notePeDeviceCallAfterPresent(
             "DrawPrimitiveUP", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {
@@ -13404,6 +13455,8 @@ public:
                                                       D3DFORMAT idxFmt,
                                                       const void* pVtxData,
                                                       UINT stride) noexcept override {
+        DxmtPeDecimatedScopeGuard peEntryScope;
+        dxmt9PeArmDecimatedScope(peEntryScope, peEntryDrawDecimatedStats_);
         const auto peCall = notePeDeviceCallAfterPresent(
             "DrawIndexedPrimitiveUP", DXMT9_PE_CALLSITE_PC());
         const auto finishPeCall = [&](HRESULT hr) noexcept {

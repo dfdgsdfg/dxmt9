@@ -262,6 +262,18 @@ buffer lock/shadow path (`~1.4 ms/present` from `result.json` counters) are
 dxmt9 code measured by none of these scopes. Treat any "dxmt9 is only X%" claim
 built on this table as a lower bound.
 
+> **Superseded 2026-08-01: the floor was 4.5x low.**
+> [append-decomposition.08](state-churn-encode/state-churn-encode-append-decomposition.08.md)
+> instrumented the D3D9 entry points themselves. Time inside dxmt9's entry
+> points is **`35.5-36.2 ms/present`, `~68%` of the frame** — the four scopes
+> behind `8.07` captured `6.9-7.7` of it. Both discipline checks pass
+> (`N=64`/`N=16` agree within `1.9%`; scene fps `18.88-19.56` against an
+> `18.35-18.51` uninstrumented baseline, so the workload is not perturbed).
+> `68%` is time inside our entry points, not `68%` of removable overhead —
+> validation and state bookkeeping are work any D3D9 implementation does. The
+> tables below still read `15.1%`; treat that as the old floor until they are
+> rebuilt on the entry measurement.
+
 **And the bound cannot be tightened by profiling.**
 [attribution.05](present-pacing/present-pacing-post-defselect-cpu-attribution.05.md)
 tried: xctrace names 564 images and neither `d3d9.dll` nor the game is among

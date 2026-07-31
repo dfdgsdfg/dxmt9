@@ -49,3 +49,33 @@ struct DxmtPeDecimatedScopeGuard {
     }
   }
 };
+
+// Arms a decimated scope in one statement: sampling decision, null-scope
+// calibration, and t0, in the order the existing hand-written call sites use.
+//
+// The calibration read is not optional and not decoration -- the instrument
+// costs ~186ns per sample, which is 6% of appendRecordDirect's reading and 92%
+// of touchConstShadow's, so an uncalibrated number is wrong by more than the
+// thing it measures for any short scope
+// (docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attribution.04.md).
+// Every scope must therefore pay the same null read, which is why this is a
+// helper rather than a comment telling people to remember.
+inline void dxmt9PeArmDecimatedScope(DxmtPeDecimatedScopeGuard& guard,
+                                     PeDecimatedScopeStats& stats) {
+  const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
+  if (decimationN == 0 ||
+      !PeDecimatedScopeTimer::shouldSample(stats, decimationN)) {
+    return;
+  }
+  guard.stats = &stats;
+  {
+    const auto n0 = std::chrono::steady_clock::now();
+    const auto n1 = std::chrono::steady_clock::now();
+    PeDecimatedScopeTimer::recordSample(
+        peDecimatedNullScopeStats(),
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+  }
+  guard.t0 = std::chrono::steady_clock::now();
+}
+
