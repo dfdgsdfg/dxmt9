@@ -1046,6 +1046,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       return dxmt9::core::D3D_OK;
     }
 
+    // Inline-replay lane, reached when the offload is disabled OR the chunk
+    // contains a synchronousReadBoundary record (READBACK). In the second case
+    // the offload worker may still hold earlier chunks, and replaying this one
+    // here without draining first would run it BEFORE them and CONCURRENTLY
+    // with them -- violating R-BACK-2.51(b) (single FIFO worker, never
+    // reordered or parallelized) and (d). No-op when the offload is off or the
+    // queue is empty, so the non-readback path pays one pointer test.
+    dxmt9::d3d9::drainDeferredReplay(d, "dxmt9c_device_commit_chunk_inline");
     const int32_t hr = replayResolvedV2Chunk(
         d, raw, /*pacedByPresentOrdinal=*/false);
     dxmt9::d3d9::releaseRetainedWrappers(raw);

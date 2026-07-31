@@ -1,6 +1,22 @@
 #include "device_c_provider_api.hpp"
 #include "device_c_replay_offload.hpp"
 
+// Drain-fence rule for this file (R-BACK-2.51(d)): fence every entry point that
+// READS OR PUBLISHES BACKEND RESOURCE CONTENTS, because the offload worker may
+// hold queued chunks that write or read the same resource, and a direct call
+// that skips the fence observes them out of program order.
+//
+// Fence:      lock/unlock (both halves -- unlock is where a write publishes),
+//             mip generation, direct sampling, and resource creation.
+// Do not:     addref/release, wire-identity, and desc/level/container getters.
+//             These read wrapper-cached metadata the replay never touches, and
+//             fencing them would drain the pipeline for a refcount bump.
+//
+// The fence used to cover create_* and buffer_lock only, which reads as a list
+// rather than a rule; the lock/unlock pairs below were unfenced with no
+// exemption note (contrast the measured one on begin/end_scene in
+// device_c_bridge_device_state_draw.cpp).
+
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* arg0, uint32_t w, uint32_t h, uint32_t levels, uint32_t usage, uint32_t fmt, uint32_t pool) {
   dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_create_texture");
   return dxmt9p_device_create_texture(arg0, w, h, levels, usage, fmt, pool);
@@ -80,10 +96,12 @@ extern "C" int32_t dxmt9c_texture_get_wire_identity(
 }
 
 extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* arg0, uint32_t level, D9CLockedRect* out, const D9CRect* arg3, uint32_t flags) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_lock_rect");
   return dxmt9p_texture_lock_rect(arg0, level, out, arg3, flags);
 }
 
 extern "C" int32_t dxmt9c_texture_unlock_rect(D9CTexture* arg0, uint32_t level) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_unlock_rect");
   return dxmt9p_texture_unlock_rect(arg0, level);
 }
 
@@ -100,6 +118,7 @@ extern "C" int32_t dxmt9c_texture_get_level_desc(D9CTexture* arg0, uint32_t leve
 }
 
 extern "C" int32_t dxmt9c_texture_generate_mip_sublevels(D9CTexture* arg0) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_generate_mip_sublevels");
   return dxmt9p_texture_generate_mip_sublevels(arg0);
 }
 
@@ -110,6 +129,7 @@ extern "C" uint32_t dxmt9c_texture_set_lod(D9CTexture* arg0, uint32_t lod) {
 extern "C" int32_t dxmt9c_texture_sample_2d(D9CTexture* arg0, uint32_t level,
                                              float u, float v,
                                              float* outRgba4) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_texture_sample_2d");
   return dxmt9p_texture_sample_2d(arg0, level, u, v, outRgba4);
 }
 
@@ -138,6 +158,7 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* arg0, uint32_t offset, uint32_t
 }
 
 extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* arg0) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_buffer_unlock");
   return dxmt9p_buffer_unlock(arg0);
 }
 
@@ -159,10 +180,12 @@ extern "C" int32_t dxmt9c_surface_get_wire_identity(
 }
 
 extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* arg0, D9CLockedRect* arg1, const D9CRect* arg2, uint32_t flags) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_surface_lock_rect");
   return dxmt9p_surface_lock_rect(arg0, arg1, arg2, flags);
 }
 
 extern "C" int32_t dxmt9c_surface_unlock_rect(D9CSurface* arg0) {
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_surface_unlock_rect");
   return dxmt9p_surface_unlock_rect(arg0);
 }
 

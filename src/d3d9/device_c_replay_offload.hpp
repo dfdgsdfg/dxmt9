@@ -18,6 +18,8 @@
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CTexture;    // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CSurface;    // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
@@ -210,6 +212,11 @@ void drainDeferredReplay(D9CBuffer* b, const char* site = nullptr);
 // visible -- resolves `s->owner` (the backpointer set at swapchain creation,
 // see device_c_common.hpp) and forwards to the D9CDevice* overload above.
 void drainDeferredReplay(D9CSwapChain* s, const char* site = nullptr);
+// Texture/Surface overloads exist for the same reason the Buffer one does: the
+// bridge shims hold only forward declarations of the wrapper structs, so they
+// cannot reach `->device` themselves. Null-safe on the wrapper.
+void drainDeferredReplay(D9CTexture* t, const char* site = nullptr);
+void drainDeferredReplay(D9CSurface* s, const char* site = nullptr);
 
 // Emits one [dxmt9-drain-site] line per blocking entry point at Info level.
 // No-op unless DXMT9_PERF_DRAIN_FENCE_SITES is set. `presents` is the

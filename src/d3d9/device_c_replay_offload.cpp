@@ -337,4 +337,18 @@ void drainDeferredReplay(D9CSwapChain* s, const char* site) {
   drainDeferredReplay(s->owner, site);
 }
 
+void drainDeferredReplay(D9CTexture* t, const char* site) {
+  if (!t) {
+    return;
+  }
+  drainDeferredReplay(t->device, site);
+}
+
+void drainDeferredReplay(D9CSurface* s, const char* site) {
+  if (!s) {
+    return;
+  }
+  drainDeferredReplay(s->device, site);
+}
+
 }  // namespace dxmt9::d3d9
