@@ -262,6 +262,14 @@ buffer lock/shadow path (`~1.4 ms/present` from `result.json` counters) are
 dxmt9 code measured by none of these scopes. Treat any "dxmt9 is only X%" claim
 built on this table as a lower bound.
 
+**And the bound cannot be tightened by profiling.**
+[attribution.05](present-pacing/present-pacing-post-defselect-cpu-attribution.05.md)
+tried: xctrace names 564 images and neither `d3d9.dll` nor the game is among
+them, because both run as translated x86 PE code with no image attribution. Only
+the Wine *unix* objects symbolicate. H212's inability to split the guest blob is
+the instrument's ceiling, not a shortcut. The floor moves only by instrumenting
+more PE scopes from the inside.
+
 ### 4.3 Inside `appendRecordDirect`
 
 | Component | ms/present | share of append |

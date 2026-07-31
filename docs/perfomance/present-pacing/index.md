@@ -22,6 +22,7 @@ Latest tracked row: `H232` - phase-aligned GT2 traces locate the 307ms CPU-to-di
 
 ## Recent Leaf Documents
 
+- [present-pacing-post-defselect-cpu-attribution.05 - The Producer Thread Cannot Be Split By Image](present-pacing-post-defselect-cpu-attribution.05.md)
 - [present-pacing-drain-fence-attribution.207 - The Blocked Locks Are Mostly MANAGED](present-pacing-drain-fence-attribution.207.md)
 - [present-pacing-drain-fence-attribution.206 - One Of 84 Bridge Entry Points Owns 99.8% Of The Drain Fence](present-pacing-drain-fence-attribution.206.md)
 - [present-pacing-sfiv-shader-cost-attribution.205 - The SFIV 88ms Instances Are Real Shader Work, Not A Wait](present-pacing-sfiv-shader-cost-attribution.205.md)

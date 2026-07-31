@@ -158,6 +158,13 @@ def make_thread_row(thread: str) -> dict[str, object]:
         "time_sample_states": Counter(),
         "top_frames": Counter(),
         "top_binaries": Counter(),
+        # Self-time by image, weighted. `top_binaries` counts samples, which
+        # answers "how often" rather than "how much"; a producer thread whose
+        # cost is unevenly distributed across images needs the weight. Bucketed
+        # on the TOP frame deliberately -- that is self time, which is the right
+        # attribution for "whose code is burning the CPU" as opposed to "who
+        # called into it".
+        "top_binary_weight_ms": Counter(),
         "keyword_hits": Counter(),
         "keyword_weight_ms": Counter(),
     }
@@ -200,6 +207,7 @@ def parse_time_profile(
             top_frame, top_binary = frames[0]
             thread_row["top_frames"][top_frame or "<unknown-frame>"] += 1  # type: ignore[index]
             thread_row["top_binaries"][top_binary or "<unknown-binary>"] += 1  # type: ignore[index]
+            thread_row["top_binary_weight_ms"][top_binary or "<unknown-binary>"] += weight_ms  # type: ignore[index]
         for keyword, lowered_keyword in lowered:
             if lowered_keyword in stack_text:
                 thread_row["keyword_hits"][keyword] += 1  # type: ignore[index]
@@ -256,6 +264,22 @@ def parse_thread_info(
 
 def counter_summary(counter: Counter[str], limit: int = 3) -> str:
     return "; ".join(f"{name}={count}" for name, count in counter.most_common(limit))
+
+
+def weight_counter_summary(counter: Counter[str], limit: int = 8) -> str:
+    """Self-time-by-image, as `name=ms(share%)`.
+
+    Wider default limit than counter_summary: attributing a producer thread
+    needs the tail, not just the top three -- the question is usually "how much
+    is NOT the top image", and a truncated list answers it by omission.
+    """
+    total = sum(counter.values())
+    if total <= 0:
+        return ""
+    return "; ".join(
+        f"{name}={ms:.1f}ms({ms / total * 100:.1f}%)"
+        for name, ms in counter.most_common(limit)
+    )
 
 
 def blocked_state_rows(states: Counter[str]) -> int:
@@ -351,6 +375,7 @@ def rows_for_output(threads: dict[str, dict[str, object]]) -> list[dict[str, str
                 "time_sample_states": counter_summary(row["time_sample_states"]),  # type: ignore[arg-type]
                 "top_frames": counter_summary(row["top_frames"]),  # type: ignore[arg-type]
                 "top_binaries": counter_summary(row["top_binaries"]),  # type: ignore[arg-type]
+                "top_binary_weight_ms": weight_counter_summary(row["top_binary_weight_ms"]),  # type: ignore[arg-type]
                 "keyword_hits": counter_summary(keyword_hits, 8),
                 "keyword_weight_ms": "; ".join(
                     f"{name}={keyword_weight[name]:.3f}" for name, _ in keyword_hits.most_common(8)
@@ -559,6 +584,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "time_sample_states",
         "top_frames",
         "top_binaries",
+        "top_binary_weight_ms",
         "keyword_hits",
         "keyword_weight_ms",
         "p4_wait_keyword_hits",
