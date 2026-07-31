@@ -1,5 +1,9 @@
 dxmt9_test_link_args = []
 dxmt9_native_test_env = environment()
+# Golden regeneration must never happen inside a test run: update mode
+# asserts nothing. Pinning this off means a leaked shell/CI variable cannot
+# silently re-baseline pe_producer_differential_spec's certification.
+dxmt9_native_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
 dxmt9_native_test_env_vars = []
 if host_machine.system() == 'darwin'
   dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([

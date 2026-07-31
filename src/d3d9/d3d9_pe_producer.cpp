@@ -14,7 +14,8 @@ namespace dxmt9::d3d9::pe {
 // Fills SparseStateV2Input straight from the shadows and the binding view.
 //
 // Section content and ORDER must match what the legacy shim's
-// populateLegacySparseState produced from the fat packet, because the
+// populateLegacySparseState (deleted with the legacy format) produced from
+// the fat packet, because the
 // differential compares emitted chunk bytes. Every walk therefore goes slot 0
 // upward, which is also what appendSparseRecordV2's orderedSlot() requires.
 bool buildSparseStateV2(const PeHotStateShadow& shadow,
@@ -130,7 +131,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // indexed-UP draw carries its indices inline in the record payload and binds
   // no index buffer, and the shim proves it: appendLegacySparseRecord sets its
   // `indexed` packet pointer only for DRAW_INDEXED_PRIMITIVE, leaving it null
-  // for _UP, so populateLegacySparseState's `indexed && indexed->ibValid` gate
+  // for _UP, so its `indexed && indexed->ibValid` gate
   // never fired and no index-buffer section was produced. Including _UP here
   // emits a section production never emitted, plus a retained handle the record
   // does not need. Pinned by the differential's "indexed UP draw ignores a dirty
@@ -274,7 +275,8 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // sections, so this drains straight into them.
   //
   // DRAINING MUTATES: each range is cleared once emitted, exactly as
-  // foldConstShadowIntoDeltaSection did. That is why `constants` is non-const,
+  // foldConstShadowIntoDeltaSection did before it was deleted. That is why
+  // `constants` is non-const,
   // and it means a caller must not build a record it then throws away -- the
   // dirty ranges are gone. Off the inline path the shadows are already clean
   // (the caller flushed them as standalone records) so this is a no-op.
@@ -535,7 +537,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   // indexed-UP draw carries its indices inline in the record payload and binds
   // no index buffer, and the shim proves it: appendLegacySparseRecord sets its
   // `indexed` packet pointer only for DRAW_INDEXED_PRIMITIVE, leaving it null
-  // for _UP, so populateLegacySparseState's `indexed && indexed->ibValid` gate
+  // for _UP, so its `indexed && indexed->ibValid` gate
   // never fired and no index-buffer section was produced. Including _UP here
   // emits a section production never emitted, plus a retained handle the record
   // does not need. Pinned by the differential's "indexed UP draw ignores a dirty

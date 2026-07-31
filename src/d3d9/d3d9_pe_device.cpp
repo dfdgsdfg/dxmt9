@@ -330,30 +330,29 @@ static std::array<char, 2048> dxmt9PeFormatCallerStack(
 // set_light / light_enable / set_indices unix-calls. New Set*-style code
 // should update PE shadow state and encode it into command records.
 //
-// Phase 16: full-snapshot mode. When set, every draw packet emitted in
-// chunk-recorder mode carries the COMPLETE BaseDrawState snapshot (every
-// field marked valid + populated from the PE shadow), not just the
-// delta-since-last-packet. Wire size grows (typical packet jumps from
-// ~100B to ~1KB) but the importer becomes idempotent — every packet is
-// self-contained and can be replayed independently of prior packets.
-// Off (default) keeps the delta optimization that makes run-coalescing
-// detection cheap (packetHasNoStateDelta == "all valid bits zero").
+// Phase 16: full-snapshot mode. When set, every draw record carries the
+// COMPLETE state -- every category populated from the PE shadow, including null
+// unbinds -- instead of the delta since the previous record. Wire size grows
+// (typical record ~100B to ~1KB) but each record is replayable independently of
+// the ones before it, which is what makes isolated and out-of-order replay
+// meaningful for debug and stress.
 //
-// SOLE APPLICATION SITE: buildDrawPacketFromViews() in
-// d3d9_pe_producer.cpp, after the
-// delta block populates valid/mask fields from pending-* PE state. When
-// enabled, the snapshot block overrides every delta field with the full
-// shadow contents (render-state table, every populated texture slot,
-// every populated stream, every shadow-driven scalar, all sampler/TSS
-// tables, full clip-plane mask 0x3F, every transform/light slot). Both
-// modes share the same wire layout (D9CDrawPrimitivePacket); only the
-// valid/mask population policy differs.
+// APPLICATION SITE: buildSparseStateV2() in d3d9_pe_producer.cpp, which per
+// category selects the shadow table instead of the pending set (`snapshot ?
+// shadow.renderStateShadow : shadow.pendingRenderStates` and its four siblings)
+// and emits every bound slot rather than only the dirty ones.
+// addChunkContextSections() takes the same verdict and then leaves the stream
+// set alone: a delta-shaped rebuild there silently dropped the very sections
+// snapshot mode exists to emit, which is what c3e18446 fixed.
 //
-// Equivalence guarantee: applying a delta-mode packet sequence vs the
-// matching full-snapshot sequence through device_c_chunk_replay's
-// applyDrawPacketStateDirect() yields identical effective state. The
-// regression guard is tests/native/bridge/
-// pe_full_snapshot_equivalence_spec.cpp.
+// One caveat the name oversells: the index-buffer section is still subject to
+// chunk retention under snapshot, so a snapshot record is not literally
+// self-contained for the IB. That matches what the legacy format did, and the
+// goldens pin it.
+//
+// Equivalence guard: tests/native/bridge/pe_full_snapshot_equivalence_spec.cpp
+// runs the real producer in both modes over identical inputs and asserts the
+// snapshot record is self-contained and the delta record is a subset of it.
 // dxmt9PeFullSnapshotEnabled() now lives in d3d9_pe_producer.hpp beside the
 // producer that reads it. Keeping a second copy here would be exactly the
 // drift hazard that motivated sharing toWireHandle.
@@ -3339,7 +3338,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     IDirect3DSurface9* dsSurface_ = nullptr;
 
     // Reused across draws so populateBindingView() does not zero ~850 bytes
-    // per call. Mutable because buildDrawPrimitivePacket() is const.
+    // per call. Mutable because the binding-view fill is a const method.
     mutable dxmt9::d3d9::pe::PeBindingView peBindingView_{};
 
     // Reused sparse-producer storage. The SparseStateV2Input spans point into
@@ -3360,7 +3359,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // draw_packet, and V2 append scopes). The const_setter accumulator lives
     // next to its owner (touchConstShadow's function-local static) — see
     // d3d9_pe_stats_decimation.hpp and logPeStatsDecimation() below.
-    // draw_packet's stats are mutable because buildDrawPrimitivePacket()
+    // draw_packet's stats are mutable because the state build's forwarder
     // is a const method.
     PeDecimatedScopeStats peV2AppendDecimatedStats_{};
     // Phase split of the record append, sampled on the same calls the
@@ -3376,7 +3375,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Per-record-type append census. Counting only -- no clock reads -- so it
     // can run alongside the decimated timers without adding to the bias that
     // 2026-07-29 showed dominates short scopes. Tells us which encode path in
-    // appendLegacyCommandRecordAsV2 is worth opening.
+    // the record encode is worth opening.
     static constexpr std::size_t kPeAppendTypeBuckets = 8;
     std::uint64_t peAppendTypeCounts_[kPeAppendTypeBuckets]{};
     std::uint64_t peAppendTypeBytes_[kPeAppendTypeBuckets]{};
@@ -3943,7 +3942,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return total;
     }
 
-    // Sparse-state counterpart to buildDrawPrimitivePacket. Fills the reused
+    // The recorder's sole state producer. Fills the reused
     // peSparseState_ / peSparseHeader_ from the shadows and the binding view --
     // no fat packet in between. The decimated draw_packet scope lives here for
     // the same reason it does on the fat-packet forwarder: it has to cover the
@@ -9246,7 +9245,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     //
     // All three phase timers stay exactly where they were before the envelope
     // was extracted -- resize around the scratch grow, write around the
-    // caller's writer, encode around appendLegacyCommandRecordAsV2 alone. A
+    // caller's writer, encode around the record encode alone. A
     // migrated emitter records encode around its direct V2 call, so `encode`
     // keeps one meaning across the migration and the before/after numbers stay
     // comparable.
@@ -9424,7 +9423,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         // The override window has to cover populateBindingView, which reads
         // fvf_ / vdecl_ / vs_, so it wraps the whole state build exactly as it
-        // wrapped buildDrawPrimitivePacket before.
+        // wrapped the fat-packet build before.
         dxmt9::d3d9::pe::PeDrawParams params{};
         params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
         params.primitiveType = static_cast<std::uint32_t>(type);
@@ -9812,26 +9811,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     // R-BACK-2.52 (Inline Const Delta fold, DXMT9_PE_INLINE_CONST_DELTA=1
-    // only): fold all six const shadows' merged dirty ranges into
-    // `packet.constDeltaSections` plus this call's payload bytes in
-    // constDeltaPayloadScratch_, instead of appending standalone
-    // D9C_COMMAND_RECORD_SET_*_CONST_* records for them. Called by
-    // appendDrawPrimitiveRecord / appendDrawIndexedPrimitiveRecord AFTER
-    // buildDrawPrimitivePacket() has already reset `packet` — folding
-    // earlier would be clobbered by that reset.
+    // only): the six const shadows' merged dirty ranges ride the draw record
+    // itself instead of being appended as standalone
+    // D9C_COMMAND_RECORD_SET_*_CONST_* records before it.
     //
-    // Each shadow's fold uses foldConstShadowIntoDeltaSection
-    // (d3d9_pe_const_shadow.hpp), which is required to reproduce the exact
-    // merged [dirtyStart, dirtyEnd) range and element size that
-    // flushConstShadow's default path would have emitted as a standalone
-    // record — this is what preserves R-BACK-2.52(d) replay equivalence.
-    // If a shadow's fold fails (defensive-only: the range check should be
-    // unreachable because Set* fast paths already bound ranges to the
-    // D3D9 register-file limit before touchConstShadow runs), that single
-    // shadow falls back to flushConstShadow so its bytes still reach the
-    // chunk as a standalone record placed before the draw record — the
-    // draw record is not appended by this function, so chunk order still
-    // ends up "consts → draw" for the fallback case.
+    // The fold no longer happens here. buildSparseStateV2() drains the shadows
+    // into the record's V2 constant sections while it builds the state, so there
+    // is no separate fold step and no payload scratch to keep in sync with a
+    // packet reset. What survives from the original design is the requirement
+    // that a folded range reproduce exactly the [dirtyStart, dirtyEnd) span and
+    // element size flushConstShadow would have emitted standalone -- that is what
+    // preserves R-BACK-2.52(d) replay equivalence, and the differential goldens
+    // pin it for the folded lane.
 
     // Phase 28: chunk-mode barrier flush. Replaces flushPendingHotState's
     // bridge-emit path with a chunk-record path that preserves the
@@ -9841,7 +9832,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // state is pending, packages the delta into a D9C_COMMAND_RECORD_
     // APPLY_STATE record + appends to the chunk + clears the pending
     // bits. Server importer dispatches APPLY_STATE via the same
-    // applyDrawPacketState() that draw records use, so the server
+    // V2 state replay that draw records use, so the server
     // shadow is updated before the upcoming barrier record runs.
     //
     // Caller still appends the actual barrier record afterwards;
@@ -11777,7 +11768,7 @@ public:
             pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
         // Phase 12: PE-shadow-only when chunk recorder is active. Pending
         // transforms ride on the next draw packet's transforms[] array;
-        // server-side applyDrawPacketState dispatches set_transform per
+        // server-side V2 state replay dispatches set_transform per
         // entry before the draw runs.
         const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
         const uint32_t stateKey = static_cast<uint32_t>(state);
@@ -11898,7 +11889,7 @@ public:
                         pVP->MinZ, pVP->MaxZ };
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries viewportValid=1 + the
-        // shadow snapshot; server-side applyDrawPacketState dispatches
+        // shadow snapshot; server-side V2 state replay dispatches
         // dxmt9c_device_set_viewport before the draw runs.
         if (std::memcmp(&peState_.viewportShadow, &vp, sizeof(vp)) == 0) {
             return S_OK;
@@ -12851,7 +12842,7 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries vsValid=1 + the vs_
-        // wire handle; server-side applyDrawPacketState dispatches the
+        // wire handle; server-side V2 state replay dispatches the
         // dxmt9c_device_set_vertex_shader call before the draw runs.
         if (vs_ == pVS) return S_OK;
         setRef(vs_, pVS);

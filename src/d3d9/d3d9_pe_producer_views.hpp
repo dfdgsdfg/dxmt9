@@ -142,8 +142,8 @@ struct PeSparseScratch {
   // ONE vertex input, not two. The section is V2SectionRuleSingle with
   // maxCount 1: FVF and vertex declaration are the two values of the entry's
   // `kind` field, not two entries. Declaration wins when both are dirty, and
-  // `value` carries the FVF either way -- see the shim at
-  // d3d9_pe_chunk_v2_draw.cpp's populateLegacySparseState.
+  // `value` carries the FVF either way -- see buildSparseStateV2's vertex-input
+  // block in d3d9_pe_producer.cpp.
   std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 1>
       vertexInputs{};
   std::array<SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>, 1>

@@ -34,9 +34,9 @@
 using namespace dxmt9::d3d9::devicec;
 
 // Forward declarations for state-setter ABI entry points implemented in
-// device_c_state.cpp. The packet-replay path (applyDrawPacketStateViaIface)
-// and the chunk importer (dxmt9c_device_commit_chunk) call these to dispatch
-// per-record state deltas. The provider macro renames apply uniformly via
+// device_c_state.cpp. The chunk importer (dxmt9c_device_commit_chunk) calls
+// these to dispatch per-record state deltas; the fat-packet applier chain that
+// used to share them is gone (see the tombstone below). The provider macro renames apply uniformly via
 // device_c_provider.hpp, so the linker resolves to the same symbols.
 extern "C" int32_t dxmt9c_device_set_viewport(D9CDevice* d, const D9CViewport* vp);
 extern "C" int32_t dxmt9c_device_set_scissor_rect(D9CDevice* d, const D9CRect* r);

@@ -26,6 +26,7 @@
 #include <array>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <cstddef>
 #include <cstdint>
@@ -281,8 +282,15 @@ LaneResult runDirectLane(const Fixture& fixture) {
 //
 // Regenerate deliberately with DXMT9_UPDATE_PE_PRODUCER_GOLDEN=1. Doing that
 // after the legacy lane is gone re-baselines against whatever the producer does
-// today and silently discards the certification -- so once stage C lands, a
-// golden diff is a finding, not a chore.
+// today and silently discards the certification -- so a golden diff is a finding,
+// not a chore.
+//
+// Update mode therefore FAILS the run on purpose. It writes the file and returns
+// nonzero, because a run that asserted nothing must never report success: a
+// leaked env var in CI or a dev shell would otherwise re-baseline the
+// certification and print OK. tests/meson.build additionally pins the variable
+// to "0" in the test environment, so reaching update mode requires running this
+// binary directly and deliberately.
 struct Golden {
   std::size_t bytes = 0;
   std::size_t records = 0;
@@ -350,6 +358,14 @@ void loadGoldens() {
   }
 }
 
+// Names actually checked this run. A renamed fixture fails loudly (its golden is
+// missing), but a DELETED one would leave its row in the file forever with
+// nothing noticing -- so the run also asserts it consumed every row it loaded.
+std::set<std::string>& consumedGoldens() {
+  static std::set<std::string> consumed;
+  return consumed;
+}
+
 std::vector<std::pair<std::string, Golden>>& capturedGoldens() {
   static std::vector<std::pair<std::string, Golden>> captured;
   return captured;
@@ -381,6 +397,7 @@ void requireMatchesGolden(const std::string& name, const LaneResult& direct) {
     capturedGoldens().emplace_back(name, actual);
     return;
   }
+  consumedGoldens().insert(name);
   const auto it = goldens().find(name);
   check(it != goldens().end(),
         name + ": no golden. Fixtures must be pinned; regenerate with "
@@ -1131,10 +1148,20 @@ int main() {
     randomizedRecordSequences();
     if (updatingGoldens()) {
       writeGoldens();
-      std::cout << "pe_producer_differential_spec: wrote "
+      std::cerr << "pe_producer_differential_spec: wrote "
                 << capturedGoldens().size() << " goldens to " << goldenPath()
-                << "\n";
-      return 0;
+                << "\nThis run VERIFIED NOTHING -- update mode is not a test "
+                   "run. Review the golden diff, then re-run without "
+                   "DXMT9_UPDATE_PE_PRODUCER_GOLDEN.\n";
+      return 2;
+    }
+    // Every loaded golden must have been checked. Catches a fixture deleted
+    // without its row, which would otherwise rot in the file unnoticed.
+    for (const auto& [name, unused] : goldens()) {
+      (void)unused;
+      check(consumedGoldens().count(name) != 0,
+            name + ": golden row has no fixture. A fixture was removed or "
+                   "renamed without updating the golden file.");
     }
   } catch (const TestFailure& failure) {
     std::cerr << "pe_producer_differential_spec FAILED: " << failure.what()

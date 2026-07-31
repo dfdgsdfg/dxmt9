@@ -2300,6 +2300,54 @@ fixed ~68 s timeline that hangs post-scene until the timeout kill, and SIGKILL
 loses the final counter flush. Set `DXMT9_PERF_FRAME_SAMPLING=1` and compute
 scene fps from the per-frame `wall_ms` samples.
 
+### Follow-up: coverage debt the final structural review priced out
+
+Not merge blockers -- the migration is functionally complete and gated -- but each
+is a specific hole with a known fix. Recorded so they are picked up deliberately
+rather than rediscovered.
+
+**1. The randomized corpus is random where the bugs were, constant elsewhere.**
+It varies record type x chunk context x snapshot flag x pending masks -- the
+cross-product that produced both real defects -- but holds five axes fixed: TSS,
+sampler and transform tables are never randomized; `inlineConstDelta` is never
+randomized; one shared stub object per kind means handle dedup always collapses
+(per-slot distinct handles appear only in two named fixtures); every texture slot
+is always bound, so **a dirty slot holding a null texture -- the `SetTexture(NULL)`
+delta -- is certified nowhere**; and the full shadow tables are left empty, so
+snapshot-mode random fixtures drain unrealistically empty shadows. That last one
+is the same pending/full duality trap the equivalence spec documents at its own
+`setRenderState` helper.
+
+**2. The full-snapshot property is necessary, not sufficient.** `requireSelfContained`
+counts only the categories whose "present" definition is unambiguous; render
+states, TSS, sampler, transform and lights are subset-checked only, so a wrong
+VALUE in a snapshot-only entry passes. It also cannot see pending/full shadow
+desync introduced by a setter (the setters live in the device TU no native test
+compiles), assumes applier idempotency, and **omits UP records entirely** even
+though production passes `forceFullSnapshot=true` at the UP sites for the SWVP
+fallback. Adding UP scenarios to its matrix is cheap and worth doing first.
+
+**3. The sequence blind spot has a concrete cheapest fix, buildable today with no
+production change.** A native spec that evolves a shadow across N producer calls
+into ONE `CommandChunkV2Builder`, derives `PeChunkContext` from that builder's
+real `referencesObject` exactly as `currentChunkContext()` does, decodes each
+record with `replaySparseRecordV2` (already natively linked by
+`dxmt9-chunk-record-v2-replay-spec`) into a small model applier, and asserts the
+delta lane's end state equals the snapshot lane's. That exercises the retention
+protocol across records, which nothing tests now, and both defects this migration
+produced were exactly this class. It still will not cover the device-TU seam
+(`populateBindingView`, setter discipline) -- that stays Wine-only.
+
+**4. Perf protocol needs three additions before Step 7 is re-run.** Interleaving
+A/B across two commits means rebuild+restage at every switch, which injects build
+thermal load immediately before each run and reintroduces the confound the
+interleaving exists to kill -- keep two prebuilt worktrees or build-dir sets so
+switching is env-only. The steady-body filter discards hitch frames, so report
+p95/p99 beside the median or a tail regression hides. And capture thermal state
+per run (`pmset -g thermlog` or thermal pressure) so "cool machine" is checkable
+rather than asserted. `--keep-frontmost` belongs in the recipe too, per
+`metal_debugging.rules.md`, whenever FPS is the evidence.
+
 ### Step 7 is DEFERRED, and the numbers taken for it are not evidence
 
 Task 10's code work is complete through stage D (`20d3528a`). The paired GT2 A/B
@@ -2340,47 +2388,6 @@ When this is re-run, on a cool machine and ideally with the machine idle:
 The structural work does not depend on this measurement: nothing in Tasks 1-10
 was justified by a perf claim. Reopen it as a perf investigation against the new
 structure rather than as a gate on the refactor.
-
-### Step 7 is DEFERRED, and the figures taken for it are not evidence
-
-Task 10's code work is complete through stage D (`20d3528a`). The paired GT2 A/B
-was attempted and is deferred: the machine was thermally throttling, so the runs
-do not measure the change. Recorded here so nobody mistakes them for a baseline.
-
-GT2, `perf` profile, `DXMT9_PERF_FRAME_SAMPLING=1`, no gputrace; scene fps from
-the median of per-frame `wall_ms` over the steady body (frame >= 30, <= 200 ms):
-
-| run | median wall | scene fps |
-|---|---|---|
-| after (`20d3528a`) | 57.232 ms | 17.47 |
-| before (`3276bf6e`) run 1 | 59.564 ms | 16.79 |
-| before run 2 | 59.392 ms | 16.84 |
-| before run 3 | 60.125 ms | 16.63 |
-
-That reads as `+4.1%`, and it should not be believed -- for a reason stronger than
-"noisy". **The ordering is confounded with the thermal state.** The single after
-run went first, on a comparatively cool machine; the three before runs followed
-back to back, after a session of four-lane builds and Wine runs. Throttling
-biases that ordering in exactly the direction the result points. The before runs'
-tight spread (`16.63-16.84`) shows only that three consecutive hot runs agree with
-each other, which is not the same as the comparison being sound.
-
-When this is re-run, on a cool and otherwise idle machine:
-
-- **Interleave the sides** (A B A B A B). Do not batch them. Ordering is the
-  confound here, not variance, and batching cannot be averaged out of it.
-- At least three runs per side, and report the spread rather than a midpoint.
-- Keep computing scene fps from per-frame `wall_ms`. Do **not** use
-  `result.json` presents: GT2 is a fixed ~68 s timeline that hangs post-scene
-  until the timeout kill, and SIGKILL loses the final counter flush (~8%
-  undercount, H231).
-- Baseline is `3276bf6e`, the last commit before Task 1. Both sides need all four
-  lanes rebuilt, and `run_experiment.py` restages, so PATH must include
-  `/opt/homebrew/opt/llvm/bin` or staging dies with exit 127 on `llvm-ar`.
-
-Nothing in Tasks 1-10 was justified by a perf claim, so this is a perf
-investigation to open against the new structure, not a gate the refactor is
-waiting on.
 
 - [ ] **Step 7: Measure, and report honestly**
 
