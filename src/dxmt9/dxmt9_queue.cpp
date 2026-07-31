@@ -1183,9 +1183,17 @@ bool QueueLifecycleController::commitCurrentChunk(
     return false;
   }
 
+  // `slot` is bound before the wait below, and that wait releases `lock`. Keep
+  // the index so the binding can be revalidated on wake: a second thread that
+  // enters here while we are parked publishes and calls `writingSlot->reset()`,
+  // after which `**writingSlot` is an empty-optional dereference and `slot`
+  // may name a slot a third writer has already re-acquired. `ensureWriterSlot`
+  // above never has this problem because it re-reads `slots[*writeIndex]`
+  // after its wait instead of holding a reference across it.
+  const size_t writingSlotIndexBeforeWait = **writingSlot;
   const bool waitNeeded = *inflightCount >= inflightLimit;
   if (waitNeeded) {
-    observeCommitWait(**writingSlot, slot.seqId, inflightLimit);
+    observeCommitWait(writingSlotIndexBeforeWait, slot.seqId, inflightLimit);
   }
   const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
@@ -1195,6 +1203,13 @@ bool QueueLifecycleController::commitCurrentChunk(
         std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   }
   if (*stop) {
+    return false;
+  }
+  // Revalidate rather than repair: if the writing slot moved while we were
+  // parked, whoever moved it owns that chunk's commit and this call has nothing
+  // left to publish. Returning false is the same answer this function already
+  // gives for "no writing slot" at entry.
+  if (!writingSlot->has_value() || **writingSlot != writingSlotIndexBeforeWait) {
     return false;
   }
 
