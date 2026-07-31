@@ -106,6 +106,50 @@ half (`seal()` versus the wow64 crossing) also remains a two-way split; under
 Rosetta the crossing is expected to dominate, which would make it a cost of the
 environment rather than of dxmt9.
 
+## Is the mutex structural? Mostly yes — read this before attacking it
+
+"Contention" reads like an oversight, so it is worth separating what is forced
+from what is a choice. Three different things are involved:
+
+**1. The per-resource operation does not need a lock at all.**
+`pool_.mark{Texture,Surface,Buffer}Use` is
+`rec.lastUsedSeqId = std::max(rec.lastUsedSeqId, seqId)` — a monotonic max on a
+`u64`, the textbook lock-free case. The mutex is not held for this.
+
+**2. What it does protect is a real invariant, but a one-directional one.**
+The lock keeps the `nextSeqId_` snapshot from going stale while marking, so no
+resource is pinned below a sequence that will use it. `lastUsedSeqId` gates
+release — `dxmt9_resource_pool.cpp` asserts `record.lastUsedSeqId <=
+completedSeqId` before freeing — so **over-pinning is safe** (the resource is
+merely held longer) and only under-pinning is the hazard. `nextSeqId_` is
+monotonically increasing. A conservative atomic read plus lock-free max
+therefore satisfies the invariant without the queue's global mutex. Possible is
+not the same as worthwhile, but it is not impossible.
+
+**3. The placement, however, is a requirement, not an accident.**
+`R-BACK-2.51(a)` mandates that "wire header/range validation, import, and
+handle-marking" stay "synchronous on the app thread before any record is handed
+off." Moving the marking onto the replay worker — which would remove the
+producer from this mutex entirely — is a spec change needing its own hazard
+argument and TLA work, not a local optimisation. **The `0.67 ms/present` is the
+measured price of that clause**, which is a more useful way to hold it than
+"a lock nobody optimised."
+
+One asymmetry worth carrying forward: the producer *waits* `13.9 us` and *holds*
+only `5.4 us`, so it is mostly waiting on other holders rather than on its own
+work. Shrinking only its critical section would not recover the wait; removing
+it from the contention set would also stop its hold from making others wait.
+For contrast, [encode-phase.196](state-churn-encode-encode-phase.196.md) measured
+the *worker's* acquisition of the same mutex in `submitDrawRunBatch` at
+`0.018 ms/present` — `37x` cheaper than the producer's. Different callers, same
+lock; that gap is a scheduling-phase question, not a lock-design one, and it is
+the thing to look at first if this is ever picked up.
+
+The practical conclusion is a bound rather than a lever: everything identified
+on the flush side, contention included, totals `1-2%` of the GT2 frame. That
+sizes the whole remaining PE-side opportunity, and it argues for stopping here
+rather than for a lock rewrite.
+
 **A correction to .05.** Its fixed term (`22.3 us`) is confirmed exactly, but its
 per-record term of `276 ns` was too high: the two-point fit could not separate
 per-record work from the present-ordinal wait, which the parent timer also spans,
