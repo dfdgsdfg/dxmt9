@@ -1021,6 +1021,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       if (hasPresent) {
         ++d->presentOrdinal;
+        // Periodic, not at teardown: 3DMark05 never releases the device, so
+        // ~D9CDevice does not run and a destructor-emitted report is lost --
+        // verified empirically, the run's log ends at [dxmt9-perf] with no
+        // site line despite 11.04 drain waits/present. Cumulative every 60
+        // presents mirrors the PE decimated stats line for the same reason.
+        if (d->presentOrdinal % 60 == 0) {
+          dxmt9::d3d9::logDrainFenceSites(d->presentOrdinal);
+        }
         if (auto upper = d->dev().upperDevice()) {
           const auto& presentParameters = d->dev().presentParameters();
           CommitChunkPhaseTimer presentWaitPhase(phaseSplit);

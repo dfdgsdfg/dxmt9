@@ -190,12 +190,18 @@ bool offloadCommitReplayEnabled();
 // offloadCommitReplayEnabled() here. An empty queue (depth() == 0) is also
 // a plain no-op return: no counter touch, no wait. Cheap on the common/off
 // path: one pointer test plus one mutex-guarded depth() read.
-void drainDeferredReplay(D9CDevice* d);
+// `site` is a diagnostic tag naming the bridge entry point, used only when the
+// drain actually blocks (DXMT9_PERF_DRAIN_FENCE_SITES). It must be a string
+// literal with static storage duration -- the sink buckets on pointer identity,
+// not on string content, so it costs a pointer compare and never a strcmp.
+// Defaulted so a caller that has not been tagged still compiles and is simply
+// attributed to "untagged".
+void drainDeferredReplay(D9CDevice* d, const char* site = nullptr);
 
 // Buffer Lock is also a direct bridge call. Resolve its owning device before
 // entering the provider so deferred draws cannot leave Lock waiting on a
 // sequence that the replay worker has not appended yet.
-void drainDeferredReplay(D9CBuffer* b);
+void drainDeferredReplay(D9CBuffer* b, const char* site = nullptr);
 
 // dxmt9c_swapchain_present overload: D9CSwapChain is an opaque forward
 // declaration in the bridge TUs (they only see the ABI-facing
@@ -203,7 +209,12 @@ void drainDeferredReplay(D9CBuffer* b);
 // device_c_replay_offload.cpp where the full D9CSwapChain definition is
 // visible -- resolves `s->owner` (the backpointer set at swapchain creation,
 // see device_c_common.hpp) and forwards to the D9CDevice* overload above.
-void drainDeferredReplay(D9CSwapChain* s);
+void drainDeferredReplay(D9CSwapChain* s, const char* site = nullptr);
+
+// Emits one [dxmt9-drain-site] line per blocking entry point at Info level.
+// No-op unless DXMT9_PERF_DRAIN_FENCE_SITES is set. `presents` is the
+// denominator for the per-present columns.
+void logDrainFenceSites(std::uint64_t presents);
 
 // Device-owned background thread that drains a ReplayOffloadQueue by
 // calling replayRawChunk() for each popped chunk. Fail-stop: a replay

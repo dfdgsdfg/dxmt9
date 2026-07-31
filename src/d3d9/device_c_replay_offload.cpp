@@ -15,6 +15,7 @@
 #include "dxmt9/dxmt9_perf_counters.hpp"
 
 #include "dxmt9/assert.hpp"
+#include "util/log/log.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -212,7 +213,97 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
   }
 }
 
-void drainDeferredReplay(D9CDevice* d) {
+// Per-call-site attribution for the drain fence
+// (DXMT9_PERF_DRAIN_FENCE_SITES). The aggregate counters say the producer
+// blocks ~10.6 times per present for ~2.2ms total on GT2, but not which of the
+// ~85 bridge entry points is doing it, which is what decides whether the fence
+// can be narrowed. Recorded only when a drain actually blocks, so the cost is
+// ~10 table probes per present, not one per bridge call.
+//
+// Buckets on the `site` POINTER, not its content: every caller passes a string
+// literal, so identity comparison is exact and costs one compare. A site that
+// overflows the table is folded into an overflow row rather than silently
+// dropped -- a missing row would read as "this call never blocks".
+namespace {
+
+constexpr std::size_t kDrainSiteSlots = 48;
+
+struct DrainSiteTable {
+  std::mutex mutex;
+  const char* names[kDrainSiteSlots]{};
+  std::uint64_t counts[kDrainSiteSlots]{};
+  std::uint64_t nanos[kDrainSiteSlots]{};
+  std::size_t used = 0;
+  std::uint64_t overflowCount = 0;
+  std::uint64_t overflowNanos = 0;
+};
+
+DrainSiteTable& drainSiteTable() {
+  static DrainSiteTable table;
+  return table;
+}
+
+bool drainSiteAttributionEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_DRAIN_FENCE_SITES");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+void noteDrainSite(const char* site, std::uint64_t nanoseconds) {
+  auto& t = drainSiteTable();
+  std::lock_guard lock(t.mutex);
+  for (std::size_t i = 0; i < t.used; ++i) {
+    if (t.names[i] == site) {
+      ++t.counts[i];
+      t.nanos[i] += nanoseconds;
+      return;
+    }
+  }
+  if (t.used < kDrainSiteSlots) {
+    t.names[t.used] = site;
+    t.counts[t.used] = 1;
+    t.nanos[t.used] = nanoseconds;
+    ++t.used;
+    return;
+  }
+  ++t.overflowCount;
+  t.overflowNanos += nanoseconds;
+}
+
+}  // namespace
+
+void logDrainFenceSites(std::uint64_t presents) {
+  if (!drainSiteAttributionEnabled()) {
+    return;
+  }
+  auto& t = drainSiteTable();
+  std::lock_guard lock(t.mutex);
+  const double p = presents ? static_cast<double>(presents) : 1.0;
+  for (std::size_t i = 0; i < t.used; ++i) {
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-drain-site",
+                      "site=%s waits=%llu waits_per_present=%.3f "
+                      "ms_total=%.3f ms_per_present=%.4f us_per_wait=%.1f",
+                      t.names[i] ? t.names[i] : "untagged",
+                      static_cast<unsigned long long>(t.counts[i]),
+                      static_cast<double>(t.counts[i]) / p,
+                      static_cast<double>(t.nanos[i]) / 1.0e6,
+                      static_cast<double>(t.nanos[i]) / 1.0e6 / p,
+                      t.counts[i] ? static_cast<double>(t.nanos[i]) /
+                                        static_cast<double>(t.counts[i]) / 1.0e3
+                                  : 0.0);
+  }
+  if (t.overflowCount) {
+    dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-drain-site",
+                      "site=<overflow> waits=%llu ms_total=%.3f "
+                      "(raise kDrainSiteSlots)",
+                      static_cast<unsigned long long>(t.overflowCount),
+                      static_cast<double>(t.overflowNanos) / 1.0e6);
+  }
+}
+
+void drainDeferredReplay(D9CDevice* d, const char* site) {
   if (!d || !d->replayOffload) {
     return;
   }
@@ -221,22 +312,29 @@ void drainDeferredReplay(D9CDevice* d) {
     return;
   }
   dxmt9::perf::countOffloadDrainFenceWait();
-  PerfScope scope(dxmt9::perf::countOffloadDrainFenceCpuTime);
+  const auto waitStart = std::chrono::steady_clock::now();
   queue.waitDrained();
+  const auto elapsed = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - waitStart).count());
+  dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
+  if (drainSiteAttributionEnabled()) {
+    noteDrainSite(site, elapsed);
+  }
 }
 
-void drainDeferredReplay(D9CBuffer* b) {
+void drainDeferredReplay(D9CBuffer* b, const char* site) {
   if (!b) {
     return;
   }
-  drainDeferredReplay(b->device);
+  drainDeferredReplay(b->device, site);
 }
 
-void drainDeferredReplay(D9CSwapChain* s) {
+void drainDeferredReplay(D9CSwapChain* s, const char* site) {
   if (!s) {
     return;
   }
-  drainDeferredReplay(s->owner);
+  drainDeferredReplay(s->owner, site);
 }
 
 }  // namespace dxmt9::d3d9

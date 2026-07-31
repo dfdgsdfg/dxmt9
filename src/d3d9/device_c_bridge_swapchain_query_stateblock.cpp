@@ -2,37 +2,37 @@
 #include "device_c_replay_offload.hpp"
 
 extern "C" D9CSwapChain* dxmt9c_device_get_swap_chain(D9CDevice* arg0, uint32_t index) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_get_swap_chain");
   return dxmt9p_device_get_swap_chain(arg0, index);
 }
 
 extern "C" uint32_t dxmt9c_device_get_swap_chain_count(D9CDevice* arg0) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_get_swap_chain_count");
   return dxmt9p_device_get_swap_chain_count(arg0);
 }
 
 extern "C" D9CSwapChain* dxmt9c_device_create_additional_swap_chain(D9CDevice* arg0, const D9CPresentParams* arg1) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_create_additional_swap_chain");
   return dxmt9p_device_create_additional_swap_chain(arg0, arg1);
 }
 
 extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* arg0, uint32_t type) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_create_query");
   return dxmt9p_device_create_query(arg0, type);
 }
 
 extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* arg0, uint32_t type) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_create_state_block");
   return dxmt9p_device_create_state_block(arg0, type);
 }
 
 extern "C" int32_t dxmt9c_device_begin_state_block(D9CDevice* arg0) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_begin_state_block");
   return dxmt9p_device_begin_state_block(arg0);
 }
 
 extern "C" int32_t dxmt9c_device_end_state_block(D9CDevice* arg0, D9CStateBlock** arg1) {
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_device_end_state_block");
   return dxmt9p_device_end_state_block(arg0, arg1);
 }
 
@@ -52,7 +52,7 @@ extern "C" int32_t dxmt9c_swapchain_present(D9CSwapChain* arg0, const D9CRect* s
   // device_c_common.hpp) and fences through it. GT1's PE path presents via
   // the PRESENT record (already ordered in-queue by commit_chunk), so this
   // only protects the alternate direct-present path.
-  dxmt9::d3d9::drainDeferredReplay(arg0);
+  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_swapchain_present");
   return dxmt9p_swapchain_present(arg0, src, dst, destWindow, dirtyRegion, flags);
 }
 
