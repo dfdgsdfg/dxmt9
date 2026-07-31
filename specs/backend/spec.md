@@ -950,8 +950,10 @@ payload field schema. Null is the sentinel and never consumes a table entry.
 Slices may repeat the same object across different records to keep validation,
 retention, and offload ownership linear and record-local.
 
-A V2 draw payload is sparse rather than embedding the fixed V1
-`D9CDrawPrimitivePacket` state slab:
+A V2 draw payload is sparse. It carries only the state sections a draw actually
+changed, rather than a fixed full-state slab per draw — the shape V1 used, whose
+`D9CDrawPrimitivePacket` was deleted along with the rest of the legacy format
+(the name survives here only to describe what the sparse form replaced):
 
 ```text
 DrawRecordV2 {

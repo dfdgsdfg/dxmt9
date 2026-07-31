@@ -17,6 +17,8 @@ This is the entry point for the `docs/perfomance/` tree.
 
 - [DXMT9 performance bottleneck model](overview.md) - general CPU/GPU/sync
   model for dxmt9.
+- [One frame, end to end](frame-lifecycle.md) - stages, state hand-off,
+  thread concurrency, and measured per-stage cost joined in one place.
 - [3DMark05 GT1 investigation map](overview-3dmark05-gt1.md) - current
   experiment knowledge graph and domain map.
 - [3DMark05 GT2 current baseline](overview-3dmark05-gt2.md) - completed

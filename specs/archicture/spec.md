@@ -219,14 +219,24 @@ sequenceDiagram
         CQ->>Slot: copy to SoA arrays + payload arena
         Slot-->>CQ: DrawRunCommandRecord index
     else PE/unix bridge path
+        Rec->>Rec: buildSparseStateV2 -> SparseStateV2Input
+        Rec->>Rec: appendRecordV2 (seal + flush every N records)
         Rec->>Bridge: commitChunk(wire blob)
         Bridge->>Import: one unix-call with POD blob
         Import->>Import: validate header/table/ranges/handles
-        Import->>CQ: queue compact imported records
+        Import->>Import: copy blob, retain wrappers, bulk-mark resources
+        Import->>Worker: push raw chunk (bounded FIFO)
+        Worker-->>CQ: replay records, publish slot (deferred)
         CQ->>Slot: append imported flat records
     end
     CQ-->>App: return after queue ownership
 ```
+
+The bridge branch is two-phase since the commit-replay offload became the engine
+default (`R-BACK-2.51`): validation, import, wrapper retention and bulk resource
+marking stay synchronous on the app thread, and only record replay and slot
+publish are deferred to the worker. `Rec` builds `SparseStateV2Input` directly —
+there is no intermediate record format between the PE state shadow and the wire.
 
 CPU-bound design rules:
 
@@ -372,6 +382,7 @@ flowchart TD
     end
 
     subgraph Queue["Queue-owned domain"]
+        WORKER["replay worker\nFIFO raw-chunk replay"]
         WRITER["queue writer\nslot admission + seq ID"]
         SLOT["ChunkSlot ring\nbounded in-flight work"]
         ENCODE["encode thread\nMetalCommandView replay"]
@@ -391,7 +402,8 @@ flowchart TD
 
     APP --> PE
     PE -->|"borrowed spans / POD records"| BRIDGE
-    BRIDGE -->|"queue ownership established"| WRITER
+    BRIDGE -->|"validate + import + mark, synchronous"| WORKER
+    WORKER -->|"queue ownership established"| WRITER
     WRITER --> SLOT
     SLOT --> ENCODE
     ENCODE --> CB
@@ -410,6 +422,8 @@ flowchart TD
 |---|---|---|---|
 | Application / Wine API thread | D3D9-visible call order, PE validation, PE `DeviceState` mutation | encode thread, GPU execution of older chunks, finish thread | call Metal directly or keep backend-owned pointers |
 | PE recorder / bridge call frame | POD chunk construction, local wire blob lifetime | prior GPU work, async pipeline compilation | expose PE COM pointers or borrowed stack spans after return |
+| Commit synchronous half (app thread) | wire validation, unix-owned blob copy + wrapper retention, bulk resource marking, raw-queue push | worker replaying *older* chunks, encode thread, GPU | hand off a record before validation and marking complete (`R-BACK-2.51(a)`) |
+| Replay worker (device-owned) | FIFO replay of raw chunks, draw-submission construction, slot publish | application recording *later* chunks, encode thread on older slots, GPU | reorder or parallelize replay across chunks (`R-BACK-2.51(b)`); run while a direct device call observes unix state (`(d)`) |
 | Queue writer / importer | slot admission, record validation, retained handles, sequence ID assignment | application recording future work, encode thread on older slots | enqueue unbounded work or accept malformed records |
 | Encode thread | queue-local replay state, active Metal encoder, render-pass merge/split decisions | application submission, GPU execution of older command buffers | read PE `DeviceState` or expose partially encoded command buffers |
 | Pipeline compile workers | sidecar PSO compilation and cache publication | encode thread and GPU work | change D3D9 command order or mutate queue records |
@@ -536,6 +550,16 @@ between the timelines.
 
 The expected bottlenecks are workload-dependent. The architecture should identify
 which stage dominates before changing data layout or synchronization policy.
+
+> This section is the *taxonomy* — which stage can dominate, and what evidence
+> settles it. For a stage-by-stage model of one real frame with the four views
+> joined (sequence, state hand-off, thread concurrency, and measured per-stage
+> cost), see [`docs/perfomance/frame-lifecycle.md`](../../docs/perfomance/frame-lifecycle.md).
+> As of 2026-07-31 on 3DMark05 GT2 the answer is a saturated application thread:
+> `~66%` of the frame is the game's own Rosetta-translated code, dxmt9's PE
+> recording is `15.1%`, GPU is `18.2%`, and the encode thread and replay worker
+> both have slack. That is one workload, not a general verdict — GT1, GT3, and
+> SFIV have different mixes.
 
 ```mermaid
 flowchart LR

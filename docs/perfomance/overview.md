@@ -12,6 +12,13 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/
 # DXMT9 Performance Bottleneck Model
 
 > Root navigation: [index](index.md). Shared log: [log](log.md).
+>
+> **For one frame end to end** — the stage sequence, what state crosses each
+> boundary and who owns it, which threads run beside which, and the measured
+> cost of every stage, all in one place — see
+> [frame-lifecycle](frame-lifecycle.md). This document owns the general
+> bottleneck taxonomy and the cross-workload baseline; that one joins the four
+> views for a single workload.
 
 Date: 2026-07-29
 
@@ -164,7 +171,8 @@ flowchart TD
 
   subgraph UnixCPU["Unix-side CPU: import, queue lifecycle, encode replay"]
     WinemetalSO[winemetal.so Metal transport]
-    Core[dxmt9 core import]
+    Core[dxmt9 core import: validate, retain, bulk-mark - SYNCHRONOUS on the app thread]
+    Worker[replay worker: replay + slot publish - deferred, FIFO]
     CQ[CommandQueue]
     ChunkRing[32-slot chunk ring]
     Pending[ready chunk queue]
@@ -190,7 +198,7 @@ flowchart TD
   end
 
   App --> D3D9PE --> Recorder --> ChunkBuffer --> ChunkBoundary --> UnixCall
-  UnixCall --> Core --> CQ --> ChunkRing --> Pending --> EncodeThread --> Replay --> DrawEnc
+  UnixCall --> Core --> Worker --> CQ --> ChunkRing --> Pending --> EncodeThread --> Replay --> DrawEnc
   Core -. Metal resource/device transport .-> WinemetalSO
   DrawEnc -. Metal object access .-> WinemetalSO
   DrawEnc --> RenderPass --> SubCB
