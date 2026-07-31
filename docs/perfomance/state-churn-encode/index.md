@@ -26,6 +26,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.06 - The Fixed Per-Commit Cost Is Queue-Mutex Contention](state-churn-encode-append-decomposition.06.md)
 - [state-churn-encode-append-decomposition.05 - The Flush Is Half Bridge-Crossing And Half Commit, And Its Fixed Cost Is The Pipeline's Clock](state-churn-encode-append-decomposition.05.md)
 - [state-churn-encode-append-decomposition.04 - Cutting Chunk Flushes 2.9x Costs 4% FPS](state-churn-encode-append-decomposition.04.md)
 - [state-churn-encode-append-decomposition.03 - Append Splits Three Ways And The Chunk Flush Leads](state-churn-encode-append-decomposition.03.md)

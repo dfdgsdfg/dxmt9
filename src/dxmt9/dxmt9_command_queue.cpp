@@ -2974,7 +2974,25 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
   if (entries.empty()) {
     return;
   }
+  // Splits this call's cost into "waiting for the queue mutex" and "marking".
+  // The distinction decides what the remaining commit_chunk cost IS: the body
+  // below is a short loop over unique handles, so if the ~19us this call costs
+  // per commit (state-churn-encode-append-decomposition.06) is the acquire,
+  // the producer is contending with the encode thread rather than doing work,
+  // and that is a different problem with a different fix. Same env gate as the
+  // other commit_chunk phases; resolved once.
+  static const bool phaseSplit = [] {
+    const char* env = std::getenv("DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
   std::unique_lock lock(mutex_);
+  if (phaseSplit) {
+    perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - lockWaitStart).count()));
+  }
   // Single seqId snapshot for the whole bulk-mark — the importer is
   // about to emit Draw* records onto the same chunk, so all resources
   // get pinned to the chunk's nextSeqId together.

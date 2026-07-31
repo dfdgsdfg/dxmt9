@@ -239,6 +239,40 @@ void countDurationSince(std::chrono::steady_clock::time_point start,
           std::chrono::steady_clock::now() - start).count()));
 }
 
+// Heavy opt-in phase split of the synchronous half of commit_chunk. Off by
+// default because it adds five clock pairs to a call that runs tens of times
+// per present; see state-churn-encode-append-decomposition.05 for why the
+// split is wanted at all (69-72% of that half is fixed per call, and which
+// phase owns the fixed term is not otherwise observable).
+bool commitChunkPhaseSplitEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+// Scope that costs one branch when the split is off. Deliberately not a
+// constructor/destructor pair: two of the five phases end in an early return,
+// and a destructor would time the unwind rather than the phase.
+struct CommitChunkPhaseTimer {
+  bool enabled = false;
+  std::chrono::steady_clock::time_point t0{};
+
+  explicit CommitChunkPhaseTimer(bool on) : enabled(on) {
+    if (enabled) {
+      t0 = std::chrono::steady_clock::now();
+    }
+  }
+  void stop(void (*counter)(std::uint64_t)) {
+    if (!enabled) {
+      return;
+    }
+    enabled = false;
+    countDurationSince(t0, counter);
+  }
+};
+
 bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
   switch (type) {
   case D9C_COMMAND_RECORD_SET_VS_CONST_F:
@@ -924,9 +958,16 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         .recordCount = chunk->recordCount,
         .handleCount = chunk->handleCount,
     };
+    const bool phaseSplit = commitChunkPhaseSplitEnabled();
+    if (phaseSplit) {
+      dxmt9::perf::countCommitChunkPhaseCall();
+    }
     dxmt9::d3d9::RawCommandChunk raw;
-    if (!dxmt9::d3d9::prepareV2OffloadChunk(
-            blob, envelope, d->wireObjects, retainV2Wrapper, raw)) {
+    CommitChunkPhaseTimer preparePhase(phaseSplit);
+    const bool prepared = dxmt9::d3d9::prepareV2OffloadChunk(
+        blob, envelope, d->wireObjects, retainV2Wrapper, raw);
+    preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
+    if (!prepared) {
       dxmt9::perf::countCommandChunkV2Reject();
       return commitChunkFail("v2-admission");
     }
@@ -934,14 +975,20 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     const auto ownedBytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
         raw.recordBlob.size());
-    if (!raw.preflightValidated ||
-        !dxmt9::d3d9::importPrevalidatedCommandChunkV2(
-            ownedBytes, envelope, imported)) {
+    CommitChunkPhaseTimer importPhase(phaseSplit);
+    const bool importedOk =
+        raw.preflightValidated &&
+        dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+            ownedBytes, envelope, imported);
+    importPhase.stop(dxmt9::perf::countCommitChunkPhaseImportCpuTime);
+    if (!importedOk) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
       dxmt9::perf::countCommandChunkV2Reject();
       return commitChunkFail("v2-owned-preflight-view");
     }
+    CommitChunkPhaseTimer markPhase(phaseSplit);
     markResolvedV2Resources(d, raw, imported);
+    markPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCpuTime);
     dxmt9::perf::countCommandChunkWire(
         D9C_COMMAND_CHUNK_VERSION_V2, chunk->recordCount,
         chunk->recordBytes, chunk->handleCount);
@@ -962,9 +1009,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         return commitChunkFail("v2-offload-worker-failed");
       }
       const bool hasPresent = raw.hasPresent;
+      CommitChunkPhaseTimer enqueuePhase(phaseSplit);
       dxmt9::perf::countOffloadReplayQueueDepth(
           static_cast<std::uint64_t>(d->replayOffload->queue().depth()));
-      if (!d->replayOffload->queue().push(std::move(raw))) {
+      const bool pushed = d->replayOffload->queue().push(std::move(raw));
+      enqueuePhase.stop(dxmt9::perf::countCommitChunkPhaseEnqueueCpuTime);
+      if (!pushed) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
         dxmt9::perf::countCommandChunkV2Reject();
         return commitChunkFail("v2-offload-queue-stopped");
@@ -973,11 +1023,14 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
         ++d->presentOrdinal;
         if (auto upper = d->dev().upperDevice()) {
           const auto& presentParameters = d->dev().presentParameters();
+          CommitChunkPhaseTimer presentWaitPhase(phaseSplit);
           upper->waitPresentOrdinalBoundary(
               d->presentOrdinal,
               presentParameters.backBufferCount,
               presentParameters.presentationInterval !=
                   dxmt9::core::PresentInterval::Immediate);
+          presentWaitPhase.stop(
+              dxmt9::perf::countCommitChunkPhasePresentWaitTime);
         }
       }
       countDurationSince(bridgeCommitStart,

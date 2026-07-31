@@ -1380,6 +1380,18 @@ struct Counters {
   // offload-branch return, incl. push/ordinal waits), producer push waits
   // against the bounded raw queue, and worker pop-idle time.
   std::atomic<std::uint64_t> offloadCommitAppNs{0};
+  // Heavy opt-in phase split of the synchronous half of commit_chunk
+  // (DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT). offloadCommitAppNs is one clock pair
+  // around the whole call; these five decompose it. presentWait is separated
+  // deliberately because it is a blocking wait the parent timer includes, so
+  // leaving it lumped makes the CPU terms look larger than they are.
+  std::atomic<std::uint64_t> commitChunkPhaseCalls{0};
+  std::atomic<std::uint64_t> commitChunkPhasePrepareNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseImportNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseMarkLockNs{0};
+  std::atomic<std::uint64_t> commitChunkPhaseEnqueueNs{0};
+  std::atomic<std::uint64_t> commitChunkPhasePresentWaitNs{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaits{0};
   std::atomic<std::uint64_t> offloadPushBackpressureWaitNs{0};
   std::atomic<std::uint64_t> offloadWorkerIdleWaitNs{0};
@@ -3393,6 +3405,13 @@ constexpr CounterEntry kCounterTable[] = {
     {"offload_drain_fence_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadDrainFenceWaits, nullptr, nullptr, 0.0},
     {"offload_drain_fence_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadDrainFenceWaitNs, nullptr, nullptr, 0.0},
     {"offload_commit_app_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadCommitAppNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_calls", CounterEntry::Kind::UnsignedCount, &Counters::commitChunkPhaseCalls, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_prepare_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhasePrepareNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_import_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhaseImportNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_mark_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhaseMarkNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_mark_lock_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhaseMarkLockNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_enqueue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhaseEnqueueNs, nullptr, nullptr, 0.0},
+    {"commit_chunk_phase_present_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::commitChunkPhasePresentWaitNs, nullptr, nullptr, 0.0},
     {"offload_push_backpressure_waits", CounterEntry::Kind::UnsignedCount, &Counters::offloadPushBackpressureWaits, nullptr, nullptr, 0.0},
     {"offload_push_backpressure_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadPushBackpressureWaitNs, nullptr, nullptr, 0.0},
     {"offload_worker_idle_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::offloadWorkerIdleWaitNs, nullptr, nullptr, 0.0},
@@ -8058,6 +8077,32 @@ void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds) {
 
 void countOffloadCommitAppCpuTime(std::uint64_t nanoseconds) {
   add(counters().offloadCommitAppNs, nanoseconds);
+}
+
+void countCommitChunkPhaseCall() { add(counters().commitChunkPhaseCalls); }
+
+void countCommitChunkPhasePrepareCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhasePrepareNs, nanoseconds);
+}
+
+void countCommitChunkPhaseImportCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseImportNs, nanoseconds);
+}
+
+void countCommitChunkPhaseMarkCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseMarkNs, nanoseconds);
+}
+
+void countCommitChunkPhaseMarkLockCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseMarkLockNs, nanoseconds);
+}
+
+void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhaseEnqueueNs, nanoseconds);
+}
+
+void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds) {
+  add(counters().commitChunkPhasePresentWaitNs, nanoseconds);
 }
 
 void countOffloadPushBackpressureWait() {

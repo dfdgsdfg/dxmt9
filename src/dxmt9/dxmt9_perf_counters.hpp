@@ -1065,6 +1065,17 @@ void countOffloadDrainFenceCpuTime(std::uint64_t nanoseconds);
 // Offload backpressure attribution (count-only-when-actually-waited for the
 // push/idle pair; commit-app is the app thread's full offload-branch wall).
 void countOffloadCommitAppCpuTime(std::uint64_t nanoseconds);
+// Heavy opt-in phase split of that same wall (DXMT9_PERF_COMMIT_CHUNK_PHASE_SPLIT).
+// presentWait is broken out because the parent timer includes a blocking wait;
+// leaving it lumped overstates the CPU terms.
+void countCommitChunkPhaseCall();
+void countCommitChunkPhasePrepareCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhaseImportCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhaseMarkCpuTime(std::uint64_t nanoseconds);
+// Of that mark phase, how much was spent acquiring the CommandQueue mutex.
+void countCommitChunkPhaseMarkLockCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds);
+void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds);
 void countOffloadPushBackpressureWait();
 void countOffloadPushBackpressureWaitNs(std::uint64_t nanoseconds);
 void countOffloadWorkerIdleWaitNs(std::uint64_t nanoseconds);

@@ -52,6 +52,17 @@ Linear fit: **`22.3 us` fixed per commit + `0.276 us` per record.** At the
 default cap that is `1.054 ms/present` of pure per-commit overhead against
 `0.463 ms` of per-record work.
 
+> **Corrected by [.06](state-churn-encode-append-decomposition.06.md), which
+> measured the phases directly.** The fixed term is confirmed exactly
+> (`22.25 us` summed from per-phase timers against `22.3 us` fitted here — two
+> independent methods agreeing to `0.05 us`). The per-record term was **too
+> high**: this two-point fit cannot separate per-record work from the
+> present-ordinal boundary wait, which the parent timer also spans, so that
+> blocking wait was lumped into the per-record remainder. Measured directly it
+> is `209 ns`, not `276 ns`, and the fixed share is `~72%`, not `69%`.
+> `markResolvedV2Resources` owns the fixed term, and `72%` of *that* is
+> acquiring the `CommandQueue` mutex.
+
 **Verdict — and why .04's lever failed, quantitatively.** A `22.3 us` fixed cost
 paid `47.3` times per present looks exactly like something batching should
 erase, and cap `256` did erase most of it: unix commit CPU fell `1.517 ->
@@ -94,6 +105,12 @@ the copy. The candidates are the owned-blob allocation, the worker queue push
 and its condvar notify, `findDirtyQueue`, and
 `noteCommitChunkEntryForCompletionGap`. Separating them needs new decimated
 scopes inside `dxmt9c_device_commit_chunk`; nothing existing can see it.
+
+> **Answered in [.06](state-churn-encode-append-decomposition.06.md)** — and by
+> none of the candidates guessed above. `markResolvedV2Resources` owns
+> `19.13` of the `22.25 us`, flat in chunk size, and `72%` of that is waiting
+> to acquire the `CommandQueue` mutex: `0.67 ms/present`, `1.25%` of the frame.
+> The fixed cost is contention, not work.
 
 The PE half is equally undecomposed, but less interesting: `seal()` versus the
 wow64 crossing is a two-way split, and under Rosetta the crossing is expected to
