@@ -31,6 +31,7 @@ capture_frames=${DXMT_3DMARK05_CAPTURE_FRAMES:-}
 capture_range=${DXMT_3DMARK05_CAPTURE_RANGE:-}
 capture_dir=${DXMT_3DMARK05_CAPTURE_DIR:-}
 suffix=${DXMT_3DMARK05_PROBE_SUFFIX:-}
+build_root=${DXMT_3DMARK05_BUILD_ROOT:-}
 result_file=${DXMT_3DMARK05_RESULT_FILE:-dxmt9_gt1.3dr}
 capture_gputrace=1
 dry_run=0
@@ -582,6 +583,15 @@ generation.
 
 Options:
   --suffix NAME       Output suffix (default: probe-<timestamp>-frame<N>)
+  --build-root DIR    Stage the runtime from DIR's build directories instead of
+                      this checkout's. DIR must follow the build-directory-name
+                      contract in agents/rules/build.rules.md (build-x86_64-builtin,
+                      build-win32-x64-builtin, build-win32-x86-builtin). Use a
+                      second prebuilt worktree to A/B two commits without a
+                      rebuild between runs -- interleaving A/B/A/B with a rebuild
+                      at every switch injects build thermal load immediately
+                      before each run, which is the confound the interleaving
+                      exists to remove. DXMT_3DMARK05_BUILD_ROOT sets a default.
   --frame N           1-based Metal capture frame (default: 60)
   --timeout SEC       run_experiment timeout seconds (default: 420 with gputrace,
                       120 with --no-gputrace; DXMT_3DMARK05_PROBE_TIMEOUT overrides)
@@ -1609,6 +1619,10 @@ while (($#)); do
   case "$1" in
     --suffix)
       suffix=${2:?missing value for --suffix}
+      shift 2
+      ;;
+    --build-root)
+      build_root=${2:?missing value for --build-root}
       shift 2
       ;;
     --frame)
@@ -5074,6 +5088,36 @@ cmd=(
   --output-suffix "$suffix"
   --timeout "$timeout"
 )
+if [[ -n "$build_root" ]]; then
+  # Resolve the five staging directories from the build-directory-name contract
+  # (agents/rules/build.rules.md), mirroring run_experiment.py's DEFAULT_*.
+  build_root_abs=$(cd "$build_root" 2>/dev/null && pwd) || {
+    echo "run_3dmark05_perf_probe: --build-root does not exist: $build_root" >&2
+    exit 2
+  }
+  build_root_pe="$build_root_abs/build-win32-x64-builtin/src/win32"
+  build_root_runtime_pe="$build_root_abs/build-win32-x64-builtin/src/winemetal"
+  build_root_wow64_pe="$build_root_abs/build-win32-x86-builtin/src/win32"
+  build_root_wow64_runtime_pe="$build_root_abs/build-win32-x86-builtin/src/winemetal"
+  build_root_unix="$build_root_abs/build-x86_64-builtin/src"
+  # Fail before Wine launch rather than silently staging a half-built tree: a
+  # run that measures the wrong binaries looks exactly like a real result.
+  for d in "$build_root_pe" "$build_root_runtime_pe" "$build_root_wow64_pe" \
+           "$build_root_wow64_runtime_pe" "$build_root_unix"; do
+    if [[ ! -d "$d" ]]; then
+      echo "run_3dmark05_perf_probe: --build-root missing build directory: $d" >&2
+      echo "  build all three lanes there first (see docs/build.md)" >&2
+      exit 2
+    fi
+  done
+  cmd+=(
+    --pe-build-dir "$build_root_pe"
+    --runtime-pe-build-dir "$build_root_runtime_pe"
+    --wow64-pe-build-dir "$build_root_wow64_pe"
+    --wow64-runtime-pe-build-dir "$build_root_wow64_runtime_pe"
+    --unix-build-dir "$build_root_unix"
+  )
+fi
 if [[ -n "$capture_delay_sec" ]]; then
   cmd+=(--capture-delay-sec "$capture_delay_sec")
 fi
