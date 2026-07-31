@@ -157,7 +157,20 @@ constexpr u32 kMaxConstBoolIndex = ::dxmt9::core::kMaxBoolConstants;
 constexpr u32 kMaxTempIndex = 32u;
 constexpr u32 kMaxSamplerIndex = ::dxmt9::core::kMaxSamplers;
 
-inline void validateRegisterIndex(D3DRegisterKind kind, u32 index) {
+// PARKED, NOT DEAD. Deliberately uncalled since 7abaa20e: the operand-loop OOB
+// check incidentally rejected valid SM3 control-flow operands, so the call site
+// was removed while the contract is characterised. Its two specs are parked the
+// same way, with `(void)` in `shader_bytecode_validation_spec.cpp`'s main
+// (testOversizedConstantRegister, testMissingEndToken), and the matching
+// `shader_decoder_reject_{oob_register,missing_end}` counters are reserved for
+// the future stricter contract.
+//
+// [[maybe_unused]] rather than deletion, and this comment rather than a bare
+// attribute, because the parked spec still compiles and still *looks* like it
+// guards this: deleting the function leaves that spec passing, so the obvious
+// experiment confirms a deletion that would silently discard the work. Restore
+// the call site and un-park both specs together, or delete all four together.
+[[maybe_unused]] inline void validateRegisterIndex(D3DRegisterKind kind, u32 index) {
   // Only the five strictly-bounded register kinds are checked here.
   // Input / Output / RastOut / AttrOut / TexCoordOut / etc. carry
   // 11-bit indices that are already saturated by the token decode,
