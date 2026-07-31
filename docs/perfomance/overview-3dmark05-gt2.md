@@ -11,6 +11,18 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
+> **Superseded on 2026-07-31 for the headline number.** GT2 now runs at
+> `17.085` sampled FPS (`16.701-17.314` over three runs at `890d78b1`), wall
+> p50/p95 `52.804 / 75.220ms`, GPU-CB p50/p95 `2.259 / 2.354ms`, zero GPU
+> errors — see the [root table](overview.md#current-multi-workload-baseline).
+> Every FPS and GPU-CB figure below predates `d63f7a65`, the DEF-overlay
+> register-file copy removal, which more than doubled this scene
+> ([defselect.02](shader-codegen/shader-codegen-defselect.02.md)); the GPU-CB
+> p50 in particular moves `23.2 -> 2.3ms`. The **analysis** below — bottleneck
+> attribution, policy stack, phase-aligned drawable lifecycle — remains valid
+> for the runtime it describes and is why this section is annotated rather than
+> replaced.
+
 ## Current Result
 
 The latest post-policy stack combines V2 MANAGED backing versioning, the

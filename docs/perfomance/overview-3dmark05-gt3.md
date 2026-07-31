@@ -11,6 +11,16 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT3 Performance — Current Baseline
 
+> **Superseded on 2026-07-31 for the headline number.** GT3 now runs at
+> `33.426` sampled FPS (`33.346-33.649` over three runs at `890d78b1`), wall
+> p50/p95 `27.147 / 47.351ms`, GPU-CB p50/p95 `2.887 / 3.564ms`, zero GPU
+> errors — see the [root table](overview.md#current-multi-workload-baseline).
+> That is `+20.0%` over the `27.858` below, with GPU-CB p50 `11.275 -> 2.887ms`,
+> from `d63f7a65` ([defselect.02](shader-codegen/shader-codegen-defselect.02.md)).
+> The 2026-07-31 capture shows the airship, deck, water, and two correctly
+> skinned crew figures. The **analysis** below remains valid for the runtime it
+> describes.
+
 ## Current Result
 
 Three completed current-runtime runs used the V2-only command wire,

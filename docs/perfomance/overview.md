@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-07-29
-source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; traces/app-d3d9-3dmark05-managed-versioned-gt2-systemtrace-20260719; experiments/output/app-d3d9-sfiv-benchmark-{current-v2-*,solo-clean-r1-20260712,at-immediate-sfiv-r2-20260714}; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+updated: 2026-07-31
+source: docs/perfomance/index.md; experiments/output/app-d3d9-3dmark05-baseline-gt{1,2,3}-r{1,2,3}; experiments/output/app-d3d9-sfiv-benchmark-baseline-sfiv-r{1,2}; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -45,12 +45,18 @@ already-ready successor in `536` frames and omits `30` commands. See
 
 ## Current Multi-Workload Baseline
 
-The 2026-07-19 baseline was measured from `153cacb14f2f` on a 16 GB MacBook
-Air with an Apple M1 8-core GPU, macOS 26.5.2, and the Sikarugir-CX 24.0.7
-Wine runtime. The runtime was built and staged from the x86_64 unix-provider,
-x64 PE, and x86 PE build directories. Runs used the `perf` profile, no Metal
-frame capture, frame sampling, the engine-default commit-replay offload and
-opaque-depth index-cache policy, and zero concurrent GPU benchmarks.
+The 2026-07-31 baseline was measured from `890d78b1` on a 16 GB MacBook Air
+(`MacBookAir10,1`) with an Apple M1 8-core GPU, macOS 26.5.2 (`25F84`), and the
+Sikarugir-CX 24.0.7 Wine runtime. The runtime was built and staged from the
+x86_64 unix-provider, x64 PE, and x86 PE build directories, all verified
+`ninja -n` clean before the sweep so no staging could compile anything ahead of
+a run. Runs used the `perf` profile, no Metal frame capture, frame sampling, the
+engine-default commit-replay offload and opaque-depth index-cache policy,
+encoder breakdown off, `--keep-frontmost` for the 3DMark05 scenes, and zero
+concurrent GPU benchmarks. The eleven runs were **interleaved by round**
+(GT1, GT2, GT3, SFIV, then repeat) with an equal `180 s` cooldown before each,
+so any thermal drift over the hour spreads across all four workloads instead of
+landing on whichever ran last.
 
 `sampled_avg_fps` is positive frame-sample count divided by sampled wall time.
 It is not a 3DMark UI score. Values are the median of three completed runs for
@@ -59,17 +65,47 @@ run-to-run FPS range.
 
 | Workload | Sampled average FPS | Wall p50 / p95 | GPU CB p50 / p95 | GPU errors |
 |---|---:|---:|---:|---:|
-| [3DMark05 GT1](overview-3dmark05-gt1.md) | `21.009` (`20.919-21.189`) | `43.188 / 64.966ms` | `4.684 / 21.749ms` | `0` |
-| [3DMark05 GT2](overview-3dmark05-gt2.md) | `7.868` (`7.841-7.889`) | `113.041 / 166.424ms` | `24.514 / 40.755ms` | `0` |
-| [3DMark05 GT3](overview-3dmark05-gt3.md) | `27.858` (`27.809-27.998`) | `29.094 / 85.705ms` | `11.275 / 13.661ms` | `0` |
-| [SFIV Benchmark](overview-sfiv.md) | `44.668` (`44.415-44.922`) | `16.751 / 49.728ms` | `2.725 / 8.005ms` | `0` |
+| [3DMark05 GT1](overview-3dmark05-gt1.md) | `21.095` (`21.065-21.335`) | `41.917 / 66.127ms` | `2.776 / 2.865ms` | `0` |
+| [3DMark05 GT2](overview-3dmark05-gt2.md) | `17.085` (`16.701-17.314`) | `52.804 / 75.220ms` | `2.259 / 2.354ms` | `0` |
+| [3DMark05 GT3](overview-3dmark05-gt3.md) | `33.426` (`33.346-33.649`) | `27.147 / 47.351ms` | `2.887 / 3.564ms` | `0` |
+| [SFIV Benchmark](overview-sfiv.md) | `44.624` (`43.836-45.413`) | `16.703 / 49.521ms` | `2.779 / 8.137ms` | `0` |
 
-All four successful-run captures show the expected rendered scenes and effects.
-The failed GT3 `r3` launch ended early with `missing_capture`; it is excluded
-and replaced by the successful `r3-retry1` run. SFIV also has a separate
-260.6-second stability sample (`42.684` sampled FPS, GPU CB p50/p95
-`3.233/7.703ms`, zero GPU errors); it is not mixed into the duration-matched
-median.
+All eleven runs are `status=pass` with `gpu_command_buffer_errors=0`, and all
+four capture images show the expected rendered scenes: GT1's firefight with
+tracers and bloom, GT2's Firefly Forest with the ent and glowing firefly, GT3's
+airship with two correctly skinned crew figures over water, and SFIV's Ryu with
+gi, gloves, rim lighting, glyphs, and logos. SFIV's own overlay reads
+`AVERAGE: 44.94` on the `r2` capture, independently corroborating the sampled
+`45.413` for that run.
+
+### What changed against the superseded 2026-07-19 row
+
+| Workload | 2026-07-19 (`153cacb14f2f`) | 2026-07-31 (`890d78b1`) | Change |
+|---|---:|---:|---:|
+| GT1 | `21.009` | `21.095` | `+0.4%` |
+| GT2 | `7.868` | `17.085` | **`+117%`** |
+| GT3 | `27.858` | `33.426` | **`+20.0%`** |
+| SFIV | `44.668` | `44.624` | `-0.1%` |
+
+The old row was stale by an order of magnitude on GT2 and by a fifth on GT3,
+because it predates `d63f7a65` — the removal of the DEF-overlay register-file
+copy, whose per-invocation stack spill was the owner of both scenes' vertex
+device-write traffic
+([shader-codegen-defselect.02](shader-codegen/shader-codegen-defselect.02.md)).
+GPU command-buffer p50 collapses across every 3DMark05 scene as a result
+(GT2 `24.514 -> 2.259ms`, GT3 `11.275 -> 2.887ms`, GT1 `4.684 -> 2.776ms`),
+which is the same mechanism seen from the run-level side.
+
+GT1 and SFIV are unchanged, and that is the expected shape rather than a null
+result: neither was GPU-bound on that traffic. GT1's own `-87%` GPU-time
+reduction bought only `+8.8%` back in defselect.01, and SFIV's pixel shaders
+had already been fixed by H226.
+
+Two provenance notes. The 2026-07-19 row carried an excluded GT3 `r3` launch
+(`missing_capture`, replaced by `r3-retry1`); this sweep had no failed launches.
+And SFIV's separate 260.6-second stability sample (`42.684` sampled FPS) belongs
+to the old row and was not repeated here — it is stability evidence, never part
+of the duration-matched median.
 
 Four further readouts used to live in this section. They are chronology,
 per-experiment verdict detail, or workload-owned synthesis rather than the

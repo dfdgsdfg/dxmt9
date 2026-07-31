@@ -29,6 +29,16 @@ Target workload: `app-d3d9-3dmark05`, GT1 path under
 
 ## Current Measured Baseline
 
+> **Re-measured 2026-07-31 at `890d78b1`: `21.095` sampled FPS**
+> (`21.065-21.335` over three runs), wall p50/p95 `41.917 / 66.127ms`, GPU-CB
+> p50/p95 `2.776 / 2.865ms`, zero GPU errors — see the
+> [root table](overview.md#current-multi-workload-baseline). The FPS figure is
+> unchanged (`+0.4%`, inside run-to-run spread), which is the expected shape:
+> GT1 was never GPU-bound on the traffic `d63f7a65` removed, and defselect.01
+> already showed a `-87%` GPU-time cut buying only `+8.8%` here. GPU-CB p50 does
+> move (`4.684 -> 2.776ms`), so the GPU-side figures below are stale even though
+> the wall-clock one is not.
+
 Three completed current-runtime runs on 2026-07-19 used the V2-only command
 wire, `-gt1 -nosplash -nosysteminfo -noscreens`, no Metal frame capture,
 frame sampling, frontmost supervision, and the engine-default offload plus

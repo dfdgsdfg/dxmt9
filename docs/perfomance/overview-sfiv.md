@@ -19,6 +19,23 @@ runtime state.
 
 ## Current Measured Baseline
 
+> **Re-measured 2026-07-31 at `890d78b1`: `44.624` sampled FPS**
+> (`43.836` / `45.413` over two duration-matched runs), wall p50/p95
+> `16.703 / 49.521ms`, GPU-CB p50/p95 `2.779 / 8.137ms`, zero GPU errors — see
+> the [root table](overview.md#current-multi-workload-baseline). This confirms
+> the `44.668` below rather than replacing it: `-0.1%`, and the game's own
+> overlay reads `AVERAGE: 44.94` on the `r2` capture. SFIV is unaffected by
+> `d63f7a65`, consistent with its cause already having been fixed for its pixel
+> shaders by H226.
+>
+> This also closes the open question
+> [defselect.03](shader-codegen/shader-codegen-defselect.03.md) raised against
+> this figure. Its `~11.3 fps` SFIV lanes were **debug**-profile runs
+> (`619-653 MB` logs of per-call `debug:` tracing); the `perf` pair from the
+> same investigation reads `43.020`. Nothing here needed re-measuring on that
+> account, and the instruction not to trust `45.416` was withdrawn in
+> `9a577ce8`.
+
 Two duration-matched runs on 2026-07-19 used the V2-only command wire, the
 `perf` profile, frame sampling, a 25-second capture delay, and a 110-second run
 timeout. This gives about 135.7 seconds of process observation, matching the
