@@ -251,6 +251,46 @@ bool drainSiteAttributionEnabled() {
   return enabled;
 }
 
+// Class histogram of the locks that actually blocked. Flags and pool follow the
+// same encoding the d3d9_buffer_lock_* counters use (pool 0=DEFAULT, 1=MANAGED,
+// 2=SYSTEMMEM, 3=SCRATCH), so the blocked subset can be compared directly
+// against the all-locks population without a second convention.
+constexpr std::uint32_t kD3DLockReadOnly = 0x00000010u;
+constexpr std::uint32_t kD3DLockNoOverwrite = 0x00001000u;
+constexpr std::uint32_t kD3DLockDiscard = 0x00002000u;
+
+struct BlockedLockClasses {
+  std::mutex mutex;
+  std::uint64_t readOnly = 0;
+  std::uint64_t discard = 0;
+  std::uint64_t noOverwrite = 0;
+  std::uint64_t plain = 0;
+  std::uint64_t pool[4]{};
+  std::uint64_t poolOther = 0;
+  std::uint64_t readOnlyNs = 0;
+  std::uint64_t discardNs = 0;
+  std::uint64_t noOverwriteNs = 0;
+  std::uint64_t plainNs = 0;
+};
+
+BlockedLockClasses& blockedLockClasses() {
+  static BlockedLockClasses classes;
+  return classes;
+}
+
+void noteBlockedLockClass(std::uint32_t flags, std::uint32_t pool,
+                          std::uint64_t nanoseconds) {
+  auto& c = blockedLockClasses();
+  std::lock_guard lock(c.mutex);
+  const bool discard = (flags & kD3DLockDiscard) != 0;
+  const bool noOverwrite = (flags & kD3DLockNoOverwrite) != 0;
+  if ((flags & kD3DLockReadOnly) != 0) { ++c.readOnly; c.readOnlyNs += nanoseconds; }
+  if (discard) { ++c.discard; c.discardNs += nanoseconds; }
+  if (noOverwrite) { ++c.noOverwrite; c.noOverwriteNs += nanoseconds; }
+  if (!discard && !noOverwrite) { ++c.plain; c.plainNs += nanoseconds; }
+  if (pool < 4u) ++c.pool[pool]; else ++c.poolOther;
+}
+
 void noteDrainSite(const char* site, std::uint64_t nanoseconds) {
   auto& t = drainSiteTable();
   std::lock_guard lock(t.mutex);
@@ -294,6 +334,27 @@ void logDrainFenceSites(std::uint64_t presents) {
                                         static_cast<double>(t.counts[i]) / 1.0e3
                                   : 0.0);
   }
+  {
+    auto& c = blockedLockClasses();
+    std::lock_guard lock(c.mutex);
+    if (c.readOnly || c.discard || c.noOverwrite || c.plain) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Info, "dxmt9-drain-site",
+          "blocked_lock_class readonly=%llu/%.3fms discard=%llu/%.3fms "
+          "nooverwrite=%llu/%.3fms plain=%llu/%.3fms "
+          "pool_default=%llu pool_managed=%llu pool_sysmem=%llu "
+          "pool_scratch=%llu pool_other=%llu",
+          static_cast<unsigned long long>(c.readOnly), c.readOnlyNs / 1.0e6,
+          static_cast<unsigned long long>(c.discard), c.discardNs / 1.0e6,
+          static_cast<unsigned long long>(c.noOverwrite), c.noOverwriteNs / 1.0e6,
+          static_cast<unsigned long long>(c.plain), c.plainNs / 1.0e6,
+          static_cast<unsigned long long>(c.pool[0]),
+          static_cast<unsigned long long>(c.pool[1]),
+          static_cast<unsigned long long>(c.pool[2]),
+          static_cast<unsigned long long>(c.pool[3]),
+          static_cast<unsigned long long>(c.poolOther));
+    }
+  }
   if (t.overflowCount) {
     dxmt9::util::logf(dxmt9::util::LogLevel::Info, "dxmt9-drain-site",
                       "site=<overflow> waits=%llu ms_total=%.3f "
@@ -320,6 +381,27 @@ void drainDeferredReplay(D9CDevice* d, const char* site) {
   dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
   if (drainSiteAttributionEnabled()) {
     noteDrainSite(site, elapsed);
+  }
+}
+
+void drainDeferredReplayForBufferLock(D9CBuffer* b, std::uint32_t lockFlags) {
+  if (!b || !b->device || !b->device->replayOffload) {
+    return;
+  }
+  auto& queue = b->device->replayOffload->queue();
+  if (queue.depth() == 0) {
+    return;
+  }
+  dxmt9::perf::countOffloadDrainFenceWait();
+  const auto waitStart = std::chrono::steady_clock::now();
+  queue.waitDrained();
+  const auto elapsed = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - waitStart).count());
+  dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
+  if (drainSiteAttributionEnabled()) {
+    noteDrainSite("dxmt9c_buffer_lock", elapsed);
+    noteBlockedLockClass(lockFlags, b->desc.pool, elapsed);
   }
 }
 

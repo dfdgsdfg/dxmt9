@@ -152,8 +152,15 @@ buffers the just-committed chunk almost certainly references, so an aliasing
 test says "aliased" and they keep blocking.
 
 The instrument cannot settle this because it does not record the flags or pool
-of the *blocked* subset. That is the next measurement and it is a two-line
-extension of `noteDrainSite`.
+of the *blocked* subset.
+
+> **Measured in [.207](present-pacing-drain-fence-attribution.207.md).** The
+> estimate above used the all-locks mix, which is the wrong denominator: the
+> blocked subset is skewed `7x` toward DISCARD (`40%` of blocked against `5.6%`
+> of all locks) and READONLY is only `46-48%` of it, not `73.7%`. Measured
+> recoverable share — the MANAGED half, which `Pool::mapWaitSeqId` already
+> exempts from GPU waits under R-BACK-5.11 — is `1.4-1.7 ms/present`,
+> narrower than the `1.7-2.15` guessed here.
 
 **Scope, and four presentation corrections.**
 

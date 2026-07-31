@@ -153,7 +153,7 @@ extern "C" int32_t dxmt9c_buffer_get_wire_identity(
 }
 
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* arg0, uint32_t offset, uint32_t size, void** data, uint32_t flags) {
-  dxmt9::d3d9::drainDeferredReplay(arg0, "dxmt9c_buffer_lock");
+  dxmt9::d3d9::drainDeferredReplayForBufferLock(arg0, flags);
   return dxmt9p_buffer_lock(arg0, offset, size, data, flags);
 }
 

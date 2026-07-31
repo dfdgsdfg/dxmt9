@@ -223,6 +223,14 @@ void drainDeferredReplay(D9CSurface* s, const char* site = nullptr);
 // denominator for the per-present columns.
 void logDrainFenceSites(std::uint64_t presents);
 
+// buffer_lock's drain, with the lock's class recorded when — and only when —
+// the drain actually blocks. `drainDeferredReplay` can see that a lock blocked
+// but not what kind it was, and the kind is what decides how much of the fence
+// is recoverable: a READONLY MANAGED lock waits on nothing and could be exempted
+// outright, while a DISCARD on a hot per-frame buffer will alias queued draws
+// and keep blocking under any narrowing. Same early-outs as the plain overload.
+void drainDeferredReplayForBufferLock(D9CBuffer* b, std::uint32_t lockFlags);
+
 // Device-owned background thread that drains a ReplayOffloadQueue by
 // calling replayRawChunk() for each popped chunk. Fail-stop: a replay
 // failure sets failed_, DXMT_ASSERTs (debug abort), stops the queue so
