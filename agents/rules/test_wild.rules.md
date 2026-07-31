@@ -58,10 +58,22 @@ spelled out under [How to Apply](#how-to-apply) below):
 The cost of a second invocation path is not the wrapper; it is that the two
 paths drift. SFIV's wrapper did not set `DXMT_EXPERIMENT_PROFILE`, so it
 silently measured the `debug` profile — validation layer on, debug logging —
-and produced `11.3` sampled fps against a real `43.02`. That was investigated
+and produced `11.3` fps against a real `43.02`. That was investigated
 as a 4x renderer regression before the profile was found. The profile now
 defaults to `perf` and is recorded in the run output, but the general lesson
 is the rule above: one path.
+
+**Those two figures are different metrics, so `4x` is the wrong size** (noted
+2026-07-31 while re-checking the same trap in
+`docs/perfomance/shader-codegen/shader-codegen-defselect.03.md`). `11.3` is a
+median of the steady frame body; `43.02` is `sampled_avg_fps`, an average that
+includes the hitch tail. Matched against the same SFIV `perf`-profile run, debug
+costs **`3.2x` on the average** (`13.5` vs `43.0`) and **`5.3x` on the median**
+(`11.3` vs `59.7`). Debug is more expensive than the old line claimed, not less.
+The trap it warns about recurred in that leaf two months later, so also treat a
+directory named `perf` as no evidence of the profile: check
+`result.json:profile`, or for runs older than 2026-07-29, `dxmt9.log` size —
+debug is two orders of magnitude larger.
 
 Two supervised wrappers under `scripts/tools/` are **not** covered by this and
 stay, because they add real supervision rather than renaming a command:

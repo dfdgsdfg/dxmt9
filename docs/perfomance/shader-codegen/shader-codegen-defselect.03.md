@@ -7,7 +7,7 @@ title: GT3 And SFIV Visual Gates Pass; SFIV Is Unaffected
 date: 2026-07-29
 type: experiment-run
 status: accepted-visual-gate
-source: traces/defsel-visual-gt3/cand; traces/defsel-visual-gt3/glitch; traces/defsel-visual-sfiv/cand; experiments/output/app-d3d9-sfiv-benchmark-defsel-perf-base; experiments/output/app-d3d9-sfiv-benchmark-defsel-perf-cand; experiments/output/app-d3d9-3dmark05-defsel-gt3-cand
+source: traces/defsel-visual-gt3/cand; traces/defsel-visual-gt3/glitch; traces/defsel-visual-sfiv/cand; experiments/output/app-d3d9-sfiv-benchmark-defsel-perf-base; experiments/output/app-d3d9-sfiv-benchmark-defsel-perf-cand; experiments/output/app-d3d9-3dmark05-defsel-gt3-cand; experiments/output/app-d3d9-sfiv-benchmark-sfiv-perfprofile-base; experiments/output/app-d3d9-sfiv-benchmark-sfiv-perfprofile-cand
 related: docs/perfomance/shader-codegen/shader-codegen-defselect.01.md; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md
 ---
 
@@ -49,19 +49,61 @@ attempt would have removed.
 already having been fixed for its *pixel* shaders by H226 (`7abaa20e`); its
 vertex shaders evidently do not combine relative constant addressing with a DEF.
 
+**Both lanes above ran on the `debug` profile** (see the correction at the
+bottom), so the `~11.3 fps` is a debug figure and is not SFIV's rate. The
+comparison is unharmed — both sides carry the same instrumentation — but do not
+quote these numbers as SFIV performance.
+
 **Verdict.** ACCEPTED. All four workloads are now validated: GT1 and GT2 gained
 (`+8.8%` and `+110%` scene fps), GT3 and SFIV render correctly with no
 regression. The skinned-geometry failure mode that the first attempt introduced
 does not appear on any of them.
 
-**An unrelated discrepancy this surfaced, not caused by this change.**
-`docs/perfomance/overview-sfiv.md` records `45.416` sampled fps for SFIV over a
-`124.493 s` run. Both lanes here measure `~11.3 fps` over a `90 s` run, and
-SFIV's own on-screen counter agrees (`AVERAGE: 10.68`). Since baseline and
-candidate agree with each other, this fix is not the cause. Whether the gap is
-run-length and scene coverage, or a real regression from some other change, is
-open and needs its own investigation — do not read `45.416` as the current SFIV
-figure without re-measuring it.
+## Correction, 2026-07-31: the SFIV "discrepancy" was the debug profile
+
+This section originally read as an open question — `docs/perfomance/overview-sfiv.md`
+records `45.416` sampled fps while both lanes here measured `~11.3`, and it told
+readers not to trust `45.416` without re-measuring. **That was wrong, and the
+instruction it gave was backwards.** There is no SFIV regression; the two lanes
+above ran on the `debug` profile.
+
+The artifacts say so directly. `dxmt9.log` is `653 MB` for the baseline lane and
+`619 MB` for the candidate, and its content is per-D3D9-call `debug:` tracing:
+
+```
+[dxmt9-device] debug: device_set_vertex_shader_constant_f device=028D0020 start=137 count=3 data=05177AFC
+```
+
+Both directories are named `...-defsel-perf-...`, which is what made this hard to
+see, and both predate the launcher change that records the resolved profile, so
+`result.json:profile` is `null` rather than `debug`. Log size was the only
+surviving signature.
+
+The `perf`-profile SFIV pair from the same investigation settles it. Re-measured
+from the per-frame `wall_ms` samples in each run's log:
+
+| run | `dxmt9.log` | profile class | `sampled_avg_fps` | median fps |
+|---|---:|---|---:|---:|
+| `defsel-perf-base` | `653 MB` | debug | `13.094` | `11.20` |
+| `defsel-perf-cand` | `619 MB` | debug | `13.506` | `11.33` |
+| `sfiv-perfprofile-base` | `22.7 MB` | perf | `41.296` | `58.83` |
+| `sfiv-perfprofile-cand` | `22.9 MB` | perf | `43.020` | `59.70` |
+
+`43.020` against the overview's `44.668` is the same class over a different
+window (`171.3 s` here versus a `126 s` duration-matched median), so
+`overview-sfiv.md` stands as written and needs no re-measurement on this account.
+
+**What survives unchanged:** the verdict. Both lanes carried identical
+instrumentation, so `+1.2%` is a valid like-for-like comparison and "SFIV is
+unaffected by `d63f7a65`" is still the correct reading.
+
+**The transferable lesson** is the one
+`agents/rules/test_wild.rules.md` already draws from an earlier instance of the
+same trap: a directory named `perf` is not evidence of the `perf` profile. Since
+2026-07-29 the launcher resolves and records the profile in `result.json:profile`
+and the summary header, so this is now checkable from the artifact. For runs
+older than that, `dxmt9.log` size is the signature — debug is two orders of
+magnitude larger.
 
 **Related.** [shader-codegen-defselect.01](shader-codegen-defselect.01.md) ·
 [shader-codegen-defselect.02](shader-codegen-defselect.02.md) ·
