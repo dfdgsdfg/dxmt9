@@ -6,7 +6,7 @@ order: 09
 title: 60% Of The Draw Entry Is An SWVP Probe That Reads The Index Buffer Before Asking Whether SWVP Applies
 date: 2026-08-01
 type: experiment-run
-status: accepted-attribution
+status: accepted-attribution; proposed fix corrected 2026-08-01 after review
 source: experiments/output/app-d3d9-3dmark05-gt2-drawphase-n64; experiments/output/app-d3d9-3dmark05-gt2-drawphase-n16
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.08.md
 ---
@@ -63,12 +63,47 @@ This is the same shape as the ungated clock reads in
 discarded — but an order of magnitude larger: `~23%` of the frame against
 `~1.9%`.
 
-**The fix is a hoist, not a rewrite.** Lift the `softwareVertexProcessing_ &&
-!vs_` test (or `describeSoftwareFfpDrawTarget` whole, which is pure state
-inspection and fills only out-parameters) above `readSoftwareFfpAdjustedIndices`
-in both probes. It reads no indices and has no dependency on them, so the
-reorder is semantically inert for the S_FALSE path and unchanged for the SWVP
-path.
+**The cost is paid twice per indexed draw.** The FFP probe returns `S_FALSE`
+after its full read, so `trySoftwareProgrammableDrawIndexedPrimitive` runs and
+**repeats the identical read** before its own predicate rejects. The phase timer
+wraps both, so the numbers above already include the doubling.
+
+**The fix is a hoist, not a rewrite — but not the hoist first written here.**
+
+> **Corrected 2026-08-01 after review.** This section originally said to lift
+> "the `softwareVertexProcessing_ && !vs_` test … in both probes". **That would
+> break the programmable fallback.** The two predicates are *complementary* on
+> `vs_`:
+>
+> | probe | predicate | file |
+> |---|---|---|
+> | FFP | `!softwareVertexProcessing_ \|\| vs_ != nullptr` | `d3d9_pe_device.cpp:4518` |
+> | programmable | `!softwareVertexProcessing_ \|\| !vs_` | `d3d9_pe_device.cpp:5124` |
+>
+> Hoisting the FFP test into the programmable probe returns `S_FALSE` for every
+> draw with a bound vertex shader — on a genuine SWVP device that silently
+> disables programmable software vertex processing entirely, and GT2 (hardware
+> VP) could never catch it. The original safety argument — "a workload that
+> genuinely uses SWVP would not reach the S_FALSE early-out, so the hoist cannot
+> hurt it" — is exactly wrong for that case.
+>
+> **The correct hoist is the shared conjunct only:**
+> `if (!softwareVertexProcessing_) return S_FALSE;` in both probes, or one check
+> at the `DrawIndexedPrimitive` entry gating both calls — which is how the UP
+> variants already work (`trySoftwareFfpDrawPrimitiveUP` calls describe first).
+> Each probe keeping its *own* full predicate hoisted is equally correct.
+
+**And it is not semantically inert.** `readSoftwareFfpAdjustedIndices` returns
+`D3DERR_INVALIDCALL` on byte-count overflow, on an index range exceeding the
+index buffer, and on a null mapping — and both probes forward that, so the entry
+point drops the draw and returns `D3DERR_INVALIDCALL` to the app.
+`appendDrawIndexedPrimitiveRecord` performs no equivalent bounds check. **Today,
+on a hardware-VP device, an out-of-range `DrawIndexedPrimitive` fails at call
+time as a side effect of a probe that cannot apply.** After the hoist it would
+be recorded and forwarded. Retail D3D9 does not validate this, so removing it is
+probably *desirable* — but it is a behaviour change on the path this document
+first called inert, no native spec covers these probes, and whichever behaviour
+is chosen should be pinned by one.
 
 **Not implemented or measured here, deliberately.** The prediction is
 `~12 ms/present` of producer CPU removed on GT2, which at the frame level is
@@ -80,12 +115,32 @@ this large is also the first candidate all year big enough to measure the
 conversion ratio *properly*, which the underpowered `.07` attempt could not.
 That A/B is the next step and it deserves its own leaf.
 
+**The `7,264 ns` is fully accounted for by the index loop.** GT2 runs
+`~1,660` indexed draws/present over `2.088e9` primitives — about `3,180` indices
+per draw, read twice, so `~6,360` element iterations at **`1.14 ns/element`**.
+That is exactly a compare/adjust loop plus one vector allocation per draw, and
+it leaves little room for anything else hiding in the span.
+
+That matters for a hypothesis worth recording and then bounding: the probe locks
+the index buffer `READONLY` on every draw, and a lock that crosses the bridge
+blocks on the commit-replay drain fence
+([.206](../present-pacing/present-pacing-drain-fence-attribution.206.md) —
+`dxmt9c_buffer_lock` is `99.8%` of it). If most probe locks crossed, part of the
+`swvp` span would be *blocking*, not CPU. They do not: the PE readonly cache
+serves MANAGED-pool readonly locks before the bridge, and the counters show
+`61.53` readonly locks/present reaching unix against `1,660` indexed draws — a
+`~96%` hit rate. The mechanism is real, the magnitude is small, and the
+element-count arithmetic above independently leaves no room for it.
+
 **Scope.** One run per decimation rate, GT2 only. A workload that genuinely uses
-software vertex processing pays the probe legitimately and would see no gain —
-but it would also not reach the `S_FALSE` early-out, so the hoist cannot hurt
-it. The `record` phase at `4,126 ns` against `appendRecordDirect`'s `2,121 ns`
-is consistent: the remainder is `flushPendingConsts` and parameter construction
-inside `appendDrawIndexedPrimitiveRecord`.
+software vertex processing pays the probe legitimately and would see no gain
+from the hoist — but with the corrected predicate it also loses nothing. The
+`record` phase at `4,126 ns` against `appendRecordDirect`'s `2,121 ns` is
+consistent: the remainder is `flushPendingConsts` and parameter construction
+inside `appendDrawIndexedPrimitiveRecord`. The draw entry bucket is shared with
+the UP entry points, which record no sub-phases, so the `rest` residual mixes
+populations — UP and non-indexed draws are `~1.1%` of calls, so the `60/34/5`
+split is unaffected.
 
 **Related.**
 [append-decomposition.08](state-churn-encode-append-decomposition.08.md) ·
