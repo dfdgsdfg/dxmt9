@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
@@ -10579,8 +10580,10 @@ bool encodeDraw(EncodeContext& ctx,
   // primitiveCount may be zero pre-paramOverride; that's OK — captures
   // see whatever is encoded.
   const auto drawDebugPrimCount = paramOverride ? paramOverride->primitiveCount : 0u;
+  // Gated on capture -- see perDrawDebugGroupsEnabled(). Nothing reads these at
+  // runtime, and they cost an allocation plus three bridge crossings per draw.
   std::optional<DebugGroupScope> drawDebugGroup;
-  if (!suppressRecordedMetalCalls(ctx)) {
+  if (core::metalcapture::perDrawDebugGroupsEnabled() && !suppressRecordedMetalCalls(ctx)) {
     drawDebugGroup.emplace(
         WMT::CommandEncoder{encoder.handle},
         makeLabelStringFmt("Draw[seq=%llu,prim=%u]",

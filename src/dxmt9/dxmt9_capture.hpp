@@ -75,6 +75,18 @@ class MetalCaptureController {
   std::optional<MetalCaptureRequest> activeSession_{};
 };
 
+// Per-draw Metal debug groups ("Draw[seq=,prim=]") are read only inside a GPU
+// capture, but cost a string format, a bridged WMT::String allocation, and a
+// pushDebugGroup/popDebugGroup pair on EVERY draw -- 2.7ms/present on GT2 GT2
+// (state-churn-encode-append-decomposition.16). So they are emitted only when
+// this process is set up to capture, or when explicitly forced with
+// DXMT9_PER_DRAW_DEBUG_GROUPS.
+//
+// Per-render-pass, blit and present debug groups are NOT gated: there are a few
+// per frame rather than ~1,690, and they carry the encoder narrative that
+// xctrace's metal-gpu-intervals joins on.
+bool perDrawDebugGroupsEnabled();
+
 bool startMetalCapture(const WMT::Device& device, const MetalCaptureRequest& request);
 void stopMetalCapture(const MetalCaptureRequest& request);
 

@@ -7,7 +7,7 @@ title: The Setup Prologue Is Half A Per-Draw Metal Debug Group — Worth 2.7 ms 
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution
-source: experiments/output/app-d3d9-3dmark05-nodebuggroup; experiments/output/app-d3d9-3dmark05-encode-sites
+source: experiments/output/app-d3d9-3dmark05-nodebuggroup; experiments/output/app-d3d9-3dmark05-encode-sites; experiments/output/app-d3d9-3dmark05-dbggroup-gated-default; experiments/output/app-d3d9-3dmark05-dbggroup-forced-on; experiments/output/app-d3d9-3dmark05-dbggroup-capture-env
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.15.md
 ---
 
@@ -74,9 +74,30 @@ The identical shape on the encode thread converts at **`c ≈ 0.004`**. Finding
 wasted work is not the same as finding a win; which thread it is on decides,
 and on GT2 the encode thread does not bind.
 
-## Whether to remove it anyway
+## Resolved: gated on capture
 
-Not decided here, because it is a real trade and not a free one:
+Implemented after this measurement. `perDrawDebugGroupsEnabled()`
+(`dxmt9_capture.cpp`) emits the per-draw groups only when a capture is
+configured for the process — `DXMT_METAL_CAPTURE_FRAME`, or Apple's
+`MTL_CAPTURE_ENABLED` / `METAL_CAPTURE_ENABLED` — with
+`DXMT9_PER_DRAW_DEBUG_GROUPS` forcing either direction. Per-render-pass, blit
+and present groups are untouched: a few per frame rather than `~1,690`, and
+`xctrace` joins on them.
+
+All three branches measured:
+
+| | `setup` | `encode_draw` | groups |
+|---|---:|---:|---|
+| before gating (always on) | `4.261` | `17.471` | on |
+| hard-disabled diagnostic | `2.762` | `14.922` | off |
+| **gated, default** | **`2.729`** | **`14.843`** | **off** |
+| gated, `DXMT9_PER_DRAW_DEBUG_GROUPS=1` | `4.430` | `18.431` | on |
+| gated, `DXMT_METAL_CAPTURE_FRAME` set | `4.274` | `17.350` | on |
+
+The default matches the hard-disabled diagnostic, and both enable paths restore
+the cost — so captures still narrate and normal runs stop paying.
+
+It was a real trade, not a free one:
 
 | for | against |
 |---|---|
@@ -84,10 +105,11 @@ Not decided here, because it is a real trade and not a free one:
 | Per-draw heap allocation on a hot path, which `codebase_conventions.rules.md` explicitly forbids | the labels are the documented `.gputrace` navigation aid (`metal_debugging.rules.md` §2) |
 | Would matter on any workload where encode *does* bind — untested | removing them silently degrades every future capture |
 
-The shape that keeps both is to emit debug groups only when a capture is active
-or explicitly requested, rather than always — the same move the SWVP hoist made,
-gating work on the condition that makes it useful. That needs its own change and
-its own verification that captures still narrate correctly.
+Gating on capture keeps both sides — the same move the SWVP hoist made, gating
+work on the condition that makes it useful. **This buys no GT2 frame time and is
+not claimed to**: it removes a hot-path allocation the conventions forbid, and it
+is the kind of change whose value shows up only on a workload where encode
+binds, which remains untested.
 
 **Scope.** One run per configuration, GT2 only, one thermal window; frame
 figures agree to `0.01 ms` which is well inside the same-build noise this day

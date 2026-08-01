@@ -163,6 +163,30 @@ std::optional<MetalCaptureRequest> MetalCaptureController::maybeCapturePresentCh
   };
 }
 
+bool perDrawDebugGroupsEnabled() {
+  static const bool enabled = [] {
+    // Explicit override wins in both directions, so a capture-less run can turn
+    // the labels on and a capture run can turn them off.
+    if (const char* env = std::getenv("DXMT9_PER_DRAW_DEBUG_GROUPS");
+        env && env[0] != '\0') {
+      return env[0] != '0';
+    }
+    if (metalCaptureConfigFromEnv().targetFrame != 0) {
+      return true;
+    }
+    // Apple's capture-layer spellings: if the layer is inserted, someone is
+    // capturing even without dxmt9's own frame trigger.
+    for (const char* name : {"MTL_CAPTURE_ENABLED", "METAL_CAPTURE_ENABLED"}) {
+      const char* value = std::getenv(name);
+      if (value && value[0] != '\0' && value[0] != '0') {
+        return true;
+      }
+    }
+    return false;
+  }();
+  return enabled;
+}
+
 bool startMetalCapture(const WMT::Device& device, const MetalCaptureRequest& request) {
   if (!device) {
     return false;

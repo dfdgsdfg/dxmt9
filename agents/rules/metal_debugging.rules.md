@@ -361,10 +361,21 @@ are already labeled and grouped:
 - **CommandBuffer**: `cb_seq_N`
 - **Pipelines**: `pso_h<shader-hash>`
 - **Render encoders**: label + nested debug groups
-  `RenderPass[rt=0xH,depth=0xH]` → `Draw[idx=N,tri=M]`. The label is what
+  `RenderPass[rt=0xH,depth=0xH]` → `Draw[seq=N,prim=M]`. The label is what
   `xctrace` (`metal-application-encoders-list` and `metal-gpu-intervals`)
   uses to identify the encoder in text traces — without it the encoder
   falls back to Metal's default "Render Command N".
+
+  **The per-draw `Draw[...]` groups are emitted only when a capture is
+  configured** — `DXMT_METAL_CAPTURE_FRAME`, `MTL_CAPTURE_ENABLED` or
+  `METAL_CAPTURE_ENABLED` — or when `DXMT9_PER_DRAW_DEBUG_GROUPS` forces them
+  either way. They are not free: a string format, a bridged `WMT::String`
+  allocation, and a `push`/`pop` pair on every draw cost `2.7 ms/present` of
+  encode-thread time on GT2
+  ([append-decomposition.16](../../docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.16.md)).
+  Every capture route sets one of those envs, so captures are unaffected. The
+  per-render-pass, blit and present groups are always on — there are a few per
+  frame, not ~1,690, and `xctrace` joins on them.
 - **Blit encoders**: `Blit[<reason>]`
 - **Present encoder**: `Present[seq=N]`
 
