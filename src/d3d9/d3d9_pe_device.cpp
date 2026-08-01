@@ -5261,6 +5261,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                         UINT primitiveCount,
                                         SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
         const UINT instanceCount = softwareDrawInstanceCount();
         if (instanceCount <= 1u) {
@@ -5315,6 +5317,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                  UINT primitiveCount,
                                                  SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
         const UINT instanceCount = softwareDrawInstanceCount();
         if (instanceCount <= 1u) {
@@ -5571,6 +5575,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         out = {};
         indices.clear();
         indexFormat = D3DFMT_UNKNOWN;
+        // Hoisted applicability gate. Every path out of this probe ends in
+        // describeSoftware{Ffp,Programmable}DrawTarget, whose first test is
+        // `!softwareVertexProcessing_ || <vs_ term>`. Only the SHARED conjunct
+        // is hoisted: the vs_ terms are complementary between the FFP and
+        // programmable families (`vs_ != nullptr` vs `!vs_`), so hoisting
+        // either one here would silently disable the other family on a genuine
+        // SWVP device. See
+        // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.09.md.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT indexCount = primitiveVertexCount(type, primitiveCount);
         if (indexCount == 0u || numVertices == 0u) return S_FALSE;
         const std::int64_t srcStart =
@@ -5657,6 +5670,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         out = {};
         indices.clear();
         indexFormat = D3DFMT_UNKNOWN;
+        // Hoisted applicability gate. Every path out of this probe ends in
+        // describeSoftware{Ffp,Programmable}DrawTarget, whose first test is
+        // `!softwareVertexProcessing_ || <vs_ term>`. Only the SHARED conjunct
+        // is hoisted: the vs_ terms are complementary between the FFP and
+        // programmable families (`vs_ != nullptr` vs `!vs_`), so hoisting
+        // either one here would silently disable the other family on a genuine
+        // SWVP device. See
+        // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.09.md.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT indexCount = primitiveVertexCount(type, primitiveCount);
         if (indexCount == 0u || numVertices == 0u) return S_FALSE;
         const std::int64_t srcStart =
@@ -5736,6 +5758,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                           UINT stride,
                                           SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
         if (vertexCount == 0u) return S_FALSE;
         DWORD outputFvf = 0;
@@ -5807,6 +5831,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                    UINT stride,
                                                    SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         const UINT vertexCount = primitiveVertexCount(type, primitiveCount);
         if (vertexCount == 0u) return S_FALSE;
         DWORD outputFvf = 0;
@@ -5884,6 +5910,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                                  UINT stride,
                                                  SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         if (primitiveVertexCount(type, primitiveCount) == 0u || numVertices == 0u) {
             return S_FALSE;
         }
@@ -5963,6 +5991,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         UINT stride,
         SoftwareFfpDrawData& out) {
         out = {};
+        // Hoisted shared conjunct only -- see trySoftwareFfpDrawIndexedPrimitive.
+        if (!softwareVertexProcessing_) return S_FALSE;
         if (primitiveVertexCount(type, primitiveCount) == 0u || numVertices == 0u) {
             return S_FALSE;
         }
