@@ -250,6 +250,39 @@ def stage_app_local_unixlib(args: argparse.Namespace) -> None:
     args.staged_winemetal_so = dst
 
 
+# The builtin lane's PE DLLs are postprocessed to carry Wine's "Wine builtin DLL"
+# signature. That makes Wine resolve them from ITS OWN dll directory no matter
+# what path LoadLibrary was given, so the copy beside the exe and the copy in
+# the prefix's system32 are both inert -- Wine loads
+# $WINE_ROOT/lib/wine/<arch>-windows/d3d9.dll.
+#
+# Nothing in this runner used to write that file. It was written by 3DMark
+# wild-run staging (install_heroic_wine.sh), at unrelated times, from whichever
+# tree that run used. On 2026-08-01 a conformance run was therefore silently
+# testing a two-week-old build, and later one staged by an unrelated A/B --
+# while every path anyone thought to md5-check matched the build output. A suite
+# that cannot observe a code change cannot pass informatively, so this staging
+# is a correctness precondition, not a convenience.
+BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal.dll")
+
+
+def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
+    """Copy the built PE DLLs into the Wine root, where Wine actually loads them."""
+    wine_dll_dir = args.wine.parent.parent / "lib" / "wine" / "x86_64-windows"
+    if not wine_dll_dir.is_dir():
+        sys.exit(f"wine dll dir not found: {wine_dll_dir}")
+    src_dir = args.exe.parent
+    for name in BUILTIN_PE_DLLS:
+        src = src_dir / name
+        if not src.is_file():
+            sys.exit(f"cannot stage {name}: missing {src} (build build-win32-x64-builtin first)")
+        dst = wine_dll_dir / name
+        shutil.copy2(src, dst)
+        if dst.read_bytes() != src.read_bytes():
+            sys.exit(f"staging {name} into the wine root did not take effect: {dst}")
+    args.staged_wine_dll_dir = wine_dll_dir
+
+
 def build_env(args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
     # Wine requires an absolute WINEPREFIX; a relative path silently resolves
@@ -324,6 +357,7 @@ def main() -> int:
     if not args.prefix.exists():
         sys.exit(f"wine prefix not found: {args.prefix} — run wineboot first")
     stage_app_local_unixlib(args)
+    stage_builtin_pe_dlls(args)
 
     names = discover_test_names()
     total = len(names)

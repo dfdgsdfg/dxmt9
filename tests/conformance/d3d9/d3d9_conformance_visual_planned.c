@@ -182,7 +182,7 @@ void test_visual_max_index16_draw_policy(const struct d3d9_api *api)
     /* Accept either S_OK or D3DERR_INVALIDCALL; must not crash. */
     hr = IDirect3DDevice9_DrawIndexedPrimitive(device, D3DPT_TRIANGLELIST,
             0, 0, 0xffff, 0, 1);
-    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL);
+    CHECK_HR(hr, D3D_OK);
     CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
 
     IDirect3DVertexBuffer9_Release(vb);
@@ -218,22 +218,14 @@ done_d3d9:
  * evaluates true and the code is bit-identical. A hardware-VP device is the
  * only configuration in which the behaviour changed.
  *
- * NOT YET A PIN -- the assertion below is deliberately tolerant.
- * Attempting to tighten it to CHECK_HR(hr, D3D_OK) exposed a harness problem
- * that has to be fixed first: this suite could not be made to observe ANY
- * change to d3d9.dll. Forcing DrawIndexedPrimitive to return D3DERR_INVALIDCALL
- * unconditionally, rebuilding, and restaging still produced D3D_OK here, while
- * the entry point's own debug log (which sits AFTER the forced return) kept
- * appearing -- so the module Wine loads is not the module meson builds, even
- * though tmp/conformance-prefix/drive_c/windows/system32/d3d9.dll and the
- * exe-adjacent copy both md5-match the build output. Separately, that prefix
- * was found holding a d3d9.dll two weeks stale (2026-07-18), so it is staged by
- * hand and nothing refreshes it.
- *
- * Until a conformance run is demonstrated to fail when the code under test
- * changes, a strict expectation here would be decoration: it would pass
- * whatever the runtime does. Tighten this to CHECK_HR(hr, D3D_OK) and flip the
- * manifest status once the loader/staging path is understood.
+ * This is a real pin, verified in both directions: with the hoist the draw
+ * returns D3D_OK, and with the eight guards removed it returns
+ * D3DERR_INVALIDCALL (0x8876086c). It could not be made to discriminate at
+ * first, because the conformance suite was loading a different d3d9.dll than
+ * the one being built -- the builtin lane's PE DLLs carry Wine's "Wine builtin
+ * DLL" signature, so Wine resolves them from $WINE_ROOT/lib/wine/<arch>-windows
+ * regardless of the path LoadLibrary was given, and nothing in the runner wrote
+ * that file. run_d3d9_conformance.py now stages it (stage_builtin_pe_dlls).
  */
 void test_visual_indexed_draw_out_of_range_hwvp_policy(const struct d3d9_api *api)
 {
@@ -310,11 +302,12 @@ void test_visual_indexed_draw_out_of_range_hwvp_policy(const struct d3d9_api *ap
     CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZ), D3D_OK);
 
     CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
-    /* StartIndex 2 + 3 indices needs [2..4] from a 3-index buffer. Tolerant
-     * until the harness is shown to detect a change -- see the header. */
+    /* StartIndex 2 + 3 indices needs [2..4] from a 3-index buffer.
+     * D3D_OK matches retail D3D9; pre-83a0b085 this returned
+     * D3DERR_INVALIDCALL from an SWVP probe that could not apply. */
     hr = IDirect3DDevice9_DrawIndexedPrimitive(device, D3DPT_TRIANGLELIST,
             0, 0, 3, 2, 1);
-    CHECK_TRUE(hr == D3D_OK || hr == D3DERR_INVALIDCALL);
+    CHECK_HR(hr, D3D_OK);
     CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
 
     /* The draw is now recorded rather than rejected, so it reaches the backend.

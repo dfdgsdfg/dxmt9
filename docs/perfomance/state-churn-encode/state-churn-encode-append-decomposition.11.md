@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 11
-title: The SWVP Hoist Is +29% GT2 Scene FPS — And CPU Removed Converts 1:1 To Wall Clock
+title: The SWVP Hoist Is +29% GT2 Scene FPS — And CPU Removed Converts ~1:1 To Wall Clock
 date: 2026-08-01
 type: experiment-run
 status: accepted-runtime-win
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-swvp2-base-r{1,2,3,4}; experiments/
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.09.md; docs/perfomance/frame-lifecycle.md
 ---
 
-# The SWVP Hoist Is +29% GT2 Scene FPS — And CPU Removed Converts 1:1 To Wall Clock
+# The SWVP Hoist Is +29% GT2 Scene FPS — And CPU Removed Converts ~1:1 To Wall Clock
 
 **Question / hypothesis.**
 [.09](state-churn-encode-append-decomposition.09.md) measured `12.02 ms/present`
@@ -57,21 +57,41 @@ mean `1000/mean(wall_ms)` and the median.
 Welch `t = 33.1`. Within-side CV is `1.38%` (base) and `0.84%` (head) against a
 `26%` separation — the two populations do not overlap at any run.
 
-## The conversion ratio is 1.01
+## The conversion ratio is ~1.0, and not to three figures
 
 `.09` predicted `12.02 ms/present` of producer CPU removed. The frame got
-**`12.15 ms/present`** shorter. **`c = 1.01`.**
+**`12.15 ms/present`** shorter. That is `c = 1.01` arithmetically, and quoting it
+that way would be false precision on both sides of the ratio.
 
-That is the top of the `[0.3, 1.5]` band and the first time this ratio has been
+**The denominator is soft.** `12.02` came from the decimated instrument on the
+*drawphase* build, one `N=64` run, in a different session whose frame
+(`53.14 ms` instrumented) was itself faster than today's uninstrumented base
+(`54.05`). `.09`'s own cross-rate spread is `1.4-2.2%` — taking its `N=16`
+figure gives `c ≈ 0.99` — H213 bounds cross-site agreement at `±12%`, and
+[.10](state-churn-encode-append-decomposition.10.md) records the neighbouring
+`append` scope failing to replicate at fixed `N` by `17.7%`.
+
+**The numerator is not purely removed CPU.** From these runs' own counters,
+producer-side *waiting* also fell:
+
+| ms/present | base | head |
+|---|---:|---:|
+| `offload_drain_fence_wait_ms` | `2.69` | `1.43` |
+| `completion_wait_ms` | `3.83` | `3.67` |
+
+`~1.4 ms/present` of the `12.15` is reduced blocking rather than removed work.
+It is not a separable term — the producer waits less *because* it is faster —
+but it means the two-digit agreement is partly offsetting components, not a
+clean identity.
+
+**Honest statement: `c ≈ 1.0`, uncertain by roughly `±0.1-0.15`.** That is still
+the top of the `[0.3, 1.5]` band and still the first time the ratio has been
 measured rather than assumed. It should not be generalized: it holds *here*
 because GT2's producer thread is the frame-setting thread
 ([frame-lifecycle](../frame-lifecycle.md) §3) and the removed work sat directly
-on it, inside the D3D9 call, with nothing else contending for the freed time.
-A removal on the encode worker (which idles `~39 ms/present`) or on the GPU
-would convert at nothing like `1.0`. What this establishes is that **for
-producer-thread CPU on a producer-bound workload, `c ≈ 1`** — which retires the
-"CPU removed is not wall clock" caveat for that specific class and leaves it
-standing everywhere else.
+on it. A removal on the encode worker or on the GPU would convert at nothing
+like `1.0` — and even on GT2, `c ≈ 1` only holds while the producer remains the
+binding thread, which each successive removal moves closer to not being true.
 
 ## Why this is a real speedup and not a rendering regression
 
@@ -86,19 +106,34 @@ checks say it is not:
 
 Both sides render the **same fixed-length timeline** and issue the **same number
 of draws per frame**; head simply fits `~28%` more frames into it. Nothing was
-skipped. The zero error count also covers the out-of-bounds-index concern the
-hoist opens (below): no malformed draw reached Metal in `~10M` indexed draws.
+skipped.
+
+The zero error count is weaker evidence than first written here: the failure
+mode the hoist opens is a *silent* out-of-bounds GPU index read, so `errors = 0`
+shows no fault, not no out-of-bounds read. For GT2 the conclusion is safe —
+it issues no malformed draws — but the argument does not generalize. Equally,
+`draws/present` agreeing to `0.2%` is within same-build variance (the A/A pair
+alone spans `1,661-1,667`), so it could not have detected a handful of
+newly-admitted draws per frame. **No check in this A/B can rule out a subtle
+rendering change**; that is what the conformance pin is for.
 Image metrics stay in band (`mean_luma 37.4-39.2`, `variance 1500-1594`), though
 the two sides capture at different animation frames so that is a smoke check,
 not a pixel gate.
 
 ## The harness had to be rebuilt first, and the first attempt was a phantom
 
-**The first A/B run was invalid and its result was `+29.7%`** — a number that
-happens to sit almost on top of the real one, obtained for entirely the wrong
-reason. The baseline worktree had been configured with meson's *default*
-buildtype (`debugoptimized`, `-O2`, `debug=True`, asserts live) against head's
-`release` (`-O3`, `NDEBUG`). It measured build flags. Two tells were visible and
+**The first A/B run was invalid and its result was `+29.7%`.** The baseline
+worktree had been configured with meson's *default* buildtype
+(`debugoptimized`, `-O2`, `debug=True`, asserts live) against head's `release`
+(`-O3`, `NDEBUG`).
+
+It is tempting to say it "measured build flags"; the data says otherwise. The
+debugoptimized base ran `18.05-18.38 fps` against the valid release base's
+`18.27-18.75` — **the build-flag confound was worth `~1.5%`, not `29%`**. The
+phantom was mostly the real effect plus a small contamination. What made it
+unusable was not its magnitude but that at the time nothing distinguished it
+from a configuration artifact, and the two tells that should have raised the
+alarm were visible and missed: Two tells were visible and
 missed: the staged x86 `d3d9.dll` was `5.3 MB` against head's `938 KB`, and
 `winemetal.so` differed by `6.5%` despite the commit not touching it. Those runs
 are quarantined as `experiments/output/INVALID-buildconfig-swvp-ab-*`.
@@ -117,16 +152,23 @@ preflights, and aborts loudly rather than degrading:
 - **per-run gates** on `result.json` (`status`, `profile == perf`, `>= 800`
   scene frames). The first harness used `grep || true`, which would have turned
   a crashed run into a silently missing sample.
-- **A/A pair first.** It would have caught the config bug immediately, and it
-  supplies the noise floor: `18.18` / `18.79`, a `3.26%` spread — wider than
-  either side's own within-side CV, and the first run of a session reads low.
+- **A/A pair first.** It validates harness symmetry and staging. It would *not*
+  have caught the config bug — that was a worktree-configuration asymmetry, and
+  a same-build A/A is structurally blind to it; only the parity preflight
+  catches that. Its `18.18` / `18.79` spread (`3.26%`) is `n=2` and includes the
+  cold first run of the session, so the right noise estimate for the delta is
+  the within-side CV (`1.38%` / `0.84%`, positions 3-10), which is what the
+  Welch `t` uses.
 
-Thermal drift is present and symmetric: base falls `18.75 -> 18.27` across the
-session and head `24.01 -> 23.61`, both `-2.6%`. The balanced order cancels it.
+Thermal drift is present in both sides: base falls `18.75 -> 18.27` (`-2.6%`)
+and head `24.01 -> 23.61` (`-1.7%`). Equal mean position (`26` vs `26`) cancels
+a linear drift exactly. The `20-200 ms` filter excludes `6-10` tail samples per
+base run against `4-6` per head run, which flatters base — so the reported delta
+is if anything conservative.
 
 ## What this does not settle
 
-- **The behaviour change is still unpinned.** The hoist skips validation that
+- **The behaviour change is real, and now pinned.** The hoist skips validation that
   ran before the applicability test, so on a hardware-VP device a malformed
   indexed draw is now recorded instead of rejected with `D3DERR_INVALIDCALL`.
   `appendDrawIndexedPrimitiveRecord` has no equivalent bounds check and
@@ -135,39 +177,33 @@ session and head `24.01 -> 23.61`, both `-2.6%`. The balanced order cancels it.
   mode is out-of-bounds GPU index reads, not a clean error. Retail D3D9 does not
   validate this outside the debug runtime, so the new behaviour is the more
   faithful one, and `gpu_command_buffer_errors = 0` across `~10M` draws says
-  nothing pathological happens in practice. But `.09` required this be pinned by
-  a test and it still is not.
-- **The conformance evidence is worse than "proves the wrong direction" —
-  it is unverified.** The structural point stands: `visual_mvp_software_vp_policy`
-  runs its draws on a SWVP device, where the hoisted gate evaluates true and the
-  code is bit-identical, so it validates the no-op direction by construction.
-  But an attempt on 2026-08-01 to add a real pinning test found that **this
-  suite could not be made to observe any change to `d3d9.dll` at all**. Forcing
-  `DrawIndexedPrimitive` to return `D3DERR_INVALIDCALL` unconditionally,
-  rebuilding, and restaging still produced `D3D_OK` in the test, while the entry
-  point's own debug log — which sits *after* the forced return — kept appearing.
-  Both candidate module paths (`tmp/conformance-prefix/.../system32/d3d9.dll`
-  and the exe-adjacent copy) md5-matched the build output. Separately that
-  prefix was found holding a `d3d9.dll` dated **2026-07-18**, two weeks stale:
-  it is staged by hand and nothing refreshes it.
+  nothing pathological happens in practice. `.09` required this be pinned by a
+  test; it now is (above).
+- **The conformance evidence was void, and is now fixed.** The structural point
+  always stood — `visual_mvp_software_vp_policy` runs on a SWVP device, where
+  the hoisted gate evaluates true and the code is bit-identical — but an attempt
+  to add a real pin found the suite **could not observe any change to
+  `d3d9.dll` at all**. Root cause: the builtin lane's PE DLLs are postprocessed
+  to carry Wine's `"Wine builtin DLL"` signature, so Wine resolves them from
+  `$WINE_ROOT/lib/wine/<arch>-windows/` regardless of the path `LoadLibrary` was
+  given. Neither the exe-adjacent copy nor the prefix `system32` copy is ever
+  loaded — and both md5-matched the build output, which is why checking them
+  read as confirmation. Nothing in `run_d3d9_conformance.py` wrote the Wine-root
+  file; it was last written by unrelated **3DMark wild-run staging**, so
+  conformance runs silently tested whichever tree last ran a wild experiment.
 
-  Consequence for this leaf and for `83a0b085`: **the "conformance is green with
-  the hoist" claim was never demonstrated to mean anything.** A suite that
-  cannot fail when the code changes cannot pass informatively either. The
-  scaffolded case `visual_indexed_draw_out_of_range_hwvp_policy` is checked in
-  with a deliberately tolerant assertion and a comment saying why; tightening it
-  is blocked on understanding the loader/staging path.
+  Fixed: `stage_builtin_pe_dlls()` in `run_d3d9_conformance.py` now stages the
+  built DLLs into the Wine root and verifies the copy took. With that in place
+  `visual_indexed_draw_out_of_range_hwvp_policy` is a **real pin**, verified in
+  both directions: `D3D_OK` with the hoist, `D3DERR_INVALIDCALL` (`0x8876086c`)
+  with the eight guards removed. That also independently confirms the behaviour
+  change documented below is real.
 
-  What is *not* affected: the A/B above stages through
-  `run_3dmark05_perf_probe.sh --build-root`, a different mechanism entirely, and
-  it demonstrably responded to the code change (`+29%`, and the invalid first
-  attempt responded to a build-flag change). The runtime evidence stands; only
-  the conformance evidence is void.
 - **The commit's safety enumeration is incomplete** — see
   [.09](state-churn-encode-append-decomposition.09.md), corrected: two further
   pre-`describe` failure escapes exist beyond the three first listed.
 - **GT2 only.** GT1, GT3 and SFIV have different draw mixes and different
-  producer-boundedness; neither the `29%` nor `c = 1.01` transfers.
+  producer-boundedness; neither the `29%` nor `c ≈ 1.0` transfers.
 
 **Scope.** Four runs per side plus two A/A, one machine, one thermal window,
 `N=64`-free (no PE instrumentation). The `20-200 ms` sample filter is

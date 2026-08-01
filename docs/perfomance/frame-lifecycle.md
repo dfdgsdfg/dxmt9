@@ -25,13 +25,15 @@ owns is the *joined* view and the measured numbers.
 > **Frame time moved 2026-08-01.** The SWVP hoist (`83a0b085`) took the GT2
 > frame from `54.05` to `41.90 ms` and scene fps from `18.50` to `23.87`
 > (**`+29%`**, [.11](state-churn-encode/state-churn-encode-append-decomposition.11.md)).
-> Every per-stage share below is against the old `~53 ms` frame and is now a
-> larger fraction of a smaller frame; the absolute ms figures for stages other
-> than the D3D9 entry are unaffected. It also measured the CPU-to-wall-clock
+> Every per-stage share below is against the old `~53 ms` frame. Absolute ms
+> figures are **not** all unaffected: any wait or idle complement moved too —
+> from these runs' counters `offload_worker_idle_wait` is `39.3 -> 26.0` and the
+> drain fence `2.69 -> 1.43 ms/present`. It also measured the CPU-to-wall-clock
 > conversion ratio at **`c = 1.01`** for producer-thread work on this
 > producer-bound workload — the first time that ratio has been measured rather
 > than assumed. Do not carry `c ≈ 1` to the encode worker (which idles
-> `~39 ms/present`) or to GPU work.
+> `~26 ms/present` post-hoist) or to GPU work; and it is `~1.0 ± 0.1-0.15`, not
+> `1.01`.
 
 **All figures are 3DMark05 GT2 at `890d78b1`-`8364aff2`**, `perf` profile, on a
 16 GB M1 MacBook Air under the Sikarugir-CX 24.0.7 Wine runtime. GT2 is the
