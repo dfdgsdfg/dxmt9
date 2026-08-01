@@ -265,12 +265,13 @@ built on this table as a lower bound.
 > **Superseded 2026-08-01: the floor was ~2.6x low.**
 > [append-decomposition.08](state-churn-encode/state-churn-encode-append-decomposition.08.md)
 > instrumented the D3D9 entry points themselves. Time inside dxmt9's entry
-> points is **`~21.4 ms/present`, `~40%` of the frame** — the four scopes behind
+> points is **`~21.4 ms/present`, `~41%` of the frame** — the four scopes behind
 > `8.07` captured `5.9-6.8` of it, leaving `~15.4 ms/present` of PE layer that no
-> scope had ever measured. Three de-phased confirmation runs measure `42.8-43.6%`
-> in a slower thermal window ([.10](state-churn-encode/state-churn-encode-append-decomposition.10.md));
-> read it as `~40%`, not either endpoint.
-> `40%` is time inside our entry points, not `40%` of removable overhead —
+> scope had ever measured. Three de-phased runs confirm it
+> directly at `40.7-41.6%` once their own phase-timer echo is removed
+> ([.10](state-churn-encode/state-churn-encode-append-decomposition.10.md)) —
+> two independent methods inside `1 pp`.
+> `41%` is time inside our entry points, not `41%` of removable overhead —
 > validation and state bookkeeping are work any D3D9 implementation does; of
 > that, [.09](state-churn-encode/state-churn-encode-append-decomposition.09.md)
 > identifies `~12 ms/present` as an SWVP probe that cannot apply. The tables

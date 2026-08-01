@@ -2,6 +2,7 @@
 #include "device_c_common.hpp"
 #include "d3d9_pe_buffer_readonly_cache.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
+#include "d3d9_pe_const_shadow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1613,8 +1614,8 @@ void testPeDecimatedScopeStats() {
   // scopes advancing in lockstep on the same calls sample the identical call
   // ordinals at phase 0 -- which buries the inner scope's whole instrument
   // inside the outer scope's span and makes the outer reading mostly clock
-  // (GT2 2026-08-01: SetVertexShaderConstantF read 756ns against a truth under
-  // 60ns). A distinct phase makes the coincidence impossible for every N >= 2.
+  // (GT2 2026-08-01: SetVertexShaderConstantF read 756ns against a measured
+  // truth of ~79-86ns). A distinct phase makes the coincidence impossible for every N >= 2.
   for (std::uint32_t n : {std::uint32_t{2}, std::uint32_t{4}, std::uint32_t{16},
                           std::uint32_t{64}}) {
     PeDecimatedScopeStats outer;
@@ -1637,6 +1638,14 @@ void testPeDecimatedScopeStats() {
     checkEq(outerSamples, 8, "de-phased outer scope still samples 1-in-N");
     checkEq(innerSamples, 8, "de-phased inner scope still samples 1-in-N");
   }
+
+  // Pin the PRODUCTION assignment, not just the mechanism. The mechanism test
+  // above passes on local structs no matter what the real scopes are set to, so
+  // a silent revert of peConstSetterDecimatedStats()'s phase to 0 would restore
+  // the 8.9x inflation with every test still green -- visible only as numbers
+  // quietly drifting in a later experiment.
+  checkEq(peConstSetterDecimatedStats().phaseOffset, std::uint32_t{1},
+          "const-setter scope keeps a phase distinct from its entry scope");
 
   // The regression this guards: identical phases coincide on every sample.
   {

@@ -33,13 +33,15 @@ struct PeDecimatedScopeStats {
 // instrument -- its calibration pair, its t0, and its destructor read, four
 // clock reads -- while the outer's own null subtraction removes only one. On
 // GT2 2026-08-01 this put `SetVertexShaderConstantF` at 756ns/call when the
-// truth was under 60ns: 92-99% of the corrected reading was the nested
-// instrument (`state-churn-encode-append-decomposition.08`). Varying N cannot
+// truth is ~79-86ns, measured directly once the fix below let it be measured at
+// all: ~89% of the corrected reading was the nested instrument
+// (`state-churn-encode-append-decomposition.08`, confirmed by `.10`). Varying N cannot
 // expose it, because the coincidence is total at every N.
 //
 // So: an independently-armed scope nested inside another must not share its
 // phase. Give the inner one a distinct `phaseOffset` (any value in [1, n) --
-// 1 suffices, and works for every N >= 2). Sub-scopes that are deliberately
+// 1 suffices, and works for every N >= 2). Assigned so far: const_setter 1,
+// draw_packet 2; everything else is phase 0. Sub-scopes that are deliberately
 // parent-gated (DxmtPeDecimatedPhaseTimer) are a different thing and are fine;
 // they cost their parent one clock pair each, which is a known, subtractable
 // constant rather than a hidden whole-instrument echo.

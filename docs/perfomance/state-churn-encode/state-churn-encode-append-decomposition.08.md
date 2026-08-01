@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 08
-title: dxmt9's D3D9 Entry Points Are ~40% Of The Frame — The 15.1% Floor Was ~2.6x Low
+title: dxmt9's D3D9 Entry Points Are ~41% Of The Frame — The 15.1% Floor Was ~2.6x Low
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution; const-setter figure corrected 2026-08-01 after review
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-gt2-entry-n64; experiments/output/a
 related: docs/perfomance/frame-lifecycle.md; docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attribution.05.md
 ---
 
-# dxmt9's D3D9 Entry Points Are ~40% Of The Frame — The 15.1% Floor Was ~2.6x Low
+# dxmt9's D3D9 Entry Points Are ~41% Of The Frame — The 15.1% Floor Was ~2.6x Low
 
 > **Corrected 2026-08-01, same day, after adversarial review.** This leaf first
 > published `68%` and `4.5x`, and a first correction published `38.7%`; the const
@@ -57,15 +57,15 @@ instrument (see below):
 | **share of frame** | | | **`40.6%`** | **`39.1%`** |
 
 **Verdict.** Against a `~53 ms` frame, **time inside dxmt9's D3D9 entry points is
-`~40%`**. The four scopes behind the `15.1%` figure captured `5.9-6.8 ms` of the
+`~41%`**. The four scopes behind the `15.1%` figure captured `5.9-6.8 ms` of the
 `21.3-21.4 ms` actually spent there — **the floor was low by about `2.6x`**, and
 the PE layer nothing had ever measured is **`~15.4 ms/present`**, `~29%` of the
 frame.
 
 The two decimation rates agree within `0.2%` on the total, and three de-phased
-confirmation runs measure `42.8-43.6%` in a slower thermal window
-([.10](state-churn-encode-append-decomposition.10.md)) — read the entry share as
-**`~40%`**, not either endpoint. And the workload is
+runs confirm it directly at `40.7-41.6%` once their own phase-timer echo is
+removed ([.10](state-churn-encode-append-decomposition.10.md)) — two methods
+inside `1 pp`, so read the entry share as **`~41%`**. And the workload is
 **not perturbed beyond noise**: mean scene fps `18.96` (`N=64`) / `18.31`
 (`N=16`) against three uninstrumented baselines at `18.35` / `17.79` / `18.18` —
 the `N=64` runs are on the *fast* side of every baseline. The `N=64`→`N=16`
@@ -98,9 +98,11 @@ reads. The draw entry moved `11,493 → 12,164 ns` (`N=64`) and
 `11,583 → 12,362` (`N=16`): **`+671` / `+779 ns` for four reads**, i.e.
 `168-195 ns` each, matching the null readings (`170-183 ns`). Subtracting four
 of those from `entry_const` leaves `3-57 ns` across the four available runs. Direct
-measurement later put it at `~79 ns`: the nested reads cost `~169 ns` each, not the
-null's `180 ns`, so this arithmetic over-corrected by `45 ns` — right by an order of
-magnitude, and `~677 ns` of echo against the `671 ns` priced independently above.
+measurement later put it at `~79-86 ns` ([.10](state-churn-encode-append-decomposition.10.md)),
+so this arithmetic was right by an order of magnitude and modestly over-corrected.
+Do not read a per-clock-read price out of the difference: across every consistent
+convention the four reads price at `~580-780 ns`, which brackets the null read
+rather than sitting under it.
 
 Two independent checks agree it is that small. `entry_state`, a scope of nearly
 identical shape with **no** nested instrument, measures `99 ns` — a const setter
@@ -163,11 +165,15 @@ differences against a `~180 ns` calibration *and*, where a scope nests another,
 against the nested instrument: at `11,493 ns` the correction is `1.6%` of the
 reading and at `936 ns` it is `96%`, so the draw figure is solid and the
 const-setter figure should be read as "too small for this instrument to
-resolve", not as `34 ns` precisely. `append`'s own reading disagrees `12.8%`
-across rates because both `64` and `16` divide the 64-record chunk period, which
-aliases the once-per-64 flush tail; the flush-free means agree within `1%`.
-Deterministic every-Nth sampling of anything with period-64 structure is biased
-whenever `N | 64`.
+resolve", not as `34 ns` precisely. `append`'s own reading is the least stable figure here: it disagrees `12.8%`
+across rates *and* `17.7%` between two `N=64` runs (`2,121` vs `2,496`), so the
+`N | 64` chunk-period aliasing that `.09` invokes cannot be the whole story —
+sampled flush share wanders `1.27-1.88%` at fixed `N`. What is stable is the
+flush-free mean, `1,296-1,305 ns` across all four locked runs (`0.7%`); use that
+for the typical append and treat `2.1-2.5 us` as a mean over a bimodal
+population. Deterministic every-Nth sampling of anything with period-64
+structure is still a hazard whenever `N | 64`; it is just not the only one
+acting here.
 
 **Related.**
 [attribution.05](../present-pacing/present-pacing-post-defselect-cpu-attribution.05.md) ·

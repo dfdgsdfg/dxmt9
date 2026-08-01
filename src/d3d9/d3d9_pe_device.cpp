@@ -3419,7 +3419,18 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // append. entry - swvp - record is the rest of the call.
     PeDecimatedScopeStats peDrawPhaseSwvpDecimatedStats_{};
     PeDecimatedScopeStats peDrawPhaseRecordDecimatedStats_{};
-    mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
+    // phaseOffset 2 (const_setter owns 1). buildSparseStateForRecord runs once
+    // per draw record, so this scope's counter tracks peEntryDrawDecimatedStats_
+    // to within 0.6% (1,944,455 vs 1,933,451 events on GT2 -- the drift is the
+    // APPLY_STATE path). That is near-lockstep, the shape banned at the top of
+    // d3d9_pe_stats_decimation.hpp: at phase 0 the coincidence is bursty rather
+    // than total, which averages to only ~11ns of bias on entry_draw today, but
+    // the drift rate is a property of the workload and nothing keeps it small.
+    mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_ = [] {
+      PeDecimatedScopeStats s{};
+      s.phaseOffset = 2;
+      return s;
+    }();
     std::uint64_t peStatsDecimationPresents_ = 0;
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
     std::int64_t peRecorderLastChunkReturnNs_ = 0;

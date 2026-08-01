@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 09
-title: 60% Of The Draw Entry Is An SWVP Probe That Reads The Index Buffer Before Asking Whether SWVP Applies
+title: 62% Of The Draw Entry Is An SWVP Probe That Reads The Index Buffer Before Asking Whether SWVP Applies
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution; proposed fix corrected 2026-08-01 after review
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-gt2-drawphase-n64; experiments/outp
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.08.md
 ---
 
-# 60% Of The Draw Entry Is An SWVP Probe That Reads The Index Buffer Before Asking Whether SWVP Applies
+# 62% Of The Draw Entry Is An SWVP Probe That Reads The Index Buffer Before Asking Whether SWVP Applies
 
 **Question / hypothesis.**
 [append-decomposition.08](state-churn-encode-append-decomposition.08.md) found
@@ -26,7 +26,8 @@ probes plus the containers they fill) and `record` (the actual draw-record
 append). `entry - swvp - record` is the rest. `DrawPrimitive` and
 `DrawIndexedPrimitive`, GT2, `perf`, two decimation rates.
 
-**Result.** The two rates agree within `2.2%`.
+**Result.** The two rates agree within `2.2%` on the entry and the swvp phase
+(the record phase disagrees `6.3%` — see Scope).
 
 | | `N=64` | `N=16` | share of entry |
 |---|---:|---:|---:|
@@ -34,6 +35,23 @@ append). `entry - swvp - record` is the rest. `DrawPrimitive` and
 | **swvp probes** | **`7,264 ns`** = **`12.31 ms/present`** | **`7,421`** = **`12.48`** | **`60%`** |
 | record append | `4,126 ns` = `6.99` | `4,388` = `7.38` | `34%` |
 | rest of call | `773 ns` = `1.31` | `552` = `0.93` | `5%` |
+
+> **Corrected 2026-08-01 after review — the denominator above is inflated.** The
+> two phase timers cost the draw entry `~671 ns` of their own clock reads
+> ([.10](state-churn-encode-append-decomposition.10.md)), so `12,164` is the
+> instrumented entry and the true one is `11,493` (measured on the build without
+> them). Each phase span holds one of those reads (`~168 ns`); the other two land
+> in the residual. Corrected, the decomposition closes **exactly**:
+>
+> | | true ns/call | share of a clean entry |
+> |---|---:|---:|
+> | swvp probes | `7,097` | **`61.7%`** |
+> | record append | `3,959` | `34.4%` |
+> | rest of call | `437` | `3.8%` |
+> | sum | `11,493` | `100.0%` |
+>
+> The `5%` "rest" was `~77%` instrument. The swvp headline is unaffected:
+> `7,097 × 1,694` = **`12.02 ms/present`, `22.6%` of the frame**.
 
 **`12.3-12.5 ms/present` — `~23%` of the GT2 frame — is spent probing whether
 software vertex processing applies.** It never does: GT2 is a hardware-VP
@@ -115,9 +133,9 @@ this large is also the first candidate all year big enough to measure the
 conversion ratio *properly*, which the underpowered `.07` attempt could not.
 That A/B is the next step and it deserves its own leaf.
 
-**The `7,264 ns` is fully accounted for by the index loop.** GT2 runs
+**The `7,097 ns` is fully accounted for by the index loop.** GT2 runs
 `~1,660` indexed draws/present over `2.088e9` primitives — about `3,180` indices
-per draw, read twice, so `~6,360` element iterations at **`1.14 ns/element`**.
+per draw, read twice, so `~6,360` element iterations at **`1.12 ns/element`**.
 That is exactly a compare/adjust loop plus one vector allocation per draw, and
 it leaves little room for anything else hiding in the span.
 
@@ -129,8 +147,15 @@ blocks on the commit-replay drain fence
 `swvp` span would be *blocking*, not CPU. They do not: the PE readonly cache
 serves MANAGED-pool readonly locks before the bridge, and the counters show
 `61.53` readonly locks/present reaching unix against `1,660` indexed draws — a
-`~96%` hit rate. The mechanism is real, the magnitude is small, and the
-element-count arithmetic above independently leaves no room for it.
+`~96%` hit rate (`~98%` per lock, since each draw locks twice). The mechanism is
+real, the magnitude is small, and the element-count arithmetic above
+independently leaves no room for it. A hard ceiling settles it regardless:
+`offload_drain_fence_wait_ms` is `2,667.5 ms / 1,194` presents =
+**`2.23 ms/present` of drain-fence blocking in the whole process**, so even
+attributing every microsecond of it to this span — which
+[.207](../present-pacing/present-pacing-drain-fence-attribution.207.md)
+contradicts, having classified the blocked subset as DISCARD-skewed writes —
+leaves `>= 10 ms/present` of real CPU in the probe.
 
 **Scope.** One run per decimation rate, GT2 only. A workload that genuinely uses
 software vertex processing pays the probe legitimately and would see no gain
@@ -152,13 +177,17 @@ it closes to within `~28%` rather than being half the phase.
 
 Two riders on the append figure itself. `2,121 ns` is a mean over a **bimodal**
 population: one append in 64 seals the chunk and pays the `65.7 us` bridge
-crossing, so `~830 ns` of that mean is amortized tail — anyone optimizing the
-typical append should use `~1.3 us`. And both `N=64` and `N=16` divide the
-64-record chunk period, which aliases how often the sampler lands on a
-flush-bearing append (`1.64%` at `N=16` against a true `1.28%`); that fully
-explains the `12.8%` cross-rate disagreement on `append`, and the flush-free
-means agree within `1%`. The draw entry scope counts draws, not records, so it
-escapes the aliasing.
+crossing, so `~0.8-1.1 us` of that mean is amortized tail — anyone optimizing the
+typical append should use the flush-free mean, `~1.30 us`, which is the one
+figure here that replicates tightly (`1,296-1,305 ns` across all four locked
+runs). And the mean itself does not replicate: `append` disagrees `12.8%` across
+rates **and `17.7%` between two `N=64` runs** (`2,121` vs `2,496`), with sampled
+flush share wandering `1.27-1.88%` at fixed `N`. Chunk-period aliasing — both
+`64` and `16` divide the 64-record period — is a real mechanism and was first
+written here as if it explained the whole gap; it cannot, because it is
+`N`-dependent and the spread is not. Sizing it properly needs the flush share
+taken from `bridge_commit_chunk` counters, or an `N` coprime to 64. The draw
+entry scope counts draws, not records, so it escapes this entirely.
 
 The draw entry bucket is shared with
 the UP entry points, which record no sub-phases, so the `rest` residual mixes
