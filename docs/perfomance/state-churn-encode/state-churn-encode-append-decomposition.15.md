@@ -94,8 +94,10 @@ biasing a number, and both times that is how the error surfaced.
 
 **What this does not say.** Still no removal candidate. `setup` is now a
 `2.97 ms` block with no counter on it rather than a `1.63 ms` one, which makes
-it worth reading — but `.09`-style discarded work has not been found on the
-encode side, and `stream_prep` was read and had none.
+it worth reading. [.16](state-churn-encode-append-decomposition.16.md) read it:
+half of that residual IS `.09`-style discarded work (a per-draw Metal debug
+group), worth `2.7 ms/present` and `0.01 ms` of frame time — the encode thread
+does not bind, so the shape transfers and the payoff does not.
 
 **Related.**
 [append-decomposition.14](state-churn-encode-append-decomposition.14.md) ·
