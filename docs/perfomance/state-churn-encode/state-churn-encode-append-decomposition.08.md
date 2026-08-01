@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 08
-title: dxmt9's D3D9 Entry Points Are ~38% Of The Frame — The 15.1% Floor Was ~2.5x Low
+title: dxmt9's D3D9 Entry Points Are ~40% Of The Frame — The 15.1% Floor Was ~2.6x Low
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution; const-setter figure corrected 2026-08-01 after review
@@ -11,10 +11,11 @@ source: experiments/output/app-d3d9-3dmark05-gt2-entry-n64; experiments/output/a
 related: docs/perfomance/frame-lifecycle.md; docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attribution.05.md
 ---
 
-# dxmt9's D3D9 Entry Points Are ~38% Of The Frame — The 15.1% Floor Was ~2.5x Low
+# dxmt9's D3D9 Entry Points Are ~40% Of The Frame — The 15.1% Floor Was ~2.6x Low
 
 > **Corrected 2026-08-01, same day, after adversarial review.** This leaf first
-> published `68%` and `4.5x`. The const-setter entry scope was inflated ~13-30x
+> published `68%` and `4.5x`, and a first correction published `38.7%`; the const
+> figure is now measured rather than inferred ([.10](state-churn-encode-append-decomposition.10.md)). The const-setter entry scope was inflated ~13-30x
 > by a nested instrument that samples the same calls it does — see
 > [The const-setter number was mostly clock](#the-const-setter-number-was-mostly-clock)
 > below, which is the more useful half of this document. The draw and state
@@ -49,19 +50,22 @@ instrument (see below):
 | entry scope | calls/present | ns/call | `N=64` | `N=16` |
 |---|---:|---:|---:|---:|
 | draws | `1,696` | `11,493` / `11,583` | **`19.49 ms`** | **`19.50 ms`** |
-| const setters | `21,827` | `34` / `57` | `0.74` | `1.22` |
+| const setters | `21,827` | `~79` (measured, [.10](state-churn-encode-append-decomposition.10.md)) | `1.72` | `1.70` |
 | state setters | `1,903` | `99` / `80` | `0.19` | `0.15` |
-| **ENTRY total** | | | **`20.42 ms`** | **`20.87 ms`** |
+| **ENTRY total** | | | **`21.40 ms`** | **`21.35 ms`** |
 | mean frame | | | `52.74 ms` | `54.61 ms` |
-| **share of frame** | | | **`38.7%`** | **`38.2%`** |
+| **share of frame** | | | **`40.6%`** | **`39.1%`** |
 
 **Verdict.** Against a `~53 ms` frame, **time inside dxmt9's D3D9 entry points is
-`~38%`**. The four scopes behind the `15.1%` figure captured `5.9-6.8 ms` of the
-`20.4-20.9 ms` actually spent there — **the floor was low by about `2.5x`**, and
-the PE layer nothing had ever measured is **`~14.5 ms/present`**, `~27%` of the
+`~40%`**. The four scopes behind the `15.1%` figure captured `5.9-6.8 ms` of the
+`21.3-21.4 ms` actually spent there — **the floor was low by about `2.6x`**, and
+the PE layer nothing had ever measured is **`~15.4 ms/present`**, `~29%` of the
 frame.
 
-The two decimation rates agree within `1.3%` on the total. And the workload is
+The two decimation rates agree within `0.2%` on the total, and three de-phased
+confirmation runs measure `42.8-43.6%` in a slower thermal window
+([.10](state-churn-encode-append-decomposition.10.md)) — read the entry share as
+**`~40%`**, not either endpoint. And the workload is
 **not perturbed beyond noise**: mean scene fps `18.96` (`N=64`) / `18.31`
 (`N=16`) against three uninstrumented baselines at `18.35` / `17.79` / `18.18` —
 the `N=64` runs are on the *fast* side of every baseline. The `N=64`→`N=16`
@@ -71,8 +75,8 @@ is the same size as the baseline's own run-to-run spread (`18.35`→`17.79`,
 
 ## The const-setter number was mostly clock
 
-`entry_const` first published `756 ns/call` = `16.50 ms/present`. It is **under
-`60 ns`**. The cause is a property of deterministic decimation that the
+`entry_const` first published `756 ns/call` = `16.50 ms/present`. It is **`~79 ns`** —
+measured directly once the fix below landed ([.10](state-churn-encode-append-decomposition.10.md)). The cause is a property of deterministic decimation that the
 [04 correction](../present-pacing/present-pacing-post-defselect-cpu-attribution.04.md)
 did not anticipate, and it is the durable lesson here.
 
@@ -93,7 +97,10 @@ the `entry` build by exactly two phase timers inside the draw entry — four clo
 reads. The draw entry moved `11,493 → 12,164 ns` (`N=64`) and
 `11,583 → 12,362` (`N=16`): **`+671` / `+779 ns` for four reads**, i.e.
 `168-195 ns` each, matching the null readings (`170-183 ns`). Subtracting four
-of those from `entry_const` leaves `3-57 ns` across the four available runs.
+of those from `entry_const` leaves `3-57 ns` across the four available runs. Direct
+measurement later put it at `~79 ns`: the nested reads cost `~169 ns` each, not the
+null's `180 ns`, so this arithmetic over-corrected by `45 ns` — right by an order of
+magnitude, and `~677 ns` of echo against the `671 ns` priced independently above.
 
 Two independent checks agree it is that small. `entry_state`, a scope of nearly
 identical shape with **no** nested instrument, measures `99 ns` — a const setter
@@ -139,7 +146,7 @@ the `36` is now `20`. It compared across three axes at once:
 **What this does not say.** `38%` is *time inside our entry points*, not `38%`
 of removable overhead. Argument validation and state bookkeeping are work any
 D3D9 implementation performs; the question this opens is how much of the
-`~14.5 ms` residual is necessary —
+`~15.4 ms` residual is necessary —
 [.09](state-churn-encode-append-decomposition.09.md) answers `12 ms` of it.
 
 **Where to look next, quantified.** The draw entry point is `11,493 ns/call` —
