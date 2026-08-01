@@ -894,6 +894,17 @@ struct Counters {
   std::atomic<std::uint64_t> reorderedIndexCacheCreated{0};
   std::atomic<std::uint64_t> reorderedIndexCacheCreatedBytes{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindViewportCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindFfpCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindVsCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindTextureCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawStreamBindIndexCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawFvfDecodeDeclCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawFvfDecodeBytesCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawFvfDecodeExpandedCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawUniformBuildMainCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawUniformBuildFfpCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawUniformBuildVsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawPhaseSetupCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawPhaseArgbufUniformCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawPhaseStreamPrepCpuNs{0};
@@ -2917,6 +2928,17 @@ constexpr CounterEntry kCounterTable[] = {
     {"reordered_index_cache_created", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreated, nullptr, nullptr, 0.0},
     {"reordered_index_cache_created_bytes", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreatedBytes, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_viewport_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindViewportCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_ffp_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindFfpCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindVsCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_texture_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindTextureCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_stream_bind_index_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawStreamBindIndexCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_fvf_decode_decl_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawFvfDecodeDeclCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_fvf_decode_bytes_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawFvfDecodeBytesCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_fvf_decode_expanded_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawFvfDecodeExpandedCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_uniform_build_main_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildMainCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_uniform_build_ffp_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildFfpCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_uniform_build_vs_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawUniformBuildVsCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_phase_setup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseSetupCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_phase_argbuf_uniform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseArgbufUniformCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_phase_stream_prep_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseStreamPrepCpuNs, nullptr, nullptr, 0.0},
@@ -6626,6 +6648,50 @@ void countReorderedIndexCacheLookup(bool hit,
   }
 }
 
+void countEncodeDrawStreamBindViewportCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindViewportCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindFfpCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindFfpCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindVsCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindTextureCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindTextureCpuNs, nanoseconds);
+}
+
+void countEncodeDrawStreamBindIndexCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawStreamBindIndexCpuNs, nanoseconds);
+}
+
+void countEncodeDrawFvfDecodeDeclCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawFvfDecodeDeclCpuNs, nanoseconds);
+}
+
+void countEncodeDrawFvfDecodeBytesCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawFvfDecodeBytesCpuNs, nanoseconds);
+}
+
+void countEncodeDrawFvfDecodeExpandedCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawFvfDecodeExpandedCpuNs, nanoseconds);
+}
+
+void countEncodeDrawUniformBuildMainCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawUniformBuildMainCpuNs, nanoseconds);
+}
+
+void countEncodeDrawUniformBuildFfpCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawUniformBuildFfpCpuNs, nanoseconds);
+}
+
+void countEncodeDrawUniformBuildVsCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawUniformBuildVsCpuNs, nanoseconds);
+}
+
 void countEncodeDrawPhaseSetupCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawPhaseSetupCpuNs, nanoseconds);
 }
@@ -9727,6 +9793,17 @@ CounterSnapshot snapshot() {
   s.encodeDrawArgbufCbufUpdateCpuNs = load(c.encodeDrawArgbufCbufUpdateCpuNs);
   s.encodeDrawStreamBindCpuNs = load(c.encodeDrawStreamBindCpuNs);
   s.encodeDrawIssueCpuNs = load(c.encodeDrawIssueCpuNs);
+  s.encodeDrawStreamBindViewportCpuNs = load(c.encodeDrawStreamBindViewportCpuNs);
+  s.encodeDrawStreamBindFfpCpuNs = load(c.encodeDrawStreamBindFfpCpuNs);
+  s.encodeDrawStreamBindVsCpuNs = load(c.encodeDrawStreamBindVsCpuNs);
+  s.encodeDrawStreamBindTextureCpuNs = load(c.encodeDrawStreamBindTextureCpuNs);
+  s.encodeDrawStreamBindIndexCpuNs = load(c.encodeDrawStreamBindIndexCpuNs);
+  s.encodeDrawFvfDecodeDeclCpuNs = load(c.encodeDrawFvfDecodeDeclCpuNs);
+  s.encodeDrawFvfDecodeBytesCpuNs = load(c.encodeDrawFvfDecodeBytesCpuNs);
+  s.encodeDrawFvfDecodeExpandedCpuNs = load(c.encodeDrawFvfDecodeExpandedCpuNs);
+  s.encodeDrawUniformBuildMainCpuNs = load(c.encodeDrawUniformBuildMainCpuNs);
+  s.encodeDrawUniformBuildFfpCpuNs = load(c.encodeDrawUniformBuildFfpCpuNs);
+  s.encodeDrawUniformBuildVsCpuNs = load(c.encodeDrawUniformBuildVsCpuNs);
   s.encodeDrawPhaseSetupCpuNs = load(c.encodeDrawPhaseSetupCpuNs);
   s.encodeDrawPhaseArgbufUniformCpuNs = load(c.encodeDrawPhaseArgbufUniformCpuNs);
   s.encodeDrawPhaseStreamPrepCpuNs = load(c.encodeDrawPhaseStreamPrepCpuNs);

@@ -1953,7 +1953,17 @@ class EncodeDrawPhaseTimer {
 
 class PerfScope {
  public:
-  explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {
+  // The optional second target splits a child counter that has more than one
+  // call site. It costs one atomic add and NO extra clock read -- the elapsed
+  // value is already computed -- and is null unless
+  // DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT is set. Without it the per-phase
+  // named/unnamed split is uncomputable, because stream_bind's five sites and
+  // fvf_decode's three straddle phases and the aggregate belongs to none of
+  // them (state-churn-encode-append-decomposition.14).
+  explicit PerfScope(void (*record)(std::uint64_t),
+                     void (*site)(std::uint64_t) = nullptr)
+      : record_(record),
+        site_(site && encodeDrawPhaseSplitPerfEnabled() ? site : nullptr) {
     if (record_) {
       started_ = std::chrono::steady_clock::now();
     }
@@ -1963,8 +1973,12 @@ class PerfScope {
       return;
     }
     const auto elapsed = std::chrono::steady_clock::now() - started_;
-    record_(static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+    const auto ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+    record_(ns);
+    if (site_) {
+      site_(ns);
+    }
   }
 
   PerfScope(const PerfScope&) = delete;
@@ -1972,6 +1986,7 @@ class PerfScope {
 
  private:
   void (*record_)(std::uint64_t) = nullptr;
+  void (*site_)(std::uint64_t) = nullptr;
   std::chrono::steady_clock::time_point started_{};
 };
 
@@ -10649,7 +10664,8 @@ bool encodeDraw(EncodeContext& ctx,
   std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
   bool fixedFunctionPath = false;
   {
-    PerfScope fvfDecodeScope(perf::countEncodeDrawFvfDecodeCpuTime);
+    PerfScope fvfDecodeScope(perf::countEncodeDrawFvfDecodeCpuTime,
+                            perf::countEncodeDrawFvfDecodeDeclCpuTime);
     ffLayout = decodeFixedFunctionVertexLayout(vertexDecl);
     fixedFunctionPath = drawUsesFixedFunctionPath(drawState, static_cast<bool>(ffLayout));
   }
@@ -11584,7 +11600,8 @@ bool encodeDraw(EncodeContext& ctx,
     uniform::clearBits(*dirtyPtr, cbufUpdateMask);
   }
   {
-    PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime);
+    PerfScope uniformBuildScope(perf::countEncodeDrawUniformBuildCpuTime,
+                            perf::countEncodeDrawUniformBuildMainCpuTime);
     if (directCbufBindings && uniform::anyDirty(*dirtyPtr, uniform::kVsAny)) {
       VsConsts vs = buildVsConsts(drawState);
       const auto plan =
@@ -11854,7 +11871,8 @@ bool encodeDraw(EncodeContext& ctx,
   // Phase 3-E: viewport / scissor / cull are BaseDrawState-only.
   const bool streamBindPhaseSplitPerf = streamBindPhaseSplitPerfEnabled();
   if (!effectiveSkipBaseStateBind) {
-    PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime);
+    PerfScope streamBindViewportScope(perf::countEncodeDrawStreamBindCpuTime,
+                            perf::countEncodeDrawStreamBindViewportCpuTime);
     PerfScope streamBindRasterPhaseScope(
         streamBindPhaseSplitPerf
             ? perf::countEncodeDrawStreamBindRasterPhaseCpuTime
@@ -11906,7 +11924,8 @@ bool encodeDraw(EncodeContext& ctx,
   const auto* indexSnapshot =
       indexBindingSnapshot(bindingSnapshot);
   {
-    PerfScope fvfDecodeBytesScope(perf::countEncodeDrawFvfDecodeCpuTime);
+    PerfScope fvfDecodeBytesScope(perf::countEncodeDrawFvfDecodeCpuTime,
+                            perf::countEncodeDrawFvfDecodeBytesCpuTime);
     if (!pv.userVertexData.empty()) {
       // Phase 5-B: prefer pre-batched UP vertex slice when the
       // DrawRun handler did the bulk upload; otherwise fall back
@@ -12071,7 +12090,8 @@ bool encodeDraw(EncodeContext& ctx,
       return false;
     }
     {
-      PerfScope uniformBuildFfScope(perf::countEncodeDrawUniformBuildCpuTime);
+      PerfScope uniformBuildFfScope(perf::countEncodeDrawUniformBuildCpuTime,
+                            perf::countEncodeDrawUniformBuildFfpCpuTime);
       drawVertexStreamOffset = 0;
       drawVertexStreamStride =
           vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride;
@@ -12084,7 +12104,8 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
     {
-      PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime);
+      PerfScope streamBindFfScope(perf::countEncodeDrawStreamBindCpuTime,
+                            perf::countEncodeDrawStreamBindFfpCpuTime);
       PerfScope streamBindFfpStreamScope(
           streamBindPhaseSplitPerf
               ? perf::countEncodeDrawStreamBindFfpStreamCpuTime
@@ -12478,7 +12499,8 @@ bool encodeDraw(EncodeContext& ctx,
       emitQueueTraceLine(trace.str());
     }
     {
-      PerfScope uniformBuildVsScope(perf::countEncodeDrawUniformBuildCpuTime);
+      PerfScope uniformBuildVsScope(perf::countEncodeDrawUniformBuildCpuTime,
+                            perf::countEncodeDrawUniformBuildVsCpuTime);
       drawVertexStreamOffset = 0;
       drawVertexStreamStride =
           ffLayout ? (vertexDecl.streams[0].stride ? vertexDecl.streams[0].stride : ffLayout->stride)
@@ -12492,7 +12514,8 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
     {
-      PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime);
+      PerfScope streamBindVsScope(perf::countEncodeDrawStreamBindCpuTime,
+                            perf::countEncodeDrawStreamBindVsCpuTime);
       PerfScope streamBindShaderStreamScope(
           streamBindPhaseSplitPerf
               ? perf::countEncodeDrawStreamBindShaderStreamCpuTime
@@ -12619,7 +12642,8 @@ bool encodeDraw(EncodeContext& ctx,
   // whether the constant argbuf hybrid is active.
   drawPhase.mark(perf::countEncodeDrawPhaseVertexBindCpuTime);
   if (!effectiveSkipBaseStateBind) {
-    PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
+    PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime,
+                            perf::countEncodeDrawStreamBindTextureCpuTime);
     PerfScope streamBindTexturePhaseScope(
         streamBindPhaseSplitPerf
             ? perf::countEncodeDrawStreamBindTexturePhaseCpuTime
@@ -13162,7 +13186,8 @@ bool encodeDraw(EncodeContext& ctx,
       emitQueueTraceLine(out.str());
     }
     if (forceExpandIndexed) {
-      PerfScope fvfDecodeExpandedScope(perf::countEncodeDrawFvfDecodeCpuTime);
+      PerfScope fvfDecodeExpandedScope(perf::countEncodeDrawFvfDecodeCpuTime,
+                            perf::countEncodeDrawFvfDecodeExpandedCpuTime);
       std::span<const u8> indexBytes;
       if (!pv.userIndexData.empty()) {
         indexBytes = pv.userIndexData;
@@ -13499,7 +13524,8 @@ bool encodeDraw(EncodeContext& ctx,
     const bool needIndexBytesForDiagnostics =
         encoderBreakdownActive || indexedDiagnosticsEnabled;
     {
-      PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime);
+      PerfScope streamBindIndexScope(perf::countEncodeDrawStreamBindCpuTime,
+                            perf::countEncodeDrawStreamBindIndexCpuTime);
       PerfScope streamBindIndexPhaseScope(
           streamBindPhaseSplitPerf
               ? perf::countEncodeDrawStreamBindIndexPhaseCpuTime

@@ -850,6 +850,17 @@ void countReorderedIndexCacheLookup(bool hit,
                                     bool created,
                                     std::uint64_t createdBytes);
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindViewportCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindFfpCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindVsCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindTextureCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawStreamBindIndexCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawFvfDecodeDeclCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawFvfDecodeBytesCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawFvfDecodeExpandedCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawUniformBuildMainCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawUniformBuildFfpCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawUniformBuildVsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPhaseSetupCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPhaseArgbufUniformCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawPhaseStreamPrepCpuTime(std::uint64_t nanoseconds);
@@ -1279,6 +1290,21 @@ struct CounterSnapshot {
   // regions they wrap and leave the branches between them uncounted -- 34% of
   // encode_draw had no counter on it. These marks partition the whole call, so
   // every nanosecond between entry and return lands in exactly one phase.
+  // Per-call-site split of the encode_draw children that appear more than once.
+  // Without these the named/unnamed split per phase cannot be computed at all:
+  // stream_bind has five sites and fvf_decode three, spread across phases, so
+  // the aggregate cannot be assigned to any one of them (.14).
+  std::uint64_t encodeDrawStreamBindViewportCpuNs = 0;
+  std::uint64_t encodeDrawStreamBindFfpCpuNs = 0;
+  std::uint64_t encodeDrawStreamBindVsCpuNs = 0;
+  std::uint64_t encodeDrawStreamBindTextureCpuNs = 0;
+  std::uint64_t encodeDrawStreamBindIndexCpuNs = 0;
+  std::uint64_t encodeDrawFvfDecodeDeclCpuNs = 0;
+  std::uint64_t encodeDrawFvfDecodeBytesCpuNs = 0;
+  std::uint64_t encodeDrawFvfDecodeExpandedCpuNs = 0;
+  std::uint64_t encodeDrawUniformBuildMainCpuNs = 0;
+  std::uint64_t encodeDrawUniformBuildFfpCpuNs = 0;
+  std::uint64_t encodeDrawUniformBuildVsCpuNs = 0;
   std::uint64_t encodeDrawPhaseSetupCpuNs = 0;
   std::uint64_t encodeDrawPhaseArgbufUniformCpuNs = 0;
   std::uint64_t encodeDrawPhaseStreamPrepCpuNs = 0;
