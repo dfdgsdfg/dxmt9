@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 13
-title: A Third Of The Encode Draw Path Is Unattributed — And This Instrument, Unlike The PE One, Is Nearly Free
+title: A Third Of The Encode Draw Path Is Unattributed — And I Priced The Instrument With The Wrong Observable
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-perfscope-on; experiments/output/ap
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.12.md
 ---
 
-# A Third Of The Encode Draw Path Is Unattributed — And This Instrument, Unlike The PE One, Is Nearly Free
+# A Third Of The Encode Draw Path Is Unattributed — And I Priced The Instrument With The Wrong Observable
 
 **Question / hypothesis.**
 [.12](state-churn-encode-append-decomposition.12.md) found the bottleneck had
@@ -28,37 +28,51 @@ through `encodeDraw` and keep only the timers whose parent chain is exactly
 `[EncodeDraw]`. Counters come from a single GT2 run with no PE-side decimation,
 so nothing on the producer side perturbs the encode numbers.
 
-## First: the instrument is trustworthy — verified, not assumed
+## First: the instrument — and I priced it with the wrong observable
 
 `PerfScope` reads `steady_clock::now()` **unconditionally**; it is not gated by
-`DXMT_PERF_COUNTERS`. With ~18 scopes on a `9.7 us` draw, and with the unix
-provider also built x86_64 under Rosetta, the obvious worry was
-[.10](state-churn-encode-append-decomposition.10.md) repeating on this side —
-a decomposition that is mostly its own clock reads.
+`DXMT_PERF_COUNTERS`. With ~18 scopes on a `9.7 us` draw, and the unix provider
+also built x86_64 under Rosetta, the worry was
+[.10](state-churn-encode-append-decomposition.10.md) repeating on this side.
 
-Measured, not argued. A diagnostic build with `PerfScope` forced to a no-op,
-paired back-to-back against the normal build in the same thermal window:
+This section originally answered that with a paired same-window A/B of a no-op
+`PerfScope` build against the normal one — **frame wall `40.10` vs `40.22 ms`,
+`0.3%`** — and concluded the instrument was nearly free.
 
-| | frame | scene fps |
-|---|---:|---:|
-| `PerfScope` **off** | `40.10 ms` | `24.94` |
-| `PerfScope` **on** | `40.22 ms` | `24.86` |
+> **Corrected 2026-08-01 after review. That measurement could not have detected
+> the cost it was looking for.** Frame wall is insensitive to encode-thread CPU,
+> because — as this same document's sibling
+> [.12](state-churn-encode-append-decomposition.12.md) had already established —
+> the encode thread carries `~17 ms/present` of slack. Adding or removing CPU
+> there is absorbed by waiting and never reaches the frame.
+>
+> The same two runs carry an **event-timestamp** stage counter that survives a
+> no-op `PerfScope` build, and it shows the real cost:
+>
+> | | encode stage wall | wait before dequeue | frame |
+> |---|---:|---:|---:|
+> | `PerfScope` **off** | `19.108` | `19.204` | `40.10` |
+> | `PerfScope` **on** | `23.745` | `14.913` | `40.22` |
+> | + `EncodeDrawPhaseTimer` | `24.390` | `14.298` | `40.17` |
+>
+> **The `PerfScope` family costs `4.64 ms/present`, `11.5%` of the frame** — 38x
+> the `0.12 ms` claimed — and the phase timer of
+> [.14](state-churn-encode-append-decomposition.14.md) adds `0.645 ms` (`1.6%`),
+> which is why it is now gated behind `DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT`
+> rather than always-on. Encode CPU added is matched almost exactly by waiting
+> removed, at constant frame — a redistribution signature that thermal drift
+> cannot produce.
+>
+> The Wine-QPC contrast survives but not the conclusion drawn from it: a clock
+> read is **`~43 ns`** here against the PE side's `~180 ns`, so this instrument
+> is four times cheaper, **not free**. Every absolute number below is inflated
+> by its own measurement.
 
-**`0.12 ms/present`, `0.3%`.** The hypothesis was wrong and the encode
-decomposition can be read at face value.
-
-An earlier unpaired look at the same no-op run suggested `+4.5%` against the
-A/B's `23.87 fps` — that was entirely session drift across thermal windows, and
-is exactly the error the paired run exists to prevent.
-
-**Why this side is cheap and the PE side is not.** Both are x86_64 under
-Rosetta, so Rosetta is not the variable. The PE-side clock goes through Wine's
-`QPC` emulation — the header of `d3d9_pe_stats_decimation.hpp` prices full
-instrumentation at `~1.5 us` per timed scope, and `.10` measured a single read
-at `~180 ns`. The unix side calls macOS's `steady_clock` directly. **The
-expensive thing was never Rosetta; it was Wine's QPC.** Adding scopes on the
-encode side is therefore nearly free, and does not need the flag-gating the
-`DXMT9_PERF_*_SPLIT` family uses.
+**What this means for the numbers below.** `encode_draw`'s `16.45 ms` reading
+contains the family's own cost; true work is **`~11.8 ms/present`**. The
+*proportions* between children are unaffected to first order, since every scope
+pays the same overhead, but no absolute figure in the table should be quoted
+without this correction.
 
 ## The decomposition
 
@@ -102,9 +116,12 @@ negative result about method**: the next step cannot be "instrument the biggest
 gap", it has to be a coarse sequential partition of `encodeDraw` that sums to
 the parent by construction, refined afterwards.
 
-**Verdict.** `encode_draw` is `16.45 ms/present`, `41%` of the GT2 frame; two
-thirds is attributed, and **`5.7 ms/present` — `14%` of the whole frame — is
-inside our hottest function with no counter on it**. `stream_bind` at `4.1 ms`
+**Verdict.** `encode_draw` *reads* `16.45 ms/present`; roughly `4.6` of that is
+the instrument, so true work is **`~11.8 ms`**. Two thirds of the reading is
+attributed, leaving `~5.7 ms` unattributed **as measured** — but part of that
+residual is the instrument too, so the honest statement is that a third of the
+reading has no counter on it and the absolute size of the real gap is not known
+from this run. `stream_bind` at `4.1 ms`
 is the largest *named* item. Both are larger than anything remaining on the
 producer side, which the same-day `.12` measured at `9.14 ms` in total.
 

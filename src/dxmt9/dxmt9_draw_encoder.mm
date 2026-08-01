@@ -1908,13 +1908,24 @@ class DebugGroupScope {
 // sum to the parent by construction and the residual has nowhere to hide. The
 // destructor closes the final phase, which also catches early returns.
 //
-// Cheap enough to leave always on: a paired same-window A/B with the whole
-// PerfScope family disabled measured it at 0.12ms/present, 0.3% of the frame.
-// The unix side calls macOS steady_clock directly; it is the PE side, going
-// through Wine's QPC emulation at ~180ns a read, that cannot afford this.
+// Gated by DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT, NOT always on. It was first
+// committed always-on on the strength of a measurement that priced the whole
+// PerfScope family at 0.12ms/present -- but that A/B compared FRAME WALL, which
+// .12 had already shown is insensitive to encode-thread CPU because that thread
+// carries ~17ms/present of slack. Measured against the encode STAGE wall
+// instead -- an event-timestamp counter that survives a no-op PerfScope build --
+// the family costs 4.64ms/present and these nine marks add 0.645ms, 1.6% of the
+// frame. A clock read here is ~43ns against the PE side's ~180ns through Wine's
+// QPC: four times cheaper, not free.
+bool encodeDrawPhaseSplitPerfEnabled();
+
 class EncodeDrawPhaseTimer {
  public:
-  EncodeDrawPhaseTimer() : last_(std::chrono::steady_clock::now()) {}
+  EncodeDrawPhaseTimer() : enabled_(encodeDrawPhaseSplitPerfEnabled()) {
+    if (enabled_) {
+      last_ = std::chrono::steady_clock::now();
+    }
+  }
   // Closes the final phase at every exit. encodeDraw's common path returns from
   // inside a nested block (the `return true` after emitTileFfpPostPass), so on a
   // typical draw this counter -- NOT the phase mark that follows that return --
@@ -1923,6 +1934,9 @@ class EncodeDrawPhaseTimer {
   ~EncodeDrawPhaseTimer() { mark(perf::countEncodeDrawPhaseRemainderCpuTime); }
 
   void mark(void (*record)(std::uint64_t)) {
+    if (!enabled_) {
+      return;
+    }
     const auto now = std::chrono::steady_clock::now();
     record(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_).count()));
@@ -1933,7 +1947,8 @@ class EncodeDrawPhaseTimer {
   EncodeDrawPhaseTimer& operator=(const EncodeDrawPhaseTimer&) = delete;
 
  private:
-  std::chrono::steady_clock::time_point last_;
+  bool enabled_ = false;
+  std::chrono::steady_clock::time_point last_{};
 };
 
 class PerfScope {
@@ -4965,6 +4980,14 @@ bool encoderBreakdownCbufContentEnabled() {
 bool textureSamplerDirectSplitPerfEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_PERF_TEXTURE_SAMPLER_DIRECT_SPLIT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+bool encodeDrawPhaseSplitPerfEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT");
     return env && env[0] != '\0' && env[0] != '0';
   }();
   return enabled;

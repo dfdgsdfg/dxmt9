@@ -24,9 +24,13 @@ localize it. Where is it?
 **Method.** `EncodeDrawPhaseTimer` stamps the clock at seven fixed points in
 `encodeDraw` and attributes each interval to exactly one phase; the destructor
 closes the final phase, so every nanosecond between entry and return lands
-somewhere and early exits are covered. Always on, not flag-gated: `.13` measured
-the whole `PerfScope` family at `0.3%` of the frame, because the unix side calls
-macOS `steady_clock` directly rather than going through Wine's `QPC`.
+somewhere and early exits are covered. **Gated behind
+`DXMT9_PERF_ENCODE_DRAW_PHASE_SPLIT`.** It was first committed always-on on the
+strength of `.13`'s `0.3%` figure; that figure was measured against frame wall,
+which is insensitive to encode-thread CPU, and the timer actually costs
+`0.645 ms/present` — `1.6%` of the frame (`.13`, corrected). Verified: with the
+gate off the encode stage wall returns to `23.743` against `23.745` for the
+build without the timer at all, and every phase counter reads `0.000`.
 
 **Result — the partition closes.**
 
@@ -44,9 +48,16 @@ Frame `40.17 ms`, `encode_draw` `17.12 ms/present` (`43%` of the frame).
 | `tile_ffp_fallthrough` | `0.001` | `0.0%` |
 | **sum** | **`16.94`** | **`98.9%`** |
 
-`98.9%` of the parent, the missing `1.1%` being the marks' own clock reads and
-where the parent `PerfScope` opens relative to the first mark. The partition
-works.
+`98.9%` of the parent. The missing `1.1%` is **not** "the marks' own clock
+reads" as first written — each interval ends at the `now` captured before
+`record()` runs, so a mark's cost lands inside the phase it closes. It is only
+the entry/exit boundary: parent `PerfScope` open → timer construction, plus the
+destructor tail. That computes to `~108 ns/draw`, about `2.4` reads at the
+`~43 ns` measured in `.13`, which matches. The partition works.
+
+Because every phase absorbs its own closing mark, **small phases are mostly
+instrument**: `ffp_vertex` reads `60 ns/draw`, of which roughly three quarters
+is the mark. Do not read the two smallest rows as work.
 
 ## One label was wrong, and the counter is renamed rather than explained
 
@@ -76,18 +87,28 @@ Subtracting the named child timers that fall inside each phase:
 | `base_state` | `1.052` | `0.729` | `0.322` |
 | `remainder` | `5.066` | `4.766` | `0.300` |
 
-> **Corrected 2026-08-01 after reading the code — `stream_prep` is not
-> unnamed.** The region contains a `stream_bind` call site (the viewport /
-> scissor / cull bind at `d3d9_draw_encoder.mm:11833`) and the *whole* of
-> `raster_state` (`0.299 ms`, its only call site). The "named children" column
-> above reads `0.000` for it only because `stream_bind` was excluded from that
-> column, and I then read the resulting zero as evidence of missing coverage.
-> The caveat below was already written and I asserted the claim anyway. The same
-> error applies to `vertex_bind`, which is bounded by two `stream_bind` sites.
+> **Corrected twice. The named/unnamed split is unreliable in every phase but
+> one, and even that one is wrong.** First correction: `stream_prep` and
+> `vertex_bind` are not "100% unnamed" — the named-children column read `0.000`
+> only because `stream_bind` was excluded from it, and I read that zero as
+> missing coverage. Second correction, after review mapped every call site:
 >
-> What survives: the `setup` prologue's `1.63 ms` beyond `fvf_decode` and
-> `pipeline_lookup` is real, since those are its only children. The phase
-> numbers themselves are unaffected.
+> | child | sites → phase |
+> |---|---|
+> | `stream_bind` (5) | `11834`→stream_prep, `12064`→ffp_vertex, `12472`→vertex_bind, `12599`→base_state, `13479`→remainder |
+> | `fvf_decode` (3) | `10629`→**setup**, `11886`→**stream_prep**, `13142`→remainder |
+> | `uniform_build` (3) | `11564`→argbuf_uniform, `12051`→ffp_vertex, `12458`→**vertex_bind** |
+>
+> **Every phase except `setup` contains a `stream_bind` site**, and `index_setup`
+> is nested inside the one at `13479` — so more than half of `stream_bind`'s
+> `4.1 ms` is index staging, not state binding.
+>
+> And the claim that `setup` was the one clean phase is **also wrong**: its
+> named-children figure of `2.591` credits it with the *whole* of `fvf_decode`
+> (`1.508`), but only one of that counter's three sites is in `setup` — the one
+> at `11886` runs on every draw and belongs to `stream_prep`. So `setup`'s
+> `1.63 ms` residual is biased down by that, and biased up by its own instrument
+> cost. **There is no clean residual figure in this table.**
 
 **Read that table as indicative, not exact.** Several child timers have multiple
 call sites spread across phases — `stream_bind` has five, `fvf_decode` three —
@@ -114,18 +135,21 @@ buffer, `~6,360` element iterations per draw. This is a handful of span
 assignments over memory that is already mapped; the pool lookup that precedes it
 is needed for `vertexBuffer` regardless. Cheap to compute, cheap to discard.
 
-The actual content of `stream_prep` is the per-draw viewport / scissor / cull
-rebind — and a comment at `:11840` records that the obvious fix was already
+The per-draw viewport / scissor / cull rebind in this phase is exactly
+`raster_state` = `0.299 ms`, only `15%` of the phase — the rest is stream0
+staging (the `fvf_decode` site at `11886`), `bindFfpVsIfDirty`, and instrument.
+A comment at `:11840` records that the obvious fix was already
 tried: a per-draw viewport/scissor shadow cache (`5eef5d4`, 2026-06-05) was
 reverted because GT1 bind diversity made the hit rate ~zero while the equality
 comparisons cost `+12.7%` `encode_chunk_cpu_ms`.
 
-**Verdict.** The partition works and is the right instrument. The attribution
-conclusion it first supported does not: `stream_prep` and `vertex_bind` are
-covered by `stream_bind` call sites, and reading `stream_prep` found no
-discarded work worth removing. **The one solid residual is the `setup`
-prologue's `1.63 ms`** — `encode_draw`'s first `4.22 ms` runs before any binding
-work, and only `2.59` of it has a name. That is where to look next.
+**Verdict.** The partition mechanism is sound and reproduces exactly. Every
+attribution conclusion drawn from it here has had to be withdrawn: the
+named/unnamed split cannot be computed while multi-site children straddle
+phases, `stream_prep` holds no discarded work worth removing, and `setup` is not
+the clean lead it looked like. **What this leaf delivers is a working instrument
+and a map of phase sizes — not a removal candidate.** Sizing the real residual
+needs per-call-site child counters, not more phases.
 
 **What this does not say.** Nothing here is a removal candidate. `.09`'s SWVP
 probe was `22.6%` of a frame doing something genuinely useless; `stream_prep`

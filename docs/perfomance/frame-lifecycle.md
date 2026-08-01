@@ -28,7 +28,8 @@ owns is the *joined* view and the measured numbers.
 > **The producer is no longer the largest block.** Re-measured on the hoisted
 > build ([.12](state-churn-encode/state-churn-encode-append-decomposition.12.md)):
 > D3D9 entry is `9.14 ms/present`, `22%` of the new `41.1 ms` frame, while the
-> encode thread is `20.5 ms` (`50%`) and the replay worker idles `25.8 ms`
+> encode thread is `~15.8 ms` of CPU (`~38%`; the raw `20.5` reading is inflated
+> by its own `PerfScope` family, `.13`) inside a `19.1 ms` stage wall and the replay worker idles `25.8 ms`
 > (`63%` slack). GPU is `1.90 ms`, `4.6%`. No stage is saturated, so the frame
 > is still set by the serial chain rather than any one stage's throughput.
 >

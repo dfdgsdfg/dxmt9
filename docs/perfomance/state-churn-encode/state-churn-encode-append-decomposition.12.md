@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 12
-title: After The Hoist The Bottleneck Moved — The Encode Thread Is Now 2.2x The Producer
+title: After The Hoist The Bottleneck Moved — The Encode Thread Is Now ~1.7x The Producer
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-gt2-entry-posthoist-n64; experiment
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.11.md; docs/perfomance/frame-lifecycle.md
 ---
 
-# After The Hoist The Bottleneck Moved — The Encode Thread Is Now 2.2x The Producer
+# After The Hoist The Bottleneck Moved — The Encode Thread Is Now ~1.7x The Producer
 
 **Question / hypothesis.** [.11](state-churn-encode-append-decomposition.11.md)
 took the GT2 frame from `54.05` to `41.90 ms`. Every per-stage share in
@@ -68,7 +68,8 @@ All from the `N=64` run, frame `41.10 ms`:
 
 | | ms/present | share |
 |---|---:|---:|
-| **encode thread** (`encode_chunk_cpu`) | **`20.47`** | **`49.8%`** |
+| **encode thread** (`encode_chunk_cpu`, *instrument-inflated*) | `20.47` | `49.8%` |
+| — corrected for the `PerfScope` family | **`~15.8`** | **`~38%`** |
 | — of which `encode_draw_cpu` | `16.25` | `39.5%` |
 | replay worker (`offload_replay_cpu`) | `17.52` | `42.6%` |
 | — `d3d9_snapshot_draw_submission` | `9.44` | `23.0%` |
@@ -78,10 +79,25 @@ All from the `N=64` run, frame `41.10 ms`:
 | replay worker **idle** | `25.77` | `62.7%` |
 
 **The bottleneck moved.** The producer was `~41%` of the old frame and the
-single largest block; it is now `22%` and **the encode thread is `2.2x` it**.
+single largest block; it is now `22%` and **the encode thread is `~1.7x` it**.
 Optimising the producer further is no longer the highest-value direction.
 
-**But no thread is saturated, so this is still a serial-chain frame.** The
+> **Corrected 2026-08-01.** This first said `2.2x`, comparing an
+> instrument-corrected producer figure (`9.14`, echo-subtracted) against an
+> *uncorrected* `encode_chunk_cpu` reading (`20.47`). The `PerfScope` family
+> inflates that reading by `4.64 ms/present`
+> ([.13](state-churn-encode-append-decomposition.13.md), corrected), so true
+> encode CPU is `~15.8 ms` and the ratio is `~1.7x`. The direction and the
+> conclusion are unchanged; the number was not apples-to-apples.
+>
+> The uninstrumented encode **stage wall** is `19.11 ms/present` (`48%` of the
+> frame), measured by event timestamps rather than `PerfScope`, which is the
+> figure to quote for "how long the encode stage takes".
+
+**But no thread is saturated, so this is still a serial-chain frame** — and
+`.13`'s corrected instrument measurement is direct experimental proof of it:
+removing `4.64 ms/present` of encode CPU moved the frame by `0.12 ms`. The
+encode thread's slack absorbed essentially all of it. The
 largest single consumer is `20.47 ms` against a `41.10 ms` frame, and the three
 CPU figures sum to `47.1 ms` — they overlap, so they cannot be added. The frame
 is set by the produce → replay → encode → present chain
@@ -96,7 +112,7 @@ frame. Anything that trades CPU for GPU work is nearly free on this workload.
 
 The two candidate directions are now:
 
-1. **Encode-thread CPU**, `20.5 ms` with `16.25` in `encode_draw`. Largest single
+1. **Encode-thread CPU**, `~15.8 ms` corrected. Largest single
    block, never decomposed at this level — the `.08`-style entry treatment has
    only ever been applied to the D3D9 producer side.
 2. **The serial chain itself.** With every stage under half the frame and the
