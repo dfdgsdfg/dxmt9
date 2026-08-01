@@ -3,7 +3,7 @@ domain: state-churn-encode
 workload: 3DMark05 GT2
 subcategory: append-decomposition
 order: 14
-title: Partitioning encodeDraw Localizes The Missing Third — Stream Prep And The Prologue
+title: Partitioning encodeDraw Works — But The Residual It Seemed To Show Was Mostly Mine
 date: 2026-08-01
 type: experiment-run
 status: accepted-attribution
@@ -11,7 +11,7 @@ source: experiments/output/app-d3d9-3dmark05-encode-phases-v2; experiments/outpu
 related: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.13.md
 ---
 
-# Partitioning encodeDraw Localizes The Missing Third — Stream Prep And The Prologue
+# Partitioning encodeDraw Works — But The Residual It Seemed To Show Was Mostly Mine
 
 **Question / hypothesis.**
 [.13](state-churn-encode-append-decomposition.13.md) found `34%` of
@@ -76,10 +76,18 @@ Subtracting the named child timers that fall inside each phase:
 | `base_state` | `1.052` | `0.729` | `0.322` |
 | `remainder` | `5.066` | `4.766` | `0.300` |
 
-**Two phases are `100%` unnamed** — `stream_prep` (`1.97 ms`: transient buffer
-construction, stream/index staging) and `vertex_bind` (`0.91 ms`) — and the
-`setup` prologue carries another `1.63 ms` beyond its `fvf_decode` and
-`pipeline_lookup` children. Those three account for `~4.5` of the `~5.7 ms`.
+> **Corrected 2026-08-01 after reading the code — `stream_prep` is not
+> unnamed.** The region contains a `stream_bind` call site (the viewport /
+> scissor / cull bind at `d3d9_draw_encoder.mm:11833`) and the *whole* of
+> `raster_state` (`0.299 ms`, its only call site). The "named children" column
+> above reads `0.000` for it only because `stream_bind` was excluded from that
+> column, and I then read the resulting zero as evidence of missing coverage.
+> The caveat below was already written and I asserted the claim anyway. The same
+> error applies to `vertex_bind`, which is bounded by two `stream_bind` sites.
+>
+> What survives: the `setup` prologue's `1.63 ms` beyond `fvf_decode` and
+> `pipeline_lookup` is real, since those are its only children. The phase
+> numbers themselves are unaffected.
 
 **Read that table as indicative, not exact.** Several child timers have multiple
 call sites spread across phases — `stream_bind` has five, `fvf_decode` three —
@@ -87,25 +95,49 @@ so they cannot be assigned to a single phase, and `stream_bind`'s `4.20 ms` is
 excluded from the "named children" column entirely. The *phase* numbers are
 exact; the per-phase split between named and unnamed is not.
 
-**Verdict.** The missing third is now localized to three regions, and the two
-largest are unambiguous: **`stream_prep` and `vertex_bind` have no child timer
-at all**, which is why nothing showed them. `setup` at `4.22 ms` is also larger
-than expected for a prologue — it is `24.7%` of `encode_draw` before any binding
-work begins.
+## Reading `stream_prep` for discarded work — there is none
 
-**What this does not say.** Nothing here says the work is removable. `.09`'s
-SWVP probe was `22.6%` of a frame doing something genuinely useless; there is no
-equivalent finding yet on the encode side, only a map of where the time is.
-The next step is to read `stream_prep` and the `setup` prologue with the same
-question `.09` asked — is any of this computed and then discarded — before
-proposing anything.
+The `.09` question, asked of the `1.97 ms`: is anything computed and thrown
+away? The region resolves the vertex buffer and builds `vertexBytes`, a span
+over the CPU-side shadow or mapped contents. Tracing every use of that span:
+
+| consumer | status |
+|---|---|
+| `traceEncode` blocks (`:11969`, `:12009`, `:13167`) | debug, early-out |
+| fixed-function trace (`:12094`-`:12191`) | gated on `debug::fixedFunctionTraceTextureHandle()` |
+| `traceEffectIndexedGeometry` (`:13790`, `:14350`) | returns immediately on `effectDrawTraceSeqMatches()` |
+| `expandIndexedStreamToFlatVertexBytes` (`:13207`) | real, but only on the index-expansion path |
+
+So on a default GT2 draw `vertexBytes` is indeed built and not consumed — but
+**this is not the SWVP shape**. That probe read and adjusted every index in the
+buffer, `~6,360` element iterations per draw. This is a handful of span
+assignments over memory that is already mapped; the pool lookup that precedes it
+is needed for `vertexBuffer` regardless. Cheap to compute, cheap to discard.
+
+The actual content of `stream_prep` is the per-draw viewport / scissor / cull
+rebind — and a comment at `:11840` records that the obvious fix was already
+tried: a per-draw viewport/scissor shadow cache (`5eef5d4`, 2026-06-05) was
+reverted because GT1 bind diversity made the hit rate ~zero while the equality
+comparisons cost `+12.7%` `encode_chunk_cpu_ms`.
+
+**Verdict.** The partition works and is the right instrument. The attribution
+conclusion it first supported does not: `stream_prep` and `vertex_bind` are
+covered by `stream_bind` call sites, and reading `stream_prep` found no
+discarded work worth removing. **The one solid residual is the `setup`
+prologue's `1.63 ms`** — `encode_draw`'s first `4.22 ms` runs before any binding
+work, and only `2.59` of it has a name. That is where to look next.
+
+**What this does not say.** Nothing here is a removal candidate. `.09`'s SWVP
+probe was `22.6%` of a frame doing something genuinely useless; `stream_prep`
+was read with that same question and the answer was no. The encode side has a
+map of where the time is and, so far, no equivalent finding.
 
 **Scope.** One run per configuration, GT2 only, one thermal window. Phase
 boundaries were chosen at function-body statement level; a boundary inside a
 branch would attribute unevenly across draws that take different paths, and the
 `tile_ffp_fallthrough` case above is exactly that failure caught by its own
-number being absurd. The three phases with no named children are the ones where
-that risk is lowest, since nothing else in them is being double-booked.
+number being absurd. The named/unnamed split is unreliable wherever a
+multi-site child lands, which is most phases — only `setup` is clean.
 
 **Related.**
 [append-decomposition.13](state-churn-encode-append-decomposition.13.md) ·
