@@ -38,6 +38,41 @@ Any bridge/schema change requires rebuilding both PE DLL build dirs and
 the unix provider together; the `DXMT9_WINEMETAL_CALL_ABI_HASH` handshake
 refuses mismatched pairs at load.
 
+## Rule: a measurement must record which binaries it ran
+
+`result.json` carries a `staged_build` block (hash + size of the five artifacts
+Wine actually loads, plus the build dirs they came from), and
+`run_d3d9_conformance.py` writes a `.staged-build.json` sidecar. Do not remove
+them, and when a result looks surprising, read them first.
+
+Two failures on 2026-08-01, in one session, both of which this makes visible in
+the artifact instead of requiring suspicion:
+
+| Failure | What it produced | The tell |
+|---|---|---|
+| A baseline worktree took meson's **default** buildtype (`debugoptimized`, asserts live) against head's `release` | a phantom `+29.7%` A/B | staged x86 `d3d9.dll` **5.3 MB vs 938 KB** — now recorded as `bytes` |
+| The D3D9 conformance suite loaded a `d3d9.dll` staged by an unrelated **3DMark** run | a suite that could not fail when the code changed | the loaded path is now named explicitly in the sidecar |
+
+**Two things follow.**
+
+**Build-config parity is a precondition for any A/B, not an assumption.**
+`run_3dmark05_perf_probe.sh --build-root` checks only that the five directories
+*exist*. Diff `meson-info/intro-buildoptions.json` between the trees until every
+option matches, and prefer a file the change cannot touch (`winemetal.so` for a
+D3D9-only change) as a byte-identity check. Run a same-build A/A pair first — it
+validates the harness, though note it is structurally blind to a worktree
+*configuration* asymmetry, which only the parity check catches.
+
+**Builtin-lane PE DLLs are loaded from the Wine root, not from where you put
+them.** `wine_builtin_dll=true` postprocesses `d3d9.dll` / `winemetal.dll` with
+Wine's `"Wine builtin DLL"` signature, so Wine resolves them from
+`$WINE_ROOT/lib/wine/<arch>-windows/` regardless of the path `LoadLibrary` was
+given. A copy beside the executable or in the prefix's `system32` is inert.
+Anything that wants to test a freshly built PE DLL must stage it into the Wine
+root (`install_heroic_wine.sh`, or `stage_builtin_pe_dlls()` in
+`run_d3d9_conformance.py`). Verifying the wrong copy's hash reads exactly like
+success.
+
 ## CI
 
 `.github/workflows/ci.yml` runs the host unit build + `meson test` on

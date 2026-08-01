@@ -40,6 +40,7 @@ field declared in MANIFEST.toml for auxiliary exes.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -268,6 +269,7 @@ BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal.dll")
 
 def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     """Copy the built PE DLLs into the Wine root, where Wine actually loads them."""
+    staged: dict[str, dict[str, object]] = {}
     wine_dll_dir = args.wine.parent.parent / "lib" / "wine" / "x86_64-windows"
     if not wine_dll_dir.is_dir():
         sys.exit(f"wine dll dir not found: {wine_dll_dir}")
@@ -278,9 +280,15 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
             sys.exit(f"cannot stage {name}: missing {src} (build build-win32-x64-builtin first)")
         dst = wine_dll_dir / name
         shutil.copy2(src, dst)
-        if dst.read_bytes() != src.read_bytes():
+        data = dst.read_bytes()
+        if data != src.read_bytes():
             sys.exit(f"staging {name} into the wine root did not take effect: {dst}")
+        staged[str(dst)] = {
+            "sha256": hashlib.sha256(data).hexdigest()[:16],
+            "bytes": len(data),
+        }
     args.staged_wine_dll_dir = wine_dll_dir
+    args.staged_build = staged
 
 
 def build_env(args: argparse.Namespace) -> dict[str, str]:
@@ -530,6 +538,18 @@ def main() -> int:
     with args.output.open("w") as f:
         json.dump(out, f, indent=2, sort_keys=True)
         f.write("\n")
+
+    # Sidecar, not a key in `out`: that file is a flat name -> verdict map other
+    # tools parse, and a synthetic entry would look like a test. This records
+    # WHICH binaries produced the verdicts -- the thing that was unknowable when
+    # this suite was found running against a DLL staged by an unrelated wild run.
+    staged = getattr(args, "staged_build", None)
+    if staged:
+        sidecar = args.output.with_suffix(args.output.suffix + ".staged-build.json")
+        with sidecar.open("w") as f:
+            json.dump({"artifacts": staged}, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"[runner] staged build recorded -> {sidecar}", file=sys.stderr)
 
     summary = {"pass": 0, "fail": 0, "skip": 0, "timeout": 0}
     for v in out.values():

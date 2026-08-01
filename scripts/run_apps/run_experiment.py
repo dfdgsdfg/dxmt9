@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
 import json
 import math
 import os
@@ -543,6 +544,47 @@ def scan_log_for_failures(log_path: Path) -> list[str]:
     return [marker for marker in markers if marker in content]
 
 
+# The five artifacts Wine actually loads, relative to a wine root. Recording
+# their identity is not bookkeeping: on 2026-08-01 two separate incidents in one
+# session hinged on not knowing which binary a run used. An A/B compared a
+# release tree against a debugoptimized one and reported a phantom +29.7%; and
+# the D3D9 conformance suite was found testing whichever tree last ran a wild
+# experiment, because builtin-signed PE DLLs are resolved from the wine root no
+# matter what path LoadLibrary is given -- so md5-checking the build output and
+# the app-local copy both read as confirmation while the loaded file was a third
+# one. A hash of what is actually staged, in the run's own output, makes both
+# failures visible in the artifact instead of requiring someone to suspect them.
+STAGED_ARTIFACTS = (
+    "lib/wine/x86_64-windows/d3d9.dll",
+    "lib/wine/x86_64-windows/winemetal.dll",
+    "lib/wine/x86_64-unix/winemetal.so",
+    "lib/wine/i386-windows/d3d9.dll",
+    "lib/wine/i386-windows/winemetal.dll",
+)
+
+
+def describe_staged_build(wine_root: Path | None, build_dirs: dict[str, Path]) -> dict[str, Any]:
+    """Identity of the binaries this run will actually load."""
+    info: dict[str, Any] = {
+        "build_dirs": {name: str(path) for name, path in build_dirs.items()},
+        "artifacts": {},
+    }
+    if wine_root is None:
+        return info
+    for rel in STAGED_ARTIFACTS:
+        path = wine_root / rel
+        try:
+            data = path.read_bytes()
+        except OSError:
+            info["artifacts"][rel] = None
+            continue
+        info["artifacts"][rel] = {
+            "sha256": hashlib.sha256(data).hexdigest()[:16],
+            "bytes": len(data),
+        }
+    return info
+
+
 def stage_dxmt9(
     prefix: Path,
     wine_root: Path | None,
@@ -977,6 +1019,18 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
         elif args.stage_mingw_runtime:
             stage_mingw_runtime(prefix, mingw_bin_dir, wow64_mingw_bin_dir)
 
+        staged_build = describe_staged_build(
+            wine_root,
+            {
+                "pe": pe_build_dir,
+                "runtime_pe": runtime_pe_build_dir,
+                "unix": unix_build_dir,
+                "wow64_pe": wow64_pe_build_dir,
+                "wow64_runtime_pe": wow64_runtime_pe_build_dir,
+            },
+        )
+        staged_build["skipped"] = bool(skip_stage)
+
         env = os.environ.copy()
         env.update(
             {
@@ -1076,6 +1130,8 @@ def run_experiment(app: ExperimentApp, args: argparse.Namespace) -> int:
             "reference": str(app.reference_path),
             "prefix": str(prefix),
             "wine_root": str(wine_root) if wine_root else None,
+            # Which binaries this run actually loaded -- see describe_staged_build.
+            "staged_build": staged_build,
             "wine_bin": str(wine_bin),
             "returncode": process.returncode if process is not None else None,
             "capture_error": capture_error,
