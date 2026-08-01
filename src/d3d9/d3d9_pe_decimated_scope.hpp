@@ -50,6 +50,42 @@ struct DxmtPeDecimatedScopeGuard {
   }
 };
 
+// Explicit-stop phase timer for sub-scopes of an already-armed scope.
+//
+// Two rules it enforces. It only runs when the PARENT scope was sampled, so
+// phases are comparable to each other and to their parent rather than being
+// three independently-sampled populations. And it stops explicitly rather than
+// in a destructor, because a phase usually ends before its variables leave
+// scope -- a destructor would time the wrong span.
+//
+// Phases are NOT null-calibrated individually: each phase pays one clock pair
+// out of the parent's already-calibrated span, so subtracting the parent's null
+// again per phase would double-count. Phases are comparable to each other; the
+// parent total is the calibrated figure.
+struct DxmtPeDecimatedPhaseTimer {
+  PeDecimatedScopeStats* stats = nullptr;
+  std::chrono::steady_clock::time_point t0{};
+
+  DxmtPeDecimatedPhaseTimer(bool parentSampled, PeDecimatedScopeStats& target) {
+    if (!parentSampled) {
+      return;
+    }
+    stats = &target;
+    t0 = std::chrono::steady_clock::now();
+  }
+
+  void stop() {
+    if (!stats) {
+      return;
+    }
+    PeDecimatedScopeTimer::recordSample(
+        *stats, static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - t0).count()));
+    stats = nullptr;
+  }
+};
+
 // Arms a decimated scope in one statement: sampling decision, null-scope
 // calibration, and t0, in the order the existing hand-written call sites use.
 //

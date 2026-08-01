@@ -3413,6 +3413,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     PeDecimatedScopeStats peEntryConstDecimatedStats_{};
     PeDecimatedScopeStats peEntryDrawDecimatedStats_{};
     PeDecimatedScopeStats peEntryStateDecimatedStats_{};
+    // Sub-phases of the draw entry, which is 11.5us/call and 37% of the GT2
+    // frame on its own (append-decomposition.08). swvp = the two SWVP fallback
+    // probes plus the containers they fill; record = the actual draw-record
+    // append. entry - swvp - record is the rest of the call.
+    PeDecimatedScopeStats peDrawPhaseSwvpDecimatedStats_{};
+    PeDecimatedScopeStats peDrawPhaseRecordDecimatedStats_{};
     mutable PeDecimatedScopeStats peDrawPacketDecimatedStats_{};
     std::uint64_t peStatsDecimationPresents_ = 0;
     std::uint64_t peRecorderStatsLastLoggedCommitCount_ = 0;
@@ -8946,7 +8952,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             "append_flush_sampled=%llu append_flush_ms=%.3f "
             "entry_const_events=%llu entry_const_sampled=%llu entry_const_ms=%.3f "
             "entry_draw_events=%llu entry_draw_sampled=%llu entry_draw_ms=%.3f "
-            "entry_state_events=%llu entry_state_sampled=%llu entry_state_ms=%.3f%s%s",
+            "entry_state_events=%llu entry_state_sampled=%llu entry_state_ms=%.3f "
+            "draw_swvp_sampled=%llu draw_swvp_ms=%.3f "
+            "draw_record_sampled=%llu draw_record_ms=%.3f%s%s",
             static_cast<unsigned long long>(peStatsDecimationPresents_),
             decimationN,
             static_cast<unsigned long long>(appendStats.events),
@@ -8978,6 +8986,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             static_cast<unsigned long long>(peEntryStateDecimatedStats_.events),
             static_cast<unsigned long long>(peEntryStateDecimatedStats_.sampled),
             static_cast<double>(peEntryStateDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peDrawPhaseSwvpDecimatedStats_.sampled),
+            static_cast<double>(peDrawPhaseSwvpDecimatedStats_.sampledNs) / 1.0e6,
+            static_cast<unsigned long long>(peDrawPhaseRecordDecimatedStats_.sampled),
+            static_cast<double>(peDrawPhaseRecordDecimatedStats_.sampledNs) / 1.0e6,
             constSetterBucketText.c_str(),
             appendTypeText.c_str());
     }
@@ -13276,12 +13288,15 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
+        DxmtPeDecimatedPhaseTimer drawSwvpPhase(
+            peEntryScope.stats != nullptr, peDrawPhaseSwvpDecimatedStats_);
         SoftwareFfpDrawData swvpDraw{};
         HRESULT hr = trySoftwareFfpDrawPrimitive(type, startVertex, count, swvpDraw);
         if (hr == S_FALSE) {
             hr = trySoftwareProgrammableDrawPrimitive(
                 type, startVertex, count, swvpDraw);
         }
+        drawSwvpPhase.stop();
         bool appendedDraw = false;
         if (hr == S_OK) {
             hr = filterSoftwareDrawOutsideClipPrimitives(swvpDraw);
@@ -13301,7 +13316,10 @@ public:
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
+            DxmtPeDecimatedPhaseTimer drawRecordPhase(
+                peEntryScope.stats != nullptr, peDrawPhaseRecordDecimatedStats_);
             hr = appendDrawPrimitiveRecord(type, startVertex, count);
+            drawRecordPhase.stop();
             appendedDraw = SUCCEEDED(hr);
         }
         if (SUCCEEDED(hr) && appendedDraw) {
@@ -13337,6 +13355,8 @@ public:
             const HRESULT barrierHr = chunkBarrierFlush();
             if (FAILED(barrierHr)) return finishPeCall(barrierHr);
         }
+        DxmtPeDecimatedPhaseTimer drawSwvpPhase(
+            peEntryScope.stats != nullptr, peDrawPhaseSwvpDecimatedStats_);
         SoftwareFfpDrawData swvpDraw{};
         std::vector<std::uint8_t> swvpIndices{};
         D3DFORMAT swvpIndexFormat = D3DFMT_UNKNOWN;
@@ -13348,6 +13368,7 @@ public:
                 type, baseVertex, minVertex, numVertices, startIndex, count,
                 swvpDraw, swvpIndices, swvpIndexFormat);
         }
+        drawSwvpPhase.stop();
         bool appendedDraw = false;
         if (hr == S_OK) {
             hr = filterSoftwareIndexedDrawOutsideClipPrimitives(
@@ -13373,8 +13394,11 @@ public:
                 appendedDraw = SUCCEEDED(hr);
             }
         } else if (hr == S_FALSE) {
+            DxmtPeDecimatedPhaseTimer drawRecordPhase(
+                peEntryScope.stats != nullptr, peDrawPhaseRecordDecimatedStats_);
             hr = appendDrawIndexedPrimitiveRecord(type, baseVertex, minVertex,
                                                  numVertices, startIndex, count);
+            drawRecordPhase.stop();
             appendedDraw = SUCCEEDED(hr);
         }
         if (SUCCEEDED(hr) && appendedDraw) {
