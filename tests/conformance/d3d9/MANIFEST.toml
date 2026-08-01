@@ -4692,7 +4692,7 @@ lane = "builtin"
 arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot. FLAKY, quantified 2026-08-02 on correctly-staged builds: fails intermittently at d3d9_conformance_visual_misc.c:6986-6989, four P8-palette texel comparisons out of 2737 checks, in a SYSTEMMEM->DEFAULT UpdateTexture destination re-sample. Rate 1/5 at 83a0b085 and 2/5 at its parent 09d24e26, so the flake predates the SWVP hoist and is not caused by it; a full-suite pre/post pair differed only here and the repeat runs show why that pair proves nothing. The intermittency itself is unexplained and is a real bug worth its own investigation, not a test defect to be dismissed."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
