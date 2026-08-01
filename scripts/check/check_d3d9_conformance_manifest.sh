@@ -36,8 +36,14 @@ valid_lanes = {"app-local", "builtin"}
 valid_arches = {"x64", "x86"}
 valid_status = {"passing", "failing", "partial", "skipped", "scaffolded", "todo"}
 evidence_status = {"passing", "failing", "skipped"}
-valid_source_kind = {"behavioral-oracle"}
-valid_license_scope = {"external-not-vendored"}
+# Two provenance shapes, and they must not be confused. Almost every case is a
+# Wine behavioral oracle: LGPL, not vendored, anchored to an upstream commit.
+# A handful are dxmt9's own policy tests, written here to pin behaviour Wine has
+# no test for -- those are MIT and must NOT carry a wine/ anchor or an
+# upstream_commit, because claiming upstream provenance for our own code is a
+# false license claim in the exact field that exists to prevent one.
+valid_source_kind = {"behavioral-oracle", "dxmt9-policy"}
+valid_license_scope = {"external-not-vendored", "dxmt9"}
 requirement_re = re.compile(r"^R-TEST-12\.\d+$")
 evidence_source_re = re.compile(r"^(?P<path>[^:]+):(?P<line>[1-9]\d*)$")
 
@@ -59,7 +65,12 @@ for index, case in enumerate(cases, 1):
         errors.append(f"case #{index}: entry is not a table")
         continue
 
-    missing = sorted(required_fields - case.keys())
+    # upstream_commit is required for Wine oracles and forbidden for dxmt9's own
+    # policy tests, so it is not in the unconditional required set.
+    needed = required_fields
+    if case.get("source_kind") == "dxmt9-policy":
+        needed = required_fields - {"upstream_commit"}
+    missing = sorted(needed - case.keys())
     if missing:
         errors.append(f"case #{index}: missing fields: {', '.join(missing)}")
 
@@ -170,16 +181,26 @@ for index, case in enumerate(cases, 1):
     license_value = case.get("license")
     license_scope = case.get("license_scope")
     upstream_commit = case.get("upstream_commit")
-    if not isinstance(source, str) or not source.startswith("wine/"):
-        errors.append(f"case #{index}: source must be a wine/... anchor")
     if source_kind not in valid_source_kind:
         errors.append(f"case #{index}: source_kind must be {sorted(valid_source_kind)}")
-    if license_value != "LGPL-2.1-or-later":
-        errors.append(f"case #{index}: license must be 'LGPL-2.1-or-later'")
-    if license_scope not in valid_license_scope:
-        errors.append(f"case #{index}: license_scope must be {sorted(valid_license_scope)}")
-    if not isinstance(upstream_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", upstream_commit):
-        errors.append(f"case #{index}: upstream_commit must be a 40-character hex commit")
+    elif source_kind == "dxmt9-policy":
+        if not isinstance(source, str) or source.startswith("wine/"):
+            errors.append(f"case #{index}: dxmt9-policy source must not be a wine/... anchor")
+        if license_value != "MIT":
+            errors.append(f"case #{index}: dxmt9-policy license must be 'MIT'")
+        if license_scope != "dxmt9":
+            errors.append(f"case #{index}: dxmt9-policy license_scope must be 'dxmt9'")
+        if upstream_commit is not None:
+            errors.append(f"case #{index}: dxmt9-policy must not claim an upstream_commit")
+    else:
+        if not isinstance(source, str) or not source.startswith("wine/"):
+            errors.append(f"case #{index}: source must be a wine/... anchor")
+        if license_value != "LGPL-2.1-or-later":
+            errors.append(f"case #{index}: license must be 'LGPL-2.1-or-later'")
+        if license_scope != "external-not-vendored":
+            errors.append(f"case #{index}: license_scope must be 'external-not-vendored'")
+        if not isinstance(upstream_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", upstream_commit):
+            errors.append(f"case #{index}: upstream_commit must be a 40-character hex commit")
 
     source_file = case.get("source_file")
     if source_file is not None:

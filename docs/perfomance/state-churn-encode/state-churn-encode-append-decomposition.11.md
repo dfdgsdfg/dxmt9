@@ -137,13 +137,32 @@ session and head `24.01 -> 23.61`, both `-2.6%`. The balanced order cancels it.
   faithful one, and `gpu_command_buffer_errors = 0` across `~10M` draws says
   nothing pathological happens in practice. But `.09` required this be pinned by
   a test and it still is not.
-- **The conformance evidence proves the wrong direction.**
-  `visual_mvp_software_vp_policy` runs its draws on a SWVP device, where the
-  hoisted gate evaluates true and falls through to bit-identical code. It
-  validates the no-op direction and **cannot detect the behaviour change at
-  all**. `test_visual_max_index16_draw_policy` is the one test near the changed
-  path and it accepts both `S_OK` and `D3DERR_INVALIDCALL`, so nothing pins the
-  new outcome either.
+- **The conformance evidence is worse than "proves the wrong direction" —
+  it is unverified.** The structural point stands: `visual_mvp_software_vp_policy`
+  runs its draws on a SWVP device, where the hoisted gate evaluates true and the
+  code is bit-identical, so it validates the no-op direction by construction.
+  But an attempt on 2026-08-01 to add a real pinning test found that **this
+  suite could not be made to observe any change to `d3d9.dll` at all**. Forcing
+  `DrawIndexedPrimitive` to return `D3DERR_INVALIDCALL` unconditionally,
+  rebuilding, and restaging still produced `D3D_OK` in the test, while the entry
+  point's own debug log — which sits *after* the forced return — kept appearing.
+  Both candidate module paths (`tmp/conformance-prefix/.../system32/d3d9.dll`
+  and the exe-adjacent copy) md5-matched the build output. Separately that
+  prefix was found holding a `d3d9.dll` dated **2026-07-18**, two weeks stale:
+  it is staged by hand and nothing refreshes it.
+
+  Consequence for this leaf and for `83a0b085`: **the "conformance is green with
+  the hoist" claim was never demonstrated to mean anything.** A suite that
+  cannot fail when the code changes cannot pass informatively either. The
+  scaffolded case `visual_indexed_draw_out_of_range_hwvp_policy` is checked in
+  with a deliberately tolerant assertion and a comment saying why; tightening it
+  is blocked on understanding the loader/staging path.
+
+  What is *not* affected: the A/B above stages through
+  `run_3dmark05_perf_probe.sh --build-root`, a different mechanism entirely, and
+  it demonstrably responded to the code change (`+29%`, and the invalid first
+  attempt responded to a build-flag change). The runtime evidence stands; only
+  the conformance evidence is void.
 - **The commit's safety enumeration is incomplete** — see
   [.09](state-churn-encode-append-decomposition.09.md), corrected: two further
   pre-`describe` failure escapes exist beyond the three first listed.

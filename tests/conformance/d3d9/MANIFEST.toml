@@ -6048,3 +6048,19 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
 summary = "Sikarugir-cx-24.0.7 builtin x64: set_texture_set_render_target_self_feedback_policy passes (9 checks, 0 failures)."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_planned.c"
+function = "test_visual_indexed_draw_out_of_range_hwvp_policy"
+source = "dxmt9 policy test; pins 83a0b085 (no Wine oracle function covers this)"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "draw-primitive"
+owner = "core/encoder"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["NOT YET A PIN: the assertion is tolerant (D3D_OK or D3DERR_INVALIDCALL) because this suite could not be made to observe any change to d3d9.dll -- forcing DrawIndexedPrimitive to fail unconditionally still produced D3D_OK while the entry log after the forced return kept appearing. Intended final form: on a D3DCREATE_HARDWARE_VERTEXPROCESSING device, DrawIndexedPrimitive whose StartIndex+index count runs past the end of the bound index buffer returns D3D_OK (retail D3D9 does not validate index ranges outside the debug runtime) and leaves the device un-lost. Pins the behaviour change in 83a0b085, which hoisted the SWVP applicability gate above the index-buffer read and thereby removed the incidental D3DERR_INVALIDCALL that the inapplicable SWVP probe used to return on hardware-VP devices. No other case can observe this: create_base_device and the visual_mvp_software_vp_policy oracle both use D3DCREATE_SOFTWARE_VERTEXPROCESSING, where the hoisted gate is a no-op."]
+status = "scaffolded"

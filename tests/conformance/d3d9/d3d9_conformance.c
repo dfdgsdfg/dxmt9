@@ -398,6 +398,8 @@ static const struct test_case tests[] =
     {"set_texture_set_render_target_self_feedback_policy",
             test_set_texture_set_render_target_self_feedback_policy},
     {"atoc_render_state_msaa_policy", test_atoc_render_state_msaa_policy},
+    {"visual_indexed_draw_out_of_range_hwvp_policy",
+            test_visual_indexed_draw_out_of_range_hwvp_policy},
 };
 
 int main(int argc, char **argv)

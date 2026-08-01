@@ -563,6 +563,7 @@ void test_atoc_render_state_msaa_policy(const struct d3d9_api *api);
 /* Wine visual.c planned-item scaffolds (G1). */
 void test_visual_specular_lighting_render_state_policy(const struct d3d9_api *api);
 void test_visual_max_index16_draw_policy(const struct d3d9_api *api);
+void test_visual_indexed_draw_out_of_range_hwvp_policy(const struct d3d9_api *api);
 void test_visual_null_format_caps_policy(const struct d3d9_api *api);
 void test_visual_sample_mask_render_state_policy(const struct d3d9_api *api);
 void test_visual_depth_stencil_init_policy(const struct d3d9_api *api);
