@@ -14,6 +14,16 @@ perf-probe toolkit.
 | `DXMT_PERF_COUNTERS` | Enable `[dxmt9-perf]` counter line at exit | `0` |
 | `DXMT_PERF_COUNTERS_PERIODIC_PRESENTS` | Emit counters every N presents (numeric) | `0` |
 | `DXMT9_PERF_FRAME_SAMPLING` | Per-frame counter delta snapshots | `0` |
+> **The encode-side `PerfScope` timers are nearly free; the PE-side decimated
+> ones are not.** Both build x86_64 under Rosetta, so Rosetta is not the
+> variable — the PE clock goes through Wine's `QPC` emulation (`~180 ns` per
+> read, `~1.5 us` per fully-instrumented scope) while the unix side calls macOS
+> `steady_clock` directly. A paired same-window A/B with `PerfScope` forced to a
+> no-op measured the whole encode family at `0.12 ms/present`, `0.3%` of the GT2
+> frame (`state-churn-encode-append-decomposition.13`). So the heavy
+> `DXMT9_PERF_*_SPLIT` gating below is about counter noise and attribution
+> clarity, not about clock cost, and new encode-side scopes do not need it.
+
 | `DXMT9_PERF_ENCODER_GPU_TIME` | Opt-in per-encoder GPU-time via counter sample buffers at render-encoder boundaries; pairs with `DXMT_PERF_COUNTERS`. See `metal_debugging.rules.md` §5 path B | `0` |
 | `DXMT9_PERF_ENCODER_BREAKDOWN` | Emit per-render-encoder `[dxmt9-perf-encoder]` summary and `[dxmt9-perf-encoder-stream]` stream breakdown lines for stream handle/offset/stride churn, stream Metal-bind first/handle/offset reasons, stream/IB unique handle bytes/usage/pool buckets, IB handle churn, primitive/vertex/FFP/pre-transformed geometry shape, PSO/shader-variant/VSOut-layout attribution including layout-cache hit/miss counts, VS/PS shader hash and, when `DXMT_DUMP_SHADER_DIR` is set, exact VS/PS source hash attribution, argbuf table/cbuf byte totals, setVertexBytes slot-5/other bytes, transient vertex/index bytes split by UP preupload, decl/shadow fallback, and indexed expansion, VS float upload-plan ranges, and write attribution | `0` |
 | `DXMT9_PERF_ENCODER_BREAKDOWN_CBUF_CONTENT` | Heavy opt-in extension for `DXMT9_PERF_ENCODER_BREAKDOWN=1`. Enables byte-by-byte VS/FFPVS cbuf content-history scans and first/rewrite/field-split columns. Keep off for normal CPU baselines because it runs on cbuf upload hot paths and is visible as `encode_draw_argbuf_cbuf_observer_cpu_ms` | `0` |
