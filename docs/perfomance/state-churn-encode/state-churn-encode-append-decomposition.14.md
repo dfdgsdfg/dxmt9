@@ -161,7 +161,9 @@ boundaries were chosen at function-body statement level; a boundary inside a
 branch would attribute unevenly across draws that take different paths, and the
 `tile_ffp_fallthrough` case above is exactly that failure caught by its own
 number being absurd. The named/unnamed split is unreliable wherever a
-multi-site child lands, which is most phases — only `setup` is clean.
+multi-site child lands, which is every phase — including `setup`, per the
+correction above. [.15](state-churn-encode-append-decomposition.15.md) resolves
+it with per-call-site counters.
 
 **Related.**
 [append-decomposition.13](state-churn-encode-append-decomposition.13.md) ·

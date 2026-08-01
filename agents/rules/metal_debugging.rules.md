@@ -13,7 +13,7 @@ The CPU-side measurement story is documented separately in
 |---|---|---|
 | Capture one frame as `.gputrace` | `DXMT_METAL_CAPTURE_FRAME=N` env var | Open the file in Xcode |
 | Read resource names in capture | Always-on (M1 labels) | `vb_h0xN`, `pso_h0xH`, etc. |
-| See render-pass / draw narrative | Always-on (M2 debug groups) | Encoder timeline gets nested groups |
+| See render-pass / draw narrative | Per-pass groups always on; **per-draw `Draw[...]` groups need a capture env or `DXMT9_PER_DRAW_DEBUG_GROUPS=1`** (§2) | Encoder timeline gets nested groups |
 | Profile in Instruments | Run with `xcrun xctrace record --template "Metal System Trace"` | Signpost track shows `frame`, `commit`, `draw` |
 | Per-CB GPU wall time as counter | `DXMT_PERF_COUNTERS=1` (M4) | `gpu_command_buffer_time_*_ms` rows |
 | GPU fault count as counter | `DXMT_PERF_COUNTERS=1` (M5) | `gpu_command_buffer_errors` row |
@@ -342,7 +342,13 @@ does not write
 log lines and the useful Xcode artifacts must be exported under
 `traces/<run>/analysis`. Merely opening Xcode at the welcome window is not
 enough; if `developerTools` still reports `Capture layer is not inserted`,
-classify the run as capture-layer failure, not Xcode/perf evidence. The wrapper
+classify the run as capture-layer failure, not Xcode/perf evidence. **If you
+trigger the capture from Xcode's own capture button on a layer-inserted Wine
+child, rather than through dxmt9's `DXMT_METAL_CAPTURE_FRAME`, set
+`DXMT9_PER_DRAW_DEBUG_GROUPS=1`** — the per-draw `Draw[...]` groups are gated on
+a capture env being present, and an externally-initiated capture sets none, so
+the `.gputrace` would arrive with no per-draw narrative and no warning.
+`run_with_wine_metal_capture_layer.sh` exports it for you. The wrapper
 refuses 3DMark05 command lines by default; use
 `--allow-3dmark05` or `DXMT9_ALLOW_3DMARK05_CAPTURE_LAYER=1` only for a
 deliberate diagnostic that is expected to be invalid as a perf sample.

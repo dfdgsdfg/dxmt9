@@ -155,6 +155,19 @@ replace_with_file "$capture_preloader" "$target_preloader"
 printf 'run_with_wine_metal_capture_layer: patched %s\n' "$wine_bin_dir" >&2
 printf 'run_with_wine_metal_capture_layer: backup %s\n' "$backup_dir" >&2
 
+# dxmt9's per-draw Metal debug groups ("Draw[seq=,prim=]") are gated on a capture
+# being configured, and they detect that from DXMT_METAL_CAPTURE_FRAME /
+# MTL_CAPTURE_ENABLED / METAL_CAPTURE_ENABLED. This script inserts the capture
+# layer through the patched Info.plist and deliberately sets none of those (see
+# the header: MTL_CAPTURE_ENABLED black-screens 3DMark05), so an Xcode-attached
+# capture taken through this wrapper would otherwise produce a .gputrace with no
+# per-draw narrative. Enable them explicitly -- this script only ever runs when
+# a capture is intended, and the labels cost 2.7ms/present
+# (docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.16.md).
+export DXMT9_PER_DRAW_DEBUG_GROUPS="${DXMT9_PER_DRAW_DEBUG_GROUPS:-1}"
+printf 'run_with_wine_metal_capture_layer: DXMT9_PER_DRAW_DEBUG_GROUPS=%s\n' \
+  "$DXMT9_PER_DRAW_DEBUG_GROUPS" >&2
+
 run_status=0
 "$@" || run_status=$?
 

@@ -32,7 +32,10 @@ a location is a name that lies the moment code moves — which is exactly how th
 `indexed`/`remainder` counter went wrong in `.14`.
 
 **Self-check first: every site sum equals its aggregate to `100.0%`** — `4.235`,
-`1.563`, `0.892`. No site is unaccounted for.
+`1.563`, `0.892`. Note what this does and does not prove: the same elapsed value
+is recorded to both counters, so equality is guaranteed *if every site passes a
+site pointer*. It therefore proves complete call-site coverage — including the
+`~0` `fvf_decode_expanded` — and cannot catch a site wired to the wrong name.
 
 ## The two inversions
 
@@ -71,6 +74,10 @@ adding either would double-count. `tile_ffp_fallthrough` is merged into
 | `ffp_vertex` | `0.104` | `0.005` | `0.099` | `95%` |
 | **`stream_prep`** | `1.974` | `1.969` | **`0.005`** | **`0%`** |
 | total | `17.291` | `11.321` | `5.970` | `35%` |
+
+The phase total (`17.291`) is `0.180` under `encode_draw` (`17.471`) — `~107 ns`
+per draw of entry/exit boundary, quantified in `.14`. "Sums to the parent by
+construction" is true to `~1%`, not exactly.
 
 **`stream_prep` is `99.8%` accounted for.** `.14` first published it as `100%`
 unnamed and the largest gap. It is the *smallest*. Both of that leaf's

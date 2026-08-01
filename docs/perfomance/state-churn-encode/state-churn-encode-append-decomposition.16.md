@@ -51,10 +51,28 @@ The labels exist so a `.gputrace` opened in Xcode shows a nested
 | **frame** | **`40.15 ms`** | **`40.16 ms`** | **`+0.01`** |
 | **scene fps** | **`24.91`** | **`24.90`** | **`-0.01`** |
 
-It is **half the `setup` phase's unnamed residual** (`1.50` of `2.97`), and the
-split is explained: the `push` and the string formatting land in `setup`, while
-the `~1.05 ms` `pop` lands in `remainder`, because the `optional` is destroyed at
-function exit.
+It is **half the `setup` phase's unnamed residual** (`1.50` of `2.97`). Where
+the rest lands, **read from the per-phase counters rather than inferred**:
+
+| phase | delta |
+|---|---:|
+| `setup` (format + `push`) | `-1.500` |
+| `remainder` (`pop` at function exit) | `-0.747` |
+| `stream_prep` | `-0.201` |
+| `argbuf_uniform` | `-0.088` |
+| others | `-0.014` |
+| sum | `-2.550` = `encode_draw` delta |
+
+> **Corrected after review.** This first said the `pop` was `~1.05 ms` in
+> `remainder`. That figure was *computed* (`2.549 - 1.499`) while the direct
+> measurement sat in the same two runs; the counter says `0.747`. And
+> `stream_prep` and `argbuf_uniform` moved by `0.29 ms` combined despite
+> containing no debug-group code — reproduced in both off-runs and larger than
+> the same-config spread, so it is a real second-order effect (allocator or
+> autorelease pressure), not noise. Unexplained, and now at least stated.
+>
+> The stage-wall delta (`2.729`) also exceeds what the phase counters attribute
+> (`2.549`) by `0.18`; the honest cost is **`~2.5-2.7 ms/present`, `n=1`**.
 
 ## `2.7 ms/present` of genuinely wasted work, worth zero frame time
 
@@ -70,9 +88,21 @@ instrumentation.
 
 **So the `.09` template does not transfer.** The SWVP probe was `22.6%` of the
 frame *and* on the producer thread, which was binding — `c ≈ 1.0`, hence `+29%`.
-The identical shape on the encode thread converts at **`c ≈ 0.004`**. Finding
-wasted work is not the same as finding a win; which thread it is on decides,
-and on GT2 the encode thread does not bind.
+The identical shape on the encode thread converts at **`c ≈ 0.02-0.03`**.
+Finding wasted work is not the same as finding a win; which thread it is on
+decides, and on GT2 the encode thread does not bind.
+
+> **Corrected after review: this leaf first quoted `c ≈ 0.004`, which is one
+> significant figure derived from a `0.01 ms` frame delta at `n=1`.** That input
+> is far inside noise — nominally identical configurations *this same day* spread
+> up to `1.5 ms` of frame wall, and the A/A pair spans `3.3%` (`~1.3 ms`). A
+> single pair bounds `|c|` only at about `0.5`. Regressing frame wall on encode
+> stage wall across the day's nine runs gives `0.019 ± 0.011` excluding the
+> `dbggroup-forced-on` outlier, and `.13`'s independent pair (`4.64 ms` removed,
+> `0.12 ms` of frame) implies `0.026`. **`c ≈ 0.02-0.03`, upper-bounded around
+> `0.05`.** The qualitative conclusion is untouched; the precision was not
+> earned, which is the same error as pricing an instrument against an observable
+> that cannot see it.
 
 ## Resolved: gated on capture
 
@@ -91,7 +121,7 @@ All three branches measured:
 | before gating (always on) | `4.261` | `17.471` | on |
 | hard-disabled diagnostic | `2.762` | `14.922` | off |
 | **gated, default** | **`2.729`** | **`14.843`** | **off** |
-| gated, `DXMT9_PER_DRAW_DEBUG_GROUPS=1` | `4.430` | `18.431` | on |
+| gated, `DXMT9_PER_DRAW_DEBUG_GROUPS=1` | `4.430` | `18.431` | on (outlier: `1,465` presents vs `~1,568`, frame `+3.7%` — directionally right, do not quote its magnitude) |
 | gated, `DXMT_METAL_CAPTURE_FRAME` set | `4.274` | `17.350` | on |
 
 The default matches the hard-disabled diagnostic, and both enable paths restore
@@ -106,7 +136,12 @@ It was a real trade, not a free one:
 | Would matter on any workload where encode *does* bind — untested | removing them silently degrades every future capture |
 
 Gating on capture keeps both sides — the same move the SWVP hoist made, gating
-work on the condition that makes it useful. **This buys no GT2 frame time and is
+work on the condition that makes it useful. **One route needed an explicit
+opt-in**: `run_with_wine_metal_capture_layer.sh` inserts the capture layer
+through a patched `Info.plist` and deliberately sets none of the three capture
+envs (`MTL_CAPTURE_ENABLED` black-screens 3DMark05), so an Xcode-attached
+capture through it would have lost its per-draw narrative silently. That
+wrapper now exports `DXMT9_PER_DRAW_DEBUG_GROUPS=1`. **This buys no GT2 frame time and is
 not claimed to**: it removes a hot-path allocation the conventions forbid, and it
 is the kind of change whose value shows up only on a workload where encode
 binds, which remains untested.

@@ -80,7 +80,7 @@ and the chunk is the unit that crosses every boundary after the recorder.
 
 ```mermaid
 flowchart TD
-  subgraph T1["① App / Wine thread — SATURATED, sets frame time"]
+  subgraph T1["① App / Wine thread — binding stage, sets frame time"]
     A1["D3D9 call<br/>Set* / Draw* / Clear / Present"]
     A2["PE DeviceState<br/>validate + mutate + dirty bits"]
     A3["buildSparseStateV2<br/>shadow -> SparseStateV2Input"]
@@ -91,7 +91,7 @@ flowchart TD
     A8["commit_chunk synchronous half<br/>prepare / import / mark / enqueue"]
   end
 
-  subgraph T2["② Replay worker — device-owned, idles ~39 ms/present"]
+  subgraph T2["② Replay worker — device-owned, idles ~26 ms/present"]
     B1["dequeue raw chunk (FIFO)"]
     B2["replay records<br/>-> CanonicalDrawState, DrawParam"]
     B3["draw-submission batching"]
