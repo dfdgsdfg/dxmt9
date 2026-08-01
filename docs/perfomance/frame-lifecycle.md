@@ -25,6 +25,13 @@ owns is the *joined* view and the measured numbers.
 > **Frame time moved 2026-08-01.** The SWVP hoist (`83a0b085`) took the GT2
 > frame from `54.05` to `41.90 ms` and scene fps from `18.50` to `23.87`
 > (**`+29%`**, [.11](state-churn-encode/state-churn-encode-append-decomposition.11.md)).
+> **The producer is no longer the largest block.** Re-measured on the hoisted
+> build ([.12](state-churn-encode/state-churn-encode-append-decomposition.12.md)):
+> D3D9 entry is `9.14 ms/present`, `22%` of the new `41.1 ms` frame, while the
+> encode thread is `20.5 ms` (`50%`) and the replay worker idles `25.8 ms`
+> (`63%` slack). GPU is `1.90 ms`, `4.6%`. No stage is saturated, so the frame
+> is still set by the serial chain rather than any one stage's throughput.
+>
 > Every per-stage share below is against the old `~53 ms` frame. Absolute ms
 > figures are **not** all unaffected: any wait or idle complement moved too —
 > from these runs' counters `offload_worker_idle_wait` is `39.3 -> 26.0` and the
