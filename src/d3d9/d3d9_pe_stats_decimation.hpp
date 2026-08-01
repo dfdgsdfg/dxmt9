@@ -18,17 +18,37 @@ struct PeDecimatedScopeStats {
   std::uint64_t events = 0;
   std::uint64_t sampled = 0;
   std::uint64_t sampledNs = 0;
+
+  // Which residue class mod N this scope samples. Sampling is deterministic
+  // every-Nth, so two scopes whose event counters advance in lockstep sample
+  // the *identical* calls unless their phases differ -- see the hazard note
+  // below. Default 0 reproduces the original `events % n == 0`.
+  std::uint32_t phaseOffset = 0;
 };
 
-// RAII: increments events always; times only every Nth event (events % n == 0
-// after increment). n==0 disables entirely. Caller supplies a now() function
-// pointer or the call sites read the clock — keep the header clock-free:
+// HAZARD -- phase-locked nesting. Sampling is deterministic (`events % n ==
+// phaseOffset`), not random, so two independently-armed scopes that increment
+// once per call on the *same* calls fire on exactly the same call ordinals at
+// every N. The outer scope's span then always contains the inner scope's whole
+// instrument -- its calibration pair, its t0, and its destructor read, four
+// clock reads -- while the outer's own null subtraction removes only one. On
+// GT2 2026-08-01 this put `SetVertexShaderConstantF` at 756ns/call when the
+// truth was under 60ns: 92-99% of the corrected reading was the nested
+// instrument (`state-churn-encode-append-decomposition.08`). Varying N cannot
+// expose it, because the coincidence is total at every N.
+//
+// So: an independently-armed scope nested inside another must not share its
+// phase. Give the inner one a distinct `phaseOffset` (any value in [1, n) --
+// 1 suffices, and works for every N >= 2). Sub-scopes that are deliberately
+// parent-gated (DxmtPeDecimatedPhaseTimer) are a different thing and are fine;
+// they cost their parent one clock pair each, which is a known, subtractable
+// constant rather than a hidden whole-instrument echo.
 class PeDecimatedScopeTimer {
  public:
   // returns true when this event should be timed
   static bool shouldSample(PeDecimatedScopeStats &s, std::uint32_t n) {
     ++s.events;
-    return n != 0 && (s.events % n) == 0;
+    return n != 0 && (s.events % n) == (s.phaseOffset % n);
   }
   static void recordSample(PeDecimatedScopeStats &s, std::uint64_t ns) {
     ++s.sampled;

@@ -56,8 +56,20 @@ struct PeConstShadowBlock {
 // the ODR for this inline function) rather than as a device-class member.
 // D3D9DeviceImpl::logPeStatsDecimation() reaches it via
 // peConstSetterDecimatedStats().
+//
+// phaseOffset is 1, not 0, and that is load-bearing: touchConstShadow is
+// called exactly once per const-setter entry point, so this scope's event
+// counter advances in lockstep with the entry scope's
+// (peEntryConstDecimatedStats_). Sharing phase 0 would make both sample the
+// same calls forever and bury this scope's entire instrument inside the entry
+// scope's span -- the failure documented at the top of
+// d3d9_pe_stats_decimation.hpp.
 inline PeDecimatedScopeStats& peConstSetterDecimatedStats() {
-    static PeDecimatedScopeStats stats{};
+    static PeDecimatedScopeStats stats = [] {
+        PeDecimatedScopeStats s{};
+        s.phaseOffset = 1;
+        return s;
+    }();
     return stats;
 }
 

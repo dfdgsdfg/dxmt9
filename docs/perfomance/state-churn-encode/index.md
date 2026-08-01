@@ -27,7 +27,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 ## Recent Leaf Documents
 
 - [state-churn-encode-append-decomposition.09 - 60% Of The Draw Entry Is An SWVP Probe That Reads Indices First](state-churn-encode-append-decomposition.09.md)
-- [state-churn-encode-append-decomposition.08 - dxmt9's D3D9 Entry Points Are 68% Of The Frame](state-churn-encode-append-decomposition.08.md)
+- [state-churn-encode-append-decomposition.08 - dxmt9's D3D9 Entry Points Are ~38% Of The Frame](state-churn-encode-append-decomposition.08.md)
 - [state-churn-encode-append-decomposition.07 - Gating Two Wasted Clock Reads Removes 12% Of Append](state-churn-encode-append-decomposition.07.md)
 - [state-churn-encode-append-decomposition.06 - The Fixed Per-Commit Cost Is Queue-Mutex Contention](state-churn-encode-append-decomposition.06.md)
 - [state-churn-encode-append-decomposition.05 - The Flush Is Half Bridge-Crossing And Half Commit, And Its Fixed Cost Is The Pipeline's Clock](state-churn-encode-append-decomposition.05.md)

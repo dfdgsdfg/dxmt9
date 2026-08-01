@@ -1609,6 +1609,49 @@ void testPeDecimatedScopeStats() {
   checkEq(offStats.sampled, std::uint64_t{0},
           "decimated stats n=0 never increments sampled");
 
+  // phaseOffset de-phases nested scopes. Sampling is deterministic, so two
+  // scopes advancing in lockstep on the same calls sample the identical call
+  // ordinals at phase 0 -- which buries the inner scope's whole instrument
+  // inside the outer scope's span and makes the outer reading mostly clock
+  // (GT2 2026-08-01: SetVertexShaderConstantF read 756ns against a truth under
+  // 60ns). A distinct phase makes the coincidence impossible for every N >= 2.
+  for (std::uint32_t n : {std::uint32_t{2}, std::uint32_t{4}, std::uint32_t{16},
+                          std::uint32_t{64}}) {
+    PeDecimatedScopeStats outer;
+    PeDecimatedScopeStats inner;
+    inner.phaseOffset = 1;
+    int coincidences = 0;
+    int outerSamples = 0;
+    int innerSamples = 0;
+    for (std::uint32_t call = 0; call < n * 8u; ++call) {
+      // Lockstep: one increment each, on every call, like an entry scope and a
+      // scope in the function it calls exactly once.
+      const bool outerHit = PeDecimatedScopeTimer::shouldSample(outer, n);
+      const bool innerHit = PeDecimatedScopeTimer::shouldSample(inner, n);
+      outerSamples += outerHit ? 1 : 0;
+      innerSamples += innerHit ? 1 : 0;
+      coincidences += (outerHit && innerHit) ? 1 : 0;
+    }
+    checkEq(coincidences, 0,
+            "de-phased lockstep scopes never sample the same call");
+    checkEq(outerSamples, 8, "de-phased outer scope still samples 1-in-N");
+    checkEq(innerSamples, 8, "de-phased inner scope still samples 1-in-N");
+  }
+
+  // The regression this guards: identical phases coincide on every sample.
+  {
+    PeDecimatedScopeStats outer;
+    PeDecimatedScopeStats inner;  // phaseOffset defaults to 0 -- same as outer
+    int coincidences = 0;
+    for (std::uint32_t call = 0; call < 64; ++call) {
+      const bool outerHit = PeDecimatedScopeTimer::shouldSample(outer, 8);
+      const bool innerHit = PeDecimatedScopeTimer::shouldSample(inner, 8);
+      coincidences += (outerHit && innerHit) ? 1 : 0;
+    }
+    checkEq(coincidences, 8,
+            "same-phase lockstep scopes coincide on every sample");
+  }
+
   // PeDecimatedBucketStats splits a scope's samples by per-call element count.
   // Its purpose is to tell a scope whose cost is fixed per call apart from one
   // that scales with work, so the boundaries are load-bearing, not cosmetic.

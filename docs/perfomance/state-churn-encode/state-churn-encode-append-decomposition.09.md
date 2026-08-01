@@ -134,10 +134,33 @@ element-count arithmetic above independently leaves no room for it.
 
 **Scope.** One run per decimation rate, GT2 only. A workload that genuinely uses
 software vertex processing pays the probe legitimately and would see no gain
-from the hoist — but with the corrected predicate it also loses nothing. The
-`record` phase at `4,126 ns` against `appendRecordDirect`'s `2,121 ns` is
-consistent: the remainder is `flushPendingConsts` and parameter construction
-inside `appendDrawIndexedPrimitiveRecord`. The draw entry bucket is shared with
+from the hoist — but with the corrected predicate it also loses nothing.
+
+The `record` phase closes against the append scope, which is the strongest
+available check that the draw-side instrument is coherent — but not the way this
+document first said. It read `4,126 ns` against `appendRecordDirect`'s
+`2,121 ns` and called the `~2 us` difference "`flushPendingConsts` and parameter
+construction". **A draw's record phase contains more than one append**:
+`3,104,430` appends against `1,933,451` draws is `1.606` appends per draw,
+because `flushPendingConsts` emits the pending const and state records inside
+the same phase. Correcting both figures for instrument cost — the phase pays one
+clock pair (`~183 ns`) out of its parent's span, and `appendRecordDirect` itself
+nests two parent-gated phase timers worth `~361 ns` that its own null read does
+not remove — gives `1.606 × 1,760 = 2,827 ns` of append inside a true
+`~3,943 ns` phase. The non-append remainder is **`~1.1 us`**, not `~2 us`, and
+it closes to within `~28%` rather than being half the phase.
+
+Two riders on the append figure itself. `2,121 ns` is a mean over a **bimodal**
+population: one append in 64 seals the chunk and pays the `65.7 us` bridge
+crossing, so `~830 ns` of that mean is amortized tail — anyone optimizing the
+typical append should use `~1.3 us`. And both `N=64` and `N=16` divide the
+64-record chunk period, which aliases how often the sampler lands on a
+flush-bearing append (`1.64%` at `N=16` against a true `1.28%`); that fully
+explains the `12.8%` cross-rate disagreement on `append`, and the flush-free
+means agree within `1%`. The draw entry scope counts draws, not records, so it
+escapes the aliasing.
+
+The draw entry bucket is shared with
 the UP entry points, which record no sub-phases, so the `rest` residual mixes
 populations — UP and non-indexed draws are `~1.1%` of calls, so the `60/34/5`
 split is unaffected.

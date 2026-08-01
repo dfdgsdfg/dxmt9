@@ -262,17 +262,26 @@ buffer lock/shadow path (`~1.4 ms/present` from `result.json` counters) are
 dxmt9 code measured by none of these scopes. Treat any "dxmt9 is only X%" claim
 built on this table as a lower bound.
 
-> **Superseded 2026-08-01: the floor was 4.5x low.**
+> **Superseded 2026-08-01: the floor was ~2.5x low.**
 > [append-decomposition.08](state-churn-encode/state-churn-encode-append-decomposition.08.md)
 > instrumented the D3D9 entry points themselves. Time inside dxmt9's entry
-> points is **`35.5-36.2 ms/present`, `~68%` of the frame** — the four scopes
-> behind `8.07` captured `6.9-7.7` of it. Both discipline checks pass
-> (`N=64`/`N=16` agree within `1.9%`; scene fps `18.88-19.56` against an
-> `18.35-18.51` uninstrumented baseline, so the workload is not perturbed).
-> `68%` is time inside our entry points, not `68%` of removable overhead —
-> validation and state bookkeeping are work any D3D9 implementation does. The
-> tables below still read `15.1%`; treat that as the old floor until they are
-> rebuilt on the entry measurement.
+> points is **`20.4-20.9 ms/present`, `~38%` of the frame** (`38.7%` at `N=64`,
+> `38.2%` at `N=16`) — the four scopes behind `8.07` captured `5.9-6.8` of it,
+> leaving `~14.5 ms/present` of PE layer that no scope had ever measured.
+> `38%` is time inside our entry points, not `38%` of removable overhead —
+> validation and state bookkeeping are work any D3D9 implementation does; of
+> that, [.09](state-churn-encode/state-churn-encode-append-decomposition.09.md)
+> identifies `~12 ms/present` as an SWVP probe that cannot apply. The tables
+> below still read `15.1%`; treat that as the old floor until they are rebuilt
+> on the entry measurement.
+>
+> That leaf first published `68%` / `4.5x`. Its const-setter entry scope was
+> inflated ~13-30x by a nested instrument sampling the same calls, an artifact
+> of *deterministic* every-Nth decimation that no amount of `N`-variation can
+> expose. The draw and state figures were never affected. See
+> [.08 §The const-setter number was mostly clock](state-churn-encode/state-churn-encode-append-decomposition.08.md#the-const-setter-number-was-mostly-clock)
+> — the instrument now carries a per-scope phase offset so lockstep scopes
+> cannot coincide.
 
 **And the bound cannot be tightened by profiling.**
 [attribution.05](present-pacing/present-pacing-post-defselect-cpu-attribution.05.md)
