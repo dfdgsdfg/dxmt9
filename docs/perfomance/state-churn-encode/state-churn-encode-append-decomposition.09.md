@@ -110,6 +110,7 @@ wraps both, so the numbers above already include the doubling.
 > at the `DrawIndexedPrimitive` entry gating both calls — which is how the UP
 > variants already work (`trySoftwareFfpDrawPrimitiveUP` calls describe first).
 > Each probe keeping its *own* full predicate hoisted is equally correct.
+> Landed that way in `83a0b085`, in all eight probes.
 
 **And it is not semantically inert.** `readSoftwareFfpAdjustedIndices` returns
 `D3DERR_INVALIDCALL` on byte-count overflow, on an index range exceeding the
@@ -123,15 +124,33 @@ probably *desirable* — but it is a behaviour change on the path this document
 first called inert, no native spec covers these probes, and whichever behaviour
 is chosen should be pinned by one.
 
-**Not implemented or measured here, deliberately.** The prediction is
-`~12 ms/present` of producer CPU removed on GT2, which at the frame level is
-`~23%` — but this day has established twice that CPU removed and wall clock are
-different currencies, and that the conversion ratio is unidentified somewhere in
-roughly `[0.3, 1.5]`
-([.02 correction](state-churn-encode-append-decomposition.02.md)). A removal
-this large is also the first candidate all year big enough to measure the
-conversion ratio *properly*, which the underpowered `.07` attempt could not.
-That A/B is the next step and it deserves its own leaf.
+> **Corrected again 2026-08-01 — the list of affected returns above is
+> incomplete.** Two further pre-`describe` failure escapes exist, so the claim
+> in `83a0b085` that "every path out of every probe ends in `describe*`" is
+> false:
+>
+> | escape | site | affects |
+> |---|---|---|
+> | `applySoftwareInstanceStreamOffsets` returns `D3DERR_INVALIDCALL` on 64-bit overflow of `streamOff_ + element*streamStr_` | `d3d9_pe_device.cpp:5114` | all four **non-UP** probes, instanced draws only |
+> | `readSoftwareFfpAdjustedIndices` propagates a failing `Unlock()` | `d3d9_pe_device.cpp:~5434` | the two indexed probes |
+>
+> The commit therefore implies the non-indexed probes have *no* behaviour
+> change; they do, for instanced hardware-VP draws. Every one of these is the
+> same failure-to-record conversion class as the three above, so the hoist stays
+> safe — but the invariant as stated is wrong. (The overflow path does call
+> `restoreSoftwareInstanceStreamOffsets` before returning, so no `streamOff_`
+> mutation leaks; skipping it entirely is strictly cleaner.)
+>
+> **Still owed:** a test pinning the chosen HRESULT. The SWVP conformance oracle
+> runs on a SWVP device, where the hoisted gate is a no-op, so it validates the
+> unchanged direction and cannot see this at all.
+
+**Implemented and measured — see [.11](state-churn-encode-append-decomposition.11.md).**
+The prediction was `~12 ms/present` of producer CPU removed on GT2. The
+interleaved A/B measured the frame `12.15 ms/present` shorter and scene fps
+`18.50 -> 23.87`, **`+29%`** — a conversion ratio of **`c = 1.01`**, the first
+time that ratio has been measured rather than assumed. It does not generalize
+beyond producer-thread CPU on a producer-bound workload.
 
 **The `7,097 ns` is fully accounted for by the index loop.** GT2 runs
 `~1,660` indexed draws/present over `2.088e9` primitives — about `3,180` indices

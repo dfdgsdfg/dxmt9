@@ -26,6 +26,7 @@ Current status: the commit-replay offload is engine-default ON (`d45af067`, H216
 
 ## Recent Leaf Documents
 
+- [state-churn-encode-append-decomposition.11 - The SWVP Hoist Is +29% GT2 Scene FPS, And CPU Converts 1:1 To Wall Clock](state-churn-encode-append-decomposition.11.md)
 - [state-churn-encode-append-decomposition.10 - De-phasing Confirms The Nested-Instrument Echo Directly](state-churn-encode-append-decomposition.10.md)
 - [state-churn-encode-append-decomposition.09 - 62% Of The Draw Entry Is An SWVP Probe That Reads Indices First](state-churn-encode-append-decomposition.09.md)
 - [state-churn-encode-append-decomposition.08 - dxmt9's D3D9 Entry Points Are ~40% Of The Frame](state-churn-encode-append-decomposition.08.md)
