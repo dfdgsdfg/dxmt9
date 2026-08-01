@@ -3972,8 +3972,15 @@ area = "palette-texture"
 owner = "core/resources"
 requirements = ["R-TEST-12.3", "R-TEST-12.13"]
 acceptance = ["D3DFMT_P8 textures expose one-byte index locks, D3DFMT_A8P8 textures expose index+alpha locks, native dxmt9c_texture_sample_2d reads palette-expanded P8/A8P8 texels before and after locked and UpdateTexture destination palette switches, native cube/volume P8/A8P8 locks expand to A8R8G8B8 backend uploads with A8P8 texel alpha preserved, SetPaletteEntries/SetCurrentTexturePalette select the active palette, matching palettized UpdateTexture copies destination index/palette shadow before re-expansion, 2D/cube/volume texture CheckDeviceFormat queries report support, and fixed-function plus ps_2_0 texld sampling read the palette-expanded A8R8G8B8 backing through 2x2 render-target readbacks, including A8P8 texel alpha, level-1 SetLOD sampling, same-slot palette updates, current-palette index switches while the texture is bound, current-palette-before-bind sampling, and SYSTEMMEM-to-DEFAULT UpdateTexture destination sampling before and after a destination palette switch, ProcessVertices vertex-texture TEXLDL reads the P8/A8P8 palette-expanded backing through destination-vertex readback, including same-slot and current-index P8/A8P8 bound palette updates plus P8 current-palette-before-bind vertex sampler readback, ps_2_0 samplerCUBE readbacks across all six P8/A8P8 cube faces, and ps_2_0 sampler3D readbacks across four P8/A8P8 volume slices"]
-status = "scaffolded"
+status = "failing"
 
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "failing"
+source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64-20260802-full.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-02: recorded as `timeout` in the full-suite snapshots, which ERASES what it actually does. Re-run alone with --timeout 300 it fails d3d9_conformance_visual_formats.c:630-633 — all four texels, in three separate helper invocations — and then still hangs past 300s. The failure is the same P8 texel-quad shape as visual_mvp_software_vp_policy's flake and is a second, more reproducible repro of that bug. Times out identically at 09d24e26, so it is not caused by the SWVP hoist. Both the failure and the hang were hidden by the timeout verdict and by this case's `scaffolded` status; do not read `scaffolded` as `nothing to see`."
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_visual_depth.c"
@@ -4692,7 +4699,7 @@ lane = "builtin"
 arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1"
-summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — passing in chunked runner snapshot. FLAKY, quantified 2026-08-02 on correctly-staged builds: fails intermittently at d3d9_conformance_visual_misc.c:6986-6989, four P8-palette texel comparisons out of 2737 checks, in a SYSTEMMEM->DEFAULT UpdateTexture destination re-sample. Rate 1/5 at 83a0b085 and 2/5 at its parent 09d24e26, so the flake predates the SWVP hoist and is not caused by it; a full-suite pre/post pair differed only here and the repeat runs show why that pair proves nothing. The intermittency itself is unexplained and is a real bug worth its own investigation, not a test defect to be dismissed."
+summary = "Sikarugir-CX 24.0.7 builtin lane x64. FLAKY on correctly-staged builds, measured 2026-08-02: fails at d3d9_conformance_visual_misc.c:6986-6989 — four P8-palette texel comparisons out of 2737 checks, the FIRST post-UpdateTexture sample of a SYSTEMMEM->DEFAULT destination in the FFP lane (not the later palette-switch re-sample). Failures are all-four-or-none, i.e. an entirely wrong 2x2 expansion rather than a torn write, and reproduce with DXMT9_OFFLOAD_COMMIT_REPLAY=0, so the commit-replay offload is not the cause. Rate across two independent measurement sets: 6/14 hoisted (83a0b085), 4/11 at its parent 09d24e26 — roughly 40% on BOTH, with no detectable difference (Fisher p ~ 1). The flake therefore predates the SWVP hoist and is not caused by it; a single full-suite pre/post pair differed only here, which is exactly why the pair alone proves nothing. An earlier note here quoted 1/5 and 2/5 from one n=5 set as if they were rates; they were not. Unexplained and a real bug: see visual_p8_texture_sampler_policy for a second repro of the same shape. Snapshots: evidence/sikarugir-cx-24.0.7-builtin-x64-20260802-full.json and -prehoist.json."
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
