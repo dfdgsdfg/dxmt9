@@ -160,3 +160,58 @@ these should not be assumed correct until a probe (via one of the vehicles above
 actually reads back the pixels.
 
 ---
+
+---
+
+**2026-08-02 — `visual_p8_texture_sampler_policy` is two real correctness bugs plus a hang, not a scaffold gap.**
+
+The case was carried as `scaffolded` and reported by the chunked runner as
+`timeout`, which **erases its FAIL lines**. Re-run alone with `--timeout 300` on a
+correctly-staged build it produces six distinct failures and then still hangs past
+300 s. Both reproduce identically at `09d24e26`, so neither is caused by the SWVP
+hoist (`83a0b085`). Status corrected `scaffolded` → `failing`.
+
+**(1) `mov oC0, r0` writes a dead temp — every palettized ps_2_0 sample renders
+white.** Four of the six failures are the `programmable_ps=TRUE` invocations, and
+all four read back `ffffffff` for all four texels. The dumped MSL
+(`DXMT_DUMP_SHADER_DIR`) shows why — identical in all three translated fragment
+shaders the test produces:
+
+```metal
+r[0] = tex0.sample(samp0, (in.texcoord0).xy);   // texld r0, t0, s0   -- correct
+// mov r256, r0
+r[256] = r[0];                                   // mov oC0, r0        -- WRONG
+color = outColor[0];                             // still float4(1.0f)
+outColor[0] = color;                             // -> white
+```
+
+The sample itself is right; the colour-output write is routed to temp index 256
+(which is also why the shader declares `float4 r[257]`, a 4 KB local array that
+`shader_codegen.rules.md` independently forbids). `outColor[0]` keeps its
+`float4(1.0f)` initialiser. The source is a minimal `dcl_texcoord t0` /
+`dcl_2d s0` / `texld` / `mov oC0, r0` shader
+(`d3d9_conformance_visual_formats.c:405`).
+
+*Not established:* why the destination decodes to index 256 specifically, and why
+other ps_2_0 shaders in the suite pass — so this is not yet known to be a general
+`D3DSPR_COLOROUT` failure. `kD3DSPR_COLOROUT` is handled in `legacyDstTarget`
+(`dxmt9_shader_metal_ir.cpp:3099`) but that is the legacy-texture destination
+path, not the general `mov` destination path; that asymmetry is where to look.
+
+**(2) LOD is ignored for palettized textures.** The two `lod_texels` FFP
+invocations sample the base level instead of the requested LOD: got
+`ff112233,ff445566,ff778899,ffaabbcc` (the level-0 texels) against
+`ffddee11 ×4` (the LOD texels). P8/A8P8 are expanded to RGBA PE-side per level by
+`expandP8SubresourceToBackend` (`device_c_resources.cpp:258`), so the suspicion is
+that only level 0 is expanded or that the expanded levels are not linked as mips.
+
+**(3) A hang past 300 s** after those failures, reached around the cube/volume
+palettized checks. Uninvestigated.
+
+**Separately, the intermittent P8 failure in `visual_mvp_software_vp_policy`**
+(`d3d9_conformance_visual_misc.c:6986-6989`, ~40% of runs on both `83a0b085` and
+its parent) is all-four-texels-or-none and reproduces with
+`DXMT9_OFFLOAD_COMMIT_REPLAY=0`, so it is a wrong 2×2 expansion rather than a torn
+write and is not the commit-replay offload. Whether it shares a root cause with
+(1) or (2) is unknown; it is a *SWVP* + `UpdateTexture` path, and the failures
+above are not.
