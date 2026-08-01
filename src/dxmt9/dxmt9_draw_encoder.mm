@@ -1900,6 +1900,42 @@ class DebugGroupScope {
   bool active_ = false;
 };
 
+// Sequential partition of encodeDraw. PerfScope times the region it wraps, so
+// the branches BETWEEN the child scopes are counted by nothing -- 34% of
+// encode_draw, 14% of the GT2 frame
+// (state-churn-encode-append-decomposition.13). This instead stamps the clock at
+// fixed points and attributes each interval to exactly one phase, so the phases
+// sum to the parent by construction and the residual has nowhere to hide. The
+// destructor closes the final phase, which also catches early returns.
+//
+// Cheap enough to leave always on: a paired same-window A/B with the whole
+// PerfScope family disabled measured it at 0.12ms/present, 0.3% of the frame.
+// The unix side calls macOS steady_clock directly; it is the PE side, going
+// through Wine's QPC emulation at ~180ns a read, that cannot afford this.
+class EncodeDrawPhaseTimer {
+ public:
+  EncodeDrawPhaseTimer() : last_(std::chrono::steady_clock::now()) {}
+  // Closes the final phase at every exit. encodeDraw's common path returns from
+  // inside a nested block (the `return true` after emitTileFfpPostPass), so on a
+  // typical draw this counter -- NOT the phase mark that follows that return --
+  // is what measures the indexed-setup + draw-issue region. Named "remainder"
+  // rather than for any one region because that is what it is on every path.
+  ~EncodeDrawPhaseTimer() { mark(perf::countEncodeDrawPhaseRemainderCpuTime); }
+
+  void mark(void (*record)(std::uint64_t)) {
+    const auto now = std::chrono::steady_clock::now();
+    record(static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_).count()));
+    last_ = now;
+  }
+
+  EncodeDrawPhaseTimer(const EncodeDrawPhaseTimer&) = delete;
+  EncodeDrawPhaseTimer& operator=(const EncodeDrawPhaseTimer&) = delete;
+
+ private:
+  std::chrono::steady_clock::time_point last_;
+};
+
 class PerfScope {
  public:
   explicit PerfScope(void (*record)(std::uint64_t)) : record_(record) {
@@ -10482,6 +10518,7 @@ bool encodeDraw(EncodeContext& ctx,
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   PerfScope scope(perf::countEncodeDrawCpuTime);
+  EncodeDrawPhaseTimer drawPhase;
   emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,
                               commandDrawCount, "enter");
   // M3 — per-draw Instruments interval. os_signpost_id_generate gives each
@@ -11015,6 +11052,7 @@ bool encodeDraw(EncodeContext& ctx,
   //
   // We fetch both PSOs on every tile-mode draw — the cache lookup is a hit
   // after the first build — so each draw in a DrawRun gets its own post-pass.
+  drawPhase.mark(perf::countEncodeDrawPhaseSetupCpuTime);
   WMT::Reference<WMT::RenderPipelineState> tileFfpPsoRef;
   WMT::RenderPipelineState tileFfpPso{};
   WMT::Reference<WMT::RenderPipelineState> tileFfpBasePsoRef;
@@ -11767,6 +11805,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
   }
+  drawPhase.mark(perf::countEncodeDrawPhaseArgbufUniformCpuTime);
   const auto& bindingPacket = *bindingPacketPtr;
   // Apply FFP preTransformed viewport override to the FfpVs host copy
   // before any bindFfpVsIfDirty call uploads it (R-BACK-12.5). The
@@ -11998,6 +12037,7 @@ bool encodeDraw(EncodeContext& ctx,
   // not just ffLayout. A user-bound programmable VS with an FFP-decodable
   // vertex declaration must take the programmable path; gating on ffLayout
   // alone would force such draws through the FFP setup below.
+  drawPhase.mark(perf::countEncodeDrawPhaseStreamPrepCpuTime);
   if (fixedFunctionPath && ffLayout) {
     if (!vertexBuffer) {
       if (traceEncode) {
@@ -12269,6 +12309,7 @@ bool encodeDraw(EncodeContext& ctx,
       }
     }
   }
+  drawPhase.mark(perf::countEncodeDrawPhaseFfpVertexCpuTime);
   if (vertexBuffer && !fixedFunctionPath) {
     const u64 ffTraceTex0 = debug::fixedFunctionTraceTextureHandle();
     const bool forceTrace =
@@ -12553,6 +12594,7 @@ bool encodeDraw(EncodeContext& ctx,
   // R-BACK-12.24 — texture/sampler resources travel on the direct render
   // encoder lane (the validated Stage 1 binding path) regardless of
   // whether the constant argbuf hybrid is active.
+  drawPhase.mark(perf::countEncodeDrawPhaseVertexBindCpuTime);
   if (!effectiveSkipBaseStateBind) {
     PerfScope streamBindTexScope(perf::countEncodeDrawStreamBindCpuTime);
     PerfScope streamBindTexturePhaseScope(
@@ -13046,6 +13088,7 @@ bool encodeDraw(EncodeContext& ctx,
                                sizeof(fsVolatile), 5);
     }
   }
+  drawPhase.mark(perf::countEncodeDrawPhaseBaseStateCpuTime);
   if (indexedDraw) {
     const bool texture0R32FCube = [&] {
       if (!hot.textures[0]) {
@@ -14483,6 +14526,7 @@ bool encodeDraw(EncodeContext& ctx,
       return true;
     }
   }
+  drawPhase.mark(perf::countEncodeDrawPhaseTileFfpFallthroughCpuTime);
   const bool upDraw = !pv.userVertexData.empty();
   if (encoderBreakdown) {
     encoderBreakdown->recordTileFfpCoverage(

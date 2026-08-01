@@ -850,6 +850,14 @@ void countReorderedIndexCacheLookup(bool hit,
                                     bool created,
                                     std::uint64_t createdBytes);
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseSetupCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseArgbufUniformCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseStreamPrepCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseFfpVertexCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseVertexBindCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseBaseStateCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseTileFfpFallthroughCpuTime(std::uint64_t nanoseconds);
+void countEncodeDrawPhaseRemainderCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIssueIndexedCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIssueNonIndexedCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIssueExpandedIndexedCpuTime(std::uint64_t nanoseconds);
@@ -1267,6 +1275,18 @@ struct CounterSnapshot {
   std::uint64_t encodeDrawArgbufCbufUpdateCpuNs = 0;
   std::uint64_t encodeDrawStreamBindCpuNs = 0;
   std::uint64_t encodeDrawIssueCpuNs = 0;
+  // Sequential partition of encodeDraw (.13). The PerfScope children time the
+  // regions they wrap and leave the branches between them uncounted -- 34% of
+  // encode_draw had no counter on it. These marks partition the whole call, so
+  // every nanosecond between entry and return lands in exactly one phase.
+  std::uint64_t encodeDrawPhaseSetupCpuNs = 0;
+  std::uint64_t encodeDrawPhaseArgbufUniformCpuNs = 0;
+  std::uint64_t encodeDrawPhaseStreamPrepCpuNs = 0;
+  std::uint64_t encodeDrawPhaseFfpVertexCpuNs = 0;
+  std::uint64_t encodeDrawPhaseVertexBindCpuNs = 0;
+  std::uint64_t encodeDrawPhaseBaseStateCpuNs = 0;
+  std::uint64_t encodeDrawPhaseTileFfpFallthroughCpuNs = 0;
+  std::uint64_t encodeDrawPhaseRemainderCpuNs = 0;
   std::uint64_t transientUploadCpuNs = 0;
   std::uint64_t commandBufferCreateCpuNs = 0;
   std::uint64_t commandBufferCommitCpuNs = 0;

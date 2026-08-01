@@ -894,6 +894,14 @@ struct Counters {
   std::atomic<std::uint64_t> reorderedIndexCacheCreated{0};
   std::atomic<std::uint64_t> reorderedIndexCacheCreatedBytes{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseSetupCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseArgbufUniformCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseStreamPrepCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseFfpVertexCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseVertexBindCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseBaseStateCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseTileFfpFallthroughCpuNs{0};
+  std::atomic<std::uint64_t> encodeDrawPhaseRemainderCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueCpuMaxNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueIndexedCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIssueNonIndexedCpuNs{0};
@@ -2909,6 +2917,14 @@ constexpr CounterEntry kCounterTable[] = {
     {"reordered_index_cache_created", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreated, nullptr, nullptr, 0.0},
     {"reordered_index_cache_created_bytes", CounterEntry::Kind::UnsignedCount, &Counters::reorderedIndexCacheCreatedBytes, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_setup_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseSetupCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_argbuf_uniform_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseArgbufUniformCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_stream_prep_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseStreamPrepCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_ffp_vertex_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseFfpVertexCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_vertex_bind_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseVertexBindCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_base_state_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseBaseStateCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_tile_ffp_fallthrough_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseTileFfpFallthroughCpuNs, nullptr, nullptr, 0.0},
+    {"encode_draw_phase_remainder_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawPhaseRemainderCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIssueCpuMaxNs, nullptr, nullptr, 0.0},
     {"encode_draw_issue_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.5},
     {"encode_draw_issue_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::encodeDrawIssueCpuRing, 0.95},
@@ -6610,6 +6626,38 @@ void countReorderedIndexCacheLookup(bool hit,
   }
 }
 
+void countEncodeDrawPhaseSetupCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseSetupCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseArgbufUniformCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseArgbufUniformCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseStreamPrepCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseStreamPrepCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseFfpVertexCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseFfpVertexCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseVertexBindCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseVertexBindCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseBaseStateCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseBaseStateCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseTileFfpFallthroughCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseTileFfpFallthroughCpuNs, nanoseconds);
+}
+
+void countEncodeDrawPhaseRemainderCpuTime(std::uint64_t nanoseconds) {
+  add(counters().encodeDrawPhaseRemainderCpuNs, nanoseconds);
+}
+
 void countEncodeDrawIssueCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawIssueCpuNs, nanoseconds);
   updateMax(counters().encodeDrawIssueCpuMaxNs, nanoseconds);
@@ -9679,6 +9727,14 @@ CounterSnapshot snapshot() {
   s.encodeDrawArgbufCbufUpdateCpuNs = load(c.encodeDrawArgbufCbufUpdateCpuNs);
   s.encodeDrawStreamBindCpuNs = load(c.encodeDrawStreamBindCpuNs);
   s.encodeDrawIssueCpuNs = load(c.encodeDrawIssueCpuNs);
+  s.encodeDrawPhaseSetupCpuNs = load(c.encodeDrawPhaseSetupCpuNs);
+  s.encodeDrawPhaseArgbufUniformCpuNs = load(c.encodeDrawPhaseArgbufUniformCpuNs);
+  s.encodeDrawPhaseStreamPrepCpuNs = load(c.encodeDrawPhaseStreamPrepCpuNs);
+  s.encodeDrawPhaseFfpVertexCpuNs = load(c.encodeDrawPhaseFfpVertexCpuNs);
+  s.encodeDrawPhaseVertexBindCpuNs = load(c.encodeDrawPhaseVertexBindCpuNs);
+  s.encodeDrawPhaseBaseStateCpuNs = load(c.encodeDrawPhaseBaseStateCpuNs);
+  s.encodeDrawPhaseTileFfpFallthroughCpuNs = load(c.encodeDrawPhaseTileFfpFallthroughCpuNs);
+  s.encodeDrawPhaseRemainderCpuNs = load(c.encodeDrawPhaseRemainderCpuNs);
   s.transientUploadCpuNs = load(c.transientUploadCpuNs);
   s.commandBufferCreateCpuNs = load(c.commandBufferCreateCpuNs);
   s.commandBufferCommitCpuNs = load(c.commandBufferCommitCpuNs);
