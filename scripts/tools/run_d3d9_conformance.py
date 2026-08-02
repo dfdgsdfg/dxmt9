@@ -268,7 +268,15 @@ BUILTIN_PE_DLLS = ("d3d9.dll", "winemetal.dll")
 
 
 def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
-    """Copy the built PE DLLs into the Wine root, where Wine actually loads them."""
+    """Copy the built PE DLLs AND the unix provider into the Wine root.
+
+    The unix side has the same trap as the PE side: Wine resolves winemetal.so
+    from $WINE_ROOT/lib/wine/x86_64-unix/, so the copy this runner used to place
+    next to the exe (and DXMT9_WINEMETAL_SO) is inert in the builtin lane. Until
+    2026-08-02 nothing here wrote that file either, so conformance ran against
+    whichever winemetal.so a 3DMark wild run last staged -- the PE half of this
+    bug was fixed first and left the unix half live.
+    """
     staged: dict[str, dict[str, object]] = {}
     wine_dll_dir = args.wine.parent.parent / "lib" / "wine" / "x86_64-windows"
     if not wine_dll_dir.is_dir():
@@ -287,6 +295,23 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
             "sha256": hashlib.sha256(data).hexdigest()[:16],
             "bytes": len(data),
         }
+
+    unix_dir = args.wine.parent.parent / "lib" / "wine" / "x86_64-unix"
+    if not unix_dir.is_dir():
+        sys.exit(f"wine unix dir not found: {unix_dir}")
+    so_src = args.winemetal_so
+    if not so_src.is_file():
+        sys.exit(f"cannot stage winemetal.so: missing {so_src}")
+    so_dst = unix_dir / "winemetal.so"
+    shutil.copy2(so_src, so_dst)
+    so_data = so_dst.read_bytes()
+    if so_data != so_src.read_bytes():
+        sys.exit(f"staging winemetal.so into the wine root did not take effect: {so_dst}")
+    staged[str(so_dst)] = {
+        "sha256": hashlib.sha256(so_data).hexdigest()[:16],
+        "bytes": len(so_data),
+    }
+
     args.staged_wine_dll_dir = wine_dll_dir
     args.staged_build = staged
 

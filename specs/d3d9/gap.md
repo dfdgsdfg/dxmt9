@@ -163,6 +163,74 @@ actually reads back the pixels.
 
 ---
 
+**2026-08-02 — `SetLOD` / `D3DSAMP_MAXMIPLEVEL` are silently ignored when `D3DSAMP_MIPFILTER = D3DTEXF_NONE`. Not a P8 bug.**
+
+The 16 surviving failures in `visual_p8_texture_sampler_policy` are this, and the
+scope is every texture format, not palettized ones. Root cause in
+`makeSamplerInfo` (`dxmt9_draw_encoder.mm`, both overloads — `:9466`/`:9527`):
+
+```c
+  switch (mipFilter) {
+    case 2u: info.mip_filter = WMTSamplerMipFilterLinear;  break;
+    case 1u: info.mip_filter = WMTSamplerMipFilterNearest; break;
+    default: info.mip_filter = WMTSamplerMipFilterNotMipmapped; break;  // D3DTEXF_NONE
+  }
+  ...
+  info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
+```
+
+`D3DTEXF_NONE` maps to `MTLSamplerMipFilterNotMipmapped`, and **Metal ignores
+`lodMinClamp` in that mode** — it always samples level 0. The clamp is computed
+and handed across the bridge (`winemetal_private_api.mm:871`) but is inert. D3D9's
+"do not filter between mips" and D3D9's "most-detailed level is N" are two
+independent knobs; dxmt9 folds them into the one Metal mode that can only express
+the first.
+
+**Trigger:** `D3DSAMP_MIPFILTER == D3DTEXF_NONE` **and** an effective most-detailed
+level `max(SetLOD, D3DSAMP_MAXMIPLEVEL) > 0`. With `MIPFILTER` set to `POINT` or
+`LINEAR` it behaves correctly.
+
+**Verified on a non-palettized control**, which is what establishes the scope. The
+repo's own passing corpus case
+`tests/shader_runner/corpus/texture/dxmt9_setlod_maxmip_readback.shader_test`
+(plain `A8R8G8B8`, `SetLOD 1`) was re-run with **only** `mip_filter=point` changed
+to `none`:
+
+| | result |
+|---|---|
+| `mip_filter=point` (as committed) | pass |
+| `mip_filter=none` | **fail** — `actual_bgra=(0,0,255,255)`, the level-0 texel, where white (level 1) is expected |
+
+The existing corpus misses it only because all three mip proxies use
+`mip_filter=point`. `SAMP_MIPMAPLODBIAS`, recorded as closed and GPU-verified
+elsewhere in this file, is a different knob and is unaffected.
+
+**Fix shape** (demonstrated to work, not landed): when the resolved mode is
+`NotMipmapped` and the clamp is non-zero, select `MipFilterNearest` and pin
+`lod_max_clamp` to the same level so exactly one mip is sampled. `SamplerKey`
+already keys on `lodMinClampBits` (`dxmt9_pipeline_cache.hpp:280`), so no cache
+change is needed. Landing it must add corpus coverage with `mip_filter=none`,
+since the current corpus cannot see the bug.
+
+**`:796-799` is separate and partly a test bug.** That helper
+(`check_visual_palettized_update_texture_sampler`) creates 1-level textures and
+never calls `SetLOD`. Its A8P8 readback matches `a8p8_updated_expected` — i.e.
+dxmt9 is right and the expectation is stale, because an earlier invocation
+(`visual_formats.c:1337`) passes `updated_palette_index = 0`, and the helper's
+`:588-590` then overwrites palette slot 0 — the current palette — without ever
+restoring it. Its P8 readback is a genuine dxmt9 defect, though: the values are
+the identity palette installed by `initPalettizedTexture`
+(`device_c_resources.cpp:246`), so the first draw after `UpdateTexture` onto a
+fresh `D3DPOOL_DEFAULT` palettized texture sampled a backing that neither the
+re-expand in `dxmt9c_device_update_texture` nor `applyCurrentPaletteToTexture`
+had repainted. Not isolated further.
+
+**Also unexplained:** the case still hangs past 300 s, in or after the second
+`UpdateTexture` invocation, and how far it gets before hanging varies — the
+`:796-799` group was 4 lines in two runs and 8 in another. Treat "20 FAIL lines"
+as approximate.
+
+
 **2026-08-02 — `visual_p8_texture_sampler_policy`: one test-harness bug (fixed) and one real dxmt9 bug (open).**
 
 > **This entry replaces an earlier version that got the root cause backwards.**
