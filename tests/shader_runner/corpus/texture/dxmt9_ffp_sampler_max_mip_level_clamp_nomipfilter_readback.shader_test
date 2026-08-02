@@ -1,9 +1,12 @@
-# Regression: SetLOD / D3DSAMP_MAXMIPLEVEL must survive MIPFILTER=NONE.
-# D3D9 has two independent knobs; Metal folds them into one. Mapping
-# D3DTEXF_NONE to MTLSamplerMipFilterNotMipmapped made Metal ignore lodMinClamp
-# and always sample level 0, so the most-detailed-level request was silently
-# dropped. Every pre-existing mip proxy in this corpus uses mip_filter=point,
-# which is exactly why none of them could see it.
+# Regression: D3DSAMP_MAXMIPLEVEL must be IGNORED under MIPFILTER=NONE.
+# Wine visual.c maxmip_test:4795 -- "with mipmapping disabled, the max mip level
+# is ignored, only level 0 is used" -- and wined3d/stateblock.c:2933 sets
+# mip_base_level = texture->lod (SetLOD alone) in the NONE branch. So with
+# max_mip_level=1 and no SetLOD, this must sample level 0 (red), NOT level 1.
+# This case exists because the 2026-08-02 fix for the SetLOD half initially
+# folded MAXMIPLEVEL in as max(SetLOD, MAXMIPLEVEL) under NONE too, which
+# inverted this and was caught in review. The SetLOD half is pinned separately
+# by dxmt9_setlod_maxmip_nomipfilter_readback.
 # See specs/d3d9/gap.md 2026-08-02.
 ; [provenance]
 ; source: dxmt9
@@ -23,7 +26,7 @@ dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=linear mag_filter=lin
 dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture texcoord_index=0
 dxmt9-bind-texture 0 0
 dxmt9-draw-textured-quad
-probe (16, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
-probe (48, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
-probe (16, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
-probe (48, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 16) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (48, 16) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (16, 48) rgba(1.0, 0.0, 0.0, 1.0) 1
+probe (48, 48) rgba(1.0, 0.0, 0.0, 1.0) 1

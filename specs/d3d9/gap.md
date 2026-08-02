@@ -186,9 +186,26 @@ and handed across the bridge (`winemetal_private_api.mm:871`) but is inert. D3D9
 independent knobs; dxmt9 folds them into the one Metal mode that can only express
 the first.
 
-**Trigger:** `D3DSAMP_MIPFILTER == D3DTEXF_NONE` **and** an effective most-detailed
-level `max(SetLOD, D3DSAMP_MAXMIPLEVEL) > 0`. With `MIPFILTER` set to `POINT` or
-`LINEAR` it behaves correctly.
+**Trigger:** `D3DSAMP_MIPFILTER == D3DTEXF_NONE` **and `SetLOD > 0`**. With
+`MIPFILTER` set to `POINT` or `LINEAR` it behaves correctly.
+
+> **Corrected after review — `D3DSAMP_MAXMIPLEVEL` is NOT part of the trigger.**
+> The first version of this entry and of the fix treated the effective level as
+> `max(SetLOD, MAXMIPLEVEL)` under `NONE` too. The cited oracle says the
+> opposite, unconditionally: Wine `visual.c:4795`, *"with mipmapping disabled,
+> the max mip level is ignored, only level 0 is used"*, asserted for
+> `MAXMIPLEVEL` 0/1/2/3. `wined3d/stateblock.c:2933` implements exactly that:
+> ```c
+> else if (desc->mip_filter == WINED3D_TEXF_NONE)
+>     desc->mip_base_level = texture->lod;                 /* MAXMIPLEVEL ignored */
+> else
+>     desc->mip_base_level = min(max(MAX_MIP_LEVEL, texture->lod), level_count - 1);
+> ```
+> So under `NONE` the base level is **`SetLOD` alone**. dxmt9's pre-existing
+> `MAXMIPLEVEL`-under-`NONE` behaviour (level 0) was already correct, and the
+> first fix broke it — verified: with the folded rule,
+> `NONE + MAXMIPLEVEL=1` sampled level 1 (green) where the oracle demands level
+> 0 (red).
 
 **Verified on a non-palettized control**, which is what establishes the scope. The
 repo's own passing corpus case
@@ -205,23 +222,30 @@ The existing corpus misses it only because all three mip proxies use
 `mip_filter=point`. `SAMP_MIPMAPLODBIAS`, recorded as closed and GPU-verified
 elsewhere in this file, is a different knob and is unaffected.
 
-**FIXED 2026-08-02.** When the resolved mode is `NotMipmapped` and the clamp is
-non-zero, both `makeSamplerInfo` overloads now select `MipFilterNearest` and pin
-`lod_max_clamp` to the same level — nearest selection with `min == max` cannot
-filter between mips, so both D3D9 semantics hold. `SamplerKey` already keys on
+**FIXED 2026-08-02.** Both `makeSamplerInfo` overloads now compute the base level
+the way wined3d does — `SetLOD` alone under `NONE`, `max(MAXMIPLEVEL, SetLOD)`
+otherwise — and, when the mode is `NotMipmapped` with a non-zero base level,
+select `MipFilterNearest` and pin `lod_max_clamp` to that level. Nearest
+selection with `min == max` cannot filter between mips, so both D3D9 semantics
+hold. `SamplerKey` already keys on
 `lodMinClampBits` (`dxmt9_pipeline_cache.hpp:280`), so no cache change was
 needed. The blit/present helper `makeSampler` (`:9439`) is untouched; it has no
 LOD.
 
-Regression-pinned by two new corpus cases that are `mip_filter=none` variants of
-the existing ones, `dxmt9_setlod_maxmip_nomipfilter_readback` and
-`dxmt9_ffp_sampler_max_mip_level_clamp_nomipfilter_readback`. **Both verified to
-discriminate**: without the fix each reads `actual_bgra=(0,0,255,255)` (level 0);
-with it both pass, while all four pre-existing mip cases pass either way — which
-also demonstrates that the old corpus could not see this bug.
+Regression-pinned by two new corpus cases, both `mip_filter=none` variants of
+existing ones, pinning **opposite** halves of the rule:
+`dxmt9_setlod_maxmip_nomipfilter_readback` asserts `SetLOD` still selects its
+level, and `dxmt9_ffp_sampler_max_mip_level_clamp_nomipfilter_readback` asserts
+`MAXMIPLEVEL` is *ignored* (level 0). Both verified to discriminate: the first
+reads `(0,0,255,255)` without the fix, and the second reads `(0,255,0,255)`
+under the first, folded version of the fix. All four pre-existing mip cases pass
+in every state, which is also the demonstration that the old corpus could not
+see either bug.
 
-Conformance case 155 went `20 -> 4` FAIL lines; the whole `:638-641` group is
-gone. The remaining 4 are the separate `:796-799` issue below.
+Conformance case 155 went `20 -> 4-8` FAIL lines; the whole `:638-641` group is
+gone and every residual is the separate `:796-799` issue below. The count is
+**not stable** — the case still hangs past 300 s and how far it gets varies, so
+do not key a comparison to an exact number.
 
 **`:796-799` is separate and partly a test bug.** That helper
 (`check_visual_palettized_update_texture_sampler`) creates 1-level textures and

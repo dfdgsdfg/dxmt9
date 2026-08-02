@@ -2695,7 +2695,7 @@ license = "MIT"
 license_scope = "project-mit"
 models = ["ffp"]
 opcodes = ["TEX"]
-oracle = "Same as dxmt9_ffp_sampler_max_mip_level_clamp_readback but with D3DSAMP_MIPFILTER=D3DTEXF_NONE: D3DSAMP_MAXMIPLEVEL=1 must still select mip 1. Fixed-function half of the same 2026-08-02 regression"
+oracle = "Wine d3d9 visual.c maxmip_test:4795 -- with mipmapping disabled the max mip level is ignored and only level 0 is used; wined3d/stateblock.c:2933 sets mip_base_level = texture->lod in the NONE branch. So MIPFILTER=NONE with MAXMIPLEVEL=1 and no SetLOD must sample level 0 (red), not level 1. Guards against the folded max(SetLOD, MAXMIPLEVEL) rule that the first 2026-08-02 fix attempt introduced"
 oracle-date = "2026-08-02"
 
 [[test]]

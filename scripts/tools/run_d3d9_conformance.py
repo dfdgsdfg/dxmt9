@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import pathlib
+import tempfile
 import json
 import os
 import re
@@ -302,8 +304,18 @@ def stage_builtin_pe_dlls(args: argparse.Namespace) -> None:
     so_src = args.winemetal_so
     if not so_src.is_file():
         sys.exit(f"cannot stage winemetal.so: missing {so_src}")
+    # Same-directory temp + atomic rename, never an in-place overwrite. An
+    # in-place cp over a Mach-O file inside the live Wine tree has reproduced
+    # `SIGKILL (Code Signature Invalid)` even when codesign --verify passed
+    # (see run_with_wine_metal_capture_layer.sh and metal_debugging.rules.md),
+    # and any process with the old winemetal.so still mapped can be killed when
+    # its pages are invalidated. The PE DLLs above are not Mach-O and are not
+    # exposed to this.
     so_dst = unix_dir / "winemetal.so"
-    shutil.copy2(so_src, so_dst)
+    with tempfile.NamedTemporaryFile(dir=unix_dir, delete=False) as tmp:
+        tmp_path = pathlib.Path(tmp.name)
+    shutil.copy2(so_src, tmp_path)
+    os.replace(tmp_path, so_dst)
     so_data = so_dst.read_bytes()
     if so_data != so_src.read_bytes():
         sys.exit(f"staging winemetal.so into the wine root did not take effect: {so_dst}")

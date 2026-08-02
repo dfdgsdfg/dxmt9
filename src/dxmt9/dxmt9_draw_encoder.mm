@@ -9483,19 +9483,25 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   // SetLOD (already encoded in `lodMinClamp`) as max — picking the coarser
   // (numerically larger) of the two. Wine d3d9 visual.c maxmip_test
   // (gap_d3d9_wine_test §5.1) is the behavioral oracle.
-  info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
+  // Base-level selection follows wined3d/stateblock.c (`mip_base_level`), which
+  // the Wine visual.c maxmip_test pins: under MIPFILTER=NONE the base level is
+  // SetLOD ALONE -- "with mipmapping disabled, the max mip level is ignored,
+  // only level 0 is used" (visual.c:4795) -- and only with a real mip filter is
+  // it max(MAXMIPLEVEL, SetLOD). Folding MAXMIPLEVEL in unconditionally makes
+  // NONE + MAXMIPLEVEL=N sample level N where D3D9 samples level 0.
+  const bool mipFilterNone =
+      info.mip_filter == WMTSamplerMipFilterNotMipmapped;
+  info.lod_min_clamp = mipFilterNone
+                           ? lodMinClamp
+                           : std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
-  // D3D9 has two independent knobs that Metal folds into one. MIPFILTER=NONE
-  // means "do not filter BETWEEN mips"; SetLOD / D3DSAMP_MAXMIPLEVEL mean "the
-  // most-detailed level is N". Mapping NONE to MTLSamplerMipFilterNotMipmapped
-  // expresses the first and silently discards the second, because Metal ignores
-  // lodMinClamp in that mode and always samples level 0. Pin the sampler to the
-  // single requested level instead: nearest selection with min == max cannot
-  // filter between mips, so both semantics hold.
-  // Not palettized-specific -- see specs/d3d9/gap.md 2026-08-02; corpus proof in
-  // dxmt9_setlod_maxmip_nomipfilter_readback / the max-mip-level sibling.
-  if (info.mip_filter == WMTSamplerMipFilterNotMipmapped &&
-      info.lod_min_clamp > 0.0f) {
+  // The other half of the same knob problem: MIPFILTER=NONE means "do not filter
+  // BETWEEN mips", SetLOD means "the most-detailed level is N", and
+  // MTLSamplerMipFilterNotMipmapped expresses only the first -- Metal ignores
+  // lodMinClamp there and always samples level 0. Pin to the single requested
+  // level instead; nearest selection with min == max cannot filter between mips,
+  // so both semantics hold. See specs/d3d9/gap.md 2026-08-02.
+  if (mipFilterNone && info.lod_min_clamp > 0.0f) {
     info.mip_filter = WMTSamplerMipFilterNearest;
     info.lod_max_clamp = info.lod_min_clamp;
   }
@@ -9553,19 +9559,25 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
   }
   // See FlatStateSet sibling above: combine D3DSAMP_MAXMIPLEVEL with SetLOD
   // (encoded in `lodMinClamp`) as max — Wine d3d9 visual.c maxmip_test.
-  info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
+  // Base-level selection follows wined3d/stateblock.c (`mip_base_level`), which
+  // the Wine visual.c maxmip_test pins: under MIPFILTER=NONE the base level is
+  // SetLOD ALONE -- "with mipmapping disabled, the max mip level is ignored,
+  // only level 0 is used" (visual.c:4795) -- and only with a real mip filter is
+  // it max(MAXMIPLEVEL, SetLOD). Folding MAXMIPLEVEL in unconditionally makes
+  // NONE + MAXMIPLEVEL=N sample level N where D3D9 samples level 0.
+  const bool mipFilterNone =
+      info.mip_filter == WMTSamplerMipFilterNotMipmapped;
+  info.lod_min_clamp = mipFilterNone
+                           ? lodMinClamp
+                           : std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
-  // D3D9 has two independent knobs that Metal folds into one. MIPFILTER=NONE
-  // means "do not filter BETWEEN mips"; SetLOD / D3DSAMP_MAXMIPLEVEL mean "the
-  // most-detailed level is N". Mapping NONE to MTLSamplerMipFilterNotMipmapped
-  // expresses the first and silently discards the second, because Metal ignores
-  // lodMinClamp in that mode and always samples level 0. Pin the sampler to the
-  // single requested level instead: nearest selection with min == max cannot
-  // filter between mips, so both semantics hold.
-  // Not palettized-specific -- see specs/d3d9/gap.md 2026-08-02; corpus proof in
-  // dxmt9_setlod_maxmip_nomipfilter_readback / the max-mip-level sibling.
-  if (info.mip_filter == WMTSamplerMipFilterNotMipmapped &&
-      info.lod_min_clamp > 0.0f) {
+  // The other half of the same knob problem: MIPFILTER=NONE means "do not filter
+  // BETWEEN mips", SetLOD means "the most-detailed level is N", and
+  // MTLSamplerMipFilterNotMipmapped expresses only the first -- Metal ignores
+  // lodMinClamp there and always samples level 0. Pin to the single requested
+  // level instead; nearest selection with min == max cannot filter between mips,
+  // so both semantics hold. See specs/d3d9/gap.md 2026-08-02.
+  if (mipFilterNone && info.lod_min_clamp > 0.0f) {
     info.mip_filter = WMTSamplerMipFilterNearest;
     info.lod_max_clamp = info.lod_min_clamp;
   }
