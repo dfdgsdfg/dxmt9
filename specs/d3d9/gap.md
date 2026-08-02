@@ -163,55 +163,62 @@ actually reads back the pixels.
 
 ---
 
-**2026-08-02 — `visual_p8_texture_sampler_policy` is two real correctness bugs plus a hang, not a scaffold gap.**
+**2026-08-02 — `visual_p8_texture_sampler_policy`: one test-harness bug (fixed) and one real dxmt9 bug (open).**
 
-The case was carried as `scaffolded` and reported by the chunked runner as
-`timeout`, which **erases its FAIL lines**. Re-run alone with `--timeout 300` on a
-correctly-staged build it produces six distinct failures and then still hangs past
-300 s. Both reproduce identically at `09d24e26`, so neither is caused by the SWVP
-hoist (`83a0b085`). Status corrected `scaffolded` → `failing`.
+> **This entry replaces an earlier version that got the root cause backwards.**
+> It claimed dxmt9 routed `mov oC0, r0` to a dead temp. It does not — dxmt9
+> decoded exactly what the test emitted. The mis-encoding was in the test's own
+> bytecode assembler macro. The white pixels were real; the attribution was not.
 
-**(1) `mov oC0, r0` writes a dead temp — every palettized ps_2_0 sample renders
-white.** Four of the six failures are the `programmable_ps=TRUE` invocations, and
-all four read back `ffffffff` for all four texels. The dumped MSL
-(`DXMT_DUMP_SHADER_DIR`) shows why — identical in all three translated fragment
-shaders the test produces:
+**Fixed — the test's register-type encoding.** `P8_PS_REGTYPE`
+(`d3d9_conformance_visual_formats.c`) and `PROCESS_VS_REGTYPE`
+(`d3d9_conformance_visual_misc.c`) placed the *high* two bits of the register
+type at bit 8 instead of bits 11-12, i.e. inside the 11-bit register-index
+field. mingw's `d3d9types.h` invites this: it defines
+`D3DSP_REGTYPE_SHIFT2 = 8` while `D3DSP_REGTYPE_MASK2 = 0x1800`, which are
+mutually inconsistent — the canonical D3D form is `(type << 8) & MASK2`, the
+whole type shifted so its bits 3-4 land at 11-12.
 
-```metal
-r[0] = tex0.sample(samp0, (in.texcoord0).xy);   // texld r0, t0, s0   -- correct
-// mov r256, r0
-r[256] = r[0];                                   // mov oC0, r0        -- WRONG
-color = outColor[0];                             // still float4(1.0f)
-outColor[0] = color;                             // -> white
-```
+Consequence: every register type `>= 8` decoded as `type & 7` with index `+256`.
 
-The sample itself is right; the colour-output write is routed to temp index 256
-(which is also why the shader declares `float4 r[257]`, a 4 KB local array that
-`shader_codegen.rules.md` independently forbids). `outColor[0]` keeps its
-`float4(1.0f)` initialiser. The source is a minimal `dcl_texcoord t0` /
-`dcl_2d s0` / `texld` / `mov oC0, r0` shader
-(`d3d9_conformance_visual_formats.c:405`).
+| operand | emitted | decoded as |
+|---|---|---|
+| `oC0` (`COLOROUT`, 8) | `0x800F0100` | `TEMP` index **256** |
+| `s0` (`SAMPLER`, 10) | `0xA00F0100` | `CONST` index 256 |
 
-*Not established:* why the destination decodes to index 256 specifically, and why
-other ps_2_0 shaders in the suite pass — so this is not yet known to be a general
-`D3DSPR_COLOROUT` failure. `kD3DSPR_COLOROUT` is handled in `legacyDstTarget`
-(`dxmt9_shader_metal_ir.cpp:3099`) but that is the legacy-texture destination
-path, not the general `mov` destination path; that asymmetry is where to look.
+So `mov oC0, r0` became `r[256] = r[0]`, `outColor[0]` kept its `float4(1.0f)`
+initialiser, and the shader emitted white — and the `float4 r[257]` local was
+just the temp array sized to the bogus index. Types 0-7 are unaffected, which is
+exactly why every fxc-compiled shader and the rest of the suite were fine. A
+corrected sibling macro with a comment naming this same trap already existed at
+`d3d9_conformance_visual_misc.c:689` (`SWVP_VS_REGTYPE`); the two others had not
+been updated. Both now use the canonical `(type << 8) & D3DSP_REGTYPE_MASK2`.
 
-**(2) LOD is ignored for palettized textures.** The two `lod_texels` FFP
-invocations sample the base level instead of the requested LOD: got
-`ff112233,ff445566,ff778899,ffaabbcc` (the level-0 texels) against
-`ffddee11 ×4` (the LOD texels). P8/A8P8 are expanded to RGBA PE-side per level by
-`expandP8SubresourceToBackend` (`device_c_resources.cpp:258`), so the suspicion is
-that only level 0 is expanded or that the expanded levels are not linked as mips.
+Measured effect on case 155: **48 -> 20 FAIL lines.** The four white
+`programmable_ps` invocations now read back the correct palette colours, and the
+cube and volume palettized checks (which were also mis-typing their samplers, so
+every variant emitted `texture2d<float>`) go to zero failures.
 
-**(3) A hang past 300 s** after those failures, reached around the cube/volume
-palettized checks. Uninvestigated.
+**Still open — a real dxmt9 mip-LOD bug, and it is not shader translation.** The
+surviving 20 failures are `visual_formats.c:638-641` (16: the four `lod_texels`
+invocations x four texels) and `:796-799` (4: the update-texture lane). They fail
+identically on the fixed-function and programmable paths, returning level-0
+texels where level-1 is expected. P8/A8P8 are expanded to RGBA per level PE-side
+by `expandP8SubresourceToBackend` (`device_c_resources.cpp:258`), so the
+suspicion is that only level 0 is expanded, or that the expanded levels are not
+linked as mips. The case also still hangs past 300 s after those failures,
+uninvestigated.
 
-**Separately, the intermittent P8 failure in `visual_mvp_software_vp_policy`**
-(`d3d9_conformance_visual_misc.c:6986-6989`, ~40% of runs on both `83a0b085` and
-its parent) is all-four-texels-or-none and reproduces with
-`DXMT9_OFFLOAD_COMMIT_REPLAY=0`, so it is a wrong 2×2 expansion rather than a torn
-write and is not the commit-replay offload. Whether it shares a root cause with
-(1) or (2) is unknown; it is a *SWVP* + `UpdateTexture` path, and the failures
-above are not.
+`visual_process_vertices_xyzhw_policy` (index 186) also used the buggy macro, but
+still fails after the fix at `visual_misc.c:14142-14143` — ProcessVertices
+coordinate assertions, a different failure. Whether the macro fix changed
+anything there was not measured.
+
+**Defence-in-depth note:** `validateRegisterIndex`
+(`dxmt9_shader_decoder.cpp:173-215`) would have rejected a temp index of 256
+against `kMaxTempIndex = 32`, but it is deliberately parked and uncalled since
+`7abaa20e` (see the comment at 160-172). Instead the translator sized a 4 KB
+local array and emitted silently-wrong output. Re-enabling it is its own project
+— the parked comment records that it previously over-rejected valid SM3
+control-flow operands — but this is the second time this session that a missing
+range check turned a wrong input into wrong pixels rather than an error.

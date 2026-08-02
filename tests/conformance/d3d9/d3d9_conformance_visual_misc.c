@@ -8757,9 +8757,17 @@ done_d3d9:
  */
 void test_visual_process_vertices_xyzhw_policy(const struct d3d9_api *api)
 {
+/* Register type is split across two fields. mingw's d3d9types.h defines
+ * D3DSP_REGTYPE_SHIFT2 = 8 but D3DSP_REGTYPE_MASK2 = 0x1800 (bits 11-12); the
+ * canonical D3D encoding is (type << 8) & MASK2, i.e. the WHOLE type shifted so
+ * its bits 3-4 land at 11-12. Pre-shifting (type >> 3) and then shifting by
+ * SHIFT2 puts them at bit 8 instead -- inside the 11-bit register-index field --
+ * so every type >= 8 decodes as (type & 7) with index += 256. That silently
+ * turned `mov oC0, r0` into a write to temp r256 and made these shaders emit
+ * white. Types 0-7 are unaffected, which is why only these blobs broke. */
 #define PROCESS_VS_REGTYPE(type) \
-    ((((DWORD)(type) & 0x7u) << D3DSP_REGTYPE_SHIFT) \
-            | (((((DWORD)(type) >> 3u) & 0x3u) << D3DSP_REGTYPE_SHIFT2)))
+    ((((DWORD)(type) << D3DSP_REGTYPE_SHIFT) & D3DSP_REGTYPE_MASK) \
+            | (((DWORD)(type) << 8) & D3DSP_REGTYPE_MASK2))
 #define PROCESS_VS_DST(type, index, mask) \
     (0x80000000u | PROCESS_VS_REGTYPE(type) \
             | (((DWORD)(mask) & 0xfu) << 16) | ((DWORD)(index) & 0x7ffu))
