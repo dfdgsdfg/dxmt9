@@ -259,5 +259,39 @@
    "failing_runs": 17,
    "failure_rate": 0.447
   }
+ },
+ "fix": {
+  "commit": "this commit",
+  "change": "src/d3d9/device_c_draw.cpp -- dxmt9c_device_update_texture no longer routes palettized UpdateTexture through core::Device::updateTexture. That path queued a GPU submitSurfaceCopy of the SOURCE texture's Metal backing, which for P8/A8P8 is a derived A8R8G8B8 expansion through the SOURCE's own palette -- and a SYSTEMMEM staging source is never bound via SetTexture, so its palette is still initPalettizedTexture's identity ramp. The destination was then expanded again with its own palette via a different submission path (Initializer::uploadTextureLevel), so one UpdateTexture issued two conflicting full-subresource writes to the same Metal texture on two submission paths with nothing ordering them. The palettized branch now copies the index shadow and re-expands with the DESTINATION's palette, making the expansion the only writer.",
+  "causal_controls": {
+   "note": "Env-gated, same binary, since reverted. Establishes sufficiency rather than inferring it from the fix working.",
+   "surfacecopy_only_readded": "9/10 fail",
+   "legacy_call_restored": "8/10 fail"
+  },
+  "post_fix": {
+   "case_155": {
+    "subagent_runs": 40,
+    "supervisor_runs": 20,
+    "total": 60,
+    "failing": 0
+   },
+   "case_185_visual_mvp_software_vp_policy": {
+    "subagent_runs": 20,
+    "supervisor_runs": 14,
+    "total": 34,
+    "failing": 0,
+    "note": "No change targeted this case; it is the second repro of the same defect."
+   },
+   "non_palettized_updatetexture_cases": {
+    "case_83": "pass",
+    "case_117": "pass"
+   },
+   "staged_artifacts": {
+    "winemetal_so_sha256": "c6eccd1e69f49c6b",
+    "d3d9_dll_sha256": "b9af3a64ab8f15a0",
+    "note": "Fix is entirely unix-side; d3d9.dll is unchanged from the pre-fix runs above."
+   }
+  },
+  "unresolved": "WHY the identity write won ~45% of the time is not established. Instrumented event streams from passing and failing runs are byte-identical through dxmt9's encode layer, including Metal texture identities, so the winner is settled below it. Bounded: intra-blit-encoder ordering is reliable here (post-fix the initializer still issues three same-subresource writes back-to-back in one encoder and the last wins in 40/40). The unordered relationship is between the chunk command buffer's SurfaceCopy and the initializer's command buffer. The fix removes the race rather than ordering it, so this is a known unknown, not a residual risk on this path."
  }
 }

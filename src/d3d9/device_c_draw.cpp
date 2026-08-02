@@ -259,17 +259,35 @@ extern "C" int32_t dxmt9c_device_update_texture(D9CDevice* d, D9CTexture* src,
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  const int32_t hr = d->iface->UpdateTexture(src->obj, dst->obj);
-  if (failed(hr) || !src->palettized) {
-    return hr;
+  if (!src->palettized) {
+    return d->iface->UpdateTexture(src->obj, dst->obj);
+  }
+  if (!src->obj || !dst->obj || !src->obj->valid() || !dst->obj->valid()) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  // Copy indices but PRESERVE dst's palette. The dxmt9 PE shim pushes the
-  // device-current palette into the bound texture via SetTexture →
-  // applyCurrentPaletteToTexture; that direct-bridge call lands BEFORE this
-  // queued UpdateTexture record runs, so overwriting dst's palette here
-  // would clobber the user's bound palette with src's default and the
-  // following sample would return the DEFAULT-palette expansion.
+  // Palettized destinations are NOT routed through Device::updateTexture.
+  //
+  // A P8/A8P8 texture's Metal backing is not storage the app ever wrote —
+  // it is a derived A8R8G8B8 expansion of (index shadow x that texture's
+  // palette). Device::updateTexture would (a) queue a GPU SurfaceCopy of
+  // the SOURCE's backing and (b) copy the source's expanded bytes into the
+  // destination's CPU shadow. Both carry the SOURCE texture's palette,
+  // which for a SYSTEMMEM staging texture is never set by the app and so
+  // is still initPalettizedTexture's identity ramp (0xff010101,
+  // 0xff020202, ...). The destination is then expanded again with its own
+  // palette, so the same destination subresource receives two conflicting
+  // full-subresource writes on two different submission paths: the
+  // chunk-stream blit and the ResourceInitializer's deferred staging
+  // upload. Nothing makes the correct one the last writer, and the
+  // identity expansion wins often enough to be a ~45% flake
+  // (specs/d3d9/gap.md, 2026-08-02). Re-adding just the SurfaceCopy on top
+  // of this function reproduces it at 9/10, so the blit alone is the
+  // sufficient cause.
+  //
+  // Copying indices and re-expanding with the DESTINATION's palette makes
+  // the expansion the only writer, which is also the only semantically
+  // correct source for the bytes.
   const size_t count = std::min(src->p8Levels.size(), dst->p8Levels.size());
   for (size_t subresource = 0; subresource < count; ++subresource) {
     dst->p8Levels[subresource] = src->p8Levels[subresource];
@@ -278,7 +296,7 @@ extern "C" int32_t dxmt9c_device_update_texture(D9CDevice* d, D9CTexture* src,
       dxmt9c_expand_palettized_subresource(dst, level);
     }
   }
-  return hr;
+  return dxmt9::core::D3D_OK;
 }
 
 extern "C" int32_t dxmt9c_device_stretch_rect(D9CDevice* d, D9CSurface* src, const D9CRect* sr,

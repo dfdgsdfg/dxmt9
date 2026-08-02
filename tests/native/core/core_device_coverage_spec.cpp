@@ -713,6 +713,16 @@ void testProgrammablePalettizedTextureDrawSmoke() {
   return;
 #else
   if (!getenvFlag("DXMT9_CORE_SPEC_METAL_INTEGRATION")) {
+    // Announce the skip. NOTHING in this repository sets that variable --
+    // not meson.build, not CI, not any script -- so this block has never run
+    // outside a hand-made invocation, and it returned silently, which reads
+    // exactly like coverage. It is not: the palettized-UpdateTexture
+    // regression it is supposed to guard shipped anyway and was only ever
+    // caught by conformance (specs/d3d9/gap.md 2026-08-02). Run it with
+    // DXMT9_CORE_SPEC_METAL_INTEGRATION=1 on a machine with a Metal device.
+    std::cerr << "SKIP programmable palettized texture draw smoke: set "
+                 "DXMT9_CORE_SPEC_METAL_INTEGRATION=1 to run (needs a Metal "
+                 "device)\n";
     return;
   }
 
@@ -930,16 +940,23 @@ void testProgrammablePalettizedTextureDrawSmoke() {
                                         static_cast<uint32_t>(destinationPalette.size())),
             D3D_OK, std::string(label) + " set destination palette");
 
-    checkEq(coreDevice->updateTexture(src.obj, dst.obj), D3D_OK,
-            std::string(label) + " core UpdateTexture");
-    auto updateBarrier = coreDevice->createQuery(QueryType::Event);
-    check(updateBarrier != nullptr, std::string(label) + " update barrier query");
-    checkEq(coreDevice->getQueryData(updateBarrier, nullptr, 0, QUERY_GETDATA_FLUSH),
-            S_OK, std::string(label) + " update barrier flush");
-    // Match the PE path ordering: the GPU copy must be flushed before the
-    // destination's palettized shadow is re-expanded through its own palette.
-    dst.p8Levels[0] = src.p8Levels[0];
-    dxmt9c_expand_palettized_subresource(&dst, 0);
+    // Drive the production bridge entry point, not a hand-rolled imitation of
+    // it. This previously called coreDevice->updateTexture, flushed, and then
+    // re-expanded by hand, under a comment claiming to "match the PE path
+    // ordering" -- which described exactly the shape that was removed as the
+    // cause of a ~45% flake: core::Device::updateTexture queues a GPU
+    // SurfaceCopy of the SOURCE's Metal backing, and for a palettized texture
+    // that backing is a derived expansion through the SOURCE's palette, so the
+    // destination received two conflicting writes on two submission paths and
+    // the identity-palette one often landed last (specs/d3d9/gap.md 2026-08-02).
+    //
+    // `iface` is deliberately null: the palettized path must be self-contained
+    // and must never reach core::Device::updateTexture. If the routing is ever
+    // reintroduced this dereferences null rather than silently regressing to a
+    // flake that only conformance can see.
+    D9CDevice bridgeDevice{nullptr};
+    checkEq(dxmt9c_device_update_texture(&bridgeDevice, &src, &dst), D3D_OK,
+            std::string(label) + " bridge UpdateTexture");
 
     checkExpanded(dst, label);
     drawAndCheck(dst, label);

@@ -334,6 +334,73 @@ invocations.
 > was a per-format rule read off a sample of one, and no per-format rule survives
 > the data.
 
+**FIXED 2026-08-02 — two writers, one texture, no ordering between them.**
+`dxmt9c_device_update_texture` routed palettized `UpdateTexture` through
+`core::Device::updateTexture`, which queues a GPU
+`submitSurfaceCopy(srcSurface → dstSurface)` (`core_texture.cpp:388`). For P8 /
+A8P8 **that Metal backing is not app data**: it is a derived A8R8G8B8 expansion
+of (index bytes × *that texture's own* palette), written by
+`expandP8SubresourceToBackend`. A SYSTEMMEM staging source is never bound through
+`SetTexture`, so `applyCurrentPaletteToTexture` never reaches it and its palette
+is still the identity ramp — which is why the blit carries exactly
+`ff010101, ff020202, …`.
+
+The *correct* expansion reached the same destination subresource by a **different
+submission path** — `expandP8SubresourceToBackend` → `Texture::unlockRect` →
+`syncLevelToBackend` → `Initializer::uploadTextureLevel`, staged and flushed as
+its own command buffer at the head of `encodeChunk`. So a single `UpdateTexture`
+issued **two conflicting full-subresource writes to one Metal texture on two
+submission paths, with nothing making the correct one last.**
+
+The palettized branch now copies the index shadow and re-expands with the
+**destination's** palette, so the expansion is the only writer — which is also
+the only semantically correct source for those bytes. The non-palettized path is
+untouched, and autogen-mipmap survives because `unlockRect` triggers it
+(`core_texture.cpp:130`) *after* the correct expansion rather than before.
+
+**Sufficiency was established by control, not inferred from the fix working.**
+Re-adding only the queued `submitSurfaceCopy` on top of the fixed function
+reproduces at `9/10`; restoring the whole legacy call, `8/10`.
+
+| | case 155 | case 185 (`visual_mvp_software_vp_policy`) |
+|---|---|---|
+| before | `17/38` fail (`45%`) | `~40%` |
+| after | **`0/60`** | **`0/34`** |
+
+Case 185 had no change aimed at it and moved anyway, which settles "one defect,
+two repros" — it was a hunch when this block was written and is now measured.
+Non-palettized `UpdateTexture` coverage (cases 83, 117) passes.
+
+**Not established: why the identity write won ~45% of the time.** Instrumented
+event streams from passing and failing runs are byte-identical through dxmt9's
+encode layer, Metal texture identities included, so the winner is settled below
+it. Bounded, though: intra-blit-encoder ordering is reliable here — post-fix the
+initializer still issues three same-subresource writes back-to-back in one
+encoder and the last wins in `40/40`. The unordered relationship was between the
+chunk command buffer's SurfaceCopy and the initializer's command buffer. The fix
+removes the race rather than ordering it, so this is a known unknown rather than
+residual risk on this path.
+
+> **The native spec that was supposed to cover this has never run.**
+> `testProgrammablePalettizedTextureDrawSmoke`
+> (`tests/native/core/core_device_coverage_spec.cpp`) returns early unless
+> `DXMT9_CORE_SPEC_METAL_INTEGRATION` is set, and **nothing in this repository
+> sets it** — not `meson.build`, not CI, not any script. It returned *silently*,
+> which reads exactly like coverage, and the regression shipped under it. It now
+> announces the skip, and its hand-rolled imitation of the old PE sequence — under
+> a comment claiming to "match the PE path ordering", i.e. describing the buggy
+> shape as the specification — has been replaced by a call to the production
+> bridge function with a **null `iface`**, so reintroducing the routing faults
+> instead of degrading to a flake only conformance can see. Verified to fire:
+> re-adding the routing makes it `SIGSEGV`, and it passes with the fix.
+
+**Still unaudited, and the same shape:** `dxmt9c_device_update_surface` →
+`Device::updateSurface` → `submitSurfaceCopy` (`core_surface.cpp:355`).
+`D9CSurface` carries no p8 shadow at all, so a palettized `UpdateSurface` would
+copy the source's expansion with **no** corrective re-expansion behind it — worse
+than the bug just fixed, not merely equal to it. No conformance case covers it,
+so it was not changed blind.
+
 **The hang is a real use-after-free, and it is not P8-specific — OPEN.**
 `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`
 as a `WMT::Reference` but holds `destTexture` as a **bare, unretained handle**.
