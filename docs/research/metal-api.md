@@ -213,6 +213,9 @@ changes that require separate render passes.
 
 ## 2. Metal Render Pass Architecture
 
+For encoder ownership and render-pass continuation models, see
+[Metal Render-Pass Lifecycle](metal-render-pass-lifecycle.md).
+
 ### 2.1 MTLRenderPassDescriptor vs D3D9 BeginScene/EndScene
 
 Metal's rendering model is based on explicit render passes. Every draw call occurs

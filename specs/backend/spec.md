@@ -438,6 +438,12 @@ the **Metal encode session** the unit that owns render-pass lifetime. D3D9
 command order remains source-order; the optimization is that queue source
 boundaries stop being mistaken for Metal render-pass boundaries.
 
+For comparative background on ANGLE `ContextMtl`,
+`MTLParallelRenderCommandEncoder`, and Metal 4 render-pass suspend/resume, see
+[Metal Render-Pass Lifecycle](../../docs/research/metal-render-pass-lifecycle.md).
+That research note is non-normative; this section remains authoritative for
+dxmt9 ownership, ordering, and verification requirements.
+
 ```mermaid
 flowchart LR
     subgraph Sources["Queue-owned source storage"]
