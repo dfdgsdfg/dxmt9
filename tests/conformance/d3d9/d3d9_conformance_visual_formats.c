@@ -1352,9 +1352,19 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
     check_visual_palettized_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, FALSE, NULL, NULL,
             updated_palette, a8p8_updated_expected, 1, TRUE);
+    /* Restore palette 0 before the UpdateTexture checks. The invocations above
+     * that pass updated_palette_index = 0 run SetPaletteEntries(device, 0,
+     * updated_palette) at :588-590 while palette 0 is the CURRENT palette, and
+     * the restore at :649-651 is gated on `if (updated_palette_index)` so it
+     * never fires. The current texture palette is device-global state consulted
+     * at draw time (Wine dlls/d3d8/tests/visual.c:2993 p8_texture_test), so the
+     * leak makes every later base-palette expectation unreachable -- these
+     * helpers were reading `updated_expected` and asserting `expected`. */
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
     check_visual_palettized_update_texture_sampler(device, D3DFMT_P8,
             p8_texels, 1, p8_expected, updated_palette,
             p8_updated_expected, FALSE);
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
     check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, updated_palette,
             a8p8_updated_expected, FALSE);

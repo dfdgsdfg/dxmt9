@@ -247,23 +247,74 @@ gone and every residual is the separate `:796-799` issue below. The count is
 **not stable** — the case still hangs past 300 s and how far it gets varies, so
 do not key a comparison to an exact number.
 
-**`:796-799` is separate and partly a test bug.** That helper
-(`check_visual_palettized_update_texture_sampler`) creates 1-level textures and
-never calls `SetLOD`. Its A8P8 readback matches `a8p8_updated_expected` — i.e.
-dxmt9 is right and the expectation is stale, because an earlier invocation
-(`visual_formats.c:1337`) passes `updated_palette_index = 0`, and the helper's
-`:588-590` then overwrites palette slot 0 — the current palette — without ever
-restoring it. Its P8 readback is a genuine dxmt9 defect, though: the values are
-the identity palette installed by `initPalettizedTexture`
-(`device_c_resources.cpp:246`), so the first draw after `UpdateTexture` onto a
-fresh `D3DPOOL_DEFAULT` palettized texture sampled a backing that neither the
-re-expand in `dxmt9c_device_update_texture` nor `applyCurrentPaletteToTexture`
-had repainted. Not isolated further.
+**`:796-799` was entirely a test bug — RESOLVED.** Both formats read back exactly
+`updated_expected` while the helper asserted `expected`. Cause: the invocations
+at `visual_formats.c:1337` and `:1365` pass `updated_palette_index = 0`, so
+`:588-590` runs `SetPaletteEntries(device, 0, updated_palette)` **while palette 0
+is the current palette**, and the restore at `:649-651` is gated on
+`if (updated_palette_index)` and never fires. The current texture palette is
+device-global state consulted at draw time (Wine
+`dlls/d3d8/tests/visual.c:2993 p8_texture_test`), so the leak makes every later
+base-palette expectation unreachable. dxmt9 was right throughout. Fixed by
+re-issuing `SetPaletteEntries(device, 0, palette)` before each `UpdateTexture`
+invocation. **Case 155 is now at zero FAIL lines** — `48 -> 20 -> 4-8 -> 0`.
 
-**Also unexplained:** the case still hangs past 300 s, in or after the second
-`UpdateTexture` invocation, and how far it gets before hanging varies — the
-`:796-799` group was 4 lines in two runs and 8 in another. Treat "20 FAIL lines"
-as approximate.
+> **An earlier version of this entry claimed the P8 half was a real dxmt9
+> defect** — that the first draw after `UpdateTexture` onto a fresh
+> `D3DPOOL_DEFAULT` palettized texture sampled the identity palette from
+> `initPalettizedTexture`. **Refuted.** Instrumented runs produced no
+> identity-palette values for either format; both render the correct expansion
+> of the live palette, so the re-expand ordering in
+> `dxmt9c_device_update_texture` / `applyCurrentPaletteToTexture` is working.
+> That claim came from a single un-reverified reading and should not have been
+> published as a defect.
+
+**The hang is a real use-after-free, and it is not P8-specific — OPEN.**
+`StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`
+as a `WMT::Reference` but holds `destTexture` as a **bare, unretained handle**.
+Staging an upload never bumps the destination's `lastUsedSeqId`, so when the
+texture is released, `gcArena`'s gate
+
+```cpp
+DXMT_ASSERT(record.lastUsedSeqId <= completedSeqId);   // dxmt9_resource_pool.cpp:172
+```
+
+is trivially satisfied and the Metal texture is freed **while
+`Initializer::pendingUploads_` still references it**.
+`Initializer::flushToWaitUnlocked` (`dxmt9_resource_initializer.mm:373-377`)
+then blits into freed memory. The gate's own comment scopes its safety argument
+to encoders — *"no in-flight encoder can still be dereferencing this record's
+pointer"* — which is exactly the hole: pending initializer uploads are not
+encoders and are not covered by R-VERIF-3.1's C++ realisation.
+
+The crash is unrecoverable rather than fatal: AGX faults on `dxmt9-encode`, a
+native pthread created inside `winemetal.so` with no Wine TEB, so Wine's ntdll
+handler dereferences a NULL `NtCurrentTeb()` and faults again. The thread wedges,
+and the app thread waits forever in
+`commit_chunk -> getRenderTargetData -> submitFlush -> waitForSequence`.
+
+**This also explains the "4 vs 8" instability**, which was never failure
+flakiness: the assertions failed deterministically per invocation and the count
+was simply how many invocations completed before the crash landed.
+
+This test is only the repro, not the cause: its teardown
+`SetCurrentTexturePalette(device, 0)` stages an upload for a bound texture
+immediately before release, and a preceding `GetRenderTargetData` has just
+forced `completedSeqId` current, so the reclaim fires at once.
+
+**Fix would have to** keep the destination alive across the staging→flush
+window — retain `destTexture` in `StagingCopy`, or have staging bump the
+destination's `lastUsedSeqId`, or drain pending initializer uploads before
+reclaim. It touches a TLA+-backed invariant (R-VERIF-3.1) so it needs
+`scripts/check/verify_tla.sh` and its own change. Separately, a fault on a
+winemetal-owned pthread being unrecoverable under Wine turns any such bug into a
+silent 300 s hang, which is worth a guard independent of this defect.
+
+**Not demonstrated:** whether this hazard also explains the ~40% flaky wrong
+expansion in `visual_mvp_software_vp_policy`. Plausible, but no wrong expansion
+was observed in any run here. Fix the retain and re-measure that rate.
+
+
 
 
 **2026-08-02 — `visual_p8_texture_sampler_policy`: one test-harness bug (fixed) and one real dxmt9 bug (open).**
