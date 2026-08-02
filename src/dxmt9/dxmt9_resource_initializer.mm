@@ -362,7 +362,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     };
     for (const auto& u : pendingUploads_) {
       if (u.destIsHeapBacked) {
-        pushHeap(u.destHeap);
+        pushHeap(u.destHeap.handle);
       }
     }
     for (std::size_t i = 0; i < usedHeapCount; ++i) {

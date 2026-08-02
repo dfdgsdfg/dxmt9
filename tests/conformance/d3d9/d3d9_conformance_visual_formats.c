@@ -1360,16 +1360,14 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
      * at draw time (Wine dlls/d3d8/tests/visual.c:2993 p8_texture_test), so the
      * leak makes every later base-palette expectation unreachable -- these
      * helpers were reading `updated_expected` and asserting `expected`.
-     * The helper itself also ends with SetCurrentTexturePalette(device, 1) and
-     * never switches back, so restoring slot 0's CONTENTS is not enough --
-     * slot 0 must be made current again too. */
+     * Only the CONTENTS need restoring: those invocations never change which
+     * palette is current (`:592` is gated on updated_palette_index), and the
+     * update helper restores current to 0 unconditionally at :835. */
     CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
-    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
     check_visual_palettized_update_texture_sampler(device, D3DFMT_P8,
             p8_texels, 1, p8_expected, updated_palette,
             p8_updated_expected, FALSE);
     CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
-    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
     check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
             a8p8_texels, 2, a8p8_expected, updated_palette,
             a8p8_updated_expected, FALSE);
@@ -1394,14 +1392,15 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
                 a8p8_texels, 2, a8p8_expected, TRUE, NULL, NULL,
                 updated_palette, a8p8_updated_expected, 1, TRUE);
         /* Same leaked-palette restore as the fixed-function pair above -- the
-         * updated_palette_index = 0 invocations in between clobber slot 0. */
+         * updated_palette_index = 0 invocations in between clobber slot 0.
+         * This pair is the half that actually moved the failure count 8 -> 4;
+         * the fixed-function pair above was added first and left these two
+         * unreached. */
         CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
-        CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
         check_visual_palettized_update_texture_sampler(device, D3DFMT_P8,
                 p8_texels, 1, p8_expected, updated_palette,
                 p8_updated_expected, TRUE);
         CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
-        CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
         check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_texels, 2, a8p8_expected, updated_palette,
                 a8p8_updated_expected, TRUE);

@@ -638,13 +638,27 @@ struct Pool {
     u32 height = 0;
     u32 depth = 1;
     // R-BACK-14.3 — capture the destination TextureRecord's heap-backed
-    // flag and heap handle at staging time so the Initializer's batched
-    // flush can perform the per-encoder useHeap dedup walk without an
-    // extra Pool lookup (the raw destTexture handle would not be
+    // flag and heap at staging time so the Initializer's batched flush
+    // can perform the per-encoder useHeap dedup walk without an extra
+    // Pool lookup (the raw destTexture handle would not be
     // reverse-resolvable to a TextureRecord). Default-zero values mean
     // "not heap-backed"; the flush walk skips them.
+    //
+    // RETAINED for the same reason destTexture is, and the hazard is one
+    // level up from that one. `HeapManager::retireFreedHeaps` erases an
+    // Instance -- releasing the pool's sole `Reference<Heap>` -- as soon
+    // as `liveMembers == 0 && lastUsedSeqId <= completedSeqId`, and a
+    // pending initializer upload satisfies neither condition: it is not a
+    // live member and it never advanced a seq id. Without this reference
+    // the flush's `blit.useHeap(destHeap)` would pass a handle the pool no
+    // longer owns. It happens to survive today because a heap-placed
+    // MTLTexture retains its MTLHeap internally, so the retained
+    // destTexture transitively pins it -- but that is an undocumented
+    // Apple implementation detail holding up a correctness argument, and
+    // nothing at the useHeap walk said so. Owning it here is one
+    // retain/release on the cold texture-initialization path.
     bool destIsHeapBacked = false;
-    obj_handle_t destHeap = 0;
+    WMT::Reference<WMT::Heap> destHeap;
   };
   std::optional<StagingCopy>
   stageTextureUpload(WMT::Device device,

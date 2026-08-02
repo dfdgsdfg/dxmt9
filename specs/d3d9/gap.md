@@ -243,9 +243,12 @@ in every state, which is also the demonstration that the old corpus could not
 see either bug.
 
 Conformance case 155 went `20 -> 4-8` FAIL lines; the whole `:638-641` group is
-gone and every residual is the separate `:796-799` issue below. The count is
-**not stable** — the case still hangs past 300 s and how far it gets varies, so
-do not key a comparison to an exact number.
+gone and every residual is the separate `:796-799` issue below. The count was
+**not stable at the time this was written** — the case still hung past 300 s and
+how far it got varied. The hang was fixed later the same day (use-after-free,
+below), and the residual turned out to be flaky on its own account, so the
+instruction not to key a comparison to an exact number stands for a second,
+independent reason.
 
 **`:796-799` was entirely a test bug — RESOLVED.** Both formats read back exactly
 `updated_expected` while the helper asserted `expected`. Cause: the invocations
@@ -256,10 +259,22 @@ is the current palette**, and the restore at `:649-651` is gated on
 device-global state consulted at draw time (Wine
 `dlls/d3d8/tests/visual.c:2993 p8_texture_test`), so the leak makes every later
 base-palette expectation unreachable. dxmt9 was right throughout. Fixed by re-issuing
-`SetPaletteEntries(device, 0, palette)` **and** `SetCurrentTexturePalette(device, 0)`
-before each of the four `UpdateTexture` invocations — restoring slot 0's contents
-alone is not enough, because the helper itself ends with
-`SetCurrentTexturePalette(device, 1)` and never switches back.
+`SetPaletteEntries(device, 0, palette)` before each of the four `UpdateTexture`
+invocations.
+
+> **Corrected 2026-08-02 after review.** This first said the restore also needed
+> `SetCurrentTexturePalette(device, 0)`, "because the helper itself ends with
+> `SetCurrentTexturePalette(device, 1)` and never switches back". **That is
+> false** — `done_texture_bind:` at `visual_formats.c:835` restores current to 0
+> unconditionally, and it predates this whole investigation. Only slot 0's
+> *contents* leak; which palette is current never does.
+>
+> The consequence is an attribution error, not just a wrong sentence. The 8 → 4
+> improvement was credited to those four `SetCurrentTexturePalette` calls; they
+> are no-ops. What actually moved it is that the first fix patched only the two
+> **fixed-function** call sites, and the second added `SetPaletteEntries` at the
+> two **programmable** ones — 2 invocations × 4 checks = exactly the residual 8.
+> The four no-op calls have been removed.
 
 > **A "zero FAIL lines" result was published for this and was an artifact.** The
 > case was still hanging at that point, so it never reached the checks. Once the
@@ -282,11 +297,42 @@ alone is not enough, because the helper itself ends with
 >  want=80112233,40445566,20778899,10aabbcc
 > ```
 >
-> `0x010101, 0x020202, …` with A8P8 alpha preserved is exactly the identity
-> palette. **OPEN, and narrower than first stated: A8P8 only** — the P8
-> invocation (`upd#1`) passes with the same fixture. The expanded RGBA backing of
-> an `A8P8` `UpdateTexture` destination is not repainted with the current palette
-> on first use.
+> `0x010101, 0x020202, …` with the source alpha preserved is exactly the identity
+> palette. **OPEN.**
+>
+> **Corrected again 2026-08-02, and this is the third correction to this entry.**
+> It was reinstated as "**A8P8 only** — the P8 invocation passes with the same
+> fixture", **on the strength of one instrumented run.** That is the same
+> methodology error the two preceding paragraphs apologise for, committed a third
+> time in the same block. Twenty runs say otherwise:
+>
+> | failing lane | occurrences |
+> |---|---:|
+> | `P8`, fixed-function | 6 |
+> | `P8`, programmable | 1 |
+> | `A8P8`, programmable | 2 |
+>
+> **`P8` fails more often than `A8P8`, not less**, and both pixel-shader lanes are
+> affected. The defect is **nondeterministic**: `9` of `20` runs fail (`45%`) —
+> `9` lane occurrences, since one run failed on two invocations — and a failing
+> invocation is always all four texels or none, always exactly the identity
+> palette. It is not the commit-replay offload (reproduces with
+> `DXMT9_OFFLOAD_COMMIT_REPLAY=0`), and it is not the heap-handle hazard fixed
+> below — a second set after that change reads `8` of `18` (`44%`), unchanged.
+> Combined `17` of `38`. Evidence:
+> `tests/conformance/d3d9/evidence/p8-identity-palette-flake-20260802.json`.
+>
+> A ~`40-45%` rate with an all-four-or-none wrong 2×2 expansion is **the same
+> signature and a statistically indistinguishable rate** compared with
+> `visual_mvp_software_vp_policy`
+> (`d3d9_conformance_visual_misc.c:6986-6989`, `~40%` across two independent
+> sets). Treat them as one defect with two repros, not two.
+>
+> Corrected statement: **the RGBA expansion of a palettized `UpdateTexture`
+> destination nondeterministically retains `initPalettizedTexture`'s identity
+> palette instead of the current one.** The earlier "A8P8 first-use repaint miss"
+> was a per-format rule read off a sample of one, and no per-format rule survives
+> the data.
 
 **The hang is a real use-after-free, and it is not P8-specific — OPEN.**
 `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`
@@ -324,11 +370,34 @@ forced `completedSeqId` current, so the reclaim fires at once.
 **FIXED 2026-08-02** by retaining the destination: `StagingCopy::destTexture` is
 now `WMT::Reference<WMT::Texture>`, symmetric with `stagingTexture`, so a pending
 upload holds the Metal texture alive across the staging→flush window regardless
-of when the record is reclaimed. This closes the hole without touching the
-seq-id invariant, so R-VERIF-3.1's model is unchanged; `verify_tla.sh` re-run
-clean (`279,136` distinct states). Bumping `lastUsedSeqId` on staging was the
+of when the record is reclaimed. Bumping `lastUsedSeqId` on staging was the
 alternative and was rejected: the initializer completes against its own
 `SharedEvent` value, not a queue seq id, so the two are different domains.
+
+> **Corrected 2026-08-02: "R-VERIF-3.1's model is unchanged, `verify_tla.sh`
+> re-run clean" was true and worthless, and stating it implied assurance it did
+> not carry.** `ResourceLifetime.tla` models in-flight GPU work *only* as
+> seq-id-marked chunks, so a pending initializer upload — a GPU command
+> referencing the texture — is outside the model entirely. That is precisely why
+> `NoUseAfterFree` was green while this use-after-free was live, and it is green
+> after the fix for the same reason. The fix satisfies R-VERIF-3.1 through
+> refcounting, **a mechanism the model does not represent**. Recorded as a known
+> incompleteness in `specs/verification/gap.md`. A model that cannot see the bug
+> class cannot certify the fix, and re-running it is not evidence.
+
+**A second, lower hazard one level up, also fixed.** `StagingCopy::destHeap` was
+a bare `obj_handle_t`, and `HeapManager::retireFreedHeaps` erases an `Instance` —
+releasing the pool's sole `Reference<Heap>` — as soon as `liveMembers == 0 &&
+lastUsedSeqId <= completedSeqId`, neither of which a pending upload satisfies.
+The flush's `blit.useHeap(destHeap)` would then pass a handle the pool no longer
+owns. It survived only because a heap-placed `MTLTexture` retains its `MTLHeap`
+internally, so the retained `destTexture` transitively pinned it — an
+undocumented Apple implementation detail load-bearing for a correctness argument,
+with nothing at the `useHeap` walk saying so. `destHeap` is now a
+`WMT::Reference<WMT::Heap>`, symmetric with `destTexture`, at the cost of one
+retain/release on the cold texture-initialization path. **No behavioural change
+measured, and none claimed**: `18` runs of case 155 after it read the same flake
+rate as the `20` before (`44%` vs `45%`).
 
 **Measured effect:** case 155 stopped hanging and now completes `1,084` checks
 with a verdict instead of timing out at 300 s. Separately, a fault on a
@@ -336,10 +405,12 @@ winemetal-owned pthread being unrecoverable under Wine turns any such bug into a
 silent 300 s hang, which is worth a guard independent of this defect.
 
 **Not yet re-measured:** whether the retain also affects the ~40% flaky wrong
-expansion in `visual_mvp_software_vp_policy`. That case's failure shape
-(all-four-texels-or-none, a wrong 2x2 expansion) is the same family as the A8P8
-first-use defect above, so it is worth re-measuring now that the hang is gone —
-its rate was established on builds where this use-after-free was live.
+expansion in `visual_mvp_software_vp_policy`. Its rate was established on builds
+where this use-after-free was live. The case-155 defect above is now measured at
+`45%` with the same all-four-texels-or-none wrong-2×2-expansion signature, which
+makes "same defect, two repros" the leading reading rather than a hunch — so the
+useful re-measurement is of both cases together, against the identity-palette
+mechanism, not of the retain.
 
 
 

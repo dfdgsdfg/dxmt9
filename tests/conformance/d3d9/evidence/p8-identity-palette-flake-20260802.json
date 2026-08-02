@@ -1,0 +1,263 @@
+{
+ "case": "visual_p8_texture_sampler_policy",
+ "note": "Repeat runs of conformance case 155 after the use-after-free fix (f377c73c), to replace a per-format claim that had been read off a single instrumented run. Set `rate-*` is verdict-only; set `lane-*` carried a temporary printf on the post-UpdateTexture readback reporting format and pixel-shader lane, reverted afterwards -- it prints only once a mismatch has already been detected, so it cannot influence the outcome. Every failure is the same four assertions at d3d9_conformance_visual_formats.c:796-799, all four texels or none, and the sampled value is always exactly initPalettizedTexture's identity palette (ff010101,ff020202,ff030303,ff040404 for P8; 80010101,40020202,20030303,10040404 for A8P8) with the source alpha preserved.",
+ "staged_d3d9_sha256": "b9af3a64ab8f15a0",
+ "runs": [
+  {
+   "run": "rate-1",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "rate-2",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "rate-3",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "rate-4",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "rate-5",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "rate-6",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "lane-1",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    }
+   ]
+  },
+  {
+   "run": "lane-2",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-3",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-4",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-5",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "A8P8",
+     "ps": "programmable"
+    }
+   ]
+  },
+  {
+   "run": "lane-6",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-7",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-8",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    }
+   ]
+  },
+  {
+   "run": "lane-9",
+   "verdict": "pass",
+   "lanes": []
+  },
+  {
+   "run": "lane-10",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    }
+   ]
+  },
+  {
+   "run": "lane-11",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    }
+   ]
+  },
+  {
+   "run": "lane-12",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    }
+   ]
+  },
+  {
+   "run": "lane-13",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "P8",
+     "ps": "fixed-function"
+    },
+    {
+     "format": "P8",
+     "ps": "programmable"
+    }
+   ]
+  },
+  {
+   "run": "lane-14",
+   "verdict": "fail",
+   "lanes": [
+    {
+     "format": "A8P8",
+     "ps": "programmable"
+    }
+   ]
+  },
+  {
+   "run": "heapretain-1",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-2",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-3",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-4",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-5",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-6",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-7",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-8",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-9",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-10",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-11",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-12",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-13",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-14",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-15",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-16",
+   "verdict": "pass",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-17",
+   "verdict": "fail",
+   "lanes": null
+  },
+  {
+   "run": "heapretain-18",
+   "verdict": "fail",
+   "lanes": null
+  }
+ ],
+ "summary": {
+  "runs": 20,
+  "failing_runs": 9,
+  "failure_rate": 0.45,
+  "failing_lane_occurrences": {
+   "P8/fixed-function": 6,
+   "P8/programmable": 1,
+   "A8P8/programmable": 2
+  },
+  "conclusion": "Nondeterministic; affects BOTH formats and BOTH pixel-shader lanes, P8 more often than A8P8. The earlier 'A8P8 only' reading came from a sample of one and is refuted. Same rate and same signature as visual_mvp_software_vp_policy (~40%, all-four-or-none wrong 2x2 expansion); treat as one defect with two repros.",
+  "post_heap_retain": {
+   "note": "Second set, after StagingCopy::destHeap was changed to a retained WMT::Reference<WMT::Heap>. That change hardens a hazard that is not currently firing, so it was expected to leave the rate alone; this set confirms it. Recorded because the first four runs of it all passed, which at the measured rate happens ~9% of the time by chance and would have been easy to publish as a fix.",
+   "runs": 18,
+   "failing_runs": 8,
+   "failure_rate": 0.444
+  },
+  "combined": {
+   "runs": 38,
+   "failing_runs": 17,
+   "failure_rate": 0.447
+  }
+ }
+}

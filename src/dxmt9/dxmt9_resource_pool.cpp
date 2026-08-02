@@ -837,7 +837,7 @@ Pool::stageTextureUpload(WMT::Device device,
   out.height = mipHeight;
   out.depth = mipDepth;
   out.destIsHeapBacked = record->isHeapBacked;
-  out.destHeap = record->heap.handle;
+  out.destHeap = record->heap;
   return out;
 }
 
