@@ -270,21 +270,34 @@ extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,
   // pair is left on the unchanged path (where the core format mismatch
   // already rejects it) rather than given invented semantics here.
   //
-  // A palettized pair never falls through: if the copy cannot be served
-  // (mismatched P8/A8P8 formats, or an index shadow shorter than the
-  // subresource — both already rejected by the PE-side validation in
-  // D3D9PeDevice::UpdateSurface, so unreachable from a real app), it is an
-  // invalid call rather than an excuse to run the path this fixes.
+  // An unservable palettized pair FALLS THROUGH to the routed path below --
+  // it must not fail this record.
+  //
+  // The first version of this returned D3DERR_INVALIDCALL, on the reasoning
+  // that a mismatched P8/A8P8 pair is "already rejected by PE-side validation,
+  // so unreachable from a real app". Both halves were wrong, and review caught
+  // it. PE's format check (`d3d9_pe_device.cpp:11208`) compares
+  // `Surface::GetDesc` formats, and `dxmt9c_surface_get_desc` reports the CORE
+  // BACKING format -- A8R8G8B8 for a level of either a P8 or an A8P8 texture,
+  // because both back onto the expansion. So `21 == 21` and the pair sails
+  // through. (That misreport is a D3D9 parity break in its own right; see
+  // specs/d3d9/gap.md.)
+  //
+  // And reaching it is far worse than an INVALIDCALL, because UpdateSurface is
+  // a fire-and-forget chunk record (`D9C_COMMAND_RECORD_UPDATE_SURFACE`),
+  // replayed asynchronously. A failed record does not become an HRESULT the app
+  // sees: it is `commitChunkFail`, which on the engine-default offload lane
+  // fail-stops the worker and poisons every later commit. That would turn a
+  // call real D3D9 merely rejects into a process-lifetime wedge -- and D3D9-era
+  // apps do probe by calling and checking the HRESULT.
+  //
+  // Falling through restores exactly the pre-fix behaviour for that exotic
+  // pair (wrong pixels, app survives) while the ordinary matched pair still
+  // takes the correct branch. Strictly no worse than before, for every input.
   if (src->ownerTex && dst->ownerTex && src->ownerTex->palettized &&
-      dst->ownerTex->palettized) {
-    if (!dxmt9c_copy_palettized_subresource(src->ownerTex, src->ownerLevel,
-                                            dst->ownerTex, dst->ownerLevel)) {
-      dxmt9DebugLog("device_update_surface palettized copy rejected "
-                    "srcTex=%p srcLevel=%u dstTex=%p dstLevel=%u",
-                    static_cast<void*>(src->ownerTex), src->ownerLevel,
-                    static_cast<void*>(dst->ownerTex), dst->ownerLevel);
-      return dxmt9::core::D3DERR_INVALIDCALL;
-    }
+      dst->ownerTex->palettized &&
+      dxmt9c_copy_palettized_subresource(src->ownerTex, src->ownerLevel,
+                                         dst->ownerTex, dst->ownerLevel)) {
     return dxmt9::core::D3D_OK;
   }
 

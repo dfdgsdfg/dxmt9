@@ -446,14 +446,60 @@ assertions, because any one of them passes while the bug is live: no surface cop
 queued, expansion used the destination's palette, and the destination's index
 shadow was written. Verified to discriminate.
 
+> **The first version of this fix introduced a device wedge, caught in review.**
+> It returned `D3DERR_INVALIDCALL` for an unservable palettized pair, reasoning
+> that a mismatched `P8`/`A8P8` pair is "already rejected by PE-side validation,
+> so unreachable from a real app". **Both halves were wrong.** PE's format check
+> (`d3d9_pe_device.cpp:11208`) compares `Surface::GetDesc` formats, and
+> `dxmt9c_surface_get_desc` reports the **core backing** format — `A8R8G8B8` for
+> a level of *either* a P8 or an A8P8 texture, since both back onto the
+> expansion — so `21 == 21` and the pair sails through.
+>
+> And reaching it is far worse than an `INVALIDCALL`, because `UpdateSurface` is
+> a **fire-and-forget chunk record** (`D9C_COMMAND_RECORD_UPDATE_SURFACE`)
+> replayed asynchronously. A failed record never becomes an HRESULT the app
+> sees: it is `commitChunkFail`, which on the engine-default offload lane
+> fail-stops the worker and **poisons every later commit**. That converts a call
+> real D3D9 merely rejects into a process-lifetime wedge — and D3D9-era apps do
+> probe by calling and checking the HRESULT. An unservable pair now falls
+> through to the routed path, which is exactly the pre-fix behaviour for it
+> (wrong pixels, app survives), so the change is strictly no worse than before
+> for every input.
+>
+> The generalisable error: **"unreachable" was asserted from a validation check
+> whose inputs I never read.**
+
+**A D3D9 parity break underneath all of this — OPEN.** `dxmt9c_surface_get_desc`
+(`device_c_resources.cpp:1381`) reports `fmtToD3D(core format)`, so
+`GetSurfaceLevel` on a `P8` texture describes itself as `D3DFMT_A8R8G8B8` where
+real D3D9 says `D3DFMT_P8`. Beyond being wrong for apps, it is what makes PE's
+`UpdateSurface` format check unable to separate `P8` from `A8P8`, and it leaves
+an adjacent hole this fix does **not** close: a `P8`-level ↔ plain-`A8R8G8B8`
+surface pair also passes PE validation, takes the routed path because one side
+is not palettized, and performs a copy real D3D9 would reject — with the same
+identity-ramp and shadow-destruction failure mode. Fixing the getter needs its
+own conformance evidence and touches app-visible behaviour, so it is not folded
+in here.
+
 **Two adjacent gaps deliberately left open**, so neither is fixed under cover of
 this one: `srcRect` / `dstPoint` are still ignored by
-`dxmt9c_device_update_surface` on *both* paths, and a standalone
-`CreateOffscreenPlainSurface(D3DFMT_P8)` pair — a genuine `Format::P8` surface
-with nowhere to store a palette — keeps the old path, where a core format
-mismatch rejects it with `D3DERR_NOTAVAILABLE` when real D3D9 returns `D3D_OK`.
-That last one is **a code-read inference with no test behind it**; pinning the
-current HRESULT would enshrine what is probably itself a defect.
+`dxmt9c_device_update_surface` on *both* paths (a partial-rect palettized copy
+now moves full-surface *correct* indices where it previously moved full-surface
+*wrong* colours — worse to pin than to leave), and standalone
+`CreateOffscreenPlainSurface(D3DFMT_P8)` surfaces, which have nowhere to store a
+palette, keep the old path.
+
+> **Corrected after review — the earlier description of that second gap was
+> wrong**, and it was flagged at the time as a code-read inference with no test
+> behind it, which is exactly how it went wrong. It claimed a standalone pair is
+> rejected with `D3DERR_NOTAVAILABLE` where real D3D9 returns `D3D_OK`. Measured:
+> a **pure** standalone pair is `Format::P8` on *both* sides, so there is no
+> mismatch, the copy proceeds over raw 1-byte texels, and it already returns
+> **`D3D_OK`** — the defect does not exist. The pair that does hit core's
+> `NOTAVAILABLE` is the **mixed** one (standalone `P8` ↔ a `P8` *texture* level,
+> core `P8` vs `A8R8G8B8`), and from a real app that never reaches core at all:
+> PE `GetDesc` reports `41` vs `21` and rejects it with `INVALIDCALL` — still not
+> D3D9's `D3D_OK`, but a different wrong answer than was recorded here.
 
 **The hang is a real use-after-free, and it is not P8-specific — OPEN.**
 `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`

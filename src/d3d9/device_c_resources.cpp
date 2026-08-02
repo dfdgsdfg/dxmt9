@@ -344,6 +344,13 @@ bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
       dstSubresource >= dstTexture->p8Levels.size()) {
     return false;
   }
+  // Match the validity checks dxmt9c_device_update_texture's palettized path
+  // performs. Without them an invalidated texture still writes its shadow and
+  // reports success, because expandP8SubresourceToBackend fails silently.
+  if (!srcTexture->obj || !dstTexture->obj || !srcTexture->obj->valid() ||
+      !dstTexture->obj->valid()) {
+    return false;
+  }
   const auto& srcDesc = srcTexture->obj->desc();
   const auto& dstDesc = dstTexture->obj->desc();
   const uint32_t texelBytes = palettizedTexelBytes(dstTexture->d3dFormat);
