@@ -1,0 +1,26 @@
+{
+ "case": "visual_p8_surface_level_contract_policy",
+ "note": "Implemented by codex (gpt-5.6-sol, reasoning high) and verified by the supervising session. Codex ran under a sandbox where wineserver could not bind, so it delivered NO Wine runtime evidence and said so; its `meson test` figure (210 Ok / 463 Fail) was sandbox artifacts -- GPU shader-render cases returning black and verify_tla unable to download tla2tools. Every runtime number below was produced by the supervising session outside that sandbox.",
+ "defect": "dxmt9c_surface_get_desc reported fmtToD3D(core backing format), so GetSurfaceLevel on a P8/A8P8 texture described itself as D3DFMT_A8R8G8B8 -- the derived expansion -- where real D3D9 reports P8/A8P8. That is an app-visible parity break, and it is what made PE UpdateSurface validation unable to separate P8 from A8P8 (21 == 21).",
+ "option_chosen": "(b) getter PLUS surface-level lock/unlock routed to the owner texture's index shadow. A getter-only fix was rejected by negative control: it leaves Surface::LockRect handing back a 4-bytes-per-texel expansion while GetDesc claims P8, so the app gets two coherent-looking answers that disagree about texel size -- worse than today's self-consistent lie. The native pin fails that variant with `P8 surface lock pitch is one byte per texel`.",
+ "supervisor_verification": {
+  "staged_winemetal_so_sha256": "ec4bb168f6a70472c7401a2afb61a9cad8ee388af3c2bd703a1273a6dbffedcd",
+  "builds": "build, build-x86_64-builtin, build-win32-x64-builtin all exit 0",
+  "case_156_with_fix": "pass",
+  "case_156_without_provider_fix": "fail, 19 FAIL lines, first at d3d9_conformance_visual_formats.c:1683 `desc.Format == format`",
+  "native_pin_with_fix": "exit 0",
+  "native_pin_without_fix": "exit 1, `P8 surface level preserves public format (left != right)`",
+  "neighbours_at_new_indices": {
+   "155 visual_p8_texture_sampler_policy": "pass",
+   "157 visual_p8_update_surface_policy": "pass",
+   "187 visual_mvp_software_vp_policy": "pass"
+  },
+  "verify_tla_standalone": "clean",
+  "manifest_check": "ok, 253 cases"
+ },
+ "not_changed": [
+  "PE validation and copy implementation -- the corrected public formats reach the existing checks, which now separate P8 (41) from A8P8 (40) and from plain A8R8G8B8 (21).",
+  "Palette expansion algorithm, bridge ABI, generated bridge output.",
+  "srcRect/dstPoint are still ignored by dxmt9c_device_update_surface on both paths."
+ ]
+}

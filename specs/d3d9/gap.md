@@ -469,17 +469,46 @@ shadow was written. Verified to discriminate.
 > The generalisable error: **"unreachable" was asserted from a validation check
 > whose inputs I never read.**
 
-**A D3D9 parity break underneath all of this — OPEN.** `dxmt9c_surface_get_desc`
-(`device_c_resources.cpp:1381`) reports `fmtToD3D(core format)`, so
-`GetSurfaceLevel` on a `P8` texture describes itself as `D3DFMT_A8R8G8B8` where
-real D3D9 says `D3DFMT_P8`. Beyond being wrong for apps, it is what makes PE's
-`UpdateSurface` format check unable to separate `P8` from `A8P8`, and it leaves
-an adjacent hole this fix does **not** close: a `P8`-level ↔ plain-`A8R8G8B8`
-surface pair also passes PE validation, takes the routed path because one side
-is not palettized, and performs a copy real D3D9 would reject — with the same
-identity-ramp and shadow-destruction failure mode. Fixing the getter needs its
-own conformance evidence and touches app-visible behaviour, so it is not folded
-in here.
+**The D3D9 parity break underneath all of this — FIXED 2026-08-02.**
+`dxmt9c_surface_get_desc` reported `fmtToD3D(core format)`, so `GetSurfaceLevel`
+on a `P8` texture described itself as `D3DFMT_A8R8G8B8` — the *derived
+expansion* — where real D3D9 says `D3DFMT_P8`. Beyond being wrong for apps, it is
+what made PE's `UpdateSurface` format check unable to separate `P8` from `A8P8`.
+
+**Fixing the getter alone would have been worse than the bug**, and a negative
+control proved it rather than an argument. `IDirect3DSurface9::LockRect` on a
+palettized level went to the core surface — the expansion, 4 bytes per texel —
+while `IDirect3DTexture9::LockRect` on the *same subresource* yields the 1-byte
+index shadow. Real D3D9 gives index bytes either way. So a getter-only fix leaves
+an app that does the ordinary thing — `GetDesc` for the format, then `LockRect`
+and walk rows by `Pitch` — holding two coherent-looking answers that disagree
+about texel size. Today's behaviour is at least a *self-consistent* lie. The pin
+fails that variant with `P8 surface lock pitch is one byte per texel`.
+
+So the fix is both halves: report `ownerTex->d3dFormat`, **and** route
+`Surface::LockRect` / `UnlockRect` through the texture path, which already owns
+`lockedLevels` and re-expands on unlock. Surface and texture interfaces to one
+subresource now agree on format, bytes, pitch, lock state, and expansion refresh.
+
+That also closes the adjacent hole the `UpdateSurface` fix left open: PE's check
+now compares `41` vs `40` for a `P8`↔`A8P8` pair and `41` vs `21` for
+`P8`↔plain-`A8R8G8B8`, rejecting both before the routed copy path — where before
+they passed as `21 == 21` and copied where real D3D9 rejects.
+
+New case `visual_p8_surface_level_contract_policy` (index 156, `dxmt9-policy` —
+Wine `6e073d28` has no oracle pairing a palettized `GetSurfaceLevel` with
+`GetDesc` or surface `LockRect`) fails `19` assertions without the provider
+change, first at `desc.Format == format`, and passes with it.
+
+> **Implemented by `codex` (`gpt-5.6-sol`, reasoning high) under a sandbox where
+> `wineserver` could not bind.** It therefore produced **no** Wine runtime
+> evidence and said so plainly rather than reporting the runs it could not make;
+> its `meson test` figure (`210 Ok / 463 Fail`) was sandbox artifacts — GPU
+> shader-render cases returning black, and `verify_tla` unable to fetch
+> `tla2tools`. Every runtime number above was produced outside that sandbox by
+> the supervising session, which also reverted two unrelated edits it found in
+> the tree adding links to `docs/research/metal-render-pass-lifecycle.md`, a file
+> that does not exist.
 
 **Two adjacent gaps deliberately left open**, so neither is fixed under cover of
 this one: `srcRect` / `dstPoint` are still ignored by

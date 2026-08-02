@@ -1636,6 +1636,320 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+static void check_visual_palettized_surface_level_contract(
+        IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
+        UINT texel_bytes, const DWORD *expected)
+{
+    struct textured_point
+    {
+        float x, y, z, rhw;
+        float u, v;
+    };
+    static const struct textured_point points[] =
+    {
+        {0.5f, 0.5f, 0.0f, 1.0f, 0.25f, 0.25f},
+        {1.5f, 0.5f, 0.0f, 1.0f, 0.75f, 0.25f},
+        {0.5f, 1.5f, 0.0f, 1.0f, 0.25f, 0.75f},
+        {1.5f, 1.5f, 0.0f, 1.0f, 0.75f, 0.75f},
+    };
+    IDirect3DSurface9 *readback = NULL;
+    IDirect3DSurface9 *surface = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    IDirect3DTexture9 *texture = NULL;
+    D3DSURFACE_DESC desc;
+    D3DLOCKED_RECT locked;
+    DWORD point_size;
+    D3DVIEWPORT9 vp;
+    INT surface_pitch = 0;
+    INT row_bytes;
+    HRESULT hr;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_MANAGED, &texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(texture, 0, &surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture;
+
+    memset(&desc, 0xcc, sizeof(desc));
+    hr = IDirect3DSurface9_GetDesc(surface, &desc);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        CHECK_TRUE(desc.Format == format);
+        CHECK_TRUE(desc.Width == 2);
+        CHECK_TRUE(desc.Height == 2);
+    }
+
+    /* Bind before locking. SetTexture applies the current device palette to
+     * the texture once; no later palette or binding call may hide a missing
+     * expansion on Surface::UnlockRect. */
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)texture), D3D_OK);
+
+    row_bytes = (INT)(2 * texel_bytes);
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(surface, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        BYTE *row0 = locked.pBits;
+        BYTE *row1 = row0 + locked.Pitch;
+        CHECK_TRUE(locked.pBits != NULL);
+        CHECK_TRUE(locked.Pitch >= row_bytes);
+        surface_pitch = locked.Pitch;
+        if (locked.pBits && locked.Pitch >= row_bytes)
+        {
+            memcpy(row0, texels, row_bytes);
+            memcpy(row1, texels + row_bytes, row_bytes);
+        }
+        CHECK_HR(IDirect3DSurface9_UnlockRect(surface), D3D_OK);
+    }
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_texture_bind;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rt;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+    vp.X = 0;
+    vp.Y = 0;
+    vp.Width = 2;
+    vp.Height = 2;
+    vp.MinZ = 0.0f;
+    vp.MaxZ = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &vp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, FALSE),
+            D3D_OK);
+    point_size = 0x3f800000u;
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+            point_size), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MINFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MAGFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MIPFILTER,
+            D3DTEXF_NONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
+            D3D_OK);
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row0 = locked.pBits;
+        const DWORD *row1 = (const DWORD *)((const BYTE *)locked.pBits
+                + locked.Pitch);
+        CHECK_TRUE(row0[0] == expected[0]);
+        CHECK_TRUE(row0[1] == expected[1]);
+        CHECK_TRUE(row1[0] == expected[2]);
+        CHECK_TRUE(row1[1] == expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    /* Both interfaces expose the same D3D9 subresource. A texture-level lock
+     * after the draw must see the exact index/alpha bytes written through the
+     * surface, with the same row pitch. */
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const BYTE *row0 = locked.pBits;
+        const BYTE *row1 = row0 + locked.Pitch;
+        CHECK_TRUE(locked.Pitch == surface_pitch);
+        CHECK_TRUE(!memcmp(row0, texels, row_bytes));
+        CHECK_TRUE(!memcmp(row1, texels + row_bytes, row_bytes));
+        CHECK_HR(IDirect3DTexture9_UnlockRect(texture, 0), D3D_OK);
+    }
+
+    IDirect3DSurface9_Release(readback);
+done_rt:
+    IDirect3DSurface9_Release(rt);
+done_texture_bind:
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+    IDirect3DSurface9_Release(surface);
+done_texture:
+    IDirect3DTexture9_Release(texture);
+done:
+    return;
+}
+
+static void check_palettized_surface_update_format_validation(
+        IDirect3DDevice9 *device)
+{
+    IDirect3DSurface9 *argb_surface = NULL;
+    IDirect3DSurface9 *a8p8_surface = NULL;
+    IDirect3DSurface9 *p8_surface = NULL;
+    IDirect3DTexture9 *a8p8_texture = NULL;
+    IDirect3DTexture9 *p8_texture = NULL;
+    HRESULT hr;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, D3DFMT_P8,
+            D3DPOOL_SYSTEMMEM, &p8_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, D3DFMT_A8P8,
+            D3DPOOL_DEFAULT, &a8p8_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_p8_texture;
+    hr = IDirect3DTexture9_GetSurfaceLevel(p8_texture, 0, &p8_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_a8p8_texture;
+    hr = IDirect3DTexture9_GetSurfaceLevel(a8p8_texture, 0,
+            &a8p8_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_p8_surface;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &argb_surface, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_a8p8_surface;
+
+    CHECK_HR(IDirect3DDevice9_UpdateSurface(device, p8_surface, NULL,
+            a8p8_surface, NULL), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_UpdateSurface(device, p8_surface, NULL,
+            argb_surface, NULL), D3DERR_INVALIDCALL);
+
+    IDirect3DSurface9_Release(argb_surface);
+done_a8p8_surface:
+    IDirect3DSurface9_Release(a8p8_surface);
+done_p8_surface:
+    IDirect3DSurface9_Release(p8_surface);
+done_a8p8_texture:
+    IDirect3DTexture9_Release(a8p8_texture);
+done_p8_texture:
+    IDirect3DTexture9_Release(p8_texture);
+done:
+    return;
+}
+
+/*
+ * dxmt9 policy test. Wine commit 6e073d28 has no D3D9 oracle combining
+ * GetSurfaceLevel with GetDesc or LockRect for P8/A8P8 textures. The D3D9 P8
+ * coverage at that commit is limited to capability / format lists and
+ * unrelated ColorFill, GetDC, and conversion tests.
+ *
+ * A surface level is an alternate interface to the same D3D9 subresource:
+ * GetDesc reports the parent texture's public format, LockRect exposes its
+ * index/alpha bytes with the same pitch as Texture::LockRect, and UnlockRect
+ * refreshes the palette-expanded sampling backing.
+ */
+void test_visual_p8_surface_level_contract_policy(const struct d3d9_api *api)
+{
+    static const BYTE p8_texels[] = {1, 2, 3, 4};
+    static const BYTE a8p8_texels[] = {1, 0x80, 2, 0x40, 3, 0x20, 4, 0x10};
+    static const DWORD p8_expected[] =
+    {
+        0xff112233u, 0xff445566u,
+        0xff778899u, 0xffaabbccu,
+    };
+    static const DWORD a8p8_expected[] =
+    {
+        0x80112233u, 0x40445566u,
+        0x20778899u, 0x10aabbccu,
+    };
+    IDirect3DDevice9 *device = NULL;
+    PALETTEENTRY palette[256];
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_P8 textures are not supported");
+        goto done_d3d9;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_A8P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_A8P8 textures are not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(palette, 0, sizeof(palette));
+    for (i = 0; i < ARRAY_SIZE(palette); ++i)
+        palette[i].peFlags = 0xff;
+    palette[1].peRed = 0x11; palette[1].peGreen = 0x22;
+    palette[1].peBlue = 0x33;
+    palette[2].peRed = 0x44; palette[2].peGreen = 0x55;
+    palette[2].peBlue = 0x66;
+    palette[3].peRed = 0x77; palette[3].peGreen = 0x88;
+    palette[3].peBlue = 0x99;
+    palette[4].peRed = 0xaa; palette[4].peGreen = 0xbb;
+    palette[4].peBlue = 0xcc;
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+
+    check_visual_palettized_surface_level_contract(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected);
+    check_visual_palettized_surface_level_contract(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected);
+    check_palettized_surface_update_format_validation(device);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /*
  * dxmt9 policy test. Wine has no oracle that combines a palettized format
  * with IDirect3DDevice9::UpdateSurface: every D3DFMT_P8 / D3DFMT_A8P8 test

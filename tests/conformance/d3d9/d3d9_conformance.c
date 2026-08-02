@@ -255,6 +255,8 @@ static const struct test_case tests[] =
             test_visual_signed_formats_caps_policy},
     {"visual_p8_texture_sampler_policy",
             test_visual_p8_texture_sampler_policy},
+    {"visual_p8_surface_level_contract_policy",
+            test_visual_p8_surface_level_contract_policy},
     {"visual_p8_update_surface_policy",
             test_visual_p8_update_surface_policy},
     {"visual_z_range_render_state_policy",

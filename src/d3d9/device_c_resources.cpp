@@ -1260,6 +1260,14 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
   if (!out) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+  // A texture-level surface is an alternate interface to the same D3D9
+  // subresource. Palettized textures keep the app-visible index/alpha bytes in
+  // p8Levels while their core Surface is a derived A8R8G8B8 expansion, so the
+  // generic surface lock below would expose the wrong texel size and backing.
+  // Use the texture path as the single lock-state and pointer authority.
+  if (s->ownerTex && s->ownerTex->palettized) {
+    return dxmt9c_texture_lock_rect(s->ownerTex, s->ownerLevel, out, r, flags);
+  }
   if (s->ownerTex) {
     if (s->ownerTex->lockedLevels.contains(s->ownerLevel)) {
       dxmt9DebugLog("surface_lock_rect rejected double-lock surface=%p ownerTexture=%p level=%u",
@@ -1351,6 +1359,11 @@ extern "C" int32_t dxmt9c_surface_lock_rect(D9CSurface* s, D9CLockedRect* out, c
 }
 
 extern "C" int32_t dxmt9c_surface_unlock_rect(D9CSurface* s) {
+  // The matching texture unlock clears lockedLevels and refreshes the derived
+  // expansion from the index shadow through the texture's current palette.
+  if (s->ownerTex && s->ownerTex->palettized) {
+    return dxmt9c_texture_unlock_rect(s->ownerTex, s->ownerLevel);
+  }
   if (s->ownerTex) {
     if (!s->ownerTex->lockedLevels.erase(s->ownerLevel)) {
       dxmt9DebugLog("surface_unlock_rect rejected not-locked surface=%p ownerTexture=%p level=%u",
@@ -1391,7 +1404,9 @@ extern "C" int32_t dxmt9c_surface_get_desc(D9CSurface* s, D9CSurfaceDesc* out) {
   }
   auto& desc = s->obj->desc();
   std::memset(out, 0, sizeof(*out));
-  out->format = fmtToD3D(desc.format);
+  out->format = s->ownerTex && s->ownerTex->palettized
+                    ? s->ownerTex->d3dFormat
+                    : fmtToD3D(desc.format);
   out->resourceType = 1;
   out->usage = usageToD3D(desc.usage);
   if (desc.renderTarget) {

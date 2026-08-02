@@ -520,16 +520,13 @@ void testPalettizedTextureExpansion() {
               "P8 level desc");
       checkEq(desc.format, 41u, "P8 public format preserved");
 
-      D9CLockedRect locked{};
-      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0), D3D_OK,
-              "P8 lock");
-      checkEq(locked.pitch, int32_t{2}, "P8 lock pitch is one byte per texel");
-      auto* indices = static_cast<uint8_t*>(locked.bits);
-      indices[0] = 1;
-      indices[1] = 2;
-      indices[2] = 3;
-      indices[3] = 4;
-      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK, "P8 unlock");
+      auto* surface = dxmt9c_texture_get_surface_level(texture, 0);
+      check(surface != nullptr, "get P8 surface level");
+      D9CSurfaceDesc surfaceDesc{};
+      checkEq(dxmt9c_surface_get_desc(surface, &surfaceDesc), D3D_OK,
+              "P8 surface level desc");
+      checkEq(surfaceDesc.format, 41u,
+              "P8 surface level preserves public format");
 
       std::array<uint32_t, 256> palette{};
       palette[1] = 0xff112233u;
@@ -539,6 +536,21 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
                                           static_cast<uint32_t>(palette.size())),
               D3D_OK, "P8 palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_surface_lock_rect(surface, &locked, nullptr, 0), D3D_OK,
+              "P8 surface lock");
+      checkEq(locked.pitch, int32_t{2},
+              "P8 surface lock pitch is one byte per texel");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 1;
+      indices[1] = 2;
+      indices[2] = 3;
+      indices[3] = 4;
+      checkEq(dxmt9c_surface_unlock_rect(surface), D3D_OK,
+              "P8 surface unlock refreshes expansion");
+      checkEq(dxmt9c_surface_release(surface), 0u,
+              "P8 surface level release");
 
       auto bytes = texture->obj->levelBytes(0);
       check(bytes.size() >= 16, "P8 expanded backing has four BGRA pixels");
@@ -880,17 +892,13 @@ void testPalettizedTextureExpansion() {
               "A8P8 level desc");
       checkEq(desc.format, 40u, "A8P8 public format preserved");
 
-      D9CLockedRect locked{};
-      checkEq(dxmt9c_texture_lock_rect(texture, 0, &locked, nullptr, 0), D3D_OK,
-              "A8P8 lock");
-      checkEq(locked.pitch, int32_t{4},
-              "A8P8 lock pitch is two bytes per texel");
-      auto* texels = static_cast<uint8_t*>(locked.bits);
-      texels[0] = 5;
-      texels[1] = 0x80;
-      texels[2] = 6;
-      texels[3] = 0x40;
-      checkEq(dxmt9c_texture_unlock_rect(texture, 0), D3D_OK, "A8P8 unlock");
+      auto* surface = dxmt9c_texture_get_surface_level(texture, 0);
+      check(surface != nullptr, "get A8P8 surface level");
+      D9CSurfaceDesc surfaceDesc{};
+      checkEq(dxmt9c_surface_get_desc(surface, &surfaceDesc), D3D_OK,
+              "A8P8 surface level desc");
+      checkEq(surfaceDesc.format, 40u,
+              "A8P8 surface level preserves public format");
 
       std::array<uint32_t, 256> palette{};
       palette[5] = 0xff102030u;
@@ -898,6 +906,21 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_set_palette(texture, palette.data(),
                                           static_cast<uint32_t>(palette.size())),
               D3D_OK, "A8P8 palette upload");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_surface_lock_rect(surface, &locked, nullptr, 0), D3D_OK,
+              "A8P8 surface lock");
+      checkEq(locked.pitch, int32_t{4},
+              "A8P8 surface lock pitch is two bytes per texel");
+      auto* texels = static_cast<uint8_t*>(locked.bits);
+      texels[0] = 5;
+      texels[1] = 0x80;
+      texels[2] = 6;
+      texels[3] = 0x40;
+      checkEq(dxmt9c_surface_unlock_rect(surface), D3D_OK,
+              "A8P8 surface unlock refreshes expansion");
+      checkEq(dxmt9c_surface_release(surface), 0u,
+              "A8P8 surface level release");
 
       auto bytes = texture->obj->levelBytes(0);
       check(bytes.size() >= 8, "A8P8 expanded backing has two BGRA pixels");
