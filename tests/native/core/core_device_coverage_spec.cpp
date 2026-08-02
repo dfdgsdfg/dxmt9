@@ -950,10 +950,11 @@ void testProgrammablePalettizedTextureDrawSmoke() {
     // destination received two conflicting writes on two submission paths and
     // the identity-palette one often landed last (specs/d3d9/gap.md 2026-08-02).
     //
-    // `iface` is deliberately null: the palettized path must be self-contained
-    // and must never reach core::Device::updateTexture. If the routing is ever
-    // reintroduced this dereferences null rather than silently regressing to a
-    // flake that only conformance can see.
+    // The contract itself -- palettized UpdateTexture must not queue a GPU
+    // surface copy -- is pinned in core_device_com_spec.cpp against a
+    // RecordingBackend, which is ungated and therefore actually runs. Do not
+    // rely on this block for that: `iface` is null here only because the
+    // palettized path has no business touching it.
     D9CDevice bridgeDevice{nullptr};
     checkEq(dxmt9c_device_update_texture(&bridgeDevice, &src, &dst), D3D_OK,
             std::string(label) + " bridge UpdateTexture");

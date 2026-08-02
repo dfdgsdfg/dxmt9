@@ -258,7 +258,8 @@
    "runs": 38,
    "failing_runs": 17,
    "failure_rate": 0.447
-  }
+  },
+  "per_format": "No per-format rule is established. 7 P8 vs 2 A8P8 occurrences at equal exposure is p=0.18 two-sided, consistent with equal rates. The data refute 'A8P8 only' (7 P8 occurrences cannot arise under it) but do not support the reverse."
  },
  "fix": {
   "commit": "this commit",
@@ -266,21 +267,25 @@
   "causal_controls": {
    "note": "Env-gated, same binary, since reverted. Establishes sufficiency rather than inferring it from the fix working.",
    "surfacecopy_only_readded": "9/10 fail",
-   "legacy_call_restored": "8/10 fail"
+   "legacy_call_restored": "8/10 fail",
+   "independent_reviewer_reconstruction": "9/12 fail (75%)",
+   "rate_caveat": "Control rates (8/10, 9/10, 9/12) run well above the 45% pre-fix baseline, so the race's observed rate is machine- and session-conditional. That does not weaken causation -- 0/80 vs 9/12 on the same machine the same day is decisive -- but '~45%' should not be quoted as a property of the defect."
   },
   "post_fix": {
    "case_155": {
     "subagent_runs": 40,
     "supervisor_runs": 20,
-    "total": 60,
-    "failing": 0
+    "total": 80,
+    "failing": 0,
+    "reviewer_runs": 20
    },
    "case_185_visual_mvp_software_vp_policy": {
     "subagent_runs": 20,
     "supervisor_runs": 14,
-    "total": 34,
+    "total": 46,
     "failing": 0,
-    "note": "No change targeted this case; it is the second repro of the same defect."
+    "note": "No change targeted this case; it is the second repro of the same defect.",
+    "reviewer_runs": 12
    },
    "non_palettized_updatetexture_cases": {
     "case_83": "pass",

@@ -673,8 +673,27 @@ void testPalettizedTextureExpansion() {
       checkEq(dxmt9c_texture_set_palette(dstTexture, destinationPalette.data(),
                                           static_cast<uint32_t>(destinationPalette.size())),
               D3D_OK, "P8 update destination palette before copy");
+      const size_t surfaceCopiesBeforeUpdate = backend->surfaceCopies.size();
       checkEq(dxmt9c_device_update_texture(&cDevice, srcTexture, dstTexture),
               D3D_OK, "P8 UpdateTexture");
+      // A palettized UpdateTexture must NOT queue a GPU surface copy.
+      //
+      // A P8/A8P8 Metal backing is not app data -- it is a derived expansion
+      // of (indices x THAT texture's palette). Blitting the source's backing
+      // therefore transports the SOURCE's palette, and for a SYSTEMMEM staging
+      // source that is still initPalettizedTexture's identity ramp, because
+      // such a source is never bound through SetTexture. The destination was
+      // also re-expanded correctly through a different submission path, so one
+      // UpdateTexture produced two conflicting full-subresource writes and the
+      // identity one won ~45% of the time (specs/d3d9/gap.md 2026-08-02).
+      //
+      // This asserts the contract -- no surface copy -- rather than a symptom.
+      // An earlier attempt pinned it by passing a null `iface` so the removed
+      // call would fault; that pin lived behind an env gate nothing in this
+      // repository sets, so it never ran, and it would have missed a guarded
+      // reintroduction (`if (d->iface) { ... }`) which faults nowhere.
+      checkEq(backend->surfaceCopies.size(), surfaceCopiesBeforeUpdate,
+              "P8 UpdateTexture queues no surface copy");
 
       auto bytes = dstTexture->obj->levelBytes(0);
       check(bytes.size() >= 8, "P8 update copied expanded backing");

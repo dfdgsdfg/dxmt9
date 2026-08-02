@@ -312,8 +312,13 @@ invocations.
 > | `P8`, programmable | 1 |
 > | `A8P8`, programmable | 2 |
 >
-> **`P8` fails more often than `A8P8`, not less**, and both pixel-shader lanes are
-> affected. The defect is **nondeterministic**: `9` of `20` runs fail (`45%`) —
+> **Both formats fail, and both pixel-shader lanes.** That decisively kills
+> "A8P8 only" — seven P8 occurrences cannot arise under it. It does **not**
+> establish the reverse: `7`-vs-`2` at equal exposure is `p = 0.18` two-sided,
+> consistent with equal rates, so an earlier revision of this line saying "P8
+> fails more often than A8P8" was the same assert-a-rule-from-a-small-sample
+> error in milder form. **No per-format rule is established in either
+> direction.** The defect is **nondeterministic**: `9` of `20` runs fail (`45%`) —
 > `9` lane occurrences, since one run failed on two invocations — and a failing
 > invocation is always all four texels or none, always exactly the identity
 > palette. It is not the commit-replay offload (reproduces with
@@ -337,7 +342,7 @@ invocations.
 **FIXED 2026-08-02 — two writers, one texture, no ordering between them.**
 `dxmt9c_device_update_texture` routed palettized `UpdateTexture` through
 `core::Device::updateTexture`, which queues a GPU
-`submitSurfaceCopy(srcSurface → dstSurface)` (`core_texture.cpp:388`). For P8 /
+`submitSurfaceCopy(srcSurface → dstSurface)` (`core_texture.cpp:397`). For P8 /
 A8P8 **that Metal backing is not app data**: it is a derived A8R8G8B8 expansion
 of (index bytes × *that texture's own* palette), written by
 `expandP8SubresourceToBackend`. A SYSTEMMEM staging source is never bound through
@@ -350,7 +355,15 @@ submission path** — `expandP8SubresourceToBackend` → `Texture::unlockRect` �
 `syncLevelToBackend` → `Initializer::uploadTextureLevel`, staged and flushed as
 its own command buffer at the head of `encodeChunk`. So a single `UpdateTexture`
 issued **two conflicting full-subresource writes to one Metal texture on two
-submission paths, with nothing making the correct one last.**
+submission paths, with nothing *guaranteeing* the correct one last.** Note the
+looser phrasing is deliberate: `encodeChunk` does encode an `encodeWaitForEvent`
+on the initializer's `SharedEvent` when the initializer flushes at that chunk's
+head, and in *that* interleaving the identity copy would land second every time,
+which would be a `100%` failure rather than `45%`. The observed rate implies the
+corrective write often rides a different flush window — a preceding chunk's
+encode, or the PE-side post-flush `applyCurrentPaletteToTexture`
+(`d3d9_pe_device.cpp:11319`), a third corrective writer. The fix removes the race
+in every interleaving, so this does not change the decision.
 
 The palettized branch now copies the index shadow and re-expands with the
 **destination's** palette, so the expansion is the only writer — which is also
@@ -518,15 +531,24 @@ Measured effect on case 155: **48 -> 20 FAIL lines.** The four white
 cube and volume palettized checks (which were also mis-typing their samplers, so
 every variant emitted `texture2d<float>`) go to zero failures.
 
-**Still open — a real dxmt9 mip-LOD bug, and it is not shader translation.** The
-surviving 20 failures are `visual_formats.c:638-641` (16: the four `lod_texels`
-invocations x four texels) and `:796-799` (4: the update-texture lane). They fail
-identically on the fixed-function and programmable paths, returning level-0
-texels where level-1 is expected. P8/A8P8 are expanded to RGBA per level PE-side
-by `expandP8SubresourceToBackend` (`device_c_resources.cpp:258`), so the
-suspicion is that only level 0 is expanded, or that the expanded levels are not
-linked as mips. The case also still hangs past 300 s after those failures,
-uninvestigated.
+**~~Still open — a real dxmt9 mip-LOD bug, and it is not shader translation.~~
+SUPERSEDED — every claim in this paragraph was resolved later the same day; it is
+kept only as the record of what was believed at this point.** The surviving 20
+failures were `visual_formats.c:638-641` (16: the four `lod_texels` invocations x
+four texels) and `:796-799` (4: the update-texture lane). They failed identically
+on the fixed-function and programmable paths, returning level-0 texels where
+level-1 was expected. The suspicion recorded here — that only level 0 is
+expanded, or that the expanded levels are not linked as mips — was **wrong**, and
+so was reading the two groups as one bug. They were three unrelated causes:
+
+| then | actually |
+|---|---|
+| `:638-641`, "a mip-LOD bug in the palettized expansion" | a **sampler** bug, nothing to do with palettes: `SetLOD` was discarded under `MIPFILTER=NONE`, because `D3DTEXF_NONE` mapped to `MTLSamplerMipFilterNotMipmapped`, in which Metal ignores `lodMinClamp` — fixed above |
+| `:796-799`, same bug as `:638-641` | two separate things: a **test** bug (slot 0's palette contents clobbered by earlier invocations) plus the palettized-`UpdateTexture` **SurfaceCopy race** — both fixed above |
+| "also still hangs past 300 s, uninvestigated" | a **use-after-free** (`StagingCopy::destTexture` unretained) — fixed above |
+
+Four causes behind what this paragraph called one, which is why the shared
+symptom was a bad grouping heuristic.
 
 `visual_process_vertices_xyzhw_policy` (index 186) also used the buggy macro, but
 still fails after the fix at `visual_misc.c:14142-14143` — ProcessVertices
