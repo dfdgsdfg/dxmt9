@@ -2675,6 +2675,30 @@ oracle = "Wine d3d9 visual.c maxmip_test behavior, reduced to SetLOD selecting t
 oracle-date = "2026-05-17"
 
 [[test]]
+file = "texture/dxmt9_setlod_maxmip_nomipfilter_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ps_2_0"]
+opcodes = ["DCL", "MOV", "TEX"]
+oracle = "Same as dxmt9_setlod_maxmip_readback but with D3DSAMP_MIPFILTER=D3DTEXF_NONE: SetLOD must still select the most detailed sampled mip. Regression for the 2026-08-02 defect where D3DTEXF_NONE mapped to MTLSamplerMipFilterNotMipmapped, in which Metal ignores lodMinClamp and always samples level 0"
+oracle-date = "2026-08-02"
+
+[[test]]
+file = "texture/dxmt9_ffp_sampler_max_mip_level_clamp_nomipfilter_readback.shader_test"
+status = "passing"
+source = "dxmt9"
+source_kind = "project-authored"
+license = "MIT"
+license_scope = "project-mit"
+models = ["ffp"]
+opcodes = ["TEX"]
+oracle = "Same as dxmt9_ffp_sampler_max_mip_level_clamp_readback but with D3DSAMP_MIPFILTER=D3DTEXF_NONE: D3DSAMP_MAXMIPLEVEL=1 must still select mip 1. Fixed-function half of the same 2026-08-02 regression"
+oracle-date = "2026-08-02"
+
+[[test]]
 file = "texture/dxmt9_ffp_sampler_max_mip_level_clamp_readback.shader_test"
 status = "passing"
 source = "dxmt9"

@@ -205,12 +205,23 @@ The existing corpus misses it only because all three mip proxies use
 `mip_filter=point`. `SAMP_MIPMAPLODBIAS`, recorded as closed and GPU-verified
 elsewhere in this file, is a different knob and is unaffected.
 
-**Fix shape** (demonstrated to work, not landed): when the resolved mode is
-`NotMipmapped` and the clamp is non-zero, select `MipFilterNearest` and pin
-`lod_max_clamp` to the same level so exactly one mip is sampled. `SamplerKey`
-already keys on `lodMinClampBits` (`dxmt9_pipeline_cache.hpp:280`), so no cache
-change is needed. Landing it must add corpus coverage with `mip_filter=none`,
-since the current corpus cannot see the bug.
+**FIXED 2026-08-02.** When the resolved mode is `NotMipmapped` and the clamp is
+non-zero, both `makeSamplerInfo` overloads now select `MipFilterNearest` and pin
+`lod_max_clamp` to the same level — nearest selection with `min == max` cannot
+filter between mips, so both D3D9 semantics hold. `SamplerKey` already keys on
+`lodMinClampBits` (`dxmt9_pipeline_cache.hpp:280`), so no cache change was
+needed. The blit/present helper `makeSampler` (`:9439`) is untouched; it has no
+LOD.
+
+Regression-pinned by two new corpus cases that are `mip_filter=none` variants of
+the existing ones, `dxmt9_setlod_maxmip_nomipfilter_readback` and
+`dxmt9_ffp_sampler_max_mip_level_clamp_nomipfilter_readback`. **Both verified to
+discriminate**: without the fix each reads `actual_bgra=(0,0,255,255)` (level 0);
+with it both pass, while all four pre-existing mip cases pass either way — which
+also demonstrates that the old corpus could not see this bug.
+
+Conformance case 155 went `20 -> 4` FAIL lines; the whole `:638-641` group is
+gone. The remaining 4 are the separate `:796-799` issue below.
 
 **`:796-799` is separate and partly a test bug.** That helper
 (`check_visual_palettized_update_texture_sampler`) creates 1-level textures and

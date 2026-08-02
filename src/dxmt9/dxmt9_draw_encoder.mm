@@ -9485,6 +9485,20 @@ WMTSamplerInfo makeSamplerInfo(const SamplerSnapshot& snapshot, float lodMinClam
   // (gap_d3d9_wine_test §5.1) is the behavioral oracle.
   info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
+  // D3D9 has two independent knobs that Metal folds into one. MIPFILTER=NONE
+  // means "do not filter BETWEEN mips"; SetLOD / D3DSAMP_MAXMIPLEVEL mean "the
+  // most-detailed level is N". Mapping NONE to MTLSamplerMipFilterNotMipmapped
+  // expresses the first and silently discards the second, because Metal ignores
+  // lodMinClamp in that mode and always samples level 0. Pin the sampler to the
+  // single requested level instead: nearest selection with min == max cannot
+  // filter between mips, so both semantics hold.
+  // Not palettized-specific -- see specs/d3d9/gap.md 2026-08-02; corpus proof in
+  // dxmt9_setlod_maxmip_nomipfilter_readback / the max-mip-level sibling.
+  if (info.mip_filter == WMTSamplerMipFilterNotMipmapped &&
+      info.lod_min_clamp > 0.0f) {
+    info.mip_filter = WMTSamplerMipFilterNearest;
+    info.lod_max_clamp = info.lod_min_clamp;
+  }
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
   // R-BACK-12.22..12.26 (resource-array sub-mode): samplers that ride the
@@ -9541,6 +9555,20 @@ WMTSamplerInfo makeSamplerInfo(const core::FlatStateSet<core::kMaxSamplerStates>
   // (encoded in `lodMinClamp`) as max — Wine d3d9 visual.c maxmip_test.
   info.lod_min_clamp = std::max(lodMinClamp, static_cast<float>(maxMipLevel));
   info.lod_max_clamp = 1e9f;
+  // D3D9 has two independent knobs that Metal folds into one. MIPFILTER=NONE
+  // means "do not filter BETWEEN mips"; SetLOD / D3DSAMP_MAXMIPLEVEL mean "the
+  // most-detailed level is N". Mapping NONE to MTLSamplerMipFilterNotMipmapped
+  // expresses the first and silently discards the second, because Metal ignores
+  // lodMinClamp in that mode and always samples level 0. Pin the sampler to the
+  // single requested level instead: nearest selection with min == max cannot
+  // filter between mips, so both semantics hold.
+  // Not palettized-specific -- see specs/d3d9/gap.md 2026-08-02; corpus proof in
+  // dxmt9_setlod_maxmip_nomipfilter_readback / the max-mip-level sibling.
+  if (info.mip_filter == WMTSamplerMipFilterNotMipmapped &&
+      info.lod_min_clamp > 0.0f) {
+    info.mip_filter = WMTSamplerMipFilterNearest;
+    info.lod_max_clamp = info.lod_min_clamp;
+  }
   info.max_anisotroy = maxAnisotropy;
   info.normalized_coords = true;
   // R-BACK-12.22..12.26 (resource-array sub-mode): samplers that ride the

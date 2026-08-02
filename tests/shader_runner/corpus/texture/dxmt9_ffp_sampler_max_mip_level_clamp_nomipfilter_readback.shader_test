@@ -1,0 +1,29 @@
+# Regression: SetLOD / D3DSAMP_MAXMIPLEVEL must survive MIPFILTER=NONE.
+# D3D9 has two independent knobs; Metal folds them into one. Mapping
+# D3DTEXF_NONE to MTLSamplerMipFilterNotMipmapped made Metal ignore lodMinClamp
+# and always sample level 0, so the most-detailed-level request was silently
+# dropped. Every pre-existing mip proxy in this corpus uses mip_filter=point,
+# which is exactly why none of them could see it.
+# See specs/d3d9/gap.md 2026-08-02.
+; [provenance]
+; source: dxmt9
+; source_kind: project-authored
+; license: MIT
+; license_scope: project-mit
+; oracle: Wine d3d9 visual.c maxmip_test behavior, reduced to D3DSAMP_MAXMIPLEVEL=1 selecting mip 1 instead of mip 0
+; oracle-date: 2026-05-23
+
+[test]
+clear rgba(0.0, 0.0, 0.0, 1.0)
+dxmt9-render-state z_enable=disable z_write=disable
+dxmt9-texture 0 4 4 A8R8G8B8 red red red red red red red red red red red red red red red red
+dxmt9-texture-mip 0 1 2 2 A8R8G8B8 green green green green
+dxmt9-texture-mip 0 2 1 1 A8R8G8B8 blue
+dxmt9-sampler 0 address_u=clamp address_v=clamp min_filter=linear mag_filter=linear mip_filter=none max_mip_level=1
+dxmt9-texture-stage 0 color_op=selectarg1 alpha_op=selectarg1 color_arg1=texture alpha_arg1=texture texcoord_index=0
+dxmt9-bind-texture 0 0
+dxmt9-draw-textured-quad
+probe (16, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (48, 16) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (16, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
+probe (48, 48) rgba(0.0, 1.0, 0.0, 1.0) 1
