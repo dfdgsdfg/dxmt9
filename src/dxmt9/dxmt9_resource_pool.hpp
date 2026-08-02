@@ -618,7 +618,20 @@ struct Pool {
   // behind a single SharedEvent signal before the next render chunk.
   struct StagingCopy {
     WMT::Reference<WMT::Texture> stagingTexture;
-    WMT::Texture destTexture;
+    // RETAINED, and it must stay that way. A pending upload outlives the
+    // caller's reference: staging does not bump the destination's
+    // lastUsedSeqId, so gcArena's gate
+    // (`record.lastUsedSeqId <= completedSeqId`, dxmt9_resource_pool.cpp) is
+    // trivially satisfied on release and frees the Metal texture while this
+    // entry is still sitting in Initializer::pendingUploads_. flushToWaitUnlocked
+    // then blits into freed memory; AGX faults on the winemetal-owned
+    // `dxmt9-encode` pthread, which has no Wine TEB, so Wine's handler
+    // dereferences a NULL NtCurrentTeb() and faults again and the process wedges
+    // rather than crashing. The gate's comment reasons only about in-flight
+    // ENCODERS -- pending initializer uploads are not encoders, which is the
+    // hole. Holding a reference here closes it without touching the seq-id
+    // invariant. See specs/d3d9/gap.md 2026-08-02.
+    WMT::Reference<WMT::Texture> destTexture;
     u32 mipLevel = 0;
     u32 slice = 0;
     u32 width = 0;

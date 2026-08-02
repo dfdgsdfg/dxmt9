@@ -255,19 +255,38 @@ is the current palette**, and the restore at `:649-651` is gated on
 `if (updated_palette_index)` and never fires. The current texture palette is
 device-global state consulted at draw time (Wine
 `dlls/d3d8/tests/visual.c:2993 p8_texture_test`), so the leak makes every later
-base-palette expectation unreachable. dxmt9 was right throughout. Fixed by
-re-issuing `SetPaletteEntries(device, 0, palette)` before each `UpdateTexture`
-invocation. **Case 155 is now at zero FAIL lines** — `48 -> 20 -> 4-8 -> 0`.
+base-palette expectation unreachable. dxmt9 was right throughout. Fixed by re-issuing
+`SetPaletteEntries(device, 0, palette)` **and** `SetCurrentTexturePalette(device, 0)`
+before each of the four `UpdateTexture` invocations — restoring slot 0's contents
+alone is not enough, because the helper itself ends with
+`SetCurrentTexturePalette(device, 1)` and never switches back.
 
-> **An earlier version of this entry claimed the P8 half was a real dxmt9
-> defect** — that the first draw after `UpdateTexture` onto a fresh
-> `D3DPOOL_DEFAULT` palettized texture sampled the identity palette from
-> `initPalettizedTexture`. **Refuted.** Instrumented runs produced no
-> identity-palette values for either format; both render the correct expansion
-> of the live palette, so the re-expand ordering in
-> `dxmt9c_device_update_texture` / `applyCurrentPaletteToTexture` is working.
-> That claim came from a single un-reverified reading and should not have been
-> published as a defect.
+> **A "zero FAIL lines" result was published for this and was an artifact.** The
+> case was still hanging at that point, so it never reached the checks. Once the
+> use-after-free below was fixed the case ran to completion — `1,084` checks —
+> and the leaked-palette failures were real and had simply never been reached.
+> A green result from a run that dies early is not a green result.
+
+> **This claim was published, retracted, and is now reinstated in a narrower
+> form — the retraction was the error.** The original entry said the first draw
+> after `UpdateTexture` onto a fresh `D3DPOOL_DEFAULT` palettized texture samples
+> the identity palette from `initPalettizedTexture` (`device_c_resources.cpp:246`).
+> A second investigation refuted it, having seen no identity values, and I
+> published that refutation. Both were looking at a run that **hung before
+> reaching the invocation that fails.** With the use-after-free fixed the case
+> runs to completion, and instrumentation shows it plainly:
+>
+> ```
+> DIAG upd#2 fmt=0x28 cur_pal=0
+>   got=80010101,40020202,20030303,10040404
+>  want=80112233,40445566,20778899,10aabbcc
+> ```
+>
+> `0x010101, 0x020202, …` with A8P8 alpha preserved is exactly the identity
+> palette. **OPEN, and narrower than first stated: A8P8 only** — the P8
+> invocation (`upd#1`) passes with the same fixture. The expanded RGBA backing of
+> an `A8P8` `UpdateTexture` destination is not repainted with the current palette
+> on first use.
 
 **The hang is a real use-after-free, and it is not P8-specific — OPEN.**
 `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`
@@ -302,17 +321,25 @@ This test is only the repro, not the cause: its teardown
 immediately before release, and a preceding `GetRenderTargetData` has just
 forced `completedSeqId` current, so the reclaim fires at once.
 
-**Fix would have to** keep the destination alive across the staging→flush
-window — retain `destTexture` in `StagingCopy`, or have staging bump the
-destination's `lastUsedSeqId`, or drain pending initializer uploads before
-reclaim. It touches a TLA+-backed invariant (R-VERIF-3.1) so it needs
-`scripts/check/verify_tla.sh` and its own change. Separately, a fault on a
+**FIXED 2026-08-02** by retaining the destination: `StagingCopy::destTexture` is
+now `WMT::Reference<WMT::Texture>`, symmetric with `stagingTexture`, so a pending
+upload holds the Metal texture alive across the staging→flush window regardless
+of when the record is reclaimed. This closes the hole without touching the
+seq-id invariant, so R-VERIF-3.1's model is unchanged; `verify_tla.sh` re-run
+clean (`279,136` distinct states). Bumping `lastUsedSeqId` on staging was the
+alternative and was rejected: the initializer completes against its own
+`SharedEvent` value, not a queue seq id, so the two are different domains.
+
+**Measured effect:** case 155 stopped hanging and now completes `1,084` checks
+with a verdict instead of timing out at 300 s. Separately, a fault on a
 winemetal-owned pthread being unrecoverable under Wine turns any such bug into a
 silent 300 s hang, which is worth a guard independent of this defect.
 
-**Not demonstrated:** whether this hazard also explains the ~40% flaky wrong
-expansion in `visual_mvp_software_vp_policy`. Plausible, but no wrong expansion
-was observed in any run here. Fix the retain and re-measure that rate.
+**Not yet re-measured:** whether the retain also affects the ~40% flaky wrong
+expansion in `visual_mvp_software_vp_policy`. That case's failure shape
+(all-four-texels-or-none, a wrong 2x2 expansion) is the same family as the A8P8
+first-use defect above, so it is worth re-measuring now that the hang is gone —
+its rate was established on builds where this use-after-free was live.
 
 
 
