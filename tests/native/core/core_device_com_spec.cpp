@@ -881,6 +881,171 @@ void testPalettizedTextureExpansion() {
               "source P8 update-surface texture release");
     }
     {
+      // Rectangular P8 UpdateSurface must edit only the addressed index-shadow
+      // texels. The subsequent whole-subresource expansion is correct only if
+      // every untouched index remains available to rebuild its old colour.
+      auto* srcTexture = dxmt9c_device_create_texture(&cDevice, 4, 3, 1, 0,
+                                                      41u, 1u);
+      auto* dstTexture = dxmt9c_device_create_texture(&cDevice, 5, 4, 1, 0,
+                                                      41u, 1u);
+      check(srcTexture != nullptr, "create source P8 rect texture");
+      check(dstTexture != nullptr, "create destination P8 rect texture");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(srcTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 rect source lock");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      for (uint32_t y = 0; y < 3; ++y) {
+        for (uint32_t x = 0; x < 4; ++x) {
+          indices[static_cast<size_t>(y) * locked.pitch + x] =
+              static_cast<uint8_t>(y * 4 + x + 1);
+        }
+      }
+      checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
+              "P8 rect source unlock");
+
+      checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 rect destination initialization lock");
+      indices = static_cast<uint8_t*>(locked.bits);
+      for (uint32_t y = 0; y < 4; ++y) {
+        std::memset(indices + static_cast<size_t>(y) * locked.pitch, 9, 5);
+      }
+      checkEq(dxmt9c_texture_unlock_rect(dstTexture, 0), D3D_OK,
+              "P8 rect destination initialization unlock");
+
+      std::array<uint32_t, 256> destinationPalette{};
+      destinationPalette[6] = 0xff102030u;
+      destinationPalette[7] = 0xff405060u;
+      destinationPalette[9] = 0xff90a0b0u;
+      destinationPalette[10] = 0xff708090u;
+      destinationPalette[11] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(
+                  dstTexture, destinationPalette.data(),
+                  static_cast<uint32_t>(destinationPalette.size())),
+              D3D_OK, "P8 rect destination palette");
+
+      auto* srcSurface = dxmt9c_texture_get_surface_level(srcTexture, 0);
+      auto* dstSurface = dxmt9c_texture_get_surface_level(dstTexture, 0);
+      check(srcSurface != nullptr, "P8 rect source surface");
+      check(dstSurface != nullptr, "P8 rect destination surface");
+      const D9CRect srcRect{1, 1, 3, 3};
+      const D9CRect dstPoint{2, 0, 2, 0};
+      const size_t copiesBefore = backend->surfaceCopies.size();
+      checkEq(dxmt9c_device_update_surface(&cDevice, srcSurface, &srcRect,
+                                           dstSurface, &dstPoint),
+              D3D_OK, "P8 rectangular UpdateSurface");
+      checkEq(backend->surfaceCopies.size(), copiesBefore,
+              "P8 rectangular UpdateSurface queues no surface copy");
+
+      checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 rect destination verification lock");
+      indices = static_cast<uint8_t*>(locked.bits);
+      for (uint32_t y = 0; y < 4; ++y) {
+        for (uint32_t x = 0; x < 5; ++x) {
+          uint8_t expected = 9;
+          if (y == 0 && x == 2) expected = 6;
+          if (y == 0 && x == 3) expected = 7;
+          if (y == 1 && x == 2) expected = 10;
+          if (y == 1 && x == 3) expected = 11;
+          checkEq(indices[static_cast<size_t>(y) * locked.pitch + x], expected,
+                  "P8 rectangular UpdateSurface preserves index shadow");
+        }
+      }
+      checkEq(dxmt9c_texture_unlock_rect(dstTexture, 0), D3D_OK,
+              "P8 rect destination verification unlock");
+
+      const auto bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 5u * 4u * 4u,
+            "P8 rect whole destination expansion exists");
+      checkEq(bytes[0], uint8_t{0xb0},
+              "P8 rect expansion preserves untouched blue");
+      checkEq(bytes[8], uint8_t{0x30},
+              "P8 rect expansion updates copied blue");
+      checkEq(bytes[12], uint8_t{0x60},
+              "P8 rect expansion updates copied neighbour blue");
+
+      checkEq(dxmt9c_surface_release(dstSurface), 0u,
+              "P8 rect destination surface release");
+      checkEq(dxmt9c_surface_release(srcSurface), 0u,
+              "P8 rect source surface release");
+      checkEq(dxmt9c_texture_release(dstTexture), 0u,
+              "P8 rect destination texture release");
+      checkEq(dxmt9c_texture_release(srcTexture), 0u,
+              "P8 rect source texture release");
+    }
+    {
+      // The plain path queues the same rectangle that its CPU shadow copy
+      // applies. Checking both catches either half drifting independently.
+      auto* srcSurface = dxmt9c_device_create_offscreen_surface(
+          &cDevice, 4, 3, 21u, 2u, nullptr);
+      auto* dstSurface = dxmt9c_device_create_offscreen_surface(
+          &cDevice, 5, 4, 21u, 0u, nullptr);
+      check(srcSurface != nullptr, "create source ARGB rect surface");
+      check(dstSurface != nullptr, "create destination ARGB rect surface");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_surface_lock_rect(srcSurface, &locked, nullptr, 0),
+              D3D_OK, "ARGB rect source lock");
+      for (uint32_t y = 0; y < 3; ++y) {
+        auto* row = reinterpret_cast<uint32_t*>(
+            static_cast<uint8_t*>(locked.bits) +
+            static_cast<size_t>(y) * locked.pitch);
+        for (uint32_t x = 0; x < 4; ++x) {
+          row[x] = 0xff000000u | (y << 8) | x;
+        }
+      }
+      checkEq(dxmt9c_surface_unlock_rect(srcSurface), D3D_OK,
+              "ARGB rect source unlock");
+
+      checkEq(dxmt9c_surface_lock_rect(dstSurface, &locked, nullptr, 0),
+              D3D_OK, "ARGB rect destination initialization lock");
+      for (uint32_t y = 0; y < 4; ++y) {
+        auto* row = reinterpret_cast<uint32_t*>(
+            static_cast<uint8_t*>(locked.bits) +
+            static_cast<size_t>(y) * locked.pitch);
+        std::fill_n(row, 5, 0xffabcdefu);
+      }
+      checkEq(dxmt9c_surface_unlock_rect(dstSurface), D3D_OK,
+              "ARGB rect destination initialization unlock");
+
+      const D9CRect srcRect{1, 1, 3, 3};
+      const D9CRect dstPoint{2, 1, 2, 1};
+      const size_t copiesBefore = backend->surfaceCopies.size();
+      checkEq(dxmt9c_device_update_surface(&cDevice, srcSurface, &srcRect,
+                                           dstSurface, &dstPoint),
+              D3D_OK, "ARGB rectangular UpdateSurface");
+      checkEq(backend->surfaceCopies.size(), copiesBefore + 1,
+              "ARGB rectangular UpdateSurface queues one surface copy");
+      const auto& copy = backend->surfaceCopies.back();
+      checkEq(copy.sourceRect, Rect{1, 1, 3, 3},
+              "ARGB UpdateSurface backend source rectangle");
+      checkEq(copy.destinationRect, Rect{2, 1, 4, 3},
+              "ARGB UpdateSurface backend destination rectangle");
+
+      checkEq(dxmt9c_surface_lock_rect(dstSurface, &locked, nullptr, 0),
+              D3D_OK, "ARGB rect destination verification lock");
+      for (uint32_t y = 0; y < 4; ++y) {
+        const auto* row = reinterpret_cast<const uint32_t*>(
+            static_cast<const uint8_t*>(locked.bits) +
+            static_cast<size_t>(y) * locked.pitch);
+        for (uint32_t x = 0; x < 5; ++x) {
+          uint32_t expected = 0xffabcdefu;
+          if (x >= 2 && x < 4 && y >= 1 && y < 3) {
+            expected = 0xff000000u | (y << 8) | (x - 1);
+          }
+          checkEq(row[x], expected,
+                  "ARGB rectangular UpdateSurface preserves destination");
+        }
+      }
+      checkEq(dxmt9c_surface_unlock_rect(dstSurface), D3D_OK,
+              "ARGB rect destination verification unlock");
+
+      checkEq(dxmt9c_surface_release(dstSurface), 0u,
+              "ARGB rect destination surface release");
+      checkEq(dxmt9c_surface_release(srcSurface), 0u,
+              "ARGB rect source surface release");
+    }
+    {
       auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
                                                    40u, 1u);
       check(texture != nullptr, "create A8P8 texture");

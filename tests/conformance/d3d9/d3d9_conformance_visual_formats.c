@@ -2094,6 +2094,315 @@ done_d3d9:
     IDirect3D9_Release(d3d9);
 }
 
+static void check_visual_update_surface_rect_format(
+        IDirect3DDevice9 *device, D3DFORMAT format)
+{
+    struct textured_point
+    {
+        float x, y, z, rhw;
+        float u, v;
+    };
+    static const DWORD source_colors[] =
+    {
+        0xff112233u, 0xff445566u,
+        0xff778899u, 0xffaabbccu,
+    };
+    static const BYTE source_indices[] = {1, 2, 3, 4};
+    static const DWORD untouched_color = 0xff0d1e2fu;
+    static const BYTE untouched_index = 5;
+    static const RECT src_rect_only = {1, 0, 2, 2};
+    static const RECT src_rect_both = {0, 1, 2, 2};
+    static const POINT dst_point_only = {1, 1};
+    static const POINT dst_point_both = {1, 2};
+    static const struct
+    {
+        const RECT *src_rect;
+        const POINT *dst_point;
+    }
+    cases[] =
+    {
+        {&src_rect_only, NULL},
+        {NULL, &dst_point_only},
+        {&src_rect_both, &dst_point_both},
+        {NULL, NULL},
+    };
+    IDirect3DSurface9 *clear_surface = NULL;
+    IDirect3DSurface9 *dst_surface = NULL;
+    IDirect3DSurface9 *src_surface = NULL;
+    IDirect3DTexture9 *clear_texture = NULL;
+    IDirect3DTexture9 *dst_texture = NULL;
+    IDirect3DTexture9 *src_texture = NULL;
+    IDirect3DSurface9 *readback = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    struct textured_point points[16];
+    D3DLOCKED_RECT locked;
+    DWORD expected[16];
+    DWORD point_size;
+    D3DVIEWPORT9 vp;
+    HRESULT hr;
+    UINT i, x, y;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_SYSTEMMEM, &src_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 1, 0, format,
+            D3DPOOL_SYSTEMMEM, &clear_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src_texture;
+    hr = IDirect3DDevice9_CreateTexture(device, 4, 4, 1, 0, format,
+            D3DPOOL_DEFAULT, &dst_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_clear_texture;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(src_texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (y = 0; y < 2; ++y)
+        {
+            if (format == D3DFMT_P8)
+                memcpy((BYTE *)locked.pBits + y * locked.Pitch,
+                        source_indices + y * 2, 2);
+            else
+                memcpy((BYTE *)locked.pBits + y * locked.Pitch,
+                        source_colors + y * 2, 2 * sizeof(DWORD));
+        }
+        CHECK_HR(IDirect3DTexture9_UnlockRect(src_texture, 0), D3D_OK);
+    }
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(clear_texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        for (y = 0; y < 4; ++y)
+        {
+            if (format == D3DFMT_P8)
+                memset((BYTE *)locked.pBits + y * locked.Pitch,
+                        untouched_index, 4);
+            else
+            {
+                DWORD *row = (DWORD *)((BYTE *)locked.pBits
+                        + y * locked.Pitch);
+                for (x = 0; x < 4; ++x)
+                    row[x] = untouched_color;
+            }
+        }
+        CHECK_HR(IDirect3DTexture9_UnlockRect(clear_texture, 0), D3D_OK);
+    }
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(src_texture, 0, &src_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    hr = IDirect3DTexture9_GetSurfaceLevel(clear_texture, 0, &clear_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src_surface;
+    hr = IDirect3DTexture9_GetSurfaceLevel(dst_texture, 0, &dst_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_clear_surface;
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 4, 4,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_surface;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 4, 4,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rt;
+
+    for (y = 0; y < 4; ++y)
+    {
+        for (x = 0; x < 4; ++x)
+        {
+            struct textured_point *point = &points[y * 4 + x];
+            point->x = x + 0.5f;
+            point->y = y + 0.5f;
+            point->z = 0.0f;
+            point->rhw = 1.0f;
+            point->u = (x + 0.5f) / 4.0f;
+            point->v = (y + 0.5f) / 4.0f;
+        }
+    }
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+    vp.X = 0;
+    vp.Y = 0;
+    vp.Width = 4;
+    vp.Height = 4;
+    vp.MinZ = 0.0f;
+    vp.MaxZ = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &vp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING,
+            FALSE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE,
+            FALSE), D3D_OK);
+    point_size = 0x3f800000u;
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+            point_size), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0,
+            D3DSAMP_MINFILTER, D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0,
+            D3DSAMP_MAGFILTER, D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0,
+            D3DSAMP_MIPFILTER, D3DTEXF_NONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)dst_texture), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device,
+            D3DFVF_XYZRHW | D3DFVF_TEX1), D3D_OK);
+
+    for (i = 0; i < ARRAY_SIZE(cases); ++i)
+    {
+        RECT source_area = cases[i].src_rect
+                ? *cases[i].src_rect : (RECT){0, 0, 2, 2};
+        LONG destination_x = cases[i].dst_point
+                ? cases[i].dst_point->x : 0;
+        LONG destination_y = cases[i].dst_point
+                ? cases[i].dst_point->y : 0;
+
+        CHECK_HR(IDirect3DDevice9_UpdateSurface(device, clear_surface, NULL,
+                dst_surface, NULL), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_UpdateSurface(device, src_surface,
+                cases[i].src_rect, dst_surface, cases[i].dst_point), D3D_OK);
+
+        for (x = 0; x < ARRAY_SIZE(expected); ++x)
+            expected[x] = untouched_color;
+        for (y = source_area.top; y < (UINT)source_area.bottom; ++y)
+        {
+            for (x = source_area.left; x < (UINT)source_area.right; ++x)
+            {
+                UINT dst_x = destination_x + x - source_area.left;
+                UINT dst_y = destination_y + y - source_area.top;
+                expected[dst_y * 4 + dst_x] = source_colors[y * 2 + x];
+            }
+        }
+
+        CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+                0xff000000u, 0.0f, 0), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+                ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+                D3D_OK);
+
+        memset(&locked, 0xcc, sizeof(locked));
+        hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+                D3DLOCK_READONLY);
+        CHECK_HR(hr, D3D_OK);
+        if (SUCCEEDED(hr))
+        {
+            for (y = 0; y < 4; ++y)
+            {
+                const DWORD *row = (const DWORD *)((const BYTE *)locked.pBits
+                        + y * locked.Pitch);
+                for (x = 0; x < 4; ++x)
+                    CHECK_TRUE(row[x] == expected[y * 4 + x]);
+            }
+            CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+        }
+    }
+
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+    IDirect3DSurface9_Release(readback);
+done_rt:
+    IDirect3DSurface9_Release(rt);
+done_dst_surface:
+    IDirect3DSurface9_Release(dst_surface);
+done_clear_surface:
+    IDirect3DSurface9_Release(clear_surface);
+done_src_surface:
+    IDirect3DSurface9_Release(src_surface);
+done_dst_texture:
+    IDirect3DTexture9_Release(dst_texture);
+done_clear_texture:
+    IDirect3DTexture9_Release(clear_texture);
+done_src_texture:
+    IDirect3DTexture9_Release(src_texture);
+done:
+    return;
+}
+
+/*
+ * Wine behavioral oracle: dlls/d3d9/tests/visual.c::test_signed_formats,
+ * commit 6e073d28dee3af7f4c965daec94644e0f9f92727. That test renders and
+ * checks a SYSTEMMEM-to-DEFAULT UpdateSurface with both a source rectangle
+ * and a destination point. This case splits the nullable arguments into all
+ * four combinations, checks every pixel outside the destination rectangle,
+ * and extends the same contract to dxmt9's palettized index-shadow path.
+ */
+void test_visual_update_surface_rect_policy(const struct d3d9_api *api)
+{
+    IDirect3DDevice9 *device = NULL;
+    PALETTEENTRY palette[256];
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_P8 textures are not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+
+    memset(palette, 0, sizeof(palette));
+    for (i = 0; i < ARRAY_SIZE(palette); ++i)
+        palette[i].peFlags = 0xff;
+    palette[1].peRed = 0x11; palette[1].peGreen = 0x22;
+    palette[1].peBlue = 0x33;
+    palette[2].peRed = 0x44; palette[2].peGreen = 0x55;
+    palette[2].peBlue = 0x66;
+    palette[3].peRed = 0x77; palette[3].peGreen = 0x88;
+    palette[3].peBlue = 0x99;
+    palette[4].peRed = 0xaa; palette[4].peGreen = 0xbb;
+    palette[4].peBlue = 0xcc;
+    palette[5].peRed = 0x0d; palette[5].peGreen = 0x1e;
+    palette[5].peBlue = 0x2f;
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+
+    check_visual_update_surface_rect_format(device, D3DFMT_A8R8G8B8);
+    check_visual_update_surface_rect_format(device, D3DFMT_P8);
+
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
 /*
  * Wine provenance: dlls/d3d9/tests/visual.c
  * function: shadow_test

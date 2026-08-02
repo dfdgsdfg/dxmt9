@@ -221,7 +221,9 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
 bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
                                         uint32_t srcSubresource,
                                         D9CTexture* dstTexture,
-                                        uint32_t dstSubresource);
+                                        uint32_t dstSubresource,
+                                        const D9CRect* srcRect,
+                                        const D9CRect* dstPoint);
 
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;

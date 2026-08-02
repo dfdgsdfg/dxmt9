@@ -273,8 +273,10 @@ class Direct3DDevice9Impl final : public IDirect3DDevice9Ex, public RefCounted<D
     return device_->stretchRect(src, srcRect, dst, dstRect, linear);
   }
   core::HResult UpdateSurface(const std::shared_ptr<core::Surface>& src,
-                              const std::shared_ptr<core::Surface>& dst) override {
-    return device_->updateSurface(src, dst);
+                              const core::Rect* srcRect,
+                              const std::shared_ptr<core::Surface>& dst,
+                              core::i32 dstX, core::i32 dstY) override {
+    return device_->updateSurface(src, srcRect, dst, dstX, dstY);
   }
   core::HResult UpdateTexture(const std::shared_ptr<core::Texture>& src,
                               const std::shared_ptr<core::Texture>& dst) override {

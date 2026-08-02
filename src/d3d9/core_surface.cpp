@@ -336,7 +336,9 @@ HResult Device::stretchRect(const std::shared_ptr<Surface> &src,
 }
 
 HResult Device::updateSurface(const std::shared_ptr<Surface> &src,
-                              const std::shared_ptr<Surface> &dst) {
+                              const Rect *srcRect,
+                              const std::shared_ptr<Surface> &dst,
+                              i32 dstX, i32 dstY) {
   if (!src || !dst || !src->valid() || !dst->valid()) {
     return D3DERR_INVALIDCALL;
   }
@@ -344,19 +346,28 @@ HResult Device::updateSurface(const std::shared_ptr<Surface> &src,
     return D3DERR_NOTAVAILABLE;
   }
 
+  const Rect srcArea = srcRect
+                           ? *srcRect
+                           : Rect{0, 0,
+                                  static_cast<i32>(std::min(src->desc().width,
+                                                            dst->desc().width)),
+                                  static_cast<i32>(std::min(src->desc().height,
+                                                            dst->desc().height))};
+  const i32 width = srcArea.right - srcArea.left;
+  const i32 height = srcArea.bottom - srcArea.top;
+  const Rect dstArea{dstX, dstY, dstX + width, dstY + height};
+
   if (backend_) {
     SurfaceCopyDesc backendDesc;
     backendDesc.source = src->handle();
     backendDesc.destination = dst->handle();
-    backendDesc.sourceRect = {0, 0, static_cast<i32>(src->desc().width),
-                              static_cast<i32>(src->desc().height)};
-    backendDesc.destinationRect = {0, 0, static_cast<i32>(dst->desc().width),
-                                   static_cast<i32>(dst->desc().height)};
+    backendDesc.sourceRect = srcArea;
+    backendDesc.destinationRect = dstArea;
     upperDevice_->submitSurfaceCopy(backendDesc);
   }
 
-  auto srcRegion = src->lockRect(nullptr, 0);
-  auto dstRegion = dst->lockRect(nullptr, 0);
+  auto srcRegion = src->lockRect(&srcArea, 0);
+  auto dstRegion = dst->lockRect(&dstArea, 0);
   if (!srcRegion.data || !dstRegion.data) {
     if (srcRegion.data) {
       src->unlockRect();
@@ -367,10 +378,10 @@ HResult Device::updateSurface(const std::shared_ptr<Surface> &src,
     return D3DERR_INVALIDCALL;
   }
 
-  const u32 width = std::min(src->desc().width, dst->desc().width);
-  const u32 height = std::min(src->desc().height, dst->desc().height);
-  const u32 rowBytes = formatRowPitch(src->desc().format, width);
-  const u32 rows = formatRowCount(src->desc().format, height);
+  const u32 rowBytes = formatRowPitch(src->desc().format,
+                                      static_cast<u32>(width));
+  const u32 rows = formatRowCount(src->desc().format,
+                                  static_cast<u32>(height));
   if (rowBytes == 0 || rows == 0 || srcRegion.pitch < rowBytes ||
       dstRegion.pitch < rowBytes) {
     src->unlockRect();
@@ -436,7 +447,7 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
       return D3D_OK;
     }
   }
-  return updateSurface(src, dst);
+  return updateSurface(src, nullptr, dst, 0, 0);
 }
 
 HResult Device::reszDepthResolve(const std::shared_ptr<Surface> &msaaDepth,

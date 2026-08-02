@@ -4030,6 +4030,30 @@ summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-02. Written to fail first: on
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_update_surface_rect_policy"
+source = "wine/dlls/d3d9/tests/visual.c:test_signed_formats"
+source_kind = "behavioral-oracle"
+license = "LGPL-2.1-or-later"
+license_scope = "external-not-vendored"
+upstream_commit = "6e073d28dee3af7f4c965daec94644e0f9f92727"
+lanes = ["builtin"]
+arches = ["x64"]
+area = "surface"
+owner = "core/resources"
+requirements = ["R-TEST-12.13", "R-TEST-12.14"]
+acceptance = ["For A8R8G8B8 and P8 SYSTEMMEM-to-DEFAULT pairs, UpdateSurface copies exactly the requested source rectangle to the requested destination point for all four nullable srcRect/dstPoint combinations; every destination texel outside the copied rectangle remains untouched, including when NULL/NULL copies a smaller whole source into a larger destination. Wine's test_signed_formats is the behavioral oracle for the non-origin sourceRect plus dstPoint contract; the P8 index-shadow extension is dxmt9 policy coverage."]
+status = "passing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/update-surface-rect-20260802.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-02. Written to fail first: without the rect plumbing the case fails with 69 FAIL lines. UpdateSurface ignored BOTH srcRect and dstPoint on BOTH paths and always copied origin-to-origin, even though the rects already reached the unix side (PE validates and packs them; the replay sink passes them) -- dxmt9c_device_update_surface declared the parameters unnamed and dropped them. Fixed by giving core::Device::updateSurface srcRect/dstX/dstY and applying the same rects to both halves it owns (the SurfaceCopyDesc submitted to the backend AND the CPU lockRect row copy), and by offsetting the palettized index-shadow row walk. Passes with the fix; neighbours at their NEW indices pass (155, 156, 157, 188). Pinned ungated in core_device_com_spec.cpp, verified to discriminate: reverting makes it exit 1 on `P8 rectangular UpdateSurface preserves index shadow`. Supervisor hardening on top: adding rects removed the only bound the palettized copy had (the pre-rect code clamped with min(srcWidth,dstWidth)), leaving a memcpy that could run past the destination on an out-of-bounds rect or a NULL rect with an oversized source -- PE rejects both, but that is the same `unreachable because the caller validates` reasoning that caused a device wedge three commits earlier, with a heap overflow as the consequence here instead of wrong pixels. Implemented by codex (gpt-5.6-sol, reasoning high), which could not run Wine in its sandbox and said so; all runtime evidence is the supervising session's. See specs/d3d9/gap.md 2026-08-02."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_visual_depth.c"
 function = "test_visual_z_range_render_state_policy"
 source = "wine/dlls/d3d9/tests/visual.c:z_range_test"

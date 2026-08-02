@@ -336,7 +336,9 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
 bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
                                         uint32_t srcSubresource,
                                         D9CTexture* dstTexture,
-                                        uint32_t dstSubresource) {
+                                        uint32_t dstSubresource,
+                                        const D9CRect* srcRect,
+                                        const D9CRect* dstPoint) {
   if (!srcTexture || !dstTexture || !srcTexture->palettized ||
       !dstTexture->palettized ||
       srcTexture->d3dFormat != dstTexture->d3dFormat ||
@@ -380,21 +382,47 @@ bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
           palettizedSubresourceBytes(dstDesc, dstSubresource, texelBytes)) {
     return false;
   }
-  // D3D9 allows a smaller source than destination (UpdateSurface validates
-  // only that the copy region fits), so clamp per axis rather than assuming
-  // equal extents. dxmt9c_device_update_surface ignores srcRect/dstPoint —
-  // a pre-existing gap on the non-palettized path too — so this copies from
-  // each origin.
-  const uint32_t width = std::min(srcWidth, dstWidth);
-  const uint32_t height = std::min(srcHeight, dstHeight);
+  const uint32_t srcLeft = srcRect ? static_cast<uint32_t>(srcRect->left) : 0u;
+  const uint32_t srcTop = srcRect ? static_cast<uint32_t>(srcRect->top) : 0u;
+  const uint32_t width = srcRect
+                             ? static_cast<uint32_t>(srcRect->right - srcRect->left)
+                             : srcWidth;
+  const uint32_t height = srcRect
+                              ? static_cast<uint32_t>(srcRect->bottom - srcRect->top)
+                              : srcHeight;
+  const uint32_t dstLeft = dstPoint ? static_cast<uint32_t>(dstPoint->left) : 0u;
+  const uint32_t dstTop = dstPoint ? static_cast<uint32_t>(dstPoint->top) : 0u;
   const uint32_t depth = std::min(srcDepth, dstDepth);
+  // Bound the copy region against BOTH surfaces before it becomes a memcpy
+  // length. D3D9PeDevice::UpdateSurface already rejects an out-of-bounds rect
+  // and a NULL-rect source larger than the destination, so this should be
+  // unreachable -- but "unreachable because the caller validates" is exactly
+  // the reasoning that produced a device wedge in dxmt9c_device_update_surface
+  // three commits ago, and the consequence here is a heap overflow rather than
+  // wrong pixels. Note the pre-rect code clamped with min(srcWidth, dstWidth),
+  // so adding rects removed the only bound that existed. Rejecting is safe:
+  // the caller falls through to the routed path.
+  if (srcRect &&
+      (srcRect->left < 0 || srcRect->top < 0 || srcRect->right < srcRect->left ||
+       srcRect->bottom < srcRect->top)) {
+    return false;
+  }
+  if (dstPoint && (dstPoint->left < 0 || dstPoint->top < 0)) {
+    return false;
+  }
+  if (srcLeft + width > srcWidth || srcTop + height > srcHeight ||
+      dstLeft + width > dstWidth || dstTop + height > dstHeight) {
+    return false;
+  }
   const size_t rowBytes = static_cast<size_t>(width) * texelBytes;
   for (uint32_t z = 0; z < depth; ++z) {
     for (uint32_t y = 0; y < height; ++y) {
       const size_t srcOffset =
-          ((static_cast<size_t>(z) * srcHeight + y) * srcWidth) * texelBytes;
+          ((static_cast<size_t>(z) * srcHeight + srcTop + y) * srcWidth + srcLeft) *
+          texelBytes;
       const size_t dstOffset =
-          ((static_cast<size_t>(z) * dstHeight + y) * dstWidth) * texelBytes;
+          ((static_cast<size_t>(z) * dstHeight + dstTop + y) * dstWidth + dstLeft) *
+          texelBytes;
       std::memcpy(dstIndices.data() + dstOffset, srcIndices.data() + srcOffset,
                   rowBytes);
     }

@@ -230,8 +230,8 @@ extern "C" int32_t dxmt9c_device_draw_indexed_primitive_up(D9CDevice* d, uint32_
 }
 
 extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,
-                                                const D9CRect*, D9CSurface* dst,
-                                                const D9CRect*) {
+                                                const D9CRect* srcRect, D9CSurface* dst,
+                                                const D9CRect* dstPoint) {
   if (!src || !dst) {
     dxmt9DebugLog("device_update_surface invalid src=%p dst=%p",
                   static_cast<void*>(src), static_cast<void*>(dst));
@@ -297,11 +297,19 @@ extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,
   if (src->ownerTex && dst->ownerTex && src->ownerTex->palettized &&
       dst->ownerTex->palettized &&
       dxmt9c_copy_palettized_subresource(src->ownerTex, src->ownerLevel,
-                                         dst->ownerTex, dst->ownerLevel)) {
+                                         dst->ownerTex, dst->ownerLevel,
+                                         srcRect, dstPoint)) {
     return dxmt9::core::D3D_OK;
   }
 
-  const int32_t hr = d->iface->UpdateSurface(src->obj, dst->obj);
+  const dxmt9::core::Rect sourceArea = srcRect
+      ? dxmt9::core::Rect{srcRect->left, srcRect->top,
+                          srcRect->right, srcRect->bottom}
+      : dxmt9::core::Rect{};
+  const int32_t dstX = dstPoint ? dstPoint->left : 0;
+  const int32_t dstY = dstPoint ? dstPoint->top : 0;
+  const int32_t hr = d->iface->UpdateSurface(
+      src->obj, srcRect ? &sourceArea : nullptr, dst->obj, dstX, dstY);
   if (failed(hr)) {
     dxmt9DebugLog("device_update_surface failed src=%p dst=%p srcObj=%p dstObj=%p hr=0x%08x",
                   static_cast<void*>(src), static_cast<void*>(dst),

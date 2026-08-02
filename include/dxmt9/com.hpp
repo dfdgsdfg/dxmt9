@@ -159,7 +159,9 @@ class IDirect3DDevice9 : public IUnknown {
                                     const std::shared_ptr<core::Surface>& dst, const core::Rect* dstRect,
                                     bool linear) = 0;
   virtual core::HResult UpdateSurface(const std::shared_ptr<core::Surface>& src,
-                                      const std::shared_ptr<core::Surface>& dst) = 0;
+                                      const core::Rect* srcRect,
+                                      const std::shared_ptr<core::Surface>& dst,
+                                      core::i32 dstX, core::i32 dstY) = 0;
   virtual core::HResult UpdateTexture(const std::shared_ptr<core::Texture>& src,
                                       const std::shared_ptr<core::Texture>& dst) = 0;
   virtual core::HResult GetRenderTargetData(const std::shared_ptr<core::Surface>& src,

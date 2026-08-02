@@ -510,11 +510,42 @@ change, first at `desc.Format == format`, and passes with it.
 > the tree adding links to `docs/research/metal-render-pass-lifecycle.md`, a file
 > that does not exist.
 
-**Two adjacent gaps deliberately left open**, so neither is fixed under cover of
-this one: `srcRect` / `dstPoint` are still ignored by
-`dxmt9c_device_update_surface` on *both* paths (a partial-rect palettized copy
-now moves full-surface *correct* indices where it previously moved full-surface
-*wrong* colours — worse to pin than to leave), and standalone
+**`srcRect` / `dstPoint` — FIXED 2026-08-02.** `UpdateSurface(src, srcRect, dst,
+dstPoint)` ignored **both** rects on **both** paths and always copied
+origin-to-origin. The rects already reached the unix side — PE validates and
+packs them into `D9CCommandChunkWireUpdateSurfaceV2`, and the replay sink passes
+them through — but `dxmt9c_device_update_surface` declared the two parameters
+**unnamed** and dropped them. Partial-rect `UpdateSurface` is legal and common
+D3D9 (atlas and glyph uploads, per-tile streaming), so a correct app silently got
+the wrong pixels in the wrong place.
+
+`core::Device::updateSurface` gained `srcRect` / `dstX` / `dstY` and applies the
+same rectangles to **both halves it owns** — the `SurfaceCopyDesc` submitted to
+the backend *and* the CPU `lockRect` row copy, which write the same destination.
+The bridge only marshals. The palettized path offsets its index-shadow row walk;
+whole-subresource re-expansion is unchanged and stays correct because the
+untouched indices are intact.
+
+New case `visual_update_surface_rect_policy` (index 158) covers all four
+nullable `srcRect`/`dstPoint` combinations for A8R8G8B8 and P8, and asserts that
+**every destination texel outside the rectangle is untouched** — the half a naive
+implementation gets wrong, and what separates a real fix from copying the whole
+surface to the right offset. It fails `69` assertions without the plumbing.
+Wine `6e073d28`'s `test_signed_formats` is a genuine oracle here (it passes
+`&src_rect` / `&dst_point`); the P8 extension is dxmt9 policy.
+
+> **Adding rects removed the only bound the palettized copy had, caught in
+> supervision.** The pre-rect code clamped with `min(srcWidth, dstWidth)`; the
+> new code takes the width from the rect, or from `srcWidth` *unclamped* when the
+> rect is `NULL`, and nothing then checked the region fits either surface. An
+> out-of-bounds rect — or a `NULL` rect with a source larger than the destination
+> — would `memcpy` past the destination. PE rejects both, but **"unreachable
+> because the caller validates" is the exact reasoning that produced a device
+> wedge three commits earlier**, and the consequence here is a heap overflow
+> rather than wrong pixels. The copy now validates rect signs and bounds against
+> both surfaces and returns `false`, falling through to the routed path.
+
+**One adjacent gap still open:** standalone
 `CreateOffscreenPlainSurface(D3DFMT_P8)` surfaces, which have nowhere to store a
 palette, keep the old path.
 

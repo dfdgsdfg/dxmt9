@@ -484,6 +484,7 @@ void test_visual_signed_formats_caps_policy(const struct d3d9_api *api);
 void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api);
 void test_visual_p8_surface_level_contract_policy(const struct d3d9_api *api);
 void test_visual_p8_update_surface_policy(const struct d3d9_api *api);
+void test_visual_update_surface_rect_policy(const struct d3d9_api *api);
 
 /* Wine visual.c depth-stencil oracle scaffolds. */
 void test_visual_z_range_render_state_policy(const struct d3d9_api *api);

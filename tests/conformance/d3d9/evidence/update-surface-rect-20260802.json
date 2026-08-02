@@ -1,0 +1,21 @@
+{
+ "case": "visual_update_surface_rect_policy",
+ "note": "Implemented by codex (gpt-5.6-sol, reasoning high) and verified by the supervising session. Codex again ran under a sandbox where wineserver could not bind, reported that plainly, and did not claim conformance results it could not produce; its host suite figure (210/673) was sandbox artifacts (GPU shader-corpus readbacks returning black, plus verify_tla unable to resolve github.com). Every runtime number below is the supervising session's, outside that sandbox.",
+ "defect": "IDirect3DDevice9::UpdateSurface(src, srcRect, dst, dstPoint) ignored BOTH rects on BOTH paths and always copied origin-to-origin. The rects already reached the unix side -- PE validates and packs them, and the replay sink passes them -- but dxmt9c_device_update_surface declared the parameters unnamed and dropped them. Partial-rect UpdateSurface is legal and common D3D9 (atlas/glyph uploads), so a correct app silently got the wrong pixels in the wrong place.",
+ "design": "Non-palettized path: core::Device::updateSurface gained srcRect/dstX/dstY and applies the same rects to BOTH halves it owns -- the SurfaceCopyDesc submitted to the backend and the CPU lockRect/row copy. The bridge only marshals, per codebase_conventions. No bridge ABI change. Palettized path: the index-shadow row walk offsets by srcRect.left/top and dstPoint.left/top; whole-subresource re-expansion is unchanged and remains correct because untouched shadow indices are intact.",
+ "supervisor_verification": {
+  "staged_winemetal_so_sha256_prefix": "e18a6161d58dc8f2",
+  "case_158_with_fix": "pass",
+  "case_158_without_fix": "fail, 69 FAIL lines",
+  "native_pin_without_fix": "exit 1, `P8 rectangular UpdateSurface preserves index shadow`",
+  "neighbours": {
+   "155 visual_p8_texture_sampler_policy": "pass",
+   "156 visual_p8_surface_level_contract_policy": "pass",
+   "157 visual_p8_update_surface_policy": "pass",
+   "188 visual_mvp_software_vp_policy": "pass"
+  },
+  "manifest_check": "ok, 254 cases"
+ },
+ "supervisor_hardening": "Adding rects REMOVED the only bound the palettized copy had: the pre-rect code clamped with min(srcWidth, dstWidth), and the new code takes width from the rect, or from srcWidth unclamped when the rect is NULL. Nothing then checked that the region fits either surface, so an out-of-bounds rect -- or a NULL rect with a source larger than the destination -- memcpy'd past the destination. PE validation does reject both, but 'unreachable because the caller validates' is the exact reasoning that produced a device wedge three commits earlier, and here the consequence is a heap overflow rather than wrong pixels. The copy now validates rect signs and bounds against both surfaces and returns false, which falls through to the routed path.",
+ "oracle": "Wine 6e073d28 dlls/d3d9/tests/visual.c::test_signed_formats DOES exercise rect-based UpdateSurface (`&tests[j].src_rect`, `&tests[j].dst_point`) -- verified, because the citation looked wrong at first glance. The P8 extension is dxmt9 policy."
+}

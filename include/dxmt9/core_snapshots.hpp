@@ -2338,7 +2338,12 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult fillSurface(const std::shared_ptr<Surface>& surface, const Rect* rect, ColorRGBA color);
   HResult stretchRect(const std::shared_ptr<Surface>& src, const Rect* srcRect,
                       const std::shared_ptr<Surface>& dst, const Rect* dstRect, bool linear);
-  HResult updateSurface(const std::shared_ptr<Surface>& src, const std::shared_ptr<Surface>& dst);
+  HResult updateSurface(const std::shared_ptr<Surface>& src, const Rect* srcRect,
+                        const std::shared_ptr<Surface>& dst, i32 dstX, i32 dstY);
+  HResult updateSurface(const std::shared_ptr<Surface>& src,
+                        const std::shared_ptr<Surface>& dst) {
+    return updateSurface(src, nullptr, dst, 0, 0);
+  }
   HResult updateTexture(const std::shared_ptr<Texture>& src, const std::shared_ptr<Texture>& dst);
   HResult getRenderTargetData(const std::shared_ptr<Surface>& src, const std::shared_ptr<Surface>& dst);
   // R-FORMAT-11 — RESZ MSAA depth resolve. `msaaDepth` is the bound

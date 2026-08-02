@@ -259,6 +259,8 @@ static const struct test_case tests[] =
             test_visual_p8_surface_level_contract_policy},
     {"visual_p8_update_surface_policy",
             test_visual_p8_update_surface_policy},
+    {"visual_update_surface_rect_policy",
+            test_visual_update_surface_rect_policy},
     {"visual_z_range_render_state_policy",
             test_visual_z_range_render_state_policy},
     {"visual_ds_smaller_than_rt_policy",
