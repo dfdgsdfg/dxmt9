@@ -324,14 +324,17 @@ must preserve R-BACK-2.30 present-tail attachment and R-BACK-2.32
 completion-gating semantics.
 
 **R-BACK-2.42** *(EncodeSession ownership.)* The production overlap design must
-make the Metal encode session, not the committed chunk or source slot, the owner
-of active Metal encoder lifetime. An `EncodeSession` owns the current
-`MTLCommandBuffer`, at most one active Metal command encoder, the active
+make the Metal encode session, not the committed chunk or source slot,
+logically responsible for active Metal encoder lifetime. An `EncodeSession`
+owns at most one active Metal command encoder, the active
 render-pass attachment key, deferred clear state, hazard/read-write sets,
 load/store action decisions, dirty encoder shadows, argument-buffer state,
 diagnostic sidecars, GPU sample cursors, post-commit callbacks, and the ordered
-list of source `seqId`s represented by the session. A chunk/source boundary is
-not by itself a render-pass, command-buffer, sidecar, or completion boundary.
+list of source `seqId`s represented by the session. The command buffer is held
+call-locally while encoding and moves into `QueueSubmissionRecord` for physical
+queue handoff, commit, and completion storage; the session coordinates its
+logical chain and tail identity. A chunk/source boundary is not by itself a
+render-pass, command-buffer, sidecar, or completion boundary.
 
 **R-BACK-2.43** *(Open-render-encoder pass streaming.)* Consecutive imported
 sources may continue through the same active `MTLRenderCommandEncoder` when
@@ -536,6 +539,18 @@ retains must be eliminated by an exact flat set or equivalent bounded
 structure. Draw-run parameters, binding overrides, payload views, pending
 submissions, and resolved core-handle lists must not allocate fresh containers
 for each replayed record or run after warm-up.
+
+**R-BACK-2.57** *(Immutable partition-entry snapshot.)* A backend-planned draw
+entry must cross into encoding as an immutable, trivially copyable,
+standard-layout value containing only `{sourceOrdinal, slotIndex, seqId}`;
+`{commandIndex, drawRunRecordIndex, stateIndex, drawParamIndex}`; one
+`DrawUniformHandle`; and absolute `DrawPayloadRange` locators for binding
+override and binding snapshot bytes. It must contain no Metal object, pointer,
+borrowed span, or retained owner; large payloads remain in queue-owned immutable
+source storage. `EncodeChunkOptions` carries the snapshot optionally by value
+and backends forward it unchanged. Empty, stale, invalid, out-of-range, or
+mismatched metadata must fail open to source-order serial encoding, and even a
+valid snapshot does not itself authorize parallel Metal encoding.
 
 ---
 

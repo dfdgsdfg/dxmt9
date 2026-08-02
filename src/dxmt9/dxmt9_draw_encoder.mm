@@ -4,6 +4,7 @@
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
+#include "dxmt9_encode_session_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_blit_encoders.hpp"
 
@@ -5300,37 +5301,36 @@ struct RenderEncoderGpuAttachment {
 
 constexpr std::uint32_t kMaxRenderEncoderGpuSamples = 8192;
 
-struct EncodeChunkSessionStorage {
+}  // namespace
+
+namespace encode_session {
+
+struct EncoderState {
   WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
   WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
-  std::vector<std::function<void()>> postCommitCallbacks;
-  std::vector<std::function<void()>> completionCallbacks;
-  std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureRequest;
+  bool hasActiveRender = false;
+};
+
+struct PassState {
   AttachmentKey activeKey{};
   HazardProbe activeWriteHazard{};
-  bool hasActiveRender = false;
   // R-BACK-13.1 / 13.6: current render encoder's chosen FFP path.
   bool activePassUsesTileFfp = false;
-  // R-BACK-12.22 / 12.24: current render encoder's sticky argbuf state.
-  bool activePassUsesArgbufHybrid = false;
-  // R-BACK-12.22..12.26: resource-array sub-mode of the sticky argbuf table.
-  bool activePassUsesArgbufResourceArray = false;
-  bool activePassUsesArgbufDirectCbuf = false;
-  // Current pass backing transient slab. Slot 30 is bound once at pass open.
-  WMT::Buffer activeArgbufStorage{};
-  std::uint64_t activeArgbufOffset = 0;
-  std::optional<core::FlatDrawStateKey> activeDrawStateKey;
-  bool activeDrawStateUsesPrefetchedPsoLayout = false;
   std::optional<core::ClearDesc> pendingClear;
   std::size_t pendingClearCommandIndex =
       std::numeric_limits<std::size_t>::max();
   // R-BACK-15.4: color attachment handles bound on the active render encoder.
   std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
-  ActiveColorAttachmentDump activeColorAttachmentDump{};
-  ActiveDepthAttachmentDump activeDepthAttachmentDump{};
-  std::vector<ActiveDrawTextureDump> activeDrawTextureDumps;
-  u64 activeRenderEncoderSeq = 0;
-  u64 activeRenderEncoderIndex = 0;
+};
+
+struct BindingState {
+  // R-BACK-12.22 / 12.24: current render encoder's sticky argbuf state.
+  bool activePassUsesArgbufHybrid = false;
+  // R-BACK-12.22..12.26: resource-array sub-mode of the sticky argbuf table.
+  bool activePassUsesArgbufResourceArray = false;
+  bool activePassUsesArgbufDirectCbuf = false;
+  std::optional<core::FlatDrawStateKey> activeDrawStateKey;
+  bool activeDrawStateUsesPrefetchedPsoLayout = false;
   uniform::DirtyState uniformDirty{};
   std::optional<u64> lastArgbufPayloadHash;
   std::optional<ArgbufPayloadDeltaKey> lastArgbufPayloadDeltaKey;
@@ -5340,6 +5340,16 @@ struct EncodeChunkSessionStorage {
   ArgbufCbufCache argbufCbufCache;
   StreamIbStagingCache activeStreamIbStaging;
   TextureSamplerBindShadow textureSamplerShadow{};
+  bool initialized = false;
+};
+
+struct DiagnosticsState {
+  std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureRequest;
+  ActiveColorAttachmentDump activeColorAttachmentDump{};
+  ActiveDepthAttachmentDump activeDepthAttachmentDump{};
+  std::vector<ActiveDrawTextureDump> activeDrawTextureDumps;
+  u64 activeRenderEncoderSeq = 0;
+  u64 activeRenderEncoderIndex = 0;
   ActiveEncoderBreakdown activeEncoderBreakdown;
   std::optional<VisibilityScoutPass> activeVisibilityScout;
   u64 renderEncoderIndex = 0;
@@ -5348,18 +5358,69 @@ struct EncodeChunkSessionStorage {
       renderEncoderGpuSamples;
   std::uint32_t renderEncoderGpuSampleCursor = 0;
   std::uint32_t requestedRenderEncoderGpuSamples = 0;
-  std::uint64_t committedSubCommandBuffers = 0;
-  bool initialized = false;
 };
+
+struct CompletionState {
+  std::vector<std::function<void()>> postCommitCallbacks;
+  std::vector<std::function<void()>> completionCallbacks;
+  std::uint64_t committedSubCommandBuffers = 0;
+};
+
+struct EncodeChunkSessionStorage {
+  EncoderState encoder{};
+  PassState pass{};
+  BindingState binding{};
+  DiagnosticsState diagnostics{};
+  CompletionState completion{};
+};
+
+EncodeChunkSessionStorage* createStorage() {
+  return new EncodeChunkSessionStorage{};
+}
+
+void destroyStorage(EncodeChunkSessionStorage* storage) noexcept {
+  delete storage;
+}
+
+void resetStorage(EncodeChunkSessionStorage& storage) {
+  DXMT_ASSERT(!storage.encoder.activeRenderEncoder);
+  DXMT_ASSERT(!storage.encoder.activeBlitEncoder);
+  DXMT_ASSERT(!storage.encoder.hasActiveRender);
+  storage = EncodeChunkSessionStorage{};
+}
+
+bool storageHasActiveRender(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  return static_cast<bool>(storage.encoder.activeRenderEncoder);
+}
+
+bool storageHasDeferredSubmissionPayload(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  return static_cast<bool>(storage.encoder.activeRenderEncoder) ||
+         static_cast<bool>(storage.encoder.activeBlitEncoder) ||
+         storage.encoder.hasActiveRender ||
+         storage.pass.pendingClear.has_value() ||
+         !storage.completion.postCommitCallbacks.empty() ||
+         !storage.completion.completionCallbacks.empty() ||
+         storage.diagnostics.metalCaptureRequest.has_value() ||
+         static_cast<bool>(storage.diagnostics.renderEncoderGpuSampleBuffer) ||
+         !storage.diagnostics.renderEncoderGpuSamples.empty();
+}
+
+}  // namespace encode_session
+
+namespace {
+
+using encode_session::EncodeChunkSessionStorage;
 
 void initializeEncodeChunkSessionStorage(
     EncodeChunkSessionStorage& state,
     const uniform::DirtyState& dirty) {
-  if (state.initialized) {
+  if (state.binding.initialized) {
     return;
   }
-  state.uniformDirty = dirty;
-  state.initialized = true;
+  state.binding.uniformDirty = dirty;
+  state.binding.initialized = true;
 }
 
 EncodeChunkSessionStorage makeEncodeChunkSessionStorage(
@@ -5373,22 +5434,24 @@ void initializeEncodeChunkSessionGpuSamplingStorage(
     EncodeChunkSessionStorage& state,
     WMT::Device device,
     std::size_t commandCount) {
-  if (state.requestedRenderEncoderGpuSamples != 0) {
+  auto& diagnostics = state.diagnostics;
+  if (diagnostics.requestedRenderEncoderGpuSamples != 0) {
     return;
   }
   if (!renderEncoderGpuTimeEnabled() ||
       !device.supportsCounterSampling(WMTCounterSamplingPointAtStageBoundary)) {
     return;
   }
-  state.requestedRenderEncoderGpuSamples =
+  diagnostics.requestedRenderEncoderGpuSamples =
       static_cast<std::uint32_t>(std::min<std::size_t>(
           kMaxRenderEncoderGpuSamples,
           std::max<std::size_t>(2u, commandCount * 2u + 16u)));
-  state.renderEncoderGpuSampleBuffer =
-      device.newCounterSampleBuffer(state.requestedRenderEncoderGpuSamples,
+  diagnostics.renderEncoderGpuSampleBuffer =
+      device.newCounterSampleBuffer(
+          diagnostics.requestedRenderEncoderGpuSamples,
                                     /*shared=*/true);
-  if (!state.renderEncoderGpuSampleBuffer) {
-    state.requestedRenderEncoderGpuSamples = 0;
+  if (!diagnostics.renderEncoderGpuSampleBuffer) {
+    diagnostics.requestedRenderEncoderGpuSamples = 0;
   }
 }
 
@@ -9148,158 +9211,55 @@ void appendSamplerTrace(std::ostringstream& out,
 
 }  // namespace
 
-struct EncodeChunkSessionState {
-  EncodeChunkSessionStorage storage{};
-  core::metalqueue::EncodeSessionSourceList sources{};
-};
+namespace encode_session {
 
-EncodeChunkSession makeEncodeChunkSession() {
-  return EncodeChunkSession(new EncodeChunkSessionState{},
-                            EncodeChunkSessionDeleter{});
-}
+class LifecycleRuntime {
+public:
+  LifecycleRuntime(EncodeContext& ctx,
+                   EncodeChunkSessionStorage& storage,
+                   EncodeCallState& call,
+                   u64 seqId,
+                   std::size_t slotIndex)
+      : ctx_(ctx),
+        storage_(storage),
+        call_(call),
+        seqId_(seqId),
+        slotIndex_(slotIndex) {}
 
-void EncodeChunkSessionDeleter::operator()(
-    EncodeChunkSessionState* session) const noexcept {
-  delete session;
-}
-
-void resetEncodeChunkSession(EncodeChunkSessionState& session) {
-  DXMT_ASSERT(!session.storage.activeRenderEncoder);
-  DXMT_ASSERT(!session.storage.activeBlitEncoder);
-  DXMT_ASSERT(!session.storage.hasActiveRender);
-  session.storage = EncodeChunkSessionStorage{};
-  session.sources.clear();
-}
-
-bool retainEncodeChunkSessionUntilSubmissionComplete(
-    EncodeChunkSession session,
-    core::metalqueue::QueueSubmissionRecord& record) {
-  if (!session) {
-    return true;
-  }
-  std::shared_ptr<EncodeChunkSessionState> retained(
-      session.release(), EncodeChunkSessionDeleter{});
-  record.retainedPayloads.push_back(std::move(retained));
-  return true;
-}
-
-bool encodeChunkSessionHasActiveRender(
-    const EncodeChunkSessionState& session) noexcept {
-  return static_cast<bool>(session.storage.activeRenderEncoder);
-}
-
-bool encodeChunkSessionHasDeferredSubmissionPayload(
-    const EncodeChunkSessionState& session) noexcept {
-  const auto& storage = session.storage;
-  return static_cast<bool>(storage.activeRenderEncoder) ||
-         static_cast<bool>(storage.activeBlitEncoder) ||
-         storage.hasActiveRender ||
-         storage.pendingClear.has_value() ||
-         !storage.postCommitCallbacks.empty() ||
-         !storage.completionCallbacks.empty() ||
-         storage.metalCaptureRequest.has_value() ||
-         static_cast<bool>(storage.renderEncoderGpuSampleBuffer) ||
-         !storage.renderEncoderGpuSamples.empty();
-}
-
-bool canAppendEncodeChunkSessionSource(
-    const EncodeChunkSessionState& session,
-    core::metalqueue::QueueCompletionSource source) noexcept {
-  return session.sources.canAppend(source);
-}
-
-bool appendEncodeChunkSessionSource(
-    EncodeChunkSessionState& session,
-    core::metalqueue::QueueCompletionSource source) noexcept {
-  return session.sources.append(source);
-}
-
-std::span<const core::metalqueue::QueueCompletionSource>
-encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept {
-  return session.sources.span();
-}
-
-bool publishEncodeChunkSessionSources(
-    const EncodeChunkSessionState& sessionState,
-    core::metalqueue::QueueSubmissionRecord& record) {
-  const auto sessionSources = sessionState.sources.span();
-  if (sessionSources.empty()) {
-    return true;
+  void assertEncoderLifecycleInvariant() const {
+    DXMT_ASSERT(!(storage_.encoder.activeRenderEncoder &&
+                  storage_.encoder.activeBlitEncoder));
+    DXMT_ASSERT(
+        storage_.encoder.hasActiveRender ==
+        static_cast<bool>(storage_.encoder.activeRenderEncoder));
   }
 
-  const auto recordSources = record.explicitCompletionSourceSpan();
-  if (recordSources.empty()) {
-    if (!record.assignFixedCompletionSources(sessionSources)) {
-      return false;
-    }
-    return true;
-  }
-
-  if (recordSources.size() != sessionSources.size()) {
-    return false;
-  }
-  for (std::size_t i = 0; i < sessionSources.size(); ++i) {
-    const auto& expected = sessionSources[i];
-    const auto& actual = recordSources[i];
-    if (expected.slotIndex != actual.slotIndex ||
-        expected.seqId != actual.seqId ||
-        expected.hasPresent != actual.hasPresent ||
-        expected.commandBegin != actual.commandBegin ||
-        expected.commandCount != actual.commandCount) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool finalizeEncodeChunkSessionIntoSubmission(
-    EncodeContext& ctx,
-    EncodeChunkSessionState& sessionState,
-    core::metalqueue::QueueSubmissionRecord& record) {
-  auto& storage = sessionState.storage;
-  if (!record.commandBuffer) {
-    return false;
-  }
-  if (record.renderEncoderGpuSampleBuffer &&
-      storage.renderEncoderGpuSampleBuffer &&
-      record.renderEncoderGpuSampleBuffer.handle !=
-          storage.renderEncoderGpuSampleBuffer.handle) {
-    return false;
-  }
-  if (record.metalCapture.has_value() &&
-      storage.metalCaptureRequest.has_value()) {
-    return false;
-  }
-
-  auto assertEncoderLifecycleInvariant = [&] {
-    DXMT_ASSERT(!(storage.activeRenderEncoder && storage.activeBlitEncoder));
-    DXMT_ASSERT(storage.hasActiveRender ==
-                static_cast<bool>(storage.activeRenderEncoder));
-  };
-  auto assertNoActiveEncoder = [&] {
+  void assertNoActiveEncoder() const {
     assertEncoderLifecycleInvariant();
-    DXMT_ASSERT(!storage.activeRenderEncoder);
-    DXMT_ASSERT(!storage.activeBlitEncoder);
-    DXMT_ASSERT(!storage.hasActiveRender);
-  };
-  auto makeRenderEncoderGpuAttachment = [&](
+    DXMT_ASSERT(!storage_.encoder.activeRenderEncoder);
+    DXMT_ASSERT(!storage_.encoder.activeBlitEncoder);
+    DXMT_ASSERT(!storage_.encoder.hasActiveRender);
+  }
+
+  RenderEncoderGpuAttachment makeRenderEncoderGpuAttachment(
       core::metalqueue::RenderEncoderGpuPassType passType,
       std::size_t commandIndex,
       std::uint64_t rtHandle,
       std::uint64_t depthHandle,
       std::uint64_t psoHandle = 0) {
     RenderEncoderGpuAttachment result{};
-    if (!storage.renderEncoderGpuSampleBuffer ||
-        storage.renderEncoderGpuSampleCursor + 1u >=
-            storage.requestedRenderEncoderGpuSamples) {
+    if (!storage_.diagnostics.renderEncoderGpuSampleBuffer ||
+        storage_.diagnostics.renderEncoderGpuSampleCursor + 1u >=
+            storage_.diagnostics.requestedRenderEncoderGpuSamples) {
       return result;
     }
     const std::uint32_t startSample =
-        storage.renderEncoderGpuSampleCursor++;
+        storage_.diagnostics.renderEncoderGpuSampleCursor++;
     const std::uint32_t endSample =
-        storage.renderEncoderGpuSampleCursor++;
+        storage_.diagnostics.renderEncoderGpuSampleCursor++;
     result.attachments[0] = WMTSampleBufferAttachmentInfo{
-        .sample_buffer = storage.renderEncoderGpuSampleBuffer.handle,
+        .sample_buffer =
+            storage_.diagnostics.renderEncoderGpuSampleBuffer.handle,
         .start_of_encoder_sample_index = startSample,
         .end_of_encoder_sample_index = endSample,
     };
@@ -9308,10 +9268,10 @@ bool finalizeEncodeChunkSessionIntoSubmission(
             .startIndex = startSample,
             .endIndex = endSample,
             .passType = passType,
-            .seqId = record.seqId,
+            .seqId = seqId_,
             .slotIndex =
-                record.slotIndex <= std::numeric_limits<std::uint32_t>::max()
-                    ? static_cast<std::uint32_t>(record.slotIndex)
+                slotIndex_ <= std::numeric_limits<std::uint32_t>::max()
+                    ? static_cast<std::uint32_t>(slotIndex_)
                     : std::numeric_limits<std::uint32_t>::max(),
             .commandIndex =
                 commandIndex <= std::numeric_limits<std::uint32_t>::max()
@@ -9323,112 +9283,284 @@ bool finalizeEncodeChunkSessionIntoSubmission(
         };
     result.active = true;
     return result;
-  };
-  auto recordRenderEncoderGpuAttachment =
-      [&](const RenderEncoderGpuAttachment& attachment) {
-        if (attachment.active) {
-          storage.renderEncoderGpuSamples.push_back(attachment.sample);
-        }
-      };
-  auto flushPendingClear = [&] {
-    if (!storage.pendingClear.has_value()) {
+  }
+
+  void recordRenderEncoderGpuAttachment(
+      const RenderEncoderGpuAttachment& attachment) {
+    if (attachment.active) {
+      storage_.diagnostics.renderEncoderGpuSamples.push_back(attachment.sample);
+    }
+  }
+
+  void flushPendingClear() {
+    if (!storage_.pass.pendingClear.has_value()) {
       return;
     }
-    const auto& clear = *storage.pendingClear;
+    const auto& clear = *storage_.pass.pendingClear;
     const auto sampleAttachment = makeRenderEncoderGpuAttachment(
         core::metalqueue::RenderEncoderGpuPassType::Clear,
-        storage.pendingClearCommandIndex,
+        storage_.pass.pendingClearCommandIndex,
         clear.colorAttachments[0].handle.value,
         clear.depthStencil.handle.value);
-    dxmt9::encoders::encodeClearPass(record.commandBuffer, ctx.pool, clear,
+    dxmt9::encoders::encodeClearPass(call_.commandBuffer, ctx_.pool, clear,
                                      sampleAttachment.span());
     recordRenderEncoderGpuAttachment(sampleAttachment);
-    storage.pendingClear.reset();
-    storage.pendingClearCommandIndex =
+    call_.commandBufferHasWork = true;
+    storage_.pass.pendingClear.reset();
+    storage_.pass.pendingClearCommandIndex =
         std::numeric_limits<std::size_t>::max();
-  };
-  auto flushRender = [&] {
-    if (!storage.activeRenderEncoder) {
+  }
+
+  void endRender(
+      perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final) {
+    if (!storage_.encoder.activeRenderEncoder) {
       return;
     }
-    DXMT_ASSERT(storage.hasActiveRender);
-    DXMT_ASSERT(!storage.activeBlitEncoder);
-    storage.activeRenderEncoder.popDebugGroup();
-    storage.activeRenderEncoder.endEncoding();
-    maybeEncodeColorAttachmentDump(record.commandBuffer, ctx.device,
-                                   storage.activeColorAttachmentDump,
-                                   storage.completionCallbacks);
-    maybeEncodeDepthAttachmentDump(record.commandBuffer, ctx.device,
-                                   storage.activeDepthAttachmentDump,
-                                   storage.completionCallbacks);
-    maybeEncodeDrawTextureDumps(record.commandBuffer, ctx.device,
-                                storage.activeDrawTextureDumps,
-                                storage.completionCallbacks);
-    if (storage.activeVisibilityScout) {
-      enqueueVisibilityScoutCompletion(*storage.activeVisibilityScout,
-                                       storage.completionCallbacks);
-      storage.activeVisibilityScout.reset();
+    DXMT_ASSERT(storage_.encoder.hasActiveRender);
+    DXMT_ASSERT(!storage_.encoder.activeBlitEncoder);
+    storage_.encoder.activeRenderEncoder.popDebugGroup();
+    storage_.encoder.activeRenderEncoder.endEncoding();
+    maybeEncodeColorAttachmentDump(
+        call_.commandBuffer, ctx_.device,
+        storage_.diagnostics.activeColorAttachmentDump,
+        storage_.completion.completionCallbacks);
+    maybeEncodeDepthAttachmentDump(
+        call_.commandBuffer, ctx_.device,
+        storage_.diagnostics.activeDepthAttachmentDump,
+        storage_.completion.completionCallbacks);
+    maybeEncodeDrawTextureDumps(
+        call_.commandBuffer, ctx_.device,
+        storage_.diagnostics.activeDrawTextureDumps,
+        storage_.completion.completionCallbacks);
+    if (storage_.diagnostics.activeVisibilityScout) {
+      enqueueVisibilityScoutCompletion(
+          *storage_.diagnostics.activeVisibilityScout,
+          storage_.completion.completionCallbacks);
+      storage_.diagnostics.activeVisibilityScout.reset();
     }
-    perf::countRenderPassEnd(perf::EncoderSplitReason::Final);
-    storage.activeEncoderBreakdown.emit(perf::EncoderSplitReason::Final);
-    storage.activeStreamIbStaging.begin(false);
-    for (auto& handle : storage.activeColorHandles) {
+    perf::countRenderPassEnd(reason);
+    storage_.diagnostics.activeEncoderBreakdown.emit(reason);
+    storage_.binding.activeStreamIbStaging.begin(false);
+    for (auto& handle : storage_.pass.activeColorHandles) {
       if (handle) {
-        ctx.queue.markColorHandleTouched(handle);
+        ctx_.queue.markColorHandleTouched(handle);
         handle = core::Handle{};
       }
     }
-    storage.activeColorAttachmentDump = {};
-    storage.activeDepthAttachmentDump = {};
-    storage.activeDrawTextureDumps.clear();
-    storage.activeRenderEncoderSeq = 0;
-    storage.activeRenderEncoderIndex = 0;
-    storage.activeRenderEncoder = {};
-    storage.hasActiveRender = false;
-    storage.activeDrawStateKey.reset();
-    storage.activeDrawStateUsesPrefetchedPsoLayout = false;
-    storage.textureSamplerShadow.reset();
+    storage_.diagnostics.activeColorAttachmentDump = {};
+    storage_.diagnostics.activeDepthAttachmentDump = {};
+    storage_.diagnostics.activeDrawTextureDumps.clear();
+    storage_.diagnostics.activeRenderEncoderSeq = 0;
+    storage_.diagnostics.activeRenderEncoderIndex = 0;
+    storage_.encoder.activeRenderEncoder = {};
+    storage_.encoder.hasActiveRender = false;
+    storage_.binding.activeDrawStateKey.reset();
+    storage_.binding.activeDrawStateUsesPrefetchedPsoLayout = false;
+    storage_.binding.textureSamplerShadow.reset();
     assertEncoderLifecycleInvariant();
-  };
-  auto flushBlit = [&] {
-    if (!storage.activeBlitEncoder) {
+  }
+
+  void endBlit() {
+    if (!storage_.encoder.activeBlitEncoder) {
       return;
     }
-    DXMT_ASSERT(!storage.activeRenderEncoder);
-    DXMT_ASSERT(!storage.hasActiveRender);
-    storage.activeBlitEncoder.endEncoding();
-    storage.activeBlitEncoder = {};
+    DXMT_ASSERT(!storage_.encoder.activeRenderEncoder);
+    DXMT_ASSERT(!storage_.encoder.hasActiveRender);
+    storage_.encoder.activeBlitEncoder.endEncoding();
+    storage_.encoder.activeBlitEncoder = {};
     assertEncoderLifecycleInvariant();
-  };
+  }
 
-  flushPendingClear();
-  flushRender();
-  flushBlit();
-  assertNoActiveEncoder();
+  void endForCallBoundary() {
+    flushPendingClear();
+    endRender(perf::EncoderSplitReason::Final);
+    endBlit();
+    assertNoActiveEncoder();
+  }
 
-  if (storage.metalCaptureRequest.has_value()) {
-    record.metalCaptureDevice = WMT::Device{ctx.device.handle};
-    record.metalCapture = std::move(storage.metalCaptureRequest);
+  bool finalizeIntoSubmission(
+      core::metalqueue::QueueSubmissionRecord& record,
+      EncodeChunkSessionState* sessionState,
+      bool resetSessionAfterPublication) {
+    if (!canFinalizeIntoSubmission(record) ||
+        !validatePublication(record, sessionState)) {
+      return false;
+    }
+    endForCallBoundary();
+    reservePublicationCapacity(record);
+    return publishPrepared(record, sessionState,
+                           resetSessionAfterPublication);
   }
-  if (!publishEncodeChunkSessionSources(sessionState, record)) {
-    return false;
+
+  bool publishIntoSubmission(
+      core::metalqueue::QueueSubmissionRecord& record,
+      EncodeChunkSessionState* sessionState,
+      bool resetSessionAfterPublication) {
+    if (!canFinalizeIntoSubmission(record) ||
+        !validatePublication(record, sessionState)) {
+      return false;
+    }
+    reservePublicationCapacity(record);
+    return publishPrepared(record, sessionState,
+                           resetSessionAfterPublication);
   }
-  if (!record.renderEncoderGpuSampleBuffer &&
-      storage.renderEncoderGpuSampleBuffer) {
-    record.renderEncoderGpuSampleBuffer =
-        std::move(storage.renderEncoderGpuSampleBuffer);
+
+private:
+  bool canFinalizeIntoSubmission(
+      const core::metalqueue::QueueSubmissionRecord& record) const {
+    return call_.commandBuffer &&
+           !(record.renderEncoderGpuSampleBuffer &&
+             storage_.diagnostics.renderEncoderGpuSampleBuffer &&
+             record.renderEncoderGpuSampleBuffer.handle !=
+                 storage_.diagnostics.renderEncoderGpuSampleBuffer.handle) &&
+           !(record.metalCapture.has_value() &&
+             storage_.diagnostics.metalCaptureRequest.has_value());
   }
-  for (auto& sample : storage.renderEncoderGpuSamples) {
-    record.renderEncoderGpuSamples.push_back(std::move(sample));
+
+  static bool validatePublication(
+      const core::metalqueue::QueueSubmissionRecord& record,
+      const EncodeChunkSessionState* sessionState) {
+    return !sessionState || validateSources(*sessionState, record);
   }
-  for (auto& callback : storage.postCommitCallbacks) {
-    record.postCommitCallbacks.push_back(std::move(callback));
+
+  void reservePublicationCapacity(
+      core::metalqueue::QueueSubmissionRecord& record) {
+    reserveAppendCapacity(storage_.diagnostics.renderEncoderGpuSamples,
+                          record.renderEncoderGpuSamples);
+    reserveAppendCapacity(storage_.completion.postCommitCallbacks,
+                          record.postCommitCallbacks);
+    reserveAppendCapacity(storage_.completion.completionCallbacks,
+                          record.completionCallbacks);
   }
-  for (auto& callback : storage.completionCallbacks) {
-    record.completionCallbacks.push_back(std::move(callback));
+
+  bool publishPrepared(
+      core::metalqueue::QueueSubmissionRecord& record,
+      EncodeChunkSessionState* sessionState,
+      bool resetSessionAfterPublication) {
+    DXMT_ASSERT(call_.commandBuffer);
+    DXMT_ASSERT(!resetSessionAfterPublication || sessionState);
+    if (sessionState && !publishSources(*sessionState, record)) {
+      return false;
+    }
+    record.commandBuffer = std::move(call_.commandBuffer);
+    if (storage_.diagnostics.metalCaptureRequest.has_value()) {
+      record.metalCaptureDevice = WMT::Device{ctx_.device.handle};
+      record.metalCapture =
+          std::move(storage_.diagnostics.metalCaptureRequest);
+      record.metalCaptureAlreadyStarted =
+          call_.captureAlreadyStartedAtChunkBegin;
+    }
+    if (!record.renderEncoderGpuSampleBuffer &&
+        storage_.diagnostics.renderEncoderGpuSampleBuffer) {
+      record.renderEncoderGpuSampleBuffer =
+          std::move(storage_.diagnostics.renderEncoderGpuSampleBuffer);
+    }
+    movePreparedPayload(storage_.diagnostics.renderEncoderGpuSamples,
+                        record.renderEncoderGpuSamples);
+    movePreparedPayload(storage_.completion.postCommitCallbacks,
+                        record.postCommitCallbacks);
+    movePreparedPayload(storage_.completion.completionCallbacks,
+                        record.completionCallbacks);
+    if (resetSessionAfterPublication) {
+      resetEncodeChunkSession(*sessionState);
+    }
+    return true;
   }
-  resetEncodeChunkSession(sessionState);
-  return true;
+
+  static bool validateSources(
+      const EncodeChunkSessionState& sessionState,
+      const core::metalqueue::QueueSubmissionRecord& record) {
+    const auto sessionSources = sessionState.sources.span();
+    if (sessionSources.empty()) {
+      return true;
+    }
+    const auto recordSources = record.explicitCompletionSourceSpan();
+    if (recordSources.empty()) {
+      core::metalqueue::EncodeSessionSourceList validated;
+      return validated.assign(sessionSources);
+    }
+    return sourcesMatch(sessionSources, recordSources);
+  }
+
+  static bool publishSources(
+      const EncodeChunkSessionState& sessionState,
+      core::metalqueue::QueueSubmissionRecord& record) {
+    const auto sessionSources = sessionState.sources.span();
+    if (sessionSources.empty()) {
+      return true;
+    }
+    const auto recordSources = record.explicitCompletionSourceSpan();
+    if (recordSources.empty()) {
+      return record.assignFixedCompletionSources(sessionSources);
+    }
+    return sourcesMatch(sessionSources, recordSources);
+  }
+
+  static bool sourcesMatch(
+      std::span<const core::metalqueue::QueueCompletionSource> expectedSources,
+      std::span<const core::metalqueue::QueueCompletionSource> actualSources) {
+    if (actualSources.size() != expectedSources.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < expectedSources.size(); ++i) {
+      const auto& expected = expectedSources[i];
+      const auto& actual = actualSources[i];
+      if (expected.slotIndex != actual.slotIndex ||
+          expected.seqId != actual.seqId ||
+          expected.hasPresent != actual.hasPresent ||
+          expected.commandBegin != actual.commandBegin ||
+          expected.commandCount != actual.commandCount) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  template <typename T>
+  static void reserveAppendCapacity(const std::vector<T>& source,
+                                    std::vector<T>& destination) {
+    if (!source.empty() && !destination.empty()) {
+      destination.reserve(destination.size() + source.size());
+    }
+  }
+
+  template <typename T>
+  static void movePreparedPayload(std::vector<T>& source,
+                                  std::vector<T>& destination) {
+    if (destination.empty()) {
+      destination = std::move(source);
+      return;
+    }
+    for (auto& value : source) {
+      destination.push_back(std::move(value));
+    }
+    source.clear();
+  }
+
+  EncodeContext& ctx_;
+  EncodeChunkSessionStorage& storage_;
+  EncodeCallState& call_;
+  u64 seqId_;
+  std::size_t slotIndex_;
+};
+
+}  // namespace encode_session
+
+bool finalizeEncodeChunkSessionIntoSubmission(
+    EncodeContext& ctx,
+    EncodeChunkSessionState& sessionState,
+    core::metalqueue::QueueSubmissionRecord& record) {
+  DXMT_ASSERT(sessionState.storage);
+  encode_session::EncodeCallState call{};
+  // Keep the record's ownership intact until all source validation and vector
+  // capacity reservations have succeeded.
+  call.commandBuffer = record.commandBuffer;
+  encode_session::LifecycleRuntime lifecycle(
+      ctx, *sessionState.storage, call, record.seqId, record.slotIndex);
+  const bool finalized =
+      lifecycle.finalizeIntoSubmission(record, &sessionState,
+                                       /*resetSessionAfterPublication=*/true);
+  return finalized;
 }
 
 WMT::Reference<WMT::SamplerState> makeSampler(WMT::Reference<WMT::Device> device, bool linear) {
@@ -14754,6 +14886,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeChunkOptions options) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
+  // EncodePartitionEntrySnapshot remains a backend metadata carrier only. The
+  // current serial executor intentionally ignores options.partitionEntry until
+  // retained-source resolution is implemented.
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
@@ -14850,9 +14985,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // frame; `notePresentChunkForCapture` later returns the request when
   // the target frame's Present chunk is encoded, and that request is
   // attached to the record so the queue's commit closes the capture.
+  encode_session::EncodeCallState call{};
+  auto& captureAlreadyStartedAtChunkBegin =
+      call.captureAlreadyStartedAtChunkBegin;
   std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest =
       ctx.queue.metalCaptureForChunkBegin(slot.seqId);
-  bool captureAlreadyStartedAtChunkBegin = false;
   if (earlyCaptureRequest.has_value()) {
     traceEncodeStage("before-start-capture");
     captureAlreadyStartedAtChunkBegin =
@@ -14866,9 +15003,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   const bool injectedCommandBuffer = options.hasInjectedCommandBuffer();
   traceEncodeStage(injectedCommandBuffer ? "before-use-injected-command-buffer"
                                          : "before-new-command-buffer");
-  auto commandBuffer = injectedCommandBuffer
+  call.commandBuffer = injectedCommandBuffer
       ? std::move(options.commandBuffer)
       : ctx.queue.newCommandBuffer();
+  auto& commandBuffer = call.commandBuffer;
   if (!commandBuffer) {
     traceEncodeStage(injectedCommandBuffer ? "injected-command-buffer-null"
                                            : "new-command-buffer-null");
@@ -14879,63 +15017,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
   traceEncodeStage(injectedCommandBuffer ? "after-use-injected-command-buffer"
                                          : "after-new-command-buffer");
-  bool commandBufferHasWork = false;
+  auto& commandBufferHasWork = call.commandBufferHasWork;
   // One-shot storage for direct callers. The opt-in EncodeSession path below
   // supplies persistent storage so source boundaries can remain metadata-only.
   EncodeChunkSessionStorage localSession =
       makeEncodeChunkSessionStorage(ctx.dirty);
   EncodeChunkSessionStorage& session =
-      options.session ? options.session->storage : localSession;
+      options.session ? *options.session->storage : localSession;
   if (options.session) {
     initializeEncodeChunkSessionStorage(session, ctx.dirty);
   }
   const bool deferSessionFinalization =
       options.deferSessionFinalization && options.session != nullptr;
-  auto& activeRenderEncoder = session.activeRenderEncoder;
-  auto& activeBlitEncoder = session.activeBlitEncoder;
-  auto& postCommitCallbacks = session.postCommitCallbacks;
-  auto& completionCallbacks = session.completionCallbacks;
-  auto& metalCaptureRequest = session.metalCaptureRequest;
-  auto& activeKey = session.activeKey;
-  auto& activeWriteHazard = session.activeWriteHazard;
-  auto& hasActiveRender = session.hasActiveRender;
-  auto& activePassUsesTileFfp = session.activePassUsesTileFfp;
-  auto& activePassUsesArgbufHybrid = session.activePassUsesArgbufHybrid;
-  auto& activePassUsesArgbufResourceArray =
-      session.activePassUsesArgbufResourceArray;
-  auto& activePassUsesArgbufDirectCbuf = session.activePassUsesArgbufDirectCbuf;
-  [[maybe_unused]] auto& activeArgbufStorage = session.activeArgbufStorage;
-  [[maybe_unused]] auto& activeArgbufOffset = session.activeArgbufOffset;
-  auto& activeDrawStateKey = session.activeDrawStateKey;
-  auto& activeDrawStateUsesPrefetchedPsoLayout =
-      session.activeDrawStateUsesPrefetchedPsoLayout;
-  auto& pendingClear = session.pendingClear;
-  auto& pendingClearCommandIndex = session.pendingClearCommandIndex;
-  auto& activeColorHandles = session.activeColorHandles;
-  auto& activeColorAttachmentDump = session.activeColorAttachmentDump;
-  auto& activeDepthAttachmentDump = session.activeDepthAttachmentDump;
-  auto& activeDrawTextureDumps = session.activeDrawTextureDumps;
-  auto& activeRenderEncoderSeq = session.activeRenderEncoderSeq;
-  auto& activeRenderEncoderIndex = session.activeRenderEncoderIndex;
-  auto& uniformDirty = session.uniformDirty;
-  auto& lastArgbufPayloadHash = session.lastArgbufPayloadHash;
-  auto& lastArgbufPayloadDeltaKey = session.lastArgbufPayloadDeltaKey;
-  auto& lastArgbufPayloadDeltaComponentKey =
-      session.lastArgbufPayloadDeltaComponentKey;
-  auto& lastArgbufPayloadDeltaPayload = session.lastArgbufPayloadDeltaPayload;
-  auto& argbufCbufCache = session.argbufCbufCache;
-  auto& activeStreamIbStaging = session.activeStreamIbStaging;
-  auto& textureSamplerShadow = session.textureSamplerShadow;
-  auto& activeEncoderBreakdown = session.activeEncoderBreakdown;
-  auto& activeVisibilityScout = session.activeVisibilityScout;
-  auto& renderEncoderIndex = session.renderEncoderIndex;
-  auto& renderEncoderGpuSampleBuffer =
-      session.renderEncoderGpuSampleBuffer;
-  auto& renderEncoderGpuSamples = session.renderEncoderGpuSamples;
-  auto& renderEncoderGpuSampleCursor =
-      session.renderEncoderGpuSampleCursor;
-  auto& requestedRenderEncoderGpuSamples =
-      session.requestedRenderEncoderGpuSamples;
+  auto& encoderState = session.encoder;
+  auto& passState = session.pass;
+  auto& bindingState = session.binding;
+  auto& diagnosticsState = session.diagnostics;
+  auto& completionState = session.completion;
+  encode_session::LifecycleRuntime lifecycle(ctx, session, call, slot.seqId,
+                                             slotIndex);
 
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
@@ -14953,42 +15053,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       std::uint64_t rtHandle,
       std::uint64_t depthHandle,
       std::uint64_t psoHandle = 0) {
-    RenderEncoderGpuAttachment result{};
-    if (!renderEncoderGpuSampleBuffer ||
-        renderEncoderGpuSampleCursor + 1u >= requestedRenderEncoderGpuSamples) {
-      return result;
-    }
-    const std::uint32_t startSample = renderEncoderGpuSampleCursor++;
-    const std::uint32_t endSample = renderEncoderGpuSampleCursor++;
-    result.attachments[0] = WMTSampleBufferAttachmentInfo{
-        .sample_buffer = renderEncoderGpuSampleBuffer.handle,
-        .start_of_encoder_sample_index = startSample,
-        .end_of_encoder_sample_index = endSample,
-    };
-    result.sample =
-        core::metalqueue::QueueSubmissionRecord::RenderEncoderGpuSample{
-            .startIndex = startSample,
-            .endIndex = endSample,
-            .passType = passType,
-            .seqId = slot.seqId,
-            .slotIndex = slotIndex <= std::numeric_limits<std::uint32_t>::max()
-                ? static_cast<std::uint32_t>(slotIndex)
-                : std::numeric_limits<std::uint32_t>::max(),
-            .commandIndex = commandIndex <= std::numeric_limits<std::uint32_t>::max()
-                ? static_cast<std::uint32_t>(commandIndex)
-                : std::numeric_limits<std::uint32_t>::max(),
-            .rtHandle = rtHandle,
-            .depthHandle = depthHandle,
-            .psoHandle = psoHandle,
-        };
-    result.active = true;
-    return result;
+    return lifecycle.makeRenderEncoderGpuAttachment(
+        passType, commandIndex, rtHandle, depthHandle, psoHandle);
   };
   auto recordRenderEncoderGpuAttachment =
       [&](const RenderEncoderGpuAttachment& attachment) {
-        if (attachment.active) {
-          renderEncoderGpuSamples.push_back(attachment.sample);
-        }
+        lifecycle.recordRenderEncoderGpuAttachment(attachment);
       };
 
   // Chunk's GPU seqId — feeds every transient-buffer reservation in this
@@ -15241,93 +15311,33 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         << " seq=" << static_cast<unsigned long long>(slot.seqId)
         << " slot=" << slotIndex
         << " command=" << commandIndex
-        << " encoder=" << static_cast<unsigned long long>(renderEncoderIndex)
+        << " encoder=" << static_cast<unsigned long long>(diagnosticsState.renderEncoderIndex)
         << " clear=" << (hasClear ? 1 : 0);
     emitQueueTraceLine(out.str());
   };
 
   // TLA+: EncoderLifecycle variable binding:
-  // activeKind  := activeRenderEncoder ? "Render" : activeBlitEncoder ? "Blit" : "None"
-  // activeRT    := activeKey while activeRenderEncoder is live; NoRT otherwise.
+  // activeKind  := encoderState.activeRenderEncoder ? "Render" : encoderState.activeBlitEncoder ? "Blit" : "None"
+  // activeRT    := passState.activeKey while encoderState.activeRenderEncoder is live; NoRT otherwise.
   // hazardFlag  := exact overlap between current attachments and next draw reads, consumed immediately by a split.
   // opCount     := progress through the slot commandHeaders replay loop below.
   // The current blit helpers open and end short-lived encoders internally, so
-  // activeBlitEncoder is normally None but remains the local binding for a
+  // encoderState.activeBlitEncoder is normally None but remains the local binding for a
   // future chunk-scoped blit encoder.
   auto assertEncoderLifecycleInvariant = [&] {
-    DXMT_ASSERT(!(activeRenderEncoder && activeBlitEncoder));
-    DXMT_ASSERT(hasActiveRender == static_cast<bool>(activeRenderEncoder));
+    lifecycle.assertEncoderLifecycleInvariant();
   };
 
   auto assertNoActiveEncoder = [&] {
-    assertEncoderLifecycleInvariant();
-    DXMT_ASSERT(!activeRenderEncoder);
-    DXMT_ASSERT(!activeBlitEncoder);
-    DXMT_ASSERT(!hasActiveRender);
+    lifecycle.assertNoActiveEncoder();
   };
 
   auto flushRender = [&](perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final) {
-    if (activeRenderEncoder) {
-      // TLA+: EncoderLifecycle / EndEncoder(Render)
-      DXMT_ASSERT(hasActiveRender);
-      DXMT_ASSERT(!activeBlitEncoder);
-      // M2: pop the render-pass debug group pushed in startRenderPass.
-      // Must happen before endEncoding — the encoder rejects further
-      // commands once endEncoding fires.
-      activeRenderEncoder.popDebugGroup();
-      activeRenderEncoder.endEncoding();
-      maybeEncodeColorAttachmentDump(commandBuffer, ctx.device,
-                                     activeColorAttachmentDump,
-                                     completionCallbacks);
-      maybeEncodeDepthAttachmentDump(commandBuffer, ctx.device,
-                                     activeDepthAttachmentDump,
-                                     completionCallbacks);
-      maybeEncodeDrawTextureDumps(commandBuffer, ctx.device,
-                                  activeDrawTextureDumps,
-                                  completionCallbacks);
-      if (activeVisibilityScout) {
-        enqueueVisibilityScoutCompletion(*activeVisibilityScout,
-                                         completionCallbacks);
-        activeVisibilityScout.reset();
-      }
-      perf::countRenderPassEnd(reason);
-      activeEncoderBreakdown.emit(reason);
-      activeStreamIbStaging.begin(false);
-      // R-BACK-15.4: color attachments stored on this pass become "touched"
-      // on the queue so the next pass on the same handle Loads instead of
-      // DontCare-loads. The current color DontCare-store proof only fires
-      // when the next touch is a Clear, whose load action ignores this
-      // touched bit, so conservatively marking every active color handle
-      // keeps the touched-set contract simple without losing that win.
-      for (auto& handle : activeColorHandles) {
-        if (handle) {
-          ctx.queue.markColorHandleTouched(handle);
-          handle = core::Handle{};
-        }
-      }
-      activeColorAttachmentDump = {};
-      activeDepthAttachmentDump = {};
-      activeDrawTextureDumps.clear();
-      activeRenderEncoderSeq = 0;
-      activeRenderEncoderIndex = 0;
-      activeRenderEncoder = {};
-      hasActiveRender = false;
-      activeDrawStateKey.reset();
-      activeDrawStateUsesPrefetchedPsoLayout = false;
-      textureSamplerShadow.reset();
-      assertEncoderLifecycleInvariant();
-    }
+    lifecycle.endRender(reason);
   };
 
   auto flushBlit = [&] {
-    if (activeBlitEncoder) {
-      // TLA+: EncoderLifecycle / EndEncoder(Blit)
-      DXMT_ASSERT(!activeRenderEncoder);
-      DXMT_ASSERT(!hasActiveRender);
-      activeBlitEncoder.endEncoding();
-      activeBlitEncoder = {};
-      assertEncoderLifecycleInvariant();
-    }
+    lifecycle.endBlit();
   };
 
   auto startRenderPass = [&](core::FlatDrawStateView drawState,
@@ -15347,12 +15357,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         drawState.hot->colorAttachments[0].handle.value,
         drawState.hot->depthStencil.handle.value,
         psoHandleBucket(renderPsoHandle));
-    const u64 openedRenderEncoderIndex = renderEncoderIndex;
-    activeVisibilityScout =
+    const u64 openedRenderEncoderIndex = diagnosticsState.renderEncoderIndex;
+    diagnosticsState.activeVisibilityScout =
         makeVisibilityScoutPass(ctx.device, encodeChunkSeqId,
                                 openedRenderEncoderIndex);
     const WMT::Buffer visibilityBuffer{
-        activeVisibilityScout ? activeVisibilityScout->buffer.handle
+        diagnosticsState.activeVisibilityScout ? diagnosticsState.activeVisibilityScout->buffer.handle
                               : NULL_OBJECT_HANDLE};
     traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
                             clear.has_value());
@@ -15475,19 +15485,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             dxmt9::pipeline::TileFfpDecision::Tile,
     };
     RenderPassActionSummary renderPassActions{};
-    activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
+    encoderState.activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
         ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
         storeProofActivePass, sampleAttachment.span(), visibilityBuffer,
         &renderPassActions);
-    traceRenderPassProgress(activeRenderEncoder
+    traceRenderPassProgress(encoderState.activeRenderEncoder
                                 ? "after-begin-render-pass-ok"
                                 : "after-begin-render-pass-null",
                             lookaheadStartIndex, clear.has_value());
-    hasActiveRender = static_cast<bool>(activeRenderEncoder);
-    if (!hasActiveRender) {
-      activeVisibilityScout.reset();
+    encoderState.hasActiveRender = static_cast<bool>(encoderState.activeRenderEncoder);
+    if (!encoderState.hasActiveRender) {
+      diagnosticsState.activeVisibilityScout.reset();
     }
-    if (hasActiveRender) {
+    if (encoderState.hasActiveRender) {
       const auto storeProof = renderPassStoreProofSummaryForLookahead(
           ctx, storeProofLookaheadSources, *drawState.hot,
           storeProofActivePass);
@@ -15497,24 +15507,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           storeProof,
           encodeChunkSeqId,
           openedRenderEncoderIndex);
-      activeEncoderBreakdown.begin(
+      diagnosticsState.activeEncoderBreakdown.begin(
           encodeChunkSeqId, openedRenderEncoderIndex,
           drawState.hot->colorAttachments[0].handle.value,
           drawState.hot->depthStencil.handle.value);
-      activeStreamIbStaging.begin(
-          stageStreamIbProbeRowMatches(&activeEncoderBreakdown));
-      activeEncoderBreakdown.recordAttachmentMetadata(ctx.pool, *drawState.hot);
-      activeEncoderBreakdown.recordRenderPassActions(renderPassActions);
-      ++renderEncoderIndex;
+      bindingState.activeStreamIbStaging.begin(
+          stageStreamIbProbeRowMatches(&diagnosticsState.activeEncoderBreakdown));
+      diagnosticsState.activeEncoderBreakdown.recordAttachmentMetadata(ctx.pool, *drawState.hot);
+      diagnosticsState.activeEncoderBreakdown.recordRenderPassActions(renderPassActions);
+      ++diagnosticsState.renderEncoderIndex;
       recordRenderEncoderGpuAttachment(sampleAttachment);
     } else {
-      activeStreamIbStaging.begin(false);
+      bindingState.activeStreamIbStaging.begin(false);
     }
-    activeKey = makeAttachmentKey(*drawState.hot);
-    activeWriteHazard = makeAttachmentHazard(*drawState.hot);
-    activeDrawStateKey.reset();
-    activeDrawStateUsesPrefetchedPsoLayout = false;
-    textureSamplerShadow.reset();
+    passState.activeKey = makeAttachmentKey(*drawState.hot);
+    passState.activeWriteHazard = makeAttachmentHazard(*drawState.hot);
+    bindingState.activeDrawStateKey.reset();
+    bindingState.activeDrawStateUsesPrefetchedPsoLayout = false;
+    bindingState.textureSamplerShadow.reset();
     // R-BACK-13.1 — per-pass tile-shader FFP selector. Eligibility is
     // computed once at encoder open; the choice is sticky for the pass.
     // Counters: each opened pass bumps exactly one of
@@ -15524,9 +15534,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // dedicated tileFfpFallbackGpuFamily counter, not the pass count.
     {
       const auto& selection = tileFfpSelection;
-      activePassUsesTileFfp =
+      passState.activePassUsesTileFfp =
           selection.decision == dxmt9::pipeline::TileFfpDecision::Tile;
-      if (activePassUsesTileFfp) {
+      if (passState.activePassUsesTileFfp) {
         perf::countTileFfpPass();
       } else {
         perf::countPortableFfpPass();
@@ -15552,37 +15562,37 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // R-BACK-15.4: capture color attachment handles so flushRender can
     // mark them touched on the queue once the encoder closes.
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-      activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
+      passState.activeColorHandles[i] = drawState.hot->colorAttachments[i].handle;
     }
-    activeColorAttachmentDump = {};
-    activeDepthAttachmentDump = {};
-    activeDrawTextureDumps.clear();
-    activeRenderEncoderSeq = encodeChunkSeqId;
-    activeRenderEncoderIndex = openedRenderEncoderIndex;
-    if (drawTextureDumpPassMatches(activeRenderEncoderSeq,
-                                   activeRenderEncoderIndex)) {
-      activeDrawTextureDumps.reserve(
+    diagnosticsState.activeColorAttachmentDump = {};
+    diagnosticsState.activeDepthAttachmentDump = {};
+    diagnosticsState.activeDrawTextureDumps.clear();
+    diagnosticsState.activeRenderEncoderSeq = encodeChunkSeqId;
+    diagnosticsState.activeRenderEncoderIndex = openedRenderEncoderIndex;
+    if (drawTextureDumpPassMatches(diagnosticsState.activeRenderEncoderSeq,
+                                   diagnosticsState.activeRenderEncoderIndex)) {
+      diagnosticsState.activeDrawTextureDumps.reserve(
           drawTextureDumpConfig().handles.size());
     }
     if (auto* depthSurface =
             ctx.pool.findSurface(drawState.hot->depthStencil.handle.value);
-        activeRenderEncoder && depthSurface && depthSurface->texture &&
+        encoderState.activeRenderEncoder && depthSurface && depthSurface->texture &&
         depthSurface->desc.depthStencil) {
-      activeDepthAttachmentDump.handle = drawState.hot->depthStencil.handle;
-      activeDepthAttachmentDump.texture = depthSurface->texture;
-      activeDepthAttachmentDump.format = depthSurface->desc.format;
-      activeDepthAttachmentDump.metalPixelFormat =
+      diagnosticsState.activeDepthAttachmentDump.handle = drawState.hot->depthStencil.handle;
+      diagnosticsState.activeDepthAttachmentDump.texture = depthSurface->texture;
+      diagnosticsState.activeDepthAttachmentDump.format = depthSurface->desc.format;
+      diagnosticsState.activeDepthAttachmentDump.metalPixelFormat =
           toPixelFormat(depthSurface->desc.format, ctx.limits);
-      activeDepthAttachmentDump.width = std::max(1u, depthSurface->desc.width);
-      activeDepthAttachmentDump.height = std::max(1u, depthSurface->desc.height);
-      activeDepthAttachmentDump.seq = encodeChunkSeqId;
-      activeDepthAttachmentDump.enc = openedRenderEncoderIndex;
-      activeDepthAttachmentDump.hasDepth =
+      diagnosticsState.activeDepthAttachmentDump.width = std::max(1u, depthSurface->desc.width);
+      diagnosticsState.activeDepthAttachmentDump.height = std::max(1u, depthSurface->desc.height);
+      diagnosticsState.activeDepthAttachmentDump.seq = encodeChunkSeqId;
+      diagnosticsState.activeDepthAttachmentDump.enc = openedRenderEncoderIndex;
+      diagnosticsState.activeDepthAttachmentDump.hasDepth =
           formatHasDepthAspect(depthSurface->desc.format);
-      activeDepthAttachmentDump.hasStencil =
+      diagnosticsState.activeDepthAttachmentDump.hasStencil =
           formatHasStencilAspect(depthSurface->desc.format);
     }
-    if (activeRenderEncoder && colorAttachmentDumpConfig().enabled) {
+    if (encoderState.activeRenderEncoder && colorAttachmentDumpConfig().enabled) {
       const auto& colorDumpConfig = colorAttachmentDumpConfig();
       for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
         const auto colorHandle = drawState.hot->colorAttachments[i].handle;
@@ -15602,16 +15612,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             !colorSurface->desc.renderTarget) {
           continue;
         }
-        activeColorAttachmentDump.handle = colorHandle;
-        activeColorAttachmentDump.texture = colorSurface->texture;
-        activeColorAttachmentDump.format = colorSurface->desc.format;
-        activeColorAttachmentDump.metalPixelFormat =
+        diagnosticsState.activeColorAttachmentDump.handle = colorHandle;
+        diagnosticsState.activeColorAttachmentDump.texture = colorSurface->texture;
+        diagnosticsState.activeColorAttachmentDump.format = colorSurface->desc.format;
+        diagnosticsState.activeColorAttachmentDump.metalPixelFormat =
             toPixelFormat(colorSurface->desc.format, ctx.limits);
-        activeColorAttachmentDump.width = std::max(1u, colorSurface->desc.width);
-        activeColorAttachmentDump.height = std::max(1u, colorSurface->desc.height);
-        activeColorAttachmentDump.index = static_cast<u32>(i);
-        activeColorAttachmentDump.seq = encodeChunkSeqId;
-        activeColorAttachmentDump.enc = openedRenderEncoderIndex;
+        diagnosticsState.activeColorAttachmentDump.width = std::max(1u, colorSurface->desc.width);
+        diagnosticsState.activeColorAttachmentDump.height = std::max(1u, colorSurface->desc.height);
+        diagnosticsState.activeColorAttachmentDump.index = static_cast<u32>(i);
+        diagnosticsState.activeColorAttachmentDump.seq = encodeChunkSeqId;
+        diagnosticsState.activeColorAttachmentDump.enc = openedRenderEncoderIndex;
         break;
       }
     }
@@ -15624,7 +15634,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // label, so without setLabel xctrace shows the Metal default
     // "Render Command N" and per-pass GPU time cannot be attributed to
     // an RT in text-based analysis.
-    if (activeRenderEncoder) {
+    if (encoderState.activeRenderEncoder) {
       traceRenderPassProgress("before-label", lookaheadStartIndex,
                               clear.has_value());
       const auto rt0 = static_cast<unsigned long long>(
@@ -15636,8 +15646,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           static_cast<unsigned long long>(encodeChunkSeqId),
           static_cast<unsigned long long>(openedRenderEncoderIndex), rt0,
           depth);
-      activeRenderEncoder.setLabel(passLabel);
-      activeRenderEncoder.pushDebugGroup(passLabel);
+      encoderState.activeRenderEncoder.setLabel(passLabel);
+      encoderState.activeRenderEncoder.pushDebugGroup(passLabel);
       traceRenderPassProgress("after-label", lookaheadStartIndex,
                               clear.has_value());
     }
@@ -15655,11 +15665,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // When the gate fails (any non-Apple-Silicon device) `openArgbuf`
     // returns an empty handle and we fall through to the Stage 1
     // counter; no slot-30 bind is issued.
-    activePassUsesArgbufHybrid = false;
-    activePassUsesArgbufResourceArray = false;
-    activePassUsesArgbufDirectCbuf = false;
-    activeArgbufStorage = {};
-    activeArgbufOffset = 0;
+    bindingState.activePassUsesArgbufHybrid = false;
+    bindingState.activePassUsesArgbufResourceArray = false;
+    bindingState.activePassUsesArgbufDirectCbuf = false;
     {
       traceRenderPassProgress("before-argbuf-select", lookaheadStartIndex,
                               clear.has_value());
@@ -15679,8 +15687,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const bool directCbufLane =
             !resourceArrayLane && dxmt9::pipeline::argbufDirectCbufEnabled();
         if (directCbufLane) {
-          activePassUsesArgbufHybrid = true;
-          activePassUsesArgbufDirectCbuf = true;
+          bindingState.activePassUsesArgbufHybrid = true;
+          bindingState.activePassUsesArgbufDirectCbuf = true;
           traceRenderPassProgress("argbuf-direct-cbuf", lookaheadStartIndex,
                                   clear.has_value());
         } else {
@@ -15708,10 +15716,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             // slot 1 stay direct).
             traceRenderPassProgress("before-argbuf-bind", lookaheadStartIndex,
                                     clear.has_value());
-            activeRenderEncoder.setVertexBuffer(populated.storage,
+            encoderState.activeRenderEncoder.setVertexBuffer(populated.storage,
                                                 populated.offset,
                                                 dxmt9::shaders::kArgbufHybridBindSlot);
-            activeRenderEncoder.setFragmentBuffer(populated.storage,
+            encoderState.activeRenderEncoder.setFragmentBuffer(populated.storage,
                                                   populated.offset,
                                                   dxmt9::shaders::kArgbufHybridBindSlot);
             traceRenderPassProgress("after-argbuf-bind", lookaheadStartIndex,
@@ -15721,12 +15729,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             // encodedLength); per-frequency cbuf bytes are bumped by
             // updateDirtyArgbufRegions on the first draw.
             perf::countArgbufHybridBytes(populated.length);
-            activeEncoderBreakdown.addArgbufTableBytes(populated.length);
-            activePassUsesArgbufHybrid = true;
-            activePassUsesArgbufResourceArray = resourceArrayLane;
-            activePassUsesArgbufDirectCbuf = false;
-            activeArgbufStorage = populated.storage;
-            activeArgbufOffset = populated.offset;
+            diagnosticsState.activeEncoderBreakdown.addArgbufTableBytes(populated.length);
+            bindingState.activePassUsesArgbufHybrid = true;
+            bindingState.activePassUsesArgbufResourceArray = resourceArrayLane;
+            bindingState.activePassUsesArgbufDirectCbuf = false;
           } else {
             // Selector chose Stage 2 but the encoder resource didn't init
             // (sentinel-null device, test fixture, or transient ring
@@ -15752,15 +15758,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // R-BACK-12.12: a fresh Metal render encoder loses any prior
     // sticky bindings — every uniform category must rebind on the
     // first draw of the new encoder.
-    uniform::markAllDirty(uniformDirty);
+    uniform::markAllDirty(bindingState.uniformDirty);
     // The fresh encoder's argbuf table (opened above) is empty, so the
     // first draw of this pass must reopen + populate regardless of its
     // payload hash.
-    lastArgbufPayloadHash.reset();
-    lastArgbufPayloadDeltaKey.reset();
-    lastArgbufPayloadDeltaComponentKey.reset();
-    lastArgbufPayloadDeltaPayload.reset();
-    argbufCbufCache.reset();
+    bindingState.lastArgbufPayloadHash.reset();
+    bindingState.lastArgbufPayloadDeltaKey.reset();
+    bindingState.lastArgbufPayloadDeltaComponentKey.reset();
+    bindingState.lastArgbufPayloadDeltaPayload.reset();
+    bindingState.argbufCbufCache.reset();
     assertEncoderLifecycleInvariant();
     traceRenderPassProgress("end", lookaheadStartIndex, clear.has_value());
   };
@@ -15773,33 +15779,21 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   auto flushPendingClear = [&] {
-    if (!pendingClear.has_value()) return;
-    const auto& clear = *pendingClear;
-    const auto sampleAttachment = makeRenderEncoderGpuAttachment(
-        core::metalqueue::RenderEncoderGpuPassType::Clear,
-        pendingClearCommandIndex,
-        clear.colorAttachments[0].handle.value,
-        clear.depthStencil.handle.value);
-    dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clear,
-                                     sampleAttachment.span());
-    recordRenderEncoderGpuAttachment(sampleAttachment);
-    commandBufferHasWork = true;
-    pendingClear.reset();
-    pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
+    lifecycle.flushPendingClear();
   };
 
   auto finalizeEncodeChunkSessionForReturn = [&] {
     traceEncodeStage("before-final-flush-pending-clear");
-    flushPendingClear();
+    lifecycle.flushPendingClear();
     traceEncodeStage("after-final-flush-pending-clear");
     traceEncodeStage("before-final-flush-render");
-    flushRender(perf::EncoderSplitReason::Final);
+    lifecycle.endRender(perf::EncoderSplitReason::Final);
     traceEncodeStage("after-final-flush-render");
     traceEncodeStage("before-final-flush-blit");
-    flushBlit();
+    lifecycle.endBlit();
     traceEncodeStage("after-final-flush-blit");
     traceEncodeStage("before-final-assert-no-active-encoder");
-    assertNoActiveEncoder();
+    lifecycle.assertNoActiveEncoder();
     traceEncodeStage("after-final-assert-no-active-encoder");
   };
 
@@ -15815,7 +15809,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (initializerFlush.didFlush &&
       initializerFlush.event &&
       initializerFlush.value > 0) {
-    if (activeRenderEncoder || activeBlitEncoder || pendingClear.has_value()) {
+    if (encoderState.activeRenderEncoder || encoderState.activeBlitEncoder || passState.pendingClear.has_value()) {
       traceEncodeStage("before-initializer-wait-finalize-session");
       finalizeEncodeChunkSessionForReturn();
       traceEncodeStage("after-initializer-wait-finalize-session");
@@ -15843,7 +15837,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // submission (R-BACK-2.32). Per-chunk commits (mid + final) are folded
   // into chunkSubCBCountMax via updateMax at chunk exit so the table
   // surfaces both total mid-chunk commits and the worst-case chain length.
-  std::uint64_t perChunkSubCBCount = 0;
+  auto& perChunkSubCBCount = call.committedSubCommandBuffers;
   auto splitMidChunk = [&] {
     if ((injectedCommandBuffer &&
          !options.allowInjectedCommandBufferMidChunkCommits) ||
@@ -15860,7 +15854,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     perf::countSubCommandBufferCommit();
     ++perChunkSubCBCount;
     if (options.session) {
-      ++session.committedSubCommandBuffers;
+      ++session.completion.committedSubCommandBuffers;
     }
     commandBuffer = std::move(next);
     commandBufferHasWork = false;
@@ -15880,12 +15874,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // do not need to repeat the cap check at every split site. cap=0
   // disables the cap (unbounded chain) for diagnostic comparison.
   // perChunkSubCBCount counts mid-chunk commits issued by this encodeChunk
-  // call. A carried EncodeSession also tracks committedSubCommandBuffers
+  // call. A carried EncodeSession also tracks completionState.committedSubCommandBuffers
   // across source boundaries so the cap applies to the logical coalesced
   // session rather than resetting for each source.
   auto splitMidChunkUnderCap = [&] {
     const std::uint64_t committedForCap =
-        options.session ? session.committedSubCommandBuffers
+        options.session ? session.completion.committedSubCommandBuffers
                         : perChunkSubCBCount;
     if (splitChainCap > 0 && committedForCap + 1 >= splitChainCap) {
       perf::countSubCommandBufferSplitSuppressedByCap();
@@ -15951,8 +15945,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const auto drawKey = makeAttachmentKey(hot);
     const auto drawReadHazard = makeDrawReadHazard(stateView);
     auto hasExactRenderHazard = [&] {
-      const bool bloomOverlap = activeWriteHazard.bloomOverlaps(drawReadHazard);
-      const bool exactOverlap = activeWriteHazard.exactOverlaps(drawReadHazard);
+      const bool bloomOverlap = passState.activeWriteHazard.bloomOverlaps(drawReadHazard);
+      const bool exactOverlap = passState.activeWriteHazard.exactOverlaps(drawReadHazard);
       perf::countHazardProbe(bloomOverlap, exactOverlap);
       return exactOverlap;
     };
@@ -15963,25 +15957,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // on the portable path. A pass that opened on the portable path
     // stays portable regardless (portable handles every state).
     auto tileMidPassIneligible = [&]() {
-      if (!hasActiveRender || !activePassUsesTileFfp) return false;
+      if (!encoderState.hasActiveRender || !passState.activePassUsesTileFfp) return false;
       const auto sel =
           dxmt9::pipeline::selectTileFfpForPass(stateView, ctx.pool.supportsApple3());
       return sel.decision != dxmt9::pipeline::TileFfpDecision::Tile;
     };
-    if (pendingClear.has_value()) {
-      const auto clearKey = makeAttachmentKey(*pendingClear);
-      const auto clearHazard = makeAttachmentHazard(*pendingClear);
+    if (passState.pendingClear.has_value()) {
+      const auto clearKey = makeAttachmentKey(*passState.pendingClear);
+      const auto clearHazard = makeAttachmentHazard(*passState.pendingClear);
       if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
-        startRenderPass(stateView, pendingClear, commandIndex, renderPsoHandle);
-        pendingClear.reset();
-        pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
+        startRenderPass(stateView, passState.pendingClear, commandIndex, renderPsoHandle);
+        passState.pendingClear.reset();
+        passState.pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
       } else {
         flushPendingClear();
-        const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+        const bool renderTargetChanged = encoderState.hasActiveRender && passState.activeKey != drawKey;
         const bool hazardDetected =
-            hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
+            encoderState.hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
         const bool tileResplit =
-            hasActiveRender && !renderTargetChanged && !hazardDetected &&
+            encoderState.hasActiveRender && !renderTargetChanged && !hazardDetected &&
             tileMidPassIneligible();
         if (tileResplit) {
           // R-BACK-13.6: tile path can't host this draw; fall back
@@ -15993,7 +15987,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::countTileFfpFallbackMidPassIneligible();
         }
         const auto entryDecision = classifyRenderPassEntry(
-            hasActiveRender,
+            encoderState.hasActiveRender,
             !renderTargetChanged,
             hazardDetected,
             tileResplit);
@@ -16001,12 +15995,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           if (entryDecision ==
               RenderPassEntryDecision::SplitRenderTargetChange) {
             // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-            DXMT_ASSERT(hasActiveRender);
+            DXMT_ASSERT(encoderState.hasActiveRender);
           }
           if (entryDecision == RenderPassEntryDecision::SplitHazard) {
             // TLA+: EncoderLifecycle / HazardDetected
-            DXMT_ASSERT(hasActiveRender);
-            DXMT_ASSERT(activeKey == drawKey);
+            DXMT_ASSERT(encoderState.hasActiveRender);
+            DXMT_ASSERT(passState.activeKey == drawKey);
           }
           const auto splitReason = renderPassEntrySplitReason(
               entryDecision, perf::EncoderSplitReason::ClearBarrier);
@@ -16022,17 +16016,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           startRenderPass(stateView, std::nullopt, commandIndex, renderPsoHandle);
         } else {
           // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-          DXMT_ASSERT(hasActiveRender);
-          DXMT_ASSERT(activeKey == drawKey);
-          DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
+          DXMT_ASSERT(encoderState.hasActiveRender);
+          DXMT_ASSERT(passState.activeKey == drawKey);
+          DXMT_ASSERT(!passState.activeWriteHazard.exactOverlaps(drawReadHazard));
         }
       }
     } else {
-      const bool renderTargetChanged = hasActiveRender && activeKey != drawKey;
+      const bool renderTargetChanged = encoderState.hasActiveRender && passState.activeKey != drawKey;
       const bool hazardDetected =
-          hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
+          encoderState.hasActiveRender && !renderTargetChanged && hasExactRenderHazard();
       const bool tileResplit =
-          hasActiveRender && !renderTargetChanged && !hazardDetected &&
+          encoderState.hasActiveRender && !renderTargetChanged && !hazardDetected &&
           tileMidPassIneligible();
       if (tileResplit) {
         // R-BACK-13.6 — see twin call site above.
@@ -16040,7 +16034,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         perf::countTileFfpFallbackMidPassIneligible();
       }
       const auto entryDecision = classifyRenderPassEntry(
-          hasActiveRender,
+          encoderState.hasActiveRender,
           !renderTargetChanged,
           hazardDetected,
           tileResplit);
@@ -16048,12 +16042,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         if (entryDecision ==
             RenderPassEntryDecision::SplitRenderTargetChange) {
           // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
-          DXMT_ASSERT(hasActiveRender);
+          DXMT_ASSERT(encoderState.hasActiveRender);
         }
         if (entryDecision == RenderPassEntryDecision::SplitHazard) {
           // TLA+: EncoderLifecycle / HazardDetected
-          DXMT_ASSERT(hasActiveRender);
-          DXMT_ASSERT(activeKey == drawKey);
+          DXMT_ASSERT(encoderState.hasActiveRender);
+          DXMT_ASSERT(passState.activeKey == drawKey);
         }
         const auto splitReason = renderPassEntrySplitReason(
             entryDecision, perf::EncoderSplitReason::Final);
@@ -16068,12 +16062,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         startRenderPass(stateView, std::nullopt, commandIndex, renderPsoHandle);
       } else {
         // TLA+: EncoderLifecycle / MergeRenderDraw(rt)
-        DXMT_ASSERT(hasActiveRender);
-        DXMT_ASSERT(activeKey == drawKey);
-        DXMT_ASSERT(!activeWriteHazard.exactOverlaps(drawReadHazard));
+        DXMT_ASSERT(encoderState.hasActiveRender);
+        DXMT_ASSERT(passState.activeKey == drawKey);
+        DXMT_ASSERT(!passState.activeWriteHazard.exactOverlaps(drawReadHazard));
       }
     }
-    if (hasActiveRender && activeKey == drawKey) {
+    if (encoderState.hasActiveRender && passState.activeKey == drawKey) {
       renderPassFrameTracker.noteDrawRead(*stateView.hot);
     }
     // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
@@ -16133,10 +16127,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           for (const auto& param : drawItems) {
             const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
             const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
-            activeEncoderBreakdown.addTransientVertexBytes(
+            diagnosticsState.activeEncoderBreakdown.addTransientVertexBytes(
                 static_cast<u64>(vertexBytes.size()),
                 ActiveEncoderBreakdown::TransientVertexSource::Preupload);
-            activeEncoderBreakdown.addTransientIndexBytes(
+            diagnosticsState.activeEncoderBreakdown.addTransientIndexBytes(
                 static_cast<u64>(indexBytes.size()),
                 ActiveEncoderBreakdown::TransientIndexSource::Preupload);
           }
@@ -16152,7 +16146,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // bind only on dirty (R-BACK-12.5/12.8); DrawVolatile is pushed
     // via setVertexBytes per draw with no slab traffic.
     const bool compatibleIndexedDrawMerge =
-        debug::optimizeCompatibleIndexedDrawMerge() && !activeVisibilityScout;
+        debug::optimizeCompatibleIndexedDrawMerge() && !diagnosticsState.activeVisibilityScout;
     const bool compatibleIndexedDrawMergeTelemetry =
         compatibleIndexedDrawMerge && perf::enabled();
     const auto mergeTelemetry = compatibleIndexedDrawMergeTelemetry
@@ -16224,36 +16218,36 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       // record to mark FfpVsClip dirty, so compare the canonical payload key
       // at the draw boundary before either direct or argbuf bindings consume
       // the dirty mask.
-      if (activeDrawStateKey.has_value() &&
-          (activeDrawStateKey->clipPlaneMask !=
+      if (bindingState.activeDrawStateKey.has_value() &&
+          (bindingState.activeDrawStateKey->clipPlaneMask !=
                drawStateView.hot->key.clipPlaneMask ||
-           activeDrawStateKey->clipPlanesHash !=
+           bindingState.activeDrawStateKey->clipPlanesHash !=
                drawStateView.hot->key.clipPlanesHash)) {
-        uniform::setBit(uniformDirty, uniform::DirtyBit::FfpVsClip);
+        uniform::setBit(bindingState.uniformDirty, uniform::DirtyBit::FfpVsClip);
       }
       const auto drawArgbufPayloadDeltaKey =
           makeArgbufPayloadDeltaKey(drawStateView);
       const u64 drawArgbufPayloadHash = drawUniformPayload->hash;
       const bool argbufPayloadChanged =
-          !lastArgbufPayloadHash.has_value() ||
-          *lastArgbufPayloadHash != drawArgbufPayloadHash;
+          !bindingState.lastArgbufPayloadHash.has_value() ||
+          *bindingState.lastArgbufPayloadHash != drawArgbufPayloadHash;
       const bool activePassUsesArgbufTable =
-          activePassUsesArgbufHybrid && !activePassUsesArgbufDirectCbuf;
+          bindingState.activePassUsesArgbufHybrid && !bindingState.activePassUsesArgbufDirectCbuf;
       const bool reopenArgbuf =
           activePassUsesArgbufTable &&
-          (activePassUsesArgbufResourceArray || argbufPayloadChanged);
+          (bindingState.activePassUsesArgbufResourceArray || argbufPayloadChanged);
       const auto previousArgbufPayloadSource =
-          lastArgbufPayloadDeltaKey.has_value()
+          bindingState.lastArgbufPayloadDeltaKey.has_value()
               ? uniform::DirectCbufPayloadSourceHashes{
                     .vertexConstants =
-                        lastArgbufPayloadDeltaKey->vertexConstantsHash,
+                        bindingState.lastArgbufPayloadDeltaKey->vertexConstantsHash,
                     .pixelConstants =
-                        lastArgbufPayloadDeltaKey->pixelConstantsHash,
+                        bindingState.lastArgbufPayloadDeltaKey->pixelConstantsHash,
                 }
               : uniform::DirectCbufPayloadSourceHashes{};
       const auto argbufPayloadSourceChange =
           uniform::classifyDirectCbufPayloadSourceChange(
-              lastArgbufPayloadDeltaKey.has_value(),
+              bindingState.lastArgbufPayloadDeltaKey.has_value(),
               previousArgbufPayloadSource,
               uniform::DirectCbufPayloadSourceHashes{
                   .vertexConstants =
@@ -16265,11 +16259,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           argbufPayloadSourceChange.vertex;
       const bool argbufPsPayloadSourceChanged =
           argbufPayloadSourceChange.pixel;
-      if (activePassUsesArgbufDirectCbuf &&
+      if (bindingState.activePassUsesArgbufDirectCbuf &&
           (argbufPayloadSourceChange.vertex ||
            argbufPayloadSourceChange.pixel)) {
         uniform::applyDirectCbufPayloadSourceChange(
-            uniformDirty,
+            bindingState.uniformDirty,
             argbufPayloadSourceChange,
             uniform::DirectCbufPayloadCounts{
                 .vertexFloat =
@@ -16282,7 +16276,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             });
       }
       const bool argbufPayloadDeltaPerf =
-          activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();
+          bindingState.activePassUsesArgbufHybrid && argbufPayloadDeltaPerfEnabled();
       std::optional<ArgbufPayloadDeltaComponentKey>
           drawArgbufPayloadDeltaComponentKey;
       if (argbufPayloadDeltaPerf) {
@@ -16290,14 +16284,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             makeArgbufPayloadDeltaComponentKey(*drawUniformPayload);
         perf::countEncodeDrawArgbufPayloadDeltaProbeCalls(1u);
         const bool cbufOnlyReopen =
-            reopenArgbuf && !activePassUsesArgbufResourceArray;
-        if (activePassUsesArgbufResourceArray && reopenArgbuf) {
+            reopenArgbuf && !bindingState.activePassUsesArgbufResourceArray;
+        if (bindingState.activePassUsesArgbufResourceArray && reopenArgbuf) {
           perf::countEncodeDrawArgbufPayloadDeltaReopenResourceArray(1u);
         }
         if (cbufOnlyReopen) {
           perf::countEncodeDrawArgbufPayloadDeltaReopenCbufOnly(1u);
         }
-        if (!lastArgbufPayloadDeltaKey.has_value()) {
+        if (!bindingState.lastArgbufPayloadDeltaKey.has_value()) {
           perf::countEncodeDrawArgbufPayloadDeltaFirst(1u);
           if (reopenArgbuf) {
             perf::countEncodeDrawArgbufPayloadDeltaReopenFirst(1u);
@@ -16305,7 +16299,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           if (cbufOnlyReopen) {
             perf::countEncodeDrawArgbufPayloadDeltaReopenCbufOnlyFirst(1u);
           }
-        } else if (lastArgbufPayloadDeltaKey->hash ==
+        } else if (bindingState.lastArgbufPayloadDeltaKey->hash ==
                    drawArgbufPayloadDeltaKey.hash) {
           perf::countEncodeDrawArgbufPayloadDeltaSame(1u);
           if (reopenArgbuf) {
@@ -16321,10 +16315,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                 1u);
           }
           const bool vsChanged =
-              lastArgbufPayloadDeltaKey->vertexConstantsHash !=
+              bindingState.lastArgbufPayloadDeltaKey->vertexConstantsHash !=
               drawArgbufPayloadDeltaKey.vertexConstantsHash;
           const bool psChanged =
-              lastArgbufPayloadDeltaKey->pixelConstantsHash !=
+              bindingState.lastArgbufPayloadDeltaKey->pixelConstantsHash !=
               drawArgbufPayloadDeltaKey.pixelConstantsHash;
           if (vsChanged) {
             perf::countEncodeDrawArgbufPayloadDeltaChangedVs(1u);
@@ -16338,20 +16332,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           if (!vsChanged && !psChanged) {
             perf::countEncodeDrawArgbufPayloadDeltaChangedNonConstOnly(1u);
           }
-          if (lastArgbufPayloadDeltaComponentKey.has_value() &&
+          if (bindingState.lastArgbufPayloadDeltaComponentKey.has_value() &&
               drawArgbufPayloadDeltaComponentKey.has_value()) {
             const auto& lastComponents =
-                *lastArgbufPayloadDeltaComponentKey;
+                *bindingState.lastArgbufPayloadDeltaComponentKey;
             const auto& drawComponents =
                 *drawArgbufPayloadDeltaComponentKey;
             if (vsChanged) {
               if (lastComponents.vsFloatHash != drawComponents.vsFloatHash) {
                 perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloat(1u);
-                if (lastArgbufPayloadDeltaPayload.has_value()) {
+                if (bindingState.lastArgbufPayloadDeltaPayload.has_value()) {
                   const auto stats =
                       measureArgbufPayloadChangedPrefix(
-                          lastArgbufPayloadDeltaPayload->vsConst.float4,
-                          lastArgbufPayloadDeltaPayload->vertexFloatConstantCount,
+                          bindingState.lastArgbufPayloadDeltaPayload->vsConst.float4,
+                          bindingState.lastArgbufPayloadDeltaPayload->vertexFloatConstantCount,
                           drawUniformPayload->vsConst.float4,
                           drawUniformPayload->vertexFloatConstantCount);
                   perf::countEncodeDrawArgbufPayloadDeltaChangedVsFloatRegs(
@@ -16389,11 +16383,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             if (psChanged) {
               if (lastComponents.psFloatHash != drawComponents.psFloatHash) {
                 perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloat(1u);
-                if (lastArgbufPayloadDeltaPayload.has_value()) {
+                if (bindingState.lastArgbufPayloadDeltaPayload.has_value()) {
                   const auto stats =
                       measureArgbufPayloadChangedPrefix(
-                          lastArgbufPayloadDeltaPayload->psConst.float4,
-                          lastArgbufPayloadDeltaPayload->pixelFloatConstantCount,
+                          bindingState.lastArgbufPayloadDeltaPayload->psConst.float4,
+                          bindingState.lastArgbufPayloadDeltaPayload->pixelFloatConstantCount,
                           drawUniformPayload->psConst.float4,
                           drawUniformPayload->pixelFloatConstantCount);
                   perf::countEncodeDrawArgbufPayloadDeltaChangedPsFloatRegs(
@@ -16414,10 +16408,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         }
       }
       const bool baseStateCompatible =
-          activeDrawStateKey.has_value() &&
-          activeDrawStateUsesPrefetchedPsoLayout &&
+          bindingState.activeDrawStateKey.has_value() &&
+          bindingState.activeDrawStateUsesPrefetchedPsoLayout &&
           core::drawStateKeysCompatibleForDrawRunBatch(
-              *activeDrawStateKey, drawStateView.hot->key);
+              *bindingState.activeDrawStateKey, drawStateView.hot->key);
       const bool overrideNeedsBaseStateBind =
           hasBindingOverride &&
           drawBindingOverrideRequiresBaseStateBind(
@@ -16426,30 +16420,30 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           hasBindingOverride && !overrideNeedsBaseStateBind;
       const bool skipBaseStateBind =
           baseStateCompatible && !overrideNeedsBaseStateBind;
-      maybeCollectDrawTextureDump(activeDrawTextureDumps,
+      maybeCollectDrawTextureDump(diagnosticsState.activeDrawTextureDumps,
                                   ctx.pool,
                                   drawStateView,
-                                  activeRenderEncoderSeq,
-                                  activeRenderEncoderIndex);
+                                  diagnosticsState.activeRenderEncoderSeq,
+                                  diagnosticsState.activeRenderEncoderIndex);
       const u64 encoderDrawIndexBeforeEncode =
-          activeEncoderBreakdown.stats.drawCalls;
+          diagnosticsState.activeEncoderBreakdown.stats.drawCalls;
       const u64 drawTexture0 = drawStateView.hot->textures[0]
           ? drawStateView.hot->textures[0].value
           : 0ull;
       traceEncodeCommand("drawrun.before-encode-draw", commandIndex,
                          Kind::DrawRun, command);
-      if (encodeDraw(ctx, commandBuffer, activeRenderEncoder, drawStateView, slot.seqId,
+      if (encodeDraw(ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView, slot.seqId,
                      /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
                      &param,
                      recordPayloadArena,
                      hasBindingOverride ? &bindingOverride : nullptr,
                      hasBindingSnapshot ? &bindingSnapshot : nullptr,
-                     &uniformDirty,
-                     /*tileFfpMode=*/activePassUsesTileFfp,
-                     /*argbufHybridMode=*/activePassUsesArgbufHybrid,
-                     /*argbufResourceArray=*/activePassUsesArgbufResourceArray,
-                     /*argbufDirectCbufMode=*/activePassUsesArgbufDirectCbuf,
+                     &bindingState.uniformDirty,
+                     /*tileFfpMode=*/passState.activePassUsesTileFfp,
+                     /*argbufHybridMode=*/bindingState.activePassUsesArgbufHybrid,
+                     /*argbufResourceArray=*/bindingState.activePassUsesArgbufResourceArray,
+                     /*argbufDirectCbufMode=*/bindingState.activePassUsesArgbufDirectCbuf,
                      /*reopenArgbufHybrid=*/reopenArgbuf,
                      /*argbufVsPayloadSourceChanged=*/argbufVsPayloadSourceChanged,
                      /*argbufPsPayloadSourceChanged=*/argbufPsPayloadSourceChanged,
@@ -16457,39 +16451,39 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      renderPsoHandle,
                      tilePsoHandle,
                      depthStencilHandle,
-                     &textureSamplerShadow,
+                     &bindingState.textureSamplerShadow,
                      commandIndex <= std::numeric_limits<std::uint32_t>::max()
                          ? static_cast<std::uint32_t>(commandIndex)
                          : std::numeric_limits<std::uint32_t>::max(),
                      static_cast<u64>(i),
                      static_cast<u64>(drawCount),
-                     &activeEncoderBreakdown,
-                     &argbufCbufCache,
-                     &activeStreamIbStaging,
-                     activeVisibilityScout ? &*activeVisibilityScout : nullptr)) {
+                     &diagnosticsState.activeEncoderBreakdown,
+                     &bindingState.argbufCbufCache,
+                     &bindingState.activeStreamIbStaging,
+                     diagnosticsState.activeVisibilityScout ? &*diagnosticsState.activeVisibilityScout : nullptr)) {
         traceEncodeCommand("drawrun.after-encode-draw-ok", commandIndex,
                            Kind::DrawRun, command);
-        activeDrawStateKey = drawStateView.hot->key;
-        activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
-        lastArgbufPayloadHash = drawArgbufPayloadHash;
-        lastArgbufPayloadDeltaKey = drawArgbufPayloadDeltaKey;
+        bindingState.activeDrawStateKey = drawStateView.hot->key;
+        bindingState.activeDrawStateUsesPrefetchedPsoLayout = !overrideNeedsBaseStateBind;
+        bindingState.lastArgbufPayloadHash = drawArgbufPayloadHash;
+        bindingState.lastArgbufPayloadDeltaKey = drawArgbufPayloadDeltaKey;
         if (argbufPayloadDeltaPerf &&
             drawArgbufPayloadDeltaComponentKey.has_value()) {
-          lastArgbufPayloadDeltaComponentKey =
+          bindingState.lastArgbufPayloadDeltaComponentKey =
               *drawArgbufPayloadDeltaComponentKey;
-          lastArgbufPayloadDeltaPayload = *drawUniformPayload;
+          bindingState.lastArgbufPayloadDeltaPayload = *drawUniformPayload;
         }
         if (colorAttachmentDumpAfterDrawWantsSplit(
-                activeColorAttachmentDump,
+                diagnosticsState.activeColorAttachmentDump,
                 drawStateView,
                 encoderDrawIndexBeforeEncode,
                 commandIndex)) {
-          activeColorAttachmentDump.afterDraw = true;
-          activeColorAttachmentDump.draw = encoderDrawIndexBeforeEncode;
-          activeColorAttachmentDump.commandIndex = commandIndex;
-          activeColorAttachmentDump.commandDrawIndex = i;
-          activeColorAttachmentDump.commandDrawCount = drawCount;
-          activeColorAttachmentDump.texture0 = drawTexture0;
+          diagnosticsState.activeColorAttachmentDump.afterDraw = true;
+          diagnosticsState.activeColorAttachmentDump.draw = encoderDrawIndexBeforeEncode;
+          diagnosticsState.activeColorAttachmentDump.commandIndex = commandIndex;
+          diagnosticsState.activeColorAttachmentDump.commandDrawIndex = i;
+          diagnosticsState.activeColorAttachmentDump.commandDrawCount = drawCount;
+          diagnosticsState.activeColorAttachmentDump.texture0 = drawTexture0;
           flushRender(perf::EncoderSplitReason::Final);
           if (i + mergedDrawCount < drawCount) {
             startRenderPass(drawStateView, std::nullopt, commandIndex,
@@ -16580,8 +16574,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         flushBlit();
         flushPendingClear();
         if (clear.rects.empty()) {
-          pendingClear = clear;
-          pendingClearCommandIndex = commandIndex;
+          passState.pendingClear = clear;
+          passState.pendingClearCommandIndex = commandIndex;
         } else {
           const auto sampleAttachment = makeRenderEncoderGpuAttachment(
               core::metalqueue::RenderEncoderGpuPassType::Clear,
@@ -16709,14 +16703,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         if (!command.present) break;
         const auto& present = command.present->present;
         const auto presentSource = command.present->presentSource;
-        if (!metalCaptureRequest.has_value()) {
+        if (!diagnosticsState.metalCaptureRequest.has_value()) {
           // Bump the controller's frame counter and, if this is the
           // target frame's Present chunk, recover the chunk-begin session
           // request so `record.metalCapture` triggers stopCapture at
           // commit time. For non-target frames the call is a no-op apart
           // from the counter bump.
-          metalCaptureRequest = ctx.queue.notePresentChunkForCapture(slot.seqId);
-          if (metalCaptureRequest.has_value()) {
+          diagnosticsState.metalCaptureRequest = ctx.queue.notePresentChunkForCapture(slot.seqId);
+          if (diagnosticsState.metalCaptureRequest.has_value()) {
             // Capture was started at an earlier chunk-begin; this
             // chunk's commit should only call stopCapture, never
             // re-start.
@@ -16757,7 +16751,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           commandBufferHasWork = true;
           ctx.queue.backBufferDiscardAfterPresent_ = true;
           if (presenter) {
-            postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
+            completionState.postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
               presenter->preAcquireNextDrawable(seqId);
             });
           }
@@ -16821,7 +16815,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("before-record-chunk-sub-cb-count");
   // R-BACK-2.29..2.32 — fold this encode call's sub-CB segment length into
   // chunkSubCBCountMax. A carried EncodeSession enforces the cap across
-  // source boundaries with session.committedSubCommandBuffers, but the record
+  // source boundaries with session.completion.committedSubCommandBuffers, but the record
   // still publishes only the segment length added by this call. Queue-side
   // merge then subtracts the shared tail CB once when joining segments.
   if (commandBufferHasWork || perChunkSubCBCount > 0) {
@@ -16837,34 +16831,30 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
   traceEncodeStage("before-build-submission-record");
   core::metalqueue::QueueSubmissionRecord record;
-  record.commandBuffer = std::move(commandBuffer);
   record.commandBufferChainLength = perChunkSubCBCount + 1;
-  if (!deferSessionFinalization && metalCaptureRequest.has_value()) {
-    record.metalCaptureDevice = WMT::Device{ctx.device.handle};
-    record.metalCapture = std::move(metalCaptureRequest);
-    record.metalCaptureAlreadyStarted = captureAlreadyStartedAtChunkBegin;
-  }
   record.slotIndex = slotIndex;
   record.seqId = seqId;
   record.context = "queue";
-  if (!deferSessionFinalization) {
-    record.renderEncoderGpuSampleBuffer =
-        std::move(renderEncoderGpuSampleBuffer);
-    record.renderEncoderGpuSamples = std::move(renderEncoderGpuSamples);
-    record.postCommitCallbacks = std::move(postCommitCallbacks);
-    record.completionCallbacks = std::move(completionCallbacks);
+  if (deferSessionFinalization) {
+    record.commandBuffer = std::move(commandBuffer);
+  } else {
+    if (options.session) {
+      traceEncodeStage("before-publish-session-sources");
+    }
+    const bool published = lifecycle.publishIntoSubmission(
+        record, options.session,
+        /*resetSessionAfterPublication=*/false);
+    if (options.session) {
+      traceEncodeStage(published ? "after-publish-session-sources-ok"
+                                 : "after-publish-session-sources-failed");
+    }
+    DXMT_ASSERT(published);
+    if (!published) {
+      return std::nullopt;
+    }
   }
   traceEncodeStage("after-build-submission-record");
   if (!deferSessionFinalization && options.session) {
-    traceEncodeStage("before-publish-session-sources");
-    const bool sourcesPublished =
-        publishEncodeChunkSessionSources(*options.session, record);
-    traceEncodeStage(sourcesPublished ? "after-publish-session-sources-ok"
-                                      : "after-publish-session-sources-failed");
-    DXMT_ASSERT(sourcesPublished);
-    if (!sourcesPublished) {
-      return std::nullopt;
-    }
     traceEncodeStage("session-owner-retained-by-caller");
   }
   traceEncodeStage("return-record");

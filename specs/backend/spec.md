@@ -742,6 +742,16 @@ session state object, emit Metal commands. It must not concatenate all source
 payloads, rebuild canonical draw state for already imported records, or copy
 large uniform/resource arrays just because several sources share a session.
 
+#### Immutable Partition-Entry Snapshot
+
+R-BACK-2.57 exposes one locator-only `EncodePartitionEntrySnapshot`: retained
+source `{sourceOrdinal, slotIndex, seqId}`, command/run/state/parameter indices,
+a uniform handle, and absolute binding-override/snapshot payload ranges. It owns
+no Metal reference, pointer, span, or large payload. The existing backend call
+carries it as an optional value in `EncodeChunkOptions`; empty or rejected
+metadata stays on the source-order serial path. Retained-source resolution and
+validation bodies remain open, as do parallel-render and Metal 4 executors.
+
 #### Verification Shape
 
 The session model needs evidence through four ordered gates:

@@ -6,6 +6,7 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_encode_session.hpp"
 // Full CommandQueue type needed by EncodeContext::queue (reference) and
 // PreUploadedDrawData::{vertex,index} (CommandQueue::TransientBufferSlice
 // member). The previous forward decl of CommandQueue worked while only a
@@ -38,33 +39,6 @@ namespace pipeline { class Cache; }
 namespace scratch { struct FrameAllocators; }
 
 namespace encoders {
-
-struct EncodeChunkSessionState;
-
-struct EncodeChunkSessionDeleter {
-  void operator()(EncodeChunkSessionState* session) const noexcept;
-};
-
-using EncodeChunkSession =
-    std::unique_ptr<EncodeChunkSessionState, EncodeChunkSessionDeleter>;
-
-EncodeChunkSession makeEncodeChunkSession();
-void resetEncodeChunkSession(EncodeChunkSessionState& session);
-bool retainEncodeChunkSessionUntilSubmissionComplete(
-    EncodeChunkSession session,
-    core::metalqueue::QueueSubmissionRecord& record);
-bool encodeChunkSessionHasActiveRender(
-    const EncodeChunkSessionState& session) noexcept;
-bool encodeChunkSessionHasDeferredSubmissionPayload(
-    const EncodeChunkSessionState& session) noexcept;
-bool canAppendEncodeChunkSessionSource(
-    const EncodeChunkSessionState& session,
-    core::metalqueue::QueueCompletionSource source) noexcept;
-bool appendEncodeChunkSessionSource(
-    EncodeChunkSessionState& session,
-    core::metalqueue::QueueCompletionSource source) noexcept;
-std::span<const core::metalqueue::QueueCompletionSource>
-encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept;
 
 // Optional recorder seam for tests that need to observe the final draw-issue
 // commands after encodeDraw has selected UP vs bound resources and built the
@@ -532,6 +506,11 @@ struct EncodeChunkOptions {
   // into a new tail CB when the caller can merge the already-committed prefix
   // into the final completion source list without violating locality.
   bool allowInjectedCommandBufferMidChunkCommits = false;
+  // Optional backend-planned locator for one immutable draw entry. The value
+  // contains no live Metal object or borrowed storage; retained-source
+  // resolution and any parallel executor remain unimplemented. Existing
+  // backends forward the empty default unchanged through the serial path.
+  std::optional<EncodePartitionEntrySnapshot> partitionEntry{};
   // Optional session owner for render-pass carry candidates. When a final
   // submission is returned, the caller must transfer the session owner into the
   // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()
@@ -582,11 +561,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::size_t slotIndex,
     const core::ChunkSlot& slot,
     EncodeChunkOptions options = {});
-
-bool finalizeEncodeChunkSessionIntoSubmission(
-    EncodeContext& ctx,
-    EncodeChunkSessionState& session,
-    core::metalqueue::QueueSubmissionRecord& record);
 
 }  // namespace encoders
 }  // namespace dxmt9
