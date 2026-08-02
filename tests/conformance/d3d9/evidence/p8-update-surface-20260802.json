@@ -1,0 +1,180 @@
+{
+ "case": "visual_p8_update_surface_policy",
+ "runner": "scripts/tools/run_d3d9_conformance.py --start 156 --end 157 --skip-aux --timeout 300 (DXMT9_PREWARM=disabled)",
+ "wine": "sikarugir-cx-24.0.7, builtin lane, x64",
+ "note": "New dxmt9-policy case added 2026-08-02 to cover palettized IDirect3DDevice9::UpdateSurface, which had no conformance coverage at all. It fails DETERMINISTICALLY before the fix -- 5/5 runs, always the same 32 of 213 checks (all four texels x two draws x four invocations: P8/A8P8 x fixed-function/ps_2_0), which is why a small run set suffices where the sibling UpdateTexture defect needed 20+. The two pre-fix runs `head-1` and `head-diag` are today's HEAD plus the new case only; `branch-removed-1..3` are the full fix tree with only the routing branch in dxmt9c_device_update_surface removed, i.e. a control for that branch specifically. `head-diag` carried a temporary printf of the readback values, reverted afterwards; it prints alongside the comparison and cannot influence it. Measured values, identical in every failing run: the FIRST draw (base palette) returns initPalettizedTexture's identity ramp -- ff010101/ff020202/ff030303/ff040404 for P8 indices {1,2,3,4}, and 80010101/40020202/20030303/10040404 for A8P8 (RGB identity, source alpha preserved) -- proving the SOURCE texture's derived expansion was transported. The SECOND draw, after SetPaletteEntries(1,..)+SetCurrentTexturePalette(1), returns ff000000 for P8 and 00000000 for A8P8, i.e. palette[0] everywhere: the destination texture's p8Levels index shadow was never written, so re-expansion at palette-switch time read a still-zero shadow and the copy vanished entirely. That second failure is the more destructive of the two and is the reason D9CSurface's lack of palette state matters. Post-fix the case passes 18/18: 12 runs on an interim variant that fell through to Device::updateSurface when the index copy could not be served, and 6 runs on the final code, which returns D3DERR_INVALIDCALL there instead so a palettized pair can never reach the routed path. Only the 6 `final-*` runs correspond to the shipped winemetal.so (93fbc24b1d04d09d). d3d9.dll and winemetal.dll are byte-identical across every run listed here (b9af3a64ab8f15a0 / 0168db1185e5e377): the change is entirely unix-side, which is itself a check that the right artifact moved.",
+ "staged_d3d9_sha256": "b9af3a64ab8f15a0",
+ "staged_winemetal_dll_sha256": "0168db1185e5e377",
+ "runs": [
+  {
+   "run": "head-1",
+   "build": "HEAD + new case only",
+   "winemetal_so_sha256": "c6eccd1e69f49c6b",
+   "verdict": "fail",
+   "checks": 213,
+   "failures": 32
+  },
+  {
+   "run": "head-diag",
+   "build": "HEAD + new case + temporary readback printf",
+   "winemetal_so_sha256": null,
+   "verdict": "fail",
+   "checks": 213,
+   "failures": 32
+  },
+  {
+   "run": "branch-removed-1",
+   "build": "fix tree, routing branch removed",
+   "winemetal_so_sha256": null,
+   "verdict": "fail"
+  },
+  {
+   "run": "branch-removed-2",
+   "build": "fix tree, routing branch removed",
+   "winemetal_so_sha256": null,
+   "verdict": "fail"
+  },
+  {
+   "run": "branch-removed-3",
+   "build": "fix tree, routing branch removed",
+   "winemetal_so_sha256": "3d346d3438eff60f",
+   "verdict": "fail"
+  },
+  {
+   "run": "interim-1",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-2",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-3",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-4",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-5",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-6",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-7",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-8",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-9",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-10",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-11",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "interim-12",
+   "build": "fix variant A (fall-through)",
+   "winemetal_so_sha256": "2d59a281d0f91876",
+   "verdict": "pass"
+  },
+  {
+   "run": "final-1",
+   "build": "shipped fix",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "final-2",
+   "build": "shipped fix",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "final-3",
+   "build": "shipped fix",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "final-4",
+   "build": "shipped fix",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "final-5",
+   "build": "shipped fix",
+   "winemetal_so_sha256": null,
+   "verdict": "pass"
+  },
+  {
+   "run": "final-6",
+   "build": "shipped fix",
+   "winemetal_so_sha256": "93fbc24b1d04d09d",
+   "verdict": "pass"
+  }
+ ],
+ "regression": {
+  "note": "Adding this case shifted every later binary index by one; both neighbours were re-run at their NEW indices on the shipped winemetal.so 93fbc24b1d04d09d. visual_p8_texture_sampler_policy keeps index 155 (the new case is inserted after it); visual_mvp_software_vp_policy moved 185 -> 186.",
+  "visual_p8_texture_sampler_policy": {
+   "index": 155,
+   "runs": 6,
+   "failures": 0
+  },
+  "visual_mvp_software_vp_policy": {
+   "index": 186,
+   "runs": 6,
+   "failures": 0
+  }
+ },
+ "native_pin": {
+  "test": "tests/native/core/core_device_com_spec.cpp::testPalettizedTextureExpansion",
+  "meson_test": "dxmt9-core-device-com-spec",
+  "gated": false,
+  "discrimination_check": "With the routing branch removed from dxmt9c_device_update_surface and everything else unchanged, the spec fails with `P8 UpdateSurface queues no surface copy (left != right)` and exits 1. Verified before recording, not assumed."
+ },
+ "supervisor_verification": {
+  "note": "Independently re-run by the supervising session on its own rebuild of both lanes (staged winemetal.so 93fbc24b1d04d09d, d3d9.dll b9af3a64ab8f15a0 -- matching the artifacts reported, and d3d9.dll unchanged from before the fix since it is unix-side).",
+  "case_156_with_fix": "1/1 pass",
+  "case_156_routing_branch_disabled": "3/3 fail, 33 FAIL lines each run (identical every time)",
+  "regression_case_155_visual_p8_texture_sampler_policy": "pass",
+  "regression_case_186_visual_mvp_software_vp_policy": "pass",
+  "native_pin_discriminates": "core_device_com_spec passes with the fix and exits 1 with the routing branch disabled, failing on `P8 UpdateSurface queues no surface copy (left != right)`",
+  "manifest_check": "ok, 252 cases"
+ }
+}

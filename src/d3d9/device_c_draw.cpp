@@ -237,6 +237,57 @@ extern "C" int32_t dxmt9c_device_update_surface(D9CDevice* d, D9CSurface* src,
                   static_cast<void*>(src), static_cast<void*>(dst));
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
+
+  // Palettized surface pairs are NOT routed through Device::updateSurface,
+  // for the same reason dxmt9c_device_update_texture does not route through
+  // Device::updateTexture (see the comment there).
+  //
+  // A P8/A8P8 texture's Metal backing is a DERIVED A8R8G8B8 expansion of
+  // (index shadow x that texture's palette); it is not storage the app ever
+  // wrote. Device::updateSurface moves that backing twice — a queued GPU
+  // SurfaceCopy of the source's Metal texture, and a CPU lockRect/memcpy of
+  // the source's expanded bytes — and both carry the SOURCE's palette. A
+  // SYSTEMMEM staging source is never bound through SetTexture, so its
+  // palette is still initPalettizedTexture's identity ramp.
+  //
+  // Unlike the UpdateTexture case there is no corrective re-expansion behind
+  // it, so this was not a race but two deterministic failures, both measured
+  // on 2026-08-02 with the destination bound and sampled:
+  //   1. The destination reads back as the identity ramp — P8 indices
+  //      {1,2,3,4} sampled ff010101/ff020202/ff030303/ff040404 instead of the
+  //      palette colours.
+  //   2. D9CSurface carries no palette state, so the destination TEXTURE's
+  //      p8Levels index shadow was never written. The next SetPaletteEntries
+  //      or SetCurrentTexturePalette re-expands the destination from that
+  //      still-zero shadow and the copy vanishes entirely: P8 went to
+  //      ff000000 (palette[0]) and A8P8 to 00000000.
+  // Copying the index shadow and re-expanding with the DESTINATION's palette
+  // fixes both, and makes the expansion the only writer.
+  //
+  // Both sides must be levels of palettized textures. D9CSurface has nowhere
+  // to store a palette, and a standalone CreateOffscreenPlainSurface(P8) is a
+  // genuine Format::P8 surface rather than an expanded backing, so such a
+  // pair is left on the unchanged path (where the core format mismatch
+  // already rejects it) rather than given invented semantics here.
+  //
+  // A palettized pair never falls through: if the copy cannot be served
+  // (mismatched P8/A8P8 formats, or an index shadow shorter than the
+  // subresource — both already rejected by the PE-side validation in
+  // D3D9PeDevice::UpdateSurface, so unreachable from a real app), it is an
+  // invalid call rather than an excuse to run the path this fixes.
+  if (src->ownerTex && dst->ownerTex && src->ownerTex->palettized &&
+      dst->ownerTex->palettized) {
+    if (!dxmt9c_copy_palettized_subresource(src->ownerTex, src->ownerLevel,
+                                            dst->ownerTex, dst->ownerLevel)) {
+      dxmt9DebugLog("device_update_surface palettized copy rejected "
+                    "srcTex=%p srcLevel=%u dstTex=%p dstLevel=%u",
+                    static_cast<void*>(src->ownerTex), src->ownerLevel,
+                    static_cast<void*>(dst->ownerTex), dst->ownerLevel);
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    return dxmt9::core::D3D_OK;
+  }
+
   const int32_t hr = d->iface->UpdateSurface(src->obj, dst->obj);
   if (failed(hr)) {
     dxmt9DebugLog("device_update_surface failed src=%p dst=%p srcObj=%p dstObj=%p hr=0x%08x",

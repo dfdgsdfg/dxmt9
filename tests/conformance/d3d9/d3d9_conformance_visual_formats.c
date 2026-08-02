@@ -845,6 +845,230 @@ done:
     return;
 }
 
+/*
+ * UpdateSurface counterpart of check_visual_palettized_update_texture_sampler.
+ *
+ * Identical shape, one level down: instead of copying the whole SYSTEMMEM
+ * texture with UpdateTexture, take level 0 of each side with GetSurfaceLevel
+ * and copy the pair with UpdateSurface. D3D9 requires the source in
+ * SYSTEMMEM, the destination in DEFAULT, and matching formats, all of which
+ * the texture pools give here.
+ *
+ * A P8/A8P8 destination must end up holding the SOURCE's palette INDICES,
+ * expanded through whichever palette is current at draw time -- the index
+ * data is what UpdateSurface transports; the palette is device state
+ * (SetPaletteEntries / SetCurrentTexturePalette), not surface content. So
+ * the same index bytes must read back as `expected` under the base palette
+ * and as `updated_expected` after a palette switch, exactly as they do for
+ * UpdateTexture.
+ */
+static void check_visual_palettized_update_surface_sampler(
+        IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
+        UINT texel_bytes, const DWORD *expected,
+        const PALETTEENTRY *updated_palette, const DWORD *updated_expected,
+        BOOL programmable_ps)
+{
+    struct textured_point
+    {
+        float x, y, z, rhw;
+        float u, v;
+    };
+    static const struct textured_point points[] =
+    {
+        {0.5f, 0.5f, 0.0f, 1.0f, 0.25f, 0.25f},
+        {1.5f, 0.5f, 0.0f, 1.0f, 0.75f, 0.25f},
+        {0.5f, 1.5f, 0.0f, 1.0f, 0.25f, 0.75f},
+        {1.5f, 1.5f, 0.0f, 1.0f, 0.75f, 0.75f},
+    };
+    IDirect3DSurface9 *dst_surface = NULL;
+    IDirect3DSurface9 *src_surface = NULL;
+    IDirect3DTexture9 *dst_texture = NULL;
+    IDirect3DTexture9 *src_texture = NULL;
+    IDirect3DSurface9 *readback = NULL;
+    IDirect3DPixelShader9 *ps = NULL;
+    IDirect3DSurface9 *rt = NULL;
+    D3DLOCKED_RECT locked;
+    DWORD point_size;
+    D3DVIEWPORT9 vp;
+    HRESULT hr;
+
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_SYSTEMMEM, &src_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done;
+    hr = IDirect3DDevice9_CreateTexture(device, 2, 2, 1, 0, format,
+            D3DPOOL_DEFAULT, &dst_texture, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src_texture;
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DTexture9_LockRect(src_texture, 0, &locked, NULL, 0);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    if (SUCCEEDED(hr))
+    {
+        INT row_bytes = (INT)(2 * texel_bytes);
+        BYTE *row0 = locked.pBits;
+        BYTE *row1 = row0 + locked.Pitch;
+        CHECK_TRUE(locked.Pitch >= row_bytes);
+        if (locked.Pitch >= row_bytes)
+        {
+            memcpy(row0, texels, row_bytes);
+            memcpy(row1, texels + row_bytes, row_bytes);
+        }
+        CHECK_HR(IDirect3DTexture9_UnlockRect(src_texture, 0), D3D_OK);
+    }
+
+    hr = IDirect3DTexture9_GetSurfaceLevel(src_texture, 0, &src_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    hr = IDirect3DTexture9_GetSurfaceLevel(dst_texture, 0, &dst_surface);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_src_surface;
+
+    CHECK_HR(IDirect3DDevice9_UpdateSurface(device, src_surface, NULL,
+            dst_surface, NULL), D3D_OK);
+
+    IDirect3DSurface9_Release(dst_surface);
+    dst_surface = NULL;
+    IDirect3DSurface9_Release(src_surface);
+    src_surface = NULL;
+
+    hr = IDirect3DDevice9_CreateRenderTarget(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &rt, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_dst_texture;
+    hr = IDirect3DDevice9_CreateOffscreenPlainSurface(device, 2, 2,
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &readback, NULL);
+    CHECK_HR(hr, D3D_OK);
+    if (FAILED(hr))
+        goto done_rt;
+
+    CHECK_HR(IDirect3DDevice9_SetRenderTarget(device, 0, rt), D3D_OK);
+    vp.X = 0;
+    vp.Y = 0;
+    vp.Width = 2;
+    vp.Height = 2;
+    vp.MinZ = 0.0f;
+    vp.MaxZ = 1.0f;
+    CHECK_HR(IDirect3DDevice9_SetViewport(device, &vp), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_LIGHTING, FALSE),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_ZENABLE, FALSE),
+            D3D_OK);
+    point_size = 0x3f800000u;
+    CHECK_HR(IDirect3DDevice9_SetRenderState(device, D3DRS_POINTSIZE,
+            point_size), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MINFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MAGFILTER,
+            D3DTEXF_POINT), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetSamplerState(device, 0, D3DSAMP_MIPFILTER,
+            D3DTEXF_NONE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTextureStageState(device, 0,
+            D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0,
+            (IDirect3DBaseTexture9 *)dst_texture), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetFVF(device, D3DFVF_XYZRHW | D3DFVF_TEX1),
+            D3D_OK);
+    if (programmable_ps)
+    {
+        hr = IDirect3DDevice9_CreatePixelShader(device, p8_sample_ps_2_0,
+                &ps);
+        CHECK_HR(hr, D3D_OK);
+        if (FAILED(hr))
+            goto done_texture_bind;
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, ps), D3D_OK);
+    }
+
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row0 = locked.pBits;
+        const DWORD *row1 = (const DWORD *)((const BYTE *)locked.pBits
+                + locked.Pitch);
+        CHECK_TRUE(row0[0] == expected[0]);
+        CHECK_TRUE(row0[1] == expected[1]);
+        CHECK_TRUE(row1[0] == expected[2]);
+        CHECK_TRUE(row1[1] == expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    /* The palette is device state, not surface content: switching it must
+     * re-expand the SAME indices UpdateSurface transported. This is the half
+     * that catches a destination whose index shadow was never written --
+     * re-expansion then reads stale indices and loses the copy entirely. */
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 1, updated_palette),
+            D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_BeginScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_Clear(device, 0, NULL, D3DCLEAR_TARGET,
+            0xff000000u, 0.0f, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_DrawPrimitiveUP(device, D3DPT_POINTLIST,
+            ARRAY_SIZE(points), points, sizeof(points[0])), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_EndScene(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_GetRenderTargetData(device, rt, readback),
+            D3D_OK);
+
+    memset(&locked, 0xcc, sizeof(locked));
+    hr = IDirect3DSurface9_LockRect(readback, &locked, NULL,
+            D3DLOCK_READONLY);
+    CHECK_HR(hr, D3D_OK);
+    if (SUCCEEDED(hr))
+    {
+        const DWORD *row0 = locked.pBits;
+        const DWORD *row1 = (const DWORD *)((const BYTE *)locked.pBits
+                + locked.Pitch);
+        CHECK_TRUE(row0[0] == updated_expected[0]);
+        CHECK_TRUE(row0[1] == updated_expected[1]);
+        CHECK_TRUE(row1[0] == updated_expected[2]);
+        CHECK_TRUE(row1[1] == updated_expected[3]);
+        CHECK_HR(IDirect3DSurface9_UnlockRect(readback), D3D_OK);
+    }
+
+    if (programmable_ps)
+        CHECK_HR(IDirect3DDevice9_SetPixelShader(device, NULL), D3D_OK);
+    if (ps) IDirect3DPixelShader9_Release(ps);
+done_texture_bind:
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetTexture(device, 0, NULL), D3D_OK);
+    IDirect3DSurface9_Release(readback);
+done_rt:
+    IDirect3DSurface9_Release(rt);
+done_src_surface:
+    if (src_surface) IDirect3DSurface9_Release(src_surface);
+done_dst_texture:
+    IDirect3DTexture9_Release(dst_texture);
+done_src_texture:
+    IDirect3DTexture9_Release(src_texture);
+done:
+    return;
+}
+
 static void check_visual_palettized_volume_texture_sampler(
         IDirect3DDevice9 *device, D3DFORMAT format, const BYTE *texels,
         UINT texel_bytes, const DWORD *expected)
@@ -1404,6 +1628,150 @@ void test_visual_p8_texture_sampler_policy(const struct d3d9_api *api)
         check_visual_palettized_update_texture_sampler(device, D3DFMT_A8P8,
                 a8p8_texels, 2, a8p8_expected, updated_palette,
                 a8p8_updated_expected, TRUE);
+    }
+    IDirect3DDevice9_Release(device);
+done_window:
+    DestroyWindow(window);
+done_d3d9:
+    IDirect3D9_Release(d3d9);
+}
+
+/*
+ * dxmt9 policy test. Wine has no oracle that combines a palettized format
+ * with IDirect3DDevice9::UpdateSurface: every D3DFMT_P8 / D3DFMT_A8P8 test
+ * upstream (dlls/d3d8/tests/visual.c p8_texture_test, dlls/d3d9/tests
+ * format lists) copies with UpdateTexture or writes the texture directly,
+ * and every UpdateSurface test upstream uses an unpalettized format
+ * (dlls/d3d9/tests/visual.c:2758 uses A8R8G8B8 into a cube face). The
+ * intersection is unmeasured territory, which is why dxmt9 had a defect
+ * there with nothing to catch it.
+ *
+ * Pins the D3D9 contract dxmt9 must honor: for P8/A8P8, UpdateSurface
+ * transports the SOURCE's palette INDICES into the destination
+ * subresource. The palette is device state (SetPaletteEntries /
+ * SetCurrentTexturePalette), never surface content, so the destination
+ * must sample through whichever palette is current AT DRAW TIME, and a
+ * later palette switch must re-expand the copied indices rather than lose
+ * them.
+ */
+void test_visual_p8_update_surface_policy(const struct d3d9_api *api)
+{
+    static const BYTE p8_texels[] = {1, 2, 3, 4};
+    static const BYTE a8p8_texels[] = {1, 0x80, 2, 0x40, 3, 0x20, 4, 0x10};
+    static const DWORD p8_expected[] =
+    {
+        0xff112233u, 0xff445566u,
+        0xff778899u, 0xffaabbccu,
+    };
+    static const DWORD a8p8_expected[] =
+    {
+        0x80112233u, 0x40445566u,
+        0x20778899u, 0x10aabbccu,
+    };
+    static const DWORD p8_updated_expected[] =
+    {
+        0xff224466u, 0xff6688aau,
+        0xff99bbddu, 0xffccdd22u,
+    };
+    static const DWORD a8p8_updated_expected[] =
+    {
+        0x80224466u, 0x406688aau,
+        0x2099bbddu, 0x10ccdd22u,
+    };
+    IDirect3DDevice9 *device = NULL;
+    PALETTEENTRY updated_palette[256];
+    PALETTEENTRY palette[256];
+    D3DCAPS9 caps;
+    IDirect3D9 *d3d9;
+    HWND window;
+    HRESULT hr;
+    UINT i;
+
+    d3d9 = api->create9(D3D_SDK_VERSION);
+    if (!d3d9)
+    {
+        skip_current_test("Direct3DCreate9 returned NULL");
+        return;
+    }
+
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_P8 textures are not supported");
+        goto done_d3d9;
+    }
+    hr = IDirect3D9_CheckDeviceFormat(d3d9, D3DADAPTER_DEFAULT,
+            D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE,
+            D3DFMT_A8P8);
+    if (hr != D3D_OK)
+    {
+        skip_current_test("D3DFMT_A8P8 textures are not supported");
+        goto done_d3d9;
+    }
+
+    window = create_test_window();
+    CHECK_TRUE(window != NULL);
+    if (!window)
+        goto done_d3d9;
+
+    device = create_base_device(d3d9, window);
+    if (!device)
+        goto done_window;
+    memset(&caps, 0, sizeof(caps));
+    CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+
+    memset(palette, 0, sizeof(palette));
+    for (i = 0; i < ARRAY_SIZE(palette); ++i)
+        palette[i].peFlags = 0xff;
+    palette[1].peRed = 0x11; palette[1].peGreen = 0x22;
+    palette[1].peBlue = 0x33; palette[1].peFlags = 0xff;
+    palette[2].peRed = 0x44; palette[2].peGreen = 0x55;
+    palette[2].peBlue = 0x66; palette[2].peFlags = 0xff;
+    palette[3].peRed = 0x77; palette[3].peGreen = 0x88;
+    palette[3].peBlue = 0x99; palette[3].peFlags = 0xff;
+    palette[4].peRed = 0xaa; palette[4].peGreen = 0xbb;
+    palette[4].peBlue = 0xcc; palette[4].peFlags = 0xff;
+    memcpy(updated_palette, palette, sizeof(palette));
+    updated_palette[1].peRed = 0x22; updated_palette[1].peGreen = 0x44;
+    updated_palette[1].peBlue = 0x66; updated_palette[1].peFlags = 0xff;
+    updated_palette[2].peRed = 0x66; updated_palette[2].peGreen = 0x88;
+    updated_palette[2].peBlue = 0xaa; updated_palette[2].peFlags = 0xff;
+    updated_palette[3].peRed = 0x99; updated_palette[3].peGreen = 0xbb;
+    updated_palette[3].peBlue = 0xdd; updated_palette[3].peFlags = 0xff;
+    updated_palette[4].peRed = 0xcc; updated_palette[4].peGreen = 0xdd;
+    updated_palette[4].peBlue = 0x22; updated_palette[4].peFlags = 0xff;
+
+    /* Re-issue palette 0's contents before every invocation. The helper
+     * leaves slot 1 selected as current until its own restore, and the
+     * companion p8 case documents how easily a leaked slot-0 mutation makes
+     * later base-palette expectations unreachable. */
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetCurrentTexturePalette(device, 0), D3D_OK);
+    check_visual_palettized_update_surface_sampler(device, D3DFMT_P8,
+            p8_texels, 1, p8_expected, updated_palette,
+            p8_updated_expected, FALSE);
+    CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette), D3D_OK);
+    check_visual_palettized_update_surface_sampler(device, D3DFMT_A8P8,
+            a8p8_texels, 2, a8p8_expected, updated_palette,
+            a8p8_updated_expected, FALSE);
+    if (caps.PixelShaderVersion >= D3DPS_VERSION(2, 0))
+    {
+        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette),
+                D3D_OK);
+        check_visual_palettized_update_surface_sampler(device, D3DFMT_P8,
+                p8_texels, 1, p8_expected, updated_palette,
+                p8_updated_expected, TRUE);
+        CHECK_HR(IDirect3DDevice9_SetPaletteEntries(device, 0, palette),
+                D3D_OK);
+        check_visual_palettized_update_surface_sampler(device, D3DFMT_A8P8,
+                a8p8_texels, 2, a8p8_expected, updated_palette,
+                a8p8_updated_expected, TRUE);
+    }
+    else
+    {
+        skip_current_test("ps_2_0 is not supported");
     }
     IDirect3DDevice9_Release(device);
 done_window:

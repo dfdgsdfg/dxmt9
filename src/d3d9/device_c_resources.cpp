@@ -333,6 +333,71 @@ void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresou
   expandP8SubresourceToBackend(texture, subresource);
 }
 
+bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
+                                        uint32_t srcSubresource,
+                                        D9CTexture* dstTexture,
+                                        uint32_t dstSubresource) {
+  if (!srcTexture || !dstTexture || !srcTexture->palettized ||
+      !dstTexture->palettized ||
+      srcTexture->d3dFormat != dstTexture->d3dFormat ||
+      srcSubresource >= srcTexture->p8Levels.size() ||
+      dstSubresource >= dstTexture->p8Levels.size()) {
+    return false;
+  }
+  const auto& srcDesc = srcTexture->obj->desc();
+  const auto& dstDesc = dstTexture->obj->desc();
+  const uint32_t texelBytes = palettizedTexelBytes(dstTexture->d3dFormat);
+  const uint32_t srcMipLevels = std::max(1u, srcDesc.levels);
+  const uint32_t dstMipLevels = std::max(1u, dstDesc.levels);
+  const uint32_t srcLevel = srcDesc.type == dxmt9::core::TextureType::Cube
+                                ? srcSubresource % srcMipLevels
+                                : srcSubresource;
+  const uint32_t dstLevel = dstDesc.type == dxmt9::core::TextureType::Cube
+                                ? dstSubresource % dstMipLevels
+                                : dstSubresource;
+  const uint32_t srcWidth = mipDimension(srcDesc.width, srcLevel);
+  const uint32_t dstWidth = mipDimension(dstDesc.width, dstLevel);
+  const uint32_t srcHeight = mipDimension(srcDesc.height, srcLevel);
+  const uint32_t dstHeight = mipDimension(dstDesc.height, dstLevel);
+  const uint32_t srcDepth = srcDesc.type == dxmt9::core::TextureType::Volume
+                                ? mipDimension(srcDesc.depth, srcLevel)
+                                : 1u;
+  const uint32_t dstDepth = dstDesc.type == dxmt9::core::TextureType::Volume
+                                ? mipDimension(dstDesc.depth, dstLevel)
+                                : 1u;
+  const auto& srcIndices = srcTexture->p8Levels[srcSubresource];
+  auto& dstIndices = dstTexture->p8Levels[dstSubresource];
+  if (srcIndices.size() <
+          palettizedSubresourceBytes(srcDesc, srcSubresource, texelBytes) ||
+      dstIndices.size() <
+          palettizedSubresourceBytes(dstDesc, dstSubresource, texelBytes)) {
+    return false;
+  }
+  // D3D9 allows a smaller source than destination (UpdateSurface validates
+  // only that the copy region fits), so clamp per axis rather than assuming
+  // equal extents. dxmt9c_device_update_surface ignores srcRect/dstPoint —
+  // a pre-existing gap on the non-palettized path too — so this copies from
+  // each origin.
+  const uint32_t width = std::min(srcWidth, dstWidth);
+  const uint32_t height = std::min(srcHeight, dstHeight);
+  const uint32_t depth = std::min(srcDepth, dstDepth);
+  const size_t rowBytes = static_cast<size_t>(width) * texelBytes;
+  for (uint32_t z = 0; z < depth; ++z) {
+    for (uint32_t y = 0; y < height; ++y) {
+      const size_t srcOffset =
+          ((static_cast<size_t>(z) * srcHeight + y) * srcWidth) * texelBytes;
+      const size_t dstOffset =
+          ((static_cast<size_t>(z) * dstHeight + y) * dstWidth) * texelBytes;
+      std::memcpy(dstIndices.data() + dstOffset, srcIndices.data() + srcOffset,
+                  rowBytes);
+    }
+  }
+  if (!dstTexture->lockedLevels.contains(dstSubresource)) {
+    expandP8SubresourceToBackend(dstTexture, dstSubresource);
+  }
+  return true;
+}
+
 extern "C" D9CTexture* dxmt9c_device_create_texture(D9CDevice* d, uint32_t w, uint32_t h,
                                                     uint32_t levels, uint32_t usage,
                                                     uint32_t fmt, uint32_t pool) {

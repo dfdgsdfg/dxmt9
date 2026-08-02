@@ -407,12 +407,53 @@ residual risk on this path.
 > instead of degrading to a flake only conformance can see. Verified to fire:
 > re-adding the routing makes it `SIGSEGV`, and it passes with the fix.
 
-**Still unaudited, and the same shape:** `dxmt9c_device_update_surface` →
-`Device::updateSurface` → `submitSurfaceCopy` (`core_surface.cpp:355`).
-`D9CSurface` carries no p8 shadow at all, so a palettized `UpdateSurface` would
-copy the source's expansion with **no** corrective re-expansion behind it — worse
-than the bug just fixed, not merely equal to it. No conformance case covers it,
-so it was not changed blind.
+**The same shape in `UpdateSurface` — FIXED 2026-08-02, and it was worse than
+predicted.** `dxmt9c_device_update_surface` → `Device::updateSurface`
+(`core_surface.cpp:338`) moves the source's derived expansion **twice**: a queued
+`submitSurfaceCopy` *and* a CPU `lockRect`/`memcpy`. `D9CSurface` carries no p8
+shadow, so unlike the `UpdateTexture` case nothing re-expanded the destination
+behind it. Both consequences measured with the destination bound and sampled:
+
+| | P8 | A8P8 |
+|---|---|---|
+| first draw | `ff010101 ff020202 ff030303 ff040404` | `80010101 40020202 20030303 10040404` |
+| after a palette switch | `ff000000` ×4 | `00000000` ×4 |
+| expected | `ff112233 …` → `ff224466 …` | `80112233 …` → `80224466 …` |
+
+The first row is the identity ramp, as predicted — deterministic here rather than
+a race, since no corrective writer competes. **The second row was not predicted
+and is the worse half:** the destination *texture*'s `p8Levels` index shadow was
+never written, so the next `SetPaletteEntries` / `SetCurrentTexturePalette`
+re-expanded from a still-zero shadow and every texel collapsed to `palette[0]`.
+The copy is not mis-coloured, it is destroyed.
+
+Fixed by `dxmt9c_copy_palettized_subresource` (`device_c_resources.cpp:336`),
+reached through `D9CSurface::ownerTex` / `ownerLevel` — the `UpdateTexture` fix
+one level down. A palettized pair never falls through to the routed path; an
+unservable one is `D3DERR_INVALIDCALL` rather than an excuse to run the path
+being fixed.
+
+**Coverage was written first, and made to fail first.** There was none, which is
+why this was flagged rather than fixed blind on 2026-08-02 morning. New case
+`visual_p8_update_surface_policy` (index 156) fails `32` of `213` checks
+deterministically on the unfixed routing — reproduced `3/3` by the supervising
+session with an identical count each time — and passes with the fix. Provenance
+is `dxmt9-policy`, not an oracle: **no Wine test combines a palettized format
+with `UpdateSurface`** — every upstream palettized test copies with
+`UpdateTexture`, and every upstream `UpdateSurface` test uses an unpalettized
+format. Pinned ungated in `core_device_com_spec.cpp` on three separate
+assertions, because any one of them passes while the bug is live: no surface copy
+queued, expansion used the destination's palette, and the destination's index
+shadow was written. Verified to discriminate.
+
+**Two adjacent gaps deliberately left open**, so neither is fixed under cover of
+this one: `srcRect` / `dstPoint` are still ignored by
+`dxmt9c_device_update_surface` on *both* paths, and a standalone
+`CreateOffscreenPlainSurface(D3DFMT_P8)` pair — a genuine `Format::P8` surface
+with nowhere to store a palette — keeps the old path, where a core format
+mismatch rejects it with `D3DERR_NOTAVAILABLE` when real D3D9 returns `D3D_OK`.
+That last one is **a code-read inference with no test behind it**; pinning the
+current HRESULT would enshrine what is probably itself a defect.
 
 **The hang is a real use-after-free, and it is not P8-specific — OPEN.**
 `StagingCopy` (`dxmt9_resource_pool.hpp:618-621`) retains its `stagingTexture`

@@ -749,6 +749,126 @@ void testPalettizedTextureExpansion() {
               "source P8 update texture release");
     }
     {
+      // Same contract one level down: dxmt9c_device_update_surface on a pair
+      // of palettized texture levels (IDirect3DTexture9::GetSurfaceLevel).
+      //
+      // Device::updateSurface both queues a GPU SurfaceCopy of the source's
+      // Metal backing AND CPU-copies the source's expanded bytes into the
+      // destination. For P8/A8P8 that backing is a derived expansion through
+      // the SOURCE's palette, so both writes carry the wrong palette -- and
+      // unlike UpdateTexture nothing re-expands the destination afterwards,
+      // because D9CSurface holds no palette state at all. Measured on
+      // 2026-08-02 through the conformance case visual_p8_update_surface_policy
+      // (index 156): the destination sampled as the identity ramp
+      // ff010101/ff020202/..., and the FOLLOWING SetCurrentTexturePalette
+      // re-expanded it from a never-written index shadow, collapsing every
+      // texel to palette[0].
+      //
+      // Two assertions, because either alone can pass while the bug is live:
+      // no surface copy is queued (the routing contract), and the
+      // destination's INDEX shadow is written (the reason a later palette
+      // switch survives).
+      auto* srcTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      41u, 1u);
+      auto* dstTexture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
+                                                      41u, 1u);
+      check(srcTexture != nullptr, "create source P8 update-surface texture");
+      check(dstTexture != nullptr,
+            "create destination P8 update-surface texture");
+
+      D9CLockedRect locked{};
+      checkEq(dxmt9c_texture_lock_rect(srcTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 update-surface source lock");
+      auto* indices = static_cast<uint8_t*>(locked.bits);
+      indices[0] = 3;
+      indices[1] = 4;
+      checkEq(dxmt9c_texture_unlock_rect(srcTexture, 0), D3D_OK,
+              "P8 update-surface source unlock");
+
+      std::array<uint32_t, 256> sourcePalette{};
+      sourcePalette[3] = 0xff8899aau;
+      sourcePalette[4] = 0xffbbccddu;
+      checkEq(dxmt9c_texture_set_palette(
+                  srcTexture, sourcePalette.data(),
+                  static_cast<uint32_t>(sourcePalette.size())),
+              D3D_OK, "P8 update-surface source palette");
+      std::array<uint32_t, 256> destinationPalette{};
+      destinationPalette[3] = 0xff112233u;
+      destinationPalette[4] = 0xff445566u;
+      checkEq(dxmt9c_texture_set_palette(
+                  dstTexture, destinationPalette.data(),
+                  static_cast<uint32_t>(destinationPalette.size())),
+              D3D_OK, "P8 update-surface destination palette before copy");
+
+      auto* srcSurface = dxmt9c_texture_get_surface_level(srcTexture, 0);
+      auto* dstSurface = dxmt9c_texture_get_surface_level(dstTexture, 0);
+      check(srcSurface != nullptr, "P8 update-surface source level");
+      check(dstSurface != nullptr, "P8 update-surface destination level");
+      check(srcSurface->ownerTex == srcTexture,
+            "P8 update-surface source level records its owner texture");
+      check(dstSurface->ownerTex == dstTexture,
+            "P8 update-surface destination level records its owner texture");
+
+      const size_t surfaceCopiesBeforeUpdate = backend->surfaceCopies.size();
+      checkEq(dxmt9c_device_update_surface(&cDevice, srcSurface, nullptr,
+                                           dstSurface, nullptr),
+              D3D_OK, "P8 UpdateSurface");
+      checkEq(backend->surfaceCopies.size(), surfaceCopiesBeforeUpdate,
+              "P8 UpdateSurface queues no surface copy");
+
+      auto bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8, "P8 update-surface expanded backing");
+      checkEq(bytes[0], uint8_t{0x33},
+              "P8 update-surface pixel0 blue uses destination palette");
+      checkEq(bytes[1], uint8_t{0x22},
+              "P8 update-surface pixel0 green uses destination palette");
+      checkEq(bytes[2], uint8_t{0x11},
+              "P8 update-surface pixel0 red uses destination palette");
+      checkEq(bytes[4], uint8_t{0x66},
+              "P8 update-surface pixel1 blue uses destination palette");
+      checkEq(bytes[6], uint8_t{0x44},
+              "P8 update-surface pixel1 red uses destination palette");
+
+      // The index shadow must have been written, or the next palette change
+      // re-expands stale indices and the copy is lost.
+      destinationPalette[3] = 0xff010203u;
+      destinationPalette[4] = 0xffa0b0c0u;
+      checkEq(dxmt9c_texture_set_palette(
+                  dstTexture, destinationPalette.data(),
+                  static_cast<uint32_t>(destinationPalette.size())),
+              D3D_OK, "P8 update-surface destination palette switch");
+      bytes = dstTexture->obj->levelBytes(0);
+      check(bytes.size() >= 8,
+            "P8 update-surface palette switch expanded backing");
+      checkEq(bytes[0], uint8_t{0x03},
+              "P8 update-surface pixel0 blue after palette switch");
+      checkEq(bytes[2], uint8_t{0x01},
+              "P8 update-surface pixel0 red after palette switch");
+      checkEq(bytes[4], uint8_t{0xc0},
+              "P8 update-surface pixel1 blue after palette switch");
+      checkEq(bytes[6], uint8_t{0xa0},
+              "P8 update-surface pixel1 red after palette switch");
+
+      checkEq(dxmt9c_texture_lock_rect(dstTexture, 0, &locked, nullptr, 0),
+              D3D_OK, "P8 update-surface destination lock");
+      indices = static_cast<uint8_t*>(locked.bits);
+      checkEq(indices[0], uint8_t{3},
+              "P8 update-surface copied destination index0 shadow");
+      checkEq(indices[1], uint8_t{4},
+              "P8 update-surface copied destination index1 shadow");
+      checkEq(dxmt9c_texture_unlock_rect(dstTexture, 0), D3D_OK,
+              "P8 update-surface destination unlock");
+
+      checkEq(dxmt9c_surface_release(dstSurface), 0u,
+              "P8 update-surface destination level release");
+      checkEq(dxmt9c_surface_release(srcSurface), 0u,
+              "P8 update-surface source level release");
+      checkEq(dxmt9c_texture_release(dstTexture), 0u,
+              "destination P8 update-surface texture release");
+      checkEq(dxmt9c_texture_release(srcTexture), 0u,
+              "source P8 update-surface texture release");
+    }
+    {
       auto* texture = dxmt9c_device_create_texture(&cDevice, 2, 1, 1, 0,
                                                    40u, 1u);
       check(texture != nullptr, "create A8P8 texture");

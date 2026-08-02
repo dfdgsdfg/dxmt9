@@ -214,6 +214,15 @@ struct D9CTexture {
 
 void dxmt9c_expand_palettized_subresource(D9CTexture* texture, uint32_t subresource);
 
+// Copies one palettized subresource's INDEX shadow between two textures and
+// re-expands the destination through the DESTINATION's palette. Returns false
+// when the pair is not a palettized-to-palettized copy this can serve, in
+// which case the caller must fall back to its normal path.
+bool dxmt9c_copy_palettized_subresource(D9CTexture* srcTexture,
+                                        uint32_t srcSubresource,
+                                        D9CTexture* dstTexture,
+                                        uint32_t dstSubresource);
+
 struct D9CBuffer {
   std::shared_ptr<dxmt9::core::Buffer> obj;
   D9CDevice* device = nullptr;

@@ -3981,6 +3981,30 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/p8-identity-palette-flake-20260802.json:1"
 summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-02. Four causes found, ALL FOUR NOW FIXED; the case no longer hangs and fails 0 of 60 runs (it was a 45% flake, 17/38). (1) TEST: P8_PS_REGTYPE mis-encoded register types >= 8 into the index field, so `mov oC0` decoded as temp r256 and every programmable_ps lane rendered white. (2) dxmt9, and NOT palettized: SetLOD was discarded whenever MIPFILTER=NONE because D3DTEXF_NONE mapped to MTLSamplerMipFilterNotMipmapped, in which Metal ignores lodMinClamp. (3) TEST: earlier invocations pass updated_palette_index = 0 and clobber slot 0's CONTENTS, so later base-palette expectations were unreachable; re-issuing SetPaletteEntries(device, 0, palette) before each UpdateTexture invocation fixes it. (4) dxmt9: palettized UpdateTexture routed through core::Device::updateTexture, which queues a GPU SurfaceCopy of the SOURCE texture's Metal backing -- for P8/A8P8 that backing is a derived expansion through the SOURCE's palette, still initPalettizedTexture's identity ramp because a SYSTEMMEM source is never bound via SetTexture. The destination was expanded again with its own palette on a different submission path, so one UpdateTexture made two conflicting full-subresource writes with nothing ordering them. The palettized branch now re-expands with the destination's palette as the sole writer. Sufficiency proven by control: re-adding only the SurfaceCopy reproduces 9/10. The same fix took visual_mvp_software_vp_policy from ~40% to 0/34 with no change aimed at it, settling `one defect, two repros`. Separately a use-after-free causing a 300s hang was fixed (StagingCopy::destTexture retained), plus a heap-handle variant; an interim `zero FAIL lines` result recorded here was an artifact of that hang. See specs/d3d9/gap.md 2026-08-02."
+
+[[case]]
+executable = "dxmt9-d3d9-conformance.exe"
+source_file = "d3d9_conformance_visual_formats.c"
+function = "test_visual_p8_update_surface_policy"
+source = "dxmt9 policy test; no Wine oracle combines a palettized format with UpdateSurface"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x64"]
+area = "palette-texture"
+owner = "core/resources"
+requirements = ["R-TEST-12.3", "R-TEST-12.13"]
+acceptance = ["A D3DFMT_P8 or D3DFMT_A8P8 SYSTEMMEM texture level copied into a DEFAULT texture level with IDirect3DDevice9::UpdateSurface (source and destination taken with IDirect3DTexture9::GetSurfaceLevel) transports the SOURCE's palette INDICES, not the source's palette expansion: binding the destination and drawing a 2x2 point list samples the indices through the CURRENT device palette, and a following SetPaletteEntries/SetCurrentTexturePalette switch re-expands the same copied indices rather than discarding them. Checked for P8 and A8P8 through both fixed-function texture-stage sampling and a ps_2_0 texld path, by 2x2 A8R8G8B8 render-target readback, including A8P8 texel alpha preservation. No Wine oracle covers this intersection: every upstream palettized test (dlls/d3d8/tests/visual.c p8_texture_test) copies with UpdateTexture, and every upstream UpdateSurface test (dlls/d3d9/tests/visual.c:2758) uses an unpalettized format. R-TEST-12.3 and R-TEST-12.13 are the closest anchors (visual readback and resource-copy policy)."]
+status = "passing"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "tests/conformance/d3d9/evidence/p8-update-surface-20260802.json:1"
+summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-02. Written to fail first: on HEAD the case failed 5/5 runs, deterministically, always the same 32 of 213 checks. dxmt9c_device_update_surface routed palettized pairs through core::Device::updateSurface, which both queues a GPU SurfaceCopy of the source's Metal backing and CPU-copies the source's expanded bytes. For P8/A8P8 that backing is a derived expansion through the SOURCE's palette -- still initPalettizedTexture's identity ramp, since a SYSTEMMEM source is never bound via SetTexture -- and unlike UpdateTexture nothing re-expands the destination behind it, because D9CSurface carries no palette state. Both consequences were measured, not inferred: the first draw returned the identity ramp (ff010101/ff020202/ff030303/ff040404 for P8; 80010101/40020202/20030303/10040404 for A8P8 with source alpha preserved), and the following palette switch collapsed every texel to palette[0] (ff000000 for P8, 00000000 for A8P8) because the destination texture's p8Levels index shadow had never been written -- the second failure destroys the copy outright and is the worse of the two. Fixed by copying the index shadow through D9CSurface::ownerTex/ownerLevel and re-expanding with the DESTINATION's palette, mirroring the UpdateTexture fix in 1d1a5ab5 one level down; a palettized pair now never reaches the routed path at all. Passes 18/18 post-fix (6 of those on the shipped winemetal.so 93fbc24b1d04d09d; the other 12 on an interim variant). d3d9.dll and winemetal.dll are byte-identical across all runs -- the change is entirely unix-side. Pinned ungated by tests/native/core/core_device_com_spec.cpp::testPalettizedTextureExpansion, verified to discriminate: removing the routing branch makes it fail with `P8 UpdateSurface queues no surface copy`."
+
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_visual_depth.c"
