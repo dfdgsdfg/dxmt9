@@ -3,6 +3,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_encode_session_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
@@ -9382,6 +9383,8 @@ public:
       core::metalqueue::QueueSubmissionRecord& record,
       EncodeChunkSessionState* sessionState,
       bool resetSessionAfterPublication) {
+    // Keep deterministic contract failures retryable: validation must precede
+    // pending-clear flushes, encoder ends, capacity changes, and publication.
     if (!canFinalizeIntoSubmission(record) ||
         !validatePublication(record, sessionState)) {
       return false;
@@ -14886,9 +14889,14 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeChunkOptions options) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
-  // EncodePartitionEntrySnapshot remains a backend metadata carrier only. The
-  // current serial executor intentionally ignores options.partitionEntry until
-  // retained-source resolution is implemented.
+  // Resolve and validate immutable partition metadata while its source table
+  // is alive. Rejected and valid entries both stay on this source-order serial
+  // executor; resolution alone never authorizes parallel Metal encoding.
+  if (options.partitionEntry) {
+    const auto partitionEntry = resolveEncodePartitionEntry(
+        *options.partitionEntry, options.sessionLookaheadSources);
+    (void)partitionEntry;
+  }
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }

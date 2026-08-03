@@ -507,9 +507,9 @@ struct EncodeChunkOptions {
   // into the final completion source list without violating locality.
   bool allowInjectedCommandBufferMidChunkCommits = false;
   // Optional backend-planned locator for one immutable draw entry. The value
-  // contains no live Metal object or borrowed storage; retained-source
-  // resolution and any parallel executor remain unimplemented. Existing
-  // backends forward the empty default unchanged through the serial path.
+  // contains no live Metal object or borrowed storage. Resolution only
+  // validates a call-local retained source; even valid metadata stays on the
+  // serial executor until a separately approved parallel executor exists.
   std::optional<EncodePartitionEntrySnapshot> partitionEntry{};
   // Optional session owner for render-pass carry candidates. When a final
   // submission is returned, the caller must transfer the session owner into the
@@ -527,8 +527,9 @@ struct EncodeChunkOptions {
   // submission so one Metal tail can expand to per-source seqId completion.
   std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
   // Call-local selected FIFO source suffix used for load/store and FrameGraph
-  // lookahead proofs. The span points at already dequeued ReadySlotSnapshot
-  // entries and must not be retained by encodeChunk or EncodeSession.
+  // lookahead proofs, and as partitionEntry's retained source table. The span
+  // points at already dequeued ReadySlotSnapshot entries and must not be
+  // retained by encodeChunk or EncodeSession.
   std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};
   // Optional validated source-command replay plan produced by the Frame Graph.
   // Passcoalesce supplies a complete permutation; DCE may supply an ordered

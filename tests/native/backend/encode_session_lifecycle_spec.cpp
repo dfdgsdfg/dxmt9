@@ -18,8 +18,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <array>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -209,6 +211,114 @@ void encodeChunkThenFinalizerPublishesAndResetsOneSession() {
         "successful finalization clears deferred session payload");
 }
 
+void finalizerValidationFailureIsNoMutationAndRetryable() {
+  Harness harness;
+  auto ctx = harness.makeContext();
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  dxmt9::core::ChunkSlot headSlot{};
+  headSlot.seqId = 51;
+  dxmt9::core::ClearDesc headClear{};
+  headClear.clearColor = true;
+  headSlot.appendClear(headClear);
+  const dxmt9::core::metalqueue::QueueCompletionSource headSource{
+      .slotIndex = 4,
+      .seqId = headSlot.seqId,
+      .hasPresent = false,
+      .commandBegin = 0,
+      .commandCount = 1,
+  };
+  auto commandBuffer =
+      retainedToken<WMT::CommandBuffer>("encode-session-retry-cb-token");
+  const obj_handle_t commandBufferHandle = commandBuffer.handle;
+  auto head = dxmt9::encoders::encodeChunk(
+      ctx, headSource.slotIndex, headSlot,
+      deferredOptions(*session, std::move(commandBuffer), headSource));
+  check(head.has_value(), "retry fixture head encode succeeds");
+
+  dxmt9::core::ChunkSlot tailSlot{};
+  tailSlot.seqId = 52;
+  const dxmt9::core::metalqueue::QueueCompletionSource tailSource{
+      .slotIndex = 5,
+      .seqId = tailSlot.seqId,
+      .hasPresent = false,
+      .commandBegin = 0,
+      .commandCount = 0,
+  };
+  auto tail = dxmt9::encoders::encodeChunk(
+      ctx, tailSource.slotIndex, tailSlot,
+      deferredOptions(*session, std::move(head->commandBuffer), tailSource));
+  check(tail.has_value(), "retry fixture tail encode succeeds");
+
+  const std::array<dxmt9::core::metalqueue::QueueCompletionSource, 1>
+      mismatchedSources{
+          dxmt9::core::metalqueue::QueueCompletionSource{
+              .slotIndex = 99,
+              .seqId = 99,
+              .hasPresent = false,
+              .commandBegin = 0,
+              .commandCount = 0,
+          },
+      };
+  check(tail->assignFixedCompletionSources(mismatchedSources),
+        "retry fixture installs a valid but conflicting source list");
+  tail->postCommitCallbacks.emplace_back([] {});
+  tail->completionCallbacks.emplace_back([] {});
+  tail->retainedPayloads.emplace_back(std::make_shared<int>(7));
+
+  const auto postCommitCount = tail->postCommitCallbacks.size();
+  const auto completionCount = tail->completionCallbacks.size();
+  const auto retainedPayloadCount = tail->retainedPayloads.size();
+  check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "mismatched completion sources reject finalization");
+
+  checkEq(tail->commandBuffer.handle, commandBufferHandle,
+          "rejected finalization preserves record command-buffer ownership");
+  checkEq(tail->postCommitCallbacks.size(), postCommitCount,
+          "rejected finalization preserves record post-commit callbacks");
+  checkEq(tail->completionCallbacks.size(), completionCount,
+          "rejected finalization preserves record completion callbacks");
+  checkEq(tail->retainedPayloads.size(), retainedPayloadCount,
+          "rejected finalization preserves record retained payloads");
+  const auto rejectedSources = tail->explicitCompletionSourceSpan();
+  checkEq(rejectedSources.size(), std::size_t{1},
+          "rejected finalization preserves conflicting record sources");
+  checkEq(rejectedSources[0].seqId, std::uint64_t{99},
+          "rejected finalization does not rewrite record source identity");
+
+  const auto sessionSources =
+      dxmt9::encoders::encodeChunkSessionSources(*session);
+  checkEq(sessionSources.size(), std::size_t{2},
+          "rejected finalization preserves all session sources");
+  checkEq(sessionSources[0].seqId, headSource.seqId,
+          "rejected finalization preserves the head source");
+  checkEq(sessionSources[1].seqId, tailSource.seqId,
+          "rejected finalization preserves the tail source");
+  check(dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+            *session),
+        "rejected finalization leaves the pending clear in session storage");
+
+  tail->fixedCompletionSources.clear();
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "corrected record retries finalization successfully");
+  checkEq(tail->commandBuffer.handle, commandBufferHandle,
+          "successful retry keeps the command buffer");
+  const auto published = tail->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{2},
+          "successful retry publishes both session sources");
+  checkEq(published[0].seqId, headSource.seqId,
+          "successful retry publishes the head source first");
+  checkEq(published[1].seqId, tailSource.seqId,
+          "successful retry publishes the tail source second");
+  check(dxmt9::encoders::encodeChunkSessionSources(*session).empty(),
+        "successful retry resets session sources");
+  check(!dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+            *session),
+        "successful retry clears deferred session payload");
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +326,7 @@ int main() {
   setenv("DXMT_METAL_CAPTURE_FRAME", "0", 1);
   try {
     encodeChunkThenFinalizerPublishesAndResetsOneSession();
+    finalizerValidationFailureIsNoMutationAndRetryable();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()
               << '\n';

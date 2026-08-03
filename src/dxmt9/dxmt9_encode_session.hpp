@@ -27,9 +27,9 @@ struct RetainedEncodeSourceLocator {
 // Immutable-after-publication locator for a single draw entry. Large state,
 // uniforms, shader layouts, binding records, and UP data remain owned by the
 // retained ChunkSlot. The payload ranges are absolute offsets into that
-// source's ChunkSlot::drawPayloadArena. This is metadata only: the current
-// serial executor intentionally ignores it until a retained-source resolver
-// exists.
+// source's ChunkSlot::drawPayloadArena. DrawParam stores ranges relative to its
+// draw-run payload, so a planner must add DrawRunCommandRecord::payloadOffset
+// when publishing a non-empty range into this snapshot.
 struct EncodePartitionEntrySnapshot {
   RetainedEncodeSourceLocator source{};
   std::uint32_t commandIndex = 0;
@@ -87,6 +87,12 @@ bool appendEncodeChunkSessionSource(
 std::span<const core::metalqueue::QueueCompletionSource>
 encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept;
 
+// A deterministic preflight rejection (missing/conflicting command-buffer
+// ownership or completion-source mismatch) is side-effect free: record and
+// session ownership remain unchanged and the caller may correct the record and
+// retry. Once preflight succeeds, finalization ends encoders and publishes the
+// session, so callers must treat a later exceptional allocation failure as
+// fatal rather than retryable.
 bool finalizeEncodeChunkSessionIntoSubmission(
     EncodeContext& ctx,
     EncodeChunkSessionState& session,

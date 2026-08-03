@@ -750,7 +750,10 @@ a uniform handle, and absolute binding-override/snapshot payload ranges. It owns
 no Metal reference, pointer, span, or large payload. The existing backend call
 carries it as an optional value in `EncodeChunkOptions`; empty or rejected
 metadata stays on the source-order serial path. Retained-source resolution and
-validation bodies remain open, as do parallel-render and Metal 4 executors.
+validation use the call-local `ReadySlotSnapshot` table and reject stale source
+identity, command/SoA indices, uniform handles, and absolute binding payload
+ranges. Parallel-render and Metal 4 executors remain open; a valid resolution
+still does not authorize parallel Metal encoding.
 
 #### Verification Shape
 
