@@ -18,6 +18,8 @@ namespace {
 
 using dxmt9::encoders::EncodePartitionEntrySnapshot;
 using dxmt9::encoders::EncodePartitionEntryValidation;
+using dxmt9::encoders::EncodePartitionRangeKind;
+using dxmt9::encoders::EncodePartitionRangeSnapshot;
 using dxmt9::encoders::RetainedEncodeSourceLocator;
 
 struct TestFailure : std::runtime_error {
@@ -47,6 +49,9 @@ static_assert(sizeof(RetainedEncodeSourceLocator) == 16);
 static_assert(std::is_trivially_copyable_v<EncodePartitionEntrySnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionEntrySnapshot>);
 static_assert(sizeof(EncodePartitionEntrySnapshot) == 64);
+static_assert(std::is_trivially_copyable_v<EncodePartitionRangeSnapshot>);
+static_assert(std::is_standard_layout_v<EncodePartitionRangeSnapshot>);
+static_assert(sizeof(EncodePartitionRangeSnapshot) == 80);
 static_assert(!std::is_pointer_v<decltype(EncodePartitionEntrySnapshot::source)>);
 static_assert(!std::is_pointer_v<decltype(EncodePartitionEntrySnapshot::uniformHandle)>);
 static_assert(!std::is_pointer_v<decltype(
@@ -118,8 +123,8 @@ void snapshotCopiesAsAnIndependentValue() {
 
 void encodeOptionsDefaultToSerialWithoutPartitionMetadata() {
   dxmt9::encoders::EncodeChunkOptions options{};
-  check(!options.partitionEntry.has_value(),
-        "existing backend options default partition entry empty");
+  check(options.partitionRanges.empty(),
+        "existing backend options default partition ranges empty");
   check(options.sessionLookaheadSources.empty(),
         "existing backend options default retained source table empty");
 }
@@ -129,9 +134,18 @@ dxmt9::encoders::EncodeChunkOptions forwardBackendOptions(
   return options;
 }
 
-void optionalPartitionEntryForwardsByValueWithExistingOptions() {
+void partitionRangeSpanForwardsWithExistingOptions() {
   dxmt9::encoders::EncodeChunkOptions options{};
-  options.partitionEntry = makeSnapshot();
+  const std::array<EncodePartitionRangeSnapshot, 1> ranges{
+      EncodePartitionRangeSnapshot{
+          .kind = EncodePartitionRangeKind::DrawRunEntries,
+          .replayOrdinalBegin = 2,
+          .replayOrdinalCount = 1,
+          .drawEntryCount = 3,
+          .entry = makeSnapshot(),
+      },
+  };
+  options.partitionRanges = ranges;
   std::array<dxmt9::core::metalqueue::ReadySlotSnapshot, 1> sources{};
   options.sessionLookaheadSources = sources;
   options.disableMidChunkCommits = true;
@@ -139,10 +153,10 @@ void optionalPartitionEntryForwardsByValueWithExistingOptions() {
   options.deferSessionFinalization = true;
 
   auto forwarded = forwardBackendOptions(std::move(options));
-  check(forwarded.partitionEntry.has_value(),
-        "backend option forwarding preserves optional partition entry");
-  checkEq(*forwarded.partitionEntry, makeSnapshot(),
-          "backend option forwarding preserves the complete snapshot value");
+  checkEq(forwarded.partitionRanges.data(), ranges.data(),
+          "backend option forwarding preserves the call-local range span");
+  checkEq(forwarded.partitionRanges.front(), ranges.front(),
+          "backend option forwarding preserves the complete range snapshot");
   checkEq(forwarded.sessionLookaheadSources.data(), sources.data(),
           "backend option forwarding preserves the call-local source table");
   check(forwarded.disableMidChunkCommits,
@@ -335,7 +349,7 @@ int main() {
     snapshotCopiesAsAnIndependentValue();
     sourceLocatorKeepsRetainedOrderAndReuseIdentity();
     encodeOptionsDefaultToSerialWithoutPartitionMetadata();
-    optionalPartitionEntryForwardsByValueWithExistingOptions();
+    partitionRangeSpanForwardsWithExistingOptions();
     retainedSourceResolverReturnsCallLocalViewsForValidMetadata();
     retainedSourceResolverRejectsEveryLocatorLayer();
   } catch (const std::exception& error) {

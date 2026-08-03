@@ -55,12 +55,36 @@ struct EncodePartitionEntrySnapshot {
   }
 };
 
+enum class EncodePartitionRangeKind : std::uint32_t {
+  CommandSegment,
+  DrawRunEntries,
+};
+
+// Immutable serial-execution coverage for one effective replay-stream range.
+// CommandSegment covers one or more complete replay ordinals and carries no
+// draw entries. DrawRunEntries covers a contiguous DrawParam subrange within
+// exactly one DrawRun replay ordinal; entry locates its first DrawParam.
+struct EncodePartitionRangeSnapshot {
+  EncodePartitionRangeKind kind = EncodePartitionRangeKind::CommandSegment;
+  std::uint32_t replayOrdinalBegin = 0;
+  std::uint32_t replayOrdinalCount = 0;
+  std::uint32_t drawEntryCount = 0;
+  EncodePartitionEntrySnapshot entry{};
+
+  friend constexpr bool operator==(const EncodePartitionRangeSnapshot&,
+                                   const EncodePartitionRangeSnapshot&) =
+      default;
+};
+
 static_assert(std::is_trivially_copyable_v<RetainedEncodeSourceLocator>);
 static_assert(std::is_standard_layout_v<RetainedEncodeSourceLocator>);
 static_assert(sizeof(RetainedEncodeSourceLocator) == 16);
 static_assert(std::is_trivially_copyable_v<EncodePartitionEntrySnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionEntrySnapshot>);
 static_assert(sizeof(EncodePartitionEntrySnapshot) == 64);
+static_assert(std::is_trivially_copyable_v<EncodePartitionRangeSnapshot>);
+static_assert(std::is_standard_layout_v<EncodePartitionRangeSnapshot>);
+static_assert(sizeof(EncodePartitionRangeSnapshot) == 80);
 
 struct EncodeChunkSessionDeleter {
   void operator()(EncodeChunkSessionState* session) const noexcept;

@@ -506,11 +506,11 @@ struct EncodeChunkOptions {
   // into a new tail CB when the caller can merge the already-committed prefix
   // into the final completion source list without violating locality.
   bool allowInjectedCommandBufferMidChunkCommits = false;
-  // Optional backend-planned locator for one immutable draw entry. The value
-  // contains no live Metal object or borrowed storage. Resolution only
-  // validates a call-local retained source; even valid metadata stays on the
-  // serial executor until a separately approved parallel executor exists.
-  std::optional<EncodePartitionEntrySnapshot> partitionEntry{};
+  // Optional backend-planned immutable serial partition ranges. Snapshot
+  // values contain no live Metal object or borrowed source storage; this span
+  // itself is call-local and must not be retained. Empty selects allocation-
+  // free identity traversal of the effective replay stream.
+  std::span<const EncodePartitionRangeSnapshot> partitionRanges{};
   // Optional session owner for render-pass carry candidates. When a final
   // submission is returned, the caller must transfer the session owner into the
   // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()
@@ -527,7 +527,7 @@ struct EncodeChunkOptions {
   // submission so one Metal tail can expand to per-source seqId completion.
   std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
   // Call-local selected FIFO source suffix used for load/store and FrameGraph
-  // lookahead proofs, and as partitionEntry's retained source table. The span
+  // lookahead proofs, and as partitionRanges' retained source table. The span
   // points at already dequeued ReadySlotSnapshot entries and must not be
   // retained by encodeChunk or EncodeSession.
   std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};

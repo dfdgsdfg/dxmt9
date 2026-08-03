@@ -14889,14 +14889,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeChunkOptions options) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
-  // Resolve and validate immutable partition metadata while its source table
-  // is alive. Rejected and valid entries both stay on this source-order serial
-  // executor; resolution alone never authorizes parallel Metal encoding.
-  if (options.partitionEntry) {
-    const auto partitionEntry = resolveEncodePartitionEntry(
-        *options.partitionEntry, options.sessionLookaheadSources);
-    (void)partitionEntry;
-  }
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
