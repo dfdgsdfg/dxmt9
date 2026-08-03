@@ -547,10 +547,34 @@ standard-layout value containing only `{sourceOrdinal, slotIndex, seqId}`;
 `DrawUniformHandle`; and absolute `DrawPayloadRange` locators for binding
 override and binding snapshot bytes. It must contain no Metal object, pointer,
 borrowed span, or retained owner; large payloads remain in queue-owned immutable
-source storage. `EncodeChunkOptions` carries the snapshot optionally by value
-and backends forward it unchanged. Empty, stale, invalid, out-of-range, or
-mismatched metadata must fail open to source-order serial encoding, and even a
-valid snapshot does not itself authorize parallel Metal encoding.
+source storage. One snapshot is embedded by value in each draw-entry range, and
+`EncodeChunkOptions` carries only a call-local span of immutable range snapshots.
+Empty, stale, invalid, out-of-range, or mismatched metadata must reject the
+complete explicit plan and fail open to serial encoding of the same selected
+effective replay stream. A valid snapshot does not itself authorize parallel
+Metal encoding.
+
+**R-BACK-2.58** *(Serial encode-partition execution.)* Every backend-selected
+effective replay stream must be consumed through explicit serial partition
+ranges. A `CommandSegment` range has nonzero complete-command coverage and zero
+draw entries. A `DrawRunEntries` range covers exactly one replay ordinal, has a
+positive draw-entry count, and embeds the entry for the first `DrawParam` in a
+contiguous subrange of that `DrawRun`. Before capture, command-buffer creation,
+initializer work, or session mutation, the encoder must validate the entire
+plan with overflow-safe arithmetic and prove exact coverage of the selected
+effective stream. Adjacent draw ranges may subdivide one command only when they
+cover its parameters contiguously without gap, overlap, duplicate, or partial
+tail; every embedded entry must resolve against the current call's immutable
+source view and match the effective command, record, state, uniform, and binding
+payloads. Any failure discards the whole plan and uses an allocation-free
+identity cursor over that same effective stream, including reordered or
+dead-code-eliminated FrameGraph replay and partial session-source ranges. The
+serial executor must perform command-level setup and completion exactly once,
+even when a `DrawRun` has multiple ranges. A partition edge must not end or
+flush an encoder, reset state, split a command buffer, change capture or
+completion behavior, or finalize a session. Resolved entries and `DrawParam`
+spans are borrowed only for the synchronous encode call and must never be
+retained by a session, submission record, callback, or Metal callback.
 
 ---
 

@@ -742,18 +742,53 @@ session state object, emit Metal commands. It must not concatenate all source
 payloads, rebuild canonical draw state for already imported records, or copy
 large uniform/resource arrays just because several sources share a session.
 
-#### Immutable Partition-Entry Snapshot
+#### Serial Encode Partitions
 
-R-BACK-2.57 exposes one locator-only `EncodePartitionEntrySnapshot`: retained
-source `{sourceOrdinal, slotIndex, seqId}`, command/run/state/parameter indices,
-a uniform handle, and absolute binding-override/snapshot payload ranges. It owns
-no Metal reference, pointer, span, or large payload. The existing backend call
-carries it as an optional value in `EncodeChunkOptions`; empty or rejected
-metadata stays on the source-order serial path. Retained-source resolution and
-validation use the call-local `ReadySlotSnapshot` table and reject stale source
-identity, command/SoA indices, uniform handles, and absolute binding payload
-ranges. Parallel-render and Metal 4 executors remain open; a valid resolution
-still does not authorize parallel Metal encoding.
+R-BACK-2.57 keeps `EncodePartitionEntrySnapshot` as the locator-only entry
+contract: retained source `{sourceOrdinal, slotIndex, seqId}`,
+command/run/state/parameter indices, a uniform handle, and absolute
+binding-override/snapshot payload ranges. It owns no Metal reference, pointer,
+span, or large payload. `EncodePartitionRangeSnapshot` embeds one entry by value
+and adds the effective replay ordinal coverage and draw-entry count;
+`EncodeChunkOptions` borrows a range-snapshot span for the synchronous call only.
+Neither that span nor a resolved entry/`DrawParam` span may escape into an
+`EncodeSession`, submission record, completion callback, or Metal callback.
+
+R-BACK-2.58 makes that range plan the common serial consumer for Traditional,
+FrameGraph reordered or DCE replay, and partial `sessionSource` calls.
+`ReplayCommandPlan` remains responsible only for selecting and ordering the
+effective commands. Before any Metal or session side effect, `encodeChunk`
+constructs an exact current-source `ReadySlotSnapshot`, validates the complete
+range plan with overflow-safe arithmetic, resolves every entry, and proves exact
+effective-stream coverage. `CommandSegment` covers one or more complete replay
+ordinals. `DrawRunEntries` covers one positive contiguous parameter subrange of
+one replay ordinal and locates its first parameter. Multiple adjacent draw
+ranges may cover a command, but must reach its exact tail without gaps,
+overlaps, or duplicates before the next ordinal.
+
+If any explicit range is empty, stale, out of the replay range, mismatched, or
+arithmetically invalid, the encoder rejects the entire plan before emission and
+uses its allocation-free identity cursor over the already-selected effective
+stream. It never rewinds FrameGraph order or resurrects a DCE command. Identity
+emits one full range for every valid nonempty `DrawRun`; clear, helper, Present,
+empty, malformed, or unsynthesizable commands remain complete
+`CommandSegment` coverage so their established execute-or-skip behavior is
+unchanged.
+
+The serial executor groups adjacent `DrawRunEntries` ranges for the same replay
+ordinal. Command uniforms, render-pass and hazard policy, tile selection,
+tracing, telemetry setup, command-buffer work state, and per-record split policy
+therefore execute once per source command. Compatible indexed-draw merging may
+occur inside one range only; identity's full range preserves the existing merge
+candidate shape. A range boundary is not a Metal boundary: it does not flush or
+end an encoder, reset dirty/binding/cache state, split a command buffer, append
+completion, alter capture, or finalize a session. Because complete preflight
+precedes all side effects and source storage is immutable, a later resolution
+mismatch is an invariant failure rather than a partial fallback.
+
+The implemented scope is the all-backend serial consumer and full-`DrawRun`
+identity plan. Heuristic subdivision, a parallel executor,
+`MTLParallelRenderCommandEncoder`, and Metal 4 suspend/resume remain open.
 
 #### Verification Shape
 
