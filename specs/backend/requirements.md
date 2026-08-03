@@ -555,11 +555,12 @@ effective replay stream. A valid snapshot does not itself authorize parallel
 Metal encoding.
 
 **R-BACK-2.58** *(Serial encode-partition execution.)* Every backend-selected
-effective replay stream must be consumed through explicit serial partition
-ranges. A `CommandSegment` range has nonzero complete-command coverage and zero
-draw entries. A `DrawRunEntries` range covers exactly one replay ordinal, has a
-positive draw-entry count, and embeds the entry for the first `DrawParam` in a
-contiguous subrange of that `DrawRun`. Before capture, command-buffer creation,
+effective replay stream must be consumed through the serial partition interface,
+using either a validated explicit range plan or identity ranges synthesized over
+that same stream. A `CommandSegment` range has nonzero complete-command coverage
+and zero draw entries. A `DrawRunEntries` range covers exactly one replay ordinal,
+has a positive draw-entry count, and embeds the entry for the first `DrawParam`
+in a contiguous subrange of that `DrawRun`. Before capture, command-buffer creation,
 initializer work, or session mutation, the encoder must validate the entire
 plan with overflow-safe arithmetic and prove exact coverage of the selected
 effective stream. Adjacent draw ranges may subdivide one command only when they

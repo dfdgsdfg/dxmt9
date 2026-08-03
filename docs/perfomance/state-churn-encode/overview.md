@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "State-Churn Encode — the CPU encode path and draw-run batching - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-07-20
-source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+updated: 2026-08-04
+source: docs/perfomance/state-churn-encode/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md; experiments/output/app-d3d9-3dmark05-encode-partition-serial-carrier-off-gt2/result.json; experiments/output/app-d3d9-3dmark05-encode-partition-serial-review-gt2/result.json
 related: docs/perfomance/state-churn-encode/index.md; docs/perfomance/state-churn-encode/log.md
 ---
 
@@ -57,6 +57,23 @@ documents as historical evidence, not open work. The domain frontier is
 encode-side P4 overlap and pass-streaming (R-BACK-2.39/2.40/2.43, still open),
 plus the live-default diagnostic A/B switches (encode-slot PSO memos,
 unpublished-slot PSO prefetch probe, sparse const records).
+
+## Serial Encode-Partition Identity Cost Non-Claim
+
+The serial partition consumer's identity `DrawRun` handoff constructs its
+resolved command view and entry snapshot once and passes the borrowed view
+directly into execution; it does not re-resolve the range before encoding. It
+still adds one per-command partition-validation and cursor layer relative to the
+former direct replay loop.
+
+The available carrier-off GT2 before/after artifacts are a single opportunistic
+pair with different draw and present totals. Normalized by the authoritative
+`completion_no_enqueue_stage_encode_dequeue_to_command_buffer_commit_ms` stage
+wall, they measure `12.385 -> 12.511 us/draw` (`+1.01%`). The narrower
+`encode_chunk_cpu_ms` row measures `10.769 -> 10.874 us/draw` (`+0.97%`). With
+no A/A or ABBA repetitions, this pair is insufficient to distinguish the
+change from run noise. No encode-cost regression or improvement is claimed,
+and these artifacts are not promotion or rejection evidence.
 
 ## Current Navigation
 
