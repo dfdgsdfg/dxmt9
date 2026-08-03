@@ -2,14 +2,16 @@
 //
 // The native nowine test host has no Metal device. This spec therefore uses
 // retained Foundation objects strictly as non-null WMT ownership tokens and an
-// inert CommandQueue. A targetless deferred clear exercises session payload
-// carry while guaranteeing that encodeChunk never sends a Metal command. The
-// production encodeChunk and
-// finalizeEncodeChunkSessionIntoSubmission implementations still execute in
-// full, covering command-buffer carry, ordered source accumulation,
-// publication into the tail submission, and session reset.
+// inert CommandQueue. Targetless deferred clears exercise session payload
+// carry, while the EncodeDrawRecorder supplies a fake render encoder and UP
+// slices for explicit DrawRun partition integration. Metal calls are suppressed,
+// but the production encodeChunk and finalizeEncodeChunkSessionIntoSubmission
+// implementations execute in full, covering command-once traversal, absolute
+// draw indexing, command-buffer carry, ordered source accumulation, publication
+// into the tail submission, and session reset.
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_encode_partition.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
@@ -23,10 +25,12 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -57,6 +61,117 @@ template <typename WmtType>
 WMT::Reference<WmtType> retainedToken(const char* label) {
   auto owner = WMT::MakeString(label, WMTUTF8StringEncoding);
   return WMT::Reference<WmtType>(WmtType{owner.handle});
+}
+
+struct DrawRunCapture {
+  std::size_t drawRunBegins = 0;
+  std::size_t renderPassBegins = 0;
+  std::size_t renderPassEnds = 0;
+  std::size_t splitPolicyCalls = 0;
+  std::size_t uploadBatchCalls = 0;
+  std::size_t unexpectedNonIndexedDraws = 0;
+  std::vector<std::pair<std::size_t, std::size_t>> subranges;
+  std::vector<std::uint64_t> vertexOffsets;
+  std::vector<std::uint64_t> indexOffsets;
+  std::vector<std::uint64_t> indexCounts;
+};
+
+void recordDrawRunBegin(void* userdata,
+                        std::size_t,
+                        std::size_t) {
+  ++static_cast<DrawRunCapture*>(userdata)->drawRunBegins;
+}
+
+void recordDrawSubrange(void* userdata,
+                        std::size_t,
+                        std::size_t absoluteDrawParamBegin,
+                        std::size_t drawCount) {
+  static_cast<DrawRunCapture*>(userdata)->subranges.push_back(
+      {absoluteDrawParamBegin, drawCount});
+}
+
+void recordRenderPassBegin(void* userdata, std::size_t) {
+  ++static_cast<DrawRunCapture*>(userdata)->renderPassBegins;
+}
+
+void recordRenderPassEnd(void* userdata) {
+  ++static_cast<DrawRunCapture*>(userdata)->renderPassEnds;
+}
+
+void recordSplitPolicy(void* userdata, bool) {
+  ++static_cast<DrawRunCapture*>(userdata)->splitPolicyCalls;
+}
+
+std::vector<dxmt9::CommandQueue::TransientBufferSlice> recordUploadBatch(
+    void* userdata,
+    std::span<const std::span<const std::byte>> payloads) {
+  auto* capture = static_cast<DrawRunCapture*>(userdata);
+  ++capture->uploadBatchCalls;
+  std::vector<dxmt9::CommandQueue::TransientBufferSlice> slices;
+  slices.reserve(payloads.size());
+  for (std::size_t i = 0; i < payloads.size(); ++i) {
+    slices.push_back(dxmt9::CommandQueue::TransientBufferSlice{
+        .buffer = WMT::Buffer{
+            static_cast<obj_handle_t>(0x710000000000000ull + i)},
+        .offset = 1000u + i * 100u,
+        .size = payloads[i].size(),
+    });
+  }
+  return slices;
+}
+
+void recordVertexBuffer(void* userdata,
+                        WMT::Buffer,
+                        std::uint64_t offset,
+                        std::uint8_t index) {
+  if (index == 1u) {
+    static_cast<DrawRunCapture*>(userdata)->vertexOffsets.push_back(offset);
+  }
+}
+
+void recordDrawPrimitives(void* userdata,
+                          WMTPrimitiveType,
+                          std::uint64_t,
+                          std::uint64_t,
+                          std::uint32_t,
+                          std::uint32_t) {
+  ++static_cast<DrawRunCapture*>(userdata)->unexpectedNonIndexedDraws;
+}
+
+void recordDrawIndexedPrimitives(void* userdata,
+                                 WMTPrimitiveType,
+                                 WMTIndexType,
+                                 std::uint64_t indexCount,
+                                 WMT::Buffer,
+                                 std::uint64_t indexBufferOffset,
+                                 std::uint32_t,
+                                 std::int32_t,
+                                 std::uint32_t) {
+  auto* capture = static_cast<DrawRunCapture*>(userdata);
+  capture->indexOffsets.push_back(indexBufferOffset);
+  capture->indexCounts.push_back(indexCount);
+}
+
+dxmt9::encoders::EncodeDrawRecorder makeDrawRunRecorder(
+    DrawRunCapture& capture,
+    WMT::RenderCommandEncoder renderCommandEncoder) {
+  return dxmt9::encoders::EncodeDrawRecorder{
+      .userdata = &capture,
+      .suppressMetalCalls = true,
+      .suppressBaseStateLookup = true,
+      .renderPipelineState = WMT::RenderPipelineState{0x720000000000001ull},
+      .depthStencilState = WMT::DepthStencilState{0x720000000000002ull},
+      .renderCommandEncoder = renderCommandEncoder,
+      .beginDrawRunCommand = recordDrawRunBegin,
+      .beginDrawSubrange = recordDrawSubrange,
+      .beginRenderPass = recordRenderPassBegin,
+      .endRenderPass = recordRenderPassEnd,
+      .applyPerRecordSplitPolicy = recordSplitPolicy,
+      .uploadTransientBufferBatch = recordUploadBatch,
+      .setVertexBuffer = recordVertexBuffer,
+      .drawPrimitives = recordDrawPrimitives,
+      .drawIndexedPrimitives = recordDrawIndexedPrimitives,
+  };
 }
 
 struct Harness {
@@ -97,6 +212,148 @@ dxmt9::encoders::EncodeChunkOptions deferredOptions(
   options.deferSessionFinalization = true;
   options.sessionSource = source;
   return options;
+}
+
+constexpr std::size_t kPartitionDrawCount = 5u;
+constexpr std::size_t kPartitionCommandIndex = 1u;
+constexpr std::uint32_t kPartitionFirstParam = 1u;
+
+dxmt9::core::metalqueue::QueueCompletionSource partitionSource(
+    std::size_t slotIndex,
+    std::uint64_t seqId) {
+  return dxmt9::core::metalqueue::QueueCompletionSource{
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .hasPresent = false,
+      .commandBegin = kPartitionCommandIndex,
+      .commandCount = 1u,
+  };
+}
+
+dxmt9::core::CanonicalDrawState makeDrawRunState() {
+  dxmt9::core::CanonicalDrawState state{};
+  state.hot.streamStrides[0] = 4u;
+  state.shaderLayout.vertexDecl.streams[0].stride = 4u;
+  state.shaderLayout.vertexShader.kind =
+      dxmt9::core::ShaderRef::Kind::Bytecode;
+  state.shaderLayout.pixelShader.kind =
+      dxmt9::core::ShaderRef::Kind::Bytecode;
+  return state;
+}
+
+dxmt9::core::ChunkSlot makeDrawRunSlot(std::uint64_t seqId) {
+  std::array<dxmt9::core::DrawParam, kPartitionDrawCount> draws{};
+  std::array<dxmt9::core::DrawParamPayloadView, kPartitionDrawCount>
+      payloads{};
+  std::array<std::array<std::uint8_t, 64>, kPartitionDrawCount>
+      vertexPayloads{};
+  std::array<std::array<std::uint8_t, 32>, kPartitionDrawCount>
+      indexPayloads{};
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    draws[i].primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+    draws[i].primitiveCount = static_cast<std::uint32_t>(i + 1u);
+    draws[i].indexed = true;
+    draws[i].indexType = dxmt9::core::IndexType::UInt16;
+    draws[i].instanceCount = 1u;
+    payloads[i].userVertexData = vertexPayloads[i];
+    payloads[i].userIndexData = indexPayloads[i];
+  }
+
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  const std::array<dxmt9::core::DrawParam, 1> prefixDraws{
+      dxmt9::core::DrawParam{},
+  };
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> prefixPayloads{};
+  slot.appendDrawRun(makeDrawRunState(),
+                     dxmt9::core::DrawUniformPayload{}, prefixDraws,
+                     prefixPayloads);
+  slot.appendDrawRun(makeDrawRunState(),
+                     dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  checkEq(slot.commandCount(), std::size_t{2},
+          "DrawRun fixture appends a prefix and selected command");
+  checkEq(slot.commandAt(kPartitionCommandIndex).drawRunRecord->firstParam,
+          kPartitionFirstParam,
+          "selected DrawRun starts at a nonzero absolute DrawParam index");
+  return slot;
+}
+
+dxmt9::encoders::EncodePartitionRangeSnapshot makeDrawRange(
+    const dxmt9::encoders::EncodePartitionReplayStream& stream,
+    std::uint32_t absoluteDrawBegin,
+    std::uint32_t drawCount) {
+  dxmt9::encoders::EncodePartitionRangeSnapshot range{
+      .kind =
+          dxmt9::encoders::EncodePartitionRangeKind::DrawRunEntries,
+      .replayOrdinalBegin = 0,
+      .replayOrdinalCount = 1,
+      .drawEntryCount = drawCount,
+  };
+  check(dxmt9::encoders::buildEncodePartitionEntrySnapshot(
+            stream, 0, absoluteDrawBegin, range.entry),
+        "explicit DrawRun entry snapshot builds");
+  return range;
+}
+
+std::vector<dxmt9::encoders::EncodePartitionRangeSnapshot> makeDrawRanges(
+    std::size_t slotIndex,
+    const dxmt9::core::ChunkSlot& slot,
+    std::span<const std::pair<std::uint32_t, std::uint32_t>> subranges) {
+  const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
+      slotIndex, slot, kPartitionCommandIndex, 1u, false, {});
+  check(stream.valid, "DrawRun fixture replay stream is valid");
+  const std::uint32_t firstParam =
+      slot.commandAt(kPartitionCommandIndex).drawRunRecord->firstParam;
+  std::vector<dxmt9::encoders::EncodePartitionRangeSnapshot> ranges;
+  ranges.reserve(subranges.size());
+  for (const auto& [begin, count] : subranges) {
+    ranges.push_back(makeDrawRange(stream, firstParam + begin, count));
+  }
+  return ranges;
+}
+
+void checkDrawRunCapture(
+    const DrawRunCapture& capture,
+    std::span<const std::pair<std::uint32_t, std::uint32_t>> subranges,
+    std::size_t expectedRenderPassEnds) {
+  checkEq(capture.drawRunBegins, std::size_t{1},
+          "DrawRun command-level setup begins once");
+  checkEq(capture.renderPassBegins, std::size_t{1},
+          "DrawRun opens one render pass across subranges");
+  checkEq(capture.renderPassEnds, expectedRenderPassEnds,
+          "partition edges do not end the render pass");
+  checkEq(capture.splitPolicyCalls, std::size_t{1},
+          "per-record split policy runs once for the DrawRun command");
+  checkEq(capture.uploadBatchCalls, std::size_t{1},
+          "UP payload upload is batched once for the complete DrawRun");
+  checkEq(capture.subranges.size(), subranges.size(),
+          "encoder observes the exact DrawRun subrange count");
+  for (std::size_t i = 0; i < subranges.size(); ++i) {
+    checkEq(capture.subranges[i].first,
+            static_cast<std::size_t>(kPartitionFirstParam +
+                                     subranges[i].first),
+            "subrange retains its absolute DrawParam begin");
+    checkEq(capture.subranges[i].second,
+            static_cast<std::size_t>(subranges[i].second),
+            "subrange retains its draw count");
+  }
+
+  checkEq(capture.unexpectedNonIndexedDraws, std::size_t{0},
+          "indexed fixture never changes draw issue shape");
+  checkEq(capture.vertexOffsets.size(), kPartitionDrawCount,
+          "every DrawRun vertex payload is bound once");
+  checkEq(capture.indexOffsets.size(), kPartitionDrawCount,
+          "every DrawRun index payload is drawn once");
+  checkEq(capture.indexCounts.size(), kPartitionDrawCount,
+          "every DrawRun draw count is recorded once");
+  for (std::size_t i = 0; i < kPartitionDrawCount; ++i) {
+    checkEq(capture.vertexOffsets[i], 1000u + i * 200u,
+            "UP vertex slice uses the absolute DrawRun index");
+    checkEq(capture.indexOffsets[i], 1100u + i * 200u,
+            "UP index slice uses the absolute DrawRun index");
+    checkEq(capture.indexCounts[i], (i + 1u) * 3u,
+            "every source DrawParam emits exactly once in order");
+  }
 }
 
 void encodeChunkThenFinalizerPublishesAndResetsOneSession() {
@@ -319,6 +576,137 @@ void finalizerValidationFailureIsNoMutationAndRetryable() {
         "successful retry clears deferred session payload");
 }
 
+void explicitDrawRunSubrangesExecuteThroughEncodeChunk() {
+  const std::array<std::pair<std::uint32_t, std::uint32_t>, 2> twoSubranges{
+      std::pair{0u, 2u},
+      std::pair{2u, 3u},
+  };
+  const std::array<std::pair<std::uint32_t, std::uint32_t>, 3> threeSubranges{
+      std::pair{0u, 1u},
+      std::pair{1u, 2u},
+      std::pair{3u, 2u},
+  };
+
+  auto run = [](std::uint64_t seqId,
+                std::span<const std::pair<std::uint32_t, std::uint32_t>>
+                    subranges) {
+    Harness harness;
+    DrawRunCapture capture;
+    auto renderEncoderOwner =
+        retainedToken<WMT::RenderCommandEncoder>("partition-render-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+
+    constexpr std::size_t slotIndex = 8u;
+    auto slot = makeDrawRunSlot(seqId);
+    auto ranges = makeDrawRanges(slotIndex, slot, subranges);
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer =
+        retainedToken<WMT::CommandBuffer>("partition-command-buffer");
+    options.partitionRanges = ranges;
+    options.sessionSource = partitionSource(slotIndex, slot.seqId);
+    auto submission = dxmt9::encoders::encodeChunk(
+        ctx, slotIndex, slot, std::move(options));
+    check(submission.has_value(),
+          "explicit DrawRun encodeChunk returns a submission");
+    checkDrawRunCapture(capture, subranges, 1u);
+  };
+
+  run(71u, twoSubranges);
+  run(72u, threeSubranges);
+}
+
+void invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner =
+      retainedToken<WMT::RenderCommandEncoder>("fallback-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+
+  constexpr std::size_t slotIndex = 9u;
+  auto slot = makeDrawRunSlot(73u);
+  const std::array<std::pair<std::uint32_t, std::uint32_t>, 2> gapPlan{
+      std::pair{0u, 1u},
+      std::pair{2u, 3u},
+  };
+  auto ranges = makeDrawRanges(slotIndex, slot, gapPlan);
+  dxmt9::encoders::EncodeChunkOptions options{};
+  options.commandBuffer =
+      retainedToken<WMT::CommandBuffer>("fallback-command-buffer");
+  options.partitionRanges = ranges;
+  options.sessionSource = partitionSource(slotIndex, slot.seqId);
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, slotIndex, slot, std::move(options));
+  check(submission.has_value(),
+        "invalid explicit DrawRun plan falls back to identity");
+
+  const std::array<std::pair<std::uint32_t, std::uint32_t>, 1> identityRange{
+      std::pair{0u, static_cast<std::uint32_t>(kPartitionDrawCount)},
+  };
+  checkDrawRunCapture(capture, identityRange, 1u);
+}
+
+void explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner =
+      retainedToken<WMT::RenderCommandEncoder>("session-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::size_t slotIndex = 10u;
+  auto slot = makeDrawRunSlot(74u);
+  const std::array<std::pair<std::uint32_t, std::uint32_t>, 2> subranges{
+      std::pair{0u, 2u},
+      std::pair{2u, 3u},
+  };
+  auto ranges = makeDrawRanges(slotIndex, slot, subranges);
+  const auto source = partitionSource(slotIndex, slot.seqId);
+  auto options = deferredOptions(
+      *session,
+      retainedToken<WMT::CommandBuffer>("session-partition-command-buffer"),
+      source);
+  options.partitionRanges = ranges;
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, slotIndex, slot, std::move(options));
+  check(submission.has_value(),
+        "deferred explicit DrawRun returns a submission carrier");
+  checkDrawRunCapture(capture, subranges, 0u);
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "partition edges preserve the deferred active render pass");
+  const auto retainedSources =
+      dxmt9::encoders::encodeChunkSessionSources(*session);
+  checkEq(retainedSources.size(), std::size_t{1},
+          "deferred explicit DrawRun retains one source");
+  checkEq(retainedSources.front().slotIndex, source.slotIndex,
+          "deferred explicit DrawRun retains source slot identity");
+  checkEq(retainedSources.front().seqId, source.seqId,
+          "deferred explicit DrawRun retains source sequence");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "explicit DrawRun session finalizes into its submission");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "session finalizer ends the DrawRun render pass once");
+  const auto published = submission->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{1},
+          "DrawRun finalizer publishes its retained source");
+  checkEq(published.front().slotIndex, source.slotIndex,
+          "published DrawRun source keeps its slot identity");
+  checkEq(published.front().seqId, source.seqId,
+          "published DrawRun source keeps its sequence");
+  check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "DrawRun finalization clears the active render pass");
+}
+
 void partialCommandSegmentSessionFinalizesWithoutTargets() {
   Harness harness;
   auto ctx = harness.makeContext();
@@ -389,6 +777,9 @@ int main() {
   try {
     encodeChunkThenFinalizerPublishesAndResetsOneSession();
     finalizerValidationFailureIsNoMutationAndRetryable();
+    explicitDrawRunSubrangesExecuteThroughEncodeChunk();
+    invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects();
+    explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer();
     partialCommandSegmentSessionFinalizesWithoutTargets();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()

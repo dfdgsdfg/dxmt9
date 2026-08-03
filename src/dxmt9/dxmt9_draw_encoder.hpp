@@ -24,6 +24,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace dxmt9 {
 
@@ -45,8 +46,9 @@ namespace encoders {
 // per-draw volatile constants. Production leaves this null.
 struct EncodeDrawRecorder {
   void* userdata = nullptr;
-  // Suppresses the recorded draw-issue calls below so tests can pass fake
-  // Metal handles. Callers must still skip or satisfy base-state binding paths.
+  // Suppresses the recorded Metal calls below so tests can pass fake handles.
+  // encodeChunk callers must also provide renderCommandEncoder when a DrawRun
+  // needs to open a render pass.
   bool suppressMetalCalls = false;
   // Test-only path for skipBaseStateBind=false without a live Metal device.
   // When set, encodeDraw uses the fake objects below instead of consulting the
@@ -55,6 +57,26 @@ struct EncodeDrawRecorder {
   WMT::RenderPipelineState renderPipelineState{};
   WMT::DepthStencilState depthStencilState{};
   WMT::SamplerState fragmentSamplerState{};
+  WMT::RenderCommandEncoder renderCommandEncoder{};
+
+  // Command-level integration hooks. Production leaves the recorder null;
+  // these callbacks must not retain any call-local source span.
+  void (*beginDrawRunCommand)(void* userdata,
+                              std::size_t commandIndex,
+                              std::size_t drawCount) = nullptr;
+  void (*beginDrawSubrange)(void* userdata,
+                            std::size_t commandIndex,
+                            std::size_t absoluteDrawParamBegin,
+                            std::size_t drawCount) = nullptr;
+  void (*beginRenderPass)(void* userdata,
+                          std::size_t commandIndex) = nullptr;
+  void (*endRenderPass)(void* userdata) = nullptr;
+  void (*applyPerRecordSplitPolicy)(void* userdata,
+                                    bool presentRecord) = nullptr;
+  std::vector<CommandQueue::TransientBufferSlice>
+      (*uploadTransientBufferBatch)(
+          void* userdata,
+          std::span<const std::span<const std::byte>> payloads) = nullptr;
 
   void (*setRenderPipelineState)(void* userdata,
                                  WMT::RenderPipelineState pipeline) = nullptr;

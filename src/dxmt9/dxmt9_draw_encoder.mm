@@ -9319,8 +9319,14 @@ public:
     }
     DXMT_ASSERT(storage_.encoder.hasActiveRender);
     DXMT_ASSERT(!storage_.encoder.activeBlitEncoder);
-    storage_.encoder.activeRenderEncoder.popDebugGroup();
-    storage_.encoder.activeRenderEncoder.endEncoding();
+    if (auto* recorder = ctx_.drawRecorder;
+        recorder && recorder->endRenderPass) {
+      recorder->endRenderPass(recorder->userdata);
+    }
+    if (!suppressRecordedMetalCalls(ctx_)) {
+      storage_.encoder.activeRenderEncoder.popDebugGroup();
+      storage_.encoder.activeRenderEncoder.endEncoding();
+    }
     maybeEncodeColorAttachmentDump(
         call_.commandBuffer, ctx_.device,
         storage_.diagnostics.activeColorAttachmentDump,
@@ -15499,10 +15505,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             dxmt9::pipeline::TileFfpDecision::Tile,
     };
     RenderPassActionSummary renderPassActions{};
-    encoderState.activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
-        ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
-        storeProofActivePass, sampleAttachment.span(), visibilityBuffer,
-        &renderPassActions);
+    if (suppressRecordedMetalCalls(ctx)) {
+      encoderState.activeRenderEncoder =
+          WMT::Reference<WMT::RenderCommandEncoder>(
+              ctx.drawRecorder->renderCommandEncoder);
+    } else {
+      encoderState.activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
+          ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
+          storeProofActivePass, sampleAttachment.span(), visibilityBuffer,
+          &renderPassActions);
+    }
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->beginRenderPass) {
+      recorder->beginRenderPass(recorder->userdata, lookaheadStartIndex);
+    }
     traceRenderPassProgress(encoderState.activeRenderEncoder
                                 ? "after-begin-render-pass-ok"
                                 : "after-begin-render-pass-null",
@@ -15648,7 +15664,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // label, so without setLabel xctrace shows the Metal default
     // "Render Command N" and per-pass GPU time cannot be attributed to
     // an RT in text-based analysis.
-    if (encoderState.activeRenderEncoder) {
+    if (encoderState.activeRenderEncoder &&
+        !suppressRecordedMetalCalls(ctx)) {
       traceRenderPassProgress("before-label", lookaheadStartIndex,
                               clear.has_value());
       const auto rt0 = static_cast<unsigned long long>(
@@ -15938,6 +15955,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     const auto& hot = *stateView.hot;
     const auto commandDrawItems =
         command.drawItems.empty() ? command.drawParams : command.drawItems;
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->beginDrawRunCommand) {
+      recorder->beginDrawRunCommand(
+          recorder->userdata, commandIndex, commandDrawItems.size());
+    }
     const core::PsoHandle renderPsoHandle =
         command.drawRunRecord ? command.drawRunRecord->renderPsoHandle
                               : core::PsoHandle{};
@@ -16136,9 +16158,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                 indexBytes.size());
       }
       if (anyUpData) {
-        upSlices = ctx.queue.uploadTransientBufferBatchWithCompletedSeqId(
-            upPayloads, /*alignment=*/16, slot.seqId,
-            ctx.transientCompletedSeqId);
+        if (auto* recorder = ctx.drawRecorder;
+            recorder && recorder->uploadTransientBufferBatch) {
+          upSlices = recorder->uploadTransientBufferBatch(
+              recorder->userdata, upPayloads);
+        } else {
+          upSlices = ctx.queue.uploadTransientBufferBatchWithCompletedSeqId(
+              upPayloads, /*alignment=*/16, slot.seqId,
+              ctx.transientCompletedSeqId);
+        }
         if (!upSlices.empty()) {
           for (const auto& param : commandDrawItems) {
             const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
@@ -16540,6 +16568,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     };
     if (drawPartitions.empty()) {
+      if (auto* recorder = ctx.drawRecorder;
+          recorder && recorder->beginDrawSubrange) {
+        recorder->beginDrawSubrange(
+            recorder->userdata, commandIndex,
+            command.drawRunRecord
+                ? command.drawRunRecord->firstParam
+                : 0u,
+            commandDrawItems.size());
+      }
       addMergeTelemetry(commandDrawItems);
       encodeDrawSubrange(commandDrawItems, 0u);
     } else {
@@ -16555,6 +16592,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const std::size_t commandDrawBegin =
             drawPartition.entry.drawParamIndex -
             command.drawRunRecord->firstParam;
+        if (auto* recorder = ctx.drawRecorder;
+            recorder && recorder->beginDrawSubrange) {
+          recorder->beginDrawSubrange(
+              recorder->userdata, commandIndex,
+              drawPartition.entry.drawParamIndex,
+              resolved.partition.drawParams.size());
+        }
         addMergeTelemetry(resolved.partition.drawParams);
         encodeDrawSubrange(resolved.partition.drawParams, commandDrawBegin);
       }
@@ -16589,6 +16633,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // violate the "present metadata on the last sub-CB only" rule.
     // Suppress the per-N-records split immediately after a Present
     // record; the present-tail boundary is not split further here.
+    if (auto* recorder = ctx.drawRecorder;
+        recorder && recorder->applyPerRecordSplitPolicy) {
+      recorder->applyPerRecordSplitPolicy(
+          recorder->userdata, presentRecord);
+    }
     ++recordsSinceLastSplit;
     if (commitPolicy == MidChunkCommitPolicy::PerNRecords &&
         recordsSinceLastSplit >= splitNRecords &&
