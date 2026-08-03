@@ -159,6 +159,15 @@ using f32 = float;
 
 namespace {
 
+[[noreturn]] void abortEncodePartitionInvariant(const char* reason) {
+  std::fprintf(
+      stderr,
+      "[dxmt9-encode] fatal: encode partition execution invariant failed "
+      "(%s)\n",
+      reason ? reason : "unknown");
+  std::abort();
+}
+
 // M1/M2 — printf-style label/group-name builder. Returns a non-owning
 // WMT::String view backed by an autoreleased NSString. Lifetime is safe
 // because the receiving setLabel:/pushDebugGroup: selector retains
@@ -16569,8 +16578,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         if (!resolved || !resolved.partition.entry.drawRunRecord ||
             resolved.partition.entry.command.drawRunRecord !=
                 command.drawRunRecord) {
-          DXMT_ASSERT(false);
-          std::abort();
+          abortEncodePartitionInvariant(
+              "explicit DrawRun range re-resolution mismatch");
         }
         const std::size_t commandDrawBegin =
             drawPartition.entry.drawParamIndex -
@@ -16883,8 +16892,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const bool resolvedCommand = partitionReplayStream.commandIndexAt(
             static_cast<std::size_t>(ordinal), commandIndex);
         if (!resolvedCommand) {
-          DXMT_ASSERT(false);
-          std::abort();
+          abortEncodePartitionInvariant(
+              "CommandSegment replay ordinal resolution failed");
         }
         encodeCompleteCommand(commandIndex, slot.commandAt(commandIndex));
       }
@@ -16897,8 +16906,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       if (partitionBatch.ranges.size() != 1u ||
           !partitionBatch.identityPartition.entry.drawRunRecord ||
           partitionBatch.identityPartition.drawParams.empty()) {
-        DXMT_ASSERT(false);
-        std::abort();
+        abortEncodePartitionInvariant(
+            "identity DrawRun batch is malformed");
       }
       commandIndex = partitionBatch.ranges.front().entry.commandIndex;
       command = partitionBatch.identityPartition.entry.command;
@@ -16906,8 +16915,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       const bool resolvedCommand = partitionReplayStream.commandIndexAt(
           partitionBatch.replayOrdinalBegin, commandIndex);
       if (!resolvedCommand) {
-        DXMT_ASSERT(false);
-        std::abort();
+        abortEncodePartitionInvariant(
+            "explicit DrawRun replay ordinal resolution failed");
       }
       command = slot.drawRunCommandAt(commandIndex);
     }
