@@ -515,6 +515,13 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
       [this] { runCompletionWatcherLoop(); });
 }
 
+CommandQueue::CommandQueue(InertTestQueueTag,
+                           WMT::Reference<WMT::CommandQueue> queue,
+                           core::BackendLimits limits)
+    : queue_(std::move(queue)),
+      queueView_(queue_.handle),
+      limits_(limits) {}
+
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   // Snapshot + reset the chunk-import dirty accumulator. The dirty
   // bits and high-water counters move to the freshly-built

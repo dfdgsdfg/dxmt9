@@ -310,6 +310,15 @@ class CommandQueue {
   // construction. Upstream dxmt has no BackendLimits.
   CommandQueue(WMT::Device device, core::BackendLimits limits);
 
+  // Inert queue for native encoder lifecycle specs. The supplied handle is
+  // used only as a validity token: this constructor does not create queue
+  // workers, resource initializers, or any other Metal-owned subsystem.
+  // Callers must inject command buffers and must not issue Metal commands.
+  struct InertTestQueueTag {};
+  CommandQueue(InertTestQueueTag,
+               WMT::Reference<WMT::CommandQueue> queue,
+               core::BackendLimits limits);
+
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
   ~CommandQueue();

@@ -173,6 +173,21 @@ test('dxmt9-encode-partition-snapshot-spec',
      encode_partition_snapshot_spec,
      env: dxmt9_native_test_env)
 
+encode_session_lifecycle_spec = executable(
+  'dxmt9-encode-session-lifecycle-spec',
+  'encode_session_lifecycle_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-encode-session-lifecycle-spec',
+     encode_session_lifecycle_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_PERF_ENCODER_GPU_TIME=0',
+       'DXMT_METAL_CAPTURE_FRAME=0',
+     ])
+
 draw_seq_filter_spec = executable(
   'dxmt9-draw-seq-filter-spec',
   [
