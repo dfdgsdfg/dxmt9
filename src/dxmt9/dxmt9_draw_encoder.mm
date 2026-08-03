@@ -16860,17 +16860,33 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
 
     std::uint32_t commandIndex = 0;
-    const bool resolvedCommand = partitionReplayStream.commandIndexAt(
-        partitionBatch.replayOrdinalBegin, commandIndex);
-    if (!resolvedCommand) {
-      DXMT_ASSERT(false);
-      std::abort();
+    core::MetalCommandView command{};
+    if (partitionBatch.identityResolved) {
+      if (partitionBatch.ranges.size() != 1u ||
+          !partitionBatch.identityPartition.entry.drawRunRecord ||
+          partitionBatch.identityPartition.drawParams.empty()) {
+        DXMT_ASSERT(false);
+        std::abort();
+      }
+      commandIndex = partitionBatch.ranges.front().entry.commandIndex;
+      command = partitionBatch.identityPartition.entry.command;
+    } else {
+      const bool resolvedCommand = partitionReplayStream.commandIndexAt(
+          partitionBatch.replayOrdinalBegin, commandIndex);
+      if (!resolvedCommand) {
+        DXMT_ASSERT(false);
+        std::abort();
+      }
+      command = slot.drawRunCommandAt(commandIndex);
     }
-    const auto command = slot.drawRunCommandAt(commandIndex);
     traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
     // TLA+: EncoderLifecycle / opCount advances once for the complete source
     // command even when that DrawRun has multiple explicit subranges.
-    encodeDrawRunCommand(commandIndex, command, partitionBatch.ranges);
+    encodeDrawRunCommand(
+        commandIndex, command,
+        partitionBatch.identityResolved
+            ? std::span<const EncodePartitionRangeSnapshot>{}
+            : partitionBatch.ranges);
     traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
     traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
                        command);

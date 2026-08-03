@@ -156,10 +156,16 @@ public:
       const EncodePartitionReplayStream& stream) noexcept;
 
   bool next(EncodePartitionRangeSnapshot& range) noexcept;
+  bool next(EncodePartitionRangeSnapshot& range,
+            ResolvedEncodePartition& partition) noexcept;
 
 private:
   const EncodePartitionReplayStream* stream_ = nullptr;
   std::size_t replayOrdinal_ = 0;
+  bool drawOnlyCommandStream_ = false;
+  bool pendingDrawRun_ = false;
+  EncodePartitionRangeSnapshot pendingRange_{};
+  ResolvedEncodePartition pendingPartition_{};
 };
 
 struct EncodePartitionSerialBatch {
@@ -169,6 +175,11 @@ struct EncodePartitionSerialBatch {
   // One range for identity traversal; one or more adjacent explicit draw
   // subranges for a DrawRun. The span is valid only until the next next().
   std::span<const EncodePartitionRangeSnapshot> ranges{};
+  // Identity DrawRuns carry the already-resolved, call-local full range so
+  // serial execution does not repeat source lookup or locator validation.
+  // The borrowed view is valid only until the next next().
+  bool identityResolved = false;
+  ResolvedEncodePartition identityPartition{};
 };
 
 // Serial outer cursor shared by Metal execution and pure tests. Explicit draw
@@ -189,6 +200,7 @@ private:
   bool useExplicitPlan_ = false;
   EncodePartitionIdentityCursor identityCursor_;
   EncodePartitionRangeSnapshot identityRange_{};
+  ResolvedEncodePartition identityPartition_{};
 };
 
 }  // namespace dxmt9::encoders

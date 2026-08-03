@@ -58,20 +58,26 @@ std::span<const core::u8> payloadBytes(
                                    range.size);
 }
 
-bool snapshotForDrawParam(
+bool snapshotForResolvedDrawParam(
     const EncodePartitionReplayStream& stream,
-    std::size_t replayOrdinal,
+    std::uint32_t commandIndex,
+    const core::MetalCommandView& command,
     std::uint32_t drawParamIndex,
-    EncodePartitionEntrySnapshot& snapshot) noexcept {
-  std::uint32_t commandIndex = 0;
+    EncodePartitionEntrySnapshot& snapshot,
+    ResolvedEncodePartitionEntry& resolved) noexcept {
   if (!stream.valid || !stream.source.slot ||
-      stream.source.slotIndex > std::numeric_limits<std::uint32_t>::max() ||
-      !stream.commandIndexAt(replayOrdinal, commandIndex)) {
+      stream.source.slotIndex > std::numeric_limits<std::uint32_t>::max()) {
     return false;
   }
 
   const core::ChunkSlot& slot = *stream.source.slot;
-  const auto command = slot.commandAt(commandIndex);
+  const std::size_t sourceCommandEnd =
+      stream.source.commandBegin + stream.source.commandCount;
+  if (stream.source.seqId == 0 || slot.seqId != stream.source.seqId ||
+      commandIndex < stream.source.commandBegin ||
+      commandIndex >= sourceCommandEnd) {
+    return false;
+  }
   if (command.kind != core::MetalCommandKind::DrawRun ||
       !command.drawRunRecord || !command.drawState.hot ||
       !command.drawState.shaderLayout || !command.drawState.debug ||
@@ -90,7 +96,8 @@ bool snapshotForDrawParam(
   const auto& param = slot.drawParams[drawParamIndex];
   const core::DrawUniformHandle uniformHandle =
       param.uniformHandle.valid() ? param.uniformHandle : record.uniformHandle;
-  if (!slot.drawUniformPayloadRecord(uniformHandle)) {
+  const auto* uniform = slot.drawUniformPayloadRecord(uniformHandle);
+  if (!uniform) {
     return false;
   }
 
@@ -123,9 +130,33 @@ bool snapshotForDrawParam(
       .bindingOverrideBytes = bindingOverrideBytes,
       .bindingSnapshotBytes = bindingSnapshotBytes,
   };
-  const std::span<const core::metalqueue::ReadySlotSnapshot> sources(
-      &stream.source, 1u);
-  return static_cast<bool>(resolveEncodePartitionEntry(snapshot, sources));
+  resolved = ResolvedEncodePartitionEntry{
+      .slot = &slot,
+      .command = command,
+      .drawRunRecord = &record,
+      .drawState = command.drawState,
+      .drawParam = &param,
+      .uniform = uniform,
+      .bindingOverrideBytes = payloadBytes(slot, bindingOverrideBytes),
+      .bindingSnapshotBytes = payloadBytes(slot, bindingSnapshotBytes),
+  };
+  return true;
+}
+
+bool snapshotForDrawParam(
+    const EncodePartitionReplayStream& stream,
+    std::size_t replayOrdinal,
+    std::uint32_t drawParamIndex,
+    EncodePartitionEntrySnapshot& snapshot,
+    ResolvedEncodePartitionEntry& resolved) noexcept {
+  std::uint32_t commandIndex = 0;
+  if (!stream.valid || !stream.source.slot ||
+      !stream.commandIndexAt(replayOrdinal, commandIndex)) {
+    return false;
+  }
+  const auto command = stream.source.slot->commandAt(commandIndex);
+  return snapshotForResolvedDrawParam(stream, commandIndex, command,
+                                      drawParamIndex, snapshot, resolved);
 }
 
 EncodePartitionRangeValidationResult rejectRange(
@@ -287,7 +318,9 @@ bool buildEncodePartitionEntrySnapshot(
     std::size_t replayOrdinal,
     std::uint32_t drawParamIndex,
     EncodePartitionEntrySnapshot& snapshot) noexcept {
-  return snapshotForDrawParam(stream, replayOrdinal, drawParamIndex, snapshot);
+  ResolvedEncodePartitionEntry resolved{};
+  return snapshotForDrawParam(stream, replayOrdinal, drawParamIndex, snapshot,
+                              resolved);
 }
 
 EncodePartitionResolution resolveEncodePartition(
@@ -480,30 +513,54 @@ EncodePartitionRangeValidationResult validateEncodePartitionRanges(
 
 EncodePartitionIdentityCursor::EncodePartitionIdentityCursor(
     const EncodePartitionReplayStream& stream) noexcept
-    : stream_(&stream) {}
+    : stream_(&stream),
+      drawOnlyCommandStream_(stream.source.slot &&
+                             stream.source.slot->drawOnlyCommandStream()) {}
 
 bool EncodePartitionIdentityCursor::next(
     EncodePartitionRangeSnapshot& range) noexcept {
+  ResolvedEncodePartition partition{};
+  return next(range, partition);
+}
+
+bool EncodePartitionIdentityCursor::next(
+    EncodePartitionRangeSnapshot& range,
+    ResolvedEncodePartition& partition) noexcept {
   if (!stream_ || !stream_->valid ||
       replayOrdinal_ >= stream_->replayOrdinalCount()) {
     return false;
   }
 
+  if (pendingDrawRun_) {
+    range = pendingRange_;
+    partition = pendingPartition_;
+    pendingDrawRun_ = false;
+    ++replayOrdinal_;
+    return true;
+  }
+
   std::uint32_t commandIndex = 0;
   if (stream_->commandIndexAt(replayOrdinal_, commandIndex)) {
-    const auto command = stream_->source.slot->commandAt(commandIndex);
+    const auto command = drawOnlyCommandStream_
+        ? stream_->source.slot->drawRunCommandAt(commandIndex)
+        : stream_->source.slot->commandAt(commandIndex);
     EncodePartitionEntrySnapshot entry{};
+    ResolvedEncodePartitionEntry resolved{};
     if (command.kind == core::MetalCommandKind::DrawRun &&
         command.drawRunRecord && command.drawRunRecord->paramCount != 0u &&
-        buildEncodePartitionEntrySnapshot(
-            *stream_, replayOrdinal_, command.drawRunRecord->firstParam,
-            entry)) {
+        snapshotForResolvedDrawParam(
+            *stream_, commandIndex, command,
+            command.drawRunRecord->firstParam, entry, resolved)) {
       range = EncodePartitionRangeSnapshot{
           .kind = EncodePartitionRangeKind::DrawRunEntries,
           .replayOrdinalBegin = static_cast<std::uint32_t>(replayOrdinal_),
           .replayOrdinalCount = 1u,
           .drawEntryCount = command.drawRunRecord->paramCount,
           .entry = entry,
+      };
+      partition = ResolvedEncodePartition{
+          .entry = resolved,
+          .drawParams = command.drawParams,
       };
       ++replayOrdinal_;
       return true;
@@ -514,13 +571,29 @@ bool EncodePartitionIdentityCursor::next(
   while (replayOrdinal_ < stream_->replayOrdinalCount()) {
     std::uint32_t nextCommandIndex = 0;
     if (stream_->commandIndexAt(replayOrdinal_, nextCommandIndex)) {
-      const auto next = stream_->source.slot->commandAt(nextCommandIndex);
+      const auto next = drawOnlyCommandStream_
+          ? stream_->source.slot->drawRunCommandAt(nextCommandIndex)
+          : stream_->source.slot->commandAt(nextCommandIndex);
       EncodePartitionEntrySnapshot entry{};
+      ResolvedEncodePartitionEntry resolved{};
       if (next.kind == core::MetalCommandKind::DrawRun &&
           next.drawRunRecord && next.drawRunRecord->paramCount != 0u &&
-          buildEncodePartitionEntrySnapshot(
-              *stream_, replayOrdinal_, next.drawRunRecord->firstParam,
-              entry)) {
+          snapshotForResolvedDrawParam(
+              *stream_, nextCommandIndex, next,
+              next.drawRunRecord->firstParam, entry, resolved)) {
+        pendingRange_ = EncodePartitionRangeSnapshot{
+            .kind = EncodePartitionRangeKind::DrawRunEntries,
+            .replayOrdinalBegin =
+                static_cast<std::uint32_t>(replayOrdinal_),
+            .replayOrdinalCount = 1u,
+            .drawEntryCount = next.drawRunRecord->paramCount,
+            .entry = entry,
+        };
+        pendingPartition_ = ResolvedEncodePartition{
+            .entry = resolved,
+            .drawParams = next.drawParams,
+        };
+        pendingDrawRun_ = true;
         break;
       }
     }
@@ -533,6 +606,7 @@ bool EncodePartitionIdentityCursor::next(
           static_cast<std::uint32_t>(replayOrdinal_ - begin),
       .drawEntryCount = 0u,
   };
+  partition = {};
   return true;
 }
 
@@ -547,7 +621,7 @@ EncodePartitionSerialCursor::EncodePartitionSerialCursor(
 bool EncodePartitionSerialCursor::next(
     EncodePartitionSerialBatch& batch) noexcept {
   if (!useExplicitPlan_) {
-    if (!identityCursor_.next(identityRange_)) {
+    if (!identityCursor_.next(identityRange_, identityPartition_)) {
       return false;
     }
     batch = EncodePartitionSerialBatch{
@@ -556,6 +630,9 @@ bool EncodePartitionSerialCursor::next(
         .replayOrdinalCount = identityRange_.replayOrdinalCount,
         .ranges = std::span<const EncodePartitionRangeSnapshot>(
             &identityRange_, 1u),
+        .identityResolved =
+            identityRange_.kind == EncodePartitionRangeKind::DrawRunEntries,
+        .identityPartition = identityPartition_,
     };
     return true;
   }
@@ -580,6 +657,7 @@ bool EncodePartitionSerialCursor::next(
       .replayOrdinalBegin = first.replayOrdinalBegin,
       .replayOrdinalCount = first.replayOrdinalCount,
       .ranges = explicitRanges_.subspan(begin, explicitIndex_ - begin),
+      .identityResolved = false,
   };
   return true;
 }

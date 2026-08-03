@@ -257,6 +257,8 @@ void validTwoAndThreeSubrangePlansGroupCommandOnce() {
       }
     } else {
       ++commandVisits[batch.replayOrdinalBegin];
+      check(!batch.identityResolved,
+            "explicit DrawRun batch requires execution re-resolution");
       if (batch.replayOrdinalBegin == 1) {
         checkEq(batch.ranges.size(), std::size_t{3},
                 "adjacent subranges group under one draw command");
@@ -267,6 +269,32 @@ void validTwoAndThreeSubrangePlansGroupCommandOnce() {
     checkEq(visits, std::uint32_t{1},
             "serial outer cursor visits every effective command once");
   }
+}
+
+void identitySerialBatchCarriesResolvedFullDrawRun() {
+  MixedFixture fixture;
+  const auto stream = fixture.sourceOrder();
+  dxmt9::encoders::EncodePartitionSerialCursor cursor(stream, {}, false);
+  dxmt9::encoders::EncodePartitionSerialBatch batch{};
+
+  check(cursor.next(batch), "identity serial cursor visits first command");
+  check(!batch.identityResolved,
+        "identity command segment carries no borrowed draw view");
+  check(cursor.next(batch), "identity serial cursor visits first draw run");
+  check(batch.identityResolved,
+        "identity DrawRun carries its call-local resolved view");
+  checkEq(batch.ranges.size(), std::size_t{1},
+          "identity DrawRun retains one full partition snapshot");
+  checkEq(batch.identityPartition.entry.slot, &fixture.slot,
+          "identity resolved view points at the current source only");
+  checkEq(batch.identityPartition.entry.command.drawRunRecord,
+          fixture.slot.commandAt(1).drawRunRecord,
+          "identity resolved view retains the selected DrawRun");
+  checkEq(batch.identityPartition.drawParams.size(), std::size_t{3},
+          "identity resolved view retains the complete DrawRun span");
+  checkEq(batch.identityPartition.drawParams.data(),
+          fixture.slot.commandAt(1).drawParams.data(),
+          "identity executor can consume the existing full-range view");
 }
 
 void invalidPlansFailAllOrNothingToIdentity() {
@@ -372,10 +400,17 @@ void partitionBoundariesLimitCompatibleIndexedMergeCandidates() {
   const auto full = dxmt9::encoders::resolveEncodePartition(
       identity.front(), stream);
   check(full, "identity full range resolves");
+  dxmt9::encoders::EncodePartitionSerialCursor identityCursor(
+      stream, {}, false);
+  dxmt9::encoders::EncodePartitionSerialBatch identityBatch{};
+  check(identityCursor.next(identityBatch),
+        "identity serial cursor yields the full DrawRun");
+  check(identityBatch.identityResolved,
+        "identity serial execution receives the resolved fast path");
   checkEq(dxmt9::encoders::makeCompatibleIndexedDrawMerge(
-              full.partition.drawParams, {}).drawCount,
+              identityBatch.identityPartition.drawParams, {}).drawCount,
           std::size_t{3},
-          "identity full range retains the existing merge candidate shape");
+          "identity fast path retains the existing merge candidate shape");
 
   const std::uint32_t first =
       slot.commandAt(0).drawRunRecord->firstParam;
@@ -406,6 +441,7 @@ int main() {
     identityUsesPartialSessionSourceRange();
     identityRetainsEmptyAndMalformedDrawRunsAsCommands();
     validTwoAndThreeSubrangePlansGroupCommandOnce();
+    identitySerialBatchCarriesResolvedFullDrawRun();
     invalidPlansFailAllOrNothingToIdentity();
     partitionBoundariesLimitCompatibleIndexedMergeCandidates();
   } catch (const std::exception& error) {
