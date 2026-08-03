@@ -74,8 +74,11 @@ struct MixedFixture {
 
   EncodePartitionReplayStream ordered(
       std::span<const std::uint32_t> order) const {
+    std::vector<std::size_t> replayOrdinalByCommandIndex(
+        slot.commandCount());
     return dxmt9::encoders::makeEncodePartitionReplayStream(
-        4, slot, 0, slot.commandCount(), true, order);
+        4, slot, 0, slot.commandCount(), true, order,
+        replayOrdinalByCommandIndex);
   }
 };
 
@@ -137,6 +140,59 @@ void identityTraversesMixedSourceOrder() {
           "identity retains the complete second draw run");
   check(dxmt9::encoders::validateEncodePartitionRanges(ranges, stream),
         "mixed identity exactly covers source order");
+}
+
+void replayStreamValidProvesActiveOrderContract() {
+  MixedFixture fixture;
+  auto make = [&](std::size_t commandBegin,
+                  std::size_t commandCount,
+                  bool commandOrderActive,
+                  std::span<const std::uint32_t> commandOrder,
+                  std::span<std::size_t> scratch = {}) {
+    return dxmt9::encoders::makeEncodePartitionReplayStream(
+        4, fixture.slot, commandBegin, commandCount,
+        commandOrderActive, commandOrder, scratch);
+  };
+
+  const std::array<std::uint32_t, 2> validReorder{3u, 1u};
+  std::array<std::size_t, 3> scratch{};
+  const auto valid = make(1u, 3u, true, validReorder, scratch);
+  check(valid.valid,
+        "active replay stream accepts a unique in-range reorder");
+  checkEq(scratch[0], std::size_t{1},
+          "active replay scratch maps the second replay ordinal");
+  checkEq(scratch[1], std::numeric_limits<std::size_t>::max(),
+          "active replay scratch leaves an unselected command missing");
+  checkEq(scratch[2], std::size_t{0},
+          "active replay scratch maps the first replay ordinal");
+
+  const std::array<std::uint32_t, 1> validSubset{2u};
+  check(make(1u, 3u, true, validSubset, scratch).valid,
+        "active replay stream accepts a unique in-range subset");
+  check(make(1u, 3u, true, {}, {}).valid,
+        "active replay stream accepts empty DCE without scratch");
+
+  const std::array<std::uint32_t, 1> belowRange{0u};
+  check(!make(1u, 3u, true, belowRange, scratch).valid,
+        "active replay stream rejects an index below source range");
+  const std::array<std::uint32_t, 1> aboveRange{4u};
+  check(!make(1u, 3u, true, aboveRange, scratch).valid,
+        "active replay stream rejects an index above source range");
+  const std::array<std::uint32_t, 2> duplicate{1u, 1u};
+  check(!make(1u, 3u, true, duplicate, scratch).valid,
+        "active replay stream rejects duplicate command selection");
+  const std::array<std::uint32_t, 4> oversized{1u, 2u, 3u, 1u};
+  check(!make(1u, 3u, true, oversized, scratch).valid,
+        "active replay stream rejects order longer than source range");
+  std::array<std::size_t, 2> undersizedScratch{};
+  check(!make(1u, 3u, true, validSubset, undersizedScratch).valid,
+        "active replay stream rejects insufficient validation scratch");
+  check(!make(1u, 3u, true, validSubset).valid,
+        "active nonempty replay order cannot bypass validation scratch");
+  check(!make(1u, 3u, false, validSubset).valid,
+        "source-order replay rejects an inactive order payload");
+  check(!make(4u, 2u, false, {}).valid,
+        "source-order replay rejects an invalid source range");
 }
 
 void identityUsesFramegraphOrderAndDceSelection() {
@@ -437,6 +493,7 @@ void partitionBoundariesLimitCompatibleIndexedMergeCandidates() {
 int main() {
   try {
     identityTraversesMixedSourceOrder();
+    replayStreamValidProvesActiveOrderContract();
     identityUsesFramegraphOrderAndDceSelection();
     identityUsesPartialSessionSourceRange();
     identityRetainsEmptyAndMalformedDrawRunsAsCommands();

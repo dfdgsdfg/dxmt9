@@ -82,7 +82,12 @@ EncodePartitionReplayStream makeEncodePartitionReplayStream(
     std::size_t commandBegin,
     std::size_t commandCount,
     bool commandOrderActive,
-    std::span<const std::uint32_t> commandOrder) noexcept;
+    std::span<const std::uint32_t> commandOrder,
+    // Active nonempty orders require at least commandCount entries. The
+    // factory initializes this caller-owned scratch and writes each selected
+    // command's replay ordinal, proving range and uniqueness without another
+    // warm-path allocation. Source order and active empty DCE need no scratch.
+    std::span<std::size_t> replayOrdinalByCommandIndex = {}) noexcept;
 
 // Synthesizes one locator-only entry against the exact current source. Returns
 // false if the selected command/draw is malformed or cannot be represented;

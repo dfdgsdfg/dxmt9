@@ -291,12 +291,55 @@ EncodePartitionReplayStream makeEncodePartitionReplayStream(
     std::size_t commandBegin,
     std::size_t commandCount,
     bool commandOrderActive,
-    std::span<const std::uint32_t> commandOrder) noexcept {
+    std::span<const std::uint32_t> commandOrder,
+    std::span<std::size_t> replayOrdinalByCommandIndex) noexcept {
   const bool sourceRangeValid =
       commandBegin <= slot.commandCount() &&
       commandCount <= slot.commandCount() - commandBegin;
   const std::size_t replayCount =
       commandOrderActive ? commandOrder.size() : commandCount;
+  bool replaySelectionValid =
+      sourceRangeValid &&
+      replayCount <= std::numeric_limits<std::uint32_t>::max();
+  if (replaySelectionValid && !commandOrderActive) {
+    replaySelectionValid = commandOrder.empty();
+    if (replaySelectionValid && commandCount != 0u) {
+      replaySelectionValid =
+          commandBegin <= std::numeric_limits<std::uint32_t>::max() &&
+          commandCount - 1u <=
+              std::numeric_limits<std::uint32_t>::max() - commandBegin;
+    }
+  } else if (replaySelectionValid) {
+    replaySelectionValid = commandOrder.size() <= commandCount;
+    if (replaySelectionValid && !commandOrder.empty()) {
+      replaySelectionValid =
+          replayOrdinalByCommandIndex.size() >= commandCount;
+    }
+    if (replaySelectionValid &&
+        replayOrdinalByCommandIndex.size() >= commandCount) {
+      const auto missingOrdinal = std::numeric_limits<std::size_t>::max();
+      for (std::size_t& ordinal :
+           replayOrdinalByCommandIndex.first(commandCount)) {
+        ordinal = missingOrdinal;
+      }
+      const std::size_t commandEnd = commandBegin + commandCount;
+      for (std::size_t ordinal = 0;
+           ordinal < commandOrder.size();
+           ++ordinal) {
+        const std::size_t commandIndex = commandOrder[ordinal];
+        if (commandIndex < commandBegin || commandIndex >= commandEnd) {
+          replaySelectionValid = false;
+          break;
+        }
+        const std::size_t relative = commandIndex - commandBegin;
+        if (replayOrdinalByCommandIndex[relative] != missingOrdinal) {
+          replaySelectionValid = false;
+          break;
+        }
+        replayOrdinalByCommandIndex[relative] = ordinal;
+      }
+    }
+  }
   return EncodePartitionReplayStream{
       .source = core::metalqueue::ReadySlotSnapshot{
           .slotIndex = slotIndex,
@@ -308,8 +351,7 @@ EncodePartitionReplayStream makeEncodePartitionReplayStream(
       },
       .commandOrderActive = commandOrderActive,
       .commandOrder = commandOrder,
-      .valid = sourceRangeValid &&
-               replayCount <= std::numeric_limits<std::uint32_t>::max(),
+      .valid = replaySelectionValid,
   };
 }
 

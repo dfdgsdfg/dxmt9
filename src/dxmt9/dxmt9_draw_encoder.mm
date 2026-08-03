@@ -14904,33 +14904,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
   std::vector<std::size_t> replayOrdinalByCommandIndex;
-  if (options.replayCommandPlanActive) {
-    if (options.replayCommandOrder.size() > replayRange.commandCount()) {
-      return std::nullopt;
-    }
-    const auto missingOrdinal = std::numeric_limits<std::size_t>::max();
-    replayOrdinalByCommandIndex.assign(replayRange.commandCount(),
-                                       missingOrdinal);
-    for (std::size_t ordinal = 0;
-         ordinal < options.replayCommandOrder.size();
-         ++ordinal) {
-      const std::uint32_t commandIndex = options.replayCommandOrder[ordinal];
-      if (commandIndex < replayRange.commandBegin ||
-          commandIndex >= replayRange.commandEnd) {
-        return std::nullopt;
-      }
-      const std::size_t relative = commandIndex - replayRange.commandBegin;
-      if (replayOrdinalByCommandIndex[relative] != missingOrdinal) {
-        return std::nullopt;
-      }
-      replayOrdinalByCommandIndex[relative] = ordinal;
-    }
+  if (options.replayCommandPlanActive &&
+      !options.replayCommandOrder.empty() &&
+      options.replayCommandOrder.size() <= replayRange.commandCount()) {
+    replayOrdinalByCommandIndex.resize(replayRange.commandCount());
   }
   const EncodePartitionReplayStream partitionReplayStream =
       makeEncodePartitionReplayStream(
           slotIndex, slot, replayRange.commandBegin,
           replayRange.commandCount(), options.replayCommandPlanActive,
-          options.replayCommandOrder);
+          options.replayCommandOrder, replayOrdinalByCommandIndex);
   if (!partitionReplayStream.valid) {
     return std::nullopt;
   }
