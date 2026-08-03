@@ -187,6 +187,33 @@ void identityUsesPartialSessionSourceRange() {
         "partial sessionSource identity validates exactly");
 }
 
+void identityRetainsEmptyAndMalformedDrawRunsAsCommands() {
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 81;
+  std::array<DrawParam, 1> oneDraw{};
+  std::array<dxmt9::core::DrawParamPayloadView, 1> onePayload{};
+  slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                     dxmt9::core::DrawUniformPayload{}, oneDraw,
+                     onePayload);
+  slot.appendDrawRun(dxmt9::core::CanonicalDrawState{},
+                     dxmt9::core::DrawUniformPayload{}, oneDraw,
+                     onePayload);
+  checkEq(slot.commandCount(), std::size_t{2},
+          "empty and malformed fixture contains two commands");
+  slot.drawRunRecords[0].paramCount = 0;
+  slot.drawRunRecords[1].paramCount = 2;
+
+  const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
+      3, slot, 0, slot.commandCount(), false, {});
+  const auto ranges = identityRanges(stream);
+  checkEq(ranges.size(), std::size_t{1},
+          "adjacent non-encodable draw runs coalesce as commands");
+  checkEq(ranges.front().kind, EncodePartitionRangeKind::CommandSegment,
+          "empty and malformed DrawRuns retain complete-command coverage");
+  checkEq(ranges.front().replayOrdinalCount, std::uint32_t{2},
+          "identity preserves both old skip-behavior commands");
+}
+
 void validTwoAndThreeSubrangePlansGroupCommandOnce() {
   MixedFixture fixture;
   const auto stream = fixture.sourceOrder();
@@ -377,6 +404,7 @@ int main() {
     identityTraversesMixedSourceOrder();
     identityUsesFramegraphOrderAndDceSelection();
     identityUsesPartialSessionSourceRange();
+    identityRetainsEmptyAndMalformedDrawRunsAsCommands();
     validTwoAndThreeSubrangePlansGroupCommandOnce();
     invalidPlansFailAllOrNothingToIdentity();
     partitionBoundariesLimitCompatibleIndexedMergeCandidates();

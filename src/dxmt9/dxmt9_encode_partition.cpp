@@ -79,7 +79,10 @@ bool snapshotForDrawParam(
     return false;
   }
   const auto& record = *command.drawRunRecord;
-  if (drawParamIndex < record.firstParam ||
+  if (record.firstParam > slot.drawParams.size() ||
+      record.paramCount > slot.drawParams.size() - record.firstParam ||
+      command.drawParams.size() != record.paramCount ||
+      drawParamIndex < record.firstParam ||
       drawParamIndex - record.firstParam >= record.paramCount ||
       drawParamIndex >= slot.drawParams.size()) {
     return false;

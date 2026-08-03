@@ -319,6 +319,68 @@ void finalizerValidationFailureIsNoMutationAndRetryable() {
         "successful retry clears deferred session payload");
 }
 
+void partialCommandSegmentSessionFinalizesWithoutTargets() {
+  Harness harness;
+  auto ctx = harness.makeContext();
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 61;
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  slot.appendClear(clear);
+  slot.appendClear(clear);
+  slot.appendClear(clear);
+  const dxmt9::core::metalqueue::QueueCompletionSource source{
+      .slotIndex = 6,
+      .seqId = slot.seqId,
+      .hasPresent = false,
+      .commandBegin = 1,
+      .commandCount = 1,
+  };
+  const std::array<dxmt9::encoders::EncodePartitionRangeSnapshot, 1>
+      partitionRanges{
+          dxmt9::encoders::EncodePartitionRangeSnapshot{
+              .kind =
+                  dxmt9::encoders::EncodePartitionRangeKind::CommandSegment,
+              .replayOrdinalBegin = 0,
+              .replayOrdinalCount = 1,
+              .drawEntryCount = 0,
+          },
+      };
+  auto options = deferredOptions(
+      *session,
+      retainedToken<WMT::CommandBuffer>("partial-command-segment-cb-token"),
+      source);
+  options.partitionRanges = partitionRanges;
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, source.slotIndex, slot, std::move(options));
+  check(submission.has_value(),
+        "partial targetless CommandSegment returns a deferred submission");
+  check(dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+            *session),
+        "partial targetless CommandSegment retains its pending clear");
+  const auto sources = dxmt9::encoders::encodeChunkSessionSources(*session);
+  checkEq(sources.size(), std::size_t{1},
+          "partial session retains exactly one completion source");
+  checkEq(sources.front().commandBegin, std::size_t{1},
+          "partial session retains the absolute selected command begin");
+  checkEq(sources.front().commandCount, std::size_t{1},
+          "partial session retains only the selected command count");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "partial deferred CommandSegment session finalizes");
+  const auto published = submission->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{1},
+          "partial finalization publishes one completion source");
+  checkEq(published.front().commandBegin, std::size_t{1},
+          "partial finalization preserves the selected command begin");
+  check(!dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+            *session),
+        "partial finalization clears targetless deferred payload");
+}
+
 }  // namespace
 
 int main() {
@@ -327,6 +389,7 @@ int main() {
   try {
     encodeChunkThenFinalizerPublishesAndResetsOneSession();
     finalizerValidationFailureIsNoMutationAndRetryable();
+    partialCommandSegmentSessionFinalizesWithoutTargets();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()
               << '\n';

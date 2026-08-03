@@ -14920,6 +14920,20 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       replayOrdinalByCommandIndex[relative] = ordinal;
     }
   }
+  const EncodePartitionReplayStream partitionReplayStream =
+      makeEncodePartitionReplayStream(
+          slotIndex, slot, replayRange.commandBegin,
+          replayRange.commandCount(), options.replayCommandPlanActive,
+          options.replayCommandOrder);
+  if (!partitionReplayStream.valid) {
+    return std::nullopt;
+  }
+  bool useExplicitPartitionPlan = false;
+  if (!options.partitionRanges.empty()) {
+    const auto validation = validateEncodePartitionRanges(
+        options.partitionRanges, partitionReplayStream);
+    useExplicitPartitionPlan = static_cast<bool>(validation);
+  }
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(slot.seqId);
   auto traceEncodeStage = [&](const char* stage) {
@@ -15892,7 +15906,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   using Kind = core::MetalCommandKind;
   auto encodeDrawRunCommand = [&](std::size_t commandIndex,
-                                  const core::MetalCommandView& command) {
+                                  const core::MetalCommandView& command,
+                                  std::span<const EncodePartitionRangeSnapshot>
+                                      drawPartitions) {
     paramUniformPayloadCache.reset();
     if (!command.drawState.hot || !command.drawState.shaderLayout ||
         !command.drawRunRecord ||
@@ -15920,7 +15936,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     auto stateView = command.drawState;
     stateView.uniforms = commandUniformPayload;
     const auto& hot = *stateView.hot;
-    const auto drawItems =
+    const auto commandDrawItems =
         command.drawItems.empty() ? command.drawParams : command.drawItems;
     const core::PsoHandle renderPsoHandle =
         command.drawRunRecord ? command.drawRunRecord->renderPsoHandle
@@ -16089,13 +16105,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     //   [3]   = draw 1 index
     //   …
     // Returned slices use the same indexing.
-    const std::size_t drawCount = drawItems.size();
+    const std::size_t commandDrawCount = commandDrawItems.size();
     const auto recordPayloadArena = core::drawRunPayloadBytes(command);
     bool anyUpData = false;
     bool hasUpPayloadRanges = false;
     traceEncodeCommand("drawrun.before-up-prescan", commandIndex,
                        Kind::DrawRun, command);
-    for (const auto& param : drawItems) {
+    for (const auto& param : commandDrawItems) {
       if (!param.userVertexRange.empty() || !param.userIndexRange.empty()) {
         hasUpPayloadRanges = true;
         break;
@@ -16108,8 +16124,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("drawrun.before-up-upload", commandIndex,
                          Kind::DrawRun, command);
       std::vector<std::span<const std::byte>> upPayloads;
-      upPayloads.reserve(drawCount * 2);
-      for (const auto& param : drawItems) {
+      upPayloads.reserve(commandDrawCount * 2);
+      for (const auto& param : commandDrawItems) {
         const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
         if (!vertexBytes.empty()) anyUpData = true;
         upPayloads.emplace_back(reinterpret_cast<const std::byte*>(vertexBytes.data()),
@@ -16124,7 +16140,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             upPayloads, /*alignment=*/16, slot.seqId,
             ctx.transientCompletedSeqId);
         if (!upSlices.empty()) {
-          for (const auto& param : drawItems) {
+          for (const auto& param : commandDrawItems) {
             const auto vertexBytes = drawParamVertexBytes(param, recordPayloadArena);
             const auto indexBytes = drawParamIndexBytes(param, recordPayloadArena);
             diagnosticsState.activeEncoderBreakdown.addTransientVertexBytes(
@@ -16149,11 +16165,34 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         debug::optimizeCompatibleIndexedDrawMerge() && !diagnosticsState.activeVisibilityScout;
     const bool compatibleIndexedDrawMergeTelemetry =
         compatibleIndexedDrawMerge && perf::enabled();
-    const auto mergeTelemetry = compatibleIndexedDrawMergeTelemetry
-        ? measureCompatibleIndexedDrawMergePairs(drawItems,
-                                                 recordPayloadArena)
-        : CompatibleIndexedDrawMergeTelemetry{};
+    CompatibleIndexedDrawMergeTelemetry mergeTelemetry{};
+    auto addMergeTelemetry = [&](std::span<const core::DrawParam> drawItems) {
+      if (!compatibleIndexedDrawMergeTelemetry) {
+        return;
+      }
+      const auto subrangeTelemetry = measureCompatibleIndexedDrawMergePairs(
+          drawItems, recordPayloadArena);
+      mergeTelemetry.pairAttempts += subrangeTelemetry.pairAttempts;
+      mergeTelemetry.compatiblePairs += subrangeTelemetry.compatiblePairs;
+      mergeTelemetry.multipleRejectPairs +=
+          subrangeTelemetry.multipleRejectPairs;
+      for (std::size_t i = 0; i < mergeTelemetry.rejectPairs.size(); ++i) {
+        mergeTelemetry.rejectPairs[i] += subrangeTelemetry.rejectPairs[i];
+        mergeTelemetry.onlyRejectPairs[i] +=
+            subrangeTelemetry.onlyRejectPairs[i];
+      }
+      for (std::size_t i = 0;
+           i < mergeTelemetry.exactRelaxationSetPairs.size(); ++i) {
+        mergeTelemetry.exactRelaxationSetPairs[i] +=
+            subrangeTelemetry.exactRelaxationSetPairs[i];
+      }
+      mergeTelemetry.otherRelaxationSetPairs +=
+          subrangeTelemetry.otherRelaxationSetPairs;
+    };
     u64 selectedMergePairs = 0u;
+    auto encodeDrawSubrange = [&](std::span<const core::DrawParam> drawItems,
+                                  std::size_t commandDrawBegin) {
+    const std::size_t drawCount = drawItems.size();
     for (std::size_t i = 0; i < drawCount;) {
       traceEncodeCommand("drawrun.draw-begin", commandIndex,
                          Kind::DrawRun, command);
@@ -16183,9 +16222,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         continue;
       }
       PreUploadedDrawData preData{};
-      if (i * 2u + 1u < upSlices.size()) {
-        preData.vertex = upSlices[i * 2u];
-        preData.index = upSlices[i * 2u + 1u];
+      const std::size_t absoluteDrawIndex = commandDrawBegin + i;
+      if (absoluteDrawIndex * 2u + 1u < upSlices.size()) {
+        preData.vertex = upSlices[absoluteDrawIndex * 2u];
+        preData.index = upSlices[absoluteDrawIndex * 2u + 1u];
       }
       core::DrawBindingOverride bindingOverride{};
       core::DrawBindingSnapshot bindingSnapshot{};
@@ -16455,8 +16495,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                      commandIndex <= std::numeric_limits<std::uint32_t>::max()
                          ? static_cast<std::uint32_t>(commandIndex)
                          : std::numeric_limits<std::uint32_t>::max(),
-                     static_cast<u64>(i),
-                     static_cast<u64>(drawCount),
+                     static_cast<u64>(absoluteDrawIndex),
+                     static_cast<u64>(commandDrawCount),
                      &diagnosticsState.activeEncoderBreakdown,
                      &bindingState.argbufCbufCache,
                      &bindingState.activeStreamIbStaging,
@@ -16481,11 +16521,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           diagnosticsState.activeColorAttachmentDump.afterDraw = true;
           diagnosticsState.activeColorAttachmentDump.draw = encoderDrawIndexBeforeEncode;
           diagnosticsState.activeColorAttachmentDump.commandIndex = commandIndex;
-          diagnosticsState.activeColorAttachmentDump.commandDrawIndex = i;
-          diagnosticsState.activeColorAttachmentDump.commandDrawCount = drawCount;
+          diagnosticsState.activeColorAttachmentDump.commandDrawIndex =
+              absoluteDrawIndex;
+          diagnosticsState.activeColorAttachmentDump.commandDrawCount =
+              commandDrawCount;
           diagnosticsState.activeColorAttachmentDump.texture0 = drawTexture0;
           flushRender(perf::EncoderSplitReason::Final);
-          if (i + mergedDrawCount < drawCount) {
+          if (absoluteDrawIndex + mergedDrawCount < commandDrawCount) {
             startRenderPass(drawStateView, std::nullopt, commandIndex,
                             renderPsoHandle);
           }
@@ -16495,6 +16537,27 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                            Kind::DrawRun, command);
       }
       i += mergedDrawCount;
+    }
+    };
+    if (drawPartitions.empty()) {
+      addMergeTelemetry(commandDrawItems);
+      encodeDrawSubrange(commandDrawItems, 0u);
+    } else {
+      for (const auto& drawPartition : drawPartitions) {
+        const auto resolved = resolveEncodePartition(
+            drawPartition, partitionReplayStream);
+        if (!resolved || !resolved.partition.entry.drawRunRecord ||
+            resolved.partition.entry.command.drawRunRecord !=
+                command.drawRunRecord) {
+          DXMT_ASSERT(false);
+          std::abort();
+        }
+        const std::size_t commandDrawBegin =
+            drawPartition.entry.drawParamIndex -
+            command.drawRunRecord->firstParam;
+        addMergeTelemetry(resolved.partition.drawParams);
+        encodeDrawSubrange(resolved.partition.drawParams, commandDrawBegin);
+      }
     }
     if (compatibleIndexedDrawMergeTelemetry) {
       perf::countCompatibleIndexedDrawMergeTelemetry(
@@ -16538,32 +16601,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
   };
 
-  const std::size_t replayCommandCount =
-      options.replayCommandPlanActive
-          ? options.replayCommandOrder.size()
-          : replayRange.commandCount();
-  auto replayCommandIndexAt = [&](std::size_t ordinal) {
-    return options.replayCommandPlanActive
-        ? static_cast<std::size_t>(options.replayCommandOrder[ordinal])
-        : replayRange.commandBegin + ordinal;
-  };
-
-  if (slot.drawOnlyCommandStream()) {
-    for (std::size_t ordinal = 0; ordinal < replayCommandCount; ++ordinal) {
-      const std::size_t commandIndex = replayCommandIndexAt(ordinal);
-      const auto command = slot.drawRunCommandAt(commandIndex);
-      traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
-      // TLA+: EncoderLifecycle / opCount observes command replay progress.
-      encodeDrawRunCommand(commandIndex, command);
-      traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
-      traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun, command);
-      applyPerRecordSplitPolicy(/*presentRecord=*/false);
-      traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
-    }
-  } else {
-    for (std::size_t ordinal = 0; ordinal < replayCommandCount; ++ordinal) {
-      const std::size_t commandIndex = replayCommandIndexAt(ordinal);
-      const auto command = slot.commandAt(commandIndex);
+  auto encodeCompleteCommand = [&](std::size_t commandIndex,
+                                   const core::MetalCommandView& command) {
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
       switch (command.kind) {
@@ -16590,7 +16629,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         break;
       }
       case Kind::DrawRun: {
-        encodeDrawRunCommand(commandIndex, command);
+        encodeDrawRunCommand(commandIndex, command, {});
         break;
       }
       case Kind::SurfaceCopy: {
@@ -16795,7 +16834,48 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       traceEncodeCommand("before-split-policy", commandIndex, command.kind, command);
       applyPerRecordSplitPolicy(command.kind == Kind::Present);
       traceEncodeCommand("end", commandIndex, command.kind, command);
+  };
+
+  EncodePartitionSerialCursor partitionCursor(
+      partitionReplayStream, options.partitionRanges,
+      useExplicitPartitionPlan);
+  EncodePartitionSerialBatch partitionBatch{};
+  while (partitionCursor.next(partitionBatch)) {
+    if (partitionBatch.kind == EncodePartitionRangeKind::CommandSegment) {
+      const std::uint64_t ordinalEnd =
+          static_cast<std::uint64_t>(partitionBatch.replayOrdinalBegin) +
+          partitionBatch.replayOrdinalCount;
+      for (std::uint64_t ordinal = partitionBatch.replayOrdinalBegin;
+           ordinal < ordinalEnd; ++ordinal) {
+        std::uint32_t commandIndex = 0;
+        const bool resolvedCommand = partitionReplayStream.commandIndexAt(
+            static_cast<std::size_t>(ordinal), commandIndex);
+        if (!resolvedCommand) {
+          DXMT_ASSERT(false);
+          std::abort();
+        }
+        encodeCompleteCommand(commandIndex, slot.commandAt(commandIndex));
+      }
+      continue;
     }
+
+    std::uint32_t commandIndex = 0;
+    const bool resolvedCommand = partitionReplayStream.commandIndexAt(
+        partitionBatch.replayOrdinalBegin, commandIndex);
+    if (!resolvedCommand) {
+      DXMT_ASSERT(false);
+      std::abort();
+    }
+    const auto command = slot.drawRunCommandAt(commandIndex);
+    traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
+    // TLA+: EncoderLifecycle / opCount advances once for the complete source
+    // command even when that DrawRun has multiple explicit subranges.
+    encodeDrawRunCommand(commandIndex, command, partitionBatch.ranges);
+    traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
+    traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
+                       command);
+    applyPerRecordSplitPolicy(/*presentRecord=*/false);
+    traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
   }
 
   if (options.session && options.sessionSource.has_value()) {
