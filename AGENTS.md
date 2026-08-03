@@ -77,21 +77,21 @@ dirs (the runner scripts and `test_wild.rules.md` expect these exact names):
 
 | Dir | Cross/native file | Produces |
 |---|---|---|
-| `build-arm64-nowine/` | native (Apple Silicon) | Native unit/spec tests — no Wine, fastest inner loop. |
+| `build/` | native host | Native unit/spec tests — no Wine, fastest inner loop. |
 | `build-x86_64-builtin/` | `cross/x86_64-macos.ini` | `winemetal.so` unix provider for Rosetta Wine64. |
 | `build-win32-x64-builtin/` | `cross/x86_64-windows.ini` | 64-bit PE `d3d9.dll` + `winemetal.dll`. |
 | `build-win32-x86-builtin/` | `cross/i686-windows.ini` | 32-bit WoW64 PE `d3d9.dll` + `winemetal.dll`. |
 
 ```sh
 # Native unit/spec tests (the common inner loop):
-meson compile -C build-arm64-nowine
-meson test -C build-arm64-nowine
+meson compile -C build
+meson test -C build
 
 # Run a single test target by name:
-meson test -C build-arm64-nowine dxmt9-core-spec
+meson test -C build dxmt9-core-spec
 
 # Setup a fresh native build dir if missing:
-meson setup build-arm64-nowine
+meson setup build
 ```
 
 Test target names are stable and prefixed `dxmt9-` (e.g. `dxmt9-core-spec`,
