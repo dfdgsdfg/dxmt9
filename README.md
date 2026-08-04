@@ -37,24 +37,25 @@ unix side replays them into Metal command buffers and presents through
 
 ## Performance
 
-Measured 2026-07-31 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
+Measured 2026-08-04 on a 16 GB MacBook Air with an Apple M1 8-core GPU using
 Sikarugir-CX 24.0.7 Wine:
 
-| Workload | Average FPS | Run range |
+| Workload | Current sampled FPS | Run range |
 |---|---:|---:|
-| 3DMark05 GT1 | `21.1` | `21.1-21.3` |
-| 3DMark05 GT2 | `17.1` | `16.7-17.3` |
-| 3DMark05 GT3 | `33.4` | `33.3-33.6` |
-| Street Fighter IV Benchmark | `44.6` | `43.8-45.4` |
+| 3DMark05 GT1 | `27.2` | `27.09-27.33` |
+| 3DMark05 GT2 | `23.8` | `23.79-23.81` |
+| 3DMark05 GT3 | `54.7` | `54.69-54.72` |
+| Street Fighter IV Benchmark | `44.2` | `42.56-44.18` |
 
-Frame-sampled averages, not 3DMark scores: the median of three completed runs
-per 3DMark05 scene and two duration-matched runs for SFIV, interleaved by round
-with an equal cooldown before each so thermal drift does not land on one
-workload. All eleven runs render the expected scenes with zero GPU errors.
+Frame-sampled averages, not 3DMark scores: the median of two completed HEAD
+runs per 3DMark05 scene and three duration-matched HEAD runs for SFIV. The
+SFIV run range is thermally sensitive, so its headline is the three-run median.
+All nine current runs passed with zero GPU errors and bridge record rejects.
 
 See the [performance overview](docs/perfomance/overview.md) for methodology and
-visual checks, and [one frame end to end](docs/perfomance/frame-lifecycle.md)
-for where the frame time goes.
+[serial-partition A/B](docs/perfomance/baselines/baselines-serial-partition-ab.02.md)
+for the measurements and limitations. [One frame end to end](docs/perfomance/frame-lifecycle.md)
+shows where the frame time goes.
 
 ## Requirements
 
