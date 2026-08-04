@@ -59,7 +59,9 @@ visible to scheduling. A publication split must not place a record under a
 **R-BACK-2.39** Source publication, session admission, partition planning, and
 execution-lane selection must be deterministic for identical imported records,
 retained metadata, and explicit queue-local state. Wallclock time, worker
-availability, and GPU progress feedback must not change their semantic shape.
+availability, publication arrival timing, completion-wait state, and GPU
+progress feedback must not change their semantic shape. Ordered release-event
+fences and fixed configured capacities are explicit queue-local state.
 
 **R-BACK-2.40** Producer-side CPU work may advance into an immutable CPU-ready
 source or source range during the previous frame's present-completion wait,
@@ -67,7 +69,12 @@ independently of Metal command-buffer selection. A CPU-ready source owns replay
 records, retained handles, sequence metadata, allocator ranges, and access
 summaries, but no drawable or present token. Deferring a frame-latency wait to
 create this window must not admit a second present tail before the prior gate is
-drained and must preserve `R-BACK-2.49` completion order.
+drained and must preserve `R-BACK-2.49` completion order. Admission assigns one
+unique, strictly increasing `sourceOrdinal` and one unique `seqId` in the same
+order. Once all bounded storage for the immediate raw-FIFO successor is
+reserved, its generation-stamped `PublicationTicket` fixes `rawOrdinal`,
+`sourceOrdinal`, and `seqId` until that source seals or aborts. No later source
+may become ready while an earlier admitted source remains unsealed.
 
 **R-BACK-2.41** The scheduler must be able to coalesce consecutive compatible
 CPU-ready sources or source ranges into the same `EncodeSession` and Metal
@@ -82,9 +89,17 @@ wait, or other semantic barriers.
 encoding lifetime. It owns the active encoder or parent encoder, logical-pass
 attachment key, pending clear and pass actions, exact hazards, native dirty and
 binding shadows, sidecars and samples, post-commit callbacks, and ordered
-completion sources. The physical command buffer remains call-local while
-encoding and transfers into submission storage at handoff. A source boundary
-does not itself close the session or logical pass.
+completion sources. While streaming is open, the physical command buffer is
+owned by the coordinator's session envelope or pending submission record;
+individual encode calls borrow it, and finalization transfers it into submitted
+queue storage. A source boundary does not itself close the session or logical
+pass. The coordinator must select one finite already-ready FIFO snapshot and
+attach its maximal compatible prefix. An open session may remain parked when no
+source is ready and producer quiescence creates no D3D-visible progress
+obligation. Source arrival, ready-snapshot exhaustion, worker scheduling,
+completion-wait state, and GPU
+timing must not themselves decide whether to finalize; only the ordered
+queue/API release events in `R-BACK-2.44` may do so.
 
 **R-BACK-2.43** A session may keep one logical render pass open across
 consecutive sources only while attachment identity, exact hazards, query and
@@ -95,22 +110,45 @@ attachment reads, blit/resolve/readback/query operations, non-render waits,
 `commitChunk()`, CPU-ready publication, `seqId`, partition, and helper-call
 boundaries are non-boundaries.
 
-**R-BACK-2.44** A session that encoded visible work must not wait indefinitely
-for a future source or present tail. At a bounded release point it must submit
-the represented prefix normally, or prove that no source was consumed. It must
-not inline-complete unsubmitted visible work, attach a present token to a
-non-present prefix, or lose a strict unrepresented suffix.
+**R-BACK-2.44** A session that encoded visible work may remain open across
+producer quiescence, but must submit its represented prefix when an ordered
+event creates a D3D-visible or queue-progress obligation: a Present tail,
+explicit Flush, direct observation or readback, producer wait for a covered
+`seqId`, source-admission or raw-writer capacity dependency, a fixed
+source/byte/draw/command-buffer cap, a semantic independent-submission boundary,
+orderly shutdown, or device loss. Each event carries an ordered fence and must
+not overtake older raw or CPU-ready work. Wallclock timeout, spin count,
+completion-wait/GPU state, ready-snapshot exhaustion, and worker-arrival timing
+are forbidden release inputs. At release the session must submit normally or
+prove that no source was consumed; it must not inline-complete unsubmitted
+visible work or attach a present token to a non-present prefix. Snapshot entries
+beyond the maximal compatible prefix remain in `Ready` FIFO order and never
+enter a snapshot-owned lifecycle state. A represented prefix rolled back before
+any Metal side effect from that newly represented batch must return ahead of
+every younger source; an older already-emitted session prefix is never rewound.
 
 **R-BACK-2.45** Session storage must remain data-oriented: fixed-size values,
 small inline arrays, queue-owned arenas, and bounded spans or views. It must not
 deep-copy source slots, concatenate payload arenas, allocate one object per draw,
-or retain PE, COM, Objective-C, or unowned process-local pointers.
+or retain PE, COM, Objective-C, or unowned process-local pointers. Session
+source lists contain generation-checked source and storage locators plus compact
+completion metadata, never direct page pointers or allocator-owned containers.
 
 **R-BACK-2.46** Pass streaming must consume large imported records, uniforms,
 bindings, handle lists, and payloads by reference to immutable queue-owned
 storage. Copies are permitted only for compact metadata, explicit ownership
 transfer, or Metal-required transient materialization; joining sources must not
-copy O(total source payload bytes).
+copy O(total source payload bytes). The replay worker must construct admitted
+records and payloads directly into their final reserved source extent after
+wire ownership is established; sealing publishes those bytes atomically, and
+session attachment must add only locator and completion metadata. After a source
+enters `Represented`, its completion pin permits the synchronous encode call to
+resolve call-local spans outside the scheduling lock; those spans must not
+escape the call or outlive the represented source. Reservation sizing must use
+only bounds-validated wire headers, lengths, and structural counts, without
+executing the semantic transform twice. Every arena-backed SoA reserves its
+final exact or conservative capacity once before append; source construction
+must not reallocate, relocate, or copy an earlier extent while growing.
 
 **R-BACK-2.47** The execution lane must obey Metal rules. The legacy serial
 lane permits only one active encoder per command buffer and cannot resume an
@@ -135,7 +173,13 @@ backed by one command buffer, a chain, or one jointly committed Metal 4 group.
 Tail or joint completion expands into strict per-source completion order. No
 represented source may complete before all Metal commands that contain its work
 complete; reclaim, query, frame-token, and deferred-destruction consumers still
-observe their existing per-source timelines.
+observe their existing per-source timelines. Source metadata, tape pages,
+retained handles, and allocator tickets may be reclaimed only after that source
+is completed, no synchronous snapshot borrows it, and every older source has
+reached the same reclaim point. Reclaim first makes the source inaccessible in
+`Reclaiming`, destroys re-entrant owners and releases retained resources outside
+the scheduling lock while its pages remain pinned, then atomically returns the
+pages and advances source/page generations.
 
 **R-BACK-2.50** A scheduling lane may be promoted only after, in order: native
 or fake-backend proof of source order, boundaries, fail-open behavior, and
@@ -178,12 +222,34 @@ amendment to this carve-out list.
 ## 4. Scheduling and Execution Lanes
 
 **R-BACK-2.60** CPU-ready source residency and admission must be bounded
-independently of GPU-reclaimed chunk slots. A logical source may reference
-immutable queue-owned tape or arena storage without consuming one scarce slot
-until GPU completion. Admission must apply deterministic back-pressure, expose
-current and peak occupancy plus wait time, retain represented sources until
-their completion expansion, and fail open without payload deep copy when the
-capacity cannot accept more work.
+independently of GPU-reclaimed chunk slots. The physical owner must be a
+queue-created fixed-capacity `CpuReadyTape`: a preallocated circular page arena
+plus a fixed source-descriptor ring. A logical `CpuReadySourceId` and its
+`CpuReadyStorageRef` must carry slot/page indices and allocation generations;
+generation mismatch is stale and must fail before dereference. A source reserves
+one non-wrapping contiguous page run, is invisible while `Writing`, and becomes
+read-only only after an all-or-nothing `Sealed -> Ready` publication that has
+completed validation, retention, resource marking, summaries, `sourceOrdinal`,
+and `seqId` assignment. Only its compact `PublicationTicket` control metadata
+is scheduler-visible while `Writing`; payload bytes are not resolvable until
+`Ready`.
+
+Capacity must be bounded simultaneously by source descriptors, total resident
+pages/bytes, per-source pages/bytes, retained-handle entries, and session source
+references. Admission uses fixed high/low watermarks and FIFO head-of-line
+ordering. Only the replay worker may wait for tape admission; the encode
+coordinator may park an open session for future publication but must never wait
+while holding the scheduling lock or for free capacity after a release event
+from `R-BACK-2.44`; the finish thread never waits for publication or capacity.
+Admission pressure publishes the corresponding ordered release event so a
+represented prefix is submitted before that prefix can participate in a
+capacity/completion cycle. Reclaim by the finish thread is the normal admission
+wake-up owner and must be able to acquire the tape metadata lock and release
+pages even while the replay worker is blocked. A source that can never fit must
+use the ordered legacy one-source bypass or fail the already-invalid oversized
+input; temporary pressure must not create a second payload copy, reorder
+sources, or hide a represented prefix. Current/peak occupancy, high-water hits,
+admission wait, bypass reason, and reclaim wakeups must be observable.
 
 **R-BACK-2.61** Direct device calls may replace a full deferred-replay drain
 with a scoped FIFO-prefix drain only when admission produced complete canonical

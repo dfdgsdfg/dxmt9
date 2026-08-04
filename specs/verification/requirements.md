@@ -108,8 +108,26 @@ conservative, and lack of proof releases current work without waiting.
 **R-VERIF-2.14** Formal evidence must prove CPU-ready source and EncodeSession
 admission progress for R-BACK-2.44 and R-BACK-2.60: all stores are bounded,
 back-pressure cannot hide a consumed visible prefix, every represented source
-eventually submits or is restored in FIFO order, and admission pressure cannot
-block completion progress required to release that pressure.
+submits or is restored in FIFO order once an ordered progress-demand release
+event occurs, and admission pressure cannot block completion progress required
+to release that pressure. Producer quiescence without such an event has no
+liveness obligation. Liveness claims are under weak fairness for enabled
+replay-worker, encode-coordinator, Metal-completion, and finish-thread actions.
+The model must represent descriptor and page generations,
+non-wrapping page reservations, `Writing -> Sealed -> Ready -> Represented ->
+Submitted -> Completed -> Reclaiming -> Reclaimed`, atomic publication, strict
+`sourceOrdinal`/`seqId` order, high/low watermarks, replay-worker-only admission
+wait, finish-owned reclaim wakeup, snapshot suffixes that remain `Ready`,
+pre-effect newly represented batch rollback without rewinding an older emitted
+session prefix, non-present prefix submission, shutdown and device-loss release,
+and stale-reference rejection. It must model ordered
+Present/Flush/direct-observation/producer-sequence-wait/capacity/semantic
+release-event fences and prove that they do not overtake older raw or ready
+work. It must prove bounded resident sources/pages, no page reuse before
+ordered reclaim, no ready source that references unsealed storage, no completion
+before submission, no worker-arrival or completion/GPU-timing release input,
+and no cycle in which admission pressure prevents the submission, completion,
+or reclaim needed to clear that pressure.
 
 **R-VERIF-2.15** Formal or equivalent refinement evidence must prove parallel
 and joint completion for R-BACK-2.49, R-BACK-2.63, and R-BACK-2.64: child or
