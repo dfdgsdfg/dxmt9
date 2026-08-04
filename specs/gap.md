@@ -24,7 +24,7 @@ This root document is only the project-level overview. Detailed implementation a
 | Benchmarks | not started | [benchmarks/gap](benchmarks/gap.md) | [benchmarks/log](benchmarks/log.md) | Benchmark harness, workloads, and regression-policy gaps. |
 | D3D8 | not started | [d3d8/gap](d3d8/gap.md) | [d3d8/log](d3d8/log.md) | D3D8 shim implementation and evidence gaps. |
 | D3D7 / DirectDraw 7 | not started | [d3d7/gap](d3d7/gap.md) | [d3d7/log](d3d7/log.md) | D3D7 / DirectDraw shim implementation and evidence gaps. |
-| Winemetal | tracked elsewhere | Tracked through [deploy/gap](deploy/gap.md) and [backend/gap](backend/gap.md) | [winemetal/log](winemetal/log.md) | Wine/Metal bridge contract documentation; implementation gaps currently roll up through deployment/backend. |
+| Winemetal | partial | [winemetal/gap](winemetal/gap.md) | [winemetal/log](winemetal/log.md) | ExtEscape surface acquisition, lifetime, fallback, and Wine compatibility evidence. |
 
 ## Detailed Inventories
 

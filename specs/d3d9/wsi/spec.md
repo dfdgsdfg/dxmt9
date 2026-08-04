@@ -7,174 +7,159 @@ tags: [specs, d3d9, wsi, spec]
 
 # Window System Integration Spec
 
-WSI maps a Win32 window handle (`HWND`) to a Metal presentation surface
-(`CAMetalLayer`) and keeps the swap chain synchronized with resize, minimize,
-and mode changes.
+WSI maps a Win32 window handle (`HWND`) to a Wine-owned Metal presentation
+surface and keeps the D3D9 swap chain synchronized with resize, reset, and
+destruction. The Wine surface protocol is owned by
+[`specs/winemetal/requirements.md`](../../winemetal/requirements.md); this
+document owns the D3D9-facing integration.
 
----
+## 1. Primary `HWND` to Layer Flow
 
-## 1. HWND to Cocoa View Resolution
-
-D3D9's `CreateDevice()` and `CreateAdditionalSwapChain()` receive a Win32
-`HWND`. On macOS under Wine, an `HWND` is a Wine internal handle backed by an
-`NSWindow` / `NSView`. Metal presents to a `CAMetalLayer` attached to an
-`NSView`.
-
-```mermaid
-graph LR
-    APP["Application\nhDeviceWindow = HWND"]
-    WINE["Wine winemac.drv\nHWND -> NSView*\nmacdrv_get_cocoa_view()"]
-    WSI["dxmt9 WSI\nNSView -> CAMetalLayer\nattach / resize / detach"]
-    MTL["Metal\nCAMetalLayer.nextDrawable\n-> present"]
-
-    APP --> WINE --> WSI --> MTL
-```
-
-`winemetal.so` supports two Wine host paths:
-
-1. Legacy direct symbol path:
-   - `macdrv_get_cocoa_view(HWND)` returns the backing `NSView*`
-2. Builtin-module fallback path used by Heroic Wine 11.5:
-   - `macdrv_functions[3]` returns a `WineWindow*`
-   - `winemetal.so` resolves `-[WineWindow contentView]` on the Cocoa main queue
-   - `macdrv_functions[6]` creates a `WineMetalView*` from that
-     `WineContentView*`
-   - `macdrv_functions[7]` returns the `CAMetalLayer*`
-
-Resolution order:
+The primary path uses the `winemac.drv` `ExtEscape` proposal tracked by
+[Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
+and [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166). Its
+current declaration is:
 
 ```c
-macdrv_get_cocoa_view(hwnd)
+#define MACDRV_ESCAPE_GET_SURFACE     6790
+#define MACDRV_ESCAPE_RELEASE_SURFACE 6791
 
-macdrv_functions[3] -> WineWindow*
-WineWindow.contentView -> WineContentView*
-macdrv_functions[6](WineContentView*, metal_device) -> WineMetalView*
-macdrv_functions[7](WineMetalView*) -> CAMetalLayer*
+struct macdrv_escape_surface {
+  uint64_t surface;
+  uint64_t layer;
+};
 ```
 
-`winemetal.so` resolves the legacy symbol or function table at runtime via
-`dlsym(RTLD_DEFAULT, ...)`. If neither path is available, it returns a null
-presentation handle and the no-window path is used.
+These values are revision-pinned compatibility declarations, not an accepted
+Wine ABI until the Wine change is merged. The canonical declaration must live
+in the compatibility header required by `R-WMB-13.1`; this excerpt is
+explanatory.
 
----
+```mermaid
+sequenceDiagram
+    participant D9 as d3d9.dll (PE)
+    participant Mac as winemac.drv
+    participant Bridge as winemetal_dxmt9.dll
+    participant Provider as winemetal_dxmt9.so
+    participant Presenter as CAMetalLayer presenter
 
-## 2. Layer Lifecycle
+    D9->>Mac: GetDC(HWND)
+    D9->>Mac: ExtEscape(QUERYESCSUPPORT, GET_SURFACE)
+    Mac-->>D9: supported
+    D9->>Mac: ExtEscape(GET_SURFACE)
+    Mac-->>D9: {surface, layer}
+    D9->>Bridge: adopt_wsi_surface(opaque POD values)
+    Bridge->>Provider: wine_unix_call(adopt)
+    Provider->>Presenter: borrow CAMetalLayer
+    Presenter-->>D9: presentation handle or failure
+    D9->>Mac: ReleaseDC(HWND, HDC)
+```
+
+PE code owns GDI calls and treats both returned values as opaque `uint64_t`
+tokens. The cold adoption call is separate from recorded command chunks. Only
+the unix provider converts the nonzero `layer` value to a borrowed
+`CAMetalLayer` reference.
+
+If `QUERYESCSUPPORT` fails, dxmt9 may use the old `macdrv_functions` or direct-
+symbol path only for an exact Wine build declared and proven as
+`legacy-macdrv-symbols`. There is no generic `dlsym` fallback for current Wine
+11.x builds.
+
+## 2. Swap-Chain Lifecycle
 
 ### 2.1 Creation
 
 At `CreateDevice()` or `CreateAdditionalSwapChain()`:
 
-1. Resolve `HWND` to either:
-   - `NSView*` directly through `macdrv_get_cocoa_view(hwnd)`, or
-   - `WineWindow* -> contentView -> WineMetalView -> CAMetalLayer*` through the
-     `macdrv_functions` fallback path.
-2. If using the legacy `NSView*` path, create and attach a `CAMetalLayer` as
-   the view's backing layer:
+1. Validate and normalize `D3DPRESENT_PARAMETERS`.
+2. Acquire the Wine client surface and layer for the selected `HWND`.
+3. Pass the opaque layer token through the cold PE/unix adoption call.
+4. Configure the borrowed layer and create the dxmt9-owned back buffer.
+5. Store the Wine surface token in PE and an opaque presenter handle in the
+   swap chain.
 
-   ```objc
-   CAMetalLayer *layer = [CAMetalLayer layer];
-   layer.device = mtlDevice;
-   layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-   layer.drawableSize = CGSizeMake(pp.BackBufferWidth, pp.BackBufferHeight);
-   layer.displaySyncEnabled = (pp.PresentationInterval != D3DPRESENT_INTERVAL_IMMEDIATE);
-   layer.maximumDrawableCount = 3;
-   layer.framebufferOnly = YES;
-   nsView.wantsLayer = YES;
-   nsView.layer = layer;
-   ```
+Failure to acquire or adopt the layer fails a windowed presenting swap chain
+with `D3DERR_NOTAVAILABLE`. It must not return a device that silently presents
+to no window.
 
-3. If using the `WineMetalView` fallback path, store the returned
-   `WineMetalView*` unix-side for later release and use its `CAMetalLayer*`
-   directly.
-4. Store an opaque presentation handle in the PE-side `SwapChain`.
+### 2.2 Reset and Rebind
 
-### 2.2 Resize
-
-When `Reset()` or `IDirect3DSwapChain9::Reset()` is called with new dimensions:
-
-1. Drain all in-flight command buffers or fence the old drawable resources.
-2. Update `layer.drawableSize`.
-3. Recreate the back-buffer `MTLTexture` at the new size.
-
-Resize can also be triggered by `NSViewFrameDidChangeNotification`. In windowed
-mode this is handled silently. In fullscreen mode it may surface as
-`D3DERR_DEVICELOST`.
+Reset acquires and validates the replacement surface first. The unix provider
+then stops old drawable acquisition, drains or fences old layer users, and
+atomically adopts the replacement. PE releases the old Wine surface only after
+successful adoption. A failed candidate is released and the old valid binding
+is preserved when D3D9 reset semantics allow rollback.
 
 ### 2.3 Destruction
 
-On device release, swap-chain destruction, or reset replacement:
+On swap-chain or device destruction:
 
-1. Drain or fence GPU work that can reference the old drawable/back buffer.
-2. Release the unix-side `WineMetalView*` or detach the legacy `CAMetalLayer`.
-3. Clear the PE-side opaque presentation handle.
+1. Stop drawable acquisition.
+2. Drain or fence every command buffer that can reference the layer.
+3. Destroy the unix presenter binding and return success to PE.
+4. Issue `MACDRV_ESCAPE_RELEASE_SURFACE` exactly once with the retained surface
+   token, then clear the PE token even if Wine reports a release failure.
 
----
+Wine owns the client surface and `CAMetalLayer`. dxmt9 borrows the layer and
+must never independently release it.
 
-## 3. Windowed, Fullscreen, and Pixel Format
+## 3. Presentation and Resize
 
-Windowed mode sets `layer.drawableSize` from the normalized back-buffer width and
-height. `displaySyncEnabled` follows `PresentationInterval`.
+Windowed mode sets `drawableSize` from the normalized back-buffer dimensions.
+`displaySyncEnabled` follows `PresentationInterval`. Host-view resize may update
+the drawable size without making a windowed device lost; reset still recreates
+the back-buffer texture after old GPU use is quiescent.
 
-Fullscreen is not part of the initial implementation target. A future exclusive
-fullscreen path requires `NSScreen` mode switching and `CGDisplayCapture`.
+The back buffer and drawable are distinct Metal objects. The back buffer is a
+dxmt9-owned `MTLTexture`; `nextDrawable` is acquired only during present, and
+the back buffer is copied or converted into the drawable. Consequently,
+`DXMT9_LAYER_FRAMEBUFFER_ONLY` changes drawable policy but not D3D9 back-buffer
+lock or readback behavior.
 
-`CAMetalLayer.pixelFormat` is always `MTLPixelFormatBGRA8Unorm`. The back buffer
-is an internal `MTLTexture` and is blitted to the BGRA drawable during present.
-`D3DFMT_A8R8G8B8` and `D3DFMT_X8R8G8B8` are direct copies; other formats require
-a format-conversion pass.
+Fullscreen is outside the initial target and may fail cleanly with
+`D3DERR_NOTAVAILABLE`. A future exclusive-fullscreen path requires an explicit
+display-mode and surface-rebind contract.
 
----
+## 4. PE / Unix Ownership
 
-## 4. PE Bridge and Unix Module Split
-
-The Wine-facing runtime follows the upstream DXMT `winemetal` split. API DLLs
-remain PE images loaded by the Windows application, while ObjC/Metal work is
-hosted by the paired Wine unix module:
-
-| Binary | Kind | Role |
+| Binary | Kind | WSI responsibility |
 |---|---|---|
-| `d3d9.dll` | PE DLL | D3D9 COM exports, D3D9 state shadow, hot-path POD command recording |
-| `winemetal.dll` | Wine builtin PE DLL | Shared bridge/service DLL for unix-call dispatch and chunk/resource/frame-token ABI |
-| `winemetal.so` | Wine unix module | ObjC/Metal WSI, shader translation, provider/runtime handlers, and GPU execution |
+| `d3d9.dll` | PE DLL | D3D9 COM surface, `HWND`/HDC and `ExtEscape`, Wine surface-token lifetime |
+| `winemetal_dxmt9.dll` | PE bridge | Validate and dispatch cold WSI adoption plus the generated dxmt9 ABI |
+| `winemetal_dxmt9.so` | Wine unixlib | Borrow `CAMetalLayer`, own presenter state, drawable acquisition, Metal execution |
 
-`d3d9.dll` imports `winemetal.dll` as a normal Windows dependency.
-`winemetal.dll` communicates with `winemetal.so` through Wine's PE/unix thunk
-mechanism. No PE DLL imports a Mach-O `.dylib` or `.so` as a Windows DLL.
+Recorded draw/state/resource packets remain pointer-free. The two Wine-issued
+64-bit values cross only through the dedicated cold WSI bootstrap/rebind call
+defined by `R-CORE-WSI-4.1` and never enter `CommandChunk`.
 
-All window/layer functions (`get_view`, `create_layer`, `resize_layer`,
-`set_sync`, `destroy_layer`, `next_drawable`, `present_drawable`) live in
-`winemetal.so`. The PE side owns COM entry points, D3D9 state tracking, POD
-command chunk construction, opaque handles, C ABI forwarding, and Wine-visible
-thunk entry points.
+The suffix-qualified bridge names are required for upstream DXMT coexistence.
+Upstream DXMT may continue to own `winemetal.dll` / `winemetal.so`; dxmt9 must
+load only `winemetal_dxmt9.dll` / `winemetal_dxmt9.so` and verify its own ABI
+handshake.
 
----
+## 5. Deployment and Qualification
 
-## 5. Initialization and Deployment
+The runtime layout is:
 
-On the common macOS Wine64 / Rosetta path:
+- `d3d9.dll` in the selected Wine Windows or application-local directory;
+- `winemetal_dxmt9.dll` in the matching Wine Windows or application-local
+  directory;
+- `winemetal_dxmt9.so` in the Wine unixlib or application-local directory.
 
-- `d3d9.dll` target: `x86_64-w64-mingw32`
-- `winemetal.dll` target: `x86_64-w64-mingw32`
-- `winemetal.so` target: host-side x86_64 Mach-O module loaded through Wine's
-  unix loader path
+The filename split does not make an unmodified Wine runtime compatible. The
+primary WSI path additionally requires a Wine revision that implements the
+accepted surface escape protocol. Until then, current Gcenx/Heroic Wine 11.x
+without the Wine change is unsupported, while an exact Wine build qualified as
+`legacy-macdrv-symbols` must retain the existing `macdrv_functions` fallback.
 
-`d3d9.dll` initializes the D3D9 wrapper state and PE-side command recorder during
-process attach, then relies on `winemetal.dll` for Wine unix-call dispatch.
-`winemetal.so` resolves `macdrv_get_cocoa_view` or the fallback
-`macdrv_functions` table on demand and owns all Metal device, queue, shader, and
-presentation state.
+## 6. Evidence
 
-The primary supported host is x86_64 Wine under Rosetta 2 on Apple Silicon with
-Wine unixlib support, `winemac.drv`, and the standard `x86_64-windows` and
-`x86_64-unix` runtime directories. Heroic Wine with the builtin-module layout is
-the confirmed host. GPTK 1.1 / Wine 7.7 is not supported because it lacks the
-required unixlib bridge path.
+Qualification must record:
 
-Current installation layout:
-
-- `d3d9.dll` in `<wine-prefix>/drive_c/windows/system32`
-- `winemetal.dll` in `<wine-root>/lib/wine/x86_64-windows`
-- `winemetal.so` in `<wine-root>/lib/wine/x86_64-unix`
-
-`winemetal.dll` is not copied into `system32` by default. It is a shared Wine
-builtin bridge/service module, matching upstream DXMT's deployment shape.
+- the exact Wine root and surface-protocol declaration;
+- observed acquisition path (`extescape-v1`, `legacy-macdrv-symbols`, or
+  `unavailable`);
+- x64 and WoW64 creation, present, reset, and balanced destruction;
+- loaded paths and ABI handshake for both suffix-qualified dxmt9 modules;
+- a negative unsupported-Wine run that fails without a crash or black window;
+- an upstream DXMT coexistence run proving independent D3D9 and D3D11 WSI.

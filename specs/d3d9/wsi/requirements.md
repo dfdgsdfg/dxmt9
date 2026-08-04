@@ -27,10 +27,13 @@ Each swap chain stores the caller-visible `HWND` used for presentation and an
 opaque backend presentation handle when a host view/layer can be resolved.
 Backend handles must remain opaque across the PE/unix bridge.
 
-If no host view or presentation layer can be resolved for the `HWND`, device
-creation may still succeed when the rest of the presentation parameters are
-valid. `Present` becomes a no-window no-op that preserves device usability for
-offscreen rendering and readback.
+**R-CORE-WSI-1.1** A windowed, presenting swap chain must acquire its Wine
+client surface and borrowed `CAMetalLayer` through the protocol defined by
+`R-WMB-12.1`-`R-WMB-12.6`. If no supported protocol can resolve a presentation
+layer for the `HWND`, device or swap-chain creation must fail cleanly with
+`D3DERR_NOTAVAILABLE`. It must not create a device whose `Present` silently
+becomes a no-window no-op. A future explicitly offscreen creation mode may
+define different behavior under a separate requirement.
 
 ---
 
@@ -65,9 +68,9 @@ ignored. Base `Present()` follows the same full-buffer presentation behavior.
 
 Presenting to a valid window commits the current command chunk and obtains a
 backend drawable/frame token as required by the command queue and frame-latency
-contracts. Presenting with no resolved window must still perform required
-ordering work, then return a Windows-compatible success or device-status
-`HRESULT` without dereferencing null host-window state.
+contracts. Loss of an already bound layer must follow the reset/rebind or
+device-status path. It must return a Windows-compatible failure or device-status
+`HRESULT` without dereferencing stale host-window state.
 
 `R-CORE-10.8` requires `CheckDeviceState(hDestinationWindow)` to return `D3D_OK`
 while the Ex device is operational, `S_PRESENT_OCCLUDED` when the destination
@@ -88,10 +91,16 @@ The PE side owns D3D9 COM lifetimes and stores only opaque backend handles for
 WSI objects. Cocoa objects, Metal objects, and unix-side C++ objects remain
 unix-side implementation details.
 
-Bridge payload constraints follow `R-CORE-11.4`. Recorded chunks and WSI bridge
-calls must contain POD command records, scalar payloads, and opaque handles only.
-No Objective-C object pointer, COM pointer, unix-side C++ object pointer, or
-executable payload may cross the PE/unix boundary.
+Bridge payload constraints follow `R-CORE-11.4`. Recorded chunks must contain
+POD command records, scalar payloads, and opaque handles only. No Objective-C
+object pointer, COM pointer, unix-side C++ object pointer, or executable payload
+may enter a recorded chunk or hot-path replay schema.
+
+**R-CORE-WSI-4.1** The dedicated cold WSI bootstrap/rebind call is the sole
+exception for Wine-issued presentation tokens. It may transport the fixed-width
+opaque client-surface and borrowed-layer values defined by `R-WMB-12.2`, but PE
+code must never dereference or retain Objective-C ownership of them. Adoption,
+quiescence, replacement, and release must follow `R-WMB-12.3`-`R-WMB-12.6`.
 
 ---
 

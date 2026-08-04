@@ -1,33 +1,25 @@
 ---
 type: "Spec Requirements"
-title: "winemetal Requirements — Wine macdrv Symbol Bridge"
-description: "Winemetal requirements and compatibility contracts."
+title: "winemetal Requirements — Wine Metal Surface Bridge"
+description: "ExtEscape and legacy macdrv compatibility contracts for Wine Metal surfaces."
 tags: [specs, winemetal, requirements]
 ---
 
-# winemetal Requirements — Wine macdrv Symbol Bridge
+# winemetal Requirements — Wine Metal Surface Bridge
 
-This spec governs how dxmt9 reaches the macOS-side Cocoa/Metal helpers
-inside Wine's `winemac.drv` so the presenter can attach a `CAMetalLayer`
-to the game's `NSView`. It is a sibling to `specs/d3d9/wsi/` (which
-covers the D3D9-side WSI semantics) and to
-`specs/experiments/runtime/` (which covers Wine root manifest mechanics).
+This spec governs how dxmt9 obtains a Wine-owned `CAMetalLayer` for a Win32
+`HWND`. D3D9-visible swap-chain behavior remains owned by `specs/d3d9/wsi/`;
+artifact discovery remains owned by `specs/deploy/`.
 
-dxmt9 calls into a handful of `winemac.drv` helpers (`get_win_data`,
-`macdrv_view_create_metal_view`, `macdrv_view_get_metal_layer`, etc.).
-Upstream Wine 11.7 removed the `visibility(default)` attribute from
-those helpers — the implementations still exist inside `winemac.so`,
-they are no longer dlsym-reachable, and Wine's `__wine_unix_call_funcs[]`
-table for `winemac.drv` has only two slots (`unix_init`,
-`unix_quit_result`). dxmt9 therefore cannot get a Metal layer attached
-on a stock Wine 11.7 build; the game renders to an offscreen drawable
-and the user sees a black window.
-
-Upstream dxmt (3Shain) takes the same approach: it documents that the
-operator must build Wine with those symbols re-exposed, and points at
-CrossOver Wine 24+ as a known-good build. dxmt9 adopts the same model —
-maintain a small Wine patch, document it, and detect missing exports at
-runtime instead of failing silently.
+Sections 1-10 preserve the implemented legacy macdrv symbol-bridge contract and
+its stable requirement IDs. That contract applies only to exact Wine builds
+qualified as `legacy-macdrv-symbols`; it is not the forward compatibility
+strategy for current Wine 11.x. Sections 11-18 define the primary `ExtEscape`
+surface protocol proposed by [Wine MR !11058](https://gitlab.winehq.org/wine/wine/-/merge_requests/11058)
+and consumed by [upstream DXMT PR #166](https://github.com/3Shain/dxmt/pull/166).
+Numeric values and wire layout remain revision-pinned until Wine accepts and
+merges a stable interface. Where a legacy requirement conflicts with
+`R-WMB-11`-`R-WMB-17`, the newer requirement controls all non-legacy runtimes.
 
 ---
 
@@ -399,3 +391,193 @@ responsibility.
 **R-WMB-10.B.3** Cross-reference: the 3Shain dxmt geek guide lives at
 https://github.com/3Shain/dxmt/wiki/DXMT-Installation-Guide-for-Geeks.
 That guide is normative for the source-build workflow on macOS.
+
+---
+
+## 11. ExtEscape Scope
+
+**R-WMB-11.1** This spec covers the control-plane path from a PE-side `HWND` to a
+Wine-owned client-surface token and `CAMetalLayer` token, their transfer to the
+unix presenter, and their ordered release.
+
+**R-WMB-11.2** This spec does not authorize PE code to call Metal or Objective-C,
+does not put host pointers in recorded command chunks, and does not make dxmt9
+responsible for implementing the Wine-side escape handler in an upstream Wine
+tree.
+
+**R-WMB-11.3** The protocol is macOS-only. Other hosts must reject the macOS WSI
+path without changing their D3D9 loader behavior.
+
+## 12. Primary `ExtEscape` Protocol
+
+**R-WMB-12.1** The PE D3D9 WSI control path must query
+`QUERYESCSUPPORT(MACDRV_ESCAPE_GET_SURFACE)` on an HDC obtained for the target
+`HWND` before issuing `MACDRV_ESCAPE_GET_SURFACE`.
+
+**R-WMB-12.2** A successful get-surface response must contain a fixed-width POD
+payload with exactly two opaque 64-bit values:
+
+- a Wine client-surface token retained by `winemac.drv`;
+- a borrowed `CAMetalLayer` token whose validity is pinned by that surface.
+
+The PE side must treat both values as opaque integers. It must not dereference,
+retain, release, message, or otherwise interpret either host object.
+
+**R-WMB-12.3** The layer token may cross the PE/unix boundary only in a dedicated,
+cold WSI bootstrap or rebind call. It must not appear in `CommandChunk`, draw,
+state, resource, query, or shader records and must never be persisted as part of
+a schema-stable hot-path packet.
+
+**R-WMB-12.4** The unix presenter may convert the nonzero layer token to a
+borrowed `CAMetalLayer` reference only after PE observes a positive escape
+result and validates both returned tokens. Wine retains ownership. dxmt9 must
+not release the layer independently of the associated Wine surface.
+
+**R-WMB-12.5** `MACDRV_ESCAPE_RELEASE_SURFACE` must be issued exactly once for
+every successfully acquired surface token. Before release, the unix presenter
+must stop drawable acquisition and drain or fence every command buffer that can
+reference the layer. PE then releases the surface through the HDC/`ExtEscape`
+path after the unix teardown or rebind call returns.
+
+**R-WMB-12.6** A reset or additional-swap-chain rebind must not expose a half-
+updated pair. The new surface is acquired and validated first; the unix
+presenter atomically adopts it or reports failure; only then may PE release the
+old surface. Failure preserves the old valid binding when D3D9 reset semantics
+permit it.
+
+## 13. Protocol Schema and Provenance
+
+**R-WMB-13.1** dxmt9 must keep the escape names (currently values 6790 and 6791),
+payload size, field widths, and release semantics in one declaration-only
+compatibility header. PE and native tests must consume that header rather than
+duplicating magic escape numbers.
+
+**R-WMB-13.2** The compatibility header must identify the Wine commit or merged
+Wine release that defines the protocol and carry Wine LGPL attribution when it
+derives declarations from Wine source. It must contain no Wine implementation
+code.
+
+**R-WMB-13.3** Each supported Wine runtime entry must record an exact Metal
+surface protocol value:
+
+```toml
+metal_surface_protocol = "extescape-v1" # extescape-v1 | legacy-macdrv-symbols | unsupported | unknown
+```
+
+`extescape-v1` requires a successful runtime `QUERYESCSUPPORT`; a manifest
+claim alone must never bypass the probe.
+
+## 14. Legacy macdrv Symbol Fallback
+
+**R-WMB-14.1** When `MACDRV_ESCAPE_GET_SURFACE` is not supported, dxmt9 may use
+the existing `macdrv_functions` / direct-symbol path only for a Wine build that
+is explicitly pinned as `legacy-macdrv-symbols` and has end-to-end WSI evidence.
+
+**R-WMB-14.2** Symbol visibility alone is not sufficient qualification for Wine
+11.x. A runtime is incompatible with the legacy path if unixlibs are loaded
+`RTLD_LOCAL`, if `macdrv_win_data` differs from the layout expected by the
+consumer, or if no persistent client view exists when the swap chain is created.
+
+**R-WMB-14.3** The historical `visibility("default")` patch and
+`requires_patch` / `patch_status` manifest fields are legacy-only compatibility
+surfaces. They must not be documented as the strategic fix for current Gcenx or
+upstream Wine 11.x builds. Version-specific patch files may remain as archival
+and reproducibility material for already-qualified legacy runtimes.
+
+## 15. Runtime Selection and Compatibility
+
+**R-WMB-15.1** WSI acquisition order is fixed:
+
+1. probe and use `extescape-v1`;
+2. use the legacy symbol path only for an explicitly qualified runtime;
+3. fail with `D3DERR_NOTAVAILABLE` and one diagnostic.
+
+There is no silent offscreen-present fallback for a windowed device that
+requires presentation.
+
+**R-WMB-15.2** The compatibility manifest and run result must record both the
+declared protocol and the observed acquisition path. The observed value is one
+of `extescape-v1`, `legacy-macdrv-symbols`, or `unavailable`.
+
+**R-WMB-15.3** As of the contract baseline, these runtime classes are interpreted
+as follows:
+
+| Wine runtime | Protocol status | Qualification |
+|---|---|---|
+| Wine revision containing the accepted `MACDRV_ESCAPE_*_SURFACE` interface | target | Runtime query, x64/WoW64 smoke, resize, teardown, and present evidence required |
+| Current Gcenx/Heroic Wine 11.x without that Wine change | unsupported | Must fail the probe cleanly; the Heroic `-DXMT` suffix alone is not qualification |
+| Exact audited Wine build with a validated `macdrv_functions` ABI | required legacy fallback | Must use the legacy path only for a manifest entry qualified as `legacy-macdrv-symbols` |
+| Self-built Wine carrying only the old visibility patch | unknown | Must not be accepted until loader visibility, layout, and client-view lifetime are all proven |
+
+**R-WMB-15.4** A new Wine minor version is unsupported until its protocol probe,
+payload layout, surface lifetime, and both PE architectures are revalidated. A
+matching filename or successful `nm` symbol audit is not sufficient evidence.
+
+**R-WMB-15.5** The existing `macdrv_functions` acquisition path is a required
+legacy fallback for every exact Wine manifest entry qualified as
+`legacy-macdrv-symbols`. A failed `QUERYESCSUPPORT` probe on such an entry must
+continue into that fallback; it must not be treated as terminal
+incompatibility. The `winemetal_dxmt9.*` rename and the addition of ExtEscape
+must not change this Wine-facing fallback behavior. Individual Wine
+distributions are evidence fixtures, not part of the protocol name or contract.
+
+## 16. Failure and Diagnostics
+
+**R-WMB-16.1** A failed `GetDC`, `QUERYESCSUPPORT`, get-surface escape, response
+size check, zero layer token, unix adoption, or release must produce one scoped
+diagnostic containing the stage, `HWND`, Wine version/root when known, and Wine
+or GDI status.
+
+**R-WMB-16.2** Unsupported acquisition must fail device or swap-chain creation
+with `D3DERR_NOTAVAILABLE` (or the closest already-established creation error).
+It must not report success while presenting to an offscreen drawable.
+
+**R-WMB-16.3** Release errors must not cause double release. After a release
+attempt, the PE token state is cleared and the failure is logged; unix objects
+must already be quiescent.
+
+**R-WMB-16.4** dxmt9 must emit one machine-readable line per acquired binding:
+
+```text
+[dxmt9-wsi] layer_acquisition=<extescape-v1|legacy-macdrv-symbols|unavailable> hwnd=0x<hex>
+```
+
+The experiment harness must preserve this value in `result.json`.
+
+## 17. Verification
+
+**R-WMB-17.1** Native protocol tests must cover payload size/width, zero tokens,
+unsupported `QUERYESCSUPPORT`, get failure, unix-adoption rollback, and exactly-
+once release without loading Wine or Metal.
+
+**R-WMB-17.2** Wine integration evidence must cover:
+
+- successful creation/present/destruction on x64;
+- the same flow from a 32-bit PE process under WoW64;
+- reset/rebind with an in-flight frame;
+- additional swap chains on distinct `HWND`s;
+- unsupported-Wine failure without a crash or black-window success;
+- repeated create/destroy proving balanced surface acquisition and release.
+
+**R-WMB-17.3** A coexistence run with upstream DXMT installed must prove that
+DXMT's D3D11 WSI and dxmt9's D3D9 WSI can both initialize without sharing bridge
+module identity. Artifact-name ownership is specified by `R-DEPLOY-2.11`.
+
+**R-WMB-17.4** Every ExtEscape or bridge-module rename change must pass builtin
+x64 and WoW64 WSI smoke through the existing `macdrv_functions` fallback on at
+least one exact audited `legacy-macdrv-symbols` runtime before rollout. Evidence
+must show the suffix-qualified dxmt9 modules, an ABI-hash handshake,
+`layer_acquisition=legacy-macdrv-symbols`, successful device creation, and at
+least one successful present. This gate does not claim app-local support on a
+runtime that lacks `MemoryWineLoadUnixLibByName`; app-local support remains
+governed by `R-DEPLOY-3.2`-`R-DEPLOY-3.8` and
+`R-DEPLOY-6.2`-`R-DEPLOY-6.6`.
+
+## 18. Non-Goals
+
+- No Vulkan/MoltenVK presentation fallback.
+- No dependence on Wine private struct offsets in the primary path.
+- No automatic acceptance of an unmerged Wine MR as a stable ABI.
+- No bundling of a patched Wine runtime under the MIT-only dxmt9 artifact set;
+  any separately distributed Wine derivative remains LGPL-compliant and
+  version-pinned.

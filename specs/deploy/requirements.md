@@ -10,8 +10,8 @@ tags: [specs, deploy, requirements]
 dxmt9 must support two deployment modes:
 
 - **Wine runtime install:** the current dxmt-style installation where
-  `d3d9.dll`, `winemetal.dll`, and `winemetal.so` are installed into a Wine
-  runtime/prefix.
+  `d3d9.dll`, `winemetal_dxmt9.dll`, and `winemetal_dxmt9.so` are installed into
+  a Wine runtime/prefix.
 - **Application-local install:** a DXVK-style layout where placing dxmt9's
   `d3d9.dll` next to a game's `.exe` makes Wine load that DLL through normal
   native DLL search rules, without modifying the Wine runtime.
@@ -28,12 +28,12 @@ set:
 
 - `d3d9.dll` in the Wine Windows runtime directory for the target PE
   architecture, e.g. `lib/wine/x86_64-windows/` or `lib/wine/i386-windows/`.
-- `winemetal.dll` in the matching Wine Windows runtime directory.
-- `winemetal.so` in the Wine unix runtime directory, e.g.
+- `winemetal_dxmt9.dll` in the matching Wine Windows runtime directory.
+- `winemetal_dxmt9.so` in the Wine unix runtime directory, e.g.
   `lib/wine/x86_64-unix/` or `lib/wine/aarch64-unix/`.
 
 **R-DEPLOY-1.2** Runtime install may also mirror `d3d9.dll` and
-`winemetal.dll` into the prefix Windows directories (`system32` and, for
+`winemetal_dxmt9.dll` into the prefix Windows directories (`system32` and, for
 WoW64, `syswow64`) to match the existing installer workflow.
 
 **R-DEPLOY-1.3** Runtime install must work with the builtin Wine load order,
@@ -47,8 +47,8 @@ executable:
 ```text
 Game.exe
 d3d9.dll
-winemetal.dll
-winemetal.so
+winemetal_dxmt9.dll
+winemetal_dxmt9.so
 ```
 
 Additional PE runtime dependency DLLs, if any, must also be staged in this
@@ -95,15 +95,15 @@ called.
 metadata. It must be loadable as an ordinary PE DLL from the application
 directory.
 
-**R-DEPLOY-2.4** `winemetal.dll` must also be built in two variants:
+**R-DEPLOY-2.4** `winemetal_dxmt9.dll` must also be built in two variants:
 
-- a Wine-builtin variant paired with runtime `winemetal.so`;
+- a Wine-builtin variant paired with runtime `winemetal_dxmt9.so`;
 - a native PE variant that can be loaded from the application directory.
 
 **R-DEPLOY-2.5** In application-local mode, `d3d9.dll` must resolve
-`winemetal.dll` from the application-local directory by controlled dynamic
+`winemetal_dxmt9.dll` from the application-local directory by controlled dynamic
 loading (`LoadLibrary` / `GetProcAddress`) or an equivalent delay-load path with
-a failure hook. It must not statically import `winemetal.dll` in a way that
+a failure hook. It must not statically import `winemetal_dxmt9.dll` in a way that
 turns a missing bridge DLL into a process loader failure before
 `Direct3DCreate9`. The app-local bridge DLL path must be derived from the
 loaded `d3d9.dll` module path (`GetModuleFileNameW(d3d9_hmodule)`), not from
@@ -112,7 +112,7 @@ path with `LoadLibraryExW` and flags that allow dependent PE DLLs to resolve
 from that sibling directory, such as `LOAD_WITH_ALTERED_SEARCH_PATH` or
 `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` plus default directories.
 
-**R-DEPLOY-2.6** `winemetal.so` must remain a Wine unixlib provider exporting
+**R-DEPLOY-2.6** `winemetal_dxmt9.so` must remain a Wine unixlib provider exporting
 `__wine_unix_call_funcs` and, where supported, `__wine_unix_call_wow64_funcs`.
 
 **R-DEPLOY-2.7** The same unix provider must be usable by both the runtime
@@ -129,24 +129,32 @@ architecture:
 | 32-bit Windows process under WoW64 | `i386-windows` | host Wine unix arch with wow64 unix-call table |
 
 **R-DEPLOY-2.9** Any non-Wine PE runtime dependency of `d3d9.dll` or
-`winemetal.dll` must be either statically linked or included in the deployment
-manifest. Hidden dependencies on a local developer toolchain directory are not
-allowed.
+`winemetal_dxmt9.dll` must be either statically linked or included in the
+deployment manifest. Hidden dependencies on a local developer toolchain
+directory are not allowed.
 
-**R-DEPLOY-2.10** Any unix-side dynamic dependency of `winemetal.so` must be
+**R-DEPLOY-2.10** Any unix-side dynamic dependency of `winemetal_dxmt9.so` must be
 declared in the deployment manifest. Wine runtime dependencies such as
 `winemac.so` and `ntdll.so` may be provided by the target Wine runtime, but the
 provider must not retain absolute references to a developer build tree that are
 not valid on the target machine.
 
+**R-DEPLOY-2.11** dxmt9 owns the qualified module basenames
+`winemetal_dxmt9.dll` and `winemetal_dxmt9.so`. A dxmt9 package must not install
+or overwrite the unqualified `winemetal.dll` or `winemetal.so` basenames owned
+by upstream DXMT. The distinct PE and unix module identities, dispatch tables,
+and ABI handshakes must permit both products to be installed in one Wine
+runtime and loaded in one process without binding one product to the other's
+provider.
+
 ---
 
 ## 3. Unix Provider Discovery
 
-**R-DEPLOY-3.1** The PE `winemetal.dll` bridge must support the current builtin
+**R-DEPLOY-3.1** The PE `winemetal_dxmt9.dll` bridge must support the current builtin
 unixlib discovery path for runtime install.
 
-**R-DEPLOY-3.2** The PE `winemetal.dll` bridge must support application-local
+**R-DEPLOY-3.2** The PE `winemetal_dxmt9.dll` bridge must support application-local
 unix provider discovery. It must not rely solely on the Wine builtin module's
 stored unixlib path.
 
@@ -159,15 +167,15 @@ before package-local candidates.
 default search order:
 
 1. An explicit override path from `DXMT9_WINEMETAL_SO`.
-2. `winemetal.so` next to the loaded `winemetal.dll`.
-3. `winemetal.so` next to the process executable.
+2. `winemetal_dxmt9.so` next to the loaded `winemetal_dxmt9.dll`.
+3. `winemetal_dxmt9.so` next to the process executable.
 
 **R-DEPLOY-3.5** Wine runtime provider fallback by unixlib name is allowed only
 when explicitly enabled, for example with
 `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=1`. In app-local mode this fallback must
 run after all package-local candidates fail and must be logged as a fallback.
 
-**R-DEPLOY-3.6** When a candidate `winemetal.so` is found, the bridge must load
+**R-DEPLOY-3.6** When a candidate `winemetal_dxmt9.so` is found, the bridge must load
 it through Wine's unixlib loader, not by directly calling provider functions
 from PE code.
 
@@ -175,7 +183,7 @@ from PE code.
 for the process lifetime. Every generated `dxmt9c_*` client call must dispatch
 through that handle.
 
-**R-DEPLOY-3.8** If no usable `winemetal.so` can be found, D3D9 creation must
+**R-DEPLOY-3.8** If no usable `winemetal_dxmt9.so` can be found, D3D9 creation must
 fail cleanly with diagnostic logging that includes the candidate paths and
 Wine status codes.
 
@@ -199,6 +207,11 @@ runtime-installed or Wine-provided D3D9 path.
 **R-DEPLOY-4.4** The package must not require users to rename the D3D9 entry
 DLL. The user-facing file name is always `d3d9.dll`.
 
+**R-DEPLOY-4.5** Any bridge-specific loader override or diagnostic instruction
+must name `winemetal_dxmt9`, never the unqualified `winemetal` module. A dxmt9
+install must not require a global override that changes how upstream DXMT's
+bridge is selected.
+
 ---
 
 ## 5. Packaging and Installation
@@ -221,8 +234,10 @@ they overwrite in a Wine runtime or prefix.
 - artifact names and architectures;
 - source build directory or version string;
 - checksum of each staged binary;
-- bridge ABI hash shared by `d3d9.dll`, `winemetal.dll`, and `winemetal.so`;
+- bridge ABI hash shared by `d3d9.dll`, `winemetal_dxmt9.dll`, and
+  `winemetal_dxmt9.so`;
 - provider schema/version identifier;
+- required Wine Metal-surface protocol;
 - whether `__wine_unix_call_wow64_funcs` is present;
 - minimum supported Wine version or unixlib feature level;
 - required Wine unix architecture;
@@ -243,20 +258,27 @@ no dxmt9 runtime installation, stage the app-local artifacts next to a D3D9
 smoke executable, and run without a builtin `d3d9` override.
 
 **R-DEPLOY-6.3** Application-local verification must prove that the loaded
-`d3d9.dll`, `winemetal.dll`, and `winemetal.so` came from the intended
-application-local package.
+`d3d9.dll`, `winemetal_dxmt9.dll`, and `winemetal_dxmt9.so` came from the
+intended application-local package.
 
-**R-DEPLOY-6.4** Missing-provider verification must remove `winemetal.so` from
-the app-local package and run with runtime provider fallback disabled. The
-result must be an explicit diagnostic failure, not a crash or silent fallback
-to an unrelated provider.
+**R-DEPLOY-6.4** Missing-provider verification must remove
+`winemetal_dxmt9.so` from the app-local package and run with runtime provider
+fallback disabled. The result must be an explicit diagnostic failure, not a
+crash or silent fallback to an unrelated provider.
 
 **R-DEPLOY-6.5** WoW64 verification must run a 32-bit D3D9 smoke executable
 with the 32-bit PE app-local DLLs and the host unix provider when the target
 Wine runtime supports WoW64.
 
 **R-DEPLOY-6.6** Application-local verification must confirm that
-`winemetal.so` resolves its unix-side dependencies from the intended package or
-target Wine runtime. It must not resolve `winemac.so`, `ntdll.so`, or equivalent
-Wine runtime libraries from a developer build directory unless that build
-directory is explicitly the target Wine runtime under test.
+`winemetal_dxmt9.so` resolves its unix-side dependencies from the intended
+package or target Wine runtime. It must not resolve `winemac.so`, `ntdll.so`, or
+equivalent Wine runtime libraries from a developer build directory unless that
+build directory is explicitly the target Wine runtime under test.
+
+**R-DEPLOY-6.7** Coexistence verification must install upstream DXMT's
+`winemetal.dll` / `winemetal.so` beside dxmt9's qualified bridge/provider pair,
+then prove loaded module paths and ABI handshakes for both products. The test
+must exercise a DXMT-backed D3D10/11 application and a dxmt9-backed D3D9
+application sequentially in the same prefix and, where a combined fixture is
+available, in the same process.

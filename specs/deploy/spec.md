@@ -18,23 +18,23 @@ runtime:
 flowchart TD
     subgraph Runtime["Wine runtime install"]
         RD9["lib/wine/*-windows/d3d9.dll\nbuiltin PE"]
-        RWM["lib/wine/*-windows/winemetal.dll\nbuiltin PE bridge"]
-        RSO["lib/wine/*-unix/winemetal.so\nunix provider"]
+        RWM["lib/wine/*-windows/winemetal_dxmt9.dll\nbuiltin PE bridge"]
+        RSO["lib/wine/*-unix/winemetal_dxmt9.so\nunix provider"]
         RD9 --> RWM --> RSO
     end
 
     subgraph Local["Application-local install"]
         EXE["Game.exe"]
         LD9["./d3d9.dll\nnative PE"]
-        LWM["./winemetal.dll\nnative PE bridge"]
-        LSO["./winemetal.so\nunix provider"]
+        LWM["./winemetal_dxmt9.dll\nnative PE bridge"]
+        LSO["./winemetal_dxmt9.so\nunix provider"]
         EXE --> LD9 --> LWM --> LSO
     end
 
     subgraph Shared["Shared implementation"]
         PECORE["D3D9 PE COM frontend"]
         BRIDGE["generated dxmt9c_* unix-call client"]
-        PROVIDER["winemetal.so provider\nD3D9 core + Metal runtime"]
+        PROVIDER["winemetal_dxmt9.so provider\nD3D9 core + Metal runtime"]
     end
 
     RD9 --> PECORE
@@ -46,7 +46,7 @@ flowchart TD
 ```
 
 The runtime lane keeps the current dxmt workflow. The app-local lane adds a
-native PE `d3d9.dll` and native PE `winemetal.dll` so Wine can discover them
+native PE `d3d9.dll` and native PE `winemetal_dxmt9.dll` so Wine can discover them
 from the executable directory the same way DXVK-style DLL drops work.
 
 ---
@@ -56,11 +56,11 @@ from the executable directory the same way DXVK-style DLL drops work.
 | Lane | Artifact | Build form | Install location |
 |---|---|---|---|
 | Runtime | `d3d9.dll` | PE DLL postprocessed as Wine builtin | `<wine-root>/lib/wine/x86_64-windows/` or `i386-windows/` |
-| Runtime | `winemetal.dll` | PE DLL postprocessed as Wine builtin | matching `*-windows` runtime dir |
-| Runtime | `winemetal.so` | Wine unixlib provider | `<wine-root>/lib/wine/<host>-unix/` |
+| Runtime | `winemetal_dxmt9.dll` | PE DLL postprocessed as Wine builtin | matching `*-windows` runtime dir |
+| Runtime | `winemetal_dxmt9.so` | Wine unixlib provider | `<wine-root>/lib/wine/<host>-unix/` |
 | App-local | `d3d9.dll` | native PE DLL, no builtin postprocess | next to `Game.exe` |
-| App-local | `winemetal.dll` | native PE DLL, no builtin postprocess | next to `Game.exe` |
-| App-local | `winemetal.so` | Wine unixlib provider | next to `Game.exe` or explicit override path |
+| App-local | `winemetal_dxmt9.dll` | native PE DLL, no builtin postprocess | next to `Game.exe` |
+| App-local | `winemetal_dxmt9.so` | Wine unixlib provider | next to `Game.exe` or explicit override path |
 
 For a mixed package:
 
@@ -69,19 +69,19 @@ package/
   pe/
     x64/
       d3d9.dll
-      winemetal.dll
+      winemetal_dxmt9.dll
       libc++.dll        # only if dynamically required
       libunwind.dll     # only if dynamically required
     x86/
       d3d9.dll
-      winemetal.dll
+      winemetal_dxmt9.dll
       libc++.dll
       libunwind.dll
   unix/
     x86_64-unix/
-      winemetal.so
+      winemetal_dxmt9.so
     aarch64-unix/
-      winemetal.so
+      winemetal_dxmt9.so
   dxmt9-deploy.json
 ```
 
@@ -90,14 +90,32 @@ A final app-local staging directory for one executable is flat:
 ```text
 Game.exe
 d3d9.dll
-winemetal.dll
-winemetal.so
+winemetal_dxmt9.dll
+winemetal_dxmt9.so
 ```
 
 The staging step selects exactly one PE architecture and one matching Wine host
 unix provider from the manifest. A 32-bit game receives the 32-bit PE DLLs; a
 64-bit game receives the 64-bit PE DLLs. The unix provider is selected from the
 Wine host architecture, not from the Windows process bitness.
+
+### 2.1 Module Namespace and DXMT Coexistence
+
+The conventional API entry point remains `d3d9.dll`, because application DLL
+discovery requires that name. The private bridge/provider pair is suffix-
+qualified:
+
+| Product | PE bridge | Unix provider |
+|---|---|---|
+| upstream DXMT | `winemetal.dll` | `winemetal.so` |
+| dxmt9 | `winemetal_dxmt9.dll` | `winemetal_dxmt9.so` |
+
+The names are module identities, not packaging aliases. Installers must not
+create cross-product symlinks or copy a dxmt9 binary under an upstream DXMT
+basename. Each PE bridge must resolve only its matching unix provider and must
+perform its own ABI handshake before dispatch. This keeps D3D9 and D3D10/11
+translation independently loadable in one prefix and, when the application
+uses both API families, in one process.
 
 ---
 
@@ -123,8 +141,8 @@ Output consumed by the runtime installer:
 
 ```text
 build-win32-x64-builtin/src/win32/d3d9.dll
-build-win32-x64-builtin/src/winemetal/winemetal.dll
-build-x86_64-builtin/src/winemetal/unix/winemetal.so
+build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll
+build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so
 ```
 
 The installer copies those files into the Wine runtime and optionally mirrors
@@ -136,7 +154,7 @@ The app-local lane uses the same Windows cross toolchain and disables builtin
 post-processing, but that is not sufficient by itself. The native lane must
 also select a `d3d9.dll` target that uses the dynamic bridge resolver described
 in section 5. It must not link the D3D9 forwarder against an import dependency
-that creates a mandatory PE static import of `winemetal.dll`.
+that creates a mandatory PE static import of `winemetal_dxmt9.dll`.
 
 ```sh
 meson setup build-win32-x64-native \
@@ -154,13 +172,13 @@ Required packaging outputs:
 
 ```text
 build-win32-x64-native/src/win32/d3d9.dll
-build-win32-x64-native/src/winemetal/winemetal.dll
-build-x86_64-builtin/src/winemetal/unix/winemetal.so
+build-win32-x64-native/src/winemetal/winemetal_dxmt9.dll
+build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so
 ```
 
-The native `d3d9.dll` should dynamically resolve app-local `winemetal.dll`
+The native `d3d9.dll` should dynamically resolve app-local `winemetal_dxmt9.dll`
 instead of linking it as a mandatory static import. This keeps a missing
-`winemetal.dll` or provider load failure in the `Direct3DCreate9` failure path,
+`winemetal_dxmt9.dll` or provider load failure in the `Direct3DCreate9` failure path,
 where dxmt9 can log a useful diagnostic. Non-Wine runtime dependencies of
 `d3d9.dll` itself must still be packaged or statically linked, because the
 Windows loader can fail before dxmt9 code runs.
@@ -182,14 +200,14 @@ sequenceDiagram
     participant App as Game
     participant Wine as Wine loader
     participant D9 as builtin d3d9.dll
-    participant WM as builtin winemetal.dll
-    participant SO as runtime winemetal.so
+    participant WM as builtin winemetal_dxmt9.dll
+    participant SO as runtime winemetal_dxmt9.so
 
     App->>Wine: LoadLibrary("d3d9.dll") or implicit import
     Wine->>D9: load builtin d3d9.dll
     D9->>WM: generated bridge imports
     WM->>Wine: __wine_init_unix_call / builtin unixlib lookup
-    Wine->>SO: load runtime winemetal.so
+    Wine->>SO: load runtime winemetal_dxmt9.so
     D9->>WM: dxmt9c_factory_create()
     WM->>SO: __wine_unix_call(handle, opcode, args)
 ```
@@ -206,39 +224,39 @@ sequenceDiagram
     participant App as Game.exe directory
     participant Wine as Wine loader
     participant D9 as ./d3d9.dll
-    participant WM as ./winemetal.dll
-    participant SO as ./winemetal.so
+    participant WM as ./winemetal_dxmt9.dll
+    participant SO as ./winemetal_dxmt9.so
 
     App->>Wine: LoadLibrary("d3d9.dll") or implicit import
     Wine->>D9: load native PE d3d9.dll from app dir
     D9->>D9: derive sibling path from d3d9.dll HMODULE
-    D9->>Wine: LoadLibraryExW("<d3d9-dir>\\winemetal.dll")
-    Wine->>WM: load native PE winemetal.dll from app dir
+    D9->>Wine: LoadLibraryExW("<d3d9-dir>\\winemetal_dxmt9.dll")
+    Wine->>WM: load native PE winemetal_dxmt9.dll from app dir
     WM->>Wine: load unix provider by explicit path
-    Wine->>SO: load ./winemetal.so as unixlib
+    Wine->>SO: load ./winemetal_dxmt9.so as unixlib
     D9->>WM: dxmt9c_factory_create()
     WM->>SO: __wine_unix_call(provider_handle, opcode, args)
 ```
 
-The key difference from the runtime path is that the app-local `winemetal.dll`
-cannot depend on Wine builtin metadata to find `winemetal.so`. It needs its own
+The key difference from the runtime path is that the app-local `winemetal_dxmt9.dll`
+cannot depend on Wine builtin metadata to find `winemetal_dxmt9.so`. It needs its own
 provider locator.
 
-The `winemetal.dll` PE bridge must be loaded by absolute sibling path. The
+The `winemetal_dxmt9.dll` PE bridge must be loaded by absolute sibling path. The
 native `d3d9.dll` records its own `HMODULE` in `DllMain`, calls
 `GetModuleFileNameW(d3d9_hmodule)`, replaces the final component with
-`winemetal.dll`, and loads that absolute path with `LoadLibraryExW`. The load
+`winemetal_dxmt9.dll`, and loads that absolute path with `LoadLibraryExW`. The load
 flags should allow dependent PE DLLs to resolve from the bridge DLL directory,
 for example `LOAD_WITH_ALTERED_SEARCH_PATH` or
 `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`. It must
-not use `LoadLibraryW(L"./winemetal.dll")`, because `.` is the current working
+not use `LoadLibraryW(L"./winemetal_dxmt9.dll")`, because `.` is the current working
 directory rather than the module directory.
 
 ---
 
 ## 6. Provider Locator
 
-`winemetal.dll` owns provider discovery, but the lookup mode differs by bridge
+`winemetal_dxmt9.dll` owns provider discovery, but the lookup mode differs by bridge
 variant. The builtin bridge is allowed to use Wine builtin metadata first. The
 native app-local bridge prioritizes package-local providers and only falls back
 to a runtime provider when explicitly requested.
@@ -249,10 +267,10 @@ flowchart TD
     MODE{Bridge locator mode}
     BUILTIN["builtin mode:\ntry Wine builtin unixlib metadata"]
     ENV["DXMT9_WINEMETAL_SO set?"]
-    MODDIR["winemetal.so next to loaded winemetal.dll"]
-    EXEDIR["winemetal.so next to process image"]
+    MODDIR["winemetal_dxmt9.so next to loaded winemetal_dxmt9.dll"]
+    EXEDIR["winemetal_dxmt9.so next to process image"]
     ALLOW{DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=1?}
-    BYNAME["Wine unixlib by-name lookup:\nwinemetal.so"]
+    BYNAME["Wine unixlib by-name lookup:\nwinemetal_dxmt9.so"]
     OK["cache module + unix-call handle"]
     FAIL["cache failure status\nlog candidates"]
 
@@ -326,7 +344,7 @@ static NTSTATUS initializeProvider(BridgeState& state) {
     }
 
     if (runtimeProviderFallbackAllowed()) {
-        NTSTATUS status = tryLoadUnixlibName(makeUnicodeString(L"winemetal.so"),
+        NTSTATUS status = tryLoadUnixlibName(makeUnicodeString(L"winemetal_dxmt9.so"),
                                              &state.module,
                                              &state.handle);
         log by-name fallback and status;
@@ -342,11 +360,11 @@ App-local candidate path construction:
 
 - `DXMT9_WINEMETAL_SO`: explicit override, useful for debugging and package
   layouts that keep the provider outside the executable directory.
-- Module directory: `GetModuleFileNameW(winemetal.dll)` with the file name
-  replaced by `winemetal.so`.
+- Module directory: `GetModuleFileNameW(winemetal_dxmt9.dll)` with the file name
+  replaced by `winemetal_dxmt9.so`.
 - Executable directory: `GetModuleFileNameW(NULL)` with the file name replaced
-  by `winemetal.so`.
-- By-name fallback: `winemetal.so`, only when
+  by `winemetal_dxmt9.so`.
+- By-name fallback: `winemetal_dxmt9.so`, only when
   `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=1` is set.
 
 When a Windows path is used for an explicit local file, convert it to the NT
@@ -366,6 +384,7 @@ The root mixed-architecture package step should emit `dxmt9-deploy.json`:
   "version": "0.1.0",
   "bridge_abi_hash": "<hex>",
   "provider_schema": "dxmt9-winemetal-v1",
+  "required_metal_surface_protocol": "extescape-v1",
   "d3d9_export_profile": "windows-d3d9-by-wine-tests",
   "has_wow64_unix_call_table": true,
   "min_wine_unixlib_feature": "MemoryWineLoadUnixLibByName",
@@ -376,10 +395,10 @@ The root mixed-architecture package step should emit `dxmt9-deploy.json`:
       "unix_arch": "x86_64-unix",
       "artifacts": [
         { "path": "pe/x64/d3d9.dll", "sha256": "<hex>" },
-        { "path": "pe/x64/winemetal.dll", "sha256": "<hex>" },
+        { "path": "pe/x64/winemetal_dxmt9.dll", "sha256": "<hex>" },
         { "path": "pe/x64/libc++.dll", "sha256": "<hex>" },
         { "path": "pe/x64/libunwind.dll", "sha256": "<hex>" },
-        { "path": "unix/x86_64-unix/winemetal.so", "sha256": "<hex>" }
+        { "path": "unix/x86_64-unix/winemetal_dxmt9.so", "sha256": "<hex>" }
       ],
       "pe_dependencies": [
         "libc++.dll",
@@ -396,10 +415,10 @@ The root mixed-architecture package step should emit `dxmt9-deploy.json`:
       "unix_arch": "x86_64-unix",
       "artifacts": [
         { "path": "pe/x86/d3d9.dll", "sha256": "<hex>" },
-        { "path": "pe/x86/winemetal.dll", "sha256": "<hex>" },
+        { "path": "pe/x86/winemetal_dxmt9.dll", "sha256": "<hex>" },
         { "path": "pe/x86/libc++.dll", "sha256": "<hex>" },
         { "path": "pe/x86/libunwind.dll", "sha256": "<hex>" },
-        { "path": "unix/x86_64-unix/winemetal.so", "sha256": "<hex>" }
+        { "path": "unix/x86_64-unix/winemetal_dxmt9.so", "sha256": "<hex>" }
       ],
       "pe_dependencies": [
         "libc++.dll",
@@ -433,20 +452,20 @@ table contract validated for the packaged `d3d9.dll`, including factory entries,
 ## 8. Failure Behavior
 
 Provider discovery failures must be actionable. At debug log level,
-`winemetal.dll` should print:
+`winemetal_dxmt9.dll` should print:
 
 - whether builtin lookup was attempted;
 - every provider candidate path;
 - the `NTSTATUS` returned for each candidate;
 - the selected provider path and unix-call handle on success;
-- the unix-side dependencies recorded for `winemetal.so` and whether they were
+- the unix-side dependencies recorded for `winemetal_dxmt9.so` and whether they were
   resolved from the package or target Wine runtime;
 - whether a dynamically resolved bridge dependency was missing before provider
   discovery began.
 
 The D3D9 frontend should translate bridge initialization failure into a normal
 D3D9 creation failure. App-local `d3d9.dll` therefore uses dynamic bridge
-resolution so missing `winemetal.dll` and missing `winemetal.so` can be reported
+resolution so missing `winemetal_dxmt9.dll` and missing `winemetal_dxmt9.so` can be reported
 from `Direct3DCreate9`. Missing dependencies of `d3d9.dll` itself are still
 Windows loader failures and must be caught by packaging validation.
 
@@ -467,8 +486,8 @@ App-local lane:
 tmp=$(mktemp -d)
 cp d3d9-smoke.exe "$tmp/"
 cp package/pe/x64/d3d9.dll "$tmp/"
-cp package/pe/x64/winemetal.dll "$tmp/"
-cp package/unix/x86_64-unix/winemetal.so "$tmp/"
+cp package/pe/x64/winemetal_dxmt9.dll "$tmp/"
+cp package/unix/x86_64-unix/winemetal_dxmt9.so "$tmp/"
 for dep in libc++.dll libunwind.dll; do
   if [ -f "package/pe/x64/$dep" ]; then
     cp "package/pe/x64/$dep" "$tmp/"
@@ -487,9 +506,9 @@ Expected debug evidence:
 - Wine loaded `d3d9.dll` from the smoke executable directory.
 - The staged `d3d9.dll` export table matches the manifest's
   `d3d9_export_profile`.
-- `d3d9.dll` loaded `winemetal.dll` from the `d3d9.dll` sibling absolute path.
-- `winemetal.dll` selected the app-local `winemetal.so` candidate.
-- `winemetal.so` resolved Wine runtime dependencies such as `winemac.so` and
+- `d3d9.dll` loaded `winemetal_dxmt9.dll` from the `d3d9.dll` sibling absolute path.
+- `winemetal_dxmt9.dll` selected the app-local `winemetal_dxmt9.so` candidate.
+- `winemetal_dxmt9.so` resolved Wine runtime dependencies such as `winemac.so` and
   `ntdll.so` from the target Wine runtime under test.
 - `Direct3DCreate9` returned a dxmt9-backed factory and a device can present a
   frame.
@@ -497,7 +516,7 @@ Expected debug evidence:
 Negative app-local test:
 
 ```sh
-rm "$tmp/winemetal.so"
+rm "$tmp/winemetal_dxmt9.so"
 WINEPREFIX="$TEMP_PREFIX" \
 DXMT_LOG_LEVEL=debug \
 DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK=0 \
