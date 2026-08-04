@@ -555,11 +555,17 @@ which stage dominates before changing data layout or synchronization policy.
 > settles it. For a stage-by-stage model of one real frame with the four views
 > joined (sequence, state hand-off, thread concurrency, and measured per-stage
 > cost), see [`docs/perfomance/frame-lifecycle.md`](../../docs/perfomance/frame-lifecycle.md).
-> As of 2026-07-31 on 3DMark05 GT2 the answer is a saturated application thread:
-> `~66%` of the frame is the game's own Rosetta-translated code, dxmt9's PE
-> recording is `15.1%`, GPU is `18.2%`, and the encode thread and replay worker
-> both have slack. That is one workload, not a general verdict — GT1, GT3, and
-> SFIV have different mixes.
+> As of 2026-08-01 on 3DMark05 GT2 the largest owner is the encode thread. In a
+> `41.10 ms` frame the encode thread is `~15.8 ms` (`~38%`, corrected for the
+> `PerfScope` instrument family), the producer's D3D9 entry path is `9.14 ms`
+> (`22.2%`), GPU is `1.90 ms` (`4.6%`), and the replay worker idles `25.77 ms`
+> (`62.7%`) — no stage is saturated, so the frame is set by the serial
+> produce → replay → encode → present chain. The earlier app-thread-saturated
+> picture was superseded by the SWVP-probe removal in `83a0b085`, which cut the
+> producer from `~41%` of the frame to `22%`; see
+> [`docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.12.md`](../../docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.12.md).
+> That is one workload, not a general verdict — GT1, GT3, and SFIV have
+> different mixes.
 
 ```mermaid
 flowchart LR
