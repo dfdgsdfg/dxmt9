@@ -2,6 +2,7 @@
 
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
+#include "dxmt9_cpu_ready_tape.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <array>
@@ -146,7 +147,7 @@ struct QueueControllerState {
   size_t inflightCount = 0;
   u64 completedSeqId = 0;
   u64 lastCommittedSeqId = 0;
-  std::span<const ChunkSlot> slots;
+  std::span<const ChunkSlotControl> slots;
 };
 
 enum class QueueLifecycleEvent {
@@ -279,11 +280,9 @@ struct ReadySlotSnapshot {
   bool hasPresent = false;
   size_t commandBegin = 0;
   size_t commandCount = 0;
-  // Non-owning ref into QueueLifecycleController::SubmissionBinding::slots.
-  // A dequeued slot is in Encoding state and cannot be recycled until its
-  // completion source drains. The scalar fields above are compact selected
-  // source metadata; the pointer is only the replay view used during this
-  // encode call, not retained session storage.
+  CpuReadySourceId sourceId{};
+  // Non-owning payload view resolved from sourceId while the control shell is
+  // in Encoding. It is call-local and must not be used to reclaim the source.
   ChunkSlot* slot = nullptr;
 };
 
@@ -296,7 +295,7 @@ using ReadySlotBatchAppendPredicate =
                        const ChunkSlot& candidateSlot)>;
 using ReadySlotBatchPrefixSelector =
     std::function<size_t(const std::deque<size_t>& readySlots,
-                         std::span<const ChunkSlot> slots,
+                         std::span<const ChunkSlotControl> slots,
                          size_t maxCount)>;
 
 struct QueueSubmissionRecord {
@@ -450,7 +449,7 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
   state.activeSlots.reserve(slots.size());
   for (size_t i = 0; i < slots.size(); ++i) {
     const auto& slot = slots[i];
-    if (slot.state == ChunkSlot::State::Free) {
+    if (slot.state == ChunkSlotControl::State::Free) {
       continue;
     }
     state.activeSlots.push_back(ActiveSlotInfo{
@@ -526,7 +525,7 @@ void traceLifecycleEvent(QueueLifecycleEvent event,
                          size_t inflightCount,
                          u64 completedSeqId,
                          u64 lastCommittedSeqId,
-                         std::span<const ChunkSlot> slots,
+                         std::span<const ChunkSlotControl> slots,
                          const char* extra = nullptr);
 void traceQueueSlotsEvent(const char* event,
                           std::optional<size_t> slotIndex,
@@ -538,7 +537,7 @@ void traceQueueSlotsEvent(const char* event,
                           size_t inflightCount,
                           u64 completedSeqId,
                           u64 lastCommittedSeqId,
-                          std::span<const ChunkSlot> slots,
+                          std::span<const ChunkSlotControl> slots,
                           const char* extra = nullptr);
 
 /*
@@ -588,7 +587,8 @@ class QueueLifecycleController {
     // the offload path (e.g. the completion-sources spec).
     u64* completedPresentOrdinal = nullptr;
     u64* lastCommittedSeqId = nullptr;
-    std::span<ChunkSlot> slots;
+    std::span<ChunkSlotControl> slots;
+    CpuReadyTape* cpuReadyTape = nullptr;
     std::mutex* mutex = nullptr;
     std::condition_variable* writeCv = nullptr;
     std::condition_variable* encodeCv = nullptr;

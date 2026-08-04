@@ -72,7 +72,7 @@ QueueTraceSnapshot makeQueueTraceSnapshot(std::optional<size_t> slotIndex,
                                           size_t inflightCount,
                                           u64 completedSeqId,
                                           u64 lastCommittedSeqId,
-                                          std::span<const ChunkSlot> slots) {
+                                          std::span<const ChunkSlotControl> slots) {
   QueueTraceState traceState;
   traceState.slotIndex = slotIndex;
   traceState.writingSlot = writingSlot;
@@ -234,7 +234,7 @@ void traceLifecycleEvent(QueueLifecycleEvent event,
                          size_t inflightCount,
                          u64 completedSeqId,
                          u64 lastCommittedSeqId,
-                         std::span<const ChunkSlot> slots,
+                         std::span<const ChunkSlotControl> slots,
                          const char* extra) {
   traceQueueSlotsEvent(lifecycleEventName(event), slotIndex, eventSeqId, writingSlot, writeIndex,
                        readyCount, completedQueueCount, inflightCount, completedSeqId,
@@ -251,7 +251,7 @@ void traceQueueSlotsEvent(const char* event,
                           size_t inflightCount,
                           u64 completedSeqId,
                           u64 lastCommittedSeqId,
-                          std::span<const ChunkSlot> slots,
+                          std::span<const ChunkSlotControl> slots,
                           const char* extra) {
   traceQueueEvent(event, makeQueueTraceSnapshot(slotIndex, eventSeqId, writingSlot, writeIndex, readyCount,
                                                 completedQueueCount, inflightCount, completedSeqId,

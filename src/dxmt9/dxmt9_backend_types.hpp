@@ -818,7 +818,6 @@ void chunkSlotReserveAtLeast(Vector& storage, std::size_t required) {
 struct ChunkSlot {
   enum class State { Free, Writing, Pending, Encoding, GPU };
 
-  State state = State::Free;
   u64 seqId = 0;
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;

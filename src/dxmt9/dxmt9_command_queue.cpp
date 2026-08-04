@@ -1901,7 +1901,8 @@ namespace {
 
 core::ChunkSlot& currentSlotUnlocked(CommandQueue& q) {
   // TLA+: RingSafety — caller holds q.mutex_ and has ensured a writing slot.
-  return q.slots_[*q.writingSlot_];
+  DXMT_ASSERT(q.slots_[*q.writingSlot_].payload != nullptr);
+  return *q.slots_[*q.writingSlot_].payload;
 }
 
 void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lock) {
@@ -2854,8 +2855,9 @@ bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
   if (slotIndex >= q.slots_.size()) {
     return false;
   }
-  return render::openCbCarrierSlotCanAppendToPending(q.slots_[slotIndex],
-                                                     hasPendingSession);
+  const auto* payload = q.slots_[slotIndex].payload;
+  return payload && render::openCbCarrierSlotCanAppendToPending(
+                        *payload, hasPendingSession);
 }
 
 // Encode-thread wait-start publication: the carrier lane found nothing
@@ -4261,7 +4263,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
             lock,
             std::span<ReadySlotSnapshot>(scratch),
             [](const std::deque<std::size_t>& readySlots,
-               std::span<const core::ChunkSlot> slots,
+               std::span<const core::ChunkSlotControl> slots,
                std::size_t maxCount) noexcept -> std::size_t {
               return render::selectOpenCbCarrierBatchPrefix(
                   readySlots, slots, maxCount);
@@ -4562,7 +4564,8 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .presentCompletedSeqId = &presentCompletedSeqId_,
       .completedPresentOrdinal = &presentOrdinalGate_.completedOrdinal,
       .lastCommittedSeqId = &lastCommittedSeqId_,
-      .slots = std::span<core::ChunkSlot>(slots_.data(), slots_.size()),
+      .slots = std::span<core::ChunkSlotControl>(slots_.data(), slots_.size()),
+      .cpuReadyTape = &cpuReadyTape_,
       .mutex = &mutex_,
       .writeCv = &writeCv_,
       .encodeCv = &encodeCv_,

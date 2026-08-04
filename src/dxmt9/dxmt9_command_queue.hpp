@@ -676,7 +676,8 @@ class CommandQueue {
   // like the other present-ordinal state above it.
   PresentOrdinalGate presentOrdinalGate_{};
 
-  std::array<core::ChunkSlot, kCommandChunkCount> slots_{};
+  core::CpuReadyTape cpuReadyTape_{kCommandChunkCount};
+  std::array<core::ChunkSlotControl, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.
   // Set on the first command append and consumed when the slot is published;
   // not part of ChunkSlot so encode-side ReadySlotSnapshot refs stay narrow.

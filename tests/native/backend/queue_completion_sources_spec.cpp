@@ -32,6 +32,8 @@ using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
 using dxmt9::core::ChunkSlot;
+using dxmt9::core::ChunkSlotControl;
+using dxmt9::core::CpuReadyTape;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -479,7 +481,8 @@ struct QueueFixture {
   std::uint64_t completedSeqId = 0;
   std::uint64_t presentCompletedSeqId = 0;
   std::uint64_t lastCommittedSeqId = 0;
-  std::array<ChunkSlot, 4> slots{};
+  CpuReadyTape cpuReadyTape{4};
+  std::array<ChunkSlotControl, 4> slots{};
   std::mutex mutex{};
   std::condition_variable writeCv{};
   std::condition_variable encodeCv{};
@@ -500,7 +503,8 @@ struct QueueFixture {
         .completedSeqId = &completedSeqId,
         .presentCompletedSeqId = &presentCompletedSeqId,
         .lastCommittedSeqId = &lastCommittedSeqId,
-        .slots = std::span<ChunkSlot>(slots.data(), slots.size()),
+        .slots = std::span<ChunkSlotControl>(slots.data(), slots.size()),
+        .cpuReadyTape = &cpuReadyTape,
         .mutex = &mutex,
         .writeCv = &writeCv,
         .encodeCv = &encodeCv,
@@ -511,8 +515,17 @@ struct QueueFixture {
   }
 
   void addReadySlot(std::size_t slotIndex, std::uint64_t seqId) {
+    const auto reservation = cpuReadyTape.reserve();
+    check(reservation.has_value(), "fixture reserves CPU-ready payload");
+    slots[slotIndex].sourceId = reservation->id;
+    slots[slotIndex].payload = reservation->payload;
+    check(cpuReadyTape.transition(reservation->id,
+                                  CpuReadyTape::State::Writing,
+                                  CpuReadyTape::State::Ready),
+          "fixture publishes CPU-ready payload");
     slots[slotIndex].state = ChunkSlot::State::Pending;
     slots[slotIndex].seqId = seqId;
+    slots[slotIndex].payload->seqId = seqId;
     readySlots.push_back(slotIndex);
     lastCommittedSeqId = std::max(lastCommittedSeqId, seqId);
     nextSeqId = std::max(nextSeqId, seqId + 1u);
@@ -655,16 +668,16 @@ void runEncodeIterationPassesLiveSlotStorage() {
         checkEq(slotIndex, 0u,
                 "single-source iteration forwards the dequeued slot index");
         observedSlot = &slot;
-        check(observedSlot == &fixture.slots[0],
+        check(observedSlot == fixture.slots[0].payload,
               "single-source iteration passes live slot storage by reference");
-        check(slot.state == ChunkSlot::State::Encoding,
-              "single-source encode sees the live slot in Encoding state");
+        check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+              "single-source encode sees the control shell in Encoding state");
         return std::nullopt;
       },
       [&](std::uint64_t seqId) { inlineCompleted.push_back(seqId); });
 
   check(encoded, "single-source iteration consumes the ready slot");
-  check(observedSlot == &fixture.slots[0],
+  check(observedSlot != nullptr,
         "single-source iteration did not encode a ChunkSlot copy");
   checkEq(inlineCompleted.size(), 1u,
           "inline single-source completion invokes callback once");
@@ -678,11 +691,18 @@ void runEncodeIterationPassesLiveSlotStorage() {
 
 void finishReleasesSlotResourceOwnersOutsideQueueLock() {
   QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  check(fixture.cpuReadyTape.transition(fixture.slots[0].sourceId,
+                                        CpuReadyTape::State::Ready,
+                                        CpuReadyTape::State::Encoding),
+        "fixture starts encoding resource-owning payload");
+  check(fixture.cpuReadyTape.transition(fixture.slots[0].sourceId,
+                                        CpuReadyTape::State::Encoding,
+                                        CpuReadyTape::State::GPU),
+        "fixture submits resource-owning payload");
   fixture.slots[0].state = ChunkSlot::State::GPU;
-  fixture.slots[0].seqId = 1;
+  fixture.readySlots.clear();
   fixture.completedSeqQueue.push_back(1);
-  fixture.inflightCount = 1;
-  fixture.lastCommittedSeqId = 1;
 
   bool released = false;
   bool releasedWhileLocked = false;
@@ -693,7 +713,7 @@ void finishReleasesSlotResourceOwnersOutsideQueueLock() {
         released = true;
         releasedWhileLocked = lock.owns_lock();
       });
-  fixture.slots[0].drawShaderLayouts.emplace_back()
+  fixture.slots[0].payload->drawShaderLayouts.emplace_back()
       .vertexDecl.streams[0].buffer = buffer;
   buffer.reset();
 
@@ -724,7 +744,7 @@ void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   check(fixture.slots[1].state == ChunkSlot::State::Encoding,
         "second source slot moves to Encoding");
   checkEq(snapshots[0].slotIndex, 0u, "first snapshot records slot index");
-  check(snapshots[0].slot == &fixture.slots[0],
+  check(snapshots[0].slot == fixture.slots[0].payload,
         "first snapshot references live slot storage");
   checkEq(snapshots[0].seqId, 1ull, "first snapshot records seqId");
   check(!snapshots[0].hasPresent, "first snapshot records present absence");
@@ -733,7 +753,7 @@ void dequeueReadySlotBatchMovesEveryDequeuedSlotToEncoding() {
   checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
           "first snapshot records command count");
   checkEq(snapshots[1].slotIndex, 1u, "second snapshot records slot index");
-  check(snapshots[1].slot == &fixture.slots[1],
+  check(snapshots[1].slot == fixture.slots[1].payload,
         "second snapshot references live slot storage");
   checkEq(snapshots[1].seqId, 2ull, "second snapshot records seqId");
   check(!snapshots[1].hasPresent, "second snapshot records present absence");
@@ -784,8 +804,8 @@ void dequeueReadySlotBatchHonorsAppendPredicate() {
                     "predicate sees the already-selected source");
             checkEq(candidateSlotIndex, 1u,
                     "predicate sees the next FIFO candidate");
-            checkEq(candidateSlot.seqId, 2ull,
-                    "predicate sees the candidate slot payload");
+            check(candidateSlot.commandsEmpty(),
+                  "predicate sees the candidate payload view");
             return false;
           });
 
@@ -816,7 +836,7 @@ void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
           [&](const std::deque<std::size_t>& readySlots,
-              std::span<const ChunkSlot> slots,
+              std::span<const ChunkSlotControl> slots,
               std::size_t maxCount) {
             selectorCalled = true;
             checkEq(maxCount, 3u, "selector sees caller capacity");
@@ -838,7 +858,7 @@ void dequeueReadySlotBatchPrefixUsesCompleteSelectorCount() {
   check(fixture.slots[2].state == ChunkSlot::State::Encoding,
         "third prefix source moves to Encoding");
   checkEq(snapshots[2].slotIndex, 2u, "third snapshot records slot index");
-  check(snapshots[2].slot == &fixture.slots[2],
+  check(snapshots[2].slot == fixture.slots[2].payload,
         "third snapshot references live slot storage");
   checkEq(snapshots[2].seqId, 3ull, "third snapshot records seqId");
   check(!snapshots[2].hasPresent, "third snapshot records present absence");
@@ -861,7 +881,7 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
           [](const std::deque<std::size_t>&,
-             std::span<const ChunkSlot>,
+             std::span<const ChunkSlotControl>,
              std::size_t) { return 0u; });
 
   checkEq(count, 1u, "rejected prefix falls back to one source");
@@ -876,7 +896,7 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
   check(fixture.slots[2].state == ChunkSlot::State::Pending,
         "later rejected source remains Pending");
   checkEq(snapshots[0].slotIndex, 0u, "fallback snapshot records first source");
-  check(snapshots[0].slot == &fixture.slots[0],
+  check(snapshots[0].slot == fixture.slots[0].payload,
         "fallback snapshot references live slot storage");
   checkEq(snapshots[0].seqId, 1ull, "fallback snapshot records first seq");
   check(!snapshots[0].hasPresent, "fallback snapshot records present absence");
@@ -939,7 +959,8 @@ void retainEncodedSourcesRejectsPendingSources() {
   snapshot.seqId = fixture.slots[0].seqId;
   snapshot.hasPresent = false;
   snapshot.commandCount = fixture.slots[0].commandCount();
-  snapshot.slot = &fixture.slots[0];
+  snapshot.sourceId = fixture.slots[0].sourceId;
+  snapshot.slot = fixture.slots[0].payload;
   std::array<QueueCompletionSource, 1> retained{};
   std::unique_lock lock(fixture.mutex);
   const std::size_t count = fixture.controller.retainEncodedSourcesForPendingTail(
@@ -957,7 +978,7 @@ void retainEncodedSourcesRejectsPendingSources() {
 void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
-  fixture.slots[0].appendClear({});
+  fixture.slots[0].payload->appendClear({});
 
   std::array<ReadySlotSnapshot, 1> snapshots{};
   std::unique_lock lock(fixture.mutex);
@@ -982,9 +1003,9 @@ void retainEncodedSourcesRejectsStaleSnapshotMetadata() {
 void retainEncodedSourcesAcceptsPartialRangeMetadata() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
-  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
-  fixture.slots[0].appendPresent(dxmt9::core::SwapDesc{},
-                                 dxmt9::core::Handle{0x99});
+  fixture.slots[0].payload->appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[0].payload->appendPresent(dxmt9::core::SwapDesc{},
+                                          dxmt9::core::Handle{0x99});
 
   std::array<ReadySlotSnapshot, 1> snapshots{};
   std::unique_lock lock(fixture.mutex);
@@ -1017,10 +1038,10 @@ void retainEncodedSourcesAcceptsSelectedPrefixMetadata() {
   fixture.addReadySlot(0, 1);
   fixture.addReadySlot(1, 2);
   fixture.addReadySlot(2, 3);
-  fixture.slots[0].appendClear(dxmt9::core::ClearDesc{});
-  fixture.slots[1].appendClear(dxmt9::core::ClearDesc{});
-  fixture.slots[2].appendPresent(dxmt9::core::SwapDesc{},
-                                 dxmt9::core::Handle{0xA3});
+  fixture.slots[0].payload->appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[1].payload->appendClear(dxmt9::core::ClearDesc{});
+  fixture.slots[2].payload->appendPresent(dxmt9::core::SwapDesc{},
+                                          dxmt9::core::Handle{0xA3});
 
   std::array<ReadySlotSnapshot, 3> snapshots{};
   std::unique_lock lock(fixture.mutex);
@@ -1029,7 +1050,7 @@ void retainEncodedSourcesAcceptsSelectedPrefixMetadata() {
           lock,
           std::span<ReadySlotSnapshot>(snapshots),
           [](const std::deque<std::size_t>&,
-             std::span<const ChunkSlot>,
+             std::span<const ChunkSlotControl>,
              std::size_t) { return 3u; });
   checkEq(sourceCount, 3u, "test setup selects the whole source prefix");
 
@@ -1086,8 +1107,8 @@ void retainedEncodedHeadCompletesOnlyWithTailCarrier() {
         "retaining head does not make it GPU-visible");
 
   fixture.addReadySlot(1, 2);
-  fixture.slots[1].appendPresent(dxmt9::core::SwapDesc{},
-                                 dxmt9::core::Handle{0xA1});
+  fixture.slots[1].payload->appendPresent(dxmt9::core::SwapDesc{},
+                                          dxmt9::core::Handle{0xA1});
   std::array<ReadySlotSnapshot, 1> tail{};
   const std::size_t tailCount =
       fixture.controller.dequeueReadySlotBatch(lock, std::span<ReadySlotSnapshot>(tail));
@@ -1149,8 +1170,8 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
   fixture.addReadySlot(0, 1);
   fixture.addReadySlot(1, 2);
   fixture.addReadySlot(2, 3);
-  fixture.slots[2].appendPresent(dxmt9::core::SwapDesc{},
-                                 dxmt9::core::Handle{0xA2});
+  fixture.slots[2].payload->appendPresent(dxmt9::core::SwapDesc{},
+                                          dxmt9::core::Handle{0xA2});
 
   std::array<ReadySlotSnapshot, 3> sources{};
   QueueSubmissionRecord record;
