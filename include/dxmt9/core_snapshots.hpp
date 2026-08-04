@@ -962,6 +962,22 @@ struct DrawBufferBindingSnapshot {
   constexpr bool valid() const noexcept { return metalHandle != 0; }
 };
 
+enum class ChunkBufferBindingCaptureResult : u8 {
+  Unsupported,
+  Complete,
+  MissingRequired,
+};
+
+struct ChunkBufferBindingSnapshot {
+  Handle buffer{};
+  DrawBufferBindingSnapshot snapshot{};
+  // Opaque lease on the concrete rename-ring entry. The upper runtime owns
+  // the token type; keeping this shared reference in RawCommandChunk makes
+  // the pool reject that backing as a rename target until raw replay ends.
+  std::shared_ptr<void> backingResidency;
+  bool requiresCapturedBacking = false;
+};
+
 struct DrawStreamBindingOverride {
   Handle buffer{};
   u32 offset = 0;

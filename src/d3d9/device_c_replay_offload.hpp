@@ -1,14 +1,19 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "device_c_chunk_v2_registry.hpp"
@@ -20,6 +25,8 @@ struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSwapChain;  // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CTexture;    // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CSurface;    // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CShader;     // fwd (global-namespace struct; see device_c_common.hpp)
+struct D9CVertexDecl; // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CQuery;      // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CStateBlock; // fwd (global-namespace struct; see device_c_common.hpp)
 
@@ -31,6 +38,76 @@ namespace dxmt9::d3d9 {
 struct RetainedWireHandle {
   uint32_t kind = 0;
   void* ptr = nullptr;
+};
+
+using ReplaySeq = std::uint64_t;
+
+struct ReplayDrainTarget {
+  ReplaySeq lastQueuedSeq = 0;
+  ReplaySeq lastReplayedSeq = 0;
+};
+
+enum class ReplayDrainResult : std::uint8_t {
+  CaughtUp,
+  Stopped,
+  Poisoned,
+};
+
+enum class ReplayTerminalState : std::uint8_t {
+  Running,
+  Stopped,
+  Failed,
+};
+
+// Bridge functions expose several C return shapes. A terminal replay worker
+// maps HRESULT-bearing calls to DEVICELOST, value getters to zero, and object
+// factories/getters to null without entering the provider.
+struct ReplayDrainFailure {
+  operator std::int32_t() const noexcept {
+    return dxmt9::core::D3DERR_DEVICELOST;
+  }
+  operator std::uint32_t() const noexcept { return 0u; }
+  template <typename T>
+  operator T*() const noexcept {
+    return nullptr;
+  }
+};
+
+struct RawCommandChunk;
+
+class ReplayDrainLedger {
+ public:
+  std::shared_ptr<ReplayDrainTarget> targetForCoreBuffer(
+      std::uint64_t handleValue);
+  bool publishInline(RawCommandChunk& chunk) noexcept;
+  void publishReplayed(const RawCommandChunk& chunk) noexcept;
+  ReplayDrainResult wait(ReplayDrainTarget& target) noexcept;
+  bool pending(const ReplayDrainTarget& target) const noexcept;
+  void stop() noexcept;
+  void publishFailure() noexcept;
+  void poison() noexcept;
+  ReplayTerminalState terminalState() const noexcept;
+  bool terminal() const noexcept;
+  bool stopped() const noexcept;
+  bool poisoned() const noexcept;
+
+ private:
+  friend class ReplayOffloadQueue;
+  friend struct ReplayDrainLedgerTestAccess;
+
+  void publishAcceptedLocked(RawCommandChunk& chunk) noexcept;
+
+  mutable std::mutex mutex_;
+  std::condition_variable cv_;
+  ReplaySeq nextSeq_ = 1;
+  bool accepting_ = true;
+  bool stopping_ = false;
+  bool poisoned_ = false;
+  std::atomic<ReplayTerminalState> terminalState_{
+      ReplayTerminalState::Running};
+  std::unordered_map<std::uint64_t, std::weak_ptr<ReplayDrainTarget>>
+      bufferTargets_;
+  std::size_t nextBufferTargetSweep_ = 64u;
 };
 
 struct RawCommandChunk {
@@ -46,6 +123,128 @@ struct RawCommandChunk {
   // registry ID up after the app-thread commit returns.
   std::vector<void*> resolvedObjects;
   std::vector<RetainedWireHandle> retainedWrappers;
+  std::vector<ReplayDrainTarget*> ledgerTargets;
+  std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
+  ReplaySeq replaySeq = 0;
+  bool bufferSnapshotsCaptured = false;
+};
+
+class ReplayBufferSnapshotResolver {
+ public:
+  enum class BindingClass : std::uint8_t {
+    Missing,
+    Live,
+    Captured,
+  };
+
+  explicit ReplayBufferSnapshotResolver(
+      std::span<const dxmt9::core::ChunkBufferBindingSnapshot> entries)
+      : entries_(entries) {}
+
+  bool resolve(
+      const std::array<dxmt9::core::Handle, dxmt9::core::kMaxStreams>& streams,
+      const std::array<dxmt9::core::u32, dxmt9::core::kMaxStreams>& offsets,
+      const std::array<dxmt9::core::u32, dxmt9::core::kMaxStreams>& strides,
+      dxmt9::core::Handle indexBuffer,
+      dxmt9::core::IndexType indexType,
+      bool indexed,
+      dxmt9::core::DrawBindingSnapshot& out,
+      bool* usedCapturedBacking = nullptr) const noexcept {
+    bool initialized = false;
+    const auto initialize = [&] {
+      if (initialized) {
+        return;
+      }
+      // DrawBindingSnapshot is serialized byte-for-byte. Clear padding only
+      // when this draw actually needs a captured backing and will attach the
+      // payload; live-only draws never materialize the 832-byte object.
+      std::memset(&out, 0, sizeof(out));
+      initialized = true;
+    };
+    for (dxmt9::core::u32 stream = 0;
+         stream < dxmt9::core::kMaxStreams; ++stream) {
+      if (!streams[stream]) {
+        continue;
+      }
+      const auto* capture = find(streams[stream]);
+      if (!capture) {
+        return false;
+      }
+      if (!capture->requiresCapturedBacking) {
+        continue;
+      }
+      if (!capture->snapshot.valid()) {
+        return false;
+      }
+      initialize();
+      out.streamMask |= 1u << stream;
+      out.streams[stream] = dxmt9::core::DrawStreamBindingSnapshot{
+          .buffer = streams[stream],
+          .offset = offsets[stream],
+          .stride = strides[stream],
+          .snapshot = capture->snapshot,
+      };
+    }
+    if (indexed && indexBuffer) {
+      const auto* capture = find(indexBuffer);
+      if (!capture) {
+        return false;
+      }
+      if (capture->requiresCapturedBacking) {
+        if (!capture->snapshot.valid()) {
+          return false;
+        }
+        initialize();
+        out.indexBuffer = indexBuffer;
+        out.indexType = indexType;
+        out.indexSnapshot = capture->snapshot;
+        out.indexSnapshotValid = true;
+      }
+    }
+    if (usedCapturedBacking) {
+      *usedCapturedBacking = initialized;
+    } else if (!initialized) {
+      // Preserve the historical value-result API for non-replay callers that
+      // do not request the sparse-payload signal.
+      std::memset(&out, 0, sizeof(out));
+    }
+    return true;
+  }
+
+  bool hasCapturedBackings() const noexcept {
+    return std::any_of(entries_.begin(), entries_.end(),
+                       [](const auto& entry) {
+                         return entry.requiresCapturedBacking;
+                       });
+  }
+
+  BindingClass classify(dxmt9::core::Handle handle) const noexcept {
+    if (!handle) {
+      return BindingClass::Live;
+    }
+    const auto* capture = find(handle);
+    if (!capture) {
+      return BindingClass::Missing;
+    }
+    return capture->requiresCapturedBacking
+               ? BindingClass::Captured
+               : BindingClass::Live;
+  }
+
+ private:
+  const dxmt9::core::ChunkBufferBindingSnapshot* find(
+      dxmt9::core::Handle handle) const noexcept {
+    const auto found = std::lower_bound(
+        entries_.begin(), entries_.end(), handle.value,
+        [](const auto& entry, std::uint64_t value) {
+          return entry.buffer.value < value;
+        });
+    return found == entries_.end() || found->buffer != handle
+               ? nullptr
+               : &*found;
+  }
+
+  std::span<const dxmt9::core::ChunkBufferBindingSnapshot> entries_{};
 };
 
 bool prepareV2OffloadChunk(
@@ -87,7 +286,7 @@ class ReplayOffloadQueue {
   // commit_chunk offload-queue-stopped path in device_c_chunk_replay.cpp,
   // which retains wrapper refs before calling push() and must release them
   // itself when push() refuses the chunk.
-  bool push(RawCommandChunk&& chunk) {
+  bool push(RawCommandChunk&& chunk, ReplayDrainLedger* ledger = nullptr) {
     std::unique_lock lock(mutex_);
     const auto admissible = [&] {
       // Oversized-chunk admission: a chunk bigger than maxBytes_ must still
@@ -107,8 +306,21 @@ class ReplayOffloadQueue {
               std::chrono::steady_clock::now() - waitStart).count()));
     }
     if (stop_) return false;  // chunk not touched -- see guarantee above.
-    queuedBytes_ += chunk.recordBytes;
-    queue_.push_back(std::move(chunk));
+    if (ledger) {
+      // The only nested order in this subsystem is queue -> ledger. Check
+      // terminal state before moving the caller's entry, then publish the
+      // owned deque entry before either lock can be released.
+      std::unique_lock ledgerLock(ledger->mutex_);
+      if (!ledger->accepting_ || ledger->terminal()) {
+        return false;
+      }
+      queuedBytes_ += chunk.recordBytes;
+      queue_.push_back(std::move(chunk));
+      ledger->publishAcceptedLocked(queue_.back());
+    } else {
+      queuedBytes_ += chunk.recordBytes;
+      queue_.push_back(std::move(chunk));
+    }
     workCv_.notify_one();
     return true;
   }
@@ -188,24 +400,37 @@ bool offloadCommitReplayEnabled();
 // Drain-fence prologue for every direct (non-commit_chunk) dxmt9c_device_*
 // bridge call: if this device has a live offload worker with a non-empty
 // queue, block until it has drained so the direct call observes
-// offload-replayed state in program order. A null `d` or a device that
-// never spun up a worker (offload disabled, or `d->replayOffload` never
-// constructed) already encodes "nothing to drain" -- do not re-check
-// offloadCommitReplayEnabled() here. An empty queue (depth() == 0) is also
-// a plain no-op return: no counter touch, no wait. Cheap on the common/off
-// path: one pointer test plus one mutex-guarded depth() read.
+// offload-replayed state in program order. Return false on any ledger/worker
+// terminal state so the bridge returns ReplayDrainFailure without entering the
+// provider. A null `d`, or a healthy device that never spun up a worker
+// (offload disabled, or `d->replayOffload` never constructed), already encodes
+// "nothing to drain" -- do not re-check offloadCommitReplayEnabled() here. A
+// healthy empty queue is a no-wait return: no timing-counter touch. Cheap on the
+// common/off path: one ledger predicate plus one pointer test.
 // `site` is a diagnostic tag naming the bridge entry point, used only when the
 // drain actually blocks (DXMT9_PERF_DRAIN_FENCE_SITES). It must be a string
 // literal with static storage duration -- the sink buckets on pointer identity,
 // not on string content, so it costs a pointer compare and never a strcmp.
 // Defaulted so a caller that has not been tagged still compiles and is simply
 // attributed to "untagged".
-void drainDeferredReplay(D9CDevice* d, const char* site = nullptr);
+bool drainDeferredReplay(D9CDevice* d, const char* site = nullptr);
+
+// Non-blocking fail-stop check for deliberately drain-free provider calls,
+// including scene markers and wrapper metadata. This never takes the queue or
+// ledger mutex.
+bool replayTerminal(D9CDevice* d) noexcept;
+bool replayTerminal(D9CBuffer* b) noexcept;
+bool replayTerminal(D9CSwapChain* s) noexcept;
+bool replayTerminal(D9CTexture* t) noexcept;
+bool replayTerminal(D9CSurface* s) noexcept;
+bool replayTerminal(D9CShader* s) noexcept;
+bool replayTerminal(D9CVertexDecl* d) noexcept;
+bool replayTerminal(D9CQuery* q) noexcept;
 
 // Buffer Lock is also a direct bridge call. Resolve its owning device before
 // entering the provider so deferred draws cannot leave Lock waiting on a
 // sequence that the replay worker has not appended yet.
-void drainDeferredReplay(D9CBuffer* b, const char* site = nullptr);
+bool drainDeferredReplay(D9CBuffer* b, const char* site = nullptr);
 
 // dxmt9c_swapchain_present overload: D9CSwapChain is an opaque forward
 // declaration in the bridge TUs (they only see the ABI-facing
@@ -213,14 +438,14 @@ void drainDeferredReplay(D9CBuffer* b, const char* site = nullptr);
 // device_c_replay_offload.cpp where the full D9CSwapChain definition is
 // visible -- resolves `s->owner` (the backpointer set at swapchain creation,
 // see device_c_common.hpp) and forwards to the D9CDevice* overload above.
-void drainDeferredReplay(D9CSwapChain* s, const char* site = nullptr);
+bool drainDeferredReplay(D9CSwapChain* s, const char* site = nullptr);
 // Texture/Surface overloads exist for the same reason the Buffer one does: the
 // bridge shims hold only forward declarations of the wrapper structs, so they
 // cannot reach `->device` themselves. Null-safe on the wrapper.
-void drainDeferredReplay(D9CTexture* t, const char* site = nullptr);
-void drainDeferredReplay(D9CSurface* s, const char* site = nullptr);
-void drainDeferredReplay(D9CQuery* q, const char* site = nullptr);
-void drainDeferredReplay(D9CStateBlock* sb, const char* site = nullptr);
+bool drainDeferredReplay(D9CTexture* t, const char* site = nullptr);
+bool drainDeferredReplay(D9CSurface* s, const char* site = nullptr);
+bool drainDeferredReplay(D9CQuery* q, const char* site = nullptr);
+bool drainDeferredReplay(D9CStateBlock* sb, const char* site = nullptr);
 
 // Emits one [dxmt9-drain-site] line per blocking entry point at Info level.
 // No-op unless DXMT9_PERF_DRAIN_FENCE_SITES is set. `presents` is the
@@ -233,7 +458,12 @@ void logDrainFenceSites(std::uint64_t presents);
 // is recoverable: a READONLY MANAGED lock waits on nothing and could be exempted
 // outright, while a DISCARD on a hot per-frame buffer will alias queued draws
 // and keep blocking under any narrowing. Same early-outs as the plain overload.
-void drainDeferredReplayForBufferLock(D9CBuffer* b, std::uint32_t lockFlags);
+bool drainDeferredReplayForBufferLock(D9CBuffer* b,
+                                      std::uint32_t lockFlags);
+bool drainDeferredReplayForBufferUnlock(D9CBuffer* b);
+bool bufferLockClassBypassesReplay(const D9CBufferDesc& desc,
+                                   std::uint32_t lockFlags,
+                                   bool dynamicRenameEnabled) noexcept;
 
 // Device-owned background thread that drains a ReplayOffloadQueue by
 // calling replayRawChunk() for each popped chunk. Fail-stop: a replay
@@ -256,9 +486,18 @@ void drainDeferredReplayForBufferLock(D9CBuffer* b, std::uint32_t lockFlags);
 // fully exited -- so neither can race a live pop()/markReplayDone() caller.
 class ReplayOffloadWorker {
  public:
+  using ReplayFn = int32_t (*)(D9CDevice*, RawCommandChunk&);
+  using FailurePublishedHook = void (*)(void*);
+
   // Queue bound: 64 chunks / 8 MiB ~= 2+ frames of GT1 chunks (about
   // 14 chunks/present, ~200 KB/present).
-  ReplayOffloadWorker() : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()) {}
+  explicit ReplayOffloadWorker(ReplayFn replay = nullptr,
+                               FailurePublishedHook failureHook = nullptr,
+                               void* failureHookContext = nullptr)
+      : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()),
+        replay_(replay),
+        failureHook_(failureHook),
+        failureHookContext_(failureHookContext) {}
   ~ReplayOffloadWorker() { stop(); }
 
   ReplayOffloadWorker(const ReplayOffloadWorker&) = delete;
@@ -274,10 +513,15 @@ class ReplayOffloadWorker {
   ReplayOffloadQueue queue_;
   std::thread thread_;
   std::atomic<bool> failed_{false};
+  D9CDevice* owner_ = nullptr;
+  ReplayFn replay_ = nullptr;
+  FailurePublishedHook failureHook_ = nullptr;
+  void* failureHookContext_ = nullptr;
 };
 
-// Replays a prevalidated, resolved V2 chunk and releases its retained wrappers
-// on both success and failure.
+// Replays a prevalidated, resolved V2 chunk. The worker publishes ledger
+// completion before releasing retained wrappers so its target pointers remain
+// alive through the publication.
 int32_t replayRawChunk(D9CDevice* d, RawCommandChunk& chunk);
 
 // Releases every wrapper retained during V2 admission and clears the list.

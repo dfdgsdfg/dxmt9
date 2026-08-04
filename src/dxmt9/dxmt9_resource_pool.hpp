@@ -80,6 +80,8 @@ using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+bool dynamicBufferRenameEnabled() noexcept;
+
 // R-BACK-5.8 / 5.11 — per-buffer-handle backing-version entry. DYNAMIC +
 // DEFAULT buffers rotate these Shared allocations on D3DLOCK_DISCARD;
 // MANAGED buffers rotate them on writable unlock/upload. Draw submissions
@@ -89,6 +91,14 @@ struct BufferRenameRingEntry {
   WMT::Reference<WMT::Buffer> buffer;
   void* contents = nullptr;  // shared-mode CPU pointer
   u64 lastUsedSeqId = 0;
+  // One reference belongs to this ring entry; admitted raw chunks copy it
+  // into ChunkBufferBindingSnapshot. A use_count above one therefore means
+  // replay has not consumed every immutable snapshot of this backing yet.
+  std::shared_ptr<void> replayResidency = std::make_shared<std::byte>();
+
+  bool replayResident() const noexcept {
+    return replayResidency && replayResidency.use_count() > 1;
+  }
 };
 
 enum class ReorderedIndexOrder : u32 {
@@ -681,6 +691,8 @@ struct Pool {
   void markTextureUse(core::Handle handle, u64 seqId);
   void markSurfaceUse(core::Handle handle, u64 seqId);
 
+  core::ChunkBufferBindingSnapshot captureChunkBufferBinding(
+      core::Handle handle) const noexcept;
   core::DrawBufferBindingSnapshot snapshotBufferBinding(core::Handle handle) const noexcept;
 
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp

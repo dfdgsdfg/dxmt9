@@ -4,6 +4,7 @@
 #include "d3d9_pe_device_child.hpp"
 
 #include "d3d9_pe_buffer_readonly_cache.hpp"
+#include "d3d9_pe_buffer_hazard.hpp"
 #include "util/com/com_private_data.hpp"
 #include "util/log/log.hpp"
 
@@ -60,26 +61,12 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
   return hr;
 }
 
-static bool bufferLockRequiresHazardFlush(DWORD flags) {
-  if ((flags & D3DLOCK_READONLY) != 0)
-    return false;
-  // DISCARD may skip a GPU wait only when the implementation gives the app a
-  // fresh backing allocation and already-recorded draws keep a concrete backing
-  // snapshot. The flush keeps PE recorder ordering explicit; the backend rename
-  // snapshot preserves the actual Metal buffer seen by each queued draw.
-  if ((flags & D3DLOCK_DISCARD) != 0)
-    return true;
-  if ((flags & D3DLOCK_NOOVERWRITE) != 0)
-    return false;
-  return true;
-}
-
 [[nodiscard]] static HRESULT
 flushChildRecorderForBufferLock(D3D9PeRecorderFlush *recorder, D9CBuffer *buffer,
                                 DWORD flags) {
-  if (!recorder || !bufferLockRequiresHazardFlush(flags))
-    return S_OK;
-  return recorder->FlushPeRecorderForBufferHazardForChild(buffer);
+  return dxmt9::d3d9::pe::sealBufferGenerationBeforeLock(
+    recorder != nullptr, flags, static_cast<HRESULT>(S_OK),
+    [&] { return recorder->FlushPeRecorderForBufferHazardForChild(buffer); });
 }
 
 static bool loadBufferDesc(D9CBuffer *buffer, D9CBufferDesc &desc) {

@@ -151,6 +151,7 @@ struct D9CDevice {
   std::optional<dxmt9::core::DeviceState> stateBlockBaseState;
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
+  dxmt9::d3d9::ReplayDrainLedger replayDrainLedger;
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   dxmt9::d3d9::WireObjectRegistry wireObjects;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
@@ -237,10 +238,15 @@ struct D9CBuffer {
   uint32_t lastLockOffset = 0;
   uint32_t lastLockSize = 0;
   uint32_t lastLockFlags = 0;
+  bool lastLockSucceeded = false;
+  std::shared_ptr<dxmt9::d3d9::ReplayDrainTarget> replayDrainTarget;
 
   explicit D9CBuffer(std::shared_ptr<dxmt9::core::Buffer> o,
                      D9CDevice* d = nullptr)
       : obj(std::move(o)), device(d) {
+    replayDrainTarget = device && obj
+        ? device->replayDrainLedger.targetForCoreBuffer(obj->handle().value)
+        : std::make_shared<dxmt9::d3d9::ReplayDrainTarget>();
     if (device) {
       wireIdentity = device->wireObjects.insert(
           D9C_CHUNK_HANDLE_KIND_BUFFER, this);

@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace dxmt9::d3d9 {
 
@@ -96,6 +97,131 @@ std::size_t offloadQueueMaxBytes() {
   return bytes;
 }
 
+std::shared_ptr<ReplayDrainTarget>
+ReplayDrainLedger::targetForCoreBuffer(std::uint64_t handleValue) {
+  std::lock_guard lock(mutex_);
+  if (handleValue != 0u) {
+    const auto found = bufferTargets_.find(handleValue);
+    if (found != bufferTargets_.end()) {
+      if (auto target = found->second.lock()) {
+        return target;
+      }
+      bufferTargets_.erase(found);
+    }
+  }
+  auto target = std::make_shared<ReplayDrainTarget>();
+  if (handleValue != 0u) {
+    if (bufferTargets_.size() >= nextBufferTargetSweep_ - 1u) {
+      std::erase_if(bufferTargets_, [](const auto& entry) {
+        return entry.second.expired();
+      });
+      constexpr std::size_t kMinimumSweepThreshold = 64u;
+      constexpr std::size_t kMaximumSize =
+          std::numeric_limits<std::size_t>::max();
+      nextBufferTargetSweep_ =
+          bufferTargets_.size() >= (kMaximumSize / 2u) - 1u
+              ? kMaximumSize
+              : std::max(kMinimumSweepThreshold,
+                         2u * (bufferTargets_.size() + 1u));
+    }
+    bufferTargets_[handleValue] = target;
+  }
+  return target;
+}
+
+void ReplayDrainLedger::publishAcceptedLocked(RawCommandChunk& chunk) noexcept {
+  chunk.replaySeq = nextSeq_++;
+  for (auto* target : chunk.ledgerTargets) {
+    if (target) {
+      target->lastQueuedSeq = chunk.replaySeq;
+    }
+  }
+  cv_.notify_all();
+}
+
+bool ReplayDrainLedger::publishInline(RawCommandChunk& chunk) noexcept {
+  std::lock_guard lock(mutex_);
+  if (!accepting_ || terminal()) {
+    return false;
+  }
+  publishAcceptedLocked(chunk);
+  return true;
+}
+
+void ReplayDrainLedger::publishReplayed(
+    const RawCommandChunk& chunk) noexcept {
+  std::lock_guard lock(mutex_);
+  for (auto* target : chunk.ledgerTargets) {
+    if (target) {
+      target->lastReplayedSeq = std::max(
+          target->lastReplayedSeq, chunk.replaySeq);
+    }
+  }
+  cv_.notify_all();
+}
+
+ReplayDrainResult ReplayDrainLedger::wait(
+    ReplayDrainTarget& target) noexcept {
+  std::unique_lock lock(mutex_);
+  cv_.wait(lock, [&] {
+    return poisoned_ || stopping_ ||
+           target.lastQueuedSeq <= target.lastReplayedSeq;
+  });
+  if (poisoned_) {
+    return ReplayDrainResult::Poisoned;
+  }
+  if (stopping_) {
+    return ReplayDrainResult::Stopped;
+  }
+  return ReplayDrainResult::CaughtUp;
+}
+
+bool ReplayDrainLedger::pending(
+    const ReplayDrainTarget& target) const noexcept {
+  std::lock_guard lock(mutex_);
+  return target.lastQueuedSeq > target.lastReplayedSeq;
+}
+
+void ReplayDrainLedger::stop() noexcept {
+  auto expected = ReplayTerminalState::Running;
+  terminalState_.compare_exchange_strong(
+      expected, ReplayTerminalState::Stopped,
+      std::memory_order_release, std::memory_order_relaxed);
+  std::lock_guard lock(mutex_);
+  accepting_ = false;
+  stopping_ = true;
+  cv_.notify_all();
+}
+
+void ReplayDrainLedger::publishFailure() noexcept {
+  terminalState_.store(ReplayTerminalState::Failed,
+                       std::memory_order_release);
+}
+
+void ReplayDrainLedger::poison() noexcept {
+  publishFailure();
+  std::lock_guard lock(mutex_);
+  accepting_ = false;
+  poisoned_ = true;
+  cv_.notify_all();
+}
+
+ReplayTerminalState ReplayDrainLedger::terminalState() const noexcept {
+  return terminalState_.load(std::memory_order_acquire);
+}
+
+bool ReplayDrainLedger::terminal() const noexcept {
+  return terminalState() != ReplayTerminalState::Running;
+}
+
+bool ReplayDrainLedger::stopped() const noexcept {
+  return terminalState() == ReplayTerminalState::Stopped;
+}
+
+bool ReplayDrainLedger::poisoned() const noexcept {
+  return terminalState() == ReplayTerminalState::Failed;
+}
+
 void notePushBackpressureWait(std::uint64_t nanoseconds) {
   dxmt9::perf::countOffloadPushBackpressureWait();
   dxmt9::perf::countOffloadPushBackpressureWaitNs(nanoseconds);
@@ -123,6 +249,8 @@ bool prepareV2OffloadChunk(
     }
     candidate.resolvedObjects.resize(envelope.handleCount);
     candidate.retainedWrappers.resize(envelope.handleCount);
+    candidate.ledgerTargets.reserve(envelope.handleCount);
+    candidate.bufferSnapshots.reserve(envelope.handleCount);
   } catch (...) {
     return false;
   }
@@ -157,10 +285,14 @@ bool prepareV2OffloadChunk(
 }
 
 void ReplayOffloadWorker::start(D9CDevice* device) {
+  owner_ = device;
   thread_ = std::thread([this, device] { run(device); });
 }
 
 void ReplayOffloadWorker::stop() {
+  if (owner_) {
+    owner_->replayDrainLedger.stop();
+  }
   queue_.stop();
   if (thread_.joinable()) {
     thread_.join();
@@ -180,22 +312,45 @@ void ReplayOffloadWorker::stop() {
 void ReplayOffloadWorker::run(D9CDevice* device) {
   RawCommandChunk chunk;
   while (queue_.pop(chunk)) {
-    const int32_t hr = replayRawChunk(device, chunk);
-    queue_.markReplayDone();
+    const int32_t hr = replay_ ? replay_(device, chunk)
+                               : replayRawChunk(device, chunk);
     if (hr < 0) {
+      // Fail-stop is visible before any completion notification. A producer
+      // linearized after poison() observes the same terminal state under the
+      // queue -> ledger admission order and cannot enqueue a doomed chunk.
+      device->replayDrainLedger.publishFailure();
       failed_.store(true, std::memory_order_release);
-      DXMT_ASSERT(false && "deferred commit replay failed");
+      device->replayDrainLedger.poison();
       queue_.stop();
-      // Release-build safety net: DXMT_ASSERT above does not abort outside
-      // debug builds, so without this an app thread already parked in
-      // CommandQueue::waitPresentOrdinalBoundary on an ordinal this now-dead
-      // worker can never retire would hang forever. abortPresentOrdinalWaits()
-      // wakes any such waiter so it observes the abort and returns instead.
-      if (auto upper = device->dev().upperDevice()) {
-        upper->abortPresentOrdinalWaits();
+      if (!replay_) {
+        DXMT_ASSERT(false && "deferred commit replay failed");
       }
+      if (failureHook_) {
+        failureHook_(failureHookContext_);
+      }
+      // Release-build safety net: abort any app thread waiting on an ordinal
+      // this now-dead worker can never retire. Native failure-injection tests
+      // construct a device without a provider interface, hence the null guard.
+      if (device->iface) {
+        if (auto upper = device->dev().upperDevice()) {
+          upper->abortPresentOrdinalWaits();
+        }
+      }
+      chunk.bufferSnapshots.clear();
+      releaseRetainedWrappers(chunk);
+      queue_.markReplayDone();
       break;
     }
+    device->replayDrainLedger.publishReplayed(chunk);
+    // Raw-entry backing leases are needed only until replay has consumed the
+    // immutable table. Release them before the worker can idle on its next pop;
+    // GPU reuse is protected from here by the normal per-draw seqId marks.
+    chunk.bufferSnapshots.clear();
+    // Raw entries hold wrapper references, and each wrapper shares ownership
+    // of its core-buffer-identity ledger target. Publish completion before
+    // releasing those references.
+    releaseRetainedWrappers(chunk);
+    queue_.markReplayDone();
   }
   // Drain epilogue: release wrapper retention for any chunks left queued
   // when the loop above exited. Reached either via the fail-stop `break`
@@ -273,6 +428,68 @@ struct BlockedLockClasses {
   std::uint64_t plainNs = 0;
 };
 
+struct DrainFenceModes {
+  std::mutex mutex;
+  std::uint64_t globalWait = 0;
+  std::uint64_t scopedWait = 0;
+  std::uint64_t scopedClear = 0;
+  std::uint64_t scopedUnrelated = 0;
+  std::uint64_t bypassDiscard = 0;
+  std::uint64_t bypassNoOverwrite = 0;
+  std::uint64_t terminal = 0;
+  std::uint64_t globalWaitNs = 0;
+  std::uint64_t scopedWaitNs = 0;
+};
+
+enum class DrainFenceMode {
+  GlobalWait,
+  ScopedWait,
+  ScopedClear,
+  ScopedUnrelated,
+  BypassDiscard,
+  BypassNoOverwrite,
+  Terminal,
+};
+
+DrainFenceModes& drainFenceModes() {
+  static DrainFenceModes modes;
+  return modes;
+}
+
+void noteDrainFenceMode(DrainFenceMode mode,
+                        std::uint64_t nanoseconds = 0) {
+  if (!drainSiteAttributionEnabled()) {
+    return;
+  }
+  auto& modes = drainFenceModes();
+  std::lock_guard lock(modes.mutex);
+  switch (mode) {
+  case DrainFenceMode::GlobalWait:
+    ++modes.globalWait;
+    modes.globalWaitNs += nanoseconds;
+    break;
+  case DrainFenceMode::ScopedWait:
+    ++modes.scopedWait;
+    modes.scopedWaitNs += nanoseconds;
+    break;
+  case DrainFenceMode::ScopedClear:
+    ++modes.scopedClear;
+    break;
+  case DrainFenceMode::ScopedUnrelated:
+    ++modes.scopedUnrelated;
+    break;
+  case DrainFenceMode::BypassDiscard:
+    ++modes.bypassDiscard;
+    break;
+  case DrainFenceMode::BypassNoOverwrite:
+    ++modes.bypassNoOverwrite;
+    break;
+  case DrainFenceMode::Terminal:
+    ++modes.terminal;
+    break;
+  }
+}
+
 BlockedLockClasses& blockedLockClasses() {
   static BlockedLockClasses classes;
   return classes;
@@ -335,6 +552,28 @@ void logDrainFenceSites(std::uint64_t presents) {
                                   : 0.0);
   }
   {
+    auto& modes = drainFenceModes();
+    std::lock_guard lock(modes.mutex);
+    if (modes.globalWait || modes.scopedWait || modes.scopedClear ||
+        modes.scopedUnrelated || modes.bypassDiscard ||
+        modes.bypassNoOverwrite || modes.terminal) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Info, "dxmt9-drain-site",
+          "fence_mode global_wait=%llu/%.3fms scoped_wait=%llu/%.3fms "
+          "scoped_clear=%llu scoped_unrelated=%llu bypass_discard=%llu "
+          "bypass_nooverwrite=%llu terminal=%llu",
+          static_cast<unsigned long long>(modes.globalWait),
+          modes.globalWaitNs / 1.0e6,
+          static_cast<unsigned long long>(modes.scopedWait),
+          modes.scopedWaitNs / 1.0e6,
+          static_cast<unsigned long long>(modes.scopedClear),
+          static_cast<unsigned long long>(modes.scopedUnrelated),
+          static_cast<unsigned long long>(modes.bypassDiscard),
+          static_cast<unsigned long long>(modes.bypassNoOverwrite),
+          static_cast<unsigned long long>(modes.terminal));
+    }
+  }
+  {
     auto& c = blockedLockClasses();
     std::lock_guard lock(c.mutex);
     if (c.readOnly || c.discard || c.noOverwrite || c.plain) {
@@ -364,13 +603,20 @@ void logDrainFenceSites(std::uint64_t presents) {
   }
 }
 
-void drainDeferredReplay(D9CDevice* d, const char* site) {
-  if (!d || !d->replayOffload) {
-    return;
+bool drainDeferredReplay(D9CDevice* d, const char* site) {
+  if (!d) {
+    return true;
+  }
+  if (d->replayDrainLedger.terminal()) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+    return false;
+  }
+  if (!d->replayOffload) {
+    return true;
   }
   auto& queue = d->replayOffload->queue();
   if (queue.depth() == 0) {
-    return;
+    return !queue.stopped() && !d->replayOffload->failed();
   }
   dxmt9::perf::countOffloadDrainFenceWait();
   const auto waitStart = std::chrono::steady_clock::now();
@@ -379,72 +625,202 @@ void drainDeferredReplay(D9CDevice* d, const char* site) {
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStart).count());
   dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
+  noteDrainFenceMode(DrainFenceMode::GlobalWait, elapsed);
   if (drainSiteAttributionEnabled()) {
     noteDrainSite(site, elapsed);
   }
+  const bool caughtUp = !queue.stopped() &&
+                        !d->replayOffload->failed() &&
+                        !d->replayDrainLedger.terminal();
+  if (!caughtUp) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+  }
+  return caughtUp;
 }
 
-void drainDeferredReplayForBufferLock(D9CBuffer* b, std::uint32_t lockFlags) {
-  if (!b || !b->device || !b->device->replayOffload) {
-    return;
+bool replayTerminal(D9CDevice* d) noexcept {
+  return d && d->replayDrainLedger.terminal();
+}
+
+bool replayTerminal(D9CBuffer* b) noexcept {
+  return replayTerminal(b ? b->device : nullptr);
+}
+
+bool replayTerminal(D9CSwapChain* s) noexcept {
+  return replayTerminal(s ? s->owner : nullptr);
+}
+
+bool replayTerminal(D9CTexture* t) noexcept {
+  return replayTerminal(t ? t->device : nullptr);
+}
+
+bool replayTerminal(D9CSurface* s) noexcept {
+  return replayTerminal(s ? s->device : nullptr);
+}
+
+bool replayTerminal(D9CShader* s) noexcept {
+  return replayTerminal(s ? s->device : nullptr);
+}
+
+bool replayTerminal(D9CVertexDecl* d) noexcept {
+  return replayTerminal(d ? d->device : nullptr);
+}
+
+bool replayTerminal(D9CQuery* q) noexcept {
+  return replayTerminal(q ? q->device : nullptr);
+}
+
+bool bufferLockClassBypassesReplay(const D9CBufferDesc& desc,
+                                   std::uint32_t lockFlags,
+                                   bool dynamicRenameEnabled) noexcept {
+  constexpr std::uint32_t kD3DUsageDynamic = 0x00000200u;
+  constexpr std::uint32_t kD3DPoolDefault = 0u;
+  const bool noOverwrite = (lockFlags & kD3DLockNoOverwrite) != 0u;
+  const bool validRename = dynamicRenameEnabled &&
+      (lockFlags & kD3DLockDiscard) != 0u &&
+      desc.pool == kD3DPoolDefault &&
+      (desc.usage & kD3DUsageDynamic) != 0u;
+  return noOverwrite || validRename;
+}
+
+bool drainDeferredReplayForBufferLock(D9CBuffer* b,
+                                      std::uint32_t lockFlags) {
+  if (!b || !b->device) {
+    return true;
   }
-  auto& queue = b->device->replayOffload->queue();
-  if (queue.depth() == 0) {
-    return;
+  auto& ledger = b->device->replayDrainLedger;
+  if (ledger.terminal()) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+    drainDeferredReplay(b->device, "dxmt9c_buffer_lock_fallback");
+    return false;
+  }
+  const auto upper = b->device->dev().upperDevice();
+  const bool noOverwrite = (lockFlags & kD3DLockNoOverwrite) != 0u;
+  const bool noWaitClass = bufferLockClassBypassesReplay(
+      b->desc, lockFlags,
+      upper && upper->dynamicBufferRenameEnabled());
+  if (noWaitClass) {
+    noteDrainFenceMode(noOverwrite ? DrainFenceMode::BypassNoOverwrite
+                                   : DrainFenceMode::BypassDiscard);
+    return true;
+  }
+  if (!ledger.pending(*b->replayDrainTarget)) {
+    const bool unrelatedWork =
+        b->device->replayOffload &&
+        b->device->replayOffload->queue().depth() != 0u;
+    noteDrainFenceMode(unrelatedWork ? DrainFenceMode::ScopedUnrelated
+                                     : DrainFenceMode::ScopedClear);
+    return true;
   }
   dxmt9::perf::countOffloadDrainFenceWait();
   const auto waitStart = std::chrono::steady_clock::now();
-  queue.waitDrained();
+  const auto result = ledger.wait(*b->replayDrainTarget);
   const auto elapsed = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStart).count());
   dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
+  noteDrainFenceMode(DrainFenceMode::ScopedWait, elapsed);
   if (drainSiteAttributionEnabled()) {
     noteDrainSite("dxmt9c_buffer_lock", elapsed);
     noteBlockedLockClass(lockFlags, b->desc.pool, elapsed);
   }
+  if (result != ReplayDrainResult::CaughtUp) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+    drainDeferredReplay(b->device, "dxmt9c_buffer_lock_fallback");
+    return false;
+  }
+  return true;
 }
 
-void drainDeferredReplay(D9CBuffer* b, const char* site) {
+bool drainDeferredReplayForBufferUnlock(D9CBuffer* b) {
+  if (!b || !b->device) {
+    return true;
+  }
+  auto& ledger = b->device->replayDrainLedger;
+  if (ledger.terminal()) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+    drainDeferredReplay(b->device, "dxmt9c_buffer_unlock_fallback");
+    return false;
+  }
+  const bool noOverwrite =
+      (b->lastLockFlags & kD3DLockNoOverwrite) != 0u;
+  const auto upper = b->device->dev().upperDevice();
+  const bool noWaitClass =
+      b->lastLockSucceeded && bufferLockClassBypassesReplay(
+          b->desc, b->lastLockFlags,
+          upper && upper->dynamicBufferRenameEnabled());
+  if (noWaitClass) {
+    noteDrainFenceMode(noOverwrite ? DrainFenceMode::BypassNoOverwrite
+                                   : DrainFenceMode::BypassDiscard);
+    return true;
+  }
+  if (!ledger.pending(*b->replayDrainTarget)) {
+    const bool unrelatedWork =
+        b->device->replayOffload &&
+        b->device->replayOffload->queue().depth() != 0u;
+    noteDrainFenceMode(unrelatedWork ? DrainFenceMode::ScopedUnrelated
+                                     : DrainFenceMode::ScopedClear);
+    return true;
+  }
+  dxmt9::perf::countOffloadDrainFenceWait();
+  const auto waitStart = std::chrono::steady_clock::now();
+  const auto result = ledger.wait(*b->replayDrainTarget);
+  const auto elapsed = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - waitStart).count());
+  dxmt9::perf::countOffloadDrainFenceCpuTime(elapsed);
+  noteDrainFenceMode(DrainFenceMode::ScopedWait, elapsed);
+  if (drainSiteAttributionEnabled()) {
+    noteDrainSite("dxmt9c_buffer_unlock", elapsed);
+  }
+  if (result != ReplayDrainResult::CaughtUp) {
+    noteDrainFenceMode(DrainFenceMode::Terminal);
+    drainDeferredReplay(b->device, "dxmt9c_buffer_unlock_fallback");
+    return false;
+  }
+  return true;
+}
+
+bool drainDeferredReplay(D9CBuffer* b, const char* site) {
   if (!b) {
-    return;
+    return true;
   }
-  drainDeferredReplay(b->device, site);
+  return drainDeferredReplay(b->device, site);
 }
 
-void drainDeferredReplay(D9CSwapChain* s, const char* site) {
+bool drainDeferredReplay(D9CSwapChain* s, const char* site) {
   if (!s) {
-    return;
+    return true;
   }
-  drainDeferredReplay(s->owner, site);
+  return drainDeferredReplay(s->owner, site);
 }
 
-void drainDeferredReplay(D9CTexture* t, const char* site) {
+bool drainDeferredReplay(D9CTexture* t, const char* site) {
   if (!t) {
-    return;
+    return true;
   }
-  drainDeferredReplay(t->device, site);
+  return drainDeferredReplay(t->device, site);
 }
 
-void drainDeferredReplay(D9CSurface* s, const char* site) {
+bool drainDeferredReplay(D9CSurface* s, const char* site) {
   if (!s) {
-    return;
+    return true;
   }
-  drainDeferredReplay(s->device, site);
+  return drainDeferredReplay(s->device, site);
 }
 
-void drainDeferredReplay(D9CQuery* q, const char* site) {
+bool drainDeferredReplay(D9CQuery* q, const char* site) {
   if (!q) {
-    return;
+    return true;
   }
-  drainDeferredReplay(q->device, site);
+  return drainDeferredReplay(q->device, site);
 }
 
-void drainDeferredReplay(D9CStateBlock* sb, const char* site) {
+bool drainDeferredReplay(D9CStateBlock* sb, const char* site) {
   if (!sb) {
-    return;
+    return true;
   }
-  drainDeferredReplay(sb->device, site);
+  return drainDeferredReplay(sb->device, site);
 }
 
 }  // namespace dxmt9::d3d9

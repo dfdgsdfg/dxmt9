@@ -126,6 +126,7 @@ struct ReplayScratchArena {
   std::vector<dxmt9::core::DrawRunSubmission> submissions;
   std::vector<dxmt9::core::DrawParam> runParams;
   std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
+  std::vector<dxmt9::core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
   std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
   bool inUse = false;
@@ -134,6 +135,7 @@ struct ReplayScratchArena {
     submissions.clear();
     runParams.clear();
     bindingOverrides.clear();
+    bindingSnapshots.clear();
     runPayloads.clear();
     coreEntries.clear();
   }
@@ -389,10 +391,30 @@ class DeviceReplaySinkV2 final : public dxmt9::d3d9::NonDrawReplaySinkV2,
 public:
   DeviceReplaySinkV2(
       D9CDevice* device, bool pacedByPresentOrdinal,
-      std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions)
+      std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
+      std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
+      std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
+      bool capturedBuffersRequired)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
-        pendingDrawSubmissions_(pendingDrawSubmissions) {}
+        pendingDrawSubmissions_(pendingDrawSubmissions),
+        bindingSnapshots_(bindingSnapshots),
+        snapshotResolver_(capturedBuffers),
+        capturedBuffersRequired_(capturedBuffersRequired &&
+                                 snapshotResolver_.hasCapturedBackings()) {
+    if (capturedBuffersRequired_) {
+      const auto& state = device_->dev().state();
+      for (dxmt9::core::u32 stream = 0;
+           stream < dxmt9::core::kMaxStreams; ++stream) {
+        const auto& buffer = state.streamBuffers[stream];
+        classifyStreamBinding(
+            stream, buffer ? buffer->handle() : dxmt9::core::Handle{});
+      }
+      classifyIndexBinding(
+          state.indexBuffer ? state.indexBuffer->handle()
+                            : dxmt9::core::Handle{});
+    }
+  }
 
   void setBatchCurrentDraw(bool value) noexcept {
     batchCurrentDraw_ = value;
@@ -506,9 +528,17 @@ public:
   std::int32_t setStream(
       const D9CCommandChunkWireStreamBindingV2& value,
       void* buffer) override {
-    return dxmt9c_device_set_stream_source(
+    const auto hr = dxmt9c_device_set_stream_source(
         device_, value.slot, static_cast<D9CBuffer*>(buffer), value.offset,
         value.stride);
+    if (!failed(hr) && capturedBuffersRequired_ &&
+        value.slot < dxmt9::core::kMaxStreams) {
+      const auto* wire = static_cast<D9CBuffer*>(buffer);
+      classifyStreamBinding(
+          value.slot, wire && wire->obj ? wire->obj->handle()
+                                       : dxmt9::core::Handle{});
+    }
+    return hr;
   }
 
   std::int32_t setShader(std::uint32_t stage, void* shader) override {
@@ -532,7 +562,15 @@ public:
   }
 
   std::int32_t setIndexBuffer(void* buffer) override {
-    return dxmt9c_device_set_indices(device_, static_cast<D9CBuffer*>(buffer));
+    const auto hr =
+        dxmt9c_device_set_indices(device_, static_cast<D9CBuffer*>(buffer));
+    if (!failed(hr) && capturedBuffersRequired_) {
+      const auto* wire = static_cast<D9CBuffer*>(buffer);
+      classifyIndexBinding(
+          wire && wire->obj ? wire->obj->handle()
+                            : dxmt9::core::Handle{});
+    }
+    return hr;
   }
 
   std::int32_t setRenderTarget(std::uint32_t slot, void* surface) override {
@@ -703,19 +741,94 @@ public:
           draw, submission, previous);
       if (failed(hr)) {
         pendingDrawSubmissions_->pop_back();
+      } else if (!attachCapturedBindingSnapshot(
+                     draw, submission.payload)) {
+        pendingDrawSubmissions_->pop_back();
+        return dxmt9::core::D3DERR_INVALIDCALL;
       }
       return hr;
     }
-    if (draw.indexed) {
-      return device_->dev().drawIndexedPrimitive(
-          draw.primitiveType, draw.primitiveCount, 0,
-          draw.baseVertexIndex, draw.startIndex, draw.indexType);
+    auto payload = call.payload;
+    if (!attachCapturedBindingSnapshot(draw, payload)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
     }
-    return device_->dev().drawPrimitive(
-        draw.primitiveType, draw.primitiveCount, draw.startVertex);
+    return device_->dev().drawPrimitiveRun(
+        std::span<const dxmt9::core::DrawParam>(&draw, 1u),
+        std::span<const dxmt9::core::DrawParamPayloadView>(&payload, 1u));
   }
 
 private:
+  bool attachCapturedBindingSnapshot(
+      const dxmt9::core::DrawParam& draw,
+      dxmt9::core::DrawParamPayloadView& payload) {
+    if (!capturedBuffersRequired_) {
+      return true;
+    }
+    if (unresolvedStreamMask_ != 0u ||
+        (draw.indexed && unresolvedIndexBinding_)) {
+      return false;
+    }
+    if (capturedStreamMask_ == 0u &&
+        (!draw.indexed || !capturedIndexBinding_)) {
+      // The chunk has captured backings, but this draw uses none of them. Keep
+      // the hot live-only path free of both the 16-stream scan and the 832-byte
+      // replay payload.
+      return true;
+    }
+    dxmt9::core::DrawBindingSnapshot binding;
+    const auto& state = device_->dev().state();
+    std::array<dxmt9::core::Handle, dxmt9::core::kMaxStreams> streams{};
+    for (dxmt9::core::u32 stream = 0;
+         stream < dxmt9::core::kMaxStreams; ++stream) {
+      const auto& buffer = state.streamBuffers[stream];
+      streams[stream] = buffer ? buffer->handle() : dxmt9::core::Handle{};
+    }
+    const auto indexBuffer = state.indexBuffer
+        ? state.indexBuffer->handle()
+        : dxmt9::core::Handle{};
+    bool usedCapturedBacking = false;
+    if (!snapshotResolver_.resolve(
+            streams, state.streamOffsets, state.streamStrides,
+            indexBuffer, draw.indexType, draw.indexed, binding,
+            &usedCapturedBacking)) {
+      return false;
+    }
+    if (!usedCapturedBacking) {
+      return true;
+    }
+    bindingSnapshots_->push_back(binding);
+    payload.bindingSnapshotData = dxmt9::core::drawBindingSnapshotBytes(
+        bindingSnapshots_->back());
+    return true;
+  }
+
+  void classifyStreamBinding(dxmt9::core::u32 stream,
+                             dxmt9::core::Handle handle) noexcept {
+    const auto bit = 1u << stream;
+    capturedStreamMask_ &= ~bit;
+    unresolvedStreamMask_ &= ~bit;
+    switch (snapshotResolver_.classify(handle)) {
+    case dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass::Missing:
+      unresolvedStreamMask_ |= bit;
+      break;
+    case dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass::Captured:
+      capturedStreamMask_ |= bit;
+      break;
+    case dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass::Live:
+      break;
+    }
+  }
+
+  void classifyIndexBinding(dxmt9::core::Handle handle) noexcept {
+    const auto classification = snapshotResolver_.classify(handle);
+    capturedIndexBinding_ =
+        classification ==
+        dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass::Captured;
+    unresolvedIndexBinding_ =
+        classification ==
+        dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass::Missing;
+  }
+
   std::int32_t setConstantBytes(std::uint32_t type, std::uint32_t start,
                                 std::uint32_t count,
                                 std::span<const std::byte> bytes) {
@@ -747,6 +860,13 @@ private:
   D9CDevice* device_ = nullptr;
   bool pacedByPresentOrdinal_ = false;
   std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions_ = nullptr;
+  std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots_ = nullptr;
+  dxmt9::d3d9::ReplayBufferSnapshotResolver snapshotResolver_;
+  bool capturedBuffersRequired_ = false;
+  dxmt9::core::u32 capturedStreamMask_ = 0u;
+  dxmt9::core::u32 unresolvedStreamMask_ = 0u;
+  bool capturedIndexBinding_ = false;
+  bool unresolvedIndexBinding_ = false;
   bool batchCurrentDraw_ = false;
 };
 
@@ -791,6 +911,7 @@ int32_t replayResolvedV2Chunk(
   auto& pendingDrawSubmissions = replayScratch.submissions;
   pendingDrawSubmissions.reserve(
       std::min<std::uint32_t>(raw.recordCount, 256u));
+  replayScratch.bindingSnapshots.reserve(raw.recordCount);
   const auto flushPendingDrawSubmissions = [&]() {
     if (pendingDrawSubmissions.empty()) {
       return;
@@ -801,7 +922,9 @@ int32_t replayResolvedV2Chunk(
     pendingDrawSubmissions.clear();
   };
   DeviceReplaySinkV2 sink(
-      device, pacedByPresentOrdinal, &pendingDrawSubmissions);
+      device, pacedByPresentOrdinal, &pendingDrawSubmissions,
+      &replayScratch.bindingSnapshots, raw.bufferSnapshots,
+      raw.bufferSnapshotsCaptured);
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
     const auto record = resolved.record(index);
     const bool batchableDraw = v2RecordCanBatchDraw(device, record.wire);
@@ -825,8 +948,8 @@ int32_t replayResolvedV2Chunk(
   return dxmt9::core::D3D_OK;
 }
 
-void markResolvedV2Resources(
-    D9CDevice* device, const dxmt9::d3d9::RawCommandChunk& raw,
+bool markResolvedV2Resources(
+    D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     const dxmt9::d3d9::ImportedChunkV2View& imported) {
   auto& scratch = replayScratchArena();
   ScopedReplayScratchUse scratchUse(scratch);
@@ -845,7 +968,15 @@ void markResolvedV2Resources(
     }
     case D9C_CHUNK_HANDLE_KIND_BUFFER: {
       auto* value = static_cast<D9CBuffer*>(raw.resolvedObjects[i]);
-      if (value && value->obj) handle = value->obj->handle();
+      if (value && value->obj) {
+        handle = value->obj->handle();
+        const bool targetDuplicate = std::find(
+            raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
+            value->replayDrainTarget.get()) != raw.ledgerTargets.end();
+        if (!targetDuplicate) {
+          raw.ledgerTargets.push_back(value->replayDrainTarget.get());
+        }
+      }
       break;
     }
     default:
@@ -863,11 +994,21 @@ void markResolvedV2Resources(
       scratch.coreEntries.push_back({.kind = kind, .handle = handle});
     }
   }
-  if (!scratch.coreEntries.empty()) {
-    if (auto upper = device->dev().upperDevice()) {
-      upper->markChunkResources(scratch.coreEntries);
-    }
+  if (auto upper = device->dev().upperDevice()) {
+    const auto captureResult =
+        upper->markChunkResourcesAndCaptureBufferBindings(
+            scratch.coreEntries, raw.bufferSnapshots);
+    raw.bufferSnapshotsCaptured =
+        captureResult ==
+        dxmt9::core::ChunkBufferBindingCaptureResult::Complete;
+    std::sort(raw.bufferSnapshots.begin(), raw.bufferSnapshots.end(),
+              [](const auto& left, const auto& right) {
+                return left.buffer.value < right.buffer.value;
+              });
+    return captureResult !=
+           dxmt9::core::ChunkBufferBindingCaptureResult::MissingRequired;
   }
+  return true;
 }
 
 bool v2ChunkRequiresInlineReplay(
@@ -884,10 +1025,10 @@ bool v2ChunkRequiresInlineReplay(
 
 // Runs on the ReplayOffloadWorker thread. V2 admission has already validated
 // the blob and resolved/retained every object, so the worker replays only that
-// owned representation and releases wrappers on both success and failure.
+// owned representation. The caller publishes ledger completion before it
+// releases the wrapper retention that keeps ledger targets alive.
 int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& chunk) {
   if (chunk.wireVersion != D9C_COMMAND_CHUNK_VERSION_V2) {
-    releaseRetainedWrappers(chunk);
     dxmt9::perf::countCommandChunkV2Reject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
@@ -895,7 +1036,6 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
   const int32_t hr = replayResolvedV2Chunk(
       d, chunk, /*pacedByPresentOrdinal=*/true);
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
-  releaseRetainedWrappers(chunk);
   if (failed(hr)) {
     dxmt9::perf::countCommandChunkV2Reject();
   }
@@ -987,8 +1127,13 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       return commitChunkFail("v2-owned-preflight-view");
     }
     CommitChunkPhaseTimer markPhase(phaseSplit);
-    markResolvedV2Resources(d, raw, imported);
+    const bool resourcesMarked = markResolvedV2Resources(d, raw, imported);
     markPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCpuTime);
+    if (!resourcesMarked) {
+      dxmt9::d3d9::releaseRetainedWrappers(raw);
+      dxmt9::perf::countCommandChunkV2Reject();
+      return commitChunkFail("v2-buffer-capture");
+    }
     dxmt9::perf::countCommandChunkWire(
         D9C_COMMAND_CHUNK_VERSION_V2, chunk->recordCount,
         chunk->recordBytes, chunk->handleCount);
@@ -1012,7 +1157,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       CommitChunkPhaseTimer enqueuePhase(phaseSplit);
       dxmt9::perf::countOffloadReplayQueueDepth(
           static_cast<std::uint64_t>(d->replayOffload->queue().depth()));
-      const bool pushed = d->replayOffload->queue().push(std::move(raw));
+      const bool pushed = d->replayOffload->queue().push(
+          std::move(raw), &d->replayDrainLedger);
       enqueuePhase.stop(dxmt9::perf::countCommitChunkPhaseEnqueueCpuTime);
       if (!pushed) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -1067,8 +1213,18 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       dxmt9::perf::countCommandChunkV2Reject();
       return commitChunkFail("v2-offload-worker-failed-inline");
     }
+    if (!d->replayDrainLedger.publishInline(raw)) {
+      dxmt9::d3d9::releaseRetainedWrappers(raw);
+      dxmt9::perf::countCommandChunkV2Reject();
+      return commitChunkFail("v2-replay-ledger-stopped-inline");
+    }
     const int32_t hr = replayResolvedV2Chunk(
         d, raw, /*pacedByPresentOrdinal=*/false);
+    if (!failed(hr)) {
+      d->replayDrainLedger.publishReplayed(raw);
+    } else {
+      d->replayDrainLedger.poison();
+    }
     dxmt9::d3d9::releaseRetainedWrappers(raw);
     if (!failed(hr)) {
       const auto elapsed = std::chrono::steady_clock::now() - bridgeCommitStart;

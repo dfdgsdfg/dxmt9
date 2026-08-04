@@ -127,7 +127,9 @@ if host_machine.system() == 'darwin'
 endif
 
 verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'check', 'verify_tla.sh')
-test('dxmt9-verify-tla', bash, args: [verify_tla_script], is_parallel: false)
+test('dxmt9-verify-tla', bash, args: [verify_tla_script],
+     is_parallel: false,
+     timeout: 120)
 test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_manifest.sh')],
      is_parallel: false)
 test('dxmt9-shader-corpus-gaps', python3,
@@ -168,6 +170,11 @@ test('dxmt9-corpus-sync-smoke', python3,
      is_parallel: false)
 test('dxmt9-wine-resolve', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wine_resolve.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
+test('dxmt9-run-d3d9-conformance', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_run_d3d9_conformance.py')],
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
