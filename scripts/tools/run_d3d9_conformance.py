@@ -346,8 +346,8 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
 
 
 def run_chunk(args: argparse.Namespace, start: int, end: int,
-              timeout: float) -> tuple[dict[str, str], str, bool]:
-    """Run a chunk of [start, end) and return (verdicts, stdout, timed_out)."""
+              timeout: float) -> tuple[dict[str, str], str, bool, int | None]:
+    """Return verdicts, output, timeout state, and process status for a chunk."""
     cmd = [
         str(args.wine),
         str(args.exe),
@@ -367,8 +367,10 @@ def run_chunk(args: argparse.Namespace, start: int, end: int,
             check=False,
         )
         stdout = proc.stdout + proc.stderr
+        returncode = proc.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
+        returncode = None
         stdout = (exc.stdout or b"").decode("utf-8", errors="replace") \
             + (exc.stderr or b"").decode("utf-8", errors="replace")
 
@@ -389,7 +391,17 @@ def run_chunk(args: argparse.Namespace, start: int, end: int,
     # If chunk timed out mid-test, last_running has no result line.
     if timed_out and last_running is not None and last_running not in verdicts:
         verdicts[last_running] = "timeout"
-    return verdicts, stdout, timed_out
+    return verdicts, stdout, timed_out, returncode
+
+
+def mark_failed_process_missing_results(
+        chunk_names: list[str], results: dict[str, str], *,
+        timed_out: bool, returncode: int | None) -> None:
+    """Fail unreported tests when their Wine process exits unsuccessfully."""
+    if timed_out or returncode in (None, 0):
+        return
+    for name in chunk_names:
+        results.setdefault(name, "fail")
 
 
 def main() -> int:
@@ -438,9 +450,12 @@ def main() -> int:
             i = j
             continue
 
-        verdicts, stdout, timed_out = run_chunk(args, i, j, args.timeout)
+        verdicts, stdout, timed_out, returncode = run_chunk(
+            args, i, j, args.timeout)
         for name, verdict in verdicts.items():
             results[name] = verdict
+        mark_failed_process_missing_results(
+            runnable, results, timed_out=timed_out, returncode=returncode)
 
         if args.verbose:
             sys.stderr.write(stdout)
@@ -450,7 +465,12 @@ def main() -> int:
         skip_n = sum(1 for n in chunk_names if results.get(n) == "skip")
         to_n = sum(1 for n in chunk_names if results.get(n) == "timeout")
         missing = [n for n in chunk_names if n not in results]
-        flag = " TIMEOUT" if timed_out else ""
+        if timed_out:
+            flag = " TIMEOUT"
+        elif returncode:
+            flag = f" PROCESS-EXIT-{returncode}"
+        else:
+            flag = ""
         print(f"[runner] chunk {chunk_idx} [{i}:{j}){flag} "
               f"pass={pass_n} fail={fail_n} skip={skip_n} timeout={to_n} "
               f"missing={len(missing)}",
@@ -487,12 +507,14 @@ def main() -> int:
                 # first time around (timeout verdicts are eligible).
                 if results.get(name) not in (None, "timeout"):
                     continue
-                verdicts, _, sto = run_chunk(args, k, k + 1,
-                                             args.singleton_timeout)
+                verdicts, _, sto, returncode = run_chunk(
+                    args, k, k + 1, args.singleton_timeout)
                 if sto and name not in verdicts:
                     results[name] = "timeout"
                 elif name in verdicts:
                     results[name] = verdicts[name]
+                elif returncode:
+                    results[name] = "fail"
                 else:
                     # Process exited cleanly but produced no result line —
                     # treat as skip rather than silently overwriting.

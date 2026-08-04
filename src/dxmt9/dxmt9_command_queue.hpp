@@ -374,6 +374,10 @@ class CommandQueue {
   // N×per-record markDrawResources walks once per-record marking is
   // suppressed for chunk-mode draws.
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries);
+  core::ChunkBufferBindingCaptureResult
+  markChunkResourcesAndCaptureBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
 
   // Phase 14: chunk importer toggles this around a chunk's record-iter
   // block. While true, submitDrawRun skips per-draw

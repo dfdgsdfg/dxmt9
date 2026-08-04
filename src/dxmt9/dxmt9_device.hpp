@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace dxmt9 {
 
@@ -138,6 +139,15 @@ class Device {
   // production-only concern). DeviceImpl forwards to
   // CommandQueue::markChunkResources.
   virtual void markChunkResources(std::span<const core::ChunkHandleEntry> /*entries*/) {}
+  virtual core::ChunkBufferBindingCaptureResult
+  markChunkResourcesAndCaptureBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots) {
+    snapshots.clear();
+    markChunkResources(entries);
+    return core::ChunkBufferBindingCaptureResult::Unsupported;
+  }
+  virtual bool dynamicBufferRenameEnabled() const noexcept { return false; }
   // Phase 14: chunk importer toggles per-draw markDrawResources off
   // around the record-iteration block so bulk markChunkResources is the
   // sole retention path. Stub backends ignore — they have no Pool.

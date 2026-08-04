@@ -12,6 +12,20 @@ pe_retainer_spec = executable(
 
 test('dxmt9-pe-retainer-spec', pe_retainer_spec)
 
+pe_buffer_lock_order_spec = executable(
+  'dxmt9-pe-buffer-lock-order-spec',
+  'pe_buffer_lock_order_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-buffer-lock-order-spec',
+     pe_buffer_lock_order_spec,
+     env: dxmt9_native_test_env)
+
 # Regression guard for DXMT9_PE_DRAW_FULL_SNAPSHOT (Phase 16 debug knob).
 # Runs the real producer in both modes over identical inputs and proves the
 # snapshot record is self-contained and the delta record is a subset of it. See

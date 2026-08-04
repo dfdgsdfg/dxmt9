@@ -375,18 +375,71 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   `DXMT9_OFFLOAD_COMMIT_REPLAY` is globally enabled for other presents. This
   flag rides `core::SwapDesc` only; it is unix/core-side and does not cross
   the PE/unix wire (the wire's `D9CCommandRecordPresent` is unchanged).
-- Direct (non-chunk) device calls currently drain the raw queue first (fence
-  prologue in the `device_c_bridge_*` wrapper layer), so server-state reads and
-  releases observe fully replayed state. The optional scoped FIFO-prefix design
-  is owned by `encode-scheduling/requirements.md` `R-BACK-2.61`; until its
-  access summaries and conservative fallback are implemented, full drain
-  remains authoritative.
+- A device-owned `ReplayDrainLedger`, independent of the lazily-created replay
+  worker, assigns each accepted raw chunk a FIFO replay sequence and records
+  per-core-buffer-identity `lastQueuedSeq`/`lastReplayedSeq` watermarks. Shared
+  handles reopened on the same device therefore reuse one target even though
+  they have distinct `D9CBuffer` wrappers. Admission first owns
+  the raw entry under the queue lock and then publishes its ledger targets;
+  the sole nested lock order is queue then ledger. A stopped/refused push
+  publishes no watermark. Replay completion, clean stop, and poison update
+  their predicates and notify scoped waiters while holding the ledger lock, so
+  waiters cannot miss either catch-up or terminal state. The core-handle target
+  cache stores weak values and periodically erases expired generations at a
+  live-set-relative growth threshold, so buffer churn cannot retain one map
+  node for every historical generated handle.
+- The synchronous admission phase captures the concrete backing generation for
+  every imported buffer handle and stores the immutable handle-to-snapshot
+  table in the raw entry. Each captured rename-ring backing also lends the raw
+  entry a residency token; popping transfers the token from queued ownership to
+  the single replay-worker in-flight state without releasing it. Rotation
+  cannot select that entry until replay completion, clean stop, or poison
+  releases the token, independently of GPU seqId retirement. The PE recorder
+  must seal a raw chunk before an
+  operation that can rotate a backing, including writable managed-buffer
+  publication, so one buffer handle denotes one backing generation within an
+  admitted PE raw chunk. Chunk replay resolves draw bindings only from that
+  captured table and fails closed on a missing required entry. The table is
+  sorted once at admission; replay attaches the 832-byte binding payload only
+  to a draw that actually resolves at least one captured backing. Direct draws
+  do not install a chunk resolver and retain the existing live-backing lookup.
+- Direct buffer lock and unlock are the initial resource-scoped allowlist.
+  Plain, read-only, and managed locks wait only while their target buffer's
+  queued watermark exceeds its replayed watermark. A valid dynamic
+  `D3DLOCK_DISCARD` lock may bypass replay waiting only when the upper device
+  reports runtime dynamic renaming enabled, because it then renames to a fresh
+  or idle non-in-flight and non-raw-resident backing; `NOOVERWRITE` may bypass
+  under its existing caller-owned non-overlap contract. Unlock may reuse a
+  bypass class only when its paired lock completed successfully. All unclassified,
+  multi-resource, device-wide, readback, present, reset, shutdown, query, and
+  state-block calls retain the whole-device drain and propagate its fail-stop
+  result before provider entry. A stopped or poisoned scoped fence runs that
+  fallback and returns
+  `D3DERR_DEVICELOST` without entering the buffer provider. Calls that only
+  create or inspect wrapper-cached metadata retain their no-drain fast path,
+  but acquire-check the same device-owned atomic terminal state before
+  provider entry. This includes `BeginScene` / `EndScene`, shader and
+  vertex-declaration creation or inspection, texture/surface/buffer metadata,
+  swapchain getters, and query type/size getters. Lifetime-only addref/release
+  calls remain reachable so terminal teardown cannot leak wrappers.
+- This single-core-buffer watermark lane is the currently implemented scoped
+  special case. `encode-scheduling/requirements.md` `R-BACK-2.61` owns the
+  future generalized multi-resource conflict-prefix design. Until that design
+  has complete canonical access summaries and its conservative fallback, calls
+  outside the buffer allowlist continue to use the full drain described above.
 - Replay failures fail-stop the worker (debug asserts; release poisons later
-  commits, releases retained wrappers of abandoned chunks, and aborts pending
-  ordinal waits). The historical per-record synchronous HRESULT
+  commits, wake scoped waiters without acknowledging failed or abandoned
+  chunks, release retained wrappers, and abort pending ordinal waits). Failure
+  publication is ordered before completion: publish the worker/device terminal
+  state, poison the ledger, stop queue admission, release the failed raw entry,
+  and only then clear the queue's in-flight marker and notify drain waiters. A
+  clean worker stop also wakes scoped waiters with a non-success stopped result. The
+  historical per-record synchronous HRESULT
   short-circuit of `commit_chunk` does not hold in offload mode.
 - With the flag explicitly set to `0` (the opt-out), the same admitted V2
-  representation is replayed inline instead of being queued to the worker.
+  representation and captured binding bytes pass through the same device-owned
+  ledger and are replayed inline instead of being queued to the worker; inline
+  success publishes the matching replayed watermarks before returning.
 
 All three former promotion blockers are resolved. The two boundary-pacing
 gaps (global-only inline-boundary suppression; ordinal wait ignoring

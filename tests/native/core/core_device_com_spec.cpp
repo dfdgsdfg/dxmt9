@@ -191,6 +191,8 @@ void testComWrappersEx() {
     check(openedBuffer != nullptr, "open c shared vertex buffer");
     check(openedBuffer->obj == sharedBuffer->obj,
           "same-device shared buffer aliases core resource");
+    check(openedBuffer->replayDrainTarget == sharedBuffer->replayDrainTarget,
+          "same-device shared buffer aliases one replay-ledger target");
     checkEq(dxmt9c_buffer_release(openedBuffer), 0u, "release opened shared buffer");
     checkEq(dxmt9c_buffer_release(sharedBuffer), 0u, "release shared buffer creator");
 
@@ -1819,6 +1821,53 @@ void testZeroSizeBufferLockUsesTailRange() {
   checkEq(d3d->Release(), 0u, "zero-size lock factory release");
 }
 
+void testBufferLockSuccessGateClearsFailedClassification() {
+  using namespace dxmt9::com;
+
+  auto backend = std::make_shared<RecordingBackend>();
+  auto* d3d = Direct3DCreate9Ex(D3D_SDK_VERSION, backend);
+  check(d3d != nullptr, "factory for buffer lock success gate");
+  PresentParameters params{};
+  params.backBufferWidth = 16;
+  params.backBufferHeight = 16;
+  params.windowed = true;
+  auto* device = d3d->CreateDeviceEx(0, params, nullptr);
+  check(device != nullptr, "device for buffer lock success gate");
+
+  {
+    device->AddRef();
+    D9CDevice cDevice(device);
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        &cDevice, 16, 0x00000200u, 0, 0u);
+    check(buffer != nullptr, "dynamic buffer for lock success gate");
+    void* data = nullptr;
+    checkEq(dxmt9c_buffer_lock(buffer, 0, 16, &data, 0x00002000u),
+            D3D_OK, "successful DISCARD lock");
+    check(buffer->lastLockSucceeded,
+          "successful lock arms unlock classification");
+    checkEq(buffer->lastLockFlags, std::uint32_t{0x00002000u},
+            "successful lock publishes its flags");
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "successful DISCARD unlock");
+    check(!buffer->lastLockSucceeded && buffer->lastLockFlags == 0u,
+          "unlock consumes and clears successful classification");
+
+    data = reinterpret_cast<void*>(1u);
+    checkEq(dxmt9c_buffer_lock(buffer, 17, 1, &data, 0x00002000u),
+            D3DERR_INVALIDCALL, "failed DISCARD lock after validation");
+    check(!buffer->lastLockSucceeded && buffer->lastLockFlags == 0u,
+          "failed lock cannot leave a bypass classification");
+    checkEq(dxmt9c_buffer_unlock(buffer), D3D_OK,
+            "failed-lock-then-unlock remains a defined conservative path");
+    check(!buffer->lastLockSucceeded && buffer->lastLockFlags == 0u,
+          "failed-lock unlock leaves the gate clear");
+    checkEq(dxmt9c_buffer_release(buffer), 0u,
+            "release lock success gate buffer");
+  }
+  checkEq(device->Release(), 0u, "release lock success gate device");
+  checkEq(d3d->Release(), 0u, "release lock success gate factory");
+}
+
 void testManagedPartialBufferLockUploadsFullCpuShadow() {
   using namespace dxmt9::com;
 
@@ -2038,6 +2087,7 @@ int main() {
     testRedundantShaderConstSetKeepsUniformSnapshotReusable();
     testDrawRunSubmissionCarrierFootprintCounters();
     testZeroSizeBufferLockUsesTailRange();
+    testBufferLockSuccessGateClearsFailedClassification();
     testManagedPartialBufferLockUploadsFullCpuShadow();
     testPeBufferReadonlyCacheRangeAndGeneration();
     testPeDecimatedScopeStats();

@@ -254,6 +254,16 @@ class DeviceImpl final : public Device {
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries) override {
     queue_.markChunkResources(entries);
   }
+  core::ChunkBufferBindingCaptureResult
+  markChunkResourcesAndCaptureBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots) override {
+    return queue_.markChunkResourcesAndCaptureBufferBindings(entries,
+                                                             snapshots);
+  }
+  bool dynamicBufferRenameEnabled() const noexcept override {
+    return resources::dynamicBufferRenameEnabled();
+  }
   void setSkipDrawResourceMarking(bool skip) override {
     queue_.setSkipDrawResourceMarking(skip);
   }

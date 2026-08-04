@@ -30,6 +30,7 @@
 // `Pool::createBuffer`.
 
 #include <array>
+#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -40,6 +41,8 @@
 #include <vector>
 
 #include "dxmt9/core.hpp"
+#include "device_c_replay_offload.hpp"
+#include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/winemetal/winemetal.h"
 
@@ -281,6 +284,220 @@ void testConcreteSnapshotMarkProtectsRotatedBacking() {
           "snapshot mark also advances the logical buffer watermark");
 }
 
+void testChunkAdmissionCaptureSurvivesLaterRename() {
+  using namespace dxmt9::core;
+  BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  const auto handle = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
+  auto* record = queue.pool().findBuffer(handle.value);
+  check(record != nullptr, "chunk-capture buffer is reachable");
+  SyntheticBufferHandleGuard handleGuard{record};
+  constexpr obj_handle_t generation0 = 0x1234u;
+  constexpr obj_handle_t generation1 = 0x5678u;
+  record->buffer.handle = generation0;
+  record->renameRing[0].buffer.handle = generation0;
+
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  const auto captureResult =
+      queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
+  check(captureResult == ChunkBufferBindingCaptureResult::Complete,
+        "valid versioned backing completes chunk admission capture");
+  checkEq(captured.size(), std::size_t{1u},
+          "chunk admission captures one deduplicated buffer backing");
+  check(captured[0].requiresCapturedBacking,
+        "dynamic buffer is marked as requiring its captured backing");
+  checkEq(captured[0].snapshot.metalHandle, generation0,
+          "chunk admission captures pre-rename generation G0");
+
+  record->renameRing.emplace_back();
+  record->renameRing[1].buffer.handle = generation1;
+  record->renameActiveIndex = 1u;
+  record->buffer.handle = generation1;
+  const auto liveAfterRename = queue.pool().snapshotBufferBinding(handle);
+  checkEq(liveAfterRename.metalHandle, generation1,
+          "live direct-draw lookup observes post-rename generation G1");
+  checkEq(captured[0].snapshot.metalHandle, generation0,
+          "immutable chunk capture remains on G0 after live rename");
+
+  dxmt9::d3d9::ReplayBufferSnapshotResolver resolver(captured);
+  std::array<Handle, kMaxStreams> streams{};
+  std::array<u32, kMaxStreams> offsets{};
+  std::array<u32, kMaxStreams> strides{};
+  streams[0] = handle;
+  offsets[0] = 4u;
+  strides[0] = 16u;
+  DrawBindingSnapshot replayBinding{};
+  check(resolver.resolve(streams, offsets, strides, {}, IndexType::UInt16,
+                         false, replayBinding),
+        "chunk resolver finds the admitted handle");
+  checkEq(replayBinding.streams[0].snapshot.metalHandle, generation0,
+          "chunk resolver emits captured G0 while live lookup is G1");
+
+  dxmt9::d3d9::ReplayBufferSnapshotResolver missingResolver({});
+  check(!missingResolver.resolve(streams, offsets, strides, {},
+                                  IndexType::UInt16, false, replayBinding),
+        "chunk resolver fails closed when a required handle is absent");
+}
+
+void testRawCaptureLeasePreventsCompletedBackingReuse() {
+  using namespace dxmt9::core;
+  BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  const auto handle = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
+  auto* record = queue.pool().findBuffer(handle.value);
+  check(record != nullptr, "raw-residency buffer is reachable");
+  SyntheticBufferHandleGuard handleGuard{record};
+  constexpr obj_handle_t generation0 = 0x1234u;
+  record->buffer.handle = generation0;
+  record->renameRing[0].buffer.handle = generation0;
+
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  check(queue.markChunkResourcesAndCaptureBufferBindings(entries, captured) ==
+            ChunkBufferBindingCaptureResult::Complete,
+        "raw-residency fixture captures G0");
+  check(captured[0].backingResidency != nullptr &&
+            record->renameRing[0].replayResident(),
+        "raw capture leases its concrete ring entry");
+
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard,
+                                 /*completedSeqId=*/UINT64_MAX);
+  checkEq(record->renameRing.size(), std::size_t{2u},
+          "GPU completion cannot make a raw-resident backing reusable");
+  checkEq(record->renameActiveIndex, 1u,
+          "DISCARD grows away from the raw-resident G0 entry");
+
+  captured.clear();
+  check(!record->renameRing[0].replayResident(),
+        "raw-entry destruction releases the backing lease");
+  record->renameRing[1].lastUsedSeqId = 9u;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard,
+                                 /*completedSeqId=*/8u);
+  checkEq(record->renameActiveIndex, 0u,
+          "released G0 becomes reusable after its GPU watermark completes");
+}
+
+void testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking() {
+  using namespace dxmt9::core;
+  const Handle versioned{.value = 10u};
+  const Handle liveOnly{.value = 20u};
+  std::vector<ChunkBufferBindingSnapshot> captures{
+      ChunkBufferBindingSnapshot{
+          .buffer = versioned,
+          .snapshot = DrawBufferBindingSnapshot{.metalHandle = 0x1234u},
+          .requiresCapturedBacking = true,
+      },
+      ChunkBufferBindingSnapshot{
+          .buffer = liveOnly,
+          .requiresCapturedBacking = false,
+      },
+  };
+  dxmt9::d3d9::ReplayBufferSnapshotResolver resolver(captures);
+  check(resolver.hasCapturedBackings(),
+        "resolver observes that this raw chunk has a versioned backing");
+  using BindingClass =
+      dxmt9::d3d9::ReplayBufferSnapshotResolver::BindingClass;
+  check(resolver.classify(versioned) == BindingClass::Captured,
+        "versioned binding arms sparse payload attachment");
+  check(resolver.classify(liveOnly) == BindingClass::Live,
+        "live-only binding keeps sparse payload attachment disarmed");
+  check(resolver.classify(Handle{.value = 30u}) == BindingClass::Missing,
+        "unregistered binding remains fail-closed");
+  std::array<Handle, kMaxStreams> streams{};
+  std::array<u32, kMaxStreams> offsets{};
+  std::array<u32, kMaxStreams> strides{};
+  streams[0] = liveOnly;
+  DrawBindingSnapshot binding;
+  std::memset(&binding, 0xa5, sizeof(binding));
+  bool usedCapturedBacking = true;
+  check(resolver.resolve(streams, offsets, strides, {}, IndexType::UInt16,
+                         false, binding, &usedCapturedBacking),
+        "live-only draw remains resolvable in a mixed raw chunk");
+  check(!usedCapturedBacking,
+        "draw that does not bind G0 requests no 832-byte payload");
+  const auto* bytes = reinterpret_cast<const std::uint8_t*>(&binding);
+  check(std::all_of(bytes, bytes + sizeof(binding),
+                    [](std::uint8_t value) { return value == 0xa5u; }),
+        "live-only draw does not materialize the binding snapshot");
+}
+
+void testChunkAdmissionLeavesStaticBufferOnLiveFallback() {
+  using namespace dxmt9::core;
+  BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  const auto handle = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, staticBufferDesc());
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  const auto captureResult =
+      queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
+  check(captureResult == ChunkBufferBindingCaptureResult::Complete,
+        "static buffer does not require a concrete admission snapshot");
+  checkEq(captured.size(), std::size_t{1u},
+          "static buffer still receives a completeness-table entry");
+  check(!captured[0].requiresCapturedBacking,
+        "static entry selects the live direct-draw fallback lane");
+  check(!captured[0].snapshot.valid(),
+        "static entry does not invent a versioned backing snapshot");
+
+  dxmt9::d3d9::ReplayBufferSnapshotResolver resolver(captured);
+  std::array<Handle, kMaxStreams> streams{};
+  std::array<u32, kMaxStreams> offsets{};
+  std::array<u32, kMaxStreams> strides{};
+  streams[0] = handle;
+  DrawBindingSnapshot replayBinding{};
+  check(resolver.resolve(streams, offsets, strides, {}, IndexType::UInt16,
+                         false, replayBinding),
+        "static buffer resolves through the live fallback lane");
+  checkEq(replayBinding.streamMask, 0u,
+          "static fallback emits no concrete backing override");
+}
+
+void testChunkAdmissionRejectsMissingRequiredBacking() {
+  using namespace dxmt9::core;
+  BackendLimits limits{};
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  const auto handle = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  const auto captureResult =
+      queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
+  check(captureResult == ChunkBufferBindingCaptureResult::MissingRequired,
+        "versioned buffer without a concrete backing rejects admission");
+  checkEq(captured.size(), std::size_t{1u},
+          "failed required capture remains diagnosable in the table");
+  check(captured[0].requiresCapturedBacking,
+        "failed capture records that the versioned backing was required");
+  check(!captured[0].snapshot.valid(),
+        "failed required capture carries no usable snapshot");
+}
+
 void testManagedCreateSeedsVersionRing() {
   using namespace dxmt9::resources;
   dxmt9::resources::Pool resourcePool;
@@ -459,6 +676,11 @@ int main() {
     testRingNeverShrinksOnSubsequentDiscards();
     testNonDiscardLockSkipsRotation();
     testConcreteSnapshotMarkProtectsRotatedBacking();
+    testChunkAdmissionCaptureSurvivesLaterRename();
+    testRawCaptureLeasePreventsCompletedBackingReuse();
+    testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking();
+    testChunkAdmissionLeavesStaticBufferOnLiveFallback();
+    testChunkAdmissionRejectsMissingRequiredBacking();
     testManagedCreateSeedsVersionRing();
     testManagedWritableMapNeverWaitsButDefaultPlainDoes();
     testManagedUploadRotatesAfterMapAndCopiesFullShadow();

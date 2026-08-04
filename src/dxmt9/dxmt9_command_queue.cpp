@@ -2329,6 +2329,10 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
   bool anyPayloadChanged = false;
   for (std::size_t i = 0; i < draws.size(); ++i) {
     const auto payload = drawPayloadAt(payloads, i);
+    if (!payload.bindingSnapshotData.empty()) {
+      snapshotPayloads.push_back(payload);
+      continue;
+    }
     core::DrawBindingSnapshot snapshot{};
     bool addedSnapshots = false;
     addDynamicBufferSnapshots(pool, hot, draws[i], payload, snapshot, addedSnapshots);
@@ -2369,6 +2373,9 @@ void snapshotDrawSubmissionBindingPayloads(
 
   for (auto& submission : submissions) {
     core::DrawParamPayloadView payload = submission.payload;
+    if (!payload.bindingSnapshotData.empty()) {
+      continue;
+    }
     core::DrawBindingSnapshot snapshot{};
     bool addedSnapshots = false;
     const auto& hot = submission.stateMaterialized
@@ -3021,6 +3028,42 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
       break;
     }
   }
+}
+
+core::ChunkBufferBindingCaptureResult
+CommandQueue::markChunkResourcesAndCaptureBufferBindings(
+    std::span<const core::ChunkHandleEntry> entries,
+    std::vector<core::ChunkBufferBindingSnapshot>& snapshots) {
+  snapshots.clear();
+  snapshots.reserve(entries.size());
+  if (entries.empty()) {
+    return core::ChunkBufferBindingCaptureResult::Complete;
+  }
+  std::unique_lock lock(mutex_);
+  const std::uint64_t seqId = seqIdForMark(*this, 0);
+  bool missingRequired = false;
+  for (const auto& entry : entries) {
+    switch (entry.kind) {
+    case core::ChunkHandleKind::Texture:
+      pool_.markTextureUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Surface:
+      pool_.markSurfaceUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Buffer:
+      pool_.markBufferUse(entry.handle, seqId);
+      snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
+      missingRequired |= snapshots.back().requiresCapturedBacking &&
+                         !snapshots.back().snapshot.valid();
+      break;
+    case core::ChunkHandleKind::Shader:
+    case core::ChunkHandleKind::VertexDecl:
+      break;
+    }
+  }
+  return missingRequired
+             ? core::ChunkBufferBindingCaptureResult::MissingRequired
+             : core::ChunkBufferBindingCaptureResult::Complete;
 }
 
 void CommandQueue::submitDrawRun(core::CanonicalDrawState state,

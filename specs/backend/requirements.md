@@ -266,10 +266,36 @@ reordering or parallelizing replay across chunks; (c) pace present-bearing
 commits with a present-ordinal frame-latency boundary
 (`CommandQueue::waitPresentOrdinalBoundary`) that honors the resolved
 `BoundaryPolicy` and stays order-isomorphic to the inline present boundary;
-(d) before any direct (non-chunk) device call observes or mutates unix-side
-state, drain all deferred replay work unless the scoped FIFO-prefix proof in
-`R-BACK-2.61` applies; a missing, stale, global, or unknown access summary must
-select the full drain; (e) fail-stop on a deferred replay
+(d) before a direct (non-chunk) device call observes or mutates unix-side
+state, it must choose one of three ordered fences: (i) when the call has one
+ledger-classified target resource, canonicalized by underlying core-buffer
+identity rather than by one D3D wrapper, wait only while that resource's
+synchronously published `lastQueuedSeq` is greater than the replay worker's
+`lastReplayedSeq`; (ii) a valid `D3DLOCK_DISCARD` buffer lock may bypass replay
+waiting only when runtime dynamic renaming is enabled and can select a fresh
+or idle non-in-flight backing, and every chunk queued before the rename must
+hold raw-entry residency on, retain, and consume its synchronously captured
+pre-rename backing; or (iii) when the call is not completely
+classifiable to one target resource, is device-wide, spans multiple resources,
+performs readback, present, reset, shutdown, query, or state-block work, or
+observes a stopped or poisoned replay worker, it must use the existing global
+drain and propagate its fail-stop outcome before entering the provider as the
+conservative fallback. A provider-facing call that is intentionally exempt
+from draining, including `BeginScene` and `EndScene`, must still acquire-check
+the device terminal replay state and must not enter the provider after stop or
+poison. Wrapper lifetime-only addref/release calls are the sole exception and
+must remain reachable after terminal publication so teardown can complete.
+This single-core-buffer allowlist is the conservative implemented special case;
+the generalized multi-resource conflict-prefix optimization is owned by
+`R-BACK-2.61`. A call outside the allowlist may use that optimization only when
+its complete canonical access summary and FIFO-prefix proof satisfy
+`R-BACK-2.61`; a missing, stale, global, or unknown summary selects the full
+drain.
+Replay failure must publish its terminal state, poison the ledger, and
+stop admission before publishing queue completion. A resource-scoped
+wait must not return while pending unreplayed work references its target, and
+the DISCARD lane must not weaken ordering for any non-DISCARD conflicting
+access; (e) fail-stop on a deferred replay
 failure — poisoning later commits and aborting pending present-ordinal
 waits — without synthesizing a per-record HRESULT for a chunk that failed
 after its synchronous validation phase already returned success; and (f)

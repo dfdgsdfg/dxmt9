@@ -1137,6 +1137,13 @@ extern "C" uint32_t dxmt9c_buffer_release(D9CBuffer* b) {
 
 extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t size, void** data,
                                       uint32_t flags) {
+  if (b) {
+    b->lastLockSucceeded = false;
+    b->lastLockReadOnly = false;
+    b->lastLockOffset = 0;
+    b->lastLockSize = 0;
+    b->lastLockFlags = 0;
+  }
   if (!data || !b || !b->obj) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
@@ -1156,10 +1163,6 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
                    actualSize, flags, b->desc.size, b->desc.usage,
                    static_cast<uint32_t>(b->desc.pool), b->desc.fvf);
   }
-  b->lastLockReadOnly = (flags & kD3DLockReadOnly) != 0;
-  b->lastLockOffset = offset;
-  b->lastLockSize = actualSize;
-  b->lastLockFlags = flags;
   const auto start = std::chrono::steady_clock::now();
   auto lock = b->obj->lock(offset, actualSize, lockFlagsToCore(flags));
   *data = lock.data;
@@ -1214,6 +1217,11 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
                    static_cast<void*>(b), static_cast<unsigned long long>(handle), *data,
                    lock.pitch, shadowCopy ? 1u : 0u);
   }
+  b->lastLockReadOnly = (flags & kD3DLockReadOnly) != 0;
+  b->lastLockOffset = offset;
+  b->lastLockSize = actualSize;
+  b->lastLockFlags = flags;
+  b->lastLockSucceeded = true;
   return dxmt9::core::D3D_OK;
 }
 
@@ -1251,6 +1259,7 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   b->lastLockOffset = 0;
   b->lastLockSize = 0;
   b->lastLockFlags = 0;
+  b->lastLockSucceeded = false;
   return dxmt9::core::D3D_OK;
 }
 

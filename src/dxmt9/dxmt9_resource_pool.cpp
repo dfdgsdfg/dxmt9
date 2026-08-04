@@ -16,15 +16,12 @@
 #include <vector>
 
 namespace dxmt9::resources {
-namespace {
 
-bool dynamicBufferRenameEnabled() {
+bool dynamicBufferRenameEnabled() noexcept {
   static const bool enabled =
       !dxmt9::util::getenvFlag("DXMT9_DISABLE_DYNAMIC_BUFFER_RENAME");
   return enabled;
 }
-
-}  // namespace
 
 BufferRecord* Pool::findBuffer(u64 handle) noexcept {
   return bufferArena_.find(handle);
@@ -989,21 +986,31 @@ void Pool::markBufferSnapshotUse(core::Handle handle,
   });
 }
 
-core::DrawBufferBindingSnapshot
-Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
-  core::DrawBufferBindingSnapshot snapshot{};
-  if (!handle) return snapshot;
-  bufferArena_.inspect(handle.value, [&snapshot](const BufferRecord& rec) {
-    if (!rec.hasVersionedBacking() || !rec.buffer) {
+core::ChunkBufferBindingSnapshot
+Pool::captureChunkBufferBinding(core::Handle handle) const noexcept {
+  core::ChunkBufferBindingSnapshot capture{.buffer = handle};
+  if (!handle) return capture;
+  bufferArena_.inspect(handle.value, [&capture](const BufferRecord& rec) {
+    capture.requiresCapturedBacking = rec.hasVersionedBacking();
+    if (!capture.requiresCapturedBacking || !rec.buffer) {
       return;
     }
-    snapshot.metalHandle = rec.buffer.handle;
-    snapshot.contentsAddress =
+    capture.snapshot.metalHandle = rec.buffer.handle;
+    capture.snapshot.contentsAddress =
         static_cast<u64>(reinterpret_cast<std::uintptr_t>(rec.contents));
-    snapshot.byteSize = rec.desc.size;
-    snapshot.contentRevision = rec.contentRevision;
+    capture.snapshot.byteSize = rec.desc.size;
+    capture.snapshot.contentRevision = rec.contentRevision;
+    if (rec.renameActiveIndex < rec.renameRing.size()) {
+      capture.backingResidency =
+          rec.renameRing[rec.renameActiveIndex].replayResidency;
+    }
   });
-  return snapshot;
+  return capture;
+}
+
+core::DrawBufferBindingSnapshot
+Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
+  return captureChunkBufferBinding(handle).snapshot;
 }
 
 void Pool::markTextureUse(core::Handle handle, u64 seqId) {
@@ -1321,7 +1328,8 @@ BufferBackingSelection rotateBufferBacking(WMT::Device device,
   // a fresh write surface, not a different allocation — return without
   // touching the ring shape. Zero-fill happens in finalizeBufferMap.
   if (record.renameActiveIndex < record.renameRing.size() &&
-      record.renameRing[record.renameActiveIndex].lastUsedSeqId <= completedSeqId) {
+      record.renameRing[record.renameActiveIndex].lastUsedSeqId <= completedSeqId &&
+      !record.renameRing[record.renameActiveIndex].replayResident()) {
     return BufferBackingSelection::ActiveIdle;
   }
   // Look for any other idle entry to rotate into.
@@ -1329,7 +1337,8 @@ BufferBackingSelection rotateBufferBacking(WMT::Device device,
     if (i == record.renameActiveIndex) {
       continue;
     }
-    if (record.renameRing[i].lastUsedSeqId <= completedSeqId) {
+    if (record.renameRing[i].lastUsedSeqId <= completedSeqId &&
+        !record.renameRing[i].replayResident()) {
       // TLA+: BufferBackingVersioning.NoUploadOverwriteInFlight.
       DXMT_ASSERT(record.renameRing[i].lastUsedSeqId <= completedSeqId);
       record.renameActiveIndex = static_cast<u32>(i);

@@ -474,6 +474,19 @@ replay_offload_queue_spec = executable(
 test('dxmt9-replay-offload-queue-spec', replay_offload_queue_spec,
      env: dxmt9_native_test_env)
 
+replay_byte_identity_spec = executable(
+  'dxmt9-replay-byte-identity-spec',
+  'replay_byte_identity_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-replay-byte-identity-off-spec', replay_byte_identity_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=0'])
+test('dxmt9-replay-byte-identity-on-spec', replay_byte_identity_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
+
 present_ordinal_boundary_spec = executable(
   'dxmt9-present-ordinal-boundary-spec',
   'present_ordinal_boundary_spec.cpp',
