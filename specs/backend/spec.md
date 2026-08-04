@@ -231,6 +231,25 @@ Ownership rules:
 - Sequence IDs track all chunk completion; frame tokens track present-bearing chunk
   completion.
 
+Immutability model (owners: R-BACK-2.51(i), R-BACK-2.59). Each hand-off in the
+lifecycle freezes the data it publishes; downstream stages read, they do not
+edit:
+
+| Stage artifact | Frozen at | Consume-side mutations permitted |
+|---|---|---|
+| PE wire chunk (record + handle tables, payload arena) | `PESealed` | none — the importer copies or takes ownership |
+| Raw-chunk queue entry (unix-owned wire copy + retained wrappers) | push onto the offload queue | none; consumed exactly once, FIFO (R-BACK-2.51(i)) |
+| Published `ChunkSlot` storage (headers, records, params, arenas, uniform payloads, binding bytes, handle tables) | leaving `Writing` | lifecycle state field; the encode worker's pipeline-prefetch memo (resolved PSO/DSS handle annotations on `DrawRun` records + prefetch cursor/seal); clearing at reclaim (R-BACK-2.59) |
+| Partition-entry snapshots and resolved views over a slot | build/resolution time | none — call-local, never retained (R-BACK-2.57/2.58) |
+
+The prefetch memo is the one deliberate carve-out: it annotates `DrawRun`
+records with already-resolved pipeline handles on the encode worker before the
+encode step reads them, and never rewrites imported payload bytes. Everything
+downstream of a publish boundary may therefore assume stable storage — the
+premise that pass-streaming reference-consumption (R-BACK-2.46), partition
+snapshots (R-BACK-2.57/2.58), and any future parallel-partition executor or
+resource-scoped drain fence build on.
+
 ### 2.2.1 Sub-CommandBuffer Chain (G axis target)
 
 `R-BACK-2.29` permits a single execution chunk to commit through a chain

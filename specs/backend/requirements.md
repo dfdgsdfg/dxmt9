@@ -457,7 +457,13 @@ inline boundary and its own frame-latency pacing even while
 (h) *(Cap honoring.)* The present-ordinal boundary's effective frame latency
 must honor `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` the same way the inline
 boundary's `presentBoundaryLatency()` does, using the committing chunk's
-swapchain `backBufferCount` (`dxmt9::cappedFrameLatency`). See
+swapchain `backBufferCount` (`dxmt9::cappedFrameLatency`).
+(i) *(Raw-queue entry immutability.)* A raw-chunk queue entry — the unix-owned
+wire copy plus its retained wrapper references — must be immutable from push
+until the replay worker consumes it, and must be consumed exactly once in FIFO
+order. No producer thread, direct device call, or diagnostic path may mutate a
+queued entry in place; any future scoped-drain or rename optimization that
+inspects queued entries must treat them as read-only. See
 `specs/backend/spec.md` §Commit-Replay Offload for the architecture. Verified
 by `dxmt9-replay-offload-queue-spec` (raw-queue FIFO/bound/drain-fence
 rules), `dxmt9-present-ordinal-boundary-spec` (ordinal target math, planner
@@ -576,6 +582,25 @@ flush an encoder, reset state, split a command buffer, change capture or
 completion behavior, or finalize a session. Resolved entries and `DrawParam`
 spans are borrowed only for the synchronous encode call and must never be
 retained by a session, submission record, callback, or Metal callback.
+
+**R-BACK-2.59** *(Published chunk-slot immutability.)* Once a `ChunkSlot` is
+published for consumption (leaves the `Writing` state), its imported command
+headers, type-specific records, draw params, payload arenas, uniform payloads,
+binding override/snapshot bytes, and retained-handle tables are immutable until
+the slot is reclaimed after GPU completion. The only permitted consume-side
+mutations are: (a) the slot lifecycle state field, advanced only by the queue's
+ownership transitions; (b) the pipeline-prefetch memo — resolved PSO and
+depth-stencil handle annotations on `DrawRun` records plus the prefetch
+cursor/seal fields — written only by the encode worker, before the encode step
+that reads them, and never modifying imported payload bytes, params, or handle
+tables; and (c) clearing storage at reclaim. Encode-path interfaces must take
+the published slot by const reference; a `const_cast` on that path must not be
+used to write. Introducing any new consume-side mutation requires amending this
+requirement's carve-out list in the same change — code that mutates a published
+slot outside the list is a defect even if no test observes it. This requirement
+is the single owner of the immutability premise that R-BACK-2.46, R-BACK-2.57,
+and R-BACK-2.58 consume, and is a stated precondition for any future
+parallel-partition encoding or resource-scoped drain design.
 
 ---
 
