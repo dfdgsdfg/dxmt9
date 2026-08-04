@@ -16,7 +16,7 @@ These requirements describe the contract owned by the backend encode path
 per-command-buffer tracking state. The design that satisfies them lives in
 `spec.md`.
 
-Traceability: `R-BACK-15.1` through `R-BACK-15.16`. Cross-references:
+Traceability: `R-BACK-15.1` through `R-BACK-15.17`. Cross-references:
 `specs/backend/requirements.md` `R-BACK-2.5` (clear-as-load-action),
 `R-BACK-2.6` (RT-change encoder split — amended below), `R-BACK-6.3`
 (post-present back-buffer DontCare-load), and
@@ -151,6 +151,11 @@ attachment is treated as live-out and uses `Store`. The next chunk may
 then DontCare-load if its first pass on the attachment is a clear or full
 overwrite (per `R-BACK-15.4`).
 
+This current-chunk rule is the fallback for an unsealed session. Once an
+EncodeSession seals a bounded logical pass under `R-BACK-2.48`, action selection
+may inspect only the immutable sources already admitted into that sealed pass;
+unknown future sources remain defensive `Store`.
+
 ---
 
 ## 4. Counters
@@ -225,6 +230,18 @@ DontCare-store on next-overwrite). The test asserts on the load/store
 action selected for the corresponding `WMTRenderPassInfo` rather than on
 GPU pixel output; pixel correctness is covered by the existing shader-
 corpus tests, which must continue to pass with the new policy active.
+
+### 5.5 Logical-pass actions across physical segments (`R-BACK-15.17`)
+
+When one logical render pass is encoded through parallel child encoders or
+Metal 4 physical segments, attachment actions and pass-end observations must
+remain logical-pass scoped. Load or deferred Clear occurs only at the first
+logical segment; Store or resolve occurs only at the final logical segment.
+Intermediate children or segments must not independently select load/store
+proofs. Touched-attachment publication, visibility results, capture or
+diagnostic sidecars, and tile-preservation counters occur once at logical-pass
+close. The serial fallback and the segmented lane must produce the same action
+and sidecar sequence.
 
 ---
 

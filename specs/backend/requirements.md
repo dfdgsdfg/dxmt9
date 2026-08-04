@@ -249,181 +249,11 @@ per `docs/research/g-axis-tuning.md`) for a measurable encode-thread +
 drawable-acquire win on chain-rich frames, while the worst case stays bounded
 by R-BACK-2.33's cap.
 
-**R-BACK-2.35** The command queue must support **producer/encode overlap**:
-work for frame N+1 may advance to CPU-ready or encode-ready state before that
-frame's `Present`, so the encode thread can build and commit non-present
-offscreen Metal work while the completion thread still waits on frame N's
-present completion. The contract is observable through the completion-overlap
-counters — `completion_wait_with_enqueue_ms` must be able to rise while
-`completion_wait_without_enqueue_ms` falls at a fixed Metal command-buffer /
-render-pass / tile-preservation shape. A queue that can advance only a
-present-bearing chunk after the present boundary wait does not satisfy this
-contract. This is a dxmt9-original divergence beyond DXMT's
-publish-at-frame-end grain.
-
-**R-BACK-2.36** Any pre-`Present` (run-ahead) promotion point used as a
-production carrier must coincide with deterministic **encoder pass / barrier
-boundaries**, not arbitrary draw counts or payload-byte thresholds. The boundary
-identity must be derived from imported records and queue-local state that the
-encoder already uses to end or begin work: attachment set, encoder kind,
-load/store action, clear folding, resolve/copy/readback/query ordering, resource
-hazards, and `Present`. Relative to the single-publish-at-`Present` baseline, a
-production run-ahead policy must not increase per-present command-buffer count,
-render-pass count, or tile-preservation bytes (the locality-preservation gate).
-A direct early-publish policy that maps each promoted slot to its own Metal
-command buffer is diagnostic-only unless this gate is proven by counters for the
-target workload.
-
-**R-BACK-2.37** A run-ahead stage or commit must be **non-present**
-(R-BACK-2.30 extension): it must not acquire a drawable, encode
-`presentDrawable`, or allocate/advance a frame-latency present token. Only the
-final present-bearing unit carries the present token, and its Metal tail is the
-only stage allowed to acquire the drawable, copy/blit the back buffer to it, and
-encode `presentDrawable`. Frame pacing therefore synchronizes **solely on
-present completion**; outstanding-present accounting and the app-side
-frame-latency wait are unaffected by how many offscreen units run ahead.
-
-**R-BACK-2.38** Resources referenced by early CPU-ready or non-present committed
-work must be retained and marked against that work unit's `seqId` before it
-becomes visible to the encode thread, so seqId-based reclaim (R-BACK-2.32)
-holds: because `completedSeqId` advances monotonically in submission order, a
-resource freed at frame N's completion can never be referenced by an N+1 unit
-that ran ahead. When chunk-bulk resource marking is active, any run-ahead split
-or staging boundary must force per-record/per-draw marking for the post-boundary
-records — no record may land under a `seqId` the importer's bulk snapshot did
-not cover.
-
-**R-BACK-2.39** Run-ahead stage, publish, and coalesce decisions must be
-**deterministic** with respect to imported record content and explicit
-queue-local state (R-BACK-2.31 extension). Policies driven by wallclock time,
-GPU progress, or other non-deterministic signals are forbidden; identical chunk
-inputs must produce identical staging, publish, and coalescing shape.
-
-**R-BACK-2.40** *(CpuReady staging.)* The producer-side CPU work of the next
-frame — PE→unix chunk import/replay, draw-submission snapshot, retained-resource
-capture, and queue draw-submission — must be able to advance to a **CPU-ready**
-state during the previous frame's present-completion wait, decoupled from the
-choice of `MTLCommandBuffer` boundary. CPU-ready units own deterministic replay
-records, retained handles, sequence metadata, and allocator ranges, but no
-drawable or present token. Promotion from CPU-ready work into Metal command
-buffers is owned by the encode thread, subject to R-BACK-2.36. If the
-frame-latency wait is deferred to create this run-ahead window, the deferred
-wait must be drained before queuing another present tail and must not relax
-R-BACK-2.49 ordered completion.
-
-**R-BACK-2.41** *(Encode-side multi-slot coalescing.)* When more than one
-CPU-ready or non-present slot is available before `Present`, the encode thread
-must be able to **coalesce consecutive compatible slots into the same Metal
-command-buffer chain that a single-publish chunk would have produced**. Slot
-boundaries must not force one Metal command buffer per slot. The encoder still
-opens and closes render, blit, or compute encoders at the normal pass / barrier
-boundaries from R-BACK-2.36; same-attachment render passes may be merged only
-when the existing hazard and load/store rules allow it. Coalescing must not
-reorder records across `Present`, query/readback, or barrier boundaries, and
-must preserve R-BACK-2.30 present-tail attachment and R-BACK-2.32
-completion-gating semantics.
-
-**R-BACK-2.42** *(EncodeSession ownership.)* The production overlap design must
-make the Metal encode session, not the committed chunk or source slot,
-logically responsible for active Metal encoder lifetime. An `EncodeSession`
-owns at most one active Metal command encoder, the active
-render-pass attachment key, deferred clear state, hazard/read-write sets,
-load/store action decisions, dirty encoder shadows, argument-buffer state,
-diagnostic sidecars, GPU sample cursors, post-commit callbacks, and the ordered
-list of source `seqId`s represented by the session. The command buffer is held
-call-locally while encoding and moves into `QueueSubmissionRecord` for physical
-queue handoff, commit, and completion storage; the session coordinates its
-logical chain and tail identity. A chunk/source boundary is not by itself a
-render-pass, command-buffer, sidecar, or completion boundary.
-
-**R-BACK-2.43** *(Open-render-encoder pass streaming.)* Consecutive imported
-sources may continue through the same active `MTLRenderCommandEncoder` when
-their replayed command stream preserves the active attachment key and exact
-hazard rules. The encoder must close the active render encoder only at semantic
-D3D9/Metal boundaries: render-target/depth/sample-count changes, clear/load
-action boundaries that cannot be folded, active render-target read hazards,
-blit/resolve/readback/query ordering points, command-encoder kind changes,
-resource-initializer waits that require a non-render encoder, `Present`, capture
-or diagnostic sidecar boundaries that explicitly observe pass-end contents, or
-session finalization. A source slot, PE/unix bridge flush, CPU-ready staging
-unit, or queue `seqId` transition must not force `flushRender(Final)` when none
-of those semantic boundaries is present.
-
-**R-BACK-2.44** *(Fail-open publication.)* A session that has encoded visible
-render work must never be held indefinitely waiting for a future present tail or
-appendable source. If the expected tail is unavailable at the carrier's bounded
-release point, the queue must either finalize and submit the already encoded
-prefix through the normal non-present completion path, or prove that the prefix
-was never consumed from the encode-visible ready lane. The queue must not mark
-an unsubmitted visible source complete inline, must not leak a frame-latency
-token to a non-present prefix, and must not block startup or frame progress on
-an uncommitted visible head.
-
-**R-BACK-2.45** *(DOD session storage.)* `EncodeSession` state must be
-data-oriented. Hot-path session data is stored in fixed-size structs,
-small inline arrays, queue-slot arenas, or ring-allocator ranges, and is passed
-as spans/views. The session must not concatenate chunk payload arenas, deep-copy
-`ChunkSlot` or imported command storage to coalesce sources, allocate one heap
-object per command/draw, or store borrowed PE/COM/ObjC/process-local pointers.
-The coalesced source list is compact metadata: source slot index, `seqId`,
-record span, allocator range identifiers, retained-handle range, and
-present-tail flags.
-
-**R-BACK-2.46** *(Minimal-copy replay contract.)* Pass-streaming coalescence
-must consume imported records and large payloads by reference to queue-owned
-immutable storage. Large uniform payloads, draw binding snapshots, resource
-lists, and command payload arenas remain owned by their source slots and are
-referenced by stable handles/spans until the session tail completes. Copies are
-permitted only for ownership transfer across a lifetime boundary, for compact
-session metadata, or for Metal API requirements such as transient uniform slab
-materialization. A coalesced session must not pay O(total payload bytes) copying
-merely to join sources.
-
-**R-BACK-2.47** *(Metal API constraints.)* The session contract must respect
-Metal encoder rules explicitly: only one command encoder may be active on a
-command buffer; a render encoder cannot be resumed after `endEncoding`; a render
-encoder must be ended before blit/compute encoders, `encodeWaitForEvent`,
-present encoding, or command-buffer commit; command buffers submitted to one
-Metal queue execute in commit order; and `CAMetalDrawable` acquisition plus
-`presentDrawable` encoding are legal only on the present tail. These constraints
-are semantic boundaries for R-BACK-2.43, not reasons to turn every source slot
-into a command-buffer boundary.
-
-**R-BACK-2.48** *(Load/store and sidecar preservation.)* Carrying a render pass
-across source boundaries must preserve the load/store action selected for the
-logical pass. Deferred clears remain load actions until the first draw of the
-logical pass; `DontCare` store proofs remain tied to the actual pass-end
-live-out proof; sidecar dumps, visibility samples, encoder-breakdown rows, and
-touched-color publication occur when the logical pass ends, not when an
-intermediate source returns. Store-proof lookahead may cross source boundaries
-only over an already selected/retained session suffix; it must stay conservative
-for unknown future writer output and must not persist borrowed source spans in
-session state. A promotable pass-streaming path must not increase
-final same-key reopens, per-present render-pass count, color/depth load/store
-MiB, tile-preservation bytes, or command-buffer count relative to the
-single-publish baseline unless a spec-local exception explicitly proves the
-semantic need.
-
-**R-BACK-2.49** *(SeqId completion refinement.)* A single `EncodeSession` may
-represent several consecutive source `seqId`s backed by one Metal command
-buffer or command-buffer chain. GPU completion of the session tail expands into
-strictly ordered per-source completion events. Resource reclaim, transient slab
-rotation, deferred destruction, query signaling, and frame-token signaling still
-observe only the per-source `seqId`/present-token timelines. No source `seqId`
-represented by a session may complete before the Metal tail that contains its
-commands completes.
-
-**R-BACK-2.50** *(Promotion gates.)* Any production `EncodeSession` /
-pass-streaming candidate must pass four ordered gates before promotion:
-deterministic native or fake-backend coverage for source-order preservation,
-fail-open publication, completion-source expansion, and semantic boundary
-detection; TLA+ or equivalent model evidence for the completion refinement in
-R-BACK-2.49; runtime visual/locality evidence proving output correctness at
-non-increasing command-buffer/render-pass/tile-preservation/load-store shape; and
-runtime no-gputrace counters proving P4 movement (`completion_wait_with_enqueue_ms`
-increases or `completion_wait_without_enqueue_ms` decreases). Runtime FPS or
-Xcode-counter evidence must not be promoted until the visual gate and the
-R-BACK-2.48 locality gates pass.
+**Encode scheduling requirements `R-BACK-2.35`–`R-BACK-2.50` are owned by
+[`encode-scheduling/requirements.md`](encode-scheduling/requirements.md).**
+They distinguish CPU-ready source publication from partition, physical encoder,
+logical render-pass, and submission boundaries, and define overlap,
+`EncodeSession`, completion, and promotion contracts.
 
 **R-BACK-2.51** *(Commit-replay offload contract.)* The commit-replay
 offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON since
@@ -436,8 +266,10 @@ reordering or parallelizing replay across chunks; (c) pace present-bearing
 commits with a present-ordinal frame-latency boundary
 (`CommandQueue::waitPresentOrdinalBoundary`) that honors the resolved
 `BoundaryPolicy` and stays order-isomorphic to the inline present boundary;
-(d) drain all deferred replay work before any direct (non-chunk) device call
-observes or mutates unix-side state; (e) fail-stop on a deferred replay
+(d) before any direct (non-chunk) device call observes or mutates unix-side
+state, drain all deferred replay work unless the scoped FIFO-prefix proof in
+`R-BACK-2.61` applies; a missing, stale, global, or unknown access summary must
+select the full drain; (e) fail-stop on a deferred replay
 failure — poisoning later commits and aborting pending present-ordinal
 waits — without synthesizing a per-record HRESULT for a chunk that failed
 after its synchronous validation phase already returned success; and (f)
@@ -546,61 +378,11 @@ structure. Draw-run parameters, binding overrides, payload views, pending
 submissions, and resolved core-handle lists must not allocate fresh containers
 for each replayed record or run after warm-up.
 
-**R-BACK-2.57** *(Immutable partition-entry snapshot.)* A backend-planned draw
-entry must cross into encoding as an immutable, trivially copyable,
-standard-layout value containing only `{sourceOrdinal, slotIndex, seqId}`;
-`{commandIndex, drawRunRecordIndex, stateIndex, drawParamIndex}`; one
-`DrawUniformHandle`; and absolute `DrawPayloadRange` locators for binding
-override and binding snapshot bytes. It must contain no Metal object, pointer,
-borrowed span, or retained owner; large payloads remain in queue-owned immutable
-source storage. One snapshot is embedded by value in each draw-entry range, and
-`EncodeChunkOptions` carries only a call-local span of immutable range snapshots.
-Empty, stale, invalid, out-of-range, or mismatched metadata must reject the
-complete explicit plan and fail open to serial encoding of the same selected
-effective replay stream. A valid snapshot does not itself authorize parallel
-Metal encoding.
-
-**R-BACK-2.58** *(Serial encode-partition execution.)* Every backend-selected
-effective replay stream must be consumed through the serial partition interface,
-using either a validated explicit range plan or identity ranges synthesized over
-that same stream. A `CommandSegment` range has nonzero complete-command coverage
-and zero draw entries. A `DrawRunEntries` range covers exactly one replay ordinal,
-has a positive draw-entry count, and embeds the entry for the first `DrawParam`
-in a contiguous subrange of that `DrawRun`. Before capture, command-buffer creation,
-initializer work, or session mutation, the encoder must validate the entire
-plan with overflow-safe arithmetic and prove exact coverage of the selected
-effective stream. Adjacent draw ranges may subdivide one command only when they
-cover its parameters contiguously without gap, overlap, duplicate, or partial
-tail; every embedded entry must resolve against the current call's immutable
-source view and match the effective command, record, state, uniform, and binding
-payloads. Any failure discards the whole plan and uses an allocation-free
-identity cursor over that same effective stream, including reordered or
-dead-code-eliminated FrameGraph replay and partial session-source ranges. The
-serial executor must perform command-level setup and completion exactly once,
-even when a `DrawRun` has multiple ranges. A partition edge must not end or
-flush an encoder, reset state, split a command buffer, change capture or
-completion behavior, or finalize a session. Resolved entries and `DrawParam`
-spans are borrowed only for the synchronous encode call and must never be
-retained by a session, submission record, callback, or Metal callback.
-
-**R-BACK-2.59** *(Published chunk-slot immutability.)* Once a `ChunkSlot` is
-published for consumption (leaves the `Writing` state), its imported command
-headers, type-specific records, draw params, payload arenas, uniform payloads,
-binding override/snapshot bytes, and retained-handle tables are immutable until
-the slot is reclaimed after GPU completion. The only permitted consume-side
-mutations are: (a) the slot lifecycle state field, advanced only by the queue's
-ownership transitions; (b) the pipeline-prefetch memo — resolved PSO and
-depth-stencil handle annotations on `DrawRun` records plus the prefetch
-cursor/seal fields — written only by the encode worker, before the encode step
-that reads them, and never modifying imported payload bytes, params, or handle
-tables; and (c) clearing storage at reclaim. Encode-path interfaces must take
-the published slot by const reference; a `const_cast` on that path must not be
-used to write. Introducing any new consume-side mutation requires amending this
-requirement's carve-out list in the same change — code that mutates a published
-slot outside the list is a defect even if no test observes it. This requirement
-is the single owner of the immutability premise that R-BACK-2.46, R-BACK-2.57,
-and R-BACK-2.58 consume, and is a stated precondition for any future
-parallel-partition encoding or resource-scoped drain design.
+**Encode scheduling requirements `R-BACK-2.57`–`R-BACK-2.64` are owned by
+[`encode-scheduling/requirements.md`](encode-scheduling/requirements.md).**
+They define immutable published storage, serial partition consumption,
+CPU-ready residency, scoped FIFO drains, production planning, parallel render
+encoding, and Metal 4 segmented logical passes.
 
 ---
 

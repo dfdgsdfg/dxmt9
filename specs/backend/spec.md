@@ -311,259 +311,26 @@ Failure mode:
   `gpu_command_buffer_errors` counter (M5) at the failure site, not
   per-sub-CB.
 
-### 2.2.2 Producer / Encode Overlap — Goal, Reference Models, and Reverted Carriers
+### 2.2.2 Encode Scheduling
 
-Scope (R-BACK-2.35–R-BACK-2.41). This section states the overlap **goal** and
-records the diagnostic / historical run-ahead carriers (A/B/C below) that proved
-the P4 wait can move but were reverted. **The production design is
-§2.2.3 (EncodeSession / open-render-encoder pass streaming, R-BACK-2.42–2.50);
-the A/B/C carriers here are not the production path.**
+CPU-ready publication, ready-prefix ownership, EncodeSession pass streaming,
+partition planning, and the serial, parallel, and Metal 4 execution lanes are
+owned by [Encode Scheduling](encode-scheduling/spec.md). Its
+[requirements](encode-scheduling/requirements.md) are authoritative for
+`R-BACK-2.35`–`R-BACK-2.50` and `R-BACK-2.57`–`R-BACK-2.64`.
 
-The goal: the producer (CS/submit thread) and the encode thread overlap the
-completion thread's present-completion wait, so per-present wall time approaches
-`max(producer, encode, present-wait)` instead of their sum. `Present` stays the
-only synchronization point (R-BACK-2.37); offscreen work runs ahead under it.
+The parent command-queue design preserves three integration rules:
 
-Reference models (apply equally to the §2.2.3 production design):
+- source publication, partition edges, physical encoder segments, logical
+  render-pass boundaries, and submission boundaries are distinct;
+- the Presenter remains the only drawable and present-token owner; and
+- completion and resource reclamation remain ordered by source `seqId` even
+  when one Metal tail or joint group represents several sources.
 
-- **DXVK D3D9.** The D3D9 device records command chunks and dispatches them to
-  `DxvkCsThread` (`dxvk/src/dxvk/dxvk_cs.*`). `EmitCsChunk()` enqueues a chunk;
-  `Flush()` appends fence/flush work and dispatches the current CS chunk
-  (`dxvk/src/d3d9/d3d9_device.cpp`). The useful model is asynchronous CS-thread
-  run-ahead with explicit synchronization only for flush, query, resource, or
-  present-facing fences. dxmt9 should borrow the timing shape, not Vulkan's
-  barrier or submission objects.
-- **DXMT.** `CommandQueue::CommitCurrentChunk()` publishes a chunk to an encode
-  thread, `CommitChunkInternal()` creates one Metal command buffer for that
-  chunk, encodes it, and commits it; the finish thread waits completion and
-  signals frame-latency fences (`dxmt/src/dxmt/dxmt_command_queue.*`). The
-  presenter acquires the drawable inside present encoding
-  (`dxmt/src/dxmt/dxmt_presenter.cpp`). dxmt9 keeps this ownership split but
-  must add a finer CPU-ready/coalescing stage because simple early chunk publish
-  maps too directly to extra Metal command buffers on Apple GPUs.
+Historical carrier and partition evidence is retained in
+[the encode-scheduling gap](encode-scheduling/gap.md) and linked performance
+notes rather than duplicated here.
 
-Terminology (**CPU-ready** / **Encode-ready** / **Present tail**) and the session
-state model are defined once in §2.2.3; that section is authoritative. In short:
-**CPU-ready** = imported/replayed records, snapshots, retained handles, allocator
-ranges, and sequence metadata are queue-owned but no Metal command-buffer,
-drawable, or present token has been chosen; the **Present tail** is the only unit
-that acquires a drawable, encodes `presentDrawable`, and signals the frame token.
-
-Diagnostic / historical carriers (all reverted — see Verification below):
-
-| Carrier | What ran ahead | CB boundary chosen by | Why not production |
-|---|---|---|---|
-| **A. Render-pass-boundary publish** (R-BACK-2.36, diagnostic) | writing chunk directly published at offscreen pass / barrier boundaries | submit thread | one CB per published slot unless C re-merges; H54/H56 reject the draw-count form |
-| **B. CpuReady staging** (R-BACK-2.40) | PE→unix replay, snapshots, retention, allocator ownership, queue submission | encoder, later | necessary readiness primitive, but slot-coalescing alone still re-fragments passes |
-| **C. Multi-slot coalescing** (R-BACK-2.41) | several CPU-ready / early non-present slots | encoder, grouping slots into one CB chain | **superseded by §2.2.3** — slot-level coalescing closes the active render encoder at each source, producing the H115 final same-key reopen; only an `EncodeSession` that carries the open encoder (R-BACK-2.43) preserves locality |
-
-The production path is therefore not "publish slots and re-merge" (A+C) but the
-§2.2.3 EncodeSession contract, which makes the Metal encode session — not the
-source slot — own render-pass lifetime. A/B/C remain useful only as the
-diagnostic A/B knobs and the readiness/coalescing primitives the session reuses.
-
-Ownership (the diagnostic A/B/C carriers; the production split is in §2.2.3):
-
-- **Submit/CS thread** — may choose diagnostic direct-publish points (A) and
-  stages CPU-ready units (B); in the production path it does not choose Metal
-  command-buffer boundaries and never touches the drawable or present token.
-- **Encode thread** — chooses `MTLCommandBuffer` chain boundaries (B/C) and owns
-  R-BACK-2.30 present-tail attachment and the R-BACK-2.33 chain cap. In the
-  reverted slot-coalescing carrier (C) it opened/closed a render encoder at every
-  source boundary; §2.2.3 supersedes that — the production EncodeSession **carries
-  one open render encoder across compatible sources** (R-BACK-2.43) and closes it
-  only at semantic pass boundaries, which is what makes the locality gate passable.
-- **Presenter** — sole owner of the drawable and present token; the
-  present-bearing tail is the only frame-latency carrier and the only code path
-  that performs drawable acquire + `presentDrawable` (R-BACK-2.37).
-- **Finish thread** — reclaims on `completedSeqId` only (R-BACK-2.32); early
-  CPU-ready or committed higher-seqId work cannot retire a resource a
-  lower-seqId present CB still uses, because `completedSeqId` is monotone in
-  submission order (R-BACK-2.38).
-
-Invariants the overlap must preserve:
-
-- **Present-only sync** — no non-present commit allocates/advances a present
-  token (`PresentFrameLatency` `CommitNonPresent`).
-- **Locality** — per-present CB / render-pass / tile-preservation shape
-  unchanged vs. single-publish (R-BACK-2.36); the arbitrary-draw-count carrier
-  and any one-CB-per-slot carrier are rejected for this reason.
-- **Lifetime** — early CPU-ready or committed work marks retained resources
-  against its `seqId` before visibility to the encode thread (`ResourceLifetime`
-  `NoUseAfterFree`, R-BACK-2.38).
-- **Tail-Present staging** — GT1 H86 shows the current Present-published slot is
-  already a large tail-Present stream (`~329` commands and `~739` draw items per
-  present before the final Present command, `100%` tail-Present slots). The
-  production candidate is therefore not a chunk-splitting path that publishes
-  pre-Present work and Present as separate chunks, but a CPU-ready staging form
-  where the encoder can still choose a coalesced tail command-buffer /
-  render-pass shape.
-
-Prior reusable primitives for this design — `runEncodeBatchLoop()`,
-`IRenderBackend::onChunkBatchReady()`, `render::tail_present_batch`'s selector
-helpers, and the `DXMT9_OPEN_CB_*` / `DXMT9_SPLIT_PRESENT_CHUNK` /
-`DXMT9_ENCODE_TAIL_PRESENT_BATCH` / `DXMT9_STAGE_TAIL_PRESENT_CHUNK` /
-`DXMT9_STAGE_PRE_PRESENT_COMMAND_LIMIT` opt-in carriers built to exercise them —
-were removed after the `present-pacing` H86-H189 experiment chain concluded the
-open-CB carrier could not recover H187's command-buffer/render-pass locality
-shape (see `docs/perfomance/present-pacing/log.md` and
-`agents/rules/environment_variables_present.rules.md`). `dequeueReadySlotBatch()`
-(move several consecutive ready slots to `Encoding` without allocating) remains,
-and `PendingCompletion` CB-to-N-`seqId` expansion remains. The production encode
-loop still calls `runEncodeIteration()` / `onChunkReady()` exclusively; no
-default behavior changed by the removal. A future §2.2.3 implementation needs to
-rebuild the batch-encode/multi-source carrier from these remaining primitives.
-The §2.2.3 completion contract (R-BACK-2.49) is authoritative for how one Metal
-tail expands to ordered per-source `seqId` completion.
-
-Verification (the full ordered gate set is in §2.2.3 *Verification Shape*; in
-brief):
-
-- Native/fake backend — semantic boundary detection, fail-open prefix submit,
-  ordered source completion, and no inline completion of unsubmitted work.
-- TLA — `PresentFrameLatency` (`CommitNonPresent` / `CommitPresent`,
-  `OutstandingPresentBound`), `ResourceLifetime` (`NoUseAfterFree`),
-  `QueueLifecycleRefinement` (`SeqIdAssignmentSafety`, `BoundedInflight`),
-  `ConcurrentProgressSignals`, and `EncodeSessionCompletion`
-  (`NoInlineCompletionOfSessionSources`, `PresentCompletionAfterTail`,
-  `OrderedCompletionExpansion`). `EncodeSessionCompletion.tla` models the
-  R-BACK-2.49 refinement where one Metal tail expands into several ordered
-  per-source `seqId` completions.
-- Runtime visual/locality — output must pass the visual gate at non-increasing
-  `command_buffers_per_present` / `passes_per_present` / `tile_preservation_mib`
-  / final same-key reopens (H57 locality gates in
-  `scripts/tools/compare_3dmark05_perf_counters.py`).
-- Runtime no-gputrace — only after visual/locality is clean, counters must show
-  `completion_wait_with_enqueue_ms` ↑ or `completion_wait_without_enqueue_ms` ↓
-  (H43 overlap gate).
-- Reverted carriers — the A/C and B prototypes (`DXMT9_OFFSCREEN_RUN_AHEAD` plus
-  ready-slot coalescing, then CPU-ready staging) moved the P4 wait but failed
-  locality, total-wait, and visual-correctness gates and were reverted; current
-  source honors none of those historical envs. The open-CB `EncodeSession`
-  carrier (`DXMT9_OPEN_CB_*` and the split/stage/tail-Present precursor envs)
-  was a separate diagnostic infrastructure track that reached H86-H189 without
-  clearing the §2.2.3 promotion requirements and was removed; a future
-  implementation is a distinct carrier, not a reintroduction of the removed
-  prototype.
-- Performance model — `docs/perfomance/present-pacing/index.md` (H10 under-pipelining,
-  H54/H56 draw-count-carrier rejection, H57 locality gates, H73 run-ahead design
-  gate, H108–H189 open-CB / render-session-carry / tail-Present carrier history,
-  retired per `agents/rules/environment_variables_present.rules.md`).
-
-### 2.2.3 EncodeSession / Open-Render-Encoder Pass Streaming
-
-The ideal overlap target is not "keep a command buffer open." It is to make
-the **Metal encode session** the unit that owns render-pass lifetime. D3D9
-command order remains source-order; the optimization is that queue source
-boundaries stop being mistaken for Metal render-pass boundaries.
-
-For comparative background on ANGLE `ContextMtl`,
-`MTLParallelRenderCommandEncoder`, and Metal 4 render-pass suspend/resume, see
-[Metal Render-Pass Lifecycle](../../docs/research/metal-render-pass-lifecycle.md).
-That research note is non-normative; this section remains authoritative for
-dxmt9 ownership, ordering, and verification requirements.
-
-```mermaid
-flowchart LR
-    subgraph Sources["Queue-owned source storage"]
-        S0["source A\nrecords + payload arena\nretained handles\nseqId A"]
-        S1["source B\nrecords + payload arena\nretained handles\nseqId B"]
-        ST["Present tail\nseqId C + frame token"]
-    end
-
-    subgraph Session["EncodeSession"]
-        CB["current MTLCommandBuffer"]
-        RE["active MTLRenderCommandEncoder"]
-        KEY["attachment key\nload/store state\nhazard sets"]
-        SH["dirty/shadow state\nargbuf state\nstream/IB shadows"]
-        META["source list\n[A,B,C]\ncallbacks + samples"]
-    end
-
-    S0 -->|"spans/views"| Session
-    S1 -->|"spans/views"| Session
-    ST -->|"tail only"| Session
-    CB --> RE
-    RE --> KEY
-    KEY --> SH
-    SH --> META
-```
-
-The session owns:
-
-| State | Why it must be session-owned |
-|---|---|
-| Current `MTLCommandBuffer` | Several source `seqId`s may be backed by one Metal tail |
-| Active render/blit/compute encoder | Metal allows only one active encoder; source boundaries must not close it |
-| Attachment key, pending clear, load/store proof | Deferred clears and `DontCare` proofs belong to the logical pass |
-| Exact read/write hazard sets | The next source can continue only if exact overlap rules permit |
-| Dirty render/shader/viewport/scissor state | Carrying a render encoder also carries its dynamic state shadow |
-| Argbuf/direct-cbuf/resource-array state | Argument tables and dirty cbuf regions must not be reset at a source boundary |
-| Stream/IB binding shadows | Avoid rebinding or losing the concrete dynamic backing selected for prior draws |
-| Sidecars, visibility samples, GPU sample cursor | Diagnostic observations publish at logical pass/session boundaries |
-| Post-commit callbacks and completion sources | Tail completion expands to ordered source completion |
-
-The session does **not** own or copy source payload bytes. Source slots retain
-their imported record arrays, payload arenas, large uniform payloads, binding
-snapshots, and handle-reference arrays. The session keeps compact source
-metadata and views:
-
-```text
-SessionSourceRef {
-  slotIndex
-  seqId
-  recordSpan
-  retainedHandleRange
-  allocatorRanges
-  flags: hasPresent, isTail, mayAcquireDrawable
-}
-```
-
-This is the DOD boundary for pass streaming: coalescing is a vector of source
-references plus one session state object, not a merged heap object or a deep
-copy of `ChunkSlot`.
-
-Load/store proof lookahead follows the same boundary. The encoder may scan a
-call-local suffix of already selected/retained sources when choosing store
-actions for a logical pass, but the suffix is not stored in `EncodeSession`.
-If the queue has not selected a future source, the proof remains source-local
-or defensive.
-
-#### Semantic Boundary Rules
-
-`EncodeSession` continues an active render encoder across sources only when
-the D3D9 command stream has no observable boundary at that point. It must end
-the active encoder for these events:
-
-| Boundary | Reason |
-|---|---|
-| RT/depth/stencil/sample-count change | Metal render-pass descriptor changes |
-| Non-foldable clear | D3D9 observes clear order; load action no longer represents it |
-| Active RT sampled or read by later draw | Exact RAW hazard requires split/barrier |
-| Blit, resolve, readback, map, or query ordering point | Metal encoder kind changes or app-visible observation |
-| Resource-initializer wait requiring `encodeWaitForEvent` | Metal wait cannot be encoded with render encoder open |
-| Present tail | Drawable acquire, blit/copy, `presentDrawable`, and frame token attach here |
-| Capture/sidecar pass-end probe | Diagnostic explicitly observes pass-end contents |
-| Session fail-open/final close | No tail is available or queue is draining |
-
-Non-boundaries:
-
-| Internal event | Required behavior |
-|---|---|
-| PE/unix `commitChunk()` | Import boundary only; no Metal pass implication |
-| CPU-ready source boundary | Source metadata boundary only |
-| Queue `seqId` boundary | Completion/lifetime boundary only |
-| Payload byte threshold or draw-count threshold | Diagnostic trigger only unless it proves a semantic boundary |
-| End of an `encodeChunk()` helper call | Must not imply `flushRender(Final)` in the session path |
-
-The frame-latency policy may move the explicit present-completion wait from the
-current `Present` return path to the next `Present` tail gate as an opt-in
-run-ahead carrier. This is not equivalent to disabling the boundary: the final
-Present tail still commits immediately, the next frame may build CPU-ready
-offscreen sources while that tail completes, and the next `Present` tail drains
-the previous target before allowing another present tail to be queued. The
-optimization exists only to create source availability for R-BACK-2.40 and
-R-BACK-2.43; it does not relax ordered completion, Present semantic boundaries,
-or the locality gates above.
 
 #### Commit-Replay Offload (engine default ON)
 
@@ -608,9 +375,12 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   `DXMT9_OFFLOAD_COMMIT_REPLAY` is globally enabled for other presents. This
   flag rides `core::SwapDesc` only; it is unix/core-side and does not cross
   the PE/unix wire (the wire's `D9CCommandRecordPresent` is unchanged).
-- Direct (non-chunk) device calls drain the raw queue first (fence prologue in
-  the `device_c_bridge_*` wrapper layer), so server-state reads and releases
-  observe fully replayed state.
+- Direct (non-chunk) device calls currently drain the raw queue first (fence
+  prologue in the `device_c_bridge_*` wrapper layer), so server-state reads and
+  releases observe fully replayed state. The optional scoped FIFO-prefix design
+  is owned by `encode-scheduling/requirements.md` `R-BACK-2.61`; until its
+  access summaries and conservative fallback are implemented, full drain
+  remains authoritative.
 - Replay failures fail-stop the worker (debug asserts; release poisons later
   commits, releases retained wrappers of abandoned chunks, and aborts pending
   ordinal waits). The historical per-record synchronous HRESULT
@@ -693,136 +463,14 @@ ceiling. The mechanics:
   runtime judgment by decimated PE stats (`DXMT9_PE_STATS_DECIMATION`)
   plus paired no-gputrace presents scouts.
 
-#### Fail-Open Publication
+#### Encode Scheduling Integration
 
-A session may not hide visible frame work while waiting for a future tail. If
-the carrier cannot attach a present tail or another compatible source at its
-bounded release point, it finalizes and submits the prefix as a normal
-non-present session.
+Fail-open publication, Metal execution constraints, minimal-copy source views,
+serial partition traversal, parallel execution, Metal 4 segmentation, and the
+ordered verification gates are defined in
+[Encode Scheduling](encode-scheduling/spec.md). The detailed implementation and
+evidence status is tracked in its [gap](encode-scheduling/gap.md).
 
-```mermaid
-stateDiagram-v2
-  [*] --> Idle
-  Idle --> ActiveSession: first source dequeued
-  ActiveSession --> ActiveSession: append compatible source
-  ActiveSession --> TailSubmit: present tail available
-  ActiveSession --> PrefixSubmit: bounded release / no tail
-  ActiveSession --> AbortBeforeEncode: source not consumed
-
-  TailSubmit --> Complete: submit tail CB
-  PrefixSubmit --> Complete: submit prefix CB
-  AbortBeforeEncode --> Idle
-  Complete --> Idle: completion expands seqIds
-```
-
-The forbidden state is "encoded visible head, no Metal submit, inline
-completion." Completion-source expansion is allowed only after Metal completion
-of the command buffer containing those source commands.
-If a multi-source batch returns a strict encoded prefix rather than the whole
-dequeued batch, the unrepresented suffix is restored to the ready lane in FIFO
-order. It is not inline-completed, because it is not backed by the prefix
-session tail. A failed suffix restore is an invariant breach and must fail-stop
-the batch path rather than synthesize completion for unsubmitted sources.
-
-#### Metal API Constraints
-
-Pass streaming is constrained by Metal's object model:
-
-- a command buffer has at most one active encoder at a time;
-- `endEncoding` is final for that encoder;
-- `encodeWaitForEvent`, blit/compute work, and present encoding require the
-  active render encoder to be closed first;
-- command buffers committed to the same `MTLCommandQueue` execute in commit
-  order, so a session can rely on tail completion as the ordered fence;
-- `nextDrawable` and `presentDrawable` belong only to the present tail.
-
-The design implication is that session state must be explicit. A helper that
-only passes an injected `WMT::CommandBuffer` through `encodeChunk()` is
-insufficient because the active render encoder and pass-local state are still
-lost at helper return.
-
-#### Minimal-Copy Contract
-
-The session path is a scheduling and lifetime change, not a payload-copying
-merge.
-
-| Data | Ownership in the ideal path |
-|---|---|
-| Imported command records | Source slot arena; session stores span |
-| Variable payload arena | Source slot arena; session stores offset/size view |
-| Uniform payloads | Queue-local handle/slab; draw references handle |
-| Binding snapshots | Source-owned compact payload; draw references snapshot handle/span |
-| Retained resource refs | Source slot retention table; session references range |
-| Completion metadata | Session source-ref vector; copied only as small metadata |
-| Metal transient cbuf bytes | Materialized only when Metal API needs a bound buffer |
-
-The hot path should remain linear: iterate sources, iterate records, update one
-session state object, emit Metal commands. It must not concatenate all source
-payloads, rebuild canonical draw state for already imported records, or copy
-large uniform/resource arrays just because several sources share a session.
-
-#### Serial Encode Partitions
-
-R-BACK-2.57 keeps `EncodePartitionEntrySnapshot` as the locator-only entry
-contract: retained source `{sourceOrdinal, slotIndex, seqId}`,
-command/run/state/parameter indices, a uniform handle, and absolute
-binding-override/snapshot payload ranges. It owns no Metal reference, pointer,
-span, or large payload. `EncodePartitionRangeSnapshot` embeds one entry by value
-and adds the effective replay ordinal coverage and draw-entry count;
-`EncodeChunkOptions` borrows a range-snapshot span for the synchronous call only.
-Neither that span nor a resolved entry/`DrawParam` span may escape into an
-`EncodeSession`, submission record, completion callback, or Metal callback.
-
-R-BACK-2.58 makes that range plan the common serial consumer for Traditional,
-FrameGraph reordered or DCE replay, and partial `sessionSource` calls.
-`ReplayCommandPlan` remains responsible only for selecting and ordering the
-effective commands. Before any Metal or session side effect, `encodeChunk`
-constructs an exact current-source `ReadySlotSnapshot`, validates the complete
-range plan with overflow-safe arithmetic, resolves every entry, and proves exact
-effective-stream coverage. `CommandSegment` covers one or more complete replay
-ordinals. `DrawRunEntries` covers one positive contiguous parameter subrange of
-one replay ordinal and locates its first parameter. Multiple adjacent draw
-ranges may cover a command, but must reach its exact tail without gaps,
-overlaps, or duplicates before the next ordinal.
-
-If any explicit range is empty, stale, out of the replay range, mismatched, or
-arithmetically invalid, the encoder rejects the entire plan before emission and
-uses its allocation-free identity cursor over the already-selected effective
-stream. It never rewinds FrameGraph order or resurrects a DCE command. Identity
-emits one full range for every valid nonempty `DrawRun`; clear, helper, Present,
-empty, malformed, or unsynthesizable commands remain complete
-`CommandSegment` coverage so their established execute-or-skip behavior is
-unchanged.
-
-The serial executor groups adjacent `DrawRunEntries` ranges for the same replay
-ordinal. Command uniforms, render-pass and hazard policy, tile selection,
-tracing, telemetry setup, command-buffer work state, and per-record split policy
-therefore execute once per source command. Compatible indexed-draw merging may
-occur inside one range only; identity's full range preserves the existing merge
-candidate shape. A range boundary is not a Metal boundary: it does not flush or
-end an encoder, reset dirty/binding/cache state, split a command buffer, append
-completion, alter capture, or finalize a session. Because complete preflight
-precedes all side effects and source storage is immutable, a later resolution
-mismatch is an invariant failure rather than a partial fallback.
-
-The implemented scope is the all-backend serial consumer and full-`DrawRun`
-identity plan. Heuristic subdivision, a parallel executor,
-`MTLParallelRenderCommandEncoder`, and Metal 4 suspend/resume remain open.
-
-#### Verification Shape
-
-The session model needs evidence through four ordered gates:
-
-| Level | Required proof |
-|---|---|
-| Native/fake backend | semantic boundary detection, fail-open prefix submit, ordered source completion, no inline completion of unsubmitted work |
-| TLA/refinement | one Metal completion event expands to ordered per-source `GpuComplete`; resources reclaim only after represented source seqIds complete |
-| Runtime visual/locality | output passes the visual gate, and final same-key reopen, CB/pass count, load/store MiB, and tile preservation do not increase |
-| Runtime no-gputrace | `completion_wait_with_enqueue_ms` rises or `completion_wait_without_enqueue_ms` falls after the visual/locality gate is clean |
-
-Only after those gates pass should Xcode replay counters be spent. The Xcode
-question is then whether the session changed GPU-side hot rows; the no-gputrace
-question decides whether the carrier is a valid average-FPS/P4 mechanism.
 
 ### 2.3 Data-Oriented Transform Boundaries
 

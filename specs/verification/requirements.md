@@ -99,6 +99,24 @@ fail-open release cannot discard or overtake a source. The implementation
 must not wait for a successor.
 Coverage is provided by `tla/DceChunkLookahead.tla`.
 
+**R-VERIF-2.13** Formal or equivalent refinement evidence must prove the
+bounded ready-prefix DCE contract in R-BACK-32.11: the snapshot contains only an
+already-ready consecutive FIFO prefix, DCE owns no future source, every source
+keeps an independent DAG and completion identity, proof-stopping boundaries are
+conservative, and lack of proof releases current work without waiting.
+
+**R-VERIF-2.14** Formal evidence must prove CPU-ready source and EncodeSession
+admission progress for R-BACK-2.44 and R-BACK-2.60: all stores are bounded,
+back-pressure cannot hide a consumed visible prefix, every represented source
+eventually submits or is restored in FIFO order, and admission pressure cannot
+block completion progress required to release that pressure.
+
+**R-VERIF-2.15** Formal or equivalent refinement evidence must prove parallel
+and joint completion for R-BACK-2.49, R-BACK-2.63, and R-BACK-2.64: child or
+segment order refines the serial partition order, coordinator join precedes
+logical-pass finalization, and per-source completion expands only after every
+Metal segment containing represented work completes.
+
 ---
 
 ## 3. Resource Lifetime

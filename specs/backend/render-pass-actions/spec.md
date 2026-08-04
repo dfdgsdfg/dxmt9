@@ -31,6 +31,7 @@ boundary.
 | Touched-attachment-handle set (color RTs) | `CommandQueue` (per command buffer) | Reuses existing `currentBackBuffer_` / `backBufferDiscardAfterPresent_` precedent. |
 | Live-out proof for depth/stencil | Encode-thread look-ahead over imported chunk records | Stateless walk of remaining queue contents at `flushRender` time. |
 | Counter emission | `src/dxmt9/dxmt9_perf_counters.{hpp,cpp}` | New `count*` helpers, same pattern as `R-BACK-15.10`–`15.12`. |
+| Logical-pass action state | Encode coordinator / `EncodeSession` | Owns first/last physical segment and publishes actions and sidecars once (`R-BACK-15.17`). |
 | Amendment to `R-BACK-2.6` | `specs/backend/requirements.md` | Edited in same PR. |
 | Backbuffer post-present DontCare-load | Existing — `R-BACK-6.3` | Unchanged; this spec extends to other RTs. |
 
@@ -291,6 +292,7 @@ sequenceDiagram
 | `R-BACK-15.10`–`15.12` counters | `tests/native/backend/allocation_counter_spec.cpp` extension or new — assert keys present, sums match. |
 | `R-BACK-15.13`–`15.15` safety invariants | Same spec — present source / lock / MSAA resolve forces Store. |
 | `R-BACK-15.16` test coverage | Spec lands the test fixture above. |
+| `R-BACK-15.17` segmented logical pass | Extend the native spec with fake parallel children and Metal 4 segments: one load/clear, one final store/resolve, no duplicated touched/sidecar/counter publication; add Metal integration evidence when either lane exists. |
 
 GPU pixel correctness for the new policy is covered by the existing
 `tests/shader_runner/corpus/` runs; they must continue to pass with the
@@ -316,7 +318,9 @@ implementation, not the spec.
 
 ## 8. Out of Scope
 
-- **Cross-chunk look-ahead.** `R-BACK-15.9` explicitly rules this out.
+- **Unknown-future look-ahead.** `R-BACK-15.9` forbids waiting for unpublished
+  work. A sealed EncodeSession may inspect its already-admitted immutable suffix
+  under `R-BACK-15.17`, but may not infer actions from unknown future sources.
 - **Tile-shader integration with depth.** `R-BACK-13` (tile-FFP) is
   separate; this spec leaves tile-FFP-active passes' depth handling to
   that spec's contract.

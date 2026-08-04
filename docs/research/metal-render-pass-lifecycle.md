@@ -14,7 +14,8 @@ continuous across queue-source boundaries without weakening D3D9 ordering,
 resource lifetime, or completion semantics?
 
 This document is comparative research, not a dxmt9 requirement. The normative
-contract remains [Backend Specification](../../specs/backend/spec.md).
+contract is [Encode Scheduling](../../specs/backend/encode-scheduling/spec.md)
+and its [requirements](../../specs/backend/encode-scheduling/requirements.md).
 
 ## Scope and Research Question
 
@@ -44,6 +45,11 @@ A design should state ownership independently on these axes:
 | Native encoder | A live `MTLRenderCommandEncoder` or `MTL4RenderCommandEncoder` |
 | Command buffer | The native submission container holding one or more encoders |
 | CPU encoding partition | The draw range assigned to one recording thread |
+| Source publication | An immutable CPU-ready prefix becoming scheduler-visible |
+| Partition edge | A replay-range subdivision; not a Metal boundary by itself |
+| Physical encoder segment | One serial encoder, parallel child, or Metal 4 segment |
+| Logical render-pass boundary | A D3D9/Metal semantic end to attachment-local rendering |
+| Submission boundary | A command buffer or joint group entering Metal execution |
 | Source lifetime | Imported records, payload arenas, retained resources, and allocator ranges |
 | Completion identity | The D3D9-visible `seqId` values completed by one native submission |
 
@@ -213,8 +219,8 @@ Relevant implementation points are:
 - [`dxmt9_queue.hpp`](../../src/dxmt9/dxmt9_queue.hpp) for bounded, consecutive
   completion-source aggregation.
 
-The normative owner and semantic-boundary table are in
-[Backend Specification §2.2.3](../../specs/backend/spec.md#223-encodesession--open-render-encoder-pass-streaming).
+The normative owner, boundary vocabulary, session states, and execution lanes
+are in [Encode Scheduling](../../specs/backend/encode-scheduling/spec.md).
 
 | Concern | ANGLE `ContextMtl` | Parallel encoder | Metal 4 suspend/resume | dxmt9 `EncodeSession` |
 |---|---|---|---|---|

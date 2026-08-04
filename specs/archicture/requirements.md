@@ -165,7 +165,9 @@ evidenced must be tracked in `specs/archicture/gap.md` with the owning
 observe or mutate rendering state: application/Wine API thread, PE recorder,
 bridge/import call frame, queue writer, encode thread, finish/completion thread,
 Metal/GPU execution, presenter/layer access, and optional sidecar workers such as
-pipeline compilation.
+pipeline compilation. An implementation that enables parallel partition
+encoding must additionally identify one encode coordinator and every optional
+partition worker as distinct agents.
 
 **R-ARCH-6.2** Ordinary hot-path submission must be fire-and-forget after queue or
 import ownership is established. `Set*`, ordinary `Draw*`, ordinary `Clear`, and
@@ -184,8 +186,10 @@ work.
 
 **R-ARCH-6.5** Queue parallelism must be bounded. The application thread may
 record or submit future chunks while the encode thread and GPU process older
-chunks, but ring capacity, chunk size limits, and frame-latency tokens must
-provide deterministic back-pressure.
+chunks, but ring capacity, chunk size limits, frame-latency tokens, CPU-ready
+source/tape capacity, unsubmitted-session capacity, and partition-job capacity
+must provide deterministic back-pressure. Adding a staging queue must not make
+total retained work unbounded.
 
 **R-ARCH-6.6** Cross-thread shared state must have one owner or an explicit
 mutex/condition/atomic protocol. Borrowed spans and views must not be stored by a
@@ -220,6 +224,23 @@ expose counters for the spread between `completedSeqId` and
 wait time attributed to each signal separately. Cross-axis blocking is a
 regression and must be detectable from these counters without timing-based
 heuristics.
+
+**R-ARCH-6.10** The encode coordinator must exclusively own `EncodeSession`,
+logical render-pass state, Metal command-buffer or joint-group ordering, parent
+parallel encoders, completion expansion, and finalization. An optional partition
+worker may own only one immutable range, its child or segment encoder, and
+partition-local native binding state. Workers must not mutate published source
+storage, session-global hazards or pass actions, completion identities, or
+sequence/frame-token state. Coordinator join must complete before pass or
+submission finalization.
+
+**R-ARCH-6.11** Scheduling pressure must be observable without weakening the
+three progress signals in `R-ARCH-6.8`. Counters must separately expose current
+and peak CPU-ready source occupancy, unsubmitted-session occupancy,
+partition-job occupancy, source-admission wait, partition join wait, and the raw
+replay and publication watermarks. These observations are pressure diagnostics,
+not substitutes for `completedSeqId`, `presentCompletedSeqId`, or ring-slot
+occupancy, and a wait displaced into them is a regression under `R-ARCH-6.9`.
 
 ---
 

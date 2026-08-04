@@ -362,9 +362,19 @@ sources. The final proof/no-proof plan must validate that any commands already
 encoded are an exact prefix of the freshly optimized permutation; a fresh proof
 that would remove an encoded pass must conservatively preserve that pass.
 `dce` stays opt-in and must not create a producer-to-encode wait, including
-when explicitly enabled. The DCE proof window supersedes the experimental
-open-CB carrier when both knobs are selected because the two paths require
-different source ownership.
+when explicitly enabled. DCE and EncodeSession scheduling must consume a shared
+immutable ready-prefix snapshot owned by the queue; neither consumer may
+dequeue, mutate, or claim exclusive ownership of another source.
+
+**R-BACK-32.11** The queue may generalize the `R-BACK-32.10` proof input from
+one successor to a bounded already-ready FIFO prefix `N+1 ... N+k`. It must
+snapshot that prefix without waiting and expose only canonical first-access and
+full-overwrite summaries to DCE. Each chunk retains its independent DAG,
+records, resources, and completion source. The proof must stop at query,
+readback, Present, partial clear, unknown format or access, or any summary that
+cannot prove a complete overwrite. No-ready or insufficient proof must
+immediately preserve current work. The bounded snapshot may be shared with the
+EncodeSession scheduler, but DCE must not dequeue or retain the future sources.
 
 ---
 

@@ -592,9 +592,11 @@ with the dump off.
 The builder runs on the unix-side encode thread and operates on **one
 `CommandChunk` at a time** per `R-BACK-32.1`. Each `onChunkReady` invocation
 builds a fresh `FrameGraph` over the records the chunk delivered. The opt-in
-R-BACK-32.10 scheduler may retain one chunk and independently build its selected
-FIFO successor, but it shares only a flat overwrite-proof summary; records,
-passes, edges, and completion sources never merge. The chunk's `completedSeqId`
+R-BACK-32.10 scheduler may retain one chunk and inspect an immutable summary for
+its already-ready immediate FIFO successor. R-BACK-32.11 permits a future
+bounded ready-prefix summary. In both cases records, passes, edges, and
+completion sources never merge, and the queue remains the only ready-prefix
+owner. The chunk's `completedSeqId`
 advances only after its own linearized DAG finishes, preserving the per-chunk
 fence semantics from `specs/backend/requirements.md`. The mapping is small and
 explicit:
@@ -721,8 +723,10 @@ When `dce` **is** enabled, a pass is dead **only when all** of:
   provably fully-overwritten by a later record inside the **same** chunk
   (e.g. a same-chunk `Clear` of the same handle, or a same-chunk
   `StretchRect`/copy whose destination covers the full subresource), or
-  (c) the immediate FIFO successor's first canonical access is a
-  full-subresource Clear. The condition is ANDed across every resource the pass
+  (c) an already-ready proof source's first canonical access is a
+  full-subresource Clear. The implemented baseline uses only the immediate FIFO
+  successor; R-BACK-32.11 may scan a bounded ready prefix until a conclusive
+  first access or proof-stopping boundary. The condition is ANDed across every resource the pass
   writes. Rectangular Clears are `ReadWrite` and do not qualify. A
   depth/stencil Clear is also `ReadWrite` unless its flags cover every aspect
   present in the retained surface format; a depth-only Clear of D24X8 therefore
@@ -747,14 +751,17 @@ prior observed overwrite set, or a bootstrap set containing every current
 resource, chooses only this scheduling checkpoint.
 
 After prefix encode the queue checks the ready FIFO once under the queue lock.
-If `N+1` is ready it becomes the fresh proof source; otherwise N is finalized
-immediately without cross-chunk proof. There is no condition-variable wait and
-no wall-clock timeout. The final plan re-runs passcoalesce and DCE, preserves
+The implemented baseline snapshots only `N+1` when ready; otherwise N is
+finalized immediately without cross-chunk proof. The R-BACK-32.11 design instead
+borrows a bounded `ReadyPrefixSnapshot` shared with encode scheduling and scans
+only its canonical summaries. Neither form waits, dequeues a proof source, or
+merges DAG ownership. The final plan re-runs passcoalesce and DCE, preserves
 any already-encoded pass that a changed proof would otherwise remove, and
 requires the encoded commands to be an exact prefix of the final live-command
 permutation. N submits before the carried N+1 and publishes only N's original
-completion identity. This state machine is checked by
-`specs/verification/tla/DceChunkLookahead.tla`.
+completion identity. The implemented state machine is checked by
+`specs/verification/tla/DceChunkLookahead.tla`; generalized bounded-prefix
+model work is tracked in `specs/verification/gap.md`.
 
 `dce` is accepted only as an explicit feature token under the implemented
 `progressive` profile. An unset feature list still enables only
