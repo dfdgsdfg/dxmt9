@@ -243,7 +243,8 @@ bool writerCanProceed(const QueueControllerState& state,
          state.inflightCount < inflightLimit;
 }
 
-void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkSlot& slot) {
+void traceEncodeIterationStage(const char* stage, size_t slotIndex,
+                               const ChunkSlotControl& slot) {
   if (!queueTraceEnabled()) {
     return;
   }
@@ -251,6 +252,19 @@ void traceEncodeIterationStage(const char* stage, size_t slotIndex, const ChunkS
   out << "[dxmt9-encode-iteration]"
       << " stage=" << stage
       << " seq=" << static_cast<unsigned long long>(slot.seqId)
+      << " slot=" << slotIndex
+      << " commands=" << slot.commandCount();
+  emitQueueTraceLine(out.str());
+}
+
+void traceEncodeIterationStage(const char* stage, size_t slotIndex,
+                               const ChunkSlot& slot) {
+  if (!queueTraceEnabled()) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-encode-iteration]"
+      << " stage=" << stage
       << " slot=" << slotIndex
       << " commands=" << slot.commandCount();
   emitQueueTraceLine(out.str());
@@ -304,14 +318,16 @@ bool commandRangeHasPresent(const ChunkSlot& slot,
 }
 
 ReadySlotSnapshot makeReadySlotSnapshot(size_t slotIndex,
-                                        ChunkSlot& slot) noexcept {
+                                        ChunkSlotControl& slot) noexcept {
+  DXMT_ASSERT(slot.payload != nullptr);
   return ReadySlotSnapshot{
       .slotIndex = slotIndex,
       .seqId = slot.seqId,
-      .hasPresent = !slot.presentRecords.empty(),
+      .hasPresent = slot.payload && !slot.payload->presentRecords.empty(),
       .commandBegin = 0,
       .commandCount = slot.commandCount(),
-      .slot = &slot,
+      .sourceId = slot.sourceId,
+      .slot = slot.payload,
   };
 }
 
@@ -675,7 +691,11 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
   if (slotIndex >= submissionBinding_.slots.size()) {
     return CommandBufferDiagnostics{.seqId = seqId, .slotIndex = slotIndex};
   }
-  return summarizeCommands(seqId, slotIndex, submissionBinding_.slots[slotIndex], resolveSurfaceFlags);
+  const auto* payload = submissionBinding_.slots[slotIndex].payload;
+  if (!payload) {
+    return CommandBufferDiagnostics{.seqId = seqId, .slotIndex = slotIndex};
+  }
+  return summarizeCommands(seqId, slotIndex, *payload, resolveSurfaceFlags);
 }
 
 CommandBufferDiagnostics QueueLifecycleController::summarizeSubmissionSources(
@@ -1084,7 +1104,9 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   auto* inflightCount = submissionBinding_.inflightCount;
   auto* writeCv = submissionBinding_.writeCv;
   auto* stop = submissionBinding_.stop;
-  if (!writingSlot || !writeIndex || !inflightCount || !writeCv || !stop) {
+  auto* cpuReadyTape = submissionBinding_.cpuReadyTape;
+  if (!writingSlot || !writeIndex || !inflightCount || !writeCv || !stop ||
+      !cpuReadyTape) {
     return false;
   }
 
@@ -1113,12 +1135,18 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   }
   observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
   acquireWriterSlot(*writeIndex, slots[*writeIndex].seqId, inflightLimit, [&] {
+    const auto reservation = cpuReadyTape->reserve();
+    DXMT_ASSERT(reservation.has_value());
+    if (!reservation) {
+      return;
+    }
     slots[*writeIndex].state = ChunkSlot::State::Writing;
     slots[*writeIndex].seqId = 0;
-    slots[*writeIndex].clearCommands();
+    slots[*writeIndex].sourceId = reservation->id;
+    slots[*writeIndex].payload = reservation->payload;
     *writingSlot = *writeIndex;
   });
-  return true;
+  return writingSlot->has_value();
 }
 
 void QueueLifecycleController::presentAndCommit(
@@ -1174,7 +1202,10 @@ bool QueueLifecycleController::commitCurrentChunk(
   if (slot.commandsEmpty()) {
     const size_t slotIndex = **writingSlot;
     commitEmpty(slotIndex, slot.seqId, [&] {
+      DXMT_ASSERT(submissionBinding_.cpuReadyTape->reclaim(slot.sourceId));
       slot.state = ChunkSlot::State::Free;
+      slot.sourceId = {};
+      slot.payload = nullptr;
       writingSlot->reset();
     });
     if (encodeCv) {
@@ -1230,16 +1261,20 @@ bool QueueLifecycleController::commitCurrentChunk(
   recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   recordNoEnqueueFirstPublishSlotShapeBeforePublish(
-      summarizeNoEnqueueFirstPublishSlotShape(slot));
+      summarizeNoEnqueueFirstPublishSlotShape(*slot.payload));
   recordNoEnqueueWaitGapToCommitPublish();
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
+    DXMT_ASSERT(submissionBinding_.cpuReadyTape->transition(
+        slot.sourceId, CpuReadyTape::State::Writing,
+        CpuReadyTape::State::Ready));
     slot.seqId = (*nextSeqId)++;
+    slot.payload->seqId = slot.seqId;
     slot.state = ChunkSlot::State::Pending;
     *lastCommittedSeqId = slot.seqId;
     ++(*inflightCount);
     const auto onBeforePublishStart = std::chrono::steady_clock::now();
     if (onBeforePublish) {
-      onBeforePublish(slot);
+      onBeforePublish(*slot.payload);
     }
     recordNoEnqueueCommitPublishOnBeforePublishCpu(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1296,7 +1331,7 @@ size_t QueueLifecycleController::dequeueReadySlotBatch(
     auto& slot = submissionBinding_.slots[slotIndex];
     if (i != 0 && canAppend &&
         !canAppend(std::span<const ReadySlotSnapshot>(out.data(), i),
-                   slotIndex, slot)) {
+                   slotIndex, *slot.payload)) {
       break;
     }
     traceEncodeIterationStage("dequeue.selected", slotIndex, slot);
@@ -1305,6 +1340,9 @@ size_t QueueLifecycleController::dequeueReadySlotBatch(
     }
     encodeDequeue(slotIndex, slot.seqId, [&] {
       readySlots->pop_front();
+      DXMT_ASSERT(submissionBinding_.cpuReadyTape->transition(
+          slot.sourceId, CpuReadyTape::State::Ready,
+          CpuReadyTape::State::Encoding));
       slot.state = ChunkSlot::State::Encoding;
     });
     traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
@@ -1343,7 +1381,7 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
   if (selectPrefix) {
     count = selectPrefix(
         *readySlots,
-        std::span<const ChunkSlot>(
+        std::span<const ChunkSlotControl>(
             submissionBinding_.slots.data(),
             submissionBinding_.slots.size()),
         maxCount);
@@ -1363,6 +1401,9 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
     }
     encodeDequeue(slotIndex, slot.seqId, [&] {
       readySlots->pop_front();
+      DXMT_ASSERT(submissionBinding_.cpuReadyTape->transition(
+          slot.sourceId, CpuReadyTape::State::Ready,
+          CpuReadyTape::State::Encoding));
       slot.state = ChunkSlot::State::Encoding;
     });
     traceEncodeIterationStage("dequeue.after-transition", slotIndex, slot);
@@ -1392,14 +1433,17 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
       return 0;
     }
     const auto& liveSlot = submissionBinding_.slots[source.slotIndex];
-    if (&liveSlot != source.slot ||
+    const auto* livePayload = submissionBinding_.cpuReadyTape->resolve(
+        source.sourceId, CpuReadyTape::State::Encoding);
+    if (liveSlot.sourceId != source.sourceId ||
+        livePayload != source.slot ||
         liveSlot.state != ChunkSlot::State::Encoding ||
         liveSlot.seqId != source.seqId ||
         liveSlot.seqId == 0 ||
-        !commandRangeWithinSlot(liveSlot,
+        !commandRangeWithinSlot(*livePayload,
                                 source.commandBegin,
                                 source.commandCount) ||
-        commandRangeHasPresent(liveSlot,
+        commandRangeHasPresent(*livePayload,
                                source.commandBegin,
                                source.commandCount) != source.hasPresent) {
       return 0;
@@ -1505,7 +1549,8 @@ void QueueLifecycleController::appendPresentCommand(const SwapDesc& present, Han
   const size_t slotIndex = **writingSlot;
   auto& slot = submissionBinding_.slots[slotIndex];
   enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
-    slot.appendPresent(present, sourceHandle);
+    DXMT_ASSERT(slot.payload != nullptr);
+    slot.payload->appendPresent(present, sourceHandle);
   });
 }
 
@@ -1539,7 +1584,8 @@ QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
   }
 
   auto& slot = submissionBinding_.slots[slotIndex];
-  auto deferredReleases = slot.detachResourceOwners();
+  DXMT_ASSERT(slot.payload != nullptr);
+  auto deferredReleases = slot.payload->detachResourceOwners();
   auto* completedSeqId = submissionBinding_.completedSeqId;
   auto* completedSeqQueue = submissionBinding_.completedSeqQueue;
   finishInline(slotIndex, seqId, [&] {
@@ -1547,9 +1593,11 @@ QueueLifecycleController::completeInlineChunk(size_t slotIndex, u64 seqId) {
     if (completedSeqId && completedSeqQueue) {
       DXMT_ASSERT(seqId == *completedSeqId + completedSeqQueue->size() + 1);
     }
+    DXMT_ASSERT(submissionBinding_.cpuReadyTape->reclaim(slot.sourceId));
     slot.state = ChunkSlot::State::Free;
     slot.seqId = 0;
-    slot.clearCommands();
+    slot.sourceId = {};
+    slot.payload = nullptr;
     if (completedSeqQueue) {
       completedSeqQueue->push_back(seqId);
     }
@@ -1647,11 +1695,14 @@ QueueLifecycleController::reclaimCompletedGpuSlots(u64 seqId) {
     }
     DXMT_ASSERT(deferredReleases.empty() &&
                 "a sequence id must identify only one GPU slot");
-    deferredReleases = slot.detachResourceOwners();
+    DXMT_ASSERT(slot.payload != nullptr);
+    deferredReleases = slot.payload->detachResourceOwners();
     reclaimFree(slotIndex, seqId, [&] {
+      DXMT_ASSERT(submissionBinding_.cpuReadyTape->reclaim(slot.sourceId));
       slot.state = ChunkSlot::State::Free;
-      slot.clearCommands();
       slot.seqId = 0;
+      slot.sourceId = {};
+      slot.payload = nullptr;
     });
     reclaimed = true;
   }
@@ -1917,28 +1968,58 @@ void QueueLifecycleController::assertQueueLifecycleInvariants(size_t inflightLim
   }
 
   size_t abstractInflight = 0;
+  size_t residentSources = 0;
   for (const auto& slot : slots) {
     switch (slot.state) {
       case ChunkSlot::State::Free:
         DXMT_ASSERT(slot.seqId == 0);
+        DXMT_ASSERT(!slot.sourceId.valid());
+        DXMT_ASSERT(slot.payload == nullptr);
         break;
       case ChunkSlot::State::Writing:
         DXMT_ASSERT(slot.seqId == 0);
+        DXMT_ASSERT(binding.cpuReadyTape);
+        DXMT_ASSERT(binding.cpuReadyTape->resolve(
+                        slot.sourceId, CpuReadyTape::State::Writing) ==
+                    slot.payload);
+        ++residentSources;
         break;
       case ChunkSlot::State::Pending:
+        DXMT_ASSERT(binding.cpuReadyTape);
+        DXMT_ASSERT(binding.cpuReadyTape->resolve(
+                        slot.sourceId, CpuReadyTape::State::Ready) ==
+                    slot.payload);
+        [[fallthrough]];
       case ChunkSlot::State::Encoding:
+        if (slot.state == ChunkSlot::State::Encoding) {
+          DXMT_ASSERT(binding.cpuReadyTape);
+          DXMT_ASSERT(binding.cpuReadyTape->resolve(
+                          slot.sourceId, CpuReadyTape::State::Encoding) ==
+                      slot.payload);
+        }
         DXMT_ASSERT(slot.seqId > 0);
         DXMT_ASSERT(slot.seqId <= lastCommittedSeqId);
+        DXMT_ASSERT(slot.payload && slot.payload->seqId == slot.seqId);
+        ++residentSources;
         ++abstractInflight;
         break;
       case ChunkSlot::State::GPU:
+        DXMT_ASSERT(binding.cpuReadyTape);
+        DXMT_ASSERT(binding.cpuReadyTape->resolve(
+                        slot.sourceId, CpuReadyTape::State::GPU) ==
+                    slot.payload);
         DXMT_ASSERT(slot.seqId > 0);
         DXMT_ASSERT(slot.seqId <= lastCommittedSeqId);
+        DXMT_ASSERT(slot.payload && slot.payload->seqId == slot.seqId);
+        ++residentSources;
         if (slot.seqId > completedSeqId) {
           ++abstractInflight;
         }
         break;
     }
+  }
+  if (binding.cpuReadyTape) {
+    DXMT_ASSERT(binding.cpuReadyTape->residentCount() == residentSources);
   }
 
   const size_t effectiveInflightLimit = inflightLimit != 0 ? inflightLimit : slots.size();
@@ -2051,6 +2132,10 @@ void QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     DXMT_ASSERT(submissionBinding_.slots[source.slotIndex].seqId == source.seqId);
 #endif
     if (source.slotIndex < submissionBinding_.slots.size()) {
+      auto& sourceSlot = submissionBinding_.slots[source.slotIndex];
+      DXMT_ASSERT(submissionBinding_.cpuReadyTape->transition(
+          sourceSlot.sourceId, CpuReadyTape::State::Encoding,
+          CpuReadyTape::State::GPU));
       submissionBinding_.slots[source.slotIndex].state = ChunkSlot::State::GPU;
     }
     const auto afterCommitState = currentState();

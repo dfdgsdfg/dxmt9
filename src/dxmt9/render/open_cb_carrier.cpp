@@ -153,10 +153,14 @@ OpenCbCarrierPendingWaitAction selectOpenCbCarrierPendingWaitAction(
   return OpenCbCarrierPendingWaitAction::WaitForReady;
 }
 
-std::size_t selectOpenCbCarrierBatchPrefix(
+namespace {
+
+template <typename SlotSpan, typename ResolvePayload>
+std::size_t selectOpenCbCarrierBatchPrefixImpl(
     const std::deque<std::size_t>& readySlots,
-    std::span<const core::ChunkSlot> slots,
-    std::size_t maxCount) noexcept {
+    SlotSpan slots,
+    std::size_t maxCount,
+    ResolvePayload&& resolvePayload) noexcept {
   if (maxCount == 0u || readySlots.empty()) {
     return 0;
   }
@@ -169,17 +173,40 @@ std::size_t selectOpenCbCarrierBatchPrefix(
       return 0;
     }
 
-    const auto& slot = slots[slotIndex];
-    if (openCbCarrierSlotHasFinalPresentTail(slot)) {
+    const core::ChunkSlot* payload = resolvePayload(slots[slotIndex]);
+    if (!payload) {
+      return 0;
+    }
+    if (openCbCarrierSlotHasFinalPresentTail(*payload)) {
       return i == 0u ? 0u : i + 1u;
     }
-    if (!openCbCarrierSlotCanBeSessionHead(slot)) {
+    if (!openCbCarrierSlotCanBeSessionHead(*payload)) {
       return 0;
     }
     ++sessionHeadPrefix;
   }
 
   return sessionHeadPrefix;
+}
+
+}  // namespace
+
+std::size_t selectOpenCbCarrierBatchPrefix(
+    const std::deque<std::size_t>& readySlots,
+    std::span<const core::ChunkSlot> slots,
+    std::size_t maxCount) noexcept {
+  return selectOpenCbCarrierBatchPrefixImpl(
+      readySlots, slots, maxCount,
+      [](const core::ChunkSlot& slot) { return &slot; });
+}
+
+std::size_t selectOpenCbCarrierBatchPrefix(
+    const std::deque<std::size_t>& readySlots,
+    std::span<const core::ChunkSlotControl> slots,
+    std::size_t maxCount) noexcept {
+  return selectOpenCbCarrierBatchPrefixImpl(
+      readySlots, slots, maxCount,
+      [](const core::ChunkSlotControl& slot) { return slot.payload; });
 }
 
 }  // namespace dxmt9::render

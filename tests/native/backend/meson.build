@@ -161,6 +161,18 @@ queue_completion_sources_spec = executable(
 test('dxmt9-queue-completion-sources-spec',
      queue_completion_sources_spec)
 
+cpu_ready_tape_spec = executable(
+  'dxmt9-cpu-ready-tape-spec',
+  'cpu_ready_tape_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-tape-spec',
+     cpu_ready_tape_spec,
+     env: dxmt9_native_test_env)
+
 encode_partition_snapshot_spec = executable(
   'dxmt9-encode-partition-snapshot-spec',
   'encode_partition_snapshot_spec.cpp',
