@@ -81,7 +81,8 @@ struct RecordedEvent {
 
 struct RecordingDxmt9Device final : dxmt9::Device {
   RecordingDxmt9Device()
-      : limits_{}, queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_) {}
+      : limits_{},
+        queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_, false) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return queue_; }

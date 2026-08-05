@@ -194,7 +194,7 @@ struct Harness {
   dxmt9::scratch::FrameAllocators allocators{};
   dxmt9::CommandQueue queue;
 
-  Harness() : queue(WMT::Device{}, limits) {}
+  Harness() : queue(WMT::Device{}, limits, false) {}
 };
 
 dxmt9::encoders::EncodeContext makeContext(Harness& harness,

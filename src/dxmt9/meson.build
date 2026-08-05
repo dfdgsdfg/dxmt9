@@ -20,6 +20,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_archive_prewarm.cpp',
   'dxmt9_argbuf_hybrid.cpp',
   'dxmt9_command_queue.cpp',
+  'dxmt9_command_queue_cpu_ready_session.cpp',
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',
   'dxmt9_blit_encoders.cpp',

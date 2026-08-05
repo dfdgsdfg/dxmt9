@@ -223,6 +223,20 @@ test('dxmt9-cpu-ready-production-routing-spec',
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
 
+cpu_ready_session_join_spec = executable(
+  'dxmt9-cpu-ready-session-join-spec',
+  'cpu_ready_session_join_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-session-join-spec',
+     cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+     ])
+
 encode_partition_snapshot_spec = executable(
   'dxmt9-encode-partition-snapshot-spec',
   'encode_partition_snapshot_spec.cpp',

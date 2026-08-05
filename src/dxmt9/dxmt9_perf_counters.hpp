@@ -172,6 +172,22 @@ void countOpenCbCarrierPendingStarted(bool duringCompletionWait);
 void countOpenCbCarrierHeadAppended();
 void countOpenCbCarrierTailSubmitted();
 void countOpenCbCarrierReleased(OpenCbCarrierReleaseReason reason);
+// Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE). Release
+// reasons are the ordered producer/queue-progress fences only — this lane
+// deliberately has no completion-wait or producer-quiescence release.
+enum class CpuReadySessionReleaseReason : std::uint8_t {
+  ProducerWait,
+  AdmissionPressure,
+  WriterPressure,
+  NonAppendable,
+  InitializerWait,
+  Drain,
+  FailPath,
+};
+void countCpuReadySessionPendingStarted();
+void countCpuReadySessionHeadAppended(bool arenaSource);
+void countCpuReadySessionTailSubmitted();
+void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason);
 void countChunkPublishPresentPrePresentOpportunityTail(
     ChunkPublishTailCommandKind kind, bool drawOnly);
 void countChunkPublishSlotResidency(ChunkPublishReason reason,

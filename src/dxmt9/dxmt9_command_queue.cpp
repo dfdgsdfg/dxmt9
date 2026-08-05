@@ -338,8 +338,15 @@ class PerfScope {
 
 }  // namespace
 
-CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
-    : device_(device),
+CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
+                           bool cpuReadySessionLaneEnabled)
+    : cpuReadyTape_(cpuReadySessionLaneEnabled
+                        ? core::CpuReadyTapeConfig::queueSessionStreaming(
+                              kCommandChunkCount)
+                        : core::CpuReadyTapeConfig::queueCompatibility(
+                              kCommandChunkCount)),
+      device_(device),
+      cpuReadySessionLaneEnabled_(cpuReadySessionLaneEnabled),
       limits_(limits),
       // R-BACK-3.9 — Mode::Full defers the archive load: shaderArchive_
       // starts default-constructed (empty, zero I/O) here and the real
@@ -535,6 +542,16 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
               [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
           return;
         }
+        if (cpuReadySessionLaneEnabled_) {
+          if (openCbCarrierEnabled()) {
+            util::logf(util::LogLevel::Warn, "dxmt9-renderer",
+                       "cpu-ready tape session lane supersedes the open-CB "
+                       "carrier for this run");
+          }
+          runCpuReadySessionEncodeLoop(
+              [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
+          return;
+        }
         if (openCbCarrierEnabled()) {
           runOpenCbCarrierEncodeLoop(
               [this](std::uint64_t) { allocators_.reclaim(completedSeqId_); });
@@ -551,13 +568,14 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
 CommandQueue::CommandQueue(InertTestQueueTag,
                            WMT::Reference<WMT::CommandQueue> queue,
                            core::BackendLimits limits)
-    : queue_(std::move(queue)),
+    : cpuReadySessionLaneEnabled_(false),
+      queue_(std::move(queue)),
       queueView_(queue_.handle),
       limits_(limits) {}
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits)
-    : limits_(limits) {
+    : cpuReadySessionLaneEnabled_(false), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
 }
@@ -3691,6 +3709,10 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
   const auto waitStarted = std::chrono::steady_clock::now();
   std::unique_lock lock(mutex_);
+  // Wake a parked Tape-gated encode session: this registered waiter is an
+  // ordered admission-pressure fence, and the parked session may be pinning
+  // the pages/slots this reservation needs.
+  encodeCv_.notify_one();
   bool admissionResolved = false;
   while (!admissionResolved) {
     if (stop_ || arenaBuildPoisoned_.load(std::memory_order_acquire)) {
@@ -5507,6 +5529,35 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
       }
     }
   }
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+CommandQueue::encodeCpuReadySessionSource(
+    const core::metalqueue::ResolvedPublishedSource& source,
+    encoders::EncodeChunkOptions options) {
+  std::optional<core::metalqueue::QueueSubmissionRecord> submission;
+  if (const auto* legacy = source.payload.legacyPayload()) {
+    auto& slot = *legacy;
+    traceEncodeFnStage("entry", source.slotIndex, slot);
+    if (encodeSlotPsoPrefetchEnabled() &&
+        !slot.prefetchedPipelinesSealed()) {
+      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+      prefetchSlotPipelines(const_cast<core::ChunkSlot&>(slot));
+    }
+    auto ctx = makeEncodeContext();
+    submission = backend_->onChunkReady(ctx, source.slotIndex, slot,
+                                        std::move(options));
+  } else {
+    auto ctx = makeEncodeContext();
+    submission = backend_->onSourceReady(ctx, source.slotIndex,
+                                         source.payload, source.seqId,
+                                         std::move(options));
+  }
+  if (submission.has_value() && !submission->commandBuffer &&
+      !submission->testOnlyAllowNullCommandBuffer) {
+    submission.reset();
+  }
+  return submission;
 }
 
 void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) {

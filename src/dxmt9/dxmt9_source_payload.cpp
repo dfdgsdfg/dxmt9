@@ -1310,6 +1310,13 @@ std::size_t SourcePayloadView::commandCount() const noexcept {
   return arena_ ? arena_->commandHeaders_.size() : 0;
 }
 
+std::size_t SourcePayloadView::presentRecordCount() const noexcept {
+  if (legacy_) {
+    return legacy_->presentRecords.size();
+  }
+  return arena_ ? arena_->presentRecords_.size() : 0;
+}
+
 bool SourcePayloadView::drawOnlyCommandStream() const noexcept {
   if (legacy_) {
     return legacy_->drawOnlyCommandStream();

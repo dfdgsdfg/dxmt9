@@ -282,6 +282,42 @@ void configValidationRejectsUnsafeBounds() {
   }
 }
 
+void productionProfilesSeparateOnlySessionPageHeadroom() {
+  const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
+  const auto streaming = CpuReadyTapeConfig::queueSessionStreaming(32);
+  const auto& legacy = compatibility.values();
+  const auto& session = streaming.values();
+
+  check(legacy.pageSize == 4096u && session.pageSize == legacy.pageSize,
+        "production profiles share the fixed page size");
+  check(legacy.pageCount == 64u && legacy.highWaterPages == 64u &&
+            legacy.lowWaterPages == 32u,
+        "compatibility profile preserves the 256 KiB page arena");
+  check(session.pageCount == 512u && session.highWaterPages == 512u &&
+            session.lowWaterPages == 256u,
+        "session profile supplies bounded two MiB page headroom");
+  check(session.sourceSlotCount == legacy.sourceSlotCount &&
+            session.readyFifoCount == legacy.readyFifoCount &&
+            session.compatibilityPayloadCount ==
+                legacy.compatibilityPayloadCount &&
+            session.maxPagesPerSource == legacy.maxPagesPerSource &&
+            session.highWaterSources == legacy.highWaterSources &&
+            session.lowWaterSources == legacy.lowWaterSources &&
+            session.highWaterReady == legacy.highWaterReady &&
+            session.lowWaterReady == legacy.lowWaterReady,
+        "session streaming changes only aggregate page capacity policy");
+
+  bool overflowRejected = false;
+  try {
+    (void)CpuReadyTapeConfig::queueSessionStreaming(
+        std::numeric_limits<std::size_t>::max() / 16u + 1u);
+  } catch (const std::invalid_argument&) {
+    overflowRejected = true;
+  }
+  check(overflowRejected,
+        "session page-capacity multiplication rejects overflow");
+}
+
 void readyAdmissionDistinguishesHardHighAndLowWater() {
   const auto config = CpuReadyTapeConfig::create({
       .pageSize = 64,
@@ -1019,6 +1055,7 @@ void controlShellDoesNotOwnPayload() {
 int main() {
   try {
     configValidationRejectsUnsafeBounds();
+    productionProfilesSeparateOnlySessionPageHeadroom();
     readyAdmissionDistinguishesHardHighAndLowWater();
     sealAndPublishFailureLeavesWritingAndCursorsUnchanged();
     representPrefixIsAtomicAndPreservesReadySuffix();

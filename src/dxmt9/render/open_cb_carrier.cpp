@@ -153,6 +153,55 @@ OpenCbCarrierPendingWaitAction selectOpenCbCarrierPendingWaitAction(
   return OpenCbCarrierPendingWaitAction::WaitForReady;
 }
 
+bool openCbCarrierSourceHasFinalPresentTail(
+    core::SourcePayloadView payload) noexcept {
+  const std::size_t count = payload.commandCount();
+  return count != 0 &&
+         payload.commandAt(count - 1u).kind() ==
+             core::MetalCommandKind::Present &&
+         payload.presentRecordCount() == 1u;
+}
+
+bool openCbCarrierSourceCanBeSessionHead(
+    core::SourcePayloadView payload) noexcept {
+  return !payload.commandsEmpty() && payload.presentRecordCount() == 0u;
+}
+
+bool openCbCarrierSourceCanAppendToPending(core::SourcePayloadView payload,
+                                           bool hasPendingSession) noexcept {
+  if (openCbCarrierSourceHasFinalPresentTail(payload)) {
+    return true;
+  }
+  if (!hasPendingSession) {
+    return false;
+  }
+  return openCbCarrierSourceCanBeSessionHead(payload);
+}
+
+std::size_t selectCpuReadySessionBatchPrefix(
+    std::span<const core::metalqueue::ResolvedPublishedSource> candidates) noexcept {
+  if (candidates.empty()) {
+    return 0;
+  }
+
+  std::size_t sessionHeadPrefix = 0;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    const core::SourcePayloadView payload = candidates[i].payload;
+    if (!payload.valid()) {
+      return sessionHeadPrefix;
+    }
+    if (openCbCarrierSourceHasFinalPresentTail(payload)) {
+      return i == 0u ? 0u : i + 1u;
+    }
+    if (!openCbCarrierSourceCanBeSessionHead(payload)) {
+      return sessionHeadPrefix;
+    }
+    ++sessionHeadPrefix;
+  }
+
+  return sessionHeadPrefix;
+}
+
 std::size_t selectOpenCbCarrierBatchPrefix(
     std::span<const core::metalqueue::ResolvedPublishedSource> candidates) noexcept {
   if (candidates.empty()) {

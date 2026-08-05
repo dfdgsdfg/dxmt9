@@ -5466,7 +5466,8 @@ void initializeEncodeChunkSessionGpuSamplingStorage(
 }
 
 std::size_t sessionGpuSamplingCommandCount(
-    const core::ChunkSlot& slot,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId,
     std::size_t currentCommandCount,
     std::span<const core::metalqueue::ResolvedPublishedSource>
         lookaheadSources) noexcept {
@@ -5486,12 +5487,12 @@ std::size_t sessionGpuSamplingCommandCount(
     total += std::min(count, remaining);
   };
   for (const auto& source : lookaheadSources) {
-    if (!source.slot && source.seqId == 0) {
+    if (!source.payload.valid() && source.seqId == 0) {
       continue;
     }
     includesCurrentSlot =
-        includesCurrentSlot || source.slot == &slot ||
-        source.seqId == slot.seqId;
+        includesCurrentSlot || source.payload == payload ||
+        source.seqId == sourceSeqId;
     addCommands(source.commandCount);
   }
   if (!includesCurrentSlot) {
@@ -14921,16 +14922,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     return std::nullopt;
   }
   const core::ChunkSlot* legacySlot = payload.legacyPayload();
-  const EncodeChunkReplayRange replayRange = legacySlot
-      ? encodeChunkReplayRange(slotIndex, *legacySlot, options)
-      : EncodeChunkReplayRange{
-            .commandBegin = 0,
-            .commandEnd = payload.commandCount(),
-            .valid = !options.sessionSource.has_value() &&
-                     !options.replayCommandPlanActive &&
-                     options.partitionRanges.empty() &&
-                     options.sessionLookaheadSources.empty(),
-        };
+  // Session participation (sessionSource ranges, injected command buffer,
+  // lookahead sources, partition ranges) is source-kind-neutral. Validated
+  // replay-command plans remain legacy-only because FrameGraph planning
+  // metadata is still ChunkSlot-indexed.
+  EncodeChunkReplayRange replayRange =
+      encodeChunkReplayRange(slotIndex, payload, sourceSeqId, options);
+  if (!legacySlot && options.replayCommandPlanActive) {
+    replayRange.valid = false;
+  }
   if (!replayRange.valid || !options.partitionSource.valid() ||
       (options.sessionSource.has_value() &&
        options.partitionSource != options.sessionSource->source)) {
@@ -14973,8 +14973,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         << " command_end=" << replayRange.commandEnd
         << " command_plan=" << (options.replayCommandPlanActive ? 1 : 0)
         << " command_order=" << options.replayCommandOrder.size()
-        << " draw_only=" << (legacySlot &&
-                                 legacySlot->drawOnlyCommandStream() ? 1 : 0);
+        << " draw_only=" << (payload.drawOnlyCommandStream() ? 1 : 0);
     emitQueueTraceLine(out.str());
   };
   auto traceEncodeCommand = [&](const char* phase,
@@ -15078,9 +15077,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
       session, WMT::Device{ctx.device.handle},
-      !legacySlot || options.sessionLookaheadSources.empty()
+      options.sessionLookaheadSources.empty()
           ? replayRange.commandCount()
-          : sessionGpuSamplingCommandCount(*legacySlot,
+          : sessionGpuSamplingCommandCount(payload, sourceSeqId,
                                            replayRange.commandCount(),
                                            options.sessionLookaheadSources));
   traceEncodeStage("after-gpu-sampling-setup");
@@ -15439,27 +15438,29 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           : sourcePayload.commandCount();
     };
     const bool selectedSessionLookaheadStartsHere =
-        legacySlot && !options.replayCommandPlanActive &&
+        !options.replayCommandPlanActive &&
         !options.sessionLookaheadSources.empty() &&
         (options.sessionSource.has_value()
              ? readySlotSnapshotMatchesCompletionSource(
                    options.sessionLookaheadSources.front(),
                    *options.sessionSource,
                    slotIndex,
-                   *legacySlot)
+                   payload,
+                   sourceSeqId)
              : readySlotSnapshotMatchesReplayRange(
                    options.sessionLookaheadSources.front(),
                    options.partitionSource,
                    slotIndex,
-                   *legacySlot,
+                   payload,
+                   sourceSeqId,
                    replayRange));
     bool selectedSessionLookaheadValid = selectedSessionLookaheadStartsHere;
     if (selectedSessionLookaheadValid) {
       for (const auto& source : options.sessionLookaheadSources) {
-        if (!source.slot ||
-            source.commandBegin > source.slot->commandCount() ||
+        if (!source.payload.valid() ||
+            source.commandBegin > source.payload.commandCount() ||
             source.commandCount >
-                source.slot->commandCount() - source.commandBegin) {
+                source.payload.commandCount() - source.commandBegin) {
           selectedSessionLookaheadValid = false;
           break;
         }

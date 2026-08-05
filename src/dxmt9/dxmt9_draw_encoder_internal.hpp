@@ -200,6 +200,73 @@ inline EncodeChunkReplayRange encodeChunkReplayRange(
   };
 }
 
+// Source-kind-neutral twin over the published payload view. The wrapped
+// legacy overloads below remain for existing ChunkSlot callers/tests.
+inline EncodeChunkReplayRange encodeChunkReplayRange(
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId,
+    const EncodeChunkOptions& options) noexcept {
+  const std::size_t commandCount = payload.commandCount();
+  if (!options.sessionSource.has_value()) {
+    return EncodeChunkReplayRange{
+        .commandBegin = 0,
+        .commandEnd = commandCount,
+        .valid = true,
+    };
+  }
+
+  const auto& source = *options.sessionSource;
+  if (source.slotIndex != slotIndex || source.seqId != sourceSeqId ||
+      source.commandBegin > commandCount ||
+      source.commandCount > commandCount - source.commandBegin) {
+    return EncodeChunkReplayRange{
+        .commandBegin = 0,
+        .commandEnd = 0,
+        .valid = false,
+    };
+  }
+  return EncodeChunkReplayRange{
+      .commandBegin = source.commandBegin,
+      .commandEnd = source.commandBegin + source.commandCount,
+      .valid = true,
+  };
+}
+
+inline bool readySlotSnapshotMatchesCompletionSource(
+    const core::metalqueue::ResolvedPublishedSource& snapshot,
+    const core::metalqueue::QueueCompletionSource& source,
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId) noexcept {
+  return snapshot.payload == payload &&
+         snapshot.sourceId == source.source.id &&
+         snapshot.storage == source.source.storage &&
+         snapshot.slotIndex == slotIndex &&
+         snapshot.slotIndex == source.slotIndex &&
+         snapshot.seqId == sourceSeqId &&
+         snapshot.seqId == source.seqId &&
+         snapshot.hasPresent == source.hasPresent &&
+         snapshot.commandBegin == source.commandBegin &&
+         snapshot.commandCount == source.commandCount;
+}
+
+inline bool readySlotSnapshotMatchesReplayRange(
+    const core::metalqueue::ResolvedPublishedSource& snapshot,
+    core::CpuReadyTape::SourceRef source,
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId,
+    EncodeChunkReplayRange replayRange) noexcept {
+  return snapshot.payload == payload &&
+         snapshot.sourceId == source.id &&
+         snapshot.storage == source.storage &&
+         snapshot.slotIndex == slotIndex &&
+         snapshot.seqId == sourceSeqId &&
+         snapshot.commandBegin == replayRange.commandBegin &&
+         snapshot.commandCount == replayRange.commandCount();
+}
+
 inline bool readySlotSnapshotMatchesCompletionSource(
     const core::metalqueue::ResolvedPublishedSource& snapshot,
     const core::metalqueue::QueueCompletionSource& source,

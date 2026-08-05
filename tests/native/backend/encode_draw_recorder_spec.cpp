@@ -376,7 +376,7 @@ struct Harness {
   std::vector<std::pair<dxmt9::core::TextureHandle, obj_handle_t>> patchedTextures;
   std::vector<std::pair<dxmt9::core::SurfaceHandle, obj_handle_t>> patchedSurfaces;
 
-  Harness() : queue(WMT::Device{}, limits) {}
+  Harness() : queue(WMT::Device{}, limits, false) {}
 
   ~Harness() {
     for (const auto& [handle, metalHandle] : patchedBuffers) {

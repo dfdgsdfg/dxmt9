@@ -58,7 +58,10 @@ struct CommandQueueArenaLeaseTestAccess;
 class Presenter;
 class PresentDrawableToken;
 
-namespace encoders { struct EncodeContext; }
+namespace encoders {
+struct EncodeChunkOptions;
+struct EncodeContext;
+}
 namespace resources { class Initializer; }
 // R-BACK-31.7 — the queue owns the render backend via a unique_ptr to this
 // interface. A forward declaration (not the full render/backend_factory.hpp
@@ -336,8 +339,11 @@ class CommandQueue {
   // dxmt9-specific divergence from upstream's single-arg ctor: dxmt9's
   // encoders consume BackendLimits in the encode path (depth24/sampleN
   // policy, max texture size, etc.), so the queue snapshots it at
-  // construction. Upstream dxmt has no BackendLimits.
-  CommandQueue(WMT::Device device, core::BackendLimits limits);
+  // construction. DeviceImpl also passes the once-sampled CPU-ready Tape
+  // activation decision; this constructor never reads that environment
+  // gate itself. Upstream dxmt has no BackendLimits.
+  CommandQueue(WMT::Device device, core::BackendLimits limits,
+               bool cpuReadySessionLaneEnabled);
 
   // Inert queue for native encoder lifecycle specs. The supplied handle is
   // used only as a validity token: this constructor does not create queue
@@ -742,6 +748,22 @@ class CommandQueue {
   // releases pending work during completion AND producer waits. See
   // render/open_cb_carrier.hpp for the baked H183 policy shape.
   void runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted);
+  // Tape-gated session join lane (DXMT9_CPU_READY_TAPE). Source-kind-neutral
+  // FIFO session: compatible prefixes admit both Legacy ChunkSlot and Arena
+  // Tape sources into one pending EncodeSession/open command buffer. Unlike
+  // the H229 carrier, a parked pending session has no completion-wait or
+  // producer-quiescence release; it finalizes only on ordered fences —
+  // Present tail, non-appendable/semantic source, session-source cap or
+  // preflight failure, producer sequence wait, arena admission pressure,
+  // compatibility control/Tape or inflight-cap writer pressure,
+  // initializer-wait boundary, and shutdown drain — so a parked session
+  // cannot withhold completion needed to release its own producer or Tape
+  // storage pressure.
+  void runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted);
+  std::optional<core::metalqueue::QueueSubmissionRecord>
+  encodeCpuReadySessionSource(
+      const core::metalqueue::ResolvedPublishedSource& source,
+      encoders::EncodeChunkOptions options);
   void runFinishLoop();
   void runCompletionWatcherLoop();
   void notePresentDequeued(std::uint64_t seqId);
@@ -938,6 +960,7 @@ class CommandQueue {
   encoders::EncodeContext makeEncodeContext();
 
   WMT::Device device_{};
+  bool cpuReadySessionLaneEnabled_ = false;
   WMT::Reference<WMT::CommandQueue> queue_{};
   WMT::CommandQueue queueView_{};  // non-owning view of queue_
 

@@ -125,7 +125,8 @@ class DeviceImpl final : public Device {
         metalVersion_(selectMetalVersion(wmt_device_)),
         limits_(finalizeLimits(desc.limits, wmt_device_)),
         capabilities_(probeCapabilities(wmt_device_)),
-        queue_(wmt_device_, limits_) {}
+        cpuReadyTapeDirectReplayEnabled_(cpuReadyTapeDirectReplayEnabled()),
+        queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_) {}
 
   // queue_ destructs first (last-declared) — joins worker threads,
   // then queue-owned pool/cache/archive destruct in member-reverse
@@ -275,7 +276,7 @@ class DeviceImpl final : public Device {
     return queue_.captureChunkBufferBindings(entries, snapshots);
   }
   bool supportsCpuReadyArenaReplay() const noexcept override {
-    return cpuReadyTapeDirectReplayEnabled();
+    return cpuReadyTapeDirectReplayEnabled_;
   }
   bool dynamicBufferRenameEnabled() const noexcept override {
     return resources::dynamicBufferRenameEnabled();
@@ -338,6 +339,7 @@ class DeviceImpl final : public Device {
   core::BackendDevice::DeviceLostObserver deviceLostObserver_{};
   core::BackendDevice::PresentationStatusObserver presentationStatusObserver_{};
   std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
+  bool cpuReadyTapeDirectReplayEnabled_ = false;
   CommandQueue queue_;
 };
 

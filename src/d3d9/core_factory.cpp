@@ -51,7 +51,8 @@ namespace {
 class StubDxmt9Device final : public dxmt9::Device {
 public:
   StubDxmt9Device(BackendLimits limits, std::shared_ptr<BackendDevice> backend)
-      : limits_(limits), queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_),
+      : limits_(limits),
+        queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_, false),
         backend_(std::move(backend)) {}
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue &queue() override { return queue_; }

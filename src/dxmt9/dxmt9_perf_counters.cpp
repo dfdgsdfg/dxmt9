@@ -166,6 +166,18 @@ struct Counters {
   std::atomic<std::uint64_t> openCbCarrierReleasedInitializerWait{0};
   std::atomic<std::uint64_t> openCbCarrierReleasedDrain{0};
   std::atomic<std::uint64_t> openCbCarrierReleasedFailPath{0};
+  // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE):
+  std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
+  std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
+  std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};
+  std::atomic<std::uint64_t> cpuReadySessionTailSubmitted{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedProducerWait{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedAdmissionPressure{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedWriterPressure{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedNonAppendable{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedInitializerWait{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedDrain{0};
+  std::atomic<std::uint64_t> cpuReadySessionReleasedFailPath{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
@@ -2143,6 +2155,17 @@ constexpr CounterEntry kCounterTable[] = {
     {"open_cb_carrier_released_initializer_wait", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedInitializerWait, nullptr, nullptr, 0.0},
     {"open_cb_carrier_released_drain", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedDrain, nullptr, nullptr, 0.0},
     {"open_cb_carrier_released_fail_path", CounterEntry::Kind::UnsignedCount, &Counters::openCbCarrierReleasedFailPath, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_pending_started", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionPendingStarted, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionHeadAppended, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_arena_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionArenaHeadAppended, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionTailSubmitted, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedProducerWait, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_admission_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedAdmissionPressure, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_writer_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedWriterPressure, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_non_appendable", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedNonAppendable, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_initializer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedInitializerWait, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_drain", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedDrain, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_released_fail_path", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedFailPath, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
@@ -4306,6 +4329,49 @@ void countOpenCbCarrierReleased(OpenCbCarrierReleaseReason reason) {
     break;
   case OpenCbCarrierReleaseReason::FailPath:
     add(c.openCbCarrierReleasedFailPath);
+    break;
+  }
+}
+
+void countCpuReadySessionPendingStarted() {
+  add(counters().cpuReadySessionPendingStarted);
+}
+
+void countCpuReadySessionHeadAppended(bool arenaSource) {
+  auto& c = counters();
+  add(c.cpuReadySessionHeadAppended);
+  if (arenaSource) {
+    add(c.cpuReadySessionArenaHeadAppended);
+  }
+}
+
+void countCpuReadySessionTailSubmitted() {
+  add(counters().cpuReadySessionTailSubmitted);
+}
+
+void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadySessionReleaseReason::ProducerWait:
+    add(c.cpuReadySessionReleasedProducerWait);
+    break;
+  case CpuReadySessionReleaseReason::AdmissionPressure:
+    add(c.cpuReadySessionReleasedAdmissionPressure);
+    break;
+  case CpuReadySessionReleaseReason::WriterPressure:
+    add(c.cpuReadySessionReleasedWriterPressure);
+    break;
+  case CpuReadySessionReleaseReason::NonAppendable:
+    add(c.cpuReadySessionReleasedNonAppendable);
+    break;
+  case CpuReadySessionReleaseReason::InitializerWait:
+    add(c.cpuReadySessionReleasedInitializerWait);
+    break;
+  case CpuReadySessionReleaseReason::Drain:
+    add(c.cpuReadySessionReleasedDrain);
+    break;
+  case CpuReadySessionReleaseReason::FailPath:
+    add(c.cpuReadySessionReleasedFailPath);
     break;
   }
 }

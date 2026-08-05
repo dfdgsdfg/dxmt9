@@ -828,7 +828,7 @@ void testTouchedSet() {
   // touched-set methods are pure container ops and run fine in this
   // mode. H4 will add the integration test that drives the encoder.
   dxmt9::core::BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
 
   // Empty set: nothing is touched.
   Handle a{0xC0A0u};
@@ -937,7 +937,7 @@ void testTouchedCrossChunkPersists() {
   // behind on the queue is visible to the next chunk's beginRenderPass
   // call. This complements H2's single-chunk smoke.
   dxmt9::core::BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
 
   Handle h1{0xC0C1u};
   // Phase 1: chunk N closes a render pass that stored color H1.
@@ -972,7 +972,7 @@ void testTouchedClearAllResets() {
   // clearAll is a full-set operation (not a one-handle pop) is
   // explicit in the test surface.
   dxmt9::core::BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
 
   Handle h1{0xCEA1u};
   Handle h2{0xCEA2u};

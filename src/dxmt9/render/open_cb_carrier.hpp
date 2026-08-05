@@ -137,6 +137,19 @@ OpenCbCarrierPendingWaitAction selectOpenCbCarrierPendingWaitAction(
     bool stopRequested,
     bool writerActive) noexcept;
 
+// Source-kind-neutral classification -------------------------------------
+//
+// Payload-view twins of the ChunkSlot predicates above. They classify a
+// published source by its immutable command stream regardless of whether the
+// payload is a legacy ChunkSlot or an Arena SourcePayloadBlock, so the
+// Tape-gated session lane can admit both kinds into one FIFO prefix.
+bool openCbCarrierSourceHasFinalPresentTail(
+    core::SourcePayloadView payload) noexcept;
+bool openCbCarrierSourceCanBeSessionHead(
+    core::SourcePayloadView payload) noexcept;
+bool openCbCarrierSourceCanAppendToPending(core::SourcePayloadView payload,
+                                           bool hasPendingSession) noexcept;
+
 // Encode-side prefix selection -------------------------------------------
 
 // FIFO prefix for dequeueReadySlotBatchPrefix: either a run of appendable
@@ -144,6 +157,12 @@ OpenCbCarrierPendingWaitAction selectOpenCbCarrierPendingWaitAction(
 // the maximal run of session heads with no tail visible yet. Returns 0 to
 // fall back to single-source dequeue.
 std::size_t selectOpenCbCarrierBatchPrefix(
+    std::span<const core::metalqueue::ResolvedPublishedSource> candidates) noexcept;
+
+// Source-kind-neutral prefix selector for the Tape-gated session lane. Same
+// head..tail shape as selectOpenCbCarrierBatchPrefix but admits Legacy and
+// Arena payloads into the same compatible prefix.
+std::size_t selectCpuReadySessionBatchPrefix(
     std::span<const core::metalqueue::ResolvedPublishedSource> candidates) noexcept;
 
 }  // namespace dxmt9::render

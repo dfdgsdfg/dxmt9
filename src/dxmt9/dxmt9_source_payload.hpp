@@ -514,6 +514,8 @@ class SourcePayloadView {
   friend bool operator==(const SourcePayloadView&,
                          const SourcePayloadView&) = default;
   std::size_t commandCount() const noexcept;
+  bool commandsEmpty() const noexcept { return commandCount() == 0; }
+  std::size_t presentRecordCount() const noexcept;
   bool drawOnlyCommandStream() const noexcept;
   SourceCommandView commandAt(std::size_t index) const noexcept;
 

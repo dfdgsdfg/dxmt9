@@ -711,6 +711,12 @@ class QueueLifecycleController {
   // A pending open-CB carrier must be allowed to submit without the final
   // Present tail when the producer is blocked on a sequence it owns.
   bool producerSequenceWaitActive();
+  // Queue-local observation for a compatibility writer blocked either on a
+  // free control/Tape reservation or on the GPU-inflight publication cap.
+  // The Tape-gated session lane treats both as one ordered raw-writer pressure
+  // fence: a parked pending session may own the source whose submission and
+  // completion are required to let that writer advance.
+  bool producerWriterPressureActive();
   // Diagnostic stage probes from the last no-enqueue completion wait end to
   // producer-side commit_chunk milestones.
   void recordCompletionWaitCommitChunkEntry();
@@ -872,6 +878,7 @@ class QueueLifecycleController {
   std::deque<PendingCompletion> pendingCompletion_{};
   bool completionWaitActive_ = false;
   std::uint32_t producerSequenceWaitDepth_ = 0;
+  std::uint32_t producerWriterPressureDepth_ = 0;
   std::uint64_t completionWaitEnqueues_ = 0;
   std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};
   std::chrono::steady_clock::time_point completionWaitEncodeDequeueTime_{};

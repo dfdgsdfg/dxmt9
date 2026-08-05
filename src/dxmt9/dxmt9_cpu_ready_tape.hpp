@@ -181,6 +181,36 @@ class CpuReadyTapeConfig {
     return *config;
   }
 
+  static CpuReadyTapeConfig queueSessionStreaming(
+      std::size_t controlCapacity) {
+    constexpr std::size_t kPageCapacityMultiplier = 16;
+    if (controlCapacity >
+        std::numeric_limits<std::size_t>::max() /
+            kPageCapacityMultiplier) {
+      throw std::invalid_argument(
+          "CpuReadyTape session page capacity overflow");
+    }
+    const auto config = create(Values{
+        .pageSize = 4096,
+        .pageCount = controlCapacity * kPageCapacityMultiplier,
+        .sourceSlotCount = controlCapacity * 2,
+        .readyFifoCount = controlCapacity,
+        .compatibilityPayloadCount = controlCapacity * 2,
+        .maxPagesPerSource = controlCapacity * 2,
+        .highWaterSources = controlCapacity * 2,
+        .lowWaterSources = controlCapacity,
+        .highWaterPages = controlCapacity * kPageCapacityMultiplier,
+        .lowWaterPages = controlCapacity * (kPageCapacityMultiplier / 2),
+        .highWaterReady = controlCapacity,
+        .lowWaterReady = controlCapacity / 2,
+    });
+    if (!config) {
+      throw std::invalid_argument(
+          "invalid CpuReadyTape session streaming capacity");
+    }
+    return *config;
+  }
+
   const Values& values() const noexcept { return values_; }
 
  private:

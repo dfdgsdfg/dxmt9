@@ -80,7 +80,10 @@ Every value is immutable after queue creation. For every bounded dimension,
 `0 <= lowWater < highWater <= hardCapacity`; all derived products and byte
 ranges are overflow-checked before allocation or reservation. Exact defaults
 are policy, but the configured values and rejected invalid configurations are
-observable.
+observable. The default-off compatibility profile and the opt-in streaming
+profile may choose different aggregate page capacities while retaining the
+same source, Ready, compatibility-payload, and per-source bounds; selecting a
+streaming profile must not change default-off allocation or admission policy.
 
 | Region | Shape | Owner |
 |---|---|---|

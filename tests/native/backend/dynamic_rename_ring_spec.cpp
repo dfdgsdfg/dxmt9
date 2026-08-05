@@ -287,7 +287,7 @@ void testConcreteSnapshotMarkProtectsRotatedBacking() {
 void testChunkAdmissionCaptureSurvivesLaterRename() {
   using namespace dxmt9::core;
   BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
   const auto handle = queue.pool().createBuffer(
       WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
   auto* record = queue.pool().findBuffer(handle.value);
@@ -349,7 +349,7 @@ void testChunkAdmissionCaptureSurvivesLaterRename() {
 void testRawCaptureLeasePreventsCompletedBackingReuse() {
   using namespace dxmt9::core;
   BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
   const auto handle = queue.pool().createBuffer(
       WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
   auto* record = queue.pool().findBuffer(handle.value);
@@ -439,7 +439,7 @@ void testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking() {
 void testChunkAdmissionLeavesStaticBufferOnLiveFallback() {
   using namespace dxmt9::core;
   BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
   const auto handle = queue.pool().createBuffer(
       WMT::Device{NULL_OBJECT_HANDLE}, staticBufferDesc());
   const std::array<ChunkHandleEntry, 1> entries{{
@@ -476,7 +476,7 @@ void testChunkAdmissionLeavesStaticBufferOnLiveFallback() {
 void testChunkAdmissionRejectsMissingRequiredBacking() {
   using namespace dxmt9::core;
   BackendLimits limits{};
-  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits);
+  dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
   const auto handle = queue.pool().createBuffer(
       WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
   const std::array<ChunkHandleEntry, 1> entries{{

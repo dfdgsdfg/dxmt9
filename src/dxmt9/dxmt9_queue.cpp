@@ -822,6 +822,11 @@ bool QueueLifecycleController::producerSequenceWaitActive() {
   return producerSequenceWaitDepth_ != 0;
 }
 
+bool QueueLifecycleController::producerWriterPressureActive() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  return producerWriterPressureDepth_ != 0;
+}
+
 void QueueLifecycleController::recordNoEnqueueCommitPublishWaitBeforePublish(
     std::uint64_t nanoseconds) {
   std::lock_guard lock(pendingCompletionMutex_);
@@ -1180,21 +1185,54 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
 
   auto& slots = submissionBinding_.slots;
   bool waitNeeded = false;
+  bool writerPressureRegistered = false;
+  auto beginWriterPressure = [&] {
+    if (writerPressureRegistered) {
+      return;
+    }
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      ++producerWriterPressureDepth_;
+    }
+    writerPressureRegistered = true;
+    if (submissionBinding_.encodeCv) {
+      submissionBinding_.encodeCv->notify_one();
+    }
+  };
+  auto endWriterPressure = [&] {
+    if (!writerPressureRegistered) {
+      return;
+    }
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      DXMT_ASSERT(producerWriterPressureDepth_ > 0);
+      if (producerWriterPressureDepth_ > 0) {
+        --producerWriterPressureDepth_;
+      }
+    }
+    writerPressureRegistered = false;
+    if (submissionBinding_.encodeCv) {
+      submissionBinding_.encodeCv->notify_one();
+    }
+  };
   const auto waitStarted = std::chrono::steady_clock::now();
   // probeReserve() mutates the pressure latch, so keep it out of a condition
   // variable predicate. Each wake re-enters this loop under the scheduling
   // lock; only TemporaryPressure is a normal reason to wait.
   for (;;) {
     if (*stop) {
+      endWriterPressure();
       return false;
     }
     const auto probe = cpuReadyTape->probeReserve();
     if (probe == CpuReadyTape::ReserveProbe::InvalidRequest ||
         probe == CpuReadyTape::ReserveProbe::Corrupt) {
+      endWriterPressure();
       poisonTapeFailure();
       return false;
     }
     if (probe == CpuReadyTape::ReserveProbe::Stopped) {
+      endWriterPressure();
       if (!*stop) {
         poisonTapeFailure();
       }
@@ -1207,9 +1245,15 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     if (!waitNeeded) {
       waitNeeded = true;
       observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
+      // The compatibility writer is now unable to publish the next Legacy
+      // source. Register the whole real wait interval before dropping the
+      // scheduling mutex so a parked Tape session can submit the represented
+      // source that owns this control/Tape capacity.
+      beginWriterPressure();
     }
     writeCv->wait(lock);
   }
+  endWriterPressure();
   if (waitNeeded) {
     const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
     perf::countQueueWriterWait(static_cast<std::uint64_t>(
@@ -1338,11 +1382,31 @@ bool QueueLifecycleController::commitCurrentChunk(
   const bool waitNeeded = *inflightCount >= inflightLimit;
   if (waitNeeded) {
     observeCommitWait(writingSlotIndexBeforeWait, slot.seqId, inflightLimit);
+    // Register the blocked producer so a parked Tape-gated encode session can
+    // observe an ordered raw-writer pressure fence and release the pending
+    // work whose completion frees these inflight tickets.
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      ++producerWriterPressureDepth_;
+    }
+    if (encodeCv) {
+      encodeCv->notify_one();
+    }
   }
   const auto waitStarted = std::chrono::steady_clock::now();
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
   if (waitNeeded) {
+    {
+      std::lock_guard pendingLock(pendingCompletionMutex_);
+      DXMT_ASSERT(producerWriterPressureDepth_ > 0);
+      if (producerWriterPressureDepth_ > 0) {
+        --producerWriterPressureDepth_;
+      }
+    }
+    if (encodeCv) {
+      encodeCv->notify_one();
+    }
     perf::countQueueCommitWait(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
   }

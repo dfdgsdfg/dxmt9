@@ -31,7 +31,8 @@ constexpr DrawBufferBindingSnapshot kAdmittedSnapshot{
 
 struct RecordingDxmt9Device final : dxmt9::Device {
   explicit RecordingDxmt9Device(bool cpuReadyTapeEnabled)
-      : limits_{}, queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_),
+      : limits_{},
+        queue_(WMT::Device{NULL_OBJECT_HANDLE}, limits_, false),
         cpuReadyTapeEnabled_(cpuReadyTapeEnabled) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
