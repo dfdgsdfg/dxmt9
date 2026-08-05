@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace dxmt9::core {
@@ -33,6 +34,11 @@ using dxmt9::core::CpuReadyAdmissionIdentity;
 using dxmt9::core::CpuReadySourceId;
 using dxmt9::core::CpuReadyStorageRef;
 using dxmt9::core::CpuReadyTape;
+
+static_assert(std::is_move_constructible_v<
+              CpuReadyTape::DetachedArenaOwner>);
+static_assert(!std::is_move_assignable_v<
+              CpuReadyTape::DetachedArenaOwner>);
 using dxmt9::core::CpuReadyTapeConfig;
 using dxmt9::core::CpuReadyLayoutRegionRequest;
 using dxmt9::core::ArenaSourcePayloadBuilder;
@@ -40,6 +46,7 @@ using dxmt9::core::SourcePayloadCapacity;
 using dxmt9::core::SourcePayloadLayout;
 using dxmt9::core::makeCpuReadyPayloadLayout;
 using dxmt9::core::makeSourcePayloadLayout;
+using dxmt9::core::makeArenaSourcePayloadLayout;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -282,7 +289,7 @@ void configValidationRejectsUnsafeBounds() {
   }
 }
 
-void productionProfilesSeparateOnlySessionPageHeadroom() {
+void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
   const auto streaming = CpuReadyTapeConfig::queueSessionStreaming(32);
   const auto& legacy = compatibility.values();
@@ -294,18 +301,22 @@ void productionProfilesSeparateOnlySessionPageHeadroom() {
             legacy.lowWaterPages == 32u,
         "compatibility profile preserves the 256 KiB page arena");
   check(session.pageCount == 512u && session.highWaterPages == 512u &&
-            session.lowWaterPages == 256u,
-        "session profile supplies bounded two MiB page headroom");
+            session.lowWaterPages == 256u &&
+            session.maxPagesPerSource == 512u,
+        "session profile lets one segmented source use bounded total page "
+        "headroom");
   check(session.sourceSlotCount == legacy.sourceSlotCount &&
             session.readyFifoCount == legacy.readyFifoCount &&
             session.compatibilityPayloadCount ==
                 legacy.compatibilityPayloadCount &&
-            session.maxPagesPerSource == legacy.maxPagesPerSource &&
             session.highWaterSources == legacy.highWaterSources &&
             session.lowWaterSources == legacy.lowWaterSources &&
             session.highWaterReady == legacy.highWaterReady &&
             session.lowWaterReady == legacy.lowWaterReady,
-        "session streaming changes only aggregate page capacity policy");
+        "session streaming preserves non-page queue capacity policy");
+  check(legacy.maxPagesPerSource == 64u,
+        "default-off compatibility profile preserves its 64-page source "
+        "bound");
 
   bool overflowRejected = false;
   try {
@@ -650,6 +661,73 @@ void strictArenaDoesNotConsumeCompatibilityCapacity() {
         "arena publication never increments compatibility residency");
   check(!tape.reserve().has_value(),
         "the filled compatibility lane remains independently bounded");
+}
+
+void segmentedArenaPublishesAndReclaimsAsOneSource() {
+  CpuReadyTape tape{makeSeparatedPayloadConfig()};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment, segment};
+  const auto layout = makeArenaSourcePayloadLayout(segmentLayouts, 4096, 8);
+  check(layout.has_value(), "segmented arena layout validates");
+  auto overlapping = *layout;
+  overlapping.segments[1].byteOffset = 0;
+  check(!tape.reserve(overlapping, CpuReadyAdmissionIdentity{
+                                       .rawOrdinal = 1,
+                                       .sourceOrdinal = 1,
+                                       .seqId = 1,
+                                       .buildGeneration = 1,
+                                   }),
+        "overlapping segment extents reject without consuming identity");
+  const auto reservation = tape.reserve(
+      *layout, CpuReadyAdmissionIdentity{
+                   .rawOrdinal = 1,
+                   .sourceOrdinal = 1,
+                   .seqId = 1,
+                   .buildGeneration = 1,
+               });
+  check(reservation.has_value() && reservation->arenaPayloadCount == 2 &&
+            reservation->arenaPayloads[0] &&
+            reservation->arenaPayloads[1],
+        "one strict ticket constructs all packed segment owners");
+  for (std::size_t i = 0; i < reservation->arenaPayloadCount; ++i) {
+    auto memory = tape.writableArenaSegment(reservation->ticket, i);
+    ArenaSourcePayloadBuilder builder(
+        *reservation->arenaPayloads[i], layout->segments[i].layout, memory);
+    dxmt9::core::SurfaceCopyDesc copy{};
+    copy.source = dxmt9::core::Handle{i + 1};
+    check(builder.tryAppendSurfaceCopyCommand(copy) && builder.publish(),
+          "each owner publishes only against its packed extent");
+  }
+  check(tape.sealAndPublish(reservation->ticket, 0,
+                            layout->usedBytes),
+        "all packed owners become Ready atomically");
+  const auto payload = tape.resolveSourcePayload(
+      reservation->id, reservation->storage, CpuReadyTape::State::Ready);
+  check(payload.valid() && payload.arenaSegmentCount() == 2 &&
+            payload.commandCount() == 2 &&
+            payload.commandAt(0).command.surfaceCopy->source ==
+                dxmt9::core::Handle{1} &&
+            payload.commandAt(1).command.surfaceCopy->source ==
+                dxmt9::core::Handle{2},
+        "one Ready source exposes a logical command space across segments");
+
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(tape.copyReadyPrefix(ready) == 1 &&
+            tape.representReadyPrefix(ready) &&
+            tape.transition(reservation->id, reservation->storage,
+                            CpuReadyTape::State::Represented,
+                            CpuReadyTape::State::Submitted) &&
+            tape.complete(reservation->id, reservation->storage) &&
+            tape.beginReclaim(reservation->id, reservation->storage),
+        "segmented source retains one lifecycle identity");
+  auto owner = tape.detachReclaimingArenaOwner(
+      reservation->id, reservation->storage);
+  check(owner.has_value(), "reclaim detaches the complete owner chain");
+  owner->destroy();
+  check(tape.finishArenaReclaim(reservation->id, reservation->storage,
+                                std::move(*owner)) &&
+            tape.residentCount() == 0,
+        "all owners destroy before one atomic page-run reclaim");
 }
 
 void arenaOwnerReclaimIsTwoPhaseAndGenerationScoped() {
@@ -1055,7 +1133,7 @@ void controlShellDoesNotOwnPayload() {
 int main() {
   try {
     configValidationRejectsUnsafeBounds();
-    productionProfilesSeparateOnlySessionPageHeadroom();
+    productionProfilesSeparateSessionPageAndSourceHeadroom();
     readyAdmissionDistinguishesHardHighAndLowWater();
     sealAndPublishFailureLeavesWritingAndCursorsUnchanged();
     representPrefixIsAtomicAndPreservesReadySuffix();
@@ -1065,6 +1143,7 @@ int main() {
     strictAdmissionIdentitySurvivesAbort();
     strictSealRequiresExactTapeOwnedBinding();
     strictArenaDoesNotConsumeCompatibilityCapacity();
+    segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     rawLegacyAndStrictAdmissionShareRawHighWater();
     compatibilityAndStrictIdentityShareHighWater();

@@ -12,6 +12,7 @@
 
 #include "../../../src/dxmt9/framegraph/fg_builder.hpp"
 #include "../../../src/dxmt9/framegraph/fg_dag.hpp"
+#include "arena_payload_fixture.hpp"
 
 #include <cstdint>
 #include <exception>
@@ -525,6 +526,101 @@ void testSurfaceTextureAliasHazardsShareOneResource() {
   check(hasEdge(1, 2), "alias WAR edge texture consumer -> second writer");
 }
 
+void testLegacyArenaGraphParity() {
+  ChunkSlot slot;
+  const Handle rt0{0x7100u};
+  const Handle rt1{0x7200u};
+  ClearDesc clear{};
+  clear.colorAttachments[0].handle = rt0;
+  clear.clearColor = true;
+  clear.rects.push_back(
+      dxmt9::core::Rect{.left = 1, .top = 2, .right = 30, .bottom = 40});
+  slot.appendClear(clear);
+  appendDrawRun(slot, rt0, {}, {}, 2);
+  slot.appendSurfaceCopy(dxmt9::core::SurfaceCopyDesc{
+      .source = rt0,
+      .destination = rt1,
+  });
+  appendDrawRun(slot, rt1, {}, rt0, 1);
+  appendPresent(slot, rt1);
+
+  dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+  check(arena.valid(), "Arena parity fixture publishes");
+  const FrameGraph legacyGraph = buildFrameGraph(slot, 91);
+  const FrameGraph arenaGraph = buildFrameGraph(arena.view(), 91);
+  check(legacyGraph.passes == arenaGraph.passes,
+        "legacy/Arena passes are identical");
+  check(legacyGraph.resources == arenaGraph.resources,
+        "legacy/Arena resource accesses are identical");
+  check(legacyGraph.edges == arenaGraph.edges,
+        "legacy/Arena dependency edges are identical");
+  check(legacyGraph.draws == arenaGraph.draws,
+        "legacy/Arena draw refs are identical");
+  check(legacyGraph.commands == arenaGraph.commands,
+        "legacy/Arena Clear/draw/helper/Present refs are identical");
+  check(legacyGraph.frame_id == arenaGraph.frame_id &&
+            legacyGraph.flush_boundary == arenaGraph.flush_boundary,
+        "legacy/Arena graph scalars are identical");
+}
+
+void testSegmentedArenaGraphParity() {
+  const Handle rtA{0x7300u};
+  const Handle rtB{0x7400u};
+
+  ChunkSlot legacy;
+  appendDrawRun(legacy, rtA, {}, {}, 1);
+  appendDrawRun(legacy, rtB, {}, {}, 1);
+  appendDrawRun(legacy, rtA, {}, {}, 1);
+  appendPresent(legacy, rtA);
+
+  ChunkSlot first;
+  appendDrawRun(first, rtA, {}, {}, 1);
+  ChunkSlot second;
+  appendDrawRun(second, rtB, {}, {}, 1);
+  appendDrawRun(second, rtA, {}, {}, 1);
+  appendPresent(second, rtA);
+
+  dxmt9::tests::framegraph::SegmentedArenaPayloadFixture arena(first, second);
+  check(arena.valid(), "segmented Arena graph fixture publishes");
+  const auto source = arena.view();
+  check(source.commandCount() == 4 && source.arenaSegmentCount() == 2,
+        "two Arena blocks expose one four-command logical source");
+  check(source.commandAt(0).segmentIndex == 0 &&
+            source.commandAt(0).localCommandIndex == 0 &&
+            source.commandAt(1).segmentIndex == 1 &&
+            source.commandAt(1).localCommandIndex == 0 &&
+            source.commandAt(3).segmentIndex == 1 &&
+            source.commandAt(3).localCommandIndex == 2,
+        "logical command lookup crosses the block boundary without reset");
+
+  const FrameGraph legacyGraph = buildFrameGraph(legacy, 92);
+  const FrameGraph arenaGraph = buildFrameGraph(source, 92);
+  check(legacyGraph.passes == arenaGraph.passes,
+        "legacy/segmented Arena passes are identical");
+  check(legacyGraph.resources == arenaGraph.resources,
+        "legacy/segmented Arena resource accesses are identical");
+  check(legacyGraph.edges == arenaGraph.edges,
+        "legacy/segmented Arena dependency edges are identical");
+  check(legacyGraph.commands == arenaGraph.commands,
+        "legacy/segmented Arena command refs use global logical indices");
+  check(legacyGraph.draws.size() == arenaGraph.draws.size(),
+        "legacy/segmented Arena draw counts are identical");
+  for (std::size_t i = 0; i < legacyGraph.draws.size(); ++i) {
+    check(legacyGraph.draws[i].command_index ==
+                  arenaGraph.draws[i].command_index &&
+              legacyGraph.draws[i].param_count ==
+                  arenaGraph.draws[i].param_count,
+          "segmented Arena draw refs preserve logical command indices");
+  }
+  check(arenaGraph.draws[0].param_first == 0 &&
+            arenaGraph.draws[1].param_first == 0 &&
+            arenaGraph.draws[2].param_first == 1,
+        "segmented Arena draw parameter offsets remain block-local");
+  check(legacyGraph.frame_id == arenaGraph.frame_id &&
+            legacyGraph.flush_boundary == arenaGraph.flush_boundary,
+        "legacy/segmented Arena graph scalars are identical");
+}
+
 }  // namespace
 
 int main() {
@@ -541,6 +637,8 @@ int main() {
     testEmptyChunk();
     testDeterminism();
     testSurfaceTextureAliasHazardsShareOneResource();
+    testLegacyArenaGraphParity();
+    testSegmentedArenaGraphParity();
   } catch (const TestFailure& failure) {
     std::cerr << "fg_builder_spec failed: " << failure.what() << '\n';
     return 1;

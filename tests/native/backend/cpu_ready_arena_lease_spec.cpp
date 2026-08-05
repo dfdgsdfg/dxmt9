@@ -48,6 +48,33 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.stop_ = true;
   }
 
+  static std::size_t readyCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.readyCount();
+  }
+
+  static bool activeFlushDeferred(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.arenaBuildContext_ &&
+           queue.arenaBuildContext_->flushAfterPublication;
+  }
+
+  static core::PresentId registerFakePresenter(CommandQueue& queue) {
+    return queue.registerPresenter(
+        reinterpret_cast<Presenter*>(static_cast<std::uintptr_t>(1)));
+  }
+
+  static bool appendStashedPresent(CommandQueue& queue,
+                                   core::PresentId id) {
+    core::SwapDesc desc{};
+    desc.presentId = id;
+    desc.pacedByPresentOrdinal = true;
+    return queue.appendActiveArenaPresent(
+               std::move(desc), BoundaryPolicy::Default,
+               /*tokenStashed=*/true) ==
+           CommandQueue::ActiveArenaAppendResult::Appended;
+  }
+
   static core::Handle currentBackBuffer(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.currentBackBuffer_;
@@ -82,10 +109,12 @@ struct CommandQueueArenaLeaseTestAccess {
         queue.arenaBuildContext_->reservation.ticket != ticket) {
       return false;
     }
-    const auto memory = queue.cpuReadyTape_.writableStorage(ticket);
-    return memory.size() >= queue.arenaBuildContext_->layout.usedBytes &&
+    const auto memory = queue.cpuReadyTape_.writableArenaSegment(ticket, 0);
+    return queue.arenaBuildContext_->layout.segmentCount == 1 &&
+           memory.size() ==
+               queue.arenaBuildContext_->layout.segments[0].layout.usedBytes &&
            queue.arenaBuildContext_->reservation.arenaPayload->boundTo(
-               memory.first(queue.arenaBuildContext_->layout.usedBytes));
+               memory);
   }
 
   static const core::ArenaSourcePayloadBlock* publishedArena(
@@ -227,10 +256,14 @@ dxmt9::core::SourcePayloadCapacity singleDrawCapacity(
   return capacity;
 }
 
-dxmt9::core::SourcePayloadLayout makeLayout(
+dxmt9::core::ArenaSourcePayloadLayout makeLayout(
     const dxmt9::core::SourcePayloadCapacity& capacity) {
-  const auto layout =
+  const auto segment =
       dxmt9::core::makeSourcePayloadLayout(capacity, 4096, 64);
+  check(segment.has_value(), "arena lease fixture segment must build");
+  const std::array segments{*segment};
+  const auto layout = dxmt9::core::makeArenaSourcePayloadLayout(
+      segments, 4096, 64);
   check(layout.has_value(), "arena lease fixture layout must build");
   return *layout;
 }
@@ -648,6 +681,93 @@ void testArenaPublishToReclaimLifecycle() {
         "arena reclaim must advance the source generation");
 }
 
+void testActivePresentPublishesFinalSourceAndDefersFlush() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 2;
+  capacity.clearRecords = 1;
+  capacity.presentRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const Handle initialBackBuffer{0x91};
+  const Handle pendingBackBuffer{0x92};
+  CommandQueueArenaLeaseTestAccess::setCurrentBackBuffer(
+      queue, initialBackBuffer);
+  auto begin = queue.beginCpuReadyArenaSource(10, layout);
+  check(begin && begin->seqId() == 1,
+        "Present fixture must reserve one strict source identity");
+
+  ClearDesc clear{};
+  clear.colorAttachments[0].handle = pendingBackBuffer;
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  SwapDesc present{};
+  present.pacedByPresentOrdinal = true;
+  check(queue.submitPresent(present) == begin->seqId(),
+        "active Arena Present returns the reserved source seq without "
+        "publishing early");
+  check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0,
+        "paced Present remains unpublished until the lease seals the source");
+  check(resolvePresentBoundaryAction(
+            /*pacedByPresentOrdinal=*/true, BoundaryPolicy::Default) ==
+            PresentBoundaryAction::SkipPacedByOffloadOrdinal,
+        "paced Arena Present selects the post-publication boundary skip");
+
+  queue.submitFlush();
+  check(CommandQueueArenaLeaseTestAccess::activeFlushDeferred(queue) &&
+            CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0,
+        "synchronous Present flush is recorded without waiting before "
+        "publication");
+  // The inert queue has no encode worker. Stop its wait predicate so publish
+  // can exercise the deferred post-publication flush without blocking.
+  CommandQueueArenaLeaseTestAccess::setStopped(queue);
+  const auto ticket = begin->ticket();
+  check(begin->publish(),
+        "Present-bearing Arena source publishes before deferred flush runs");
+  const auto* arena =
+      CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket);
+  check(arena != nullptr, "published Present source resolves from Tape");
+  const SourcePayloadView source(*arena);
+  check(source.commandCount() == 2 &&
+            source.commandAt(0).kind() == MetalCommandKind::Clear &&
+            source.commandAt(1).kind() == MetalCommandKind::Present &&
+            source.commandAt(1).command.present &&
+            source.commandAt(1).command.present->presentSource ==
+                pendingBackBuffer,
+        "Present is the final command and uses the active build's pending "
+        "backbuffer");
+}
+
+void testPresentAppendAbortRemovesStashedTokenOnce() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  // Intentionally omit Present storage so append fails after the token has
+  // been stashed and cleanup responsibility recorded by the build context.
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(11, layout);
+  check(begin.has_value(), "token-abort fixture admission must succeed");
+  const auto presentId =
+      CommandQueueArenaLeaseTestAccess::registerFakePresenter(queue);
+  auto token = std::make_shared<PresentDrawableToken>();
+  std::weak_ptr<PresentDrawableToken> weakToken = token;
+  queue.stashDrawableToken(presentId, token);
+  token.reset();
+  check(!CommandQueueArenaLeaseTestAccess::appendStashedPresent(
+            queue, presentId),
+        "capacity failure must reject the active Present append");
+  check(!begin->publish(),
+        "failed Present append must fail-stop the strict publication");
+  check(weakToken.expired() && !queue.takeDrawableToken(presentId),
+        "abort removes the sole stashed token and a second take is empty");
+  queue.unregisterPresenter(presentId);
+}
+
 }  // namespace
 
 int main() {
@@ -659,6 +779,8 @@ int main() {
     testTypedBeginStatusAndMissingAdmissionSnapshot();
     testArenaClearMarksCommonViewResourcesAtExactSeq();
     testArenaPublishToReclaimLifecycle();
+    testActivePresentPublishesFinalSourceAndDefersFlush();
+    testPresentAppendAbortRemovesStashedTokenOnce();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
     return 1;

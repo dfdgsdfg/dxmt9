@@ -9,13 +9,25 @@ TraditionalBackend::onChunkReady(encoders::EncodeContext& ctx,
                                  std::size_t slotIndex,
                                  const core::ChunkSlot& slot,
                                  encoders::EncodeChunkOptions options) {
+  return onSourceReady(ctx, slotIndex, core::SourcePayloadView(slot),
+                       slot.seqId, std::move(options));
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+TraditionalBackend::onSourceReady(encoders::EncodeContext& ctx,
+                                  std::size_t slotIndex,
+                                  core::SourcePayloadView payload,
+                                  std::uint64_t seqId,
+                                  encoders::EncodeChunkOptions options) {
   // Backend-agnostic DAG observe + export side-channel (R-BACK-39.7). Reads only
-  // `slot`, writes only debug dump files when DXMT9_RENDERER_DUMP_DAG is set, and
+  // `payload`, writes only debug dump files when DXMT9_RENDERER_DUMP_DAG is set, and
   // early-outs otherwise — so the traditional encode below stays byte-identical.
-  observer_.observeAndExport(slot, makeResourceAliasResolver(ctx.pool));
+  observer_.observeAndExport(payload, seqId,
+                             makeResourceAliasResolver(ctx.pool));
 
   // Byte-identical traditional path: forward straight to the free function.
-  return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+  return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
+                               std::move(options));
 }
 
 bool TraditionalBackend::emitDraw(encoders::EncodeContext& ctx,

@@ -36,6 +36,12 @@ class TraditionalBackend final : public IRenderBackend,
       std::size_t slotIndex,
       const core::ChunkSlot& slot,
       encoders::EncodeChunkOptions options = {}) override;
+  std::optional<core::metalqueue::QueueSubmissionRecord> onSourceReady(
+      encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      core::SourcePayloadView payload,
+      std::uint64_t seqId,
+      encoders::EncodeChunkOptions options = {}) override;
 
   BackendMode mode() const override { return BackendMode::Traditional; }
 

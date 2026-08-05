@@ -1,9 +1,8 @@
 // Frame Graph builder (Task B2, L1). See fg_builder.hpp for scope/contract.
 //
 // spec.md §4.1 maps chunk-record kinds onto builder actions. The real input
-// is the imported `core::ChunkSlot` SoA, so the mapping is read against
-// `ChunkSlot::commandHeaders` (MetalCommandKind + payload index), not the
-// PE-side wire enum (spec.md §2.1):
+// is an immutable `core::SourcePayloadView`, so the same mapping applies to
+// legacy ChunkSlot and arena-backed payload storage.
 //
 //   MetalCommandKind::DrawRun  -> append DrawRef(s) to the current Render pass;
 //                                 start a new pass when the attachment set
@@ -55,7 +54,7 @@ AttachmentSet attachmentSetFromHot(const core::FlatDrawStateRecord& hot) {
   return set;
 }
 
-AttachmentSet attachmentSetFromClear(const core::ClearDesc& clear) {
+AttachmentSet attachmentSetFromClear(const core::ClearCommandView& clear) {
   AttachmentSet set{};
   u32 count = 0;
   if (clear.clearColor) {
@@ -78,18 +77,17 @@ AttachmentSet attachmentSetFromClear(const core::ClearDesc& clear) {
 // can append accesses / draws / edges against the current pass.
 class Builder {
 public:
-  Builder(const core::ChunkSlot& slot, u64 frame_id,
+  Builder(core::SourcePayloadView payload, u64 frame_id,
           ResourceAliasResolver aliasResolver, FrameGraph& graph)
-      : slot_(slot), aliasResolver_(aliasResolver), graph_(graph) {
+      : payload_(payload), aliasResolver_(aliasResolver), graph_(graph) {
     graph_.reset();
     graph_.frame_id = frame_id;
   }
 
   void run() {
-    const std::size_t commandCount = slot_.commandHeaders.size();
+    const std::size_t commandCount = payload_.commandCount();
     for (std::size_t i = 0; i < commandCount; ++i) {
-      const auto& header = slot_.commandHeaders[i];
-      switch (header.kind) {
+      switch (payload_.commandAt(i).kind()) {
       case core::MetalCommandKind::DrawRun:
         handleDrawRun(i);
         break;
@@ -161,7 +159,7 @@ private:
                      .count = 1};
     graph_.commands.push_back(CommandRef{
         .command_index = static_cast<u32>(commandIndex),
-        .kind = slot_.commandHeaders[commandIndex].kind,
+        .kind = payload_.commandAt(commandIndex).kind(),
     });
     graph_.passes.push_back(pass);
     return static_cast<u32>(graph_.passes.size() - 1u);
@@ -275,7 +273,7 @@ private:
   // --- Command handlers -----------------------------------------------------
 
   void handleDrawRun(std::size_t commandIndex) {
-    const auto command = slot_.drawRunCommandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.drawState.hot) {
       // Malformed/absent state (out-of-range stateIndex). Skip rather than
       // dereference; the linearizer would skip it too.
@@ -349,11 +347,11 @@ private:
   }
 
   void handleClear(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
-    if (!command.clear) {
+    const auto source = payload_.commandAt(commandIndex);
+    if (!source.clear) {
       return;
     }
-    const auto& clear = *command.clear;
+    const auto& clear = *source.clear;
     const AttachmentSet targets = attachmentSetFromClear(clear);
     // A rectangular clear preserves pixels outside the rect set. A
     // depth-only or stencil-only clear may preserve the other aspect of the
@@ -391,7 +389,7 @@ private:
 
   void handlePresent(std::size_t commandIndex) {
     const u32 pass_index = emitStandalonePass(PassKind::Present, commandIndex);
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (command.present && command.present->presentSource.value != 0) {
       currentPass_ = pass_index;
       // Present observes the source surface. Recording the read keeps a final
@@ -403,7 +401,7 @@ private:
   }
 
   void handleSurfaceCopy(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.surfaceCopy) {
       return;
     }
@@ -412,7 +410,7 @@ private:
   }
 
   void handleStretchRect(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.stretchRect) {
       return;
     }
@@ -421,7 +419,7 @@ private:
   }
 
   void handleColorFill(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.colorFill) {
       return;
     }
@@ -431,7 +429,7 @@ private:
   }
 
   void handleDepthResolve(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.depthResolve) {
       return;
     }
@@ -441,7 +439,7 @@ private:
   }
 
   void handleReadback(std::size_t commandIndex) {
-    const auto command = slot_.commandAt(commandIndex);
+    const auto command = payload_.commandAt(commandIndex).command;
     if (!command.readback) {
       return;
     }
@@ -469,7 +467,7 @@ private:
     }
   }
 
-  const core::ChunkSlot& slot_;
+  core::SourcePayloadView payload_{};
   ResourceAliasResolver aliasResolver_{};
   FrameGraph& graph_;
   u32 currentPass_ = 0;
@@ -478,25 +476,46 @@ private:
 
 }  // namespace
 
-void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id, FrameGraph& out) {
-  buildFrameGraph(slot, frame_id, ResourceAliasResolver{}, out);
+void buildFrameGraph(core::SourcePayloadView payload, u64 frame_id,
+                     FrameGraph& out) {
+  buildFrameGraph(payload, frame_id, ResourceAliasResolver{}, out);
+}
+
+void buildFrameGraph(core::SourcePayloadView payload, u64 frame_id,
+                     ResourceAliasResolver alias_resolver, FrameGraph& out) {
+  Builder builder(payload, frame_id, alias_resolver, out);
+  builder.run();
+}
+
+FrameGraph buildFrameGraph(core::SourcePayloadView payload, u64 frame_id) {
+  return buildFrameGraph(payload, frame_id, ResourceAliasResolver{});
+}
+
+FrameGraph buildFrameGraph(core::SourcePayloadView payload, u64 frame_id,
+                           ResourceAliasResolver alias_resolver) {
+  FrameGraph graph;
+  buildFrameGraph(payload, frame_id, alias_resolver, graph);
+  return graph;
+}
+
+void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
+                     FrameGraph& out) {
+  buildFrameGraph(core::SourcePayloadView(slot), frame_id, out);
 }
 
 void buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
                      ResourceAliasResolver alias_resolver, FrameGraph& out) {
-  Builder builder(slot, frame_id, alias_resolver, out);
-  builder.run();
+  buildFrameGraph(core::SourcePayloadView(slot), frame_id, alias_resolver, out);
 }
 
 FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id) {
-  return buildFrameGraph(slot, frame_id, ResourceAliasResolver{});
+  return buildFrameGraph(core::SourcePayloadView(slot), frame_id);
 }
 
 FrameGraph buildFrameGraph(const core::ChunkSlot& slot, u64 frame_id,
                            ResourceAliasResolver alias_resolver) {
-  FrameGraph graph;
-  buildFrameGraph(slot, frame_id, alias_resolver, graph);
-  return graph;
+  return buildFrameGraph(core::SourcePayloadView(slot), frame_id,
+                         alias_resolver);
 }
 
 }  // namespace dxmt9::framegraph

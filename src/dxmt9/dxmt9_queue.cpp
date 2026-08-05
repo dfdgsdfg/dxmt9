@@ -1935,13 +1935,14 @@ bool QueueLifecycleController::completeInlineChunk(
       deferredReleases = reclaimingPayload->detachResourceOwners();
       reclaimingPayload->clearCommands();
     } else {
-      arenaOwner =
+      auto detached =
           submissionBinding_.cpuReadyTape->detachReclaimingArenaOwner(
               source.id, source.storage);
-      if (!arenaOwner) {
+      if (!detached) {
         poisonTapeFailure();
         return;
       }
+      arenaOwner.emplace(std::move(*detached));
     }
     reclaimBegan = true;
     slot.state = ChunkSlot::State::Free;
@@ -2112,12 +2113,14 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     deferredReleases = payload->detachResourceOwners();
     payload->clearCommands();
   } else {
-    arenaOwner = submissionBinding_.cpuReadyTape->detachReclaimingArenaOwner(
-        head->source.id, head->source.storage);
-    if (!arenaOwner) {
+    auto detached =
+        submissionBinding_.cpuReadyTape->detachReclaimingArenaOwner(
+            head->source.id, head->source.storage);
+    if (!detached) {
       poisonTapeFailure();
       return false;
     }
+    arenaOwner.emplace(std::move(*detached));
   }
 
   lock.unlock();

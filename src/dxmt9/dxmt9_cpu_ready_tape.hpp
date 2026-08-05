@@ -115,6 +115,9 @@ class CpuReadyTapeConfig {
         values.pageCount > std::numeric_limits<std::uint32_t>::max() ||
         values.sourceSlotCount >
             std::numeric_limits<std::uint32_t>::max() ||
+        values.sourceSlotCount >
+            std::numeric_limits<std::size_t>::max() /
+                kMaxArenaSourcePayloadSegments ||
         values.readyFifoCount > values.sourceSlotCount ||
         values.maxPagesPerSource == 0 ||
         values.maxPagesPerSource > values.pageCount ||
@@ -196,7 +199,11 @@ class CpuReadyTapeConfig {
         .sourceSlotCount = controlCapacity * 2,
         .readyFifoCount = controlCapacity,
         .compatibilityPayloadCount = controlCapacity * 2,
-        .maxPagesPerSource = controlCapacity * 2,
+        // Streaming admits one logical source as several independently sized
+        // Arena blocks. Its total bound is the Tape page policy, not the
+        // legacy compatibility payload count; the ordinary per-segment cap
+        // remains 64 pages in the structural planner.
+        .maxPagesPerSource = controlCapacity * kPageCapacityMultiplier,
         .highWaterSources = controlCapacity * 2,
         .lowWaterSources = controlCapacity,
         .highWaterPages = controlCapacity * kPageCapacityMultiplier,
@@ -373,11 +380,15 @@ class CpuReadyTape {
     PayloadKind payloadKind = PayloadKind::Legacy;
     SourcePayloadBlock* payload = nullptr;
     ArenaSourcePayloadBlock* arenaPayload = nullptr;
+    std::array<ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> arenaPayloads{};
+    std::size_t arenaPayloadCount = 0;
 
     explicit operator bool() const noexcept {
       return ticket.valid() &&
              (payloadKind == PayloadKind::Legacy ? payload != nullptr
-                                                 : arenaPayload != nullptr);
+                                                 : arenaPayload != nullptr &&
+                                                       arenaPayloadCount != 0);
     }
   };
 
@@ -424,42 +435,41 @@ class CpuReadyTape {
     DetachedArenaOwner& operator=(const DetachedArenaOwner&) = delete;
 
     DetachedArenaOwner(DetachedArenaOwner&& other) noexcept
-        : payload_(other.payload_), destroyed_(other.destroyed_) {
-      other.payload_ = nullptr;
+        : payloads_(other.payloads_), count_(other.count_),
+          destroyed_(other.destroyed_) {
+      other.payloads_ = {};
+      other.count_ = 0;
       other.destroyed_ = false;
     }
 
-    DetachedArenaOwner& operator=(DetachedArenaOwner&& other) noexcept {
-      if (this == &other) {
-        return *this;
-      }
-      destroy();
-      payload_ = other.payload_;
-      destroyed_ = other.destroyed_;
-      other.payload_ = nullptr;
-      other.destroyed_ = false;
-      return *this;
-    }
+    DetachedArenaOwner& operator=(DetachedArenaOwner&&) = delete;
 
-    explicit operator bool() const noexcept { return payload_ != nullptr; }
+    explicit operator bool() const noexcept { return count_ != 0; }
     bool destroyed() const noexcept { return destroyed_; }
 
     void destroy() noexcept {
-      if (!payload_ || destroyed_) {
+      if (count_ == 0 || destroyed_) {
         return;
       }
-      payload_->destroyConstructed();
-      std::destroy_at(payload_);
+      for (std::size_t i = count_; i != 0; --i) {
+        payloads_[i - 1]->destroyConstructed();
+        std::destroy_at(payloads_[i - 1]);
+      }
       destroyed_ = true;
     }
 
    private:
     friend class CpuReadyTape;
 
-    explicit DetachedArenaOwner(ArenaSourcePayloadBlock* payload) noexcept
-        : payload_(payload) {}
+    explicit DetachedArenaOwner(
+        std::span<ArenaSourcePayloadBlock* const> payloads) noexcept
+        : count_(payloads.size()) {
+      std::copy(payloads.begin(), payloads.end(), payloads_.begin());
+    }
 
-    ArenaSourcePayloadBlock* payload_ = nullptr;
+    std::array<ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> payloads_{};
+    std::size_t count_ = 0;
     bool destroyed_ = false;
   };
 
@@ -496,7 +506,8 @@ class CpuReadyTape {
         pageArena_(allocateCpuReadyAlignedBytes(
             config.values().pageSize * config.values().pageCount)),
         arenaOwners_(std::make_unique<CpuReadyArenaOwnerSlot[]>(
-            config.values().sourceSlotCount)),
+            config.values().sourceSlotCount *
+            kMaxArenaSourcePayloadSegments)),
         compatibilityPayloads_(std::make_unique<SourcePayloadBlock[]>(
             config.values().compatibilityPayloadCount)),
         compatibilityOwners_(std::make_unique<CpuReadySourceId[]>(
@@ -504,11 +515,14 @@ class CpuReadyTape {
 
   ~CpuReadyTape() {
     for (std::size_t i = 0; i < capacity(); ++i) {
-      auto& owner = arenaOwners_[i];
-      if (owner.constructed && !entries_[i].arenaOwnerDetached) {
-        owner.payload()->destroyConstructed();
-        std::destroy_at(owner.payload());
-        owner.constructed = false;
+      for (std::size_t segment = entries_[i].arenaPayloadCount;
+           segment != 0; --segment) {
+        auto& owner = arenaOwner(i, segment - 1);
+        if (owner.constructed && !entries_[i].arenaOwnerDetached) {
+          owner.payload()->destroyConstructed();
+          std::destroy_at(owner.payload());
+          owner.constructed = false;
+        }
       }
     }
   }
@@ -588,7 +602,11 @@ class CpuReadyTape {
         (entry->payloadKind == PayloadKind::Legacy
              ? !compatibilityPayload(*entry) ||
                    compatibilityPayload(*entry)->seqId != seqId
-             : !arenaPayload(*entry) || !arenaPayload(*entry)->readable())) {
+             : entry->arenaPayloadCount == 0 ||
+                   (entry->arenaPayloadCount == 1
+                        ? !arenaPayload(*entry) ||
+                              !arenaPayload(*entry)->readable()
+                        : !entry->arenaChain.readable()))) {
       noteStaleReject();
       return false;
     }
@@ -615,6 +633,22 @@ class CpuReadyTape {
 
   ReserveProbe probeArenaReserve(std::size_t pageCount) noexcept {
     return probeReserve(pageCount, PayloadKind::Arena);
+  }
+
+  ReserveProbe probeArenaReserve(
+      const ArenaSourcePayloadLayout& layout) noexcept {
+    if (!layout.valid()) {
+      return ReserveProbe::InvalidRequest;
+    }
+    const ReserveProbe probe = inspectReserve(
+        layout.pageCount, PayloadKind::Arena, layout.segmentCount);
+    if (probe == ReserveProbe::TemporaryPressure) {
+      closeAdmission(pressureDimensions(layout.pageCount,
+                                        PayloadKind::Arena));
+    } else if (probe == ReserveProbe::Corrupt) {
+      stopAdmission();
+    }
+    return probe;
   }
 
   ReserveProbe probeReserve(std::size_t pageCount,
@@ -653,7 +687,28 @@ class CpuReadyTape {
       std::size_t pageCount,
       std::size_t plannedBytes,
       CpuReadyAdmissionIdentity identity) noexcept {
+    SourcePayloadLayout segment{};
+    segment.usedBytes = plannedBytes;
+    segment.pageCount = pageCount;
+    segment.requiredBaseAlignment = 1;
+    ArenaSourcePayloadLayout layout{};
+    layout.segments[0] = ArenaSourcePayloadSegmentLayout{
+        .layout = segment,
+        .byteOffset = 0,
+    };
+    layout.segmentCount = 1;
+    layout.usedBytes = plannedBytes;
+    layout.pageCount = pageCount;
+    return reserve(layout, identity);
+  }
+
+  std::optional<Reservation> reserve(
+      const ArenaSourcePayloadLayout& layout,
+      CpuReadyAdmissionIdentity identity) noexcept {
+    const std::size_t pageCount = layout.pageCount;
+    const std::size_t plannedBytes = layout.usedBytes;
     if (!identity.valid() || plannedBytes == 0 ||
+        !layout.valid() ||
         1 + (plannedBytes - 1) / config_.values().pageSize != pageCount ||
         compatibilityWritingCount_ != 0 || strictWritingActive_ ||
         identity.rawOrdinal <= rawOrdinalHighWater_ ||
@@ -662,10 +717,11 @@ class CpuReadyTape {
       return std::nullopt;
     }
 
-    if (probeReserve(pageCount, PayloadKind::Arena) != ReserveProbe::Ready) {
+    if (probeArenaReserve(layout) != ReserveProbe::Ready) {
       return std::nullopt;
     }
-    auto reservation = reserveStorageImpl(pageCount, PayloadKind::Arena);
+    auto reservation = reserveStorageImpl(
+        pageCount, PayloadKind::Arena, layout.segmentCount);
     if (!reservation) {
       return std::nullopt;
     }
@@ -682,6 +738,13 @@ class CpuReadyTape {
     entry->sourceOrdinal = identity.sourceOrdinal;
     entry->seqId = identity.seqId;
     entry->buildGeneration = identity.buildGeneration;
+    entry->arenaPayloadCount = layout.segmentCount;
+    for (std::size_t i = 0; i < layout.segmentCount; ++i) {
+      entry->arenaExtents[i] = Entry::ArenaExtent{
+          .byteOffset = layout.segments[i].byteOffset,
+          .byteCount = layout.segments[i].layout.usedBytes,
+      };
+    }
     rawOrdinalHighWater_ = identity.rawOrdinal;
     sourceOrdinalHighWater_ = identity.sourceOrdinal;
     seqIdHighWater_ = identity.seqId;
@@ -706,6 +769,27 @@ class CpuReadyTape {
       return {};
     }
     return storageSpan(ticket.storage);
+  }
+
+  std::span<std::byte> writableArenaSegment(
+      CpuReadyPublicationTicket ticket,
+      std::size_t segmentIndex) noexcept {
+    auto* entry = resolveEntry(ticket.id, ticket.storage);
+    if (!entry || entry->state != State::Writing ||
+        entry->payloadKind != PayloadKind::Arena ||
+        !ticketMatchesEntry(ticket, *entry) ||
+        segmentIndex >= entry->arenaPayloadCount) {
+      noteStaleReject();
+      return {};
+    }
+    const auto extent = entry->arenaExtents[segmentIndex];
+    auto storage = storageSpan(ticket.storage);
+    if (extent.byteOffset > storage.size() ||
+        extent.byteCount > storage.size() - extent.byteOffset) {
+      noteStaleReject();
+      return {};
+    }
+    return storage.subspan(extent.byteOffset, extent.byteCount);
   }
 
   std::span<const std::byte> resolveStorage(
@@ -792,9 +876,14 @@ class CpuReadyTape {
       const auto* payload = compatibilityPayload(*entry);
       return payload ? SourcePayloadView(*payload) : SourcePayloadView{};
     }
-    const auto* payload = arenaPayload(*entry);
-    return payload && payload->readable() ? SourcePayloadView(*payload)
-                                          : SourcePayloadView{};
+    if (entry->arenaPayloadCount == 1) {
+      const auto* payload = arenaPayload(*entry);
+      return payload && payload->readable() ? SourcePayloadView(*payload)
+                                            : SourcePayloadView{};
+    }
+    return entry->arenaChain.readable()
+               ? SourcePayloadView(entry->arenaChain)
+               : SourcePayloadView{};
   }
 
   std::optional<PayloadKind> payloadKind(
@@ -877,11 +966,31 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
-    auto* payload = arenaPayload(*entry);
     const auto reservedStorage = storageSpan(ticket.storage);
     const auto plannedStorage = reservedStorage.first(entry->plannedBytes);
-    if (!payload || !payload->published() ||
-        !payload->boundTo(std::span<const std::byte>(plannedStorage))) {
+    std::array<const ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> payloads{};
+    for (std::size_t i = 0; i < entry->arenaPayloadCount; ++i) {
+      const auto extent = entry->arenaExtents[i];
+      if (extent.byteOffset > plannedStorage.size() ||
+          extent.byteCount > plannedStorage.size() - extent.byteOffset) {
+        noteStaleReject();
+        return false;
+      }
+      const auto& owner = arenaOwner(ticket.id.index, i);
+      const auto* payload = owner.constructed ? owner.payload() : nullptr;
+      const auto segmentStorage =
+          plannedStorage.subspan(extent.byteOffset, extent.byteCount);
+      if (!payload || !payload->published() ||
+          !payload->boundTo(
+              std::span<const std::byte>(segmentStorage))) {
+        noteStaleReject();
+        return false;
+      }
+      payloads[i] = payload;
+    }
+    if (!entry->arenaChain.initialize(
+            std::span(payloads).first(entry->arenaPayloadCount))) {
       noteStaleReject();
       return false;
     }
@@ -966,17 +1075,24 @@ class CpuReadyTape {
       noteStaleReject();
       return std::nullopt;
     }
-    auto* payload = arenaPayload(*entry);
-    if (!payload) {
-      noteStaleReject();
-      return std::nullopt;
+    std::array<ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> payloads{};
+    for (std::size_t i = 0; i < entry->arenaPayloadCount; ++i) {
+      auto& owner = arenaOwner(ticket.id.index, i);
+      if (!owner.constructed) {
+        noteStaleReject();
+        return std::nullopt;
+      }
+      payloads[i] = owner.payload();
     }
     --readyPublicationReservations_;
     stats_.readyPublicationReservations = readyPublicationReservations_;
     entry->state = State::Reclaiming;
+    entry->arenaChain.clear();
     entry->arenaOwnerDetached = true;
     entry->arenaDetachKind = Entry::ArenaDetachKind::Abort;
-    return DetachedArenaOwner(payload);
+    return DetachedArenaOwner(
+        std::span(payloads).first(entry->arenaPayloadCount));
   }
 
   bool finishArenaAbort(CpuReadyPublicationTicket ticket,
@@ -988,13 +1104,23 @@ class CpuReadyTape {
         !ticketMatchesEntry(ticket, *entry) || !entry->arenaOwnerDetached ||
         entry->arenaDetachKind != Entry::ArenaDetachKind::Abort ||
         !owner.destroyed() ||
-        owner.payload_ != arenaOwners_[ticket.id.index].storageAddress()) {
+        owner.count_ != entry->arenaPayloadCount) {
       noteStaleReject();
       return false;
     }
-    owner.payload_ = nullptr;
+    for (std::size_t i = 0; i < owner.count_; ++i) {
+      auto& slot = arenaOwner(ticket.id.index, i);
+      if (owner.payloads_[i] != slot.storageAddress()) {
+        noteStaleReject();
+        return false;
+      }
+    }
+    for (std::size_t i = 0; i < owner.count_; ++i) {
+      arenaOwner(ticket.id.index, i).constructed = false;
+    }
+    owner.payloads_ = {};
+    owner.count_ = 0;
     owner.destroyed_ = false;
-    arenaOwners_[ticket.id.index].constructed = false;
     strictWritingActive_ = false;
     rollbackNewest(*entry);
     refreshAdmissionAfterRelease();
@@ -1102,14 +1228,21 @@ class CpuReadyTape {
       noteStaleReject();
       return std::nullopt;
     }
-    auto* payload = arenaPayload(*entry);
-    if (!payload) {
-      noteStaleReject();
-      return std::nullopt;
+    std::array<ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> payloads{};
+    for (std::size_t i = 0; i < entry->arenaPayloadCount; ++i) {
+      auto& owner = arenaOwner(id.index, i);
+      if (!owner.constructed) {
+        noteStaleReject();
+        return std::nullopt;
+      }
+      payloads[i] = owner.payload();
     }
+    entry->arenaChain.clear();
     entry->arenaOwnerDetached = true;
     entry->arenaDetachKind = Entry::ArenaDetachKind::Reclaim;
-    return DetachedArenaOwner(payload);
+    return DetachedArenaOwner(
+        std::span(payloads).first(entry->arenaPayloadCount));
   }
 
   bool finishArenaReclaim(CpuReadySourceId id,
@@ -1121,13 +1254,23 @@ class CpuReadyTape {
         !entry->arenaOwnerDetached ||
         entry->arenaDetachKind != Entry::ArenaDetachKind::Reclaim ||
         !owner.destroyed() ||
-        owner.payload_ != arenaOwners_[id.index].storageAddress()) {
+        owner.count_ != entry->arenaPayloadCount) {
       noteStaleReject();
       return false;
     }
-    owner.payload_ = nullptr;
+    for (std::size_t i = 0; i < owner.count_; ++i) {
+      auto& slot = arenaOwner(id.index, i);
+      if (owner.payloads_[i] != slot.storageAddress()) {
+        noteStaleReject();
+        return false;
+      }
+    }
+    for (std::size_t i = 0; i < owner.count_; ++i) {
+      arenaOwner(id.index, i).constructed = false;
+    }
+    owner.payloads_ = {};
+    owner.count_ = 0;
     owner.destroyed_ = false;
-    arenaOwners_[id.index].constructed = false;
     releaseOldest(*entry);
     refreshAdmissionAfterRelease();
     return true;
@@ -1171,6 +1314,14 @@ class CpuReadyTape {
     std::size_t plannedBytes = 0;
     PayloadKind payloadKind = PayloadKind::Legacy;
     std::size_t compatibilityIndex = kInvalidIndex;
+    struct ArenaExtent {
+      std::size_t byteOffset = 0;
+      std::size_t byteCount = 0;
+    };
+    std::array<ArenaExtent,
+               kMaxArenaSourcePayloadSegments> arenaExtents{};
+    ArenaSourcePayloadChain arenaChain{};
+    std::size_t arenaPayloadCount = 0;
     std::uint64_t rawOrdinal = 0;
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
@@ -1280,9 +1431,13 @@ class CpuReadyTape {
     return dimensions;
   }
 
-  ReserveProbe inspectReserve(std::size_t pageCount,
-                              PayloadKind payloadKind) const noexcept {
-    if (!validPageRequest(pageCount)) {
+  ReserveProbe inspectReserve(
+      std::size_t pageCount, PayloadKind payloadKind,
+      std::size_t arenaPayloadCount = 1) const noexcept {
+    if (!validPageRequest(pageCount) ||
+        (payloadKind == PayloadKind::Arena &&
+         (arenaPayloadCount == 0 ||
+          arenaPayloadCount > kMaxArenaSourcePayloadSegments))) {
       return ReserveProbe::InvalidRequest;
     }
     if (stopped_) {
@@ -1312,11 +1467,16 @@ class CpuReadyTape {
     }
 
     const std::size_t firstPage = padding != 0 ? 0 : pageTail_;
+    bool arenaOwnersFree = true;
+    if (payloadKind == PayloadKind::Arena) {
+      for (std::size_t i = 0; i < arenaPayloadCount; ++i) {
+        arenaOwnersFree &= !arenaOwner(sourceTail_, i).constructed;
+      }
+    }
     if (entries_[sourceTail_].state != State::Free ||
         (payloadKind == PayloadKind::Legacy &&
          findFreeCompatibilityPayload() == kInvalidIndex) ||
-        (payloadKind == PayloadKind::Arena &&
-         arenaOwners_[sourceTail_].constructed) ||
+        !arenaOwnersFree ||
         !allocationPagesFree(firstPage, pageCount, padding)) {
       return ReserveProbe::Corrupt;
     }
@@ -1324,7 +1484,8 @@ class CpuReadyTape {
   }
 
   std::optional<Reservation> reserveStorageImpl(
-      std::size_t pageCount, PayloadKind payloadKind) noexcept {
+      std::size_t pageCount, PayloadKind payloadKind,
+      std::size_t arenaPayloadCount = 1) noexcept {
     const std::size_t compatibilityIndex =
         payloadKind == PayloadKind::Legacy
             ? findFreeCompatibilityPayload()
@@ -1332,11 +1493,19 @@ class CpuReadyTape {
     const std::size_t padding = wrapPaddingFor(pageCount);
     const std::size_t firstPage = padding != 0 ? 0 : pageTail_;
     auto& entry = entries_[sourceTail_];
-    auto& arenaOwner = arenaOwners_[sourceTail_];
+    bool arenaOwnersFree = true;
+    if (payloadKind == PayloadKind::Arena) {
+      for (std::size_t i = 0; i < arenaPayloadCount; ++i) {
+        arenaOwnersFree &= !arenaOwner(sourceTail_, i).constructed;
+      }
+    }
     if (entry.state != State::Free ||
         (payloadKind == PayloadKind::Legacy &&
          compatibilityIndex == kInvalidIndex) ||
-        (payloadKind == PayloadKind::Arena && arenaOwner.constructed) ||
+        (payloadKind == PayloadKind::Arena &&
+         (arenaPayloadCount == 0 ||
+          arenaPayloadCount > kMaxArenaSourcePayloadSegments ||
+          !arenaOwnersFree)) ||
         !allocationPagesFree(firstPage, pageCount, padding)) {
       stopAdmission();
       return std::nullopt;
@@ -1371,7 +1540,8 @@ class CpuReadyTape {
     }
 
     SourcePayloadBlock* compatibilityPayloadPtr = nullptr;
-    ArenaSourcePayloadBlock* arenaPayloadPtr = nullptr;
+    std::array<ArenaSourcePayloadBlock*,
+               kMaxArenaSourcePayloadSegments> arenaPayloadPtrs{};
     if (payloadKind == PayloadKind::Legacy) {
       compatibilityPayloadPtr = &compatibilityPayloads_[compatibilityIndex];
       compatibilityPayloadPtr->clearCommands();
@@ -1380,8 +1550,11 @@ class CpuReadyTape {
       ++compatibilityResident_;
       ++compatibilityWritingCount_;
     } else {
-      arenaPayloadPtr = std::construct_at(arenaOwner.storageAddress());
-      arenaOwner.constructed = true;
+      for (std::size_t i = 0; i < arenaPayloadCount; ++i) {
+        auto& owner = arenaOwner(sourceTail_, i);
+        arenaPayloadPtrs[i] = std::construct_at(owner.storageAddress());
+        owner.constructed = true;
+      }
     }
 
     entry.state = State::Writing;
@@ -1392,6 +1565,11 @@ class CpuReadyTape {
     entry.plannedBytes = 0;
     entry.payloadKind = payloadKind;
     entry.compatibilityIndex = compatibilityIndex;
+    entry.arenaPayloadCount = payloadKind == PayloadKind::Arena
+                                  ? arenaPayloadCount
+                                  : 0;
+    entry.arenaExtents = {};
+    entry.arenaChain.clear();
     entry.rawOrdinal = 0;
     entry.sourceOrdinal = 0;
     entry.seqId = 0;
@@ -1424,7 +1602,11 @@ class CpuReadyTape {
         .ticket = ticket,
         .payloadKind = payloadKind,
         .payload = compatibilityPayloadPtr,
-        .arenaPayload = arenaPayloadPtr,
+        .arenaPayload = arenaPayloadPtrs[0],
+        .arenaPayloads = arenaPayloadPtrs,
+        .arenaPayloadCount = payloadKind == PayloadKind::Arena
+                                 ? arenaPayloadCount
+                                 : 0,
     };
   }
 
@@ -1555,22 +1737,37 @@ class CpuReadyTape {
     return &compatibilityPayloads_[entry.compatibilityIndex];
   }
 
+  CpuReadyArenaOwnerSlot& arenaOwner(
+      std::size_t sourceIndex, std::size_t segmentIndex) noexcept {
+    return arenaOwners_[sourceIndex * kMaxArenaSourcePayloadSegments +
+                        segmentIndex];
+  }
+
+  const CpuReadyArenaOwnerSlot& arenaOwner(
+      std::size_t sourceIndex,
+      std::size_t segmentIndex) const noexcept {
+    return arenaOwners_[sourceIndex * kMaxArenaSourcePayloadSegments +
+                        segmentIndex];
+  }
+
   ArenaSourcePayloadBlock* arenaPayload(Entry& entry) noexcept {
     const std::size_t index = static_cast<std::size_t>(&entry - entries_.get());
     if (entry.payloadKind != PayloadKind::Arena || index >= capacity() ||
-        !arenaOwners_[index].constructed || entry.arenaOwnerDetached) {
+        entry.arenaPayloadCount == 0 ||
+        !arenaOwner(index, 0).constructed || entry.arenaOwnerDetached) {
       return nullptr;
     }
-    return arenaOwners_[index].payload();
+    return arenaOwner(index, 0).payload();
   }
 
   const ArenaSourcePayloadBlock* arenaPayload(const Entry& entry) const noexcept {
     const std::size_t index = static_cast<std::size_t>(&entry - entries_.get());
     if (entry.payloadKind != PayloadKind::Arena || index >= capacity() ||
-        !arenaOwners_[index].constructed || entry.arenaOwnerDetached) {
+        entry.arenaPayloadCount == 0 ||
+        !arenaOwner(index, 0).constructed || entry.arenaOwnerDetached) {
       return nullptr;
     }
-    return arenaOwners_[index].payload();
+    return arenaOwner(index, 0).payload();
   }
 
   SourcePayloadBlock* resolvePayload(Entry* entry,

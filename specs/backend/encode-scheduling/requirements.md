@@ -45,11 +45,16 @@ by itself end an encoder, split a logical pass, or create a command buffer.
 Metal split and submit decisions must remain derived from semantic boundaries
 and the locality rules in `R-BACK-2.43`, `R-BACK-2.47`, and `R-BACK-2.48`.
 
-**R-BACK-2.37** A run-ahead stage or commit must be non-present: it must not
-acquire a drawable, encode `presentDrawable`, or allocate or advance a
-frame-latency present token. Only the final present-bearing source carries the
-present token and may acquire and present a drawable. Frame pacing remains
-synchronized on present completion regardless of offscreen run-ahead depth.
+**R-BACK-2.37** A run-ahead stage or commit must be non-present: publishing an
+Arena source that contains `Present` must not acquire a drawable, encode
+`presentDrawable`, or allocate or advance a frame-latency present token. The
+Presenter retains exclusive ownership of drawable acquisition and present
+encoding. Only the final present-bearing source may receive the present token,
+and only when the encode coordinator reaches that source's ordered Present
+tail. Frame pacing remains synchronized on present completion regardless of
+offscreen run-ahead depth. Abort or device-loss cleanup before Present encoding
+must release any reserved pacing state without synthesizing a successful
+present or source completion.
 
 **R-BACK-2.38** Resources referenced by early CPU-ready or non-present work must
 be retained and marked against the owning source `seqId` before that source is
@@ -70,18 +75,28 @@ records, retained handles, sequence metadata, allocator ranges, and access
 summaries, but no drawable or present token. Deferring a frame-latency wait to
 create this window must not admit a second present tail before the prior gate is
 drained and must preserve `R-BACK-2.49` completion order. Admission assigns one
-unique, strictly increasing `sourceOrdinal` and one unique `seqId` in the same
-order. Once all bounded storage for the immediate raw-FIFO successor is
-reserved, its generation-stamped `PublicationTicket` fixes `rawOrdinal`,
-`sourceOrdinal`, and `seqId` until that source seals or aborts. No later source
-may become ready while an earlier admitted source remains unsealed.
+unique, strictly increasing global `sourceOrdinal` and one unique `seqId` in
+the same order. One logical source may own an ordered chain of packed Arena
+payload blocks, but every block in that chain shares the same `rawOrdinal`,
+`sourceOrdinal`, `seqId`, retention lifetime, publication transaction, and
+completion source. Once all bounded storage for the immediate raw-FIFO
+successor is reserved, its generation-stamped `PublicationTicket` fixes those
+identities until that complete source seals or aborts. No segment or block may
+publish independently, and no later source may become ready while an earlier
+admitted source remains unsealed.
 
 **R-BACK-2.41** The scheduler must be able to coalesce consecutive compatible
 CPU-ready sources or source ranges into the same `EncodeSession` and Metal
 command-buffer chain that a single publication would have produced. Source
 storage boundaries must not force command-buffer or logical-pass boundaries.
 Coalescing must not reorder work across `Present`, query, readback, initializer
-wait, or other semantic barriers.
+wait, or other semantic barriers. An open session's next-source frontier is the
+oldest not-yet-represented FIFO source ordinal fixed when the session parks or
+finishes its current ready snapshot. Later publication, worker timing, or a
+younger ready source must not replace or bypass that frontier. The coordinator
+may append the frontier only after its complete payload-block chain is Ready,
+or must process its ordered control/compatibility disposition before examining
+any younger source.
 
 ## 2. EncodeSession
 
@@ -133,22 +148,35 @@ deep-copy source slots, concatenate payload arenas, allocate one object per draw
 or retain PE, COM, Objective-C, or unowned process-local pointers. Session
 source lists contain generation-checked source and storage locators plus compact
 completion metadata, never direct page pointers or allocator-owned containers.
+A source-table locator index is named `retainedSourceIndex`; the name
+`sourceOrdinal` is reserved for the global monotonic publication identity.
+Replay, FrameGraph, and diagnostic locators qualify each command as
+`(retainedSourceIndex, commandIndex)` or an equivalent source ID plus command
+index. These command locators are attribution and resolution identities, not
+completion identities.
 
 **R-BACK-2.46** Pass streaming must consume large imported records, uniforms,
 bindings, handle lists, and payloads by reference to immutable queue-owned
 storage. Copies are permitted only for compact metadata, explicit ownership
 transfer, or Metal-required transient materialization; joining sources must not
 copy O(total source payload bytes). The replay worker must construct admitted
-records and payloads directly into their final reserved source extent after
-wire ownership is established; sealing publishes those bytes atomically, and
-session attachment must add only locator and completion metadata. After a source
-enters `Represented`, its completion pin permits the synchronous encode call to
-resolve call-local spans outside the scheduling lock; those spans must not
-escape the call or outlive the represented source. Reservation sizing must use
-only bounds-validated wire headers, lengths, and structural counts, without
-executing the semantic transform twice. Every arena-backed SoA reserves its
-final exact or conservative capacity once before append; source construction
-must not reallocate, relocate, or copy an earlier extent while growing.
+records and payloads directly into a final ordered chain of one or more packed
+Arena payload blocks after wire ownership is established. Each ordinary block
+is a non-wrapping page run and carries only consecutive regions of the same
+logical source. Sealing publishes the complete chain atomically, and session
+attachment adds only source/block locators and completion metadata. A canonical
+record is indivisible across block boundaries. A record larger than the
+ordinary per-segment limit is a jumbo record: it occupies one dedicated jumbo
+block, may exceed `maxPagesPerPayloadSegment`, remains bounded by
+`maxPagesPerSource`, and is never split, copied into a second representation,
+or assigned a second command index. After a source enters `Represented`, its
+completion pin permits the synchronous encode call to resolve call-local spans
+outside the scheduling lock; those spans must not escape the call or outlive
+the represented source. Reservation sizing must use only bounds-validated wire
+headers, lengths, and structural counts, without executing the semantic
+transform twice. Every arena-backed SoA region reserves its final exact or
+conservative capacity once before append; source construction must not
+reallocate, relocate, or copy an earlier extent while growing.
 
 **R-BACK-2.47** The execution lane must obey Metal rules. The legacy serial
 lane permits only one active encoder per command buffer and cannot resume an
@@ -173,7 +201,11 @@ backed by one command buffer, a chain, or one jointly committed Metal 4 group.
 Tail or joint completion expands into strict per-source completion order. No
 represented source may complete before all Metal commands that contain its work
 complete; reclaim, query, frame-token, and deferred-destruction consumers still
-observe their existing per-source timelines. Source metadata, tape pages,
+observe their existing per-source timelines. Payload blocks, payload segments,
+FrameGraph nodes, partitions, and command indices must never create independent
+completion signals. Source-qualified `(source, commandIndex)` attribution may
+identify replay and diagnostics, but completion and reclaim remain exactly once
+per logical source `seqId`. Source metadata, tape pages,
 retained handles, and allocator tickets may be reclaimed only after that source
 is completed, no synchronous snapshot borrows it, and every older source has
 reached the same reclaim point. Reclaim first makes the source inaccessible in
@@ -191,6 +223,11 @@ and locality evidence; and no-gputrace overlap evidence. A fall in
 Promotion also fails when bounded source/session/partition occupancy remains
 pinned at capacity, or command-buffer, logical-pass, load/store, or tile shape
 regresses. FPS and Xcode counters are considered only after these gates pass.
+Until all gates pass for the unified Arena lane, `DXMT9_CPU_READY_TAPE` remains
+default off and the legacy payload-owning path remains a supported rollback
+path. Making Arena allocation unconditional, deleting legacy rollback, or
+changing default allocation/admission policy is itself a promotion and requires
+the same ordered evidence.
 
 ## 3. Immutable Partition Contract
 
@@ -224,20 +261,28 @@ amendment to this carve-out list.
 **R-BACK-2.60** CPU-ready source residency and admission must be bounded
 independently of GPU-reclaimed chunk slots. The physical owner must be a
 queue-created fixed-capacity `CpuReadyTape`: a preallocated circular page arena
-plus a fixed source-descriptor ring. A logical `CpuReadySourceId` and its
-`CpuReadyStorageRef` must carry slot/page indices and allocation generations;
-generation mismatch is stale and must fail before dereference. A source reserves
-one non-wrapping contiguous page run, is invisible while `Writing`, and becomes
-read-only only after an all-or-nothing `Sealed -> Ready` publication that has
+plus a fixed source-descriptor ring. A logical `CpuReadySourceId` and every
+member of its `CpuReadyStorageRef` block chain must carry slot/page indices and
+allocation generations; generation mismatch is stale and must fail before
+dereference. One source reserves one all-or-nothing ordered chain of
+non-wrapping page runs, is invisible while `Writing`, and becomes read-only only
+after an atomic `Sealed -> Ready` publication of the complete chain that has
 completed validation, retention, resource marking, summaries, `sourceOrdinal`,
 and `seqId` assignment. Only its compact `PublicationTicket` control metadata
-is scheduler-visible while `Writing`; payload bytes are not resolvable until
-`Ready`.
+is scheduler-visible while `Writing`; no payload block is resolvable until the
+whole source is `Ready`.
 
 Capacity must be bounded simultaneously by source descriptors, total resident
-pages/bytes, per-source pages/bytes, retained-handle entries, and session source
-references. Admission uses fixed high/low watermarks and FIFO head-of-line
-ordering. Only the replay worker may wait for tape admission; the encode
+pages/bytes, `maxPagesPerPayloadSegment`, `maxPayloadSegmentsPerSource`,
+`maxPagesPerSource`, retained-handle entries, and session source references.
+`maxPagesPerPayloadSegment` bounds each ordinary packed segment;
+`maxPayloadSegmentsPerSource` bounds ordinary plus jumbo segments; and
+`maxPagesPerSource` bounds their total pages, including a jumbo segment that
+exceeds the ordinary segment limit. These are independent validated limits,
+not aliases for one capacity. Admission reserves all descriptors, blocks, and
+pages for the head source transactionally before construction. It uses fixed
+high/low watermarks and FIFO head-of-line ordering. Only the replay worker may
+wait for tape admission; the encode
 coordinator may park an open session for future publication but must never wait
 while holding the scheduling lock or for free capacity after a release event
 from `R-BACK-2.44`; the finish thread never waits for publication or capacity.
@@ -245,11 +290,13 @@ Admission pressure publishes the corresponding ordered release event so a
 represented prefix is submitted before that prefix can participate in a
 capacity/completion cycle. Reclaim by the finish thread is the normal admission
 wake-up owner and must be able to acquire the tape metadata lock and release
-pages even while the replay worker is blocked. A source that can never fit must
-use the ordered legacy one-source bypass or fail the already-invalid oversized
-input; temporary pressure must not create a second payload copy, reorder
+pages even while the replay worker is blocked. A source that exceeds the total
+page or segment-count limit, or a jumbo record that exceeds the total source
+limit, must use the ordered legacy one-source rollback path or fail the
+already-invalid oversized input; temporary pressure must not create a second payload copy, reorder
 sources, or hide a represented prefix. Current/peak occupancy, high-water hits,
-admission wait, bypass reason, and reclaim wakeups must be observable.
+admission wait, segment/jumbo counts, bypass reason, and reclaim wakeups must be
+observable.
 
 **R-BACK-2.61** Direct device calls may replace a full deferred-replay drain
 with a scoped FIFO-prefix drain only when admission produced complete canonical
@@ -261,12 +308,27 @@ immutable, and replay and publication watermarks must be separately observable.
 
 **R-BACK-2.62** A production partition planner must deterministically subdivide
 the final selected replay stream after Traditional or FrameGraph reorder and
-DCE. It must not resurrect, reorder, or duplicate commands. The first production
-policy may subdivide only sufficiently large `DrawRun` parameter ranges;
-commands, clears, queries, readbacks, and `Present` remain serial coordinator
-segments. Unsupported or invalid output falls back to identity ranges before
-side effects. Counters must expose identity and explicit plans, range cost and
-draw distribution, planner CPU time, validation fallback, and rejection reason.
+DCE. FrameGraph construction and replay resolution consume a read-only
+`SourcePayloadView` over one logical source's complete payload-block chain;
+storage blocks do not define DAG, replay, partition, or completion boundaries.
+The view exposes stable source-qualified command locators and call-local record
+resolution, but neither the graph nor an asynchronous partition may retain raw
+page pointers. The planner must not resurrect, reorder, or duplicate commands.
+The first production policy may subdivide only sufficiently large `DrawRun`
+parameter ranges; commands, clears, and `Present` remain serial coordinator
+segments.
+
+Until canonical Arena sizing and ownership exist for Query, Readback, and
+`UpdateTexture`, any source or direct operation requiring one of them uses an
+explicit non-payload ordered control disposition. Such a disposition occupies
+its original FIFO/order fence, is not represented as a partial Arena source,
+closes or submits an older incompatible session prefix before observation or
+copy work, and executes through the existing compatibility/direct path before
+any younger source. It may not be reordered, DCE-proved through, or mistaken
+for an empty payload publication. Unsupported or invalid partition output falls
+back to identity ranges before side effects. Counters must expose identity and
+explicit plans, range cost and draw distribution, planner CPU time, validation
+fallback, control-disposition reason, and rejection reason.
 
 **R-BACK-2.63** Parallel render-pass execution may use
 `MTLParallelRenderCommandEncoder` only after one logical render pass is sealed

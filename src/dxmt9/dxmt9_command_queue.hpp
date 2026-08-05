@@ -427,6 +427,7 @@ class CommandQueue {
     explicit operator bool() const noexcept { return queue_ != nullptr; }
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
     std::uint64_t seqId() const noexcept { return ticket_.seqId; }
+    bool selectSegment(std::size_t segmentIndex) noexcept;
     bool publish(
         std::span<const core::ChunkHandleEntry> resources = {}) noexcept;
 
@@ -471,17 +472,22 @@ class CommandQueue {
 
   struct CpuReadyArenaPlanLimits {
     std::size_t pageSize = 0;
-    std::size_t maxPages = 0;
+    std::size_t maxOrdinaryPagesPerSegment = 64;
+    std::size_t maxSegmentsPerSource =
+        core::kMaxArenaSourcePayloadSegments;
+    std::size_t maxPagesPerSource = 0;
   };
 
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
-      const core::SourcePayloadLayout& layout) noexcept;
+      const core::ArenaSourcePayloadLayout& layout) noexcept;
   CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
     const auto& values = cpuReadyTape_.config().values();
     return {
         .pageSize = values.pageSize,
-        .maxPages = values.maxPagesPerSource,
+        .maxOrdinaryPagesPerSegment = 64,
+        .maxSegmentsPerSource = core::kMaxArenaSourcePayloadSegments,
+        .maxPagesPerSource = values.maxPagesPerSource,
     };
   }
   void rejectActiveCpuReadyArenaSource() noexcept;
@@ -503,7 +509,7 @@ class CommandQueue {
       std::span<const core::ChunkHandleEntry> entries,
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
   bool waitForCpuReadyArenaAdmission(
-      const core::SourcePayloadLayout& layout) noexcept;
+      const core::ArenaSourcePayloadLayout& layout) noexcept;
 
   // Phase 14: chunk importer toggles this around a chunk's record-iter
   // block. While true, submitDrawRun skips per-draw
@@ -874,25 +880,77 @@ class CommandQueue {
   struct ArenaBuildContext {
     ArenaBuildContext(core::CpuReadyTape::Reservation value,
                       std::size_t selectedControlIndex,
-                      const core::SourcePayloadLayout& sourceLayout,
-                      std::span<std::byte> memory) noexcept
+                      const core::ArenaSourcePayloadLayout& sourceLayout,
+                      core::CpuReadyTape& tape,
+                      core::Handle initialBackBuffer) noexcept
         : reservation(value),
           controlIndex(selectedControlIndex),
           layout(sourceLayout),
-          builder(*reservation.arenaPayload, layout, memory),
-          assembler(builder),
-          ownerThread(std::this_thread::get_id()) {}
+          initialBackBuffer(initialBackBuffer),
+          ownerThread(std::this_thread::get_id()) {
+      if (!initializeBuilders(tape)) {
+        failed.store(true, std::memory_order_relaxed);
+      }
+    }
+
+    bool initializeBuilders(core::CpuReadyTape& tape) noexcept {
+      if (!layout.valid() ||
+          reservation.arenaPayloadCount != layout.segmentCount) {
+        return false;
+      }
+      for (std::size_t i = 0; i < layout.segmentCount; ++i) {
+        auto memory = tape.writableArenaSegment(reservation.ticket, i);
+        if (!reservation.arenaPayloads[i] ||
+            memory.size() != layout.segments[i].layout.usedBytes) {
+          return false;
+        }
+        builders[i].emplace(*reservation.arenaPayloads[i],
+                            layout.segments[i].layout, memory);
+        if (!builders[i]->good()) {
+          return false;
+        }
+        assemblers[i].emplace(*builders[i]);
+      }
+      return true;
+    }
+
+    core::ArenaSourcePayloadBuilder* activeBuilder() noexcept {
+      return activeSegment < layout.segmentCount && builders[activeSegment]
+          ? &*builders[activeSegment]
+          : nullptr;
+    }
+
+    core::ArenaSourcePayloadAssembler* activeAssembler() noexcept {
+      return activeSegment < layout.segmentCount && assemblers[activeSegment]
+          ? &*assemblers[activeSegment]
+          : nullptr;
+    }
 
     core::CpuReadyTape::Reservation reservation{};
     std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
-    core::SourcePayloadLayout layout{};
-    core::ArenaSourcePayloadBuilder builder;
-    core::ArenaSourcePayloadAssembler assembler;
+    core::ArenaSourcePayloadLayout layout{};
+    std::array<std::optional<core::ArenaSourcePayloadBuilder>,
+               core::kMaxArenaSourcePayloadSegments> builders{};
+    std::array<std::optional<core::ArenaSourcePayloadAssembler>,
+               core::kMaxArenaSourcePayloadSegments> assemblers{};
+    std::size_t activeSegment = 0;
+    core::Handle initialBackBuffer{};
     std::thread::id ownerThread{};
     std::atomic<bool> failed{false};
     std::atomic<bool> publishing{false};
     core::Handle pendingBackBuffer{};
     bool updatesBackBuffer = false;
+    // Before Ready publication the Presenter registry owns any stashed token,
+    // while this context owns the sole obligation to remove it on abort.
+    // Successful publication transfers that cleanup obligation to encoded
+    // Present consumption; abortCpuReadyArenaSource is the only failure-side
+    // takeDrawableToken site.
+    core::PresentId pendingPresentId{};
+    core::SwapDesc pendingPresentDesc{};
+    BoundaryPolicy pendingPresentBoundaryPolicy = BoundaryPolicy::Disabled;
+    bool presentAppended = false;
+    bool presentTokenStashed = false;
+    bool flushAfterPublication = false;
   };
 
   enum class ActiveArenaAppendResult {
@@ -937,7 +995,15 @@ class CommandQueue {
       const core::ColorFillDesc& value) noexcept;
   ActiveArenaAppendResult appendActiveArenaDepthResolve(
       const core::DepthResolveDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaPresent(
+      core::SwapDesc value, BoundaryPolicy boundaryPolicy,
+      bool tokenStashed) noexcept;
+  ActiveArenaAppendResult deferActiveArenaFlush() noexcept;
   ActiveArenaAppendResult rejectIfActiveArena() noexcept;
+  bool selectCpuReadyArenaSegment(
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex,
+      std::size_t segmentIndex) noexcept;
   bool publishCpuReadyArenaSource(
       core::CpuReadyPublicationTicket ticket,
       std::size_t controlIndex,
@@ -958,6 +1024,9 @@ class CommandQueue {
   // pipelineCache_, shaderArchive_, *this). No upper-Device pointer —
   // presentation back-channels ride on SwapDesc per submission.
   encoders::EncodeContext makeEncodeContext();
+  void applyPublishedPresentBoundary(std::uint64_t presentSeqId,
+                                     const core::SwapDesc& desc,
+                                     BoundaryPolicy policy);
 
   WMT::Device device_{};
   bool cpuReadySessionLaneEnabled_ = false;

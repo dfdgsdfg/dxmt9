@@ -31,6 +31,7 @@
 #include "../../../src/dxmt9/framegraph/fg_debug_export.hpp"
 #include "../../../src/dxmt9/render/dag_observer.hpp"
 #include "../../../src/dxmt9/render/traditional_backend.hpp"
+#include "../framegraph/arena_payload_fixture.hpp"
 
 #include <unistd.h>  // mkdtemp, rmdir
 
@@ -854,6 +855,28 @@ void testPostOptDefaultOptionsDoNotCoalesce(const std::string& dir) {
   removeIfPresent(post);
 }
 
+void testArenaPayloadObserverExport(const std::string& dir) {
+  ChunkSlot slot;
+  slot.seqId = 90;
+  slot.appendClear({});
+  dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+  check(arena.valid(), "Arena observer fixture publishes");
+
+  DagObserver observer;
+  const std::string pre = dumpPath(dir, slot.seqId, slot.seqId, "pre-opt");
+  const std::string post = dumpPath(dir, slot.seqId, slot.seqId, "post-opt");
+  removeIfPresent(pre);
+  removeIfPresent(post);
+  observer.observeAndExportDagToDir(arena.view(), slot.seqId,
+                                    /*frameId=*/slot.seqId, dir);
+  check(fileExists(pre), "Arena payload writes pre-opt DAG");
+  check(fileExists(post), "Arena payload writes post-opt DAG");
+  check(contains(readFile(pre), "\"chunk_seq_id\": 90"),
+        "Arena DAG preserves source sequence attribution");
+  removeIfPresent(pre);
+  removeIfPresent(post);
+}
+
 // DXMT9_RENDERER_DUMP_DAG_DRAWS pure resolver: repo env-flag semantics — "set"
 // is a non-empty string that is not "0".
 void testResolveDumpDagDraws() {
@@ -983,6 +1006,7 @@ int main() {
     testResolveDumpDagOptimize();
     testPostOptHonorsPasscoalesce(dir);
     testPostOptDefaultOptionsDoNotCoalesce(dir);
+    testArenaPayloadObserverExport(dir);
 
     // 11. DXMT9_RENDERER_DUMP_DAG_DRAWS DEBUG-ONLY per-draw detail extension.
     testResolveDumpDagDraws();

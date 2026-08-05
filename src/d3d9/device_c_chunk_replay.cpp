@@ -886,7 +886,9 @@ bool v2RecordCanBatchDraw(
 
 int32_t replayResolvedV2Chunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
-    bool pacedByPresentOrdinal) {
+    bool pacedByPresentOrdinal,
+    dxmt9::CommandQueue::CpuReadyArenaBuildLease* arenaLease = nullptr,
+    std::span<const dxmt9::d3d9::V2CpuReadySegmentPlan> arenaSegments = {}) {
   const auto bytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
       raw.recordBlob.size());
@@ -901,6 +903,21 @@ int32_t replayResolvedV2Chunk(
           bytes, envelope, imported) ||
       raw.resolvedObjects.size() != imported.handles.size()) {
     return commitChunkFail("v2-replay-preflight-view");
+  }
+  if (arenaLease) {
+    std::size_t coveredRecords = 0;
+    for (const auto& segment : arenaSegments) {
+      if (segment.recordCount == 0 ||
+          segment.firstRecordIndex != coveredRecords ||
+          coveredRecords > imported.records.size() ||
+          segment.recordCount > imported.records.size() - coveredRecords) {
+        return commitChunkFail("v2-replay-segment-range");
+      }
+      coveredRecords += segment.recordCount;
+    }
+    if (coveredRecords != imported.records.size()) {
+      return commitChunkFail("v2-replay-segment-cover");
+    }
   }
 
   dxmt9::d3d9::ResolvedChunkV2View resolved{
@@ -926,7 +943,33 @@ int32_t replayResolvedV2Chunk(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
       raw.bufferSnapshotsCaptured);
+  std::size_t activeSegment = 0;
+  if ((!arenaLease && !arenaSegments.empty()) ||
+      (arenaLease && arenaSegments.empty()) ||
+      (arenaLease && !arenaLease->selectSegment(0))) {
+    return commitChunkFail("v2-replay-segment-initial");
+  }
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
+    if (arenaLease && activeSegment + 1u < arenaSegments.size()) {
+      const std::size_t nextFirstRecord =
+          arenaSegments[activeSegment + 1u].firstRecordIndex;
+      if (index > nextFirstRecord) {
+        flushPendingDrawSubmissions();
+        return commitChunkFail("v2-replay-segment-edge",
+                               static_cast<std::uint32_t>(index));
+      }
+      if (index == nextFirstRecord) {
+        // A draw batch is source-local but its Arena indices are block-local.
+        // Flush before changing builders so no DrawRun crosses the exact
+        // structural firstRecordIndex edge selected by the planner.
+        flushPendingDrawSubmissions();
+        ++activeSegment;
+        if (!arenaLease->selectSegment(activeSegment)) {
+          return commitChunkFail("v2-replay-segment-select",
+                                 static_cast<std::uint32_t>(index));
+        }
+      }
+    }
     const auto record = resolved.record(index);
     const bool batchableDraw = v2RecordCanBatchDraw(device, record.wire);
     sink.setBatchCurrentDraw(batchableDraw);
@@ -945,6 +988,9 @@ int32_t replayResolvedV2Chunk(
     }
   }
   flushPendingDrawSubmissions();
+  if (arenaLease && activeSegment + 1u != arenaSegments.size()) {
+    return commitChunkFail("v2-replay-segment-incomplete");
+  }
   dxmt9::perf::countChunkAdmit();
   return dxmt9::core::D3D_OK;
 }
@@ -1083,9 +1129,15 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
       imported, raw.replaySeq,
       dxmt9::d3d9::V2CpuReadyPlanOptions{
           .pageSize = limits.pageSize == 0 ? 4096 : limits.pageSize,
-          .maxPages = limits.maxPages == 0
+          .maxOrdinaryPagesPerSegment =
+              limits.maxOrdinaryPagesPerSegment,
+          .maxSegmentsPerSource = limits.maxSegmentsPerSource,
+          .maxPagesPerSource = limits.maxPagesPerSource == 0
+                                   ? std::numeric_limits<std::uint32_t>::max()
+                                   : limits.maxPagesPerSource,
+          .maxPages = limits.maxPagesPerSource == 0
                           ? std::numeric_limits<std::uint32_t>::max()
-                          : limits.maxPages,
+                          : limits.maxPagesPerSource,
       });
   switch (plan.lane) {
   case dxmt9::d3d9::V2ReplayLane::Reject:
@@ -1106,7 +1158,7 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
     break;
   }
 
-  if (!queue || !plan.layout.has_value()) {
+  if (!queue || !plan.arenaLayout.has_value()) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
     markLegacyV2Resources(device, raw);
@@ -1115,12 +1167,13 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
 
   dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
   while (true) {
-    begin = queue->beginCpuReadyArenaSource(plan.rawOrdinal, *plan.layout);
+    begin = queue->beginCpuReadyArenaSource(plan.rawOrdinal,
+                                            *plan.arenaLayout);
     if (begin.status !=
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
     }
-    if (!queue->waitForCpuReadyArenaAdmission(*plan.layout)) {
+    if (!queue->waitForCpuReadyArenaAdmission(*plan.arenaLayout)) {
       return commitChunkFail("v2-arena-pressure-stopped");
     }
   }
@@ -1133,7 +1186,8 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
 
   auto lease = std::move(*begin);
   const int32_t hr = replayResolvedV2Chunk(
-      device, raw, pacedByPresentOrdinal);
+      device, raw, pacedByPresentOrdinal, &lease,
+      std::span(plan.segments).first(plan.segmentCount));
   if (failed(hr)) {
     // Lease destruction performs the two-phase fail-stop abort. Replaying the
     // raw chunk through Legacy here would duplicate already-applied semantics.

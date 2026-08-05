@@ -169,8 +169,8 @@ public:
   virtual void onFrameBegin(uint64_t frame_id) = 0;
   virtual void onFrameEnd() = 0;
 
-  // Chunk consumer (R-BACK-30.2)
-  virtual void onChunkReady(ChunkView chunk, ImportContext& ctx) = 0;
+  // Logical source consumer (R-BACK-30.2, R-BACK-32.1)
+  virtual void onSourceReady(SourcePayloadView source, ImportContext& ctx) = 0;
 
   // Resource hooks (memoryless classifier needs these)
   virtual void onSurfaceLock(SurfaceHandle, LockFlags) = 0;
@@ -209,17 +209,20 @@ data-oriented encode path, which is already function-separated (so the §15
 | Spec concept | Actual code symbol | Location |
 |---|---|---|
 | `ArgumentEncodingContext` (AEC) | `encoders::EncodeContext` (a view bundle, **not** a stateful class) + the free functions `encoders::beginRenderPass` / `encodeDraw` / `encodeChunk` | `src/dxmt9/dxmt9_draw_encoder.{hpp,mm}` |
-| `ChunkView` | `core::ChunkSlot` (SoA, already-imported per-kind record vectors: `commandHeaders`, `drawHotStates`, `drawParams`, `clearRecords`, …) | `src/dxmt9/dxmt9_backend_types.hpp` |
-| `ImportContext` / the `onChunkReady` hook | the `(slotIndex, const core::ChunkSlot&)` callback + `CommandQueue::makeEncodeContext()` boundary | `src/dxmt9/dxmt9_command_queue.cpp` (encode-loop lambda) |
+| `SourcePayloadView` | `core::SourcePayloadView`, an immutable borrowed logical-source view. The legacy adapter wraps one `core::ChunkSlot`; the Arena adapter resolves one complete packed payload-block chain without exposing page pointers. | `src/dxmt9/dxmt9_source_payload.{hpp,cpp}` |
+| `ImportContext` / the source-ready hook | `render::IRenderBackend::onSourceReady` carries one `core::SourcePayloadView` plus source identity and encode-session context. The `onChunkReady` compatibility adapter constructs the same logical view from a legacy `ChunkSlot`. | `src/dxmt9/render/backend_interface.hpp`, `src/dxmt9/render/{traditional_backend,framegraph_backend}.cpp` |
 | AEC "encoder lifecycle" vs "draw emission" split (§15) | already distinct functions: `beginRenderPass` (open) / `encodeDraw` (+ a clear-within-pass) (emit) / `endEncoding` (close) | `src/dxmt9/dxmt9_draw_encoder.mm` |
 | `IExternalDrawEmitter` | new interface wrapping `encoders::encodeDraw` + a clear emitter; `endEncoding`/`beginRenderPass` stay caller-owned | new `src/dxmt9/render/` |
-| DAG observe + export side-channel (R-BACK-39.7) | `render::DagObserver` — a shared, backend-agnostic observer owned by BOTH `TraditionalBackend` and `FrameGraphBackend` (each holds a `render::DagObserver observer_` member); the backend invokes `observer_.observeAndExport(slot)` from `onChunkReady`. It carries the owning backend's resolved `framegraph::OptimizerOptions` (default/all-off for traditional) plus the encode-thread-local `observe_frame_` counter | new `src/dxmt9/render/dag_observer.{hpp,cpp}` |
+| DAG observe + export side-channel (R-BACK-39.7) | `render::DagObserver` — a shared, backend-agnostic observer owned by both `TraditionalBackend` and `FrameGraphBackend`; `onSourceReady` invokes `observer_.observeAndExport(payload, seqId, aliasResolver)` with the same logical `SourcePayloadView` consumed by replay. It carries the owning backend's resolved `framegraph::OptimizerOptions` (default/all-off for traditional) plus the encode-thread-local `observe_frame_` counter. | `src/dxmt9/render/dag_observer.{hpp,cpp}` |
 
-The Frame Graph backend therefore consumes `ChunkSlot` (the same input
-`encoders::encodeChunk` consumes), not the PE-side `D9CCommandRecord*` wire
-records (those are decoded into `ChunkSlot` upstream on the PE→unix path in
-`src/d3d9/device_c_chunk_replay.cpp`). The §4.1 "chunk record kind → builder
-action" table is read against `ChunkSlot.commandHeaders`, not the wire enum.
+The target Frame Graph backend consumes `SourcePayloadView`, not the PE-side
+`D9CCommandRecord*` wire records. The legacy adapter resolves the same
+`ChunkSlot.commandHeaders` input that `encoders::encodeChunk` consumes; the
+Arena adapter resolves the equivalent ordered command stream across the
+source's packed block chain. Both adapters expose stable
+`(retainedSourceIndex, commandIndex)` attribution and call-local typed record
+resolution. The view owns no payload: queue storage remains pinned through the
+source completion contract in `specs/backend/encode-scheduling/requirements.md`.
 
 ---
 
@@ -393,11 +396,16 @@ storage is reset.
 `framegraph/fg_debug_export.{hpp,cpp}` serializes a `FrameGraph` to a
 development-only artifact. It is a **pure read transform** over the
 in-memory DAG — it takes a `const FrameGraph&` plus the caller-supplied
-chunk seq id and `stage` label (the `FrameGraph` carries `frame_id` but not
-the chunk seq id, which `onChunkReady` sources from its `ImportContext`)
+source `seqId`, global `sourceOrdinal`, and `stage` label (the `FrameGraph`
+carries `frame_id` but not queue completion identity)
 and returns owned bytes; it holds no Metal, queue, cache, or pool
 reference, so it cannot perturb the state R-BACK-39.7 requires it to
 leave untouched.
+
+Every command-level diagnostic key is source-qualified. A `commandIndex` is
+meaningful only together with `sourceOrdinal` or the generation-checked source
+ID; payload block and segment indices may be reported as storage detail but are
+never used as replay or completion identity.
 
 The shared `render::DagObserver` (§2.1; `render/dag_observer.{hpp,cpp}`) drives
 this at two points when `DXMT9_RENDERER_DUMP_DAG` is set: once right after
@@ -423,9 +431,10 @@ because it is purely an observe-side analysis selector. The same
 behave identically.
 
 The dump is a **backend-agnostic perf/debug side-channel, not an encode input**
-(R-BACK-39.7). The same `render::DagObserver` is owned by BOTH backends — each
-holds a `DagObserver observer_` member and calls `observer_.observeAndExport(slot)`
-from `onChunkReady` before delegating to `encoders::encodeChunk`. Which backend
+(R-BACK-39.7). The same `render::DagObserver` is owned by both backends — each
+holds a `DagObserver observer_` member and calls
+`observer_.observeAndExport(payload, seqId, aliasResolver)` from
+`onSourceReady` before delegating to source replay. Which backend
 encodes is irrelevant to the observation: on `traditional` the observer is
 constructed with default (all-off) `OptimizerOptions{}`, so the observed
 post-opt DAG reflects the order-preserving baseline while the traditional encode
@@ -438,12 +447,13 @@ pays no observe cost and emits the identical Metal stream. The export itself
 counters; those are process-global atomics that no-op unless `DXMT_PERF_COUNTERS`
 is set, keeping the channel observation-only.
 
-JSON is the primary format (one object per chunk):
+JSON is the primary format (one object per logical source):
 
 ```json
 {
   "frame_id": 60,
-  "chunk_seq_id": 1422,
+  "source_ordinal": 73,
+  "source_seq_id": 1422,
   "stage": "post-opt",
   "passes": [
     { "index": 0, "kind": "Render",
@@ -469,18 +479,20 @@ producer→consumer surface the render-pass re-entry investigation needs: an
 
 **Optional per-draw D3D9 detail (`DXMT9_RENDERER_DUMP_DAG_DRAWS`, L1-debug).**
 A pass node may carry a `draws_detail` array (one entry per draw-call ordinal in
-its `DrawRange`) when the export is given the source `core::ChunkSlot` AND
-`DXMT9_RENDERER_DUMP_DAG_DRAWS` is set. The slot is threaded through as an
-OPTIONAL parameter: `buildSnapshot(fg, seq, stage, slot=nullptr)`,
-`serializeDagJson(fg, seq, stage, slot=nullptr)`, and
-`writeDagDump(fg, frame, seq, stage, slot=nullptr)` all default the slot to
-`nullptr`; `render::DagObserver` passes the real `&slot` it already holds, while
-the pure FrameGraph-only overloads (and the device-free golden tests) pass none.
-When the slot is null or the flag is off, no draw is resolved (zero extra cost)
+its `DrawRange`) when the export is given the source `SourcePayloadView` AND
+`DXMT9_RENDERER_DUMP_DAG_DRAWS` is set. The view is threaded through as an
+OPTIONAL parameter: `buildSnapshot(fg, seq, stage, source=nullptr)`,
+`serializeDagJson(fg, seq, stage, source=nullptr)`, and
+`writeDagDump(fg, frame, seq, stage, source=nullptr)` all default the view to
+`nullptr`; `render::DagObserver` passes the represented source view, while the
+pure FrameGraph-only overloads (and the device-free golden tests) pass none.
+During migration the legacy adapter supplies the current `ChunkSlot`-backed
+view. When the view is null or the flag is off, no draw is resolved (zero extra cost)
 and the JSON is byte-identical to the shape above — so `draws_detail` is
 strictly additive and off by default. When both are present, `buildSnapshot`
-walks each pass's `DrawRange → FrameGraph.draws[i]` (a `DrawRef`) →
-`slot.drawRunCommandAt(command_index)` and copies a BOUNDED hot-state summary:
+walks each pass's `DrawRange → FrameGraph.draws[i]` (a source-qualified
+`DrawRef`) → `source.drawRunCommandAt(command_index)` and copies a BOUNDED
+hot-state summary:
 
 ```json
 "draws_detail": [
@@ -526,22 +538,21 @@ re-walks the DAG:
   ```
 
 Output path: `DXMT9_RENDERER_DUMP_DAG` is a directory; files are named
-`dag-frame<frame_id>-chunk<seq>-<stage>.{json,dot,mermaid}` per selected
+`dag-frame<frame_id>-source<ordinal>-seq<seq>-<stage>.{json,dot,mermaid}` per selected
 format. The exporter never creates the directory implicitly and skips
 silently (single warning, once) if the path is unwritable, so a dump
 misconfiguration cannot fail a render.
 
-**Per-frame chunk filter (`DXMT9_RENDERER_DUMP_DAG_FRAME`).** Because a real
-app emits thousands of chunks per frame, the shared `render::DagObserver`
+**Per-frame source filter (`DXMT9_RENDERER_DUMP_DAG_FRAME`).** Because a real
+app emits thousands of logical sources per frame, the shared `render::DagObserver`
 carries a private inter-present frame counter `observe_frame_` (1-based). It is
 touched only on the encode thread (`observeAndExport` is the single writer), so
-it needs no atomic. A "frame" is the inter-present interval: every chunk belongs
-to the current `observe_frame_`, and a chunk that **contains** a Present —
-detected by `framegraph::chunkContainsPresent(slot)`, a single cheap scan of
-`slot.commandHeaders` for `core::MetalCommandKind::Present` — is the last chunk
-of that frame, so `observe_frame_` advances *after* processing it. The
-advance happens whether or not the chunk was dumped, so all of frame N's
-multiple chunks dump before the counter moves to N+1.
+it needs no atomic. A "frame" is the inter-present interval: every source belongs
+to the current `observe_frame_`, and a source that **contains** a Present is the
+last source of that frame, so `observe_frame_` advances *after* processing it.
+The advance happens whether or not the source was dumped, so all of frame N's
+sources dump before the counter moves to N+1. During migration the legacy view
+implements this test with `chunkContainsPresent(slot)`.
 
 `framegraph::resolveDumpDagFrame(env)` resolves `DXMT9_RENDERER_DUMP_DAG_FRAME`
 to `std::optional<u64>`: nullptr / empty / `"0"` / non-numeric → `nullopt`
@@ -563,15 +574,15 @@ and `radius == 0` degenerates to the original `frame == target` test. The radius
 is honored only when a target frame is set; an unset target still dumps every
 chunk.
 
-When the chunk's observe frame is outside the window, `observeAndExport`
+When the source's observe frame is outside the window, `observeAndExport`
 runs only the Present scan, advances the counter if a Present was seen, and
 returns **before** building the FrameGraph — so a filtered-out chunk costs no
 build / optimizer / serialize / write work, and the counter still advances so
 the window is reached and then left correctly. The
 `frame_id` passed to `writeDagDump` (and stamped into the filename and JSON) is
 `observe_frame_`, the inter-present frame number, so filenames read
-`dag-frame<N>-chunk<seq>-<stage>.json` meaningfully; the chunk seq id stays the
-JSON `chunk_seq_id`. The frame-filter path is exercised device-free by
+`dag-frame<N>-source<ordinal>-seq<seq>-<stage>.json` meaningfully; the JSON keeps
+both `source_ordinal` and `source_seq_id`. The frame-filter path is exercised device-free by
 `framegraph_observe_spec.cpp` through the testable
 `observeAndExportDagToDirForFrame(slot, dir, targetFrame, radius)` seam (which
 takes the resolved target frame + radius as arguments, bypassing the static env
@@ -587,19 +598,22 @@ with the dump off.
 
 ## 4. Frame Graph Builder
 
-### 4.1 Chunk → DAG mapping
+### 4.1 Logical source → DAG mapping
 
-The builder runs on the unix-side encode thread and operates on **one
-`CommandChunk` at a time** per `R-BACK-32.1`. Each `onChunkReady` invocation
-builds a fresh `FrameGraph` over the records the chunk delivered. The opt-in
-R-BACK-32.10 scheduler may retain one chunk and inspect an immutable summary for
-its already-ready immediate FIFO successor. R-BACK-32.11 permits a future
-bounded ready-prefix summary. In both cases records, passes, edges, and
-completion sources never merge, and the queue remains the only ready-prefix
-owner. The chunk's `completedSeqId`
-advances only after its own linearized DAG finishes, preserving the per-chunk
-fence semantics from `specs/backend/requirements.md`. The mapping is small and
-explicit:
+The builder runs on the unix-side encode thread and operates on **one logical
+`SourcePayloadView` at a time** per `R-BACK-32.1`. The legacy adapter presents
+one `CommandChunk`; the Arena adapter presents the complete ordered payload-block
+chain of one source. Each source-ready invocation builds a fresh `FrameGraph`
+over exactly that view. Segment boundaries do not finalize the graph or create
+additional completion sources. The opt-in R-BACK-32.10 scheduler may retain one
+source and inspect an immutable summary for its already-ready immediate FIFO
+successor. R-BACK-32.11 permits a future bounded ready-prefix summary. In both
+cases records, passes, edges, and completion sources never merge across logical
+sources, and the queue remains the only ready-prefix owner. The source's
+`completedSeqId` advances exactly once after its session tail completes;
+FrameGraph replay and diagnostics retain `(retainedSourceIndex, commandIndex)`
+attribution without turning command or block boundaries into completion
+boundaries. The mapping is small and explicit:
 
 | Chunk record kind | Builder action |
 |---|---|
@@ -607,14 +621,19 @@ explicit:
 | `Clear` | Update the pending `LoadStorePolicy`; if no current pass, force one. |
 | `Draw*` | Emit `DrawDescriptor`; append to current `PassNode.draws`. |
 | `SetTexture`/`SetSampler`/`SetVertexShader`/`SetPixelShader` | Update current pending state; persisted into the next `DrawDescriptor`. |
-| `BeginQuery`/`EndQuery` | Edge to the current pass; record into `PassNode.flags`. |
-| `Present` | Finalize current pass, emit `PassNode{kind=Present}`, record a Read of the canonical present source, mark frame boundary. |
+| `BeginQuery`/`EndQuery` | Legacy/compatibility view only: edge to the current pass and record into `PassNode.flags`. Arena admission emits an ordered non-payload Query disposition until canonical sizing exists. |
+| `Present` | Finalize current pass, emit `PassNode{kind=Present}`, record a Read of the canonical present source, and mark the frame boundary. The source view owns the record and backbuffer identity; the Presenter owns drawable acquisition and pacing at linearization. |
 | `LockRect`/`UnlockRect` (deferred record) | Force flush boundary per `R-BACK-32.4`. |
 | `StretchRect` | Either fuse into pass (same source/dest pass) or emit `PassNode{kind=Blit}`. |
 | `SetMarker` (debug) | Annotate pass; ignored by optimizer. |
 
 The builder is a single forward pass; no lookahead is required for DAG
-construction. Lookahead happens in the optimizer phase (§5).
+construction. `SourcePayloadView` resolves each typed record only for the
+duration of that forward step; the graph stores the source-qualified command
+locator and never a page pointer. Lookahead happens in the optimizer phase
+(§5). Readback and `UpdateTexture`, like Arena Query, remain ordered non-payload
+control/compatibility dispositions and therefore are not builder inputs until
+their canonical Arena layouts are specified.
 
 ### 4.2 Dependency edge inference
 
@@ -659,9 +678,10 @@ surface write` chain would be split across two `ResourceNode`s and
 ### 4.3 Determinism
 
 The builder must not read clock, thread id, or mutable scheduling state. Its
-inputs are the chunk and the retained resource records used to resolve
-surface-to-texture aliases; those records are immutable for the lifetime of the
-chunk. This satisfies `R-BACK-32.2`.
+inputs are the logical source view and the retained resource records used to
+resolve surface-to-texture aliases; those records and every payload block are
+immutable for the represented lifetime of the source. This satisfies
+`R-BACK-32.2`.
 
 ---
 
@@ -682,28 +702,28 @@ in-memory `FrameGraph` and may mutate `PassNode` flags, `ResourceNode`
 residency, edge set (only reorder pass), and the linearized pass order
 (reorder pass only).
 
-### 5.1 dce.cpp — Dead-Pass Elimination (Chunk-Conservative)
+### 5.1 dce.cpp — Dead-Pass Elimination (Source-Conservative)
 
-Each Frame Graph still covers one `CommandChunk` (R-BACK-32.1). A pass whose
-written output is unread inside the chunk **may still be read by a future
-chunk**; without an R-BACK-32.10 successor summary the DCE pass cannot prove
-cross-chunk dead-ness. `specs/backend/render-pass-actions/requirements.md` §6
+Each Frame Graph covers one logical `SourcePayloadView` (R-BACK-32.1). A pass
+whose written output is unread inside the source **may still be read by a future
+source**; without an R-BACK-32.10 successor summary the DCE pass cannot prove
+cross-source dead-ness. `specs/backend/render-pass-actions/requirements.md` §6
 (live-out contracts) requires preservation whenever future use is unknown at
-chunk end. DCE therefore defaults off and drops passes only under conservative,
+source end. DCE therefore defaults off and drops passes only under conservative,
 explicit proof gates.
 
 DCE is **opt-in** via a separate feature token `dce` added to
 `DXMT9_RENDERER_FEATURES` (R-BACK-31.3). When `dce` is not in the feature
 set, no pass is ever dropped — every pass linearizes into its Metal call
-sequence regardless of in-chunk read shape. This is the parity baseline.
+sequence regardless of in-source read shape. This is the parity baseline.
 
 When `dce` **is** enabled, a pass is dead **only when all** of:
 
 - It writes to a resource whose `last_use_pass <= pass_index` within the
-  same chunk for **read** accesses (i.e. nothing inside the chunk reads
+  same source for **read** accesses (i.e. nothing inside the source reads
   the write).
 - The resource has no CPU readback (`classifier_flags.readback_seen == 0`)
-  inside the chunk.
+  inside the source.
 - The pass kind is not `Present`.
 - The pass does **not** contain an occlusion or event query record
   (`PassNode.flags.contains_occlusion_query == 0`,
@@ -714,14 +734,14 @@ When `dce` **is** enabled, a pass is dead **only when all** of:
   `EndOcclusionQuery`/`Issue(D3DISSUE_END)` would invalidate the
   application-visible `GetData` result.
 - The pass does not bind a visibility-tracking attachment that a later
-  pass or chunk reads through a query result.
+  pass or source reads through a query result.
 - The pass is not annotated with a debug marker the user explicitly
   requested via `DXMT9_RENDERER_LOG_DIVERGENCE`.
-- **Cross-chunk safety**: at least one of (a) the written resource is
+- **Cross-source safety**: at least one of (a) the written resource is
   memoryless-eligible by R-BACK-33.2 (so prior-frame observation proves no
-  cross-chunk read of its stored contents), or (b) the resource is
-  provably fully-overwritten by a later record inside the **same** chunk
-  (e.g. a same-chunk `Clear` of the same handle, or a same-chunk
+  cross-source read of its stored contents), or (b) the resource is
+  provably fully-overwritten by a later record inside the **same** source
+  (e.g. a same-source `Clear` of the same handle, or a same-source
   `StretchRect`/copy whose destination covers the full subresource), or
   (c) an already-ready proof source's first canonical access is a
   full-subresource Clear. The implemented baseline uses only the immediate FIFO
@@ -731,7 +751,7 @@ When `dce` **is** enabled, a pass is dead **only when all** of:
   depth/stencil Clear is also `ReadWrite` unless its flags cover every aspect
   present in the retained surface format; a depth-only Clear of D24X8 therefore
   qualifies, while a depth-only Clear of D24S8 does not. Present is a read of
-  its canonical source, so the in-chunk unread gate keeps a final backbuffer
+  its canonical source, so the in-source unread gate keeps a final backbuffer
   writer alive. Otherwise the pass stays alive.
 
 Dead passes are kept in the array for counter reporting. The production v2
@@ -743,7 +763,7 @@ the source-order default. `framegraph_dce_dropped`,
 `framegraph_dce_cross_chunk_proof_resources`, and
 `framegraph_dce_replay_commands_omitted` expose the proof and replay effect.
 
-The queue owns the bounded successor selection. It may keep one dequeued slot
+The queue owns the bounded successor selection. It may keep one dequeued source
 in `Encoding` while a proof-independent prefix of the passcoalesce-optimized
 command permutation is appended to an unsubmitted `EncodeSession`. The prefix
 ends before the first pass whose liveness could depend on successor proof. A
@@ -758,7 +778,8 @@ only its canonical summaries. Neither form waits, dequeues a proof source, or
 merges DAG ownership. The final plan re-runs passcoalesce and DCE, preserves
 any already-encoded pass that a changed proof would otherwise remove, and
 requires the encoded commands to be an exact prefix of the final live-command
-permutation. N submits before the carried N+1 and publishes only N's original
+permutation. N remains ordered before N+1 whether they share an EncodeSession
+tail or use separate submissions, and each publishes only its original source
 completion identity. The implemented state machine is checked by
 `specs/verification/tla/DceChunkLookahead.tla`; generalized bounded-prefix
 model work is tracked in `specs/verification/gap.md`.
@@ -889,8 +910,10 @@ floating-point cost.
 
 ## 6. Linearizer
 
-The linearizer reads the optimized `FrameGraph` and emits Metal calls. For
-each `PassNode` in order:
+The linearizer reads the optimized `FrameGraph`, resolves each command locator
+through the same represented `SourcePayloadView`, and emits Metal calls. The
+resolved span is call-local and never retained by the graph, session, or a
+partition worker. For each `PassNode` in order:
 
 ```
 beginRenderEncoder(targets, load_store)
@@ -906,6 +929,11 @@ endRenderEncoder
 The AEC traditional path is the same code the `TraditionalBackend` uses;
 mixed-path coexistence (`R-BACK-35.7`) is mechanical because the same encoder
 is reused.
+
+A `Present` node closes the current logical pass and delegates its canonical
+backbuffer identity to the Presenter. Publication and graph construction do not
+acquire a drawable or pacing token. The Presenter performs those actions only
+at this ordered tail, and the source remains the single completion owner.
 
 ---
 

@@ -235,29 +235,35 @@ this key extension together with the renderer factory; see spec.md
 
 ## 3. Frame Graph Semantics
 
-**R-BACK-32.1** When the modern path is active, the chunk consumer must build
-one Frame Graph DAG **per `CommandChunk`**. The DAG window covers exactly the
-records delivered in a single `onChunkReady` call. Multiple chunks must not
-merge into a shared DAG even when no `Present` separates them, and a single
-chunk that spans a `Present` boundary must keep its `Present` record as one
-node inside the DAG. Nodes represent passes (render, compute, blit, present,
-sync). Edges represent resource read/write dependencies internal to the chunk.
+**R-BACK-32.1** When the modern path is active, the source consumer must build
+one Frame Graph DAG **per logical `SourcePayloadView`**. A legacy
+`CommandChunk` is adapted as one such view; an Arena source exposes one view
+over its complete ordered payload-block chain. The DAG window covers exactly
+that logical source. Payload blocks and segments must not create separate DAGs,
+and multiple logical sources must not merge into one DAG even when no `Present`
+separates them. A source that spans a `Present` boundary keeps its `Present`
+record as one node inside the DAG. Nodes represent passes (render, compute,
+blit, present, sync). Edges represent resource read/write dependencies internal
+to the source. FrameGraph command references are source-qualified stable
+locators; the graph must not retain Arena page pointers. Query-, Readback-, and
+`UpdateTexture`-dependent work remains an ordered non-payload control or
+compatibility disposition until its canonical Arena sizing is specified.
 The opt-in DCE lookahead in R-BACK-32.10 may build a second, independent DAG
 for an already-selected FIFO successor and pass only its full-overwrite summary
-to the current DAG. It must not merge the DAGs or create a cross-chunk edge.
+to the current DAG. It must not merge the DAGs or create a cross-source edge.
 
-**R-BACK-32.8** Per-chunk fence semantics from
-`specs/backend/requirements.md` (chunk `completedSeqId`, deferred resource
-reclaim, query and readback wait) must hold under the modern path
-unchanged. The linearizer must submit each chunk's optimized DAG as a single
-ordered Metal call sequence whose final completion advances the same
-`completedSeqId` the traditional path would advance for that chunk;
-cross-chunk reordering is forbidden, and chunks must be processed in
-submission order. The Frame Graph must not defer or coalesce a fence signal
-across the chunk boundary.
+**R-BACK-32.8** Per-source fence semantics from
+`specs/backend/requirements.md` (`completedSeqId`, deferred resource reclaim,
+query and readback wait) must hold under the modern path unchanged. The
+linearizer must submit each source's optimized DAG as one ordered replay stream
+inside its selected EncodeSession whose source completion advances the same
+`completedSeqId` the traditional path would advance for that logical source.
+Cross-source reordering is forbidden, and sources must be processed in
+submission order. Payload blocks, graph nodes, and `(source, commandIndex)`
+diagnostic locators must not create, split, defer, or coalesce source completion.
 
-**R-BACK-32.2** Frame Graph construction must be deterministic: the same chunk
-input and retained resource-alias mapping must always produce the same DAG, the
+**R-BACK-32.2** Frame Graph construction must be deterministic: the same source
+view and retained resource-alias mapping must always produce the same DAG, the
 same optimizer outcome, and the same Metal call sequence. The renderer must not
 depend on wall clock, thread scheduling, or any non-deterministic source.
 When R-BACK-32.10 selects a successor, that immutable successor summary is an
@@ -291,14 +297,14 @@ WAR and WAW edges (a builder that emits RAW only must keep both passes
 disabled). The DAG observe/debug-export path (R-BACK-39.7) does not consume
 edges, so it is unaffected by edge completeness.
 
-**R-BACK-32.4** The Frame Graph must finalize the current chunk's DAG when any
-of these boundaries occur inside the chunk: an in-chunk `Lock`/`Unlock`
+**R-BACK-32.4** The Frame Graph must finalize the current source's DAG when any
+of these boundaries occur inside the source: an in-source `Lock`/`Unlock`
 record, a `GetRenderTargetData` record, a `StretchRect` that crosses
 CPU-visible memory, a `Present` record, or an explicit
-`DXMT9_RENDERER_FLUSH_PRESENT_INTERVAL=N` debug override. End-of-chunk is
+`DXMT9_RENDERER_FLUSH_PRESENT_INTERVAL=N` debug override. End-of-source is
 always a finalize boundary by `R-BACK-32.1`. Finalize serializes the DAG up
-to that boundary; remaining records in the same chunk start a fresh sub-DAG
-that submits before the next chunk's `onChunkReady`.
+to that boundary; remaining records in the same source start a fresh sub-DAG
+that submits before the next source.
 
 **R-BACK-32.5** The Frame Graph optimizer must run a fixed pipeline of passes
 in this order:
@@ -338,7 +344,7 @@ DAG and calls the same encoder primitives the traditional path calls. Pass
 boundaries map 1:1 to `MTLRenderCommandEncoder` lifetimes per `R-BACK-2.4`.
 
 **R-BACK-32.10** When the `dce` token is enabled, the queue may hold at most one
-dequeued `CommandChunk N` in `Encoding` state while it encodes a
+dequeued logical source N in `Encoding` state while it encodes a
 proof-independent prefix of the optimized replay permutation. At the prefix
 checkpoint it may select the immediate FIFO successor `N+1` as a bounded proof
 input only when N+1 is already ready. It must not wait for N+1. If no successor
@@ -356,9 +362,9 @@ resource; without format evidence it is conservative `ReadWrite`. Present must
 record a read of its source, so a presented backbuffer writer cannot be removed
 by a next-frame Clear.
 
-The queue must submit and complete N before N+1, must retain each slot and its
-resources under its original sequence ID, and must not merge completion
-sources. The final proof/no-proof plan must validate that any commands already
+The queue must preserve completion order from N to N+1, must retain each source
+and all of its payload blocks under its original sequence ID, and must not
+merge completion sources. The final proof/no-proof plan must validate that any commands already
 encoded are an exact prefix of the freshly optimized permutation; a fresh proof
 that would remove an encoded pass must conservatively preserve that pass.
 `dce` stays opt-in and must not create a producer-to-encode wait, including
@@ -812,8 +818,12 @@ must produce the same byte contents the traditional path would produce.
 Memoryless promotion (§4) is conditioned on the surface never being locked.
 
 **R-BACK-38.4** `Present` must always emit a present command in submission
-order. The Frame Graph may merge passes within a present interval but must
-never delay the present itself or change its visible timing.
+order. An Arena source owns the Present record and canonical present-source
+read in its `SourcePayloadView`, but not the drawable or frame-latency token.
+The Frame Graph may merge passes within a present interval but must never delay
+the present itself or change its visible timing. Drawable acquisition,
+`presentDrawable`, pacing-token attachment, and abort cleanup remain owned by
+the Presenter at the ordered Present tail.
 
 **R-BACK-38.5** Transparent geometry ordering must be preserved. Object
 shader batching (§6.6) may not reorder draws within a render pass; this
@@ -941,7 +951,7 @@ the parity harness and the per-PR regression run.
 
 **R-BACK-39.7** The Frame Graph must be serializable as a development-only
 debug artifact behind `DXMT9_RENDERER_DUMP_DAG=<path>`. When set, each
-`onChunkReady` invocation must emit, for the chunk it processed, **two**
+logical source-ready invocation must emit, for the source it processed, **two**
 DAG snapshots — `pre-opt` (immediately after the builder runs, R-BACK-32.1)
 and `post-opt` (immediately after the optimizer pipeline runs,
 R-BACK-32.5) — so the optimizer's effect is diffable. Each snapshot must
@@ -950,8 +960,8 @@ draw range, dominant state profile, and resolved load/store policy; per
 `ResourceNode`: handle, the chronological access log (`pass_index`,
 `access_kind`, `stage`), `first_use_pass`, `last_use_pass`, and residency
 class; and the full producer→consumer edge set keyed by resource. The
-primary serialization format is **JSON** (one object per chunk, framed by
-`frame_id` and chunk seq id) so the artifact joins the existing
+primary serialization format is **JSON** (one object per logical source,
+framed by `frame_id`, global `sourceOrdinal`, and source `seqId`) so the artifact joins the existing
 `scripts/tools` / `analysis/` perf tooling. Optional human-visual
 renderings — Graphviz `.dot` and/or Mermaid `flowchart` — may be derived
 from the same in-memory snapshot when listed in
@@ -973,9 +983,9 @@ rasterization-downstream property outside the DAG's scope).
 The DAG debug dump is **backend-agnostic**: it must be available whenever
 `DXMT9_RENDERER_DUMP_DAG` is set, on BOTH the `traditional` and `framegraph`
 render modes, decoupled from `DXMT9_RENDER_MODE`. Because the dump is a pure
-observation side-channel — which backend actually encodes a chunk is irrelevant
+observation side-channel — which backend actually encodes a source is irrelevant
 to it — both backends own the shared observer (`render::DagObserver`, spec.md
-§2.1 / §3.5) and invoke it from `onChunkReady` before delegating to
+§2.1 / §3.5) and invoke it from the source-ready hook before delegating to
 `encoders::encodeChunk`. On the `traditional` path the DAG is built purely for
 observation against default (all-off) optimizer options — the order-preserving
 parity baseline — and the traditional encode path stays unchanged and
@@ -984,27 +994,27 @@ without it pays only one cached-optional check and emits the identical Metal
 command stream. The frame-window filter (`DXMT9_RENDERER_DUMP_DAG_FRAME` /
 `_RADIUS`, below) applies identically on both backends.
 
-A real app (3DMark05, etc.) emits thousands of chunks per frame and would
-flood the dump directory if every chunk's DAG were serialized. The dump may
+A real app (3DMark05, etc.) emits thousands of logical sources per frame and
+would flood the dump directory if every source's DAG were serialized. The dump may
 therefore be scoped to a single frame with `DXMT9_RENDERER_DUMP_DAG_FRAME=N`,
 a 1-based inter-present frame number. A "frame" is the inter-present interval:
-a chunk belongs to the current frame, and a chunk that **contains** a Present
-is the last chunk of that frame (the frame counter advances after such a
-chunk). When the filter is set, only chunks belonging to frame N are
-serialized; all other chunks must early-out **before** the FrameGraph is
-built, so a filtered-out chunk costs only a cheap Present scan and no build /
+a source belongs to the current frame, and a source that **contains** a Present
+is the last source of that frame (the frame counter advances after such a
+source). When the filter is set, only sources belonging to frame N are
+serialized; all other sources must early-out **before** the FrameGraph is
+built, so a filtered-out source costs only a cheap Present scan and no build /
 serialize / file-write work. When the filter is unset (or `0` / non-numeric),
-behavior is unchanged — every chunk is dumped, as before; real apps should set
+behavior is unchanged — every source is dumped; real apps should set
 the filter to avoid flooding the dump directory. The frame counter is
 encode-thread-local (single writer). The `frame_id` stamped into the dump
-filename and JSON is this inter-present frame number; the chunk seq id remains
-the JSON `chunk_seq_id`.
+filename and JSON is this inter-present frame number; the logical source keeps
+its global `source_ordinal` and `source_seq_id` attribution.
 
 The single-frame filter may be widened to a ±radius **window** with
 `DXMT9_RENDERER_DUMP_DAG_FRAME_RADIUS=R`, a non-negative integer (default `0`,
 i.e. single frame). When `DXMT9_RENDERER_DUMP_DAG_FRAME=N` and the radius is
-`R`, every chunk whose inter-present frame falls in the **inclusive** window
-`[max(1, N-R), N+R]` is dumped; chunks outside that window early-out before the
+`R`, every source whose inter-present frame falls in the **inclusive** window
+`[max(1, N-R), N+R]` is dumped; sources outside that window early-out before the
 FrameGraph is built, exactly as the single-frame filter does. The low end is
 clamped at `1` because inter-present frames are 1-based, so no `frame 0` is ever
 selected (e.g. `N=1, R=5` dumps frames `1..6`). A radius of `0`, an empty

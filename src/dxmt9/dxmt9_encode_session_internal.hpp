@@ -22,6 +22,9 @@ bool storageHasActiveRender(
     const EncodeChunkSessionStorage& storage) noexcept;
 bool storageHasDeferredSubmissionPayload(
     const EncodeChunkSessionStorage& storage) noexcept;
+std::optional<core::metalqueue::PublishedCommandRef>
+storagePendingClearCommand(
+    const EncodeChunkSessionStorage& storage) noexcept;
 
 }  // namespace encode_session
 

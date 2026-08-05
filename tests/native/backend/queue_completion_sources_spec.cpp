@@ -1951,7 +1951,14 @@ QueueSubmissionRecord::RenderEncoderGpuSample makeGpuSample(
       .startIndex = commandIndex * 2u,
       .endIndex = commandIndex * 2u + 1u,
       .seqId = seqId,
+      .slotIndex = commandIndex,
       .commandIndex = commandIndex,
+      .sourceCommand = {
+          .source = testSource(commandIndex, seqId),
+          .seqId = seqId,
+          .slotIndex = commandIndex,
+          .commandIndex = commandIndex,
+      },
   };
 }
 
@@ -2049,6 +2056,18 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
           "head render sample stays before tail sample");
   checkEq(tail.renderEncoderGpuSamples[1].seqId, 2ull,
           "tail render sample stays after head sample");
+  check(tail.renderEncoderGpuSamples[0].sourceCommand.source ==
+            testSource(1, 1),
+        "head render sample keeps generation-bearing source identity");
+  check(tail.renderEncoderGpuSamples[1].sourceCommand.source ==
+            testSource(2, 2),
+        "tail render sample keeps generation-bearing source identity");
+  checkEq(tail.renderEncoderGpuSamples[0].sourceCommand.seqId,
+          tail.renderEncoderGpuSamples[0].seqId,
+          "head sample scalar and qualified sequence stay consistent");
+  checkEq(tail.renderEncoderGpuSamples[1].sourceCommand.commandIndex,
+          tail.renderEncoderGpuSamples[1].commandIndex,
+          "tail sample scalar and qualified command stay consistent");
   checkEq(tail.postCommitCallbacks.size(), 2u,
           "post-commit callbacks are merged");
   checkEq(tail.completionCallbacks.size(), 2u,

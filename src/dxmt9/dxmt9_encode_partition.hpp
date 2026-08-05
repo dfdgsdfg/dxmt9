@@ -11,6 +11,8 @@ namespace dxmt9::encoders {
 // A resolved entry borrows queue-owned source storage only for the synchronous
 // encode call. It must never be retained by EncodeSession or a Metal callback.
 struct ResolvedEncodePartitionEntry {
+  // Compatibility locator for legacy ChunkSlot sources. Arena sources leave
+  // this null; all consumers must use the command-local spans below.
   const core::ChunkSlot* slot = nullptr;
   core::MetalCommandView command{};
   const core::DrawRunCommandRecord* drawRunRecord = nullptr;
@@ -31,7 +33,7 @@ struct ResolvedEncodePartition {
 
 enum class EncodePartitionEntryValidation {
   Valid,
-  SourceOrdinalOutOfRange,
+  RetainedSourceIndexOutOfRange,
   SourceIdentityMismatch,
   SourceCommandRangeInvalid,
   CommandIndexOutOfRange,
@@ -46,7 +48,7 @@ enum class EncodePartitionEntryValidation {
 
 struct EncodePartitionEntryResolution {
   EncodePartitionEntryValidation validation =
-      EncodePartitionEntryValidation::SourceOrdinalOutOfRange;
+      EncodePartitionEntryValidation::RetainedSourceIndexOutOfRange;
   ResolvedEncodePartitionEntry entry{};
 
   explicit operator bool() const noexcept {
@@ -55,9 +57,10 @@ struct EncodePartitionEntryResolution {
 };
 
 // Resolves locator-only partition metadata against the call-local retained
-// source table. Every identity, command, SoA index, uniform handle, and payload
-// range must agree with immutable ChunkSlot storage. Rejection is side-effect
-// free so the caller can fail open to source-order serial encoding.
+// source table. Every identity, command, segment-local SoA index, uniform
+// handle, and payload range must agree with immutable SourcePayloadView
+// storage. Rejection is side-effect free so the caller can fail open to
+// source-order serial encoding.
 EncodePartitionEntryResolution resolveEncodePartitionEntry(
     const EncodePartitionEntrySnapshot& snapshot,
     std::span<const core::metalqueue::ResolvedPublishedSource> sources) noexcept;
@@ -133,7 +136,7 @@ struct EncodePartitionRangeValidationResult {
   EncodePartitionRangeValidation validation =
       EncodePartitionRangeValidation::ReplayStreamInvalid;
   EncodePartitionEntryValidation entryValidation =
-      EncodePartitionEntryValidation::SourceOrdinalOutOfRange;
+      EncodePartitionEntryValidation::RetainedSourceIndexOutOfRange;
   std::size_t rangeIndex = 0;
 
   explicit operator bool() const noexcept {
@@ -145,7 +148,7 @@ struct EncodePartitionResolution {
   EncodePartitionRangeValidation validation =
       EncodePartitionRangeValidation::ReplayStreamInvalid;
   EncodePartitionEntryValidation entryValidation =
-      EncodePartitionEntryValidation::SourceOrdinalOutOfRange;
+      EncodePartitionEntryValidation::RetainedSourceIndexOutOfRange;
   ResolvedEncodePartition partition{};
 
   explicit operator bool() const noexcept {

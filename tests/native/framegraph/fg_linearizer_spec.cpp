@@ -23,6 +23,7 @@
 #include "../../../src/dxmt9/framegraph/fg_dag.hpp"
 #include "../../../src/dxmt9/framegraph/fg_linearizer.hpp"
 #include "../../../src/dxmt9/framegraph/fg_optimizer.hpp"
+#include "arena_payload_fixture.hpp"
 
 #include <cstdint>
 #include <exception>
@@ -376,6 +377,141 @@ void testDeterminism() {
   check(reused == a, "in-place plan matches value plan (reset)");
 }
 
+void testArenaReplayPlanning() {
+  {
+    ChunkSlot slot;
+    const Handle rtA{0x8100u};
+    const Handle rtB{0x8200u};
+    appendDrawRun(slot, rtA, {}, {}, 1);
+    appendDrawRun(slot, rtB, {}, {}, 1);
+    appendDrawRun(slot, rtA, {}, {}, 1);
+    dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+    check(arena.valid(), "Arena passcoalesce fixture publishes");
+
+    FrameGraph identityGraph = buildFrameGraph(arena.view(), 0);
+    const ReplayCommandPlan identity =
+        planReplayCommands(identityGraph, arena.view());
+    check(identity.valid && !identity.reordered && !identity.dropped &&
+              identity.command_indices ==
+                  std::vector<std::uint32_t>({0u, 1u, 2u}),
+          "Arena identity replay plan preserves source order");
+
+    OptimizerOptions coalesce{};
+    coalesce.passcoalesce = true;
+    runOptimizer(identityGraph, coalesce);
+    const ReplayCommandPlan reordered =
+        planReplayCommands(identityGraph, arena.view());
+    check(reordered.valid && reordered.reordered && !reordered.dropped &&
+              reordered.command_indices ==
+                  std::vector<std::uint32_t>({0u, 2u, 1u}),
+          "Arena passcoalesce produces the same validated permutation");
+
+    FrameGraph kindMismatch = identityGraph;
+    kindMismatch.commands.front().kind = MetalCommandKind::Present;
+    check(!planReplayCommands(kindMismatch, arena.view()).valid,
+          "Arena replay rejects a command-kind mismatch");
+  }
+
+  {
+    ChunkSlot slot;
+    const Handle rt{0x8300u};
+    appendDrawRun(slot, rt, {}, {}, 1);
+    appendClearColor(slot, rt);
+    appendDrawRun(slot, rt, {}, {}, 1);
+    dxmt9::tests::framegraph::ArenaPayloadFixture arena(slot);
+    check(arena.valid(), "Arena DCE fixture publishes");
+
+    FrameGraph graph = buildFrameGraph(arena.view(), 0);
+    OptimizerOptions dce{};
+    dce.dce = true;
+    runOptimizer(graph, dce);
+    const ReplayCommandPlan dropped =
+        planReplayCommands(graph, arena.view());
+    check(dropped.valid && dropped.dropped && !dropped.reordered &&
+              dropped.command_indices ==
+                  std::vector<std::uint32_t>({1u, 2u}),
+          "Arena DCE produces a validated ordered replay subset");
+  }
+}
+
+void testSegmentedArenaReplayPlanning() {
+  {
+    const Handle rtA{0x8400u};
+    const Handle rtB{0x8500u};
+    ChunkSlot legacy;
+    appendDrawRun(legacy, rtA, {}, {}, 1);
+    appendDrawRun(legacy, rtB, {}, {}, 1);
+    appendDrawRun(legacy, rtA, {}, {}, 1);
+    appendPresent(legacy, rtA);
+
+    ChunkSlot first;
+    appendDrawRun(first, rtA, {}, {}, 1);
+    ChunkSlot second;
+    appendDrawRun(second, rtB, {}, {}, 1);
+    appendDrawRun(second, rtA, {}, {}, 1);
+    appendPresent(second, rtA);
+    dxmt9::tests::framegraph::SegmentedArenaPayloadFixture arena(first, second);
+    check(arena.valid(), "segmented Arena passcoalesce fixture publishes");
+
+    FrameGraph legacyGraph = buildFrameGraph(legacy, 0);
+    FrameGraph arenaGraph = buildFrameGraph(arena.view(), 0);
+    const ReplayCommandPlan legacyIdentity =
+        planReplayCommands(legacyGraph, legacy);
+    const ReplayCommandPlan arenaIdentity =
+        planReplayCommands(arenaGraph, arena.view());
+    check(legacyIdentity == arenaIdentity && arenaIdentity.valid &&
+              arenaIdentity.command_indices ==
+                  std::vector<std::uint32_t>({0u, 1u, 2u, 3u}),
+          "segmented Arena identity replay matches the legacy logical order");
+
+    OptimizerOptions coalesce{};
+    coalesce.passcoalesce = true;
+    runOptimizer(legacyGraph, coalesce);
+    runOptimizer(arenaGraph, coalesce);
+    const ReplayCommandPlan legacyReordered =
+        planReplayCommands(legacyGraph, legacy);
+    const ReplayCommandPlan arenaReordered =
+        planReplayCommands(arenaGraph, arena.view());
+    check(legacyReordered == arenaReordered && arenaReordered.valid &&
+              arenaReordered.reordered && !arenaReordered.dropped &&
+              arenaReordered.command_indices ==
+                  std::vector<std::uint32_t>({0u, 2u, 1u, 3u}),
+          "segmented Arena passcoalesce preserves global logical indices");
+  }
+
+  {
+    const Handle rt{0x8600u};
+    ChunkSlot legacy;
+    appendDrawRun(legacy, rt, {}, {}, 1);
+    appendClearColor(legacy, rt);
+    appendDrawRun(legacy, rt, {}, {}, 1);
+
+    ChunkSlot first;
+    appendDrawRun(first, rt, {}, {}, 1);
+    ChunkSlot second;
+    appendClearColor(second, rt);
+    appendDrawRun(second, rt, {}, {}, 1);
+    dxmt9::tests::framegraph::SegmentedArenaPayloadFixture arena(first, second);
+    check(arena.valid(), "segmented Arena DCE fixture publishes");
+
+    FrameGraph legacyGraph = buildFrameGraph(legacy, 0);
+    FrameGraph arenaGraph = buildFrameGraph(arena.view(), 0);
+    OptimizerOptions dce{};
+    dce.dce = true;
+    runOptimizer(legacyGraph, dce);
+    runOptimizer(arenaGraph, dce);
+    const ReplayCommandPlan legacyDropped =
+        planReplayCommands(legacyGraph, legacy);
+    const ReplayCommandPlan arenaDropped =
+        planReplayCommands(arenaGraph, arena.view());
+    check(legacyDropped == arenaDropped && arenaDropped.valid &&
+              arenaDropped.dropped && !arenaDropped.reordered &&
+              arenaDropped.command_indices ==
+                  std::vector<std::uint32_t>({1u, 2u}),
+          "segmented Arena DCE preserves retained global logical indices");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -385,6 +521,8 @@ int main() {
     testPassCoalesceReplayCarriesInterveningClear();
     testDceDropsDeadPassOps();
     testDeterminism();
+    testArenaReplayPlanning();
+    testSegmentedArenaReplayPlanning();
   } catch (const TestFailure& failure) {
     std::cerr << "fg_linearizer_spec failed: " << failure.what() << '\n';
     return 1;

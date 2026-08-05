@@ -575,7 +575,9 @@ CommandQueue::CommandQueue(InertTestQueueTag,
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
                            core::BackendLimits limits)
-    : cpuReadySessionLaneEnabled_(false), limits_(limits) {
+    : cpuReadyTape_(core::CpuReadyTapeConfig::queueSessionStreaming(
+          kCommandChunkCount)),
+      cpuReadySessionLaneEnabled_(false), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
 }
@@ -3588,6 +3590,12 @@ bool CommandQueue::CpuReadyArenaBuildLease::publish(
   return true;
 }
 
+bool CommandQueue::CpuReadyArenaBuildLease::selectSegment(
+    std::size_t segmentIndex) noexcept {
+  return queue_ && queue_->selectCpuReadyArenaSegment(
+                       ticket_, controlIndex_, segmentIndex);
+}
+
 void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
   if (!queue_) {
     return;
@@ -3601,9 +3609,17 @@ void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
 CommandQueue::CpuReadyArenaBeginResult
 CommandQueue::beginCpuReadyArenaSource(
     std::uint64_t rawOrdinal,
-    const core::SourcePayloadLayout& layout) noexcept {
-  if (rawOrdinal == 0 || layout.usedBytes == 0 || layout.pageCount == 0 ||
-      layout.requiredBaseAlignment > core::kCpuReadyPageArenaAlignment) {
+    const core::ArenaSourcePayloadLayout& layout) noexcept {
+  if (rawOrdinal == 0 || !layout.valid()) {
+    return {.status = CpuReadyArenaBeginStatus::Invalid};
+  }
+  for (std::size_t i = 0; i < layout.segmentCount; ++i) {
+    if (layout.segments[i].layout.requiredBaseAlignment >
+        core::kCpuReadyPageArenaAlignment) {
+      return {.status = CpuReadyArenaBeginStatus::Invalid};
+    }
+  }
+  if (layout.pageCount > cpuReadyTape_.config().values().maxPagesPerSource) {
     return {.status = CpuReadyArenaBeginStatus::Invalid};
   }
   if (arenaBuildPoisoned_.load(std::memory_order_acquire)) {
@@ -3637,7 +3653,7 @@ CommandQueue::beginCpuReadyArenaSource(
   if (slots_[writeIndex_].state != core::ChunkSlot::State::Free) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   }
-  const auto probe = cpuReadyTape_.probeArenaReserve(layout.pageCount);
+  const auto probe = cpuReadyTape_.probeArenaReserve(layout);
   switch (probe) {
   case core::CpuReadyTape::ReserveProbe::Ready:
     break;
@@ -3664,8 +3680,7 @@ CommandQueue::beginCpuReadyArenaSource(
       .buildGeneration = buildGeneration == 0 ? nextArenaBuildGeneration_++
                                              : buildGeneration,
   };
-  auto reservation = cpuReadyTape_.reserve(
-      layout.pageCount, layout.usedBytes, identity);
+  auto reservation = cpuReadyTape_.reserve(layout, identity);
   if (!reservation) {
     return {.status = CpuReadyArenaBeginStatus::Corrupt};
   }
@@ -3680,16 +3695,10 @@ CommandQueue::beginCpuReadyArenaSource(
   control.payload = nullptr;
   ++nextSeqId_;
   arenaAdmissionActive_.store(true, std::memory_order_release);
-  auto memory = cpuReadyTape_.writableStorage(reservation->ticket);
-  if (memory.size() < layout.usedBytes) {
-    lock.unlock();
-    abortCpuReadyArenaSource(reservation->ticket, controlIndex);
-    return {.status = CpuReadyArenaBeginStatus::Corrupt};
-  }
   arenaBuildContext_.emplace(
-      *reservation, controlIndex, layout, memory.first(layout.usedBytes));
+      *reservation, controlIndex, layout, cpuReadyTape_, currentBackBuffer_);
   auto* context = &*arenaBuildContext_;
-  if (!context->builder.good()) {
+  if (context->failed.load(std::memory_order_relaxed)) {
     context->failed.store(true, std::memory_order_release);
     lock.unlock();
     abortCpuReadyArenaSource(reservation->ticket, controlIndex);
@@ -3705,7 +3714,7 @@ CommandQueue::beginCpuReadyArenaSource(
 }
 
 bool CommandQueue::waitForCpuReadyArenaAdmission(
-    const core::SourcePayloadLayout& layout) noexcept {
+    const core::ArenaSourcePayloadLayout& layout) noexcept {
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
   const auto waitStarted = std::chrono::steady_clock::now();
   std::unique_lock lock(mutex_);
@@ -3722,7 +3731,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
         !arenaBuildContext_.has_value() && writeIndex_ < slots_.size() &&
         slots_[writeIndex_].state == core::ChunkSlot::State::Free) {
       admissionResolved =
-          cpuReadyTape_.probeArenaReserve(layout.pageCount) !=
+          cpuReadyTape_.probeArenaReserve(layout) !=
           core::CpuReadyTape::ReserveProbe::TemporaryPressure;
       recordCpuReadyTapeStats(cpuReadyTape_);
       if (admissionResolved) {
@@ -3738,6 +3747,31 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStarted).count()));
   return admitted;
+}
+
+bool CommandQueue::selectCpuReadyArenaSegment(
+    core::CpuReadyPublicationTicket ticket,
+    std::size_t controlIndex,
+    std::size_t segmentIndex) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || context->reservation.ticket != ticket ||
+      context->controlIndex != controlIndex ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->failed.load(std::memory_order_acquire) ||
+      context->publishing.load(std::memory_order_acquire) ||
+      segmentIndex >= context->layout.segmentCount ||
+      (segmentIndex != context->activeSegment &&
+       segmentIndex != context->activeSegment + 1u) ||
+      !context->builders[segmentIndex] ||
+      !context->assemblers[segmentIndex]) {
+    if (context) {
+      context->failed.store(true, std::memory_order_release);
+    }
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    return false;
+  }
+  context->activeSegment = segmentIndex;
+  return true;
 }
 
 CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
@@ -3761,6 +3795,7 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveArenaDrawRunBatch(
     std::span<core::DrawRunSubmission> submissions) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
+    auto* assembler = context.activeAssembler();
     if (submissions.empty() || !submissions.front().stateMaterialized) {
       return false;
     }
@@ -3783,7 +3818,7 @@ CommandQueue::appendActiveArenaDrawRunBatch(
       // doing so would substitute a later rename generation. Publish validates
       // every versioned binding through Pool's own synchronization before
       // marking it, outside the queue scheduling mutex.
-      if (!context.assembler.tryAppendDrawRunBatch(batch)) {
+      if (!assembler || !assembler->tryAppendDrawRunBatch(batch)) {
         return false;
       }
       context.pendingBackBuffer = batch.front()
@@ -3805,6 +3840,7 @@ CommandQueue::appendActiveArenaDrawRun(
     std::span<const core::DrawParam> draws,
     std::span<const core::DrawParamPayloadView> payloads) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
+    auto* assembler = context.activeAssembler();
     if (draws.empty()) {
       return true;
     }
@@ -3828,7 +3864,7 @@ CommandQueue::appendActiveArenaDrawRun(
         submission.stateMaterialized = false;
       }
     }
-    if (!context.assembler.tryAppendDrawRunBatch(
+    if (!assembler || !assembler->tryAppendDrawRunBatch(
             scratch.arenaSubmissions)) {
       return false;
     }
@@ -3841,7 +3877,8 @@ CommandQueue::appendActiveArenaDrawRun(
 CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaClear(
     const core::ClearDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
-    if (!context.assembler.tryAppendClear(value)) {
+    auto* assembler = context.activeAssembler();
+    if (!assembler || !assembler->tryAppendClear(value)) {
       return false;
     }
     if (value.colorAttachments[0].handle) {
@@ -3856,7 +3893,8 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveArenaSurfaceCopy(
     const core::SurfaceCopyDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
-    if (!context.assembler.tryAppendSurfaceCopy(value)) {
+    auto* assembler = context.activeAssembler();
+    if (!assembler || !assembler->tryAppendSurfaceCopy(value)) {
       return false;
     }
     context.pendingBackBuffer = value.destination;
@@ -3869,7 +3907,8 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveArenaStretchRect(
     const core::StretchRectDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
-    if (!context.assembler.tryAppendStretchRect(value)) {
+    auto* assembler = context.activeAssembler();
+    if (!assembler || !assembler->tryAppendStretchRect(value)) {
       return false;
     }
     context.pendingBackBuffer = value.destination;
@@ -3881,7 +3920,8 @@ CommandQueue::appendActiveArenaStretchRect(
 CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaColorFill(
     const core::ColorFillDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
-    if (!context.assembler.tryAppendColorFill(value)) {
+    auto* assembler = context.activeAssembler();
+    if (!assembler || !assembler->tryAppendColorFill(value)) {
       return false;
     }
     context.pendingBackBuffer = value.destination;
@@ -3894,7 +3934,50 @@ CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveArenaDepthResolve(
     const core::DepthResolveDesc& value) noexcept {
   return appendActiveArena([&](ArenaBuildContext& context) {
-    return context.assembler.tryAppendDepthResolve(value);
+    auto* assembler = context.activeAssembler();
+    return assembler && assembler->tryAppendDepthResolve(value);
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
+    core::SwapDesc value, BoundaryPolicy boundaryPolicy,
+    bool tokenStashed) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    auto* builder = context.activeBuilder();
+    if (!builder || context.presentAppended) {
+      return false;
+    }
+    const core::Handle fallback = context.updatesBackBuffer
+        ? context.pendingBackBuffer
+        : context.initialBackBuffer;
+    const core::Handle sourceHandle =
+        core::metalqueue::selectPresentSourceHandle(value, fallback);
+    perf::countPresentSourceSelection(
+        static_cast<bool>(value.sourceSurface),
+        sourceHandle.value != 0 && sourceHandle == fallback);
+
+    // Record cleanup responsibility before the append: if capacity or command
+    // validation fails, lease abort remains the single token-removal path.
+    context.pendingPresentId = value.presentId;
+    context.pendingPresentDesc = value;
+    context.pendingPresentBoundaryPolicy = boundaryPolicy;
+    context.presentAppended = true;
+    context.presentTokenStashed = tokenStashed;
+    return builder->tryAppendPresentCommand(core::PresentCommandRecord{
+        .present = std::move(value),
+        .presentSource = sourceHandle,
+    });
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::deferActiveArenaFlush() noexcept {
+  return appendActiveArena([](ArenaBuildContext& context) {
+    if (!context.presentAppended) {
+      return false;
+    }
+    context.flushAfterPublication = true;
+    return true;
   });
 }
 
@@ -3906,10 +3989,18 @@ bool CommandQueue::publishCpuReadyArenaSource(
   if (!context || context->reservation.ticket != ticket ||
       context->ownerThread != std::this_thread::get_id() ||
       context->failed.load(std::memory_order_acquire) ||
-      context->controlIndex != controlIndex || !context->builder.publish()) {
+      context->controlIndex != controlIndex ||
+      context->activeSegment + 1u != context->layout.segmentCount) {
     arenaBuildPoisoned_.store(true, std::memory_order_release);
     abortCpuReadyArenaSource(ticket, controlIndex);
     return false;
+  }
+  for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+    if (!context->builders[i] || !context->builders[i]->publish()) {
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
   }
 
   // Phase 1 fixes the exact transaction and immutable published payload while
@@ -3939,15 +4030,22 @@ bool CommandQueue::publishCpuReadyArenaSource(
 
   // Resource retention is deliberately outside the scheduling lock (§5.4).
   // The arena owner and view remain pinned by the active strict transaction.
-  const core::SourcePayloadView payloadView(*context->reservation.arenaPayload);
-  if (!payloadView.valid() ||
-      !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
-    arenaBuildPoisoned_.store(true, std::memory_order_release);
-    abortCpuReadyArenaSource(ticket, controlIndex);
-    return false;
+  for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+    const core::SourcePayloadView payloadView(
+        *context->reservation.arenaPayloads[i]);
+    if (!payloadView.valid() ||
+        !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
   }
   markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
-  markArenaSourceResources(pool_, payloadView, ticket.seqId);
+  for (std::size_t i = 0; i < context->layout.segmentCount; ++i) {
+    const core::SourcePayloadView payloadView(
+        *context->reservation.arenaPayloads[i]);
+    markArenaSourceResources(pool_, payloadView, ticket.seqId);
+  }
 
   // Phase 3 revalidates the same ticket/context/control after marking. No
   // writer can advance either ring while arenaAdmissionActive_ remains set.
@@ -3982,6 +4080,14 @@ bool CommandQueue::publishCpuReadyArenaSource(
   if (context->updatesBackBuffer) {
     currentBackBuffer_ = context->pendingBackBuffer;
   }
+  const bool hasPublishedPresent = context->presentAppended;
+  const auto publishedPresentDesc = context->pendingPresentDesc;
+  const auto publishedPresentBoundaryPolicy =
+      context->pendingPresentBoundaryPolicy;
+  const bool flushAfterPublication = context->flushAfterPublication;
+  // Ready publication transfers any stashed drawable token's cleanup
+  // obligation from the build context to normal encoded-Present consumption.
+  context->presentTokenStashed = false;
   activeArenaBuild_.store(nullptr, std::memory_order_release);
   arenaBuildContext_.reset();
   arenaAdmissionActive_.store(false, std::memory_order_release);
@@ -3989,26 +4095,52 @@ bool CommandQueue::publishCpuReadyArenaSource(
   lock.unlock();
   writeCv_.notify_all();
   encodeCv_.notify_one();
+  if (hasPublishedPresent) {
+    if (publishedPresentBoundaryPolicy ==
+        BoundaryPolicy::DeferredPresentCompletion) {
+      PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+      drainDeferredPresentBoundary();
+    }
+    applyPublishedPresentBoundary(ticket.seqId, publishedPresentDesc,
+                                  publishedPresentBoundaryPolicy);
+  }
+  if (flushAfterPublication) {
+    submitFlush();
+  }
   return true;
 }
 
 void CommandQueue::abortCpuReadyArenaSource(
     core::CpuReadyPublicationTicket ticket,
     std::size_t controlIndex) noexcept {
-  std::optional<core::CpuReadyTape::DetachedArenaOwner> owner;
-  {
+  core::PresentId stashedPresentId{};
+  bool removeStashedPresentToken = false;
+  auto owner = [&]() {
     std::unique_lock lock(mutex_);
+    auto detached = controlIndex < slots_.size()
+        ? cpuReadyTape_.beginArenaAbort(ticket)
+        : std::optional<core::CpuReadyTape::DetachedArenaOwner>{};
     if (controlIndex < slots_.size()) {
-      owner = cpuReadyTape_.beginArenaAbort(ticket);
+      if (arenaBuildContext_ &&
+          arenaBuildContext_->reservation.ticket == ticket &&
+          arenaBuildContext_->presentTokenStashed) {
+        stashedPresentId = arenaBuildContext_->pendingPresentId;
+        removeStashedPresentToken = true;
+        arenaBuildContext_->presentTokenStashed = false;
+      }
       activeArenaBuild_.store(nullptr, std::memory_order_release);
       arenaBuildContext_.reset();
     }
     stop_ = true;
     cpuReadyTape_.stopAdmission();
     arenaBuildPoisoned_.store(true, std::memory_order_release);
-  }
+    return detached;
+  }();
   if (owner) {
     owner->destroy();
+  }
+  if (removeStashedPresentToken) {
+    (void)takeDrawableToken(stashedPresentId);
   }
   {
     std::lock_guard lock(mutex_);
@@ -4151,8 +4283,21 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
-  if (rejectIfActiveArena() != ActiveArenaAppendResult::Inactive) {
-    return 0;
+  const bool arenaPresentActive =
+      arenaAdmissionActive_.load(std::memory_order_acquire);
+  std::uint64_t arenaPresentSeqId = 0;
+  if (arenaPresentActive) {
+    auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+    if (!context || context->ownerThread != std::this_thread::get_id() ||
+        context->failed.load(std::memory_order_acquire) ||
+        context->publishing.load(std::memory_order_acquire)) {
+      // Validate the strict transaction before acquiring or stashing a
+      // drawable token. A failed active build is the sole owner of abort-side
+      // token cleanup, so no Presenter side effect may precede this check.
+      (void)rejectIfActiveArena();
+      return 0;
+    }
+    arenaPresentSeqId = context->reservation.ticket.seqId;
   }
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
@@ -4171,11 +4316,13 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // process (a direct COM caller, or one replayed by the synchronous
   // non-offload chunk path) may have deferred a target even while offload
   // is globally enabled for other (paced) presents.
-  if (boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
+  if (!arenaPresentActive &&
+      boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     drainDeferredPresentBoundary();
   }
   core::SwapDesc queuedDesc = desc;
+  bool presentTokenStashed = false;
   // Resolve the queue-local Presenter binding once. Stale ids (swapchain
   // destroyed between snapshotSwapDesc and submitPresent) resolve to
   // nullptr; the legacy raw-pointer code already tolerated that path so
@@ -4194,11 +4341,12 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           perf::countPresentAsyncAcquireFallback();
           queuedDesc.drawableTokenRequired = false;
         }
+        presentTokenStashed = static_cast<bool>(token);
         stashDrawableToken(queuedDesc.presentId, std::move(token));
         break;
       }
       case AcquirePolicy::SyncOnSubmit: {
-        {
+        if (!arenaPresentActive) {
           std::unique_lock lock(mutex_);
           queueLifecycle_.commitCurrentChunk(
               lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
@@ -4208,6 +4356,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         }
         auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
         queuedDesc.drawableTokenRequired = true;
+        presentTokenStashed = static_cast<bool>(token);
         stashDrawableToken(queuedDesc.presentId, std::move(token));
         break;
       }
@@ -4217,6 +4366,14 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         // prefetched-drawable cache from the encode thread.
         break;
     }
+  }
+
+  if (arenaPresentActive) {
+    return appendActiveArenaPresent(std::move(queuedDesc), boundaryPolicy,
+                                    presentTokenStashed) ==
+                   ActiveArenaAppendResult::Appended
+        ? arenaPresentSeqId
+        : 0;
   }
 
   std::uint64_t presentSeqId = 0;
@@ -4282,8 +4439,16 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // participating in the inline boundary even while
   // DXMT9_OFFLOAD_COMMIT_REPLAY is globally enabled for other presents in
   // this process.
-  DXMT_ASSERT(!queuedDesc.pacedByPresentOrdinal || offloadCommitReplayEnabled());
-  switch (resolvePresentBoundaryAction(queuedDesc.pacedByPresentOrdinal, boundaryPolicy)) {
+  applyPublishedPresentBoundary(presentSeqId, queuedDesc, boundaryPolicy);
+  return presentSeqId;
+}
+
+void CommandQueue::applyPublishedPresentBoundary(
+    std::uint64_t presentSeqId, const core::SwapDesc& desc,
+    BoundaryPolicy boundaryPolicy) {
+  DXMT_ASSERT(!desc.pacedByPresentOrdinal || offloadCommitReplayEnabled());
+  switch (resolvePresentBoundaryAction(desc.pacedByPresentOrdinal,
+                                       boundaryPolicy)) {
     case PresentBoundaryAction::SkipPacedByOffloadOrdinal:
       // dxmt9::Device::waitPresentOrdinalBoundary already paced this
       // present before submitPresent was called; applying the inline
@@ -4293,19 +4458,18 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
       break;
     case PresentBoundaryAction::Defer:
       perf::countPresentBoundaryApplied();
-      deferPresentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+      deferPresentBoundary(presentSeqId, presentBoundaryLatency(desc));
       break;
     case PresentBoundaryAction::ApplyInline: {
       PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
       perf::countPresentBoundaryApplied();
-      presentBoundary(presentSeqId, presentBoundaryLatency(queuedDesc));
+      presentBoundary(presentSeqId, presentBoundaryLatency(desc));
       break;
     }
     case PresentBoundaryAction::SkipDisabled:
       perf::countPresentBoundarySkipped();
       break;
   }
-  return presentSeqId;
 }
 
 void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t maxFrameLatency) {
@@ -4491,6 +4655,9 @@ CommandQueue::notePresentChunkForCapture(std::uint64_t seqId) {
 
 void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
+  if (deferActiveArenaFlush() != ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::unique_lock lock(mutex_);
   queueLifecycle_.flushAndWait(
       lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {

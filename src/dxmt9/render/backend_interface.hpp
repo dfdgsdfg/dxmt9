@@ -1,9 +1,9 @@
 #pragma once
 
 // IRenderBackend — strategy seam for the modern-renderer transition (Task A1).
-// A backend observes device/frame lifecycle and is handed each ready chunk.
-// onChunkReady mirrors encoders::encodeChunk exactly so a Traditional backend
-// can forward straight to it while a FrameGraph backend reinterprets the chunk.
+// A backend observes device/frame lifecycle and is handed each ready source.
+// onSourceReady mirrors the source-neutral encoders::encodeChunk entry point;
+// onChunkReady remains the legacy ChunkSlot compatibility wrapper.
 
 // dxmt9_draw_encoder.hpp transitively provides everything this seam needs:
 //   - encoders::EncodeContext + the encoders::encodeChunk declaration
@@ -36,28 +36,22 @@ class IRenderBackend {
   virtual void onDeviceDestroyed() {}
   virtual void onFrameBegin(std::uint64_t /*frame_id*/) {}
   virtual void onFrameEnd() {}
-  // Must mirror the signature/return type of encoders::encodeChunk exactly so a
-  // Traditional backend can forward without an adapter (see dxmt9_draw_encoder.hpp).
+  // Legacy compatibility entry point. Implementations must forward through
+  // onSourceReady so Arena and ChunkSlot sources share one production path.
   virtual std::optional<core::metalqueue::QueueSubmissionRecord> onChunkReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
       const core::ChunkSlot& slot,
-      encoders::EncodeChunkOptions options = {}) = 0;
+      encoders::EncodeChunkOptions options = {}) {
+    return onSourceReady(ctx, slotIndex, core::SourcePayloadView(slot),
+                         slot.seqId, std::move(options));
+  }
   virtual std::optional<core::metalqueue::QueueSubmissionRecord> onSourceReady(
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
       core::SourcePayloadView payload,
       std::uint64_t seqId,
-      encoders::EncodeChunkOptions options = {}) {
-    if (const auto* legacy = payload.legacyPayload()) {
-      return onChunkReady(ctx, slotIndex, *legacy, std::move(options));
-    }
-    // FrameGraph metadata is still ChunkSlot-indexed. Arena sources fail open
-    // to the same identity serial partition consumer until that planner also
-    // accepts SourcePayloadView.
-    return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
-                                 std::move(options));
-  }
+      encoders::EncodeChunkOptions options = {}) = 0;
   virtual BackendMode mode() const = 0;
   virtual BackendCaps caps() const { return {}; }
   // Opt-in queue planning seam for bounded cross-chunk proofs. The queue may

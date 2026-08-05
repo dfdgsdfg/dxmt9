@@ -29,6 +29,7 @@ using dxmt9::core::ArenaByteBuffer;
 using dxmt9::core::ArenaSourcePayloadBlock;
 using dxmt9::core::ArenaSourcePayloadBuilder;
 using dxmt9::core::ArenaSourcePayloadAssembler;
+using dxmt9::core::ArenaSourcePayloadChain;
 using dxmt9::core::ArenaSoA;
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::ClearDesc;
@@ -51,6 +52,7 @@ using dxmt9::core::SourcePayloadCapacity;
 using dxmt9::core::SourcePayloadRegion;
 using dxmt9::core::kSourcePayloadRegionCount;
 using dxmt9::core::makeSourcePayloadLayout;
+using dxmt9::core::makeArenaSourcePayloadLayout;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -813,6 +815,57 @@ void testReplayAssemblerConsumesScratchIntoFinalArena() {
   block.destroyConstructed();
 }
 
+void testArenaChainMapsOneLogicalCommandSpaceWithoutGather() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.surfaceCopyRecords = 1;
+  const auto segment = makeSourcePayloadLayout(capacity, 4096, 8);
+  check(segment.has_value(), "chain segment layout must build");
+  const std::array segmentLayouts{*segment, *segment};
+  const auto layout = makeArenaSourcePayloadLayout(segmentLayouts, 4096, 8);
+  check(layout.has_value() && layout->segmentCount == 2 &&
+            layout->segments[1].byteOffset >= segment->usedBytes,
+        "chain layout must pack two aligned blocks into one page run");
+
+  std::vector<std::max_align_t> backing;
+  auto memory = alignedBacking(backing, layout->usedBytes);
+  std::array<ArenaSourcePayloadBlock, 2> blocks;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    const auto packed = layout->segments[i];
+    ArenaSourcePayloadBuilder builder(
+        blocks[i], packed.layout,
+        memory.subspan(packed.byteOffset, packed.layout.usedBytes));
+    dxmt9::core::SurfaceCopyDesc copy{};
+    copy.source = dxmt9::core::Handle{i + 1};
+    check(builder.tryAppendSurfaceCopyCommand(copy) && builder.publish(),
+          "each packed chain segment must publish independently");
+  }
+
+  const std::array<const ArenaSourcePayloadBlock*, 2> segments{
+      &blocks[0], &blocks[1]};
+  ArenaSourcePayloadChain chain;
+  check(chain.initialize(segments) && chain.commandCount() == 2,
+        "published segments form one immutable logical command space");
+  const SourcePayloadView view(chain);
+  const auto first = view.commandAt(0);
+  const auto second = view.commandAt(1);
+  check(first.kind() == MetalCommandKind::SurfaceCopy &&
+            first.segmentIndex == 0 && first.localCommandIndex == 0 &&
+            second.kind() == MetalCommandKind::SurfaceCopy &&
+            second.segmentIndex == 1 && second.localCommandIndex == 0 &&
+            first.command.surfaceCopy && second.command.surfaceCopy &&
+            first.command.surfaceCopy->source == dxmt9::core::Handle{1} &&
+            second.command.surfaceCopy->source == dxmt9::core::Handle{2},
+        "logical lookup maps directly to segment-local immutable views");
+  check(view.arenaSegmentCount() == 2 && !view.arenaPayload() &&
+            view.arenaSegment(1).commandCount() == 1,
+        "multi-segment views do not pretend to be a gathered single block");
+  chain.clear();
+  for (std::size_t i = blocks.size(); i != 0; --i) {
+    blocks[i - 1].destroyConstructed();
+  }
+}
+
 void testPublishRejectsInvalidCommandRanges() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
@@ -852,6 +905,7 @@ int main() {
     testLegacyArenaSourcePayloadViewParity();
     testConsolidatedNondrawCommandParity();
     testReplayAssemblerConsumesScratchIntoFinalArena();
+    testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();
   } catch (const std::exception& error) {
     std::cerr << "source_payload_spec: " << error.what() << '\n';

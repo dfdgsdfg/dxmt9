@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -39,26 +40,66 @@ bool isFeatureSeparator(unsigned char ch) {
   return std::isspace(ch) || ch == ',' || ch == ';';
 }
 
-const core::metalqueue::ResolvedPublishedSource* selectedNextSource(
+}  // namespace
+
+bool resolvedSourceMatchesFrameGraphInput(
+    const core::metalqueue::ResolvedPublishedSource& source,
+    std::size_t slotIndex, core::SourcePayloadView payload,
+    std::uint64_t seqId,
+    core::CpuReadyTape::SourceRef expectedSource) noexcept {
+  const core::CpuReadyTape::SourceRef represented{
+      .id = source.sourceId,
+      .storage = source.storage,
+  };
+  return source.valid() && expectedSource.valid() &&
+         source.source == expectedSource && source.source == represented &&
+         source.slotIndex == slotIndex && source.payload == payload &&
+         source.seqId == seqId && source.commandBegin == 0u &&
+         source.commandCount == payload.commandCount();
+}
+
+const core::metalqueue::ResolvedPublishedSource* selectFrameGraphLookahead(
     std::span<const core::metalqueue::ResolvedPublishedSource> selected,
-    std::size_t slotIndex,
-    const core::ChunkSlot& slot) noexcept {
-  if (selected.size() < 2u) {
+    std::size_t slotIndex, core::SourcePayloadView payload,
+    std::uint64_t seqId,
+    core::CpuReadyTape::SourceRef currentSource) noexcept {
+  if (selected.size() < 2u ||
+      !resolvedSourceMatchesFrameGraphInput(
+          selected.front(), slotIndex, payload, seqId, currentSource)) {
     return nullptr;
   }
-  const auto& current = selected.front();
   const auto& next = selected[1];
-  if (current.slot != &slot || current.slotIndex != slotIndex ||
-      current.seqId != slot.seqId || current.commandBegin != 0u ||
-      current.commandCount != slot.commandCount() || !next.slot ||
-      next.seqId != slot.seqId + 1u || next.commandBegin != 0u ||
-      next.commandCount != next.slot->commandCount()) {
+  if (seqId == std::numeric_limits<std::uint64_t>::max() ||
+      next.seqId != seqId + 1u ||
+      !resolvedSourceMatchesFrameGraphInput(
+          next, next.slotIndex, next.payload, next.seqId, next.source)) {
     return nullptr;
   }
   return &next;
 }
 
-}  // namespace
+bool replayPlanPreservesHeadStableFrontier(
+    const framegraph::ReplayCommandPlan& optimized,
+    const framegraph::ReplayCommandPlan& natural) noexcept {
+  if (!optimized.valid || !natural.valid ||
+      optimized.command_indices.size() != natural.command_indices.size()) {
+    return false;
+  }
+  if (natural.command_indices.empty()) {
+    return true;
+  }
+  if (optimized.command_indices.front() != natural.command_indices.front()) {
+    return false;
+  }
+  for (const framegraph::u32 command : optimized.command_indices) {
+    if (std::find(natural.command_indices.begin(),
+                  natural.command_indices.end(), command) ==
+        natural.command_indices.end()) {
+      return false;
+    }
+  }
+  return true;
+}
 
 RendererCompatProfile resolveRendererCompatProfile(const char* env) {
   if (env == nullptr || std::strcmp(env, "progressive") == 0) {
@@ -172,12 +213,23 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
                                 std::size_t slotIndex,
                                 const core::ChunkSlot& slot,
                                 encoders::EncodeChunkOptions options) {
+  return onSourceReady(ctx, slotIndex, core::SourcePayloadView(slot),
+                       slot.seqId, std::move(options));
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
+                                 std::size_t slotIndex,
+                                 core::SourcePayloadView payload,
+                                 std::uint64_t seqId,
+                                 encoders::EncodeChunkOptions options) {
   if (options.skipBackendPlanning) {
-    return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+    return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
+                                 std::move(options));
   }
 
   // Side-effect-neutral observe + DAG export side-channel (R-BACK-39.7). This
-  // runs BEFORE the encode but cannot influence it: it only reads `slot` and
+  // runs BEFORE the encode but cannot influence it: it only reads `payload` and
   // writes debug dump files. The shared render::DagObserver tracks the
   // inter-present frame number itself (encode-thread-local counter) so the file
   // names read dag-frame<observeFrame>-chunk<seqId>-<stage>.json and
@@ -185,40 +237,50 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
   // dump is backend-agnostic — the TraditionalBackend owns the same observer.
   const framegraph::ResourceAliasResolver aliasResolver =
       makeResourceAliasResolver(ctx.pool);
-  observer_.observeAndExport(slot, aliasResolver);
+  observer_.observeAndExport(payload, seqId, aliasResolver);
 
   if (!features_.empty()) {
     framegraph::FrameGraph graph =
-        framegraph::buildFrameGraph(slot, slot.seqId, aliasResolver);
+        framegraph::buildFrameGraph(payload, seqId, aliasResolver);
     framegraph::OptimizerOptions activeOptions = options_;
-    // A general carried render session may already own an open encoder, so
-    // passcoalesce command movement remains source-local-only there. The DCE
-    // lookahead suffix is different: its held session contains an exact prefix
-    // of this same optimized permutation, validated below, so passcoalesce must
-    // remain enabled for the tail.
-    if ((options.session || options.hasInjectedCommandBuffer()) &&
-        options.replayCommandsAlreadyEncoded.empty()) {
-      activeOptions.passcoalesce = false;
-    }
 
     std::vector<framegraph::ResourceHandle> overwriteProof;
     if (features_.dce) {
-      if (const auto* next = selectedNextSource(
-              options.sessionLookaheadSources, slotIndex, slot)) {
+      if (const auto* next = selectFrameGraphLookahead(
+              options.sessionLookaheadSources, slotIndex, payload, seqId,
+              options.partitionSource)) {
         const framegraph::FrameGraph lookahead =
-            framegraph::buildFrameGraph(*next->slot, next->seqId,
+            framegraph::buildFrameGraph(next->payload, next->seqId,
                                         aliasResolver);
         overwriteProof =
             framegraph::collectDceLookaheadFullOverwrites(lookahead);
         priorDceLookaheadProof_ = overwriteProof;
       }
     }
+    const bool requiresHeadStableFrontier =
+        activeOptions.passcoalesce &&
+        (options.session || options.hasInjectedCommandBuffer()) &&
+        options.replayCommandsAlreadyEncoded.empty();
+    framegraph::FrameGraph naturalGraph;
+    framegraph::OptimizerStats naturalStats{};
+    framegraph::ReplayCommandPlan naturalPlan{};
+    if (requiresHeadStableFrontier) {
+      naturalGraph =
+          framegraph::buildFrameGraph(payload, seqId, aliasResolver);
+      framegraph::OptimizerOptions naturalOptions = activeOptions;
+      naturalOptions.passcoalesce = false;
+      framegraph::runOptimizer(
+          naturalGraph, naturalOptions, /*observations=*/nullptr,
+          &naturalStats, framegraph::DceLookaheadProof{overwriteProof});
+      naturalPlan = framegraph::planReplayCommands(naturalGraph, payload);
+    }
+
     framegraph::OptimizerStats stats{};
     framegraph::runOptimizer(
         graph, activeOptions, /*observations=*/nullptr, &stats,
         framegraph::DceLookaheadProof{overwriteProof});
 
-    std::vector<bool> alreadyEncoded(slot.commandCount(), false);
+    std::vector<bool> alreadyEncoded(payload.commandCount(), false);
     bool alreadyEncodedValid = true;
     for (const std::uint32_t commandIndex :
          options.replayCommandsAlreadyEncoded) {
@@ -265,6 +327,15 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
         }
       }
     }
+    if (requiresHeadStableFrontier) {
+      const framegraph::ReplayCommandPlan optimizedPlan =
+          framegraph::planReplayCommands(graph, payload);
+      if (!replayPlanPreservesHeadStableFrontier(optimizedPlan,
+                                                 naturalPlan)) {
+        graph = std::move(naturalGraph);
+        stats = naturalStats;
+      }
+    }
     if (features_.dce) {
       perf::countFramegraphDceDropped(stats.dce_dropped);
       perf::countFramegraphDcePreservedUnprovable(
@@ -276,11 +347,11 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
     if (stats.pass_coalesced_count != 0 || stats.dce_dropped != 0 ||
         !options.replayCommandsAlreadyEncoded.empty()) {
       framegraph::ReplayCommandPlan plan =
-          framegraph::planReplayCommands(graph, slot);
+          framegraph::planReplayCommands(graph, payload);
       if (plan.valid) {
         if (plan.dropped) {
           perf::countFramegraphDceReplayCommandsOmitted(
-              slot.commandCount() - plan.command_indices.size());
+              payload.commandCount() - plan.command_indices.size());
         }
 
         std::span<const framegraph::u32> replayPlan(
@@ -304,7 +375,7 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
             !options.replayCommandsAlreadyEncoded.empty()) {
           options.replayCommandPlanActive = true;
           options.replayCommandOrder = replayPlan;
-          return encoders::encodeChunk(ctx, slotIndex, slot,
+          return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                        std::move(options));
         }
       }
@@ -322,18 +393,8 @@ FrameGraphBackend::onChunkReady(encoders::EncodeContext& ctx,
       });
     }
   }
-  if (features_.passcoalesce &&
-      (options.session || options.hasInjectedCommandBuffer()) &&
-      options.replayCommandsAlreadyEncoded.empty()) {
-    static std::once_flag warning;
-    std::call_once(warning, [] {
-      util::logf(util::LogLevel::Warn, "dxmt9-renderer",
-                 "passcoalesce is incompatible with an injected/open encode "
-                 "session; falling back to source-order v2 replay");
-    });
-  }
-
-  return encoders::encodeChunk(ctx, slotIndex, slot, std::move(options));
+  return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
+                               std::move(options));
 }
 
 }  // namespace dxmt9::render

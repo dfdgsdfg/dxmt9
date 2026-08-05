@@ -66,7 +66,7 @@ EncodePartitionEntrySnapshot makeSnapshot() {
               .id = {.index = 5, .generation = 7},
               .storage = {.firstPage = 9, .pageCount = 1, .generation = 11},
           },
-          .sourceOrdinal = 3,
+          .retainedSourceIndex = 3,
           .slotIndex = 7,
           .seqId = 0x123456789abcdef0ull,
       },
@@ -92,24 +92,24 @@ EncodePartitionEntrySnapshot makeSnapshot() {
 
 void sourceLocatorKeepsRetainedOrderAndReuseIdentity() {
   auto first = makeSnapshot();
-  first.source.sourceOrdinal = 0;
+  first.source.retainedSourceIndex = 0;
   first.source.slotIndex = 7;
   first.source.seqId = 41;
   auto second = makeSnapshot();
-  second.source.sourceOrdinal = 1;
+  second.source.retainedSourceIndex = 1;
   second.source.slotIndex = 8;
   second.source.seqId = 42;
   auto reused = makeSnapshot();
-  reused.source.sourceOrdinal = 2;
+  reused.source.retainedSourceIndex = 2;
   reused.source.slotIndex = 7;
   reused.source.seqId = 43;
   ++reused.source.tapeSource.id.generation;
   const std::vector<EncodePartitionEntrySnapshot> order{first, second, reused};
 
-  checkEq(order[0].source.sourceOrdinal, std::uint32_t{0},
-          "retained order starts at ordinal zero");
-  checkEq(order[1].source.sourceOrdinal, std::uint32_t{1},
-          "retained order preserves the successor ordinal");
+  checkEq(order[0].source.retainedSourceIndex, std::uint32_t{0},
+          "retained order starts at index zero");
+  checkEq(order[1].source.retainedSourceIndex, std::uint32_t{1},
+          "retained order preserves the successor index");
   checkEq(order[2].source.seqId, std::uint64_t{43},
           "retained order preserves sequence identity");
   checkEq(order[0].source.slotIndex, order[2].source.slotIndex,
@@ -239,7 +239,7 @@ struct ResolverFixture {
                     .generation = 19,
                 },
             },
-            .sourceOrdinal = 0,
+            .retainedSourceIndex = 0,
             .slotIndex = 7,
             .seqId = slot.seqId,
         },
@@ -312,9 +312,10 @@ void retainedSourceResolverRejectsEveryLocatorLayer() {
   };
 
   auto snapshot = fixture.snapshot;
-  snapshot.source.sourceOrdinal = 1;
-  expect(snapshot, EncodePartitionEntryValidation::SourceOrdinalOutOfRange,
-         "out-of-range source ordinal is rejected");
+  snapshot.source.retainedSourceIndex = 1;
+  expect(snapshot,
+         EncodePartitionEntryValidation::RetainedSourceIndexOutOfRange,
+         "out-of-range retained source index is rejected");
 
   snapshot = fixture.snapshot;
   snapshot.source.seqId += 1;
@@ -375,6 +376,106 @@ void retainedSourceResolverRejectsEveryLocatorLayer() {
         "retained source range outside the slot is rejected");
 }
 
+void retainedSourceResolverUsesSegmentLocalArenaViews() {
+  dxmt9::core::SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.drawHotStates = 1;
+  capacity.drawShaderLayouts = 1;
+  capacity.drawDebugSnapshots = 1;
+  capacity.drawPsoSubviews = 1;
+  capacity.drawUniformFixedPayloads = 1;
+  capacity.drawUniformVertexConstants = 1;
+  capacity.drawUniformVertexConstantBytes =
+      sizeof(dxmt9::core::VertexShaderConstants);
+  capacity.drawUniformPixelConstants = 1;
+  capacity.drawUniformPixelConstantBytes =
+      sizeof(dxmt9::core::PixelShaderConstants);
+  capacity.drawUniformPayloads = 1;
+  capacity.drawParams = 1;
+  capacity.drawPayloadBytes =
+      sizeof(dxmt9::core::DrawBindingOverride) +
+      sizeof(dxmt9::core::DrawBindingSnapshot) +
+      alignof(dxmt9::core::DrawBindingSnapshot);
+  capacity.drawRunRecords = 1;
+  const auto layout =
+      dxmt9::core::makeSourcePayloadLayout(capacity, 4096, 8);
+  check(layout.has_value(), "segmented partition fixture layout builds");
+
+  std::array<dxmt9::core::ArenaSourcePayloadBlock, 2> blocks;
+  std::array<std::vector<std::max_align_t>, 2> backing;
+  for (std::size_t i = 0; i < blocks.size(); ++i) {
+    backing[i].resize(
+        (layout->usedBytes + sizeof(std::max_align_t) - 1) /
+        sizeof(std::max_align_t));
+    auto memory = std::span<std::byte>(
+        reinterpret_cast<std::byte*>(backing[i].data()),
+        backing[i].size() * sizeof(std::max_align_t));
+    dxmt9::core::DrawBindingOverride bindingOverride{};
+    bindingOverride.alphaTestStateValid = true;
+    bindingOverride.alphaTestRef = static_cast<dxmt9::core::u32>(i + 1);
+    dxmt9::core::DrawBindingSnapshot bindingSnapshot{};
+    bindingSnapshot.streamMask = static_cast<dxmt9::core::u32>(1u << i);
+    std::array<dxmt9::core::u8,
+               sizeof(dxmt9::core::DrawBindingOverride)> overrideBytes{};
+    std::array<dxmt9::core::u8,
+               sizeof(dxmt9::core::DrawBindingSnapshot)> snapshotBytes{};
+    std::memcpy(overrideBytes.data(), &bindingOverride, overrideBytes.size());
+    std::memcpy(snapshotBytes.data(), &bindingSnapshot, snapshotBytes.size());
+    dxmt9::core::DrawRunSubmission submission{
+        .state = dxmt9::core::CanonicalDrawState{},
+        .uniforms = dxmt9::core::DrawUniformPayload{},
+        .draw = dxmt9::core::DrawParam{},
+        .payload = {
+            .bindingOverrideData = overrideBytes,
+            .bindingSnapshotData = snapshotBytes,
+        },
+        .uniformGeneration = static_cast<std::uint64_t>(i + 1),
+    };
+    dxmt9::core::ArenaSourcePayloadBuilder builder(
+        blocks[i], *layout, memory.first(layout->usedBytes));
+    dxmt9::core::ArenaSourcePayloadAssembler assembler(builder);
+    check(assembler.tryAppendDrawRunBatch(
+              std::span<dxmt9::core::DrawRunSubmission>(&submission, 1)) &&
+              builder.publish(),
+          "each segment publishes one complete draw run");
+  }
+
+  const std::array<const dxmt9::core::ArenaSourcePayloadBlock*, 2> segments{
+      &blocks[0], &blocks[1]};
+  dxmt9::core::ArenaSourcePayloadChain chain;
+  check(chain.initialize(segments), "partition fixture chain initializes");
+  const dxmt9::core::CpuReadyTape::SourceRef tapeSource{
+      .id = {.index = 2, .generation = 17},
+      .storage = {.firstPage = 3, .pageCount = 2, .generation = 19},
+  };
+  const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
+      7, dxmt9::core::SourcePayloadView(chain), 41, 0, 2, false, {}, {},
+      tapeSource);
+  const auto target = stream.source.payload.commandAt(1).command;
+  check(target.drawRunRecord && target.drawParams.size() == 1,
+        "logical command one resolves directly into segment one");
+  EncodePartitionEntrySnapshot snapshot{};
+  check(dxmt9::encoders::buildEncodePartitionEntrySnapshot(
+            stream, 1, target.drawRunRecord->firstParam, snapshot),
+        "snapshot construction consumes segment-local command spans");
+  const std::array sources{stream.source};
+  const auto resolved = dxmt9::encoders::resolveEncodePartitionEntry(
+      snapshot, sources);
+  check(resolved && resolved.entry.slot == nullptr &&
+            resolved.entry.drawRunRecord == target.drawRunRecord &&
+            resolved.entry.drawParam == target.drawParams.data() &&
+            resolved.entry.bindingOverrideBytes.size() ==
+                sizeof(dxmt9::core::DrawBindingOverride) &&
+            resolved.entry.bindingSnapshotBytes.size() ==
+                sizeof(dxmt9::core::DrawBindingSnapshot),
+        "partition resolver needs no aggregate ChunkSlot or gathered arena");
+
+  chain.clear();
+  for (std::size_t i = blocks.size(); i != 0; --i) {
+    blocks[i - 1].destroyConstructed();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -385,6 +486,7 @@ int main() {
     partitionRangeSpanForwardsWithExistingOptions();
     retainedSourceResolverReturnsCallLocalViewsForValidMetadata();
     retainedSourceResolverRejectsEveryLocatorLayer();
+    retainedSourceResolverUsesSegmentLocalArenaViews();
   } catch (const std::exception& error) {
     std::cerr << "encode_partition_snapshot_spec: " << error.what() << '\n';
     return 1;

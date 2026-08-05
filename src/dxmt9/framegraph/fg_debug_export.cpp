@@ -154,12 +154,13 @@ std::string jsonEscape(std::string_view s) {
 }
 
 // Resolve the DEBUG-ONLY per-draw detail for one pass's DrawRange out of the
-// source ChunkSlot. Pure read: it walks fg.draws[first..first+count) (each a
-// DrawRef into the slot), re-resolves the draw run via slot.drawRunCommandAt,
-// and copies the cheaply-available hot fields. No geometry bytes are decoded;
+// source payload. Pure read: it walks fg.draws[first..first+count) (each a
+// source-local DrawRef), resolves the draw run through SourcePayloadView, and
+// copies the cheaply-available hot fields. No geometry bytes are decoded;
 // every value comes from the already-resolved hot/debug snapshot or per-ordinal
 // DrawParam. See SnapshotDraw in the header for the field-by-field source.
-void resolvePassDrawDetail(const FrameGraph& fg, const core::ChunkSlot& slot,
+void resolvePassDrawDetail(const FrameGraph& fg,
+                           core::SourcePayloadView payload,
                            const DrawRange& range,
                            std::vector<SnapshotDraw>& out) {
   const std::size_t first = range.first;
@@ -170,7 +171,7 @@ void resolvePassDrawDetail(const FrameGraph& fg, const core::ChunkSlot& slot,
   for (std::size_t d = first; d < last; ++d) {
     const DrawRef& ref = fg.draws[d];
     const core::MetalCommandView command =
-        slot.drawRunCommandAt(ref.command_index);
+        payload.commandAt(ref.command_index).command;
     const core::FlatDrawStateRecord* hot = command.drawState.hot;
     const core::DrawDebugSnapshot* debug = command.drawState.debug;
 
@@ -226,11 +227,12 @@ void resolvePassDrawDetail(const FrameGraph& fg, const core::ChunkSlot& slot,
 }  // namespace
 
 DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
-                          const char* stage, const core::ChunkSlot* slot) {
-  // DEBUG-ONLY per-draw detail is resolved only when a slot is supplied AND the
+                          const char* stage,
+                          core::SourcePayloadView payload) {
+  // DEBUG-ONLY per-draw detail is resolved only when a payload is supplied AND the
   // operator opted in. Reading the flag once here keeps the off-path zero-cost
   // (no draw walk, no allocation) and the JSON byte-identical to history.
-  const bool wantDraws = slot != nullptr && dumpDagDraws();
+  const bool wantDraws = payload.valid() && dumpDagDraws();
   DagSnapshot snap;
   snap.frame_id = fg.frame_id;
   snap.chunk_seq_id = chunk_seq_id;
@@ -256,7 +258,7 @@ DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
     sp.state_profile = p.state_profile;
     sp.load_store = p.load_store;
     if (wantDraws) {
-      resolvePassDrawDetail(fg, *slot, p.draws, sp.draws_detail);
+      resolvePassDrawDetail(fg, payload, p.draws, sp.draws_detail);
     }
     snap.passes.push_back(std::move(sp));
   }
@@ -289,6 +291,13 @@ DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
   }
 
   return snap;
+}
+
+DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
+                          const char* stage, const core::ChunkSlot* slot) {
+  return buildSnapshot(
+      fg, chunk_seq_id, stage,
+      slot ? core::SourcePayloadView(*slot) : core::SourcePayloadView{});
 }
 
 std::string serializeDagJson(const DagSnapshot& snapshot) {
@@ -458,6 +467,12 @@ std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
   return serializeDagJson(buildSnapshot(fg, chunk_seq_id, stage, slot));
 }
 
+std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
+                             const char* stage,
+                             core::SourcePayloadView payload) {
+  return serializeDagJson(buildSnapshot(fg, chunk_seq_id, stage, payload));
+}
+
 std::string serializeDagMermaid(const FrameGraph& fg) {
   return serializeDagMermaid(buildSnapshot(fg, 0, ""));
 }
@@ -621,13 +636,17 @@ std::optional<OptimizerOptions> dumpDagOptimizeOverride() {
   return value;
 }
 
-bool chunkContainsPresent(const core::ChunkSlot& slot) {
-  for (const auto& header : slot.commandHeaders) {
-    if (header.kind == core::MetalCommandKind::Present) {
+bool chunkContainsPresent(core::SourcePayloadView payload) {
+  for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+    if (payload.commandAt(i).kind() == core::MetalCommandKind::Present) {
       return true;
     }
   }
   return false;
+}
+
+bool chunkContainsPresent(const core::ChunkSlot& slot) {
+  return chunkContainsPresent(core::SourcePayloadView(slot));
 }
 
 namespace {
@@ -648,7 +667,7 @@ const char* formatExtension(DumpFormat fmt) {
 
 void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
                   std::uint64_t chunk_seq_id, const char* stage,
-                  const core::ChunkSlot* slot) {
+                  core::SourcePayloadView payload) {
   const std::optional<std::string> dir = dumpDagDir();
   if (!dir.has_value()) {
     return;
@@ -660,9 +679,9 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
       resolveDumpFormats(std::getenv("DXMT9_RENDERER_DUMP_DAG_FORMATS"));
 
   // One field-walk, reused by every selected format (R-BACK-39.7). The optional
-  // per-draw detail is resolved inside buildSnapshot only when slot != nullptr
+  // per-draw detail is resolved inside buildSnapshot only when payload is valid
   // AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set (DEBUG-ONLY; JSON-only).
-  const DagSnapshot snapshot = buildSnapshot(fg, chunk_seq_id, stage, slot);
+  const DagSnapshot snapshot = buildSnapshot(fg, chunk_seq_id, stage, payload);
 
   const std::string stageStr = stage ? std::string(stage) : std::string();
 
@@ -707,6 +726,14 @@ void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
       return;  // never fail a render; subsequent dumps are skipped silently
     }
   }
+}
+
+void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
+                  std::uint64_t chunk_seq_id, const char* stage,
+                  const core::ChunkSlot* slot) {
+  writeDagDump(
+      fg, frame_id, chunk_seq_id, stage,
+      slot ? core::SourcePayloadView(*slot) : core::SourcePayloadView{});
 }
 
 }  // namespace dxmt9::framegraph

@@ -18,61 +18,44 @@ bool rangeEquals(core::DrawPayloadRange lhs,
   return lhs.offset == rhs.offset && lhs.size == rhs.size;
 }
 
-bool absolutePayloadRange(const core::DrawRunCommandRecord& record,
-                          core::DrawPayloadRange relative,
-                          std::size_t arenaSize,
-                          std::size_t schemaSize,
-                          core::DrawPayloadRange& absolute) noexcept {
+bool resolvePayloadRange(
+    const core::DrawRunCommandRecord& record,
+    core::DrawPayloadRange relative,
+    std::span<const core::u8> commandPayload,
+    std::size_t schemaSize,
+    core::DrawPayloadRange& absolute,
+    std::span<const core::u8>& bytes) noexcept {
   if (relative.empty()) {
     absolute = {};
+    bytes = {};
     return true;
   }
   if (relative.size != schemaSize ||
       relative.offset > record.payloadSize ||
       relative.size > record.payloadSize - relative.offset ||
-      record.payloadOffset > arenaSize ||
-      record.payloadSize > arenaSize - record.payloadOffset) {
+      commandPayload.size() != record.payloadSize) {
     return false;
   }
 
   const std::uint64_t offset =
       static_cast<std::uint64_t>(record.payloadOffset) + relative.offset;
   if (offset > std::numeric_limits<std::uint32_t>::max() ||
-      offset > arenaSize || relative.size > arenaSize - offset) {
+      relative.offset > commandPayload.size() ||
+      relative.size > commandPayload.size() - relative.offset) {
     return false;
   }
   absolute = core::DrawPayloadRange{
       .offset = static_cast<std::uint32_t>(offset),
       .size = relative.size,
   };
+  bytes = commandPayload.subspan(relative.offset, relative.size);
   return true;
-}
-
-std::span<const core::u8> payloadBytes(
-    const core::ChunkSlot& slot,
-    core::DrawPayloadRange range) noexcept {
-  if (range.empty()) {
-    return {};
-  }
-  return std::span<const core::u8>(slot.drawPayloadArena.data() + range.offset,
-                                   range.size);
-}
-
-std::span<const core::u8> payloadBytes(
-    core::SourcePayloadView payload,
-    core::DrawPayloadRange range) noexcept {
-  const auto arena = payload.drawPayloadBytes();
-  if (range.empty() || range.offset > arena.size() ||
-      range.size > arena.size() - range.offset) {
-    return {};
-  }
-  return arena.subspan(range.offset, range.size);
 }
 
 bool snapshotForResolvedDrawParam(
     const EncodePartitionReplayStream& stream,
     std::uint32_t commandIndex,
-    const core::MetalCommandView& command,
+    const core::SourceCommandView& sourceCommand,
     std::uint32_t drawParamIndex,
     EncodePartitionEntrySnapshot& snapshot,
     ResolvedEncodePartitionEntry& resolved) noexcept {
@@ -95,6 +78,7 @@ bool snapshotForResolvedDrawParam(
       commandIndex >= sourceCommandEnd) {
     return false;
   }
+  const auto& command = sourceCommand.command;
   if (command.kind != core::MetalCommandKind::DrawRun ||
       !command.drawRunRecord || !command.drawState.hot ||
       !command.drawState.shaderLayout || !command.drawState.debug ||
@@ -102,19 +86,17 @@ bool snapshotForResolvedDrawParam(
     return false;
   }
   const auto& record = *command.drawRunRecord;
-  const auto drawParams = payload.drawParams();
-  if (record.firstParam > drawParams.size() ||
-      record.paramCount > drawParams.size() - record.firstParam ||
-      command.drawParams.size() != record.paramCount ||
+  if (command.drawParams.size() != record.paramCount ||
       drawParamIndex < record.firstParam ||
       drawParamIndex - record.firstParam >= record.paramCount ||
-      drawParamIndex >= drawParams.size()) {
+      drawParamIndex - record.firstParam >= command.drawParams.size()) {
     return false;
   }
-  const auto& param = drawParams[drawParamIndex];
+  const auto& param =
+      command.drawParams[drawParamIndex - record.firstParam];
   const core::DrawUniformHandle uniformHandle =
       param.uniformHandle.valid() ? param.uniformHandle : record.uniformHandle;
-  const auto uniforms = payload.drawUniformPayloads();
+  const auto uniforms = command.drawUniformPayloadRecords;
   const auto* uniform = uniformHandle.valid() &&
                                 uniformHandle.index < uniforms.size() &&
                                 uniforms[uniformHandle.index].handle ==
@@ -126,17 +108,19 @@ bool snapshotForResolvedDrawParam(
   }
 
   core::DrawPayloadRange bindingOverrideBytes{};
-  if (!absolutePayloadRange(record, param.bindingOverrideRange,
-                            payload.drawPayloadBytes().size(),
-                            sizeof(core::DrawBindingOverride),
-                            bindingOverrideBytes)) {
+  std::span<const core::u8> bindingOverrideView{};
+  if (!resolvePayloadRange(record, param.bindingOverrideRange,
+                           command.drawPayloadBytes,
+                           sizeof(core::DrawBindingOverride),
+                           bindingOverrideBytes, bindingOverrideView)) {
     return false;
   }
   core::DrawPayloadRange bindingSnapshotBytes{};
-  if (!absolutePayloadRange(record, param.bindingSnapshotRange,
-                            payload.drawPayloadBytes().size(),
-                            sizeof(core::DrawBindingSnapshot),
-                            bindingSnapshotBytes)) {
+  std::span<const core::u8> bindingSnapshotView{};
+  if (!resolvePayloadRange(record, param.bindingSnapshotRange,
+                           command.drawPayloadBytes,
+                           sizeof(core::DrawBindingSnapshot),
+                           bindingSnapshotBytes, bindingSnapshotView)) {
     return false;
   }
 
@@ -146,16 +130,12 @@ bool snapshotForResolvedDrawParam(
               .id = stream.source.sourceId,
               .storage = stream.source.storage,
           },
-          .sourceOrdinal = 0,
+          .retainedSourceIndex = 0,
           .slotIndex = static_cast<std::uint32_t>(stream.source.slotIndex),
           .seqId = stream.source.seqId,
       },
       .commandIndex = commandIndex,
-      .drawRunRecordIndex = stream.source.slot
-                                ? stream.source.slot
-                                      ->commandHeaders[commandIndex]
-                                      .payloadIndex.value
-                                : 0,
+      .drawRunRecordIndex = sourceCommand.payloadIndex,
       .stateIndex = record.stateIndex,
       .drawParamIndex = drawParamIndex,
       .uniformHandle = uniformHandle,
@@ -169,8 +149,8 @@ bool snapshotForResolvedDrawParam(
       .drawState = command.drawState,
       .drawParam = &param,
       .uniform = uniform,
-      .bindingOverrideBytes = payloadBytes(payload, bindingOverrideBytes),
-      .bindingSnapshotBytes = payloadBytes(payload, bindingSnapshotBytes),
+      .bindingOverrideBytes = bindingOverrideView,
+      .bindingSnapshotBytes = bindingSnapshotView,
   };
   return true;
 }
@@ -186,7 +166,7 @@ bool snapshotForDrawParam(
       !stream.commandIndexAt(replayOrdinal, commandIndex)) {
     return false;
   }
-  const auto command = stream.source.payload.commandAt(commandIndex).command;
+  const auto command = stream.source.payload.commandAt(commandIndex);
   return snapshotForResolvedDrawParam(stream, commandIndex, command,
                                       drawParamIndex, snapshot, resolved);
 }
@@ -195,7 +175,7 @@ EncodePartitionRangeValidationResult rejectRange(
     EncodePartitionRangeValidation validation,
     std::size_t rangeIndex,
     EncodePartitionEntryValidation entryValidation =
-        EncodePartitionEntryValidation::SourceOrdinalOutOfRange) noexcept {
+        EncodePartitionEntryValidation::RetainedSourceIndexOutOfRange) noexcept {
   return EncodePartitionRangeValidationResult{
       .validation = validation,
       .entryValidation = entryValidation,
@@ -208,28 +188,31 @@ EncodePartitionRangeValidationResult rejectRange(
 EncodePartitionEntryResolution resolveEncodePartitionEntry(
     const EncodePartitionEntrySnapshot& snapshot,
     std::span<const core::metalqueue::ResolvedPublishedSource> sources) noexcept {
-  if (snapshot.source.sourceOrdinal >= sources.size()) {
-    return reject(Validation::SourceOrdinalOutOfRange);
+  if (snapshot.source.retainedSourceIndex >= sources.size()) {
+    return reject(Validation::RetainedSourceIndexOutOfRange);
   }
 
-  const auto& source = sources[snapshot.source.sourceOrdinal];
+  const auto& source = sources[snapshot.source.retainedSourceIndex];
   const core::CpuReadyTape::SourceRef resolvedSource{
       .id = source.sourceId,
       .storage = source.storage,
   };
   const core::ChunkSlot* slot = source.slot;
   if (!snapshot.source.tapeSource.valid() || !resolvedSource.valid() ||
-      !slot || source.sourceId != snapshot.source.tapeSource.id ||
+      !source.payload.valid() ||
+      source.sourceId != snapshot.source.tapeSource.id ||
       source.storage != snapshot.source.tapeSource.storage ||
       source.slotIndex != snapshot.source.slotIndex ||
       source.seqId == 0 || source.seqId != snapshot.source.seqId ||
-      slot->seqId != snapshot.source.seqId) {
+      (slot && (slot->seqId != snapshot.source.seqId ||
+                source.payload.legacyPayload() != slot))) {
     return reject(Validation::SourceIdentityMismatch);
   }
 
-  const std::size_t slotCommandCount = slot->commandCount();
-  if (source.commandBegin > slotCommandCount ||
-      source.commandCount > slotCommandCount - source.commandBegin) {
+  const std::size_t sourcePayloadCommandCount = source.payload.commandCount();
+  if (source.commandBegin > sourcePayloadCommandCount ||
+      source.commandCount >
+          sourcePayloadCommandCount - source.commandBegin) {
     return reject(Validation::SourceCommandRangeInvalid);
   }
   const std::size_t sourceCommandEnd =
@@ -239,16 +222,13 @@ EncodePartitionEntryResolution resolveEncodePartitionEntry(
     return reject(Validation::CommandIndexOutOfRange);
   }
 
-  const auto command = slot->commandAt(snapshot.commandIndex);
+  const auto sourceCommand = source.payload.commandAt(snapshot.commandIndex);
+  const auto& command = sourceCommand.command;
   if (command.kind != core::MetalCommandKind::DrawRun ||
       !command.drawRunRecord) {
     return reject(Validation::CommandIsNotDrawRun);
   }
-  const auto& header = slot->commandHeaders[snapshot.commandIndex];
-  if (header.payloadIndex.value != snapshot.drawRunRecordIndex ||
-      snapshot.drawRunRecordIndex >= slot->drawRunRecords.size() ||
-      command.drawRunRecord !=
-          &slot->drawRunRecords[snapshot.drawRunRecordIndex]) {
+  if (sourceCommand.payloadIndex != snapshot.drawRunRecordIndex) {
     return reject(Validation::DrawRunRecordMismatch);
   }
 
@@ -260,31 +240,41 @@ EncodePartitionEntryResolution resolveEncodePartitionEntry(
   }
   if (snapshot.drawParamIndex < record.firstParam ||
       snapshot.drawParamIndex - record.firstParam >= record.paramCount ||
-      snapshot.drawParamIndex >= slot->drawParams.size()) {
+      snapshot.drawParamIndex - record.firstParam >=
+          command.drawParams.size()) {
     return reject(Validation::DrawParamIndexMismatch);
   }
 
-  const auto& param = slot->drawParams[snapshot.drawParamIndex];
+  const auto& param = command.drawParams[
+      snapshot.drawParamIndex - record.firstParam];
   const core::DrawUniformHandle effectiveUniform =
       param.uniformHandle.valid() ? param.uniformHandle : record.uniformHandle;
-  const auto* uniform = slot->drawUniformPayloadRecord(effectiveUniform);
+  const auto uniforms = command.drawUniformPayloadRecords;
+  const auto* uniform = effectiveUniform.valid() &&
+                                effectiveUniform.index < uniforms.size() &&
+                                uniforms[effectiveUniform.index].handle ==
+                                    effectiveUniform
+                            ? &uniforms[effectiveUniform.index]
+                            : nullptr;
   if (!uniform || !(effectiveUniform == snapshot.uniformHandle)) {
     return reject(Validation::UniformHandleMismatch);
   }
 
   core::DrawPayloadRange bindingOverrideBytes{};
-  if (!absolutePayloadRange(record, param.bindingOverrideRange,
-                            slot->drawPayloadArena.size(),
-                            sizeof(core::DrawBindingOverride),
-                            bindingOverrideBytes) ||
+  std::span<const core::u8> bindingOverrideView{};
+  if (!resolvePayloadRange(record, param.bindingOverrideRange,
+                           command.drawPayloadBytes,
+                           sizeof(core::DrawBindingOverride),
+                           bindingOverrideBytes, bindingOverrideView) ||
       !rangeEquals(bindingOverrideBytes, snapshot.bindingOverrideBytes)) {
     return reject(Validation::BindingOverrideRangeMismatch);
   }
   core::DrawPayloadRange bindingSnapshotBytes{};
-  if (!absolutePayloadRange(record, param.bindingSnapshotRange,
-                            slot->drawPayloadArena.size(),
-                            sizeof(core::DrawBindingSnapshot),
-                            bindingSnapshotBytes) ||
+  std::span<const core::u8> bindingSnapshotView{};
+  if (!resolvePayloadRange(record, param.bindingSnapshotRange,
+                           command.drawPayloadBytes,
+                           sizeof(core::DrawBindingSnapshot),
+                           bindingSnapshotBytes, bindingSnapshotView) ||
       !rangeEquals(bindingSnapshotBytes, snapshot.bindingSnapshotBytes)) {
     return reject(Validation::BindingSnapshotRangeMismatch);
   }
@@ -298,8 +288,8 @@ EncodePartitionEntryResolution resolveEncodePartitionEntry(
           .drawState = command.drawState,
           .drawParam = &param,
           .uniform = uniform,
-          .bindingOverrideBytes = payloadBytes(*slot, bindingOverrideBytes),
-          .bindingSnapshotBytes = payloadBytes(*slot, bindingSnapshotBytes),
+          .bindingOverrideBytes = bindingOverrideView,
+          .bindingSnapshotBytes = bindingSnapshotView,
       },
   };
 }
@@ -466,8 +456,13 @@ EncodePartitionResolution resolveEncodePartition(
       static_cast<std::uint64_t>(record.firstParam) + record.paramCount;
   if (drawEnd > std::numeric_limits<std::uint32_t>::max() ||
       runEnd > std::numeric_limits<std::uint32_t>::max() ||
-      drawEnd > runEnd || !entry.entry.slot ||
-      drawEnd > entry.entry.slot->drawParams.size()) {
+      drawEnd > runEnd ||
+      range.entry.drawParamIndex < record.firstParam ||
+      range.entry.drawParamIndex - record.firstParam >
+          entry.entry.command.drawParams.size() ||
+      range.drawEntryCount >
+          entry.entry.command.drawParams.size() -
+              (range.entry.drawParamIndex - record.firstParam)) {
     return EncodePartitionResolution{
         .validation = EncodePartitionRangeValidation::DrawEntryOverflow,
         .entryValidation = EncodePartitionEntryValidation::Valid,
@@ -479,9 +474,8 @@ EncodePartitionResolution resolveEncodePartition(
       .entryValidation = EncodePartitionEntryValidation::Valid,
       .partition = ResolvedEncodePartition{
           .entry = entry.entry,
-          .drawParams = std::span<const core::DrawParam>(
-              entry.entry.slot->drawParams.data() +
-                  range.entry.drawParamIndex,
+          .drawParams = entry.entry.command.drawParams.subspan(
+              range.entry.drawParamIndex - record.firstParam,
               range.drawEntryCount),
       },
   };
@@ -640,14 +634,15 @@ bool EncodePartitionIdentityCursor::next(
 
   std::uint32_t commandIndex = 0;
   if (stream_->commandIndexAt(replayOrdinal_, commandIndex)) {
-    const auto command =
-        stream_->source.payload.commandAt(commandIndex).command;
+    const auto sourceCommand =
+        stream_->source.payload.commandAt(commandIndex);
+    const auto& command = sourceCommand.command;
     EncodePartitionEntrySnapshot entry{};
     ResolvedEncodePartitionEntry resolved{};
     if (command.kind == core::MetalCommandKind::DrawRun &&
         command.drawRunRecord && command.drawRunRecord->paramCount != 0u &&
         snapshotForResolvedDrawParam(
-            *stream_, commandIndex, command,
+            *stream_, commandIndex, sourceCommand,
             command.drawRunRecord->firstParam, entry, resolved)) {
       range = EncodePartitionRangeSnapshot{
           .kind = EncodePartitionRangeKind::DrawRunEntries,
@@ -669,14 +664,15 @@ bool EncodePartitionIdentityCursor::next(
   while (replayOrdinal_ < stream_->replayOrdinalCount()) {
     std::uint32_t nextCommandIndex = 0;
     if (stream_->commandIndexAt(replayOrdinal_, nextCommandIndex)) {
-      const auto next =
-          stream_->source.payload.commandAt(nextCommandIndex).command;
+      const auto nextSourceCommand =
+          stream_->source.payload.commandAt(nextCommandIndex);
+      const auto& next = nextSourceCommand.command;
       EncodePartitionEntrySnapshot entry{};
       ResolvedEncodePartitionEntry resolved{};
       if (next.kind == core::MetalCommandKind::DrawRun &&
           next.drawRunRecord && next.drawRunRecord->paramCount != 0u &&
           snapshotForResolvedDrawParam(
-              *stream_, nextCommandIndex, next,
+              *stream_, nextCommandIndex, nextSourceCommand,
               next.drawRunRecord->firstParam, entry, resolved)) {
         pendingRange_ = EncodePartitionRangeSnapshot{
             .kind = EncodePartitionRangeKind::DrawRunEntries,

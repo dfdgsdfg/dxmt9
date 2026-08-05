@@ -30,10 +30,14 @@ struct CommandQueueArenaLeaseTestAccess {
     bool dequeued = false;
     bool arena = false;
     bool clear = false;
+    bool finalPresent = false;
     bool submitted = false;
     bool completed = false;
     bool reclaimed = false;
     std::uint64_t seqId = 0;
+    std::size_t commandCount = 0;
+    std::size_t arenaSegmentCount = 0;
+    core::Handle presentSource{};
   };
 
   static std::uint64_t nextSeqId(CommandQueue& queue) {
@@ -71,9 +75,21 @@ struct CommandQueueArenaLeaseTestAccess {
           queue.queueLifecycle_.resolveRepresentedSource(source);
       result.arena = resolved.valid() && resolved.payload.isArena() &&
                      resolved.slot == nullptr;
+      result.commandCount = resolved.payload.commandCount();
+      result.arenaSegmentCount = resolved.payload.arenaSegmentCount();
       result.clear = result.arena && resolved.payload.commandCount() == 1u &&
                      resolved.payload.commandAt(0).kind() ==
                          core::MetalCommandKind::Clear;
+      result.finalPresent = result.arena && result.commandCount != 0 &&
+          resolved.payload.commandAt(result.commandCount - 1u).kind() ==
+              core::MetalCommandKind::Present;
+      if (result.finalPresent) {
+        const auto present =
+            resolved.payload.commandAt(result.commandCount - 1u).command.present;
+        if (present) {
+          result.presentSource = present->presentSource;
+        }
+      }
 
       QueueSubmissionRecord record{};
       record.testOnlyAllowNullCommandBuffer = true;
@@ -204,17 +220,29 @@ WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
   return fixture;
 }
 
-RecordSpec clearRecord() {
-  return {
+RecordSpec clearRecord(std::uint32_t rectCount = 0) {
+  const D9CCommandChunkWireClearV2 clear{
+      .flags = 1u,
+      .colorARGB = 0xff123456u,
+      .z = 1.0f,
+      .stencil = 0,
+      .rectCount = rectCount,
+      .rectOffset = sizeof(D9CCommandChunkWireClearV2),
+  };
+  RecordSpec record{
       .type = D9C_COMMAND_RECORD_CLEAR,
-      .payload = bytesOf(D9CCommandChunkWireClearV2{
-          .flags = 1u,
-          .colorARGB = 0xff123456u,
-          .z = 1.0f,
-          .stencil = 0,
-          .rectCount = 0,
-          .rectOffset = sizeof(D9CCommandChunkWireClearV2),
-      }),
+  };
+  record.payload.resize(sizeof(clear) +
+                        static_cast<std::size_t>(rectCount) *
+                            sizeof(D9CRect));
+  std::memcpy(record.payload.data(), &clear, sizeof(clear));
+  return record;
+}
+
+RecordSpec presentRecord() {
+  return {
+      .type = D9C_COMMAND_RECORD_PRESENT,
+      .payload = bytesOf(D9CCommandChunkWirePresentV2{}),
   };
 }
 
@@ -360,12 +388,19 @@ struct RoutingDevice final : dxmt9::Device {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
 
+  void present(const SwapDesc& desc) override {
+    ++presentCalls;
+    lastPresentSeqId = queue_.submitPresent(desc);
+  }
+
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
   bool rejectAfterClear_ = false;
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
+  std::atomic<std::uint32_t> presentCalls{0};
+  std::uint64_t lastPresentSeqId = 0;
   std::uint32_t captureCalls = 0;
   std::uint32_t legacyMarkCalls = 0;
   std::uint64_t capturedBufferLastUsedSeq = UINT64_MAX;
@@ -435,6 +470,39 @@ void directRawPublishesAndCompletesArenaSource() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
             fixture.routing->queue_) == 0,
         "completed Direct source must release Tape residency");
+}
+
+void segmentedPresentRawPublishesOneLogicalSourceAndCompletion() {
+  RuntimeFixture fixture;
+  // 17K D3D rects make the first indivisible Clear exceed the ordinary
+  // 64-page block cap. Present is the final raw record and therefore becomes
+  // the second planned block while the Tape publishes one logical source.
+  const std::array records{clearRecord(17000), presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 1);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  check(hr == D3D_OK && fixture.routing->clearCalls == 1 &&
+            fixture.routing->presentCalls == 1 &&
+            fixture.routing->lastPresentSeqId == 1,
+        "segmented Direct replay applies Clear and final Present exactly "
+        "once at the reserved seq");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 1 &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == 2,
+        "segmented Direct replay publishes one Ready source and consumes one "
+        "queue sequence");
+
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && completion.arena &&
+            completion.arenaSegmentCount == 2 &&
+            completion.commandCount == 2 && completion.finalPresent &&
+            completion.presentSource.value != 0 &&
+            completion.submitted && completion.completed &&
+            completion.reclaimed && completion.seqId == 1,
+        "two Arena blocks resolve as one ordered Clear/Present source with "
+        "one completion identity");
 }
 
 void productionGateIsExplicitAndDefaultOff() {
@@ -552,8 +620,12 @@ void workerPressureWaitResumesAfterActiveLeasePublishes() {
   capacity.commandHeaders = 1;
   capacity.clearRecords = 1;
   const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
-  const auto layout = makeSourcePayloadLayout(
-      capacity, limits.pageSize, limits.maxPages);
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "pressure fixture arena segment must build");
+  const std::array segments{*segment};
+  const auto layout = makeArenaSourcePayloadLayout(
+      segments, limits.pageSize, limits.maxPagesPerSource);
   check(layout.has_value(), "pressure fixture arena layout must build");
   auto active = fixture.routing->queue_.beginCpuReadyArenaSource(1, *layout);
   check(active.has_value(), "pressure fixture must hold one active lease");
@@ -608,6 +680,7 @@ int main() {
   try {
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
+    segmentedPresentRawPublishesOneLogicalSourceAndCompletion();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();

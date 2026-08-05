@@ -50,6 +50,7 @@
 // DETERMINISM (R-BACK-32.2): pure walk over the graph; no clock/thread/RNG.
 
 #include "fg_dag.hpp"
+#include "../dxmt9_source_payload.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -126,6 +127,8 @@ void planLinearization(const FrameGraph& graph, LinearizationPlan& out);
 // DCE-dead pass and every command kind still matches the source header. With no
 // dead passes this remains a complete duplicate-free permutation; DCE produces
 // a validated ordered subset and sets `dropped`.
+ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
+                                     core::SourcePayloadView payload);
 ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
                                      const core::ChunkSlot& slot);
 

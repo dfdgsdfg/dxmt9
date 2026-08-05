@@ -271,8 +271,58 @@ struct SourcePayloadLayout {
   }
 };
 
+inline constexpr std::size_t kMaxArenaSourcePayloadSegments = 8;
+
+struct ArenaSourcePayloadSegmentLayout {
+  SourcePayloadLayout layout{};
+  std::size_t byteOffset = 0;
+};
+
+// One logical source may contain several independently indexed payload blocks
+// packed into one final Tape extent. Segment boundaries are storage details:
+// command indices remain logical-source-relative and completion still names
+// the single source/ticket that owns the complete extent.
+struct ArenaSourcePayloadLayout {
+  std::array<ArenaSourcePayloadSegmentLayout,
+             kMaxArenaSourcePayloadSegments> segments{};
+  std::size_t segmentCount = 0;
+  std::size_t usedBytes = 0;
+  std::size_t pageCount = 0;
+
+  bool valid() const noexcept {
+    if (segmentCount == 0 ||
+        segmentCount > kMaxArenaSourcePayloadSegments ||
+        usedBytes == 0 || pageCount == 0) {
+      return false;
+    }
+    std::size_t cursor = 0;
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      const auto& segment = segments[i];
+      const std::size_t alignment =
+          segment.layout.requiredBaseAlignment;
+      if (segment.layout.usedBytes == 0 ||
+          segment.layout.pageCount == 0 || alignment == 0 ||
+          (alignment & (alignment - 1)) != 0 ||
+          segment.byteOffset < cursor ||
+          segment.byteOffset % alignment != 0 ||
+          segment.layout.usedBytes >
+              std::numeric_limits<std::size_t>::max() -
+                  segment.byteOffset) {
+        return false;
+      }
+      cursor = segment.byteOffset + segment.layout.usedBytes;
+    }
+    return cursor == usedBytes;
+  }
+};
+
 std::optional<SourcePayloadLayout> makeSourcePayloadLayout(
     const SourcePayloadCapacity& capacity,
+    std::size_t pageSize,
+    std::size_t maxPages = std::numeric_limits<std::size_t>::max()) noexcept;
+
+std::optional<ArenaSourcePayloadLayout> makeArenaSourcePayloadLayout(
+    std::span<const SourcePayloadLayout> segments,
     std::size_t pageSize,
     std::size_t maxPages = std::numeric_limits<std::size_t>::max()) noexcept;
 
@@ -304,6 +354,7 @@ class ArenaSourcePayloadBlock {
 
  private:
   friend class ArenaSourcePayloadBuilder;
+  friend class ArenaSourcePayloadChain;
   friend class SourcePayloadView;
   friend struct ArenaSourcePayloadBlockTestAccess;
 
@@ -349,6 +400,37 @@ class ArenaSourcePayloadBlock {
   bool bound_ = false;
   bool published_ = false;
   bool destroyed_ = false;
+};
+
+// Queue-owned immutable locator table for the payload blocks of one logical
+// source. It owns no payload storage. initialize() is called only while the
+// source is unpublished; after Ready visibility the table stays immutable
+// until ordered reclaim clears it.
+class ArenaSourcePayloadChain {
+ public:
+  bool initialize(
+      std::span<const ArenaSourcePayloadBlock* const> segments) noexcept;
+  void clear() noexcept;
+
+  bool readable() const noexcept { return readable_; }
+  std::size_t segmentCount() const noexcept { return segmentCount_; }
+  std::size_t commandCount() const noexcept {
+    return commandOffsets_[segmentCount_];
+  }
+  const ArenaSourcePayloadBlock* segment(std::size_t index) const noexcept {
+    return index < segmentCount_ ? segments_[index] : nullptr;
+  }
+  bool locateCommand(std::size_t logicalCommandIndex,
+                     std::size_t& segmentIndex,
+                     std::size_t& localCommandIndex) const noexcept;
+
+ private:
+  std::array<const ArenaSourcePayloadBlock*,
+             kMaxArenaSourcePayloadSegments> segments_{};
+  std::array<std::size_t, kMaxArenaSourcePayloadSegments + 1>
+      commandOffsets_{};
+  std::size_t segmentCount_ = 0;
+  bool readable_ = false;
 };
 
 class ArenaSourcePayloadBuilder {
@@ -490,6 +572,9 @@ struct ClearCommandView {
 struct SourceCommandView {
   MetalCommandView command{};
   std::optional<ClearCommandView> clear{};
+  std::uint32_t payloadIndex = 0;
+  std::size_t segmentIndex = 0;
+  std::size_t localCommandIndex = 0;
 
   MetalCommandKind kind() const noexcept { return command.kind; }
 };
@@ -505,12 +590,36 @@ class SourcePayloadView {
       : legacy_(&legacy) {}
   explicit SourcePayloadView(const ArenaSourcePayloadBlock& arena) noexcept
       : arena_(arena.readable() ? &arena : nullptr) {}
+  explicit SourcePayloadView(const ArenaSourcePayloadChain& arena) noexcept
+      : arenaChain_(arena.readable() ? &arena : nullptr) {}
 
-  bool valid() const noexcept { return legacy_ != nullptr || arena_ != nullptr; }
+  bool valid() const noexcept {
+    return legacy_ != nullptr || arena_ != nullptr || arenaChain_ != nullptr;
+  }
   bool isLegacy() const noexcept { return legacy_ != nullptr; }
-  bool isArena() const noexcept { return arena_ != nullptr; }
+  bool isArena() const noexcept {
+    return arena_ != nullptr || arenaChain_ != nullptr;
+  }
   const ChunkSlot* legacyPayload() const noexcept { return legacy_; }
-  const ArenaSourcePayloadBlock* arenaPayload() const noexcept { return arena_; }
+  const ArenaSourcePayloadBlock* arenaPayload() const noexcept {
+    return arena_ ? arena_
+                  : arenaChain_ && arenaChain_->segmentCount() == 1
+                        ? arenaChain_->segment(0)
+                        : nullptr;
+  }
+  std::size_t arenaSegmentCount() const noexcept {
+    return arena_ ? 1u : arenaChain_ ? arenaChain_->segmentCount() : 0u;
+  }
+  SourcePayloadView arenaSegment(std::size_t index) const noexcept {
+    if (arena_ && index == 0) {
+      return SourcePayloadView(*arena_);
+    }
+    const auto* segment = arenaChain_ ? arenaChain_->segment(index) : nullptr;
+    return segment ? SourcePayloadView(*segment) : SourcePayloadView{};
+  }
+  bool locateCommand(std::size_t logicalCommandIndex,
+                     std::size_t& segmentIndex,
+                     std::size_t& localCommandIndex) const noexcept;
   friend bool operator==(const SourcePayloadView&,
                          const SourcePayloadView&) = default;
   std::size_t commandCount() const noexcept;
@@ -528,6 +637,7 @@ class SourcePayloadView {
  private:
   const ChunkSlot* legacy_ = nullptr;
   const ArenaSourcePayloadBlock* arena_ = nullptr;
+  const ArenaSourcePayloadChain* arenaChain_ = nullptr;
 };
 
 }  // namespace dxmt9::core

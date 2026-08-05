@@ -5327,8 +5327,7 @@ struct PassState {
   // R-BACK-13.1 / 13.6: current render encoder's chosen FFP path.
   bool activePassUsesTileFfp = false;
   std::optional<core::ClearDesc> pendingClear;
-  std::size_t pendingClearCommandIndex =
-      std::numeric_limits<std::size_t>::max();
+  core::metalqueue::PublishedCommandRef pendingClearCommand{};
   // R-BACK-15.4: color attachment handles bound on the active render encoder.
   std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
 };
@@ -5415,6 +5414,15 @@ bool storageHasDeferredSubmissionPayload(
          storage.diagnostics.metalCaptureRequest.has_value() ||
          static_cast<bool>(storage.diagnostics.renderEncoderGpuSampleBuffer) ||
          !storage.diagnostics.renderEncoderGpuSamples.empty();
+}
+
+std::optional<core::metalqueue::PublishedCommandRef>
+storagePendingClearCommand(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  if (!storage.pass.pendingClear.has_value()) {
+    return std::nullopt;
+  }
+  return storage.pass.pendingClearCommand;
 }
 
 }  // namespace encode_session
@@ -9230,13 +9238,31 @@ public:
   LifecycleRuntime(EncodeContext& ctx,
                    EncodeChunkSessionStorage& storage,
                    EncodeCallState& call,
+                   core::CpuReadyTape::SourceRef source,
                    u64 seqId,
                    std::size_t slotIndex)
       : ctx_(ctx),
         storage_(storage),
         call_(call),
+        source_(source),
         seqId_(seqId),
         slotIndex_(slotIndex) {}
+
+  core::metalqueue::PublishedCommandRef commandRef(
+      std::size_t commandIndex) const noexcept {
+    return core::metalqueue::PublishedCommandRef{
+        .source = source_,
+        .seqId = seqId_,
+        .slotIndex =
+            slotIndex_ <= std::numeric_limits<std::uint32_t>::max()
+                ? static_cast<std::uint32_t>(slotIndex_)
+                : std::numeric_limits<std::uint32_t>::max(),
+        .commandIndex =
+            commandIndex <= std::numeric_limits<std::uint32_t>::max()
+                ? static_cast<std::uint32_t>(commandIndex)
+                : std::numeric_limits<std::uint32_t>::max(),
+    };
+  }
 
   void assertEncoderLifecycleInvariant() const {
     DXMT_ASSERT(!(storage_.encoder.activeRenderEncoder &&
@@ -9256,6 +9282,16 @@ public:
   RenderEncoderGpuAttachment makeRenderEncoderGpuAttachment(
       core::metalqueue::RenderEncoderGpuPassType passType,
       std::size_t commandIndex,
+      std::uint64_t rtHandle,
+      std::uint64_t depthHandle,
+      std::uint64_t psoHandle = 0) {
+    return makeRenderEncoderGpuAttachment(
+        passType, commandRef(commandIndex), rtHandle, depthHandle, psoHandle);
+  }
+
+  RenderEncoderGpuAttachment makeRenderEncoderGpuAttachment(
+      core::metalqueue::RenderEncoderGpuPassType passType,
+      core::metalqueue::PublishedCommandRef command,
       std::uint64_t rtHandle,
       std::uint64_t depthHandle,
       std::uint64_t psoHandle = 0) {
@@ -9280,15 +9316,10 @@ public:
             .startIndex = startSample,
             .endIndex = endSample,
             .passType = passType,
-            .seqId = seqId_,
-            .slotIndex =
-                slotIndex_ <= std::numeric_limits<std::uint32_t>::max()
-                    ? static_cast<std::uint32_t>(slotIndex_)
-                    : std::numeric_limits<std::uint32_t>::max(),
-            .commandIndex =
-                commandIndex <= std::numeric_limits<std::uint32_t>::max()
-                    ? static_cast<std::uint32_t>(commandIndex)
-                    : std::numeric_limits<std::uint32_t>::max(),
+            .seqId = command.seqId,
+            .slotIndex = command.slotIndex,
+            .commandIndex = command.commandIndex,
+            .sourceCommand = command,
             .rtHandle = rtHandle,
             .depthHandle = depthHandle,
             .psoHandle = psoHandle,
@@ -9311,7 +9342,7 @@ public:
     const auto& clear = *storage_.pass.pendingClear;
     const auto sampleAttachment = makeRenderEncoderGpuAttachment(
         core::metalqueue::RenderEncoderGpuPassType::Clear,
-        storage_.pass.pendingClearCommandIndex,
+        storage_.pass.pendingClearCommand,
         clear.colorAttachments[0].handle.value,
         clear.depthStencil.handle.value);
     dxmt9::encoders::encodeClearPass(call_.commandBuffer, ctx_.pool, clear,
@@ -9319,8 +9350,7 @@ public:
     recordRenderEncoderGpuAttachment(sampleAttachment);
     call_.commandBufferHasWork = true;
     storage_.pass.pendingClear.reset();
-    storage_.pass.pendingClearCommandIndex =
-        std::numeric_limits<std::size_t>::max();
+    storage_.pass.pendingClearCommand = {};
   }
 
   void endRender(
@@ -9561,6 +9591,7 @@ private:
   EncodeContext& ctx_;
   EncodeChunkSessionStorage& storage_;
   EncodeCallState& call_;
+  core::CpuReadyTape::SourceRef source_{};
   u64 seqId_;
   std::size_t slotIndex_;
 };
@@ -9577,7 +9608,7 @@ bool finalizeEncodeChunkSessionIntoSubmission(
   // capacity reservations have succeeded.
   call.commandBuffer = record.commandBuffer;
   encode_session::LifecycleRuntime lifecycle(
-      ctx, *sessionState.storage, call, record.seqId, record.slotIndex);
+      ctx, *sessionState.storage, call, {}, record.seqId, record.slotIndex);
   const bool finalized =
       lifecycle.finalizeIntoSubmission(record, &sessionState,
                                        /*resetSessionAfterPublication=*/true);
@@ -14921,16 +14952,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
-  const core::ChunkSlot* legacySlot = payload.legacyPayload();
-  // Session participation (sessionSource ranges, injected command buffer,
-  // lookahead sources, partition ranges) is source-kind-neutral. Validated
-  // replay-command plans remain legacy-only because FrameGraph planning
-  // metadata is still ChunkSlot-indexed.
+  // Session participation and validated replay-command plans are
+  // source-kind-neutral. The plan is call-local and indexes the logical source
+  // command stream, including segmented Arena sources.
   EncodeChunkReplayRange replayRange =
       encodeChunkReplayRange(slotIndex, payload, sourceSeqId, options);
-  if (!legacySlot && options.replayCommandPlanActive) {
-    replayRange.valid = false;
-  }
   if (!replayRange.valid || !options.partitionSource.valid() ||
       (options.sessionSource.has_value() &&
        options.partitionSource != options.sessionSource->source)) {
@@ -15071,7 +15097,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto& bindingState = session.binding;
   auto& diagnosticsState = session.diagnostics;
   auto& completionState = session.completion;
-  encode_session::LifecycleRuntime lifecycle(ctx, session, call, sourceSeqId,
+  encode_session::LifecycleRuntime lifecycle(ctx, session, call,
+                                             options.partitionSource,
+                                             sourceSeqId,
                                              slotIndex);
 
   traceEncodeStage("before-gpu-sampling-setup");
@@ -15388,9 +15416,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     // can run the depth/stencil DontCare-store look-ahead over the
     // remaining records.
     assertNoActiveEncoder();
-    const auto sampleAttachment = makeRenderEncoderGpuAttachment(
+    const core::metalqueue::PublishedCommandRef passCommand =
+        clear.has_value() && passState.pendingClearCommand.valid()
+            ? passState.pendingClearCommand
+            : lifecycle.commandRef(lookaheadStartIndex);
+    const auto sampleAttachment = lifecycle.makeRenderEncoderGpuAttachment(
         core::metalqueue::RenderEncoderGpuPassType::Draw,
-        lookaheadStartIndex,
+        passCommand,
         drawState.hot->colorAttachments[0].handle.value,
         drawState.hot->depthStencil.handle.value,
         psoHandleBucket(renderPsoHandle));
@@ -16026,7 +16058,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       if (clearKey == drawKey && !clearHazard.exactOverlaps(drawReadHazard)) {
         startRenderPass(stateView, passState.pendingClear, commandIndex, renderPsoHandle);
         passState.pendingClear.reset();
-        passState.pendingClearCommandIndex = std::numeric_limits<std::size_t>::max();
+        passState.pendingClearCommand = {};
       } else {
         flushPendingClear();
         const bool renderTargetChanged = encoderState.hasActiveRender && passState.activeKey != drawKey;
@@ -16693,7 +16725,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               .depth = clearView.depth,
               .stencil = clearView.stencil,
           };
-          passState.pendingClearCommandIndex = commandIndex;
+          passState.pendingClearCommand = lifecycle.commandRef(commandIndex);
         } else {
           const auto sampleAttachment = makeRenderEncoderGpuAttachment(
               core::metalqueue::RenderEncoderGpuPassType::Clear,

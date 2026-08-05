@@ -136,9 +136,9 @@ LinearizationPlan planLinearization(const FrameGraph& graph) {
 }
 
 ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
-                                     const core::ChunkSlot& slot) {
+                                     core::SourcePayloadView payload) {
   ReplayCommandPlan plan;
-  const std::size_t command_count = slot.commandCount();
+  const std::size_t command_count = payload.commandCount();
   plan.command_indices.reserve(command_count);
   std::vector<bool> accounted(command_count, false);
   std::vector<bool> omitted(command_count, false);
@@ -153,7 +153,7 @@ ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
       const CommandRef& ref = graph.commands[pass.commands.first + i];
       if (ref.command_index >= command_count ||
           accounted[ref.command_index] ||
-          slot.commandHeaders[ref.command_index].kind != ref.kind) {
+          payload.commandAt(ref.command_index).kind() != ref.kind) {
         return plan;
       }
       accounted[ref.command_index] = true;
@@ -185,6 +185,11 @@ ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
     ++natural_index;
   }
   return plan;
+}
+
+ReplayCommandPlan planReplayCommands(const FrameGraph& graph,
+                                     const core::ChunkSlot& slot) {
+  return planReplayCommands(graph, core::SourcePayloadView(slot));
 }
 
 // ---------------------------------------------------------------------------

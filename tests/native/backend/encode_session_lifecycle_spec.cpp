@@ -202,22 +202,27 @@ struct Harness {
   }
 };
 
+dxmt9::core::CpuReadyTape::SourceRef sourceRefFor(
+    std::size_t slotIndex, std::uint64_t seqId) {
+  return dxmt9::core::CpuReadyTape::SourceRef{
+      .id = {
+          .index = static_cast<std::uint32_t>(slotIndex),
+          .generation = seqId,
+      },
+      .storage = {
+          .firstPage = static_cast<std::uint32_t>(slotIndex),
+          .pageCount = 1,
+          .generation = seqId,
+      },
+  };
+}
+
 dxmt9::encoders::EncodeChunkOptions deferredOptions(
     dxmt9::encoders::EncodeChunkSessionState& session,
     WMT::Reference<WMT::CommandBuffer> commandBuffer,
     dxmt9::core::metalqueue::QueueCompletionSource source) {
   if (!source.source.valid()) {
-    source.source = dxmt9::core::CpuReadyTape::SourceRef{
-        .id = {
-            .index = static_cast<std::uint32_t>(source.slotIndex),
-            .generation = source.seqId,
-        },
-        .storage = {
-            .firstPage = static_cast<std::uint32_t>(source.slotIndex),
-            .pageCount = 1,
-            .generation = source.seqId,
-        },
-    };
+    source.source = sourceRefFor(source.slotIndex, source.seqId);
   }
   dxmt9::encoders::EncodeChunkOptions options{};
   options.commandBuffer = std::move(commandBuffer);
@@ -415,6 +420,20 @@ void encodeChunkThenFinalizerPublishesAndResetsOneSession() {
   check(dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
             *session),
         "head clear remains as deferred session payload");
+  const auto pendingAfterHead =
+      dxmt9::encoders::encodeChunkSessionPendingClearCommand(*session);
+  check(pendingAfterHead.has_value() && pendingAfterHead->valid(),
+        "deferred clear retains a valid command identity");
+  check(pendingAfterHead->source ==
+            sourceRefFor(headSource.slotIndex, headSource.seqId),
+        "deferred clear retains the head Tape generations");
+  checkEq(pendingAfterHead->seqId, headSource.seqId,
+          "deferred clear retains the head sequence");
+  checkEq(pendingAfterHead->slotIndex,
+          static_cast<std::uint32_t>(headSource.slotIndex),
+          "deferred clear retains the head diagnostic slot");
+  checkEq(pendingAfterHead->commandIndex, std::uint32_t{0},
+          "deferred clear retains its logical command index");
 
   const auto sourcesAfterHead =
       dxmt9::encoders::encodeChunkSessionSources(*session);
@@ -445,6 +464,10 @@ void encodeChunkThenFinalizerPublishesAndResetsOneSession() {
   check(dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
             *session),
         "tail preserves the deferred clear until finalization");
+  const auto pendingAfterTail =
+      dxmt9::encoders::encodeChunkSessionPendingClearCommand(*session);
+  check(pendingAfterTail == pendingAfterHead,
+        "source-B encode cannot rewrite source-A deferred clear identity");
 
   const auto sourcesBeforeFinalize =
       dxmt9::encoders::encodeChunkSessionSources(*session);
@@ -492,6 +515,9 @@ void encodeChunkThenFinalizerPublishesAndResetsOneSession() {
   check(!dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
             *session),
         "successful finalization clears deferred session payload");
+  check(!dxmt9::encoders::encodeChunkSessionPendingClearCommand(*session)
+             .has_value(),
+        "successful finalization clears deferred command identity");
 }
 
 void finalizerValidationFailureIsNoMutationAndRetryable() {

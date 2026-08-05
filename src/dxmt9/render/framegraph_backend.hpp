@@ -12,6 +12,7 @@
 #include "backend_interface.hpp"
 #include "dag_observer.hpp"
 
+#include "../framegraph/fg_linearizer.hpp"
 #include "../framegraph/fg_optimizer.hpp"  // framegraph::OptimizerOptions
 
 #include <cstddef>
@@ -50,6 +51,26 @@ RendererCompatProfile resolveRendererCompatProfile(const char* env);
 RendererFeatureSet resolveRendererFeatures(const char* env,
                                            RendererCompatProfile profile);
 
+// Pure production-selection seams. A resolved lookahead source must carry a
+// self-consistent generation-bearing SourceRef and cover its entire payload;
+// ChunkSlot pointer identity is deliberately irrelevant.
+bool resolvedSourceMatchesFrameGraphInput(
+    const core::metalqueue::ResolvedPublishedSource& source,
+    std::size_t slotIndex, core::SourcePayloadView payload,
+    std::uint64_t seqId,
+    core::CpuReadyTape::SourceRef expectedSource) noexcept;
+const core::metalqueue::ResolvedPublishedSource* selectFrameGraphLookahead(
+    std::span<const core::metalqueue::ResolvedPublishedSource> selected,
+    std::size_t slotIndex, core::SourcePayloadView payload,
+    std::uint64_t seqId,
+    core::CpuReadyTape::SourceRef currentSource) noexcept;
+
+// Open/injected sessions may consume a coalesced plan only when it preserves
+// both the no-coalesce DCE live subset and that subset's natural first command.
+bool replayPlanPreservesHeadStableFrontier(
+    const framegraph::ReplayCommandPlan& optimized,
+    const framegraph::ReplayCommandPlan& natural) noexcept;
+
 class FrameGraphBackend final : public IRenderBackend {
  public:
   FrameGraphBackend();
@@ -64,6 +85,12 @@ class FrameGraphBackend final : public IRenderBackend {
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
       const core::ChunkSlot& slot,
+      encoders::EncodeChunkOptions options = {}) override;
+  std::optional<core::metalqueue::QueueSubmissionRecord> onSourceReady(
+      encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      core::SourcePayloadView payload,
+      std::uint64_t seqId,
       encoders::EncodeChunkOptions options = {}) override;
 
   BackendMode mode() const override { return BackendMode::FrameGraph; }

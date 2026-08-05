@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <type_traits>
 
@@ -12,12 +13,12 @@ namespace dxmt9::encoders {
 struct EncodeContext;
 struct EncodeChunkSessionState;
 
-// Stable identity for one source retained by an encode session. The ordinal
+// Stable identity for one source retained by an encode session. The index
 // selects the source within the retained table; Tape source/storage generations
-// plus seqId reject a stale ordinal after temporary-control reuse.
+// plus seqId reject a stale index after temporary-control reuse.
 struct RetainedEncodeSourceLocator {
   core::CpuReadyTape::SourceRef tapeSource{};
-  std::uint32_t sourceOrdinal = 0;
+  std::uint32_t retainedSourceIndex = 0;
   std::uint32_t slotIndex = 0;
   std::uint64_t seqId = 0;
 
@@ -111,6 +112,9 @@ bool appendEncodeChunkSessionSource(
     core::metalqueue::QueueCompletionSource source) noexcept;
 std::span<const core::metalqueue::QueueCompletionSource>
 encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept;
+std::optional<core::metalqueue::PublishedCommandRef>
+encodeChunkSessionPendingClearCommand(
+    const EncodeChunkSessionState& session) noexcept;
 
 // A deterministic preflight rejection (missing/conflicting command-buffer
 // ownership or completion-source mismatch) is side-effect free: record and

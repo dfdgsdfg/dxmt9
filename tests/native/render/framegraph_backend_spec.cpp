@@ -10,11 +10,14 @@
 // Deliberately does NOT call onChunkReady.
 
 #include "../../../src/dxmt9/render/framegraph_backend.hpp"
+#include "../framegraph/arena_payload_fixture.hpp"
 
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -24,6 +27,8 @@ using dxmt9::render::IRenderBackend;
 using dxmt9::render::RendererCompatProfile;
 using dxmt9::render::resolveRendererCompatProfile;
 using dxmt9::render::resolveRendererFeatures;
+using dxmt9::render::replayPlanPreservesHeadStableFrontier;
+using dxmt9::render::selectFrameGraphLookahead;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -112,6 +117,96 @@ void testProgressivePasscoalesceResolution() {
         "strict rejects the bounded DCE token");
 }
 
+dxmt9::framegraph::ReplayCommandPlan replayPlan(
+    std::initializer_list<std::uint32_t> commands) {
+  return dxmt9::framegraph::ReplayCommandPlan{
+      .command_indices = std::vector<std::uint32_t>(commands),
+      .valid = true,
+  };
+}
+
+void testHeadStableFrontierSelection() {
+  const auto natural = replayPlan({0, 1, 2});
+  check(replayPlanPreservesHeadStableFrontier(replayPlan({0, 2, 1}),
+                                               natural),
+        "same live subset and natural head permits coalesced replay");
+  check(!replayPlanPreservesHeadStableFrontier(replayPlan({1, 0, 2}),
+                                                natural),
+        "moved live head requires no-coalesce fallback");
+  check(!replayPlanPreservesHeadStableFrontier(replayPlan({0, 2}), natural),
+        "changed DCE live subset requires no-coalesce fallback");
+
+  const auto empty = replayPlan({});
+  check(replayPlanPreservesHeadStableFrontier(empty, empty),
+        "empty proven-live subset has a stable frontier");
+  auto invalid = empty;
+  invalid.valid = false;
+  check(!replayPlanPreservesHeadStableFrontier(invalid, empty),
+        "invalid optimized plan requires fallback");
+}
+
+dxmt9::core::metalqueue::ResolvedPublishedSource resolvedSource(
+    std::size_t slotIndex, std::uint64_t seqId,
+    dxmt9::core::SourcePayloadView payload,
+    dxmt9::core::CpuReadyTape::SourceRef source) {
+  return dxmt9::core::metalqueue::ResolvedPublishedSource{
+      .source = source,
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .payload = payload,
+      .sourceId = source.id,
+      .storage = source.storage,
+      .slot = nullptr,
+      .commandBegin = 0,
+      .commandCount = payload.commandCount(),
+  };
+}
+
+void testGenerationCheckedArenaLookahead() {
+  dxmt9::core::ChunkSlot arenaSource;
+  arenaSource.appendClear({});
+  dxmt9::tests::framegraph::ArenaPayloadFixture arena(arenaSource);
+  check(arena.valid(), "Arena lookahead fixture publishes");
+
+  dxmt9::core::ChunkSlot nextSource;
+  nextSource.appendClear({});
+  const dxmt9::core::CpuReadyTape::SourceRef currentRef{
+      .id = {.index = 2, .generation = 17},
+      .storage = {.firstPage = 4, .pageCount = 1, .generation = 31},
+  };
+  const dxmt9::core::CpuReadyTape::SourceRef nextRef{
+      .id = {.index = 3, .generation = 18},
+      .storage = {.firstPage = 5, .pageCount = 1, .generation = 32},
+  };
+  std::array selected{
+      resolvedSource(7, 40, arena.view(), currentRef),
+      resolvedSource(8, 41, dxmt9::core::SourcePayloadView(nextSource),
+                     nextRef),
+  };
+
+  check(selectFrameGraphLookahead(selected, 7, arena.view(), 40,
+                                  currentRef) == &selected[1],
+        "Arena lookahead resolves without ChunkSlot pointer identity");
+
+  auto stale = selected;
+  ++stale[1].storage.generation;
+  check(selectFrameGraphLookahead(stale, 7, arena.view(), 40,
+                                  currentRef) == nullptr,
+        "stale next-source storage generation is rejected");
+
+  auto partial = selected;
+  partial[1].commandCount = 0;
+  check(selectFrameGraphLookahead(partial, 7, arena.view(), 40,
+                                  currentRef) == nullptr,
+        "partial next-source range is not a whole-source DCE proof");
+
+  auto nonConsecutive = selected;
+  nonConsecutive[1].seqId = 42;
+  check(selectFrameGraphLookahead(nonConsecutive, 7, arena.view(), 40,
+                                  currentRef) == nullptr,
+        "non-consecutive successor is rejected");
+}
+
 }  // namespace
 
 int main() {
@@ -121,6 +216,8 @@ int main() {
     testStrictResolverEmptyForAllTokens();
     testResolverEmptyForGarbageTokens();
     testProgressivePasscoalesceResolution();
+    testHeadStableFrontierSelection();
+    testGenerationCheckedArenaLookahead();
   } catch (const std::exception& e) {
     std::cerr << "framegraph_backend_spec failed: " << e.what() << '\n';
     return 1;

@@ -62,8 +62,51 @@ V2CpuReadyPlan fallback(RawOrdinal rawOrdinal,
   };
 }
 
-bool addDrawCapacities(core::SourcePayloadCapacity& capacity,
-                       const ImportedRecordV2View& record) noexcept {
+bool addTriangleFanPayloadCapacity(
+    core::SourcePayloadCapacity& capacity,
+    const ImportedRecordV2View& record,
+    const D9CCommandChunkWireDrawHeaderV2& draw) noexcept {
+  if (draw.primitiveCount >
+      std::numeric_limits<std::uint32_t>::max() / 3u) {
+    return false;
+  }
+  const std::size_t triangleElementCount =
+      static_cast<std::size_t>(draw.primitiveCount) * 3u;
+  std::size_t elementSize = 0;
+  switch (record.header.type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    elementSize = draw.primitiveCount <=
+                          std::numeric_limits<std::uint16_t>::max() - 1u
+                      ? sizeof(std::uint16_t)
+                      : sizeof(std::uint32_t);
+    break;
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+    // The sparse wire form inherits the bound index-buffer format. Plan the
+    // UInt32 decomposition so structural admission is independent of replay
+    // state.
+    elementSize = sizeof(std::uint32_t);
+    break;
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+    elementSize = draw.indexFormat == 102u ? sizeof(std::uint32_t)
+                                           : sizeof(std::uint16_t);
+    break;
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+    elementSize = draw.stride;
+    break;
+  default:
+    return false;
+  }
+  std::size_t byteCount = 0;
+  return multiplyU32Count(triangleElementCount, elementSize, byteCount) &&
+         (byteCount == 0 ||
+          addAlignedBytes(capacity.drawPayloadBytes, byteCount,
+                          kV2ArenaDrawPayloadAppendAlignment));
+}
+
+bool addDrawCapacities(
+    core::SourcePayloadCapacity& capacity,
+    const ImportedRecordV2View& record,
+    const D9CCommandChunkWireDrawHeaderV2& draw) noexcept {
   if (!addCount(capacity.commandHeaders, 1) ||
       !addCount(capacity.drawHotStates, 1) ||
       !addCount(capacity.drawShaderLayouts, 1) ||
@@ -88,7 +131,17 @@ bool addDrawCapacities(core::SourcePayloadCapacity& capacity,
     }
     switch (section.descriptor.kind) {
     case D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA:
+      if (draw.primitiveType == 6 &&
+          record.header.type ==
+              D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
+        break;
+      }
+      [[fallthrough]];
     case D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA:
+      if (draw.primitiveType == 6 &&
+          record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
+        break;
+      }
       if (!addAlignedBytes(capacity.drawPayloadBytes,
                            section.descriptor.byteSize,
                            kV2ArenaDrawPayloadAppendAlignment)) {
@@ -99,13 +152,145 @@ bool addDrawCapacities(core::SourcePayloadCapacity& capacity,
       break;
     }
   }
-  return addAlignedBytes(capacity.drawPayloadBytes,
+  return (draw.primitiveType != 6 ||
+          addTriangleFanPayloadCapacity(capacity, record, draw)) &&
+         addAlignedBytes(capacity.drawPayloadBytes,
                          sizeof(core::DrawBindingOverride),
                          kV2ArenaDrawPayloadAppendAlignment) &&
          addAlignedBytes(capacity.drawPayloadBytes,
                          sizeof(core::DrawBindingSnapshot),
                          kV2ArenaDrawPayloadAppendAlignment);
 }
+
+enum class DirectRecordResult {
+  StateOnly,
+  GpuProducing,
+  Invalid,
+  Overflow,
+  Unsupported,
+};
+
+DirectRecordResult addDirectRecordCapacity(
+    core::SourcePayloadCapacity& capacity,
+    std::size_t& drawCount,
+    const ImportedRecordV2View& record) noexcept {
+  switch (record.header.type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
+    D9CCommandChunkWireDrawHeaderV2 draw{};
+    if (!loadFixed(record, draw) || draw.primitiveType < 1 ||
+        draw.primitiveType > 6) {
+      return DirectRecordResult::Invalid;
+    }
+    if (!addDrawCapacities(capacity, record, draw) ||
+        !addCount(drawCount, 1)) {
+      return DirectRecordResult::Overflow;
+    }
+    return DirectRecordResult::GpuProducing;
+  }
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+  case D9C_COMMAND_RECORD_APPLY_STATE:
+    return DirectRecordResult::StateOnly;
+  case D9C_COMMAND_RECORD_CLEAR: {
+    D9CCommandChunkWireClearV2 clear{};
+    if (!loadFixed(record, clear)) {
+      return DirectRecordResult::Invalid;
+    }
+    if (!addCount(capacity.commandHeaders, 1) ||
+        !addCount(capacity.clearRecords, 1) ||
+        !addCount(capacity.clearRects, clear.rectCount)) {
+      return DirectRecordResult::Overflow;
+    }
+    return DirectRecordResult::GpuProducing;
+  }
+  case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.surfaceCopyRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
+  case D9C_COMMAND_RECORD_STRETCH_RECT:
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.stretchRectRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
+  case D9C_COMMAND_RECORD_COLOR_FILL:
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.colorFillRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
+  case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.depthResolveRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
+  case D9C_COMMAND_RECORD_PRESENT: {
+    D9CCommandChunkWirePresentV2 present{};
+    if (!loadFixed(record, present)) {
+      return DirectRecordResult::Invalid;
+    }
+    return addCount(capacity.commandHeaders, 1) &&
+                   addCount(capacity.presentRecords, 1)
+               ? DirectRecordResult::GpuProducing
+               : DirectRecordResult::Overflow;
+  }
+  default:
+    return DirectRecordResult::Unsupported;
+  }
+}
+
+bool addDerivedDrawCapacity(core::SourcePayloadCapacity& capacity,
+                            std::size_t drawCount) noexcept {
+  std::size_t vertexConstantBytes = 0;
+  std::size_t pixelConstantBytes = 0;
+  if (!multiplyU32Count(drawCount, sizeof(core::VertexShaderConstants),
+                        vertexConstantBytes) ||
+      !multiplyU32Count(drawCount, sizeof(core::PixelShaderConstants),
+                        pixelConstantBytes)) {
+    return false;
+  }
+  capacity.drawUniformVertexConstantBytes = vertexConstantBytes;
+  capacity.drawUniformPixelConstantBytes = pixelConstantBytes;
+
+  const auto lookupBucketCount =
+      core::detail::chunkSlotUniformLookupBucketCount(drawCount);
+  capacity.drawUniformPayloadLookupHeads = lookupBucketCount;
+  capacity.drawUniformPayloadLookupTails = lookupBucketCount;
+  capacity.drawUniformPayloadLookupNext = drawCount;
+  capacity.drawUniformVertexConstantsLookupHeads = lookupBucketCount;
+  capacity.drawUniformVertexConstantsLookupTails = lookupBucketCount;
+  capacity.drawUniformVertexConstantsLookupNext = drawCount;
+  capacity.drawUniformPixelConstantsLookupHeads = lookupBucketCount;
+  capacity.drawUniformPixelConstantsLookupTails = lookupBucketCount;
+  capacity.drawUniformPixelConstantsLookupNext = drawCount;
+  return true;
+}
+
+std::optional<core::SourcePayloadLayout> makeSegmentLayout(
+    const core::SourcePayloadCapacity& baseCapacity,
+    std::size_t drawCount,
+    std::size_t pageSize) noexcept {
+  auto capacity = baseCapacity;
+  if (!addDerivedDrawCapacity(capacity, drawCount)) {
+    return std::nullopt;
+  }
+  return core::makeSourcePayloadLayout(
+      capacity, pageSize, std::numeric_limits<std::uint32_t>::max());
+}
+
+struct SegmentAccumulator {
+  core::SourcePayloadCapacity capacity{};
+  std::size_t drawCount = 0;
+  std::size_t firstRecordIndex = 0;
+  std::size_t lastRecordIndex = 0;
+  bool active = false;
+};
 
 }  // namespace
 
@@ -114,6 +299,11 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     RawOrdinal rawOrdinal,
     V2CpuReadyPlanOptions options) noexcept {
   if (rawOrdinal == 0 || options.pageSize == 0 || options.maxPages == 0 ||
+      options.maxOrdinaryPagesPerSegment == 0 ||
+      options.maxSegmentsPerSource == 0 ||
+      options.maxSegmentsPerSource >
+          core::kMaxArenaSourcePayloadSegments ||
+      options.maxPagesPerSource == 0 ||
       imported.records.size() != imported.header.recordCount) {
     return fallback(rawOrdinal, V2ReplayLane::Reject,
                     V2ReplayReason::InvalidImportedView);
@@ -124,7 +314,46 @@ V2CpuReadyPlan planCpuReadyChunkV2(
       .lane = V2ReplayLane::DirectArenaCandidate,
       .reason = V2ReplayReason::Eligible,
   };
-  std::size_t drawCount = 0;
+  const std::size_t maxPagesPerSource =
+      std::min(options.maxPages, options.maxPagesPerSource);
+  std::size_t totalDrawCount = 0;
+  SegmentAccumulator current{};
+  bool sawPresent = false;
+  // State-only records after the previous segment's final GPU record stay
+  // pending until the next GPU record fixes their construction segment.
+  std::size_t nextSegmentRecordIndex = 0;
+
+  const auto appendSegment = [&](const SegmentAccumulator& segment,
+                                 bool jumbo) noexcept {
+    if (!segment.active ||
+        plan.segmentCount >= options.maxSegmentsPerSource) {
+      return false;
+    }
+    auto capacity = segment.capacity;
+    if (!addDerivedDrawCapacity(capacity, segment.drawCount)) {
+      return false;
+    }
+    const auto layout = core::makeSourcePayloadLayout(
+        capacity, options.pageSize,
+        std::numeric_limits<std::uint32_t>::max());
+    if (!layout || segment.firstRecordIndex >
+                       std::numeric_limits<std::uint32_t>::max() ||
+        segment.lastRecordIndex < segment.firstRecordIndex ||
+        segment.lastRecordIndex - segment.firstRecordIndex >=
+            std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    plan.segments[plan.segmentCount++] = V2CpuReadySegmentPlan{
+        .firstRecordIndex =
+            static_cast<std::uint32_t>(segment.firstRecordIndex),
+        .recordCount = static_cast<std::uint32_t>(
+            segment.lastRecordIndex - segment.firstRecordIndex + 1),
+        .jumbo = jumbo,
+        .capacity = capacity,
+        .layout = *layout,
+    };
+    return true;
+  };
 
   for (std::size_t i = 0; i < imported.records.size(); ++i) {
     const auto record = imported.record(i);
@@ -135,101 +364,111 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     }
 
     switch (record.header.type) {
-    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
-    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
-    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
-    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-      D9CCommandChunkWireDrawHeaderV2 draw{};
-      if (!loadFixed(record, draw) || draw.primitiveType < 1 ||
-          draw.primitiveType > 6) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::InvalidImportedView);
-      }
-      if (draw.primitiveType == 6) {
-        return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                        V2ReplayReason::TriangleFan);
-      }
-      if (!addDrawCapacities(plan.capacity, record) ||
-          !addCount(drawCount, 1)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
-    }
-    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
-    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
-      break;
-    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
-    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
-      break;
-    case D9C_COMMAND_RECORD_APPLY_STATE:
-      break;
-    case D9C_COMMAND_RECORD_CLEAR: {
-      D9CCommandChunkWireClearV2 clear{};
-      if (!loadFixed(record, clear)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::InvalidImportedView);
-      }
-      if (!addCount(plan.capacity.commandHeaders, 1) ||
-          !addCount(plan.capacity.clearRecords, 1) ||
-          !addCount(plan.capacity.clearRects, clear.rectCount)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
-    }
-    case D9C_COMMAND_RECORD_UPDATE_SURFACE:
-      if (!addCount(plan.capacity.commandHeaders, 1) ||
-          !addCount(plan.capacity.surfaceCopyRecords, 1)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
-    case D9C_COMMAND_RECORD_STRETCH_RECT:
-      if (!addCount(plan.capacity.commandHeaders, 1) ||
-          !addCount(plan.capacity.stretchRectRecords, 1)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
-    case D9C_COMMAND_RECORD_COLOR_FILL:
-      if (!addCount(plan.capacity.commandHeaders, 1) ||
-          !addCount(plan.capacity.colorFillRecords, 1)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
-    case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
-      if (!addCount(plan.capacity.commandHeaders, 1) ||
-          !addCount(plan.capacity.depthResolveRecords, 1)) {
-        return fallback(rawOrdinal, V2ReplayLane::Reject,
-                        V2ReplayReason::StructuralOverflow);
-      }
-      plan.logicalSource = true;
-      break;
     case D9C_COMMAND_RECORD_QUERY_ISSUE:
       return fallback(rawOrdinal, V2ReplayLane::Legacy,
                       V2ReplayReason::Query);
     case D9C_COMMAND_RECORD_READBACK:
       return fallback(rawOrdinal, V2ReplayLane::Inline,
                       V2ReplayReason::Readback);
-    case D9C_COMMAND_RECORD_PRESENT:
-      return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                      V2ReplayReason::Present);
     case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
       return fallback(rawOrdinal, V2ReplayLane::Legacy,
                       V2ReplayReason::UpdateTexture);
     default:
+      break;
+    }
+
+    if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {
+      if (sawPresent || i + 1u != imported.records.size()) {
+        return fallback(rawOrdinal, V2ReplayLane::Legacy,
+                        V2ReplayReason::Present);
+      }
+      sawPresent = true;
+    }
+
+    auto aggregateCapacity = plan.capacity;
+    std::size_t aggregateDrawCount = totalDrawCount;
+    const auto aggregateResult = addDirectRecordCapacity(
+        aggregateCapacity, aggregateDrawCount, record);
+    if (aggregateResult == DirectRecordResult::Invalid) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::InvalidImportedView);
+    }
+    if (aggregateResult == DirectRecordResult::Overflow) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    if (aggregateResult == DirectRecordResult::Unsupported) {
       return fallback(rawOrdinal, V2ReplayLane::Reject,
                       V2ReplayReason::UnknownRecord);
     }
+    plan.capacity = aggregateCapacity;
+    totalDrawCount = aggregateDrawCount;
+    if (aggregateResult == DirectRecordResult::StateOnly) {
+      continue;
+    }
+
+    auto candidate = current;
+    if (!candidate.active) {
+      candidate.active = true;
+      candidate.firstRecordIndex = nextSegmentRecordIndex;
+    }
+    candidate.lastRecordIndex = i;
+    const auto candidateResult = addDirectRecordCapacity(
+        candidate.capacity, candidate.drawCount, record);
+    if (candidateResult != DirectRecordResult::GpuProducing) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    auto candidateLayout = makeSegmentLayout(
+        candidate.capacity, candidate.drawCount, options.pageSize);
+    if (!candidateLayout) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    if (candidateLayout->pageCount <=
+        options.maxOrdinaryPagesPerSegment) {
+      current = candidate;
+      plan.logicalSource = true;
+      continue;
+    }
+
+    if (current.active && !appendSegment(current, false)) {
+      return fallback(rawOrdinal, V2ReplayLane::Legacy,
+                      V2ReplayReason::Oversize);
+    }
+    if (current.active) {
+      nextSegmentRecordIndex = current.lastRecordIndex + 1u;
+    }
+    SegmentAccumulator indivisible{};
+    indivisible.active = true;
+    indivisible.firstRecordIndex = nextSegmentRecordIndex;
+    indivisible.lastRecordIndex = i;
+    if (addDirectRecordCapacity(indivisible.capacity,
+                                indivisible.drawCount,
+                                record) !=
+        DirectRecordResult::GpuProducing) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    const auto indivisibleLayout = makeSegmentLayout(
+        indivisible.capacity, indivisible.drawCount, options.pageSize);
+    if (!indivisibleLayout) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    if (indivisibleLayout->pageCount >
+            options.maxOrdinaryPagesPerSegment) {
+      if (indivisibleLayout->pageCount > maxPagesPerSource ||
+          !appendSegment(indivisible, true)) {
+        return fallback(rawOrdinal, V2ReplayLane::Legacy,
+                        V2ReplayReason::Oversize);
+      }
+      nextSegmentRecordIndex = i + 1u;
+      current = {};
+    } else {
+      current = indivisible;
+    }
+    plan.logicalSource = true;
   }
 
   if (!plan.logicalSource) {
@@ -237,42 +476,46 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     return plan;
   }
 
-  std::size_t vertexConstantBytes = 0;
-  std::size_t pixelConstantBytes = 0;
-  if (!multiplyU32Count(drawCount, sizeof(core::VertexShaderConstants),
-                        vertexConstantBytes) ||
-      !multiplyU32Count(drawCount, sizeof(core::PixelShaderConstants),
-                        pixelConstantBytes)) {
+  if (current.active) {
+    current.lastRecordIndex = imported.records.size() - 1u;
+    if (!appendSegment(current, false)) {
+      return fallback(rawOrdinal, V2ReplayLane::Legacy,
+                      V2ReplayReason::Oversize);
+    }
+  } else if (nextSegmentRecordIndex < imported.records.size()) {
+    auto& tail = plan.segments[plan.segmentCount - 1u];
+    const std::size_t tailCount =
+        imported.records.size() - tail.firstRecordIndex;
+    if (tailCount > std::numeric_limits<std::uint32_t>::max()) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::StructuralOverflow);
+    }
+    tail.recordCount = static_cast<std::uint32_t>(tailCount);
+  }
+  if (!addDerivedDrawCapacity(plan.capacity, totalDrawCount)) {
     return fallback(rawOrdinal, V2ReplayLane::Reject,
                     V2ReplayReason::StructuralOverflow);
   }
-  plan.capacity.drawUniformVertexConstantBytes = vertexConstantBytes;
-  plan.capacity.drawUniformPixelConstantBytes = pixelConstantBytes;
-
-  const auto lookupBucketCount =
-      core::detail::chunkSlotUniformLookupBucketCount(drawCount);
-  plan.capacity.drawUniformPayloadLookupHeads = lookupBucketCount;
-  plan.capacity.drawUniformPayloadLookupTails = lookupBucketCount;
-  plan.capacity.drawUniformPayloadLookupNext = drawCount;
-  plan.capacity.drawUniformVertexConstantsLookupHeads = lookupBucketCount;
-  plan.capacity.drawUniformVertexConstantsLookupTails = lookupBucketCount;
-  plan.capacity.drawUniformVertexConstantsLookupNext = drawCount;
-  plan.capacity.drawUniformPixelConstantsLookupHeads = lookupBucketCount;
-  plan.capacity.drawUniformPixelConstantsLookupTails = lookupBucketCount;
-  plan.capacity.drawUniformPixelConstantsLookupNext = drawCount;
-
-  const auto layout = core::makeSourcePayloadLayout(
-      plan.capacity, options.pageSize,
+  std::array<core::SourcePayloadLayout,
+             core::kMaxArenaSourcePayloadSegments> segmentLayouts{};
+  for (std::size_t i = 0; i < plan.segmentCount; ++i) {
+    segmentLayouts[i] = plan.segments[i].layout;
+  }
+  const auto arenaLayout = core::makeArenaSourcePayloadLayout(
+      std::span(segmentLayouts).first(plan.segmentCount), options.pageSize,
       std::numeric_limits<std::uint32_t>::max());
-  if (!layout) {
+  if (!arenaLayout) {
     return fallback(rawOrdinal, V2ReplayLane::Reject,
                     V2ReplayReason::StructuralOverflow);
   }
-  if (layout->pageCount > options.maxPages) {
+  if (arenaLayout->pageCount > maxPagesPerSource) {
     return fallback(rawOrdinal, V2ReplayLane::Legacy,
                     V2ReplayReason::Oversize);
   }
-  plan.layout = *layout;
+  plan.arenaLayout = *arenaLayout;
+  if (plan.segmentCount == 1) {
+    plan.layout = plan.segments[0].layout;
+  }
   return plan;
 }
 

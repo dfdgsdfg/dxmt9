@@ -70,4 +70,12 @@ encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept {
   return session.sources.span();
 }
 
+std::optional<core::metalqueue::PublishedCommandRef>
+encodeChunkSessionPendingClearCommand(
+    const EncodeChunkSessionState& session) noexcept {
+  return session.storage
+             ? encode_session::storagePendingClearCommand(*session.storage)
+             : std::nullopt;
+}
+
 }  // namespace dxmt9::encoders

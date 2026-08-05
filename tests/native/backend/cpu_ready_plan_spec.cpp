@@ -181,6 +181,64 @@ RecordSpec directUpDrawRecord() {
   };
 }
 
+RecordSpec triangleFanRecord(std::uint32_t type,
+                             std::uint32_t indexFormat = 101u,
+                             std::uint32_t primitiveCount = 3u,
+                             std::uint32_t stride = 4u) {
+  D9CCommandChunkWireDrawHeaderV2 draw{
+      .primitiveType = 6,
+      .primitiveCount = primitiveCount,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+  };
+  std::array<D9CCommandChunkWireSectionDescV2, 2> sections{};
+  std::size_t sectionCount = 0;
+  std::array<std::size_t, 2> sectionBytes{};
+  if (type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+    draw.numVertices = primitiveCount + 2u;
+  } else if (type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
+    draw.stride = stride;
+    sectionBytes[sectionCount] =
+        static_cast<std::size_t>(primitiveCount + 2u) * stride;
+    sections[sectionCount++].kind =
+        D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA;
+  } else if (type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
+    draw.numVertices = primitiveCount + 2u;
+    draw.stride = stride;
+    draw.indexFormat = indexFormat;
+    sectionBytes[sectionCount] =
+        static_cast<std::size_t>(primitiveCount + 2u) *
+        (indexFormat == 102u ? 4u : 2u);
+    sections[sectionCount++].kind =
+        D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA;
+    sectionBytes[sectionCount] =
+        static_cast<std::size_t>(draw.numVertices) * stride;
+    sections[sectionCount++].kind =
+        D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA;
+  }
+  draw.sectionCount = static_cast<std::uint32_t>(sectionCount);
+  draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
+      sizeof(draw) + sectionCount * sizeof(sections[0]),
+      alignof(std::uint32_t)));
+  std::size_t payloadEnd = draw.sectionPayloadOffset;
+  for (std::size_t i = 0; i < sectionCount; ++i) {
+    const auto* rule = dxmt9::d3d9::v2SectionRule(sections[i].kind);
+    check(rule != nullptr, "fan UP section rule must exist");
+    payloadEnd = alignUp(payloadEnd, rule->payloadAlignment);
+    sections[i].elementSize = rule->elementSize;
+    sections[i].count = static_cast<std::uint32_t>(sectionBytes[i]);
+    sections[i].payloadOffset = static_cast<std::uint32_t>(payloadEnd);
+    sections[i].byteSize = static_cast<std::uint32_t>(sectionBytes[i]);
+    payloadEnd += sectionBytes[i];
+  }
+  std::vector<std::byte> payload(payloadEnd);
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  if (sectionCount != 0) {
+    std::memcpy(payload.data() + draw.sectionTableOffset, sections.data(),
+                sectionCount * sizeof(sections[0]));
+  }
+  return {.type = type, .payload = std::move(payload)};
+}
+
 RecordSpec clearRecord(std::size_t rectCount) {
   D9CCommandChunkWireClearV2 clear{
       .rectCount = static_cast<std::uint32_t>(rectCount),
@@ -189,6 +247,40 @@ RecordSpec clearRecord(std::size_t rectCount) {
   auto payload = bytesOf(clear);
   payload.resize(payload.size() + rectCount * sizeof(D9CRect));
   return {.type = D9C_COMMAND_RECORD_CLEAR, .payload = std::move(payload)};
+}
+
+std::size_t clearRectCountForSegmentPages(std::size_t targetPages,
+                                          bool lastMatch = false) {
+  std::size_t match = 0;
+  bool found = false;
+  for (std::size_t rectCount = 0;
+       rectCount <= targetPages * 4096 / sizeof(D9CRect) + 1024;
+       ++rectCount) {
+    dxmt9::core::SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1;
+    capacity.clearRecords = 1;
+    capacity.clearRects = rectCount;
+    capacity.drawUniformPayloadLookupHeads = 8;
+    capacity.drawUniformPayloadLookupTails = 8;
+    capacity.drawUniformVertexConstantsLookupHeads = 8;
+    capacity.drawUniformVertexConstantsLookupTails = 8;
+    capacity.drawUniformPixelConstantsLookupHeads = 8;
+    capacity.drawUniformPixelConstantsLookupTails = 8;
+    const auto layout = dxmt9::core::makeSourcePayloadLayout(
+        capacity, 4096, std::numeric_limits<std::uint32_t>::max());
+    check(layout.has_value(), "clear boundary layout must build");
+    if (layout->pageCount == targetPages) {
+      match = rectCount;
+      found = true;
+      if (!lastMatch) {
+        return match;
+      }
+    } else if (found && layout->pageCount > targetPages) {
+      return match;
+    }
+  }
+  check(found, "requested clear page boundary must be reachable");
+  return match;
 }
 
 RecordSpec partialFloatConstantRecord(std::uint32_t type,
@@ -333,8 +425,6 @@ void blockersSelectOneWholeRawFallbackLane() {
                V2ReplayLane::Inline, V2ReplayReason::Readback},
       Expected{D9C_COMMAND_RECORD_UPDATE_TEXTURE,
                V2ReplayLane::Legacy, V2ReplayReason::UpdateTexture},
-      Expected{D9C_COMMAND_RECORD_PRESENT,
-               V2ReplayLane::Legacy, V2ReplayReason::Present},
   };
   for (const auto& item : expected) {
     const std::array records{drawRecord(), blockingRecord(item.type)};
@@ -381,16 +471,27 @@ void partialConstantDeltasDoNotInflateSnapshotCapacity() {
 }
 
 void triangleFanAndLookupBoundaryPlans() {
-  const std::array fanRecords{
-      drawRecord(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 6),
+  struct FanForm {
+    std::uint32_t type;
+    std::size_t minimumGeneratedBytes;
   };
-  const auto fanFixture = makeValidatedFixture(fanRecords);
-  const auto fanPlan =
-      dxmt9::d3d9::planCpuReadyChunkV2(fanFixture.view(), 10);
-  check(fanPlan.lane == V2ReplayLane::Legacy &&
-            fanPlan.reason == V2ReplayReason::TriangleFan &&
-            fanPlan.replaysSemanticsExactlyOnce(),
-        "TriangleFan selects legacy before generated-index semantics begin");
+  const std::array fanForms{
+      FanForm{D9C_COMMAND_RECORD_DRAW_PRIMITIVE, 3u * 3u * 2u},
+      FanForm{D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, 3u * 3u * 4u},
+      FanForm{D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP, 3u * 3u * 4u},
+      FanForm{D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+              (3u + 2u) * 4u + 3u * 3u * 2u},
+  };
+  for (const auto& form : fanForms) {
+    const std::array fanRecords{triangleFanRecord(form.type)};
+    const auto fanFixture = makeValidatedFixture(fanRecords);
+    const auto fanPlan =
+        dxmt9::d3d9::planCpuReadyChunkV2(fanFixture.view(), 10);
+    check(fanPlan.directArenaCandidate() && fanPlan.segmentCount == 1 &&
+              fanPlan.capacity.drawPayloadBytes >=
+                  form.minimumGeneratedBytes,
+          "every TriangleFan wire form plans its worst-case transformed payload");
+  }
 
   std::vector<RecordSpec> fiveDraws(5, drawRecord());
   const auto fiveFixture = makeValidatedFixture(fiveDraws);
@@ -425,6 +526,177 @@ void upPayloadUsesCheckedAlignedBuilderUpperBound() {
             plan.capacity.drawPayloadBytes <=
                 std::numeric_limits<std::uint32_t>::max(),
         "UP and synthesized binding payloads share the checked aligned append policy");
+}
+
+void segmentedArenaBoundariesAndHardCaps() {
+  const auto exact64Rects = clearRectCountForSegmentPages(64, true);
+  const auto exact65Rects = clearRectCountForSegmentPages(65);
+  const auto exact40Rects = clearRectCountForSegmentPages(40, true);
+
+  const std::array exact64Records{clearRecord(exact64Rects)};
+  const auto exact64Fixture = makeValidatedFixture(exact64Records);
+  const auto exact64 = dxmt9::d3d9::planCpuReadyChunkV2(
+      exact64Fixture.view(), 20,
+      {.pageSize = 4096, .maxOrdinaryPagesPerSegment = 64});
+  check(exact64.directArenaCandidate() && exact64.segmentCount == 1 &&
+            exact64.segments[0].layout.pageCount == 64 &&
+            !exact64.segments[0].jumbo && exact64.layout.has_value() &&
+            exact64.arenaLayout->segmentCount == 1,
+        "an ordinary block accepts the exact 64-page boundary");
+
+  const std::array jumboRecords{clearRecord(exact65Rects)};
+  const auto jumboFixture = makeValidatedFixture(jumboRecords);
+  const auto jumbo = dxmt9::d3d9::planCpuReadyChunkV2(
+      jumboFixture.view(), 21,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxPagesPerSource = 128});
+  check(jumbo.directArenaCandidate() && jumbo.segmentCount == 1 &&
+            jumbo.segments[0].layout.pageCount == 65 &&
+            jumbo.segments[0].jumbo,
+        "one indivisible 65-page record receives one bounded jumbo block");
+  const auto jumboCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+      jumboFixture.view(), 21,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxPagesPerSource = 64});
+  check(jumboCapped.lane == V2ReplayLane::Legacy &&
+            jumboCapped.reason == V2ReplayReason::Oversize,
+        "jumbo cannot exceed the complete source page cap");
+
+  const std::array twoJumboRecords{
+      clearRecord(exact65Rects), clearRecord(exact65Rects)};
+  const auto twoJumboFixture = makeValidatedFixture(twoJumboRecords);
+  const auto twoJumbo = dxmt9::d3d9::planCpuReadyChunkV2(
+      twoJumboFixture.view(), 27,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 2,
+       .maxPagesPerSource = 192});
+  check(twoJumbo.directArenaCandidate() && twoJumbo.segmentCount == 2 &&
+            twoJumbo.segments[0].jumbo &&
+            twoJumbo.segments[1].jumbo &&
+            twoJumbo.segments[0].firstRecordIndex == 0 &&
+            twoJumbo.segments[0].recordCount == 1 &&
+            twoJumbo.segments[1].firstRecordIndex == 1 &&
+            twoJumbo.segments[1].recordCount == 1,
+        "multiple indivisible records receive dedicated jumbo segments within source caps");
+
+  const std::array splitRecords{
+      clearRecord(exact40Rects), clearRecord(exact40Rects)};
+  const auto splitFixture = makeValidatedFixture(splitRecords);
+  const auto split = dxmt9::d3d9::planCpuReadyChunkV2(
+      splitFixture.view(), 22,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 2,
+       .maxPagesPerSource = 128});
+  check(split.directArenaCandidate() && split.segmentCount == 2 &&
+            !split.layout && split.arenaLayout->segmentCount == 2 &&
+            split.segments[0].firstRecordIndex == 0 &&
+            split.segments[0].recordCount == 1 &&
+            split.segments[1].firstRecordIndex == 1 &&
+            split.segments[1].recordCount == 1 &&
+            split.segments[0].layout.pageCount <= 64 &&
+            split.segments[1].layout.pageCount <= 64,
+        "a 65+-page aggregate splits before the second GPU record in source order");
+  const auto segmentCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+      splitFixture.view(), 22,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 1,
+       .maxPagesPerSource = 128});
+  check(segmentCapped.lane == V2ReplayLane::Legacy &&
+            segmentCapped.reason == V2ReplayReason::Oversize,
+        "the segment hard cap rejects a required second block");
+  const auto pageCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+      splitFixture.view(), 22,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 2,
+       .maxPagesPerSource = split.arenaLayout->pageCount - 1});
+  check(pageCapped.lane == V2ReplayLane::Legacy &&
+            pageCapped.reason == V2ReplayReason::Oversize,
+        "packed segments still obey the complete source page hard cap");
+}
+
+void segmentedRangesCoverEveryRawRecordExactlyOnce() {
+  const auto exact40Rects = clearRectCountForSegmentPages(40, true);
+  const std::array records{
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      clearRecord(exact40Rects),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+      fixture.view(), 24,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 2,
+       .maxPagesPerSource = 128});
+  check(plan.directArenaCandidate() && plan.segmentCount == 2 &&
+            plan.segments[0].firstRecordIndex == 0 &&
+            plan.segments[0].recordCount == 2 &&
+            plan.segments[1].firstRecordIndex == 2 &&
+            plan.segments[1].recordCount == 3,
+        "segment ranges preserve leading, interstitial, and trailing state records exactly once");
+  check(plan.segments[0].firstRecordIndex +
+                plan.segments[0].recordCount ==
+            plan.segments[1].firstRecordIndex &&
+            plan.segments[1].firstRecordIndex +
+                    plan.segments[1].recordCount ==
+                records.size(),
+        "segment ranges form one gap-free non-overlapping raw-record partition");
+}
+
+void presentTailIsAOrderedDirectSegment() {
+  const auto exact64Rects = clearRectCountForSegmentPages(64, true);
+  const std::array records{
+      clearRecord(exact64Rects),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+      fixture.view(), 23,
+      {.pageSize = 4096,
+       .maxOrdinaryPagesPerSegment = 64,
+       .maxSegmentsPerSource = 2,
+       .maxPagesPerSource = 128});
+  check(plan.directArenaCandidate() && plan.segmentCount == 2 &&
+            plan.capacity.presentRecords == 1 &&
+            plan.segments[1].firstRecordIndex == 1 &&
+            plan.segments[1].recordCount == 1 &&
+            plan.segments[1].capacity.presentRecords == 1 &&
+            plan.segments[1].capacity.commandHeaders == 1,
+        "Present is a structurally sized Direct record at the logical tail");
+}
+
+void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
+  const std::array presentBeforeDraw{
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+      drawRecord(),
+  };
+  const auto beforeDrawFixture = makeValidatedFixture(presentBeforeDraw);
+  const auto beforeDraw = dxmt9::d3d9::planCpuReadyChunkV2(
+      beforeDrawFixture.view(), 25);
+  check(beforeDraw.lane == V2ReplayLane::Legacy &&
+            beforeDraw.reason == V2ReplayReason::Present &&
+            beforeDraw.replaysSemanticsExactlyOnce(),
+        "Present before later work falls back as one ordered legacy source");
+
+  const std::array repeatedPresent{
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+  };
+  const auto repeatedFixture = makeValidatedFixture(repeatedPresent);
+  const auto repeated = dxmt9::d3d9::planCpuReadyChunkV2(
+      repeatedFixture.view(), 26);
+  check(repeated.lane == V2ReplayLane::Legacy &&
+            repeated.reason == V2ReplayReason::Present &&
+            repeated.replaysSemanticsExactlyOnce(),
+        "multiple Present records fall back as one ordered legacy source");
 }
 
 void oversizeAndOverflowFallbackBeforeReplay() {
@@ -490,6 +762,10 @@ int main() {
     partialConstantDeltasDoNotInflateSnapshotCapacity();
     triangleFanAndLookupBoundaryPlans();
     upPayloadUsesCheckedAlignedBuilderUpperBound();
+    segmentedArenaBoundariesAndHardCaps();
+    segmentedRangesCoverEveryRawRecordExactlyOnce();
+    presentTailIsAOrderedDirectSegment();
+    nonFinalOrRepeatedPresentFallsBackAsOneSource();
     oversizeAndOverflowFallbackBeforeReplay();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_plan_spec failed: " << error.what() << '\n';

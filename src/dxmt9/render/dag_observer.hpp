@@ -4,7 +4,7 @@
 // side-channel (R-BACK-39.7 side-effect neutral).
 //
 // The DAG debug dump (DXMT9_RENDERER_DUMP_DAG) is a PURE OBSERVATION channel:
-// it builds a framegraph::FrameGraph from one core::ChunkSlot, dumps the
+// it builds a framegraph::FrameGraph from one core::SourcePayloadView, dumps the
 // pre-opt DAG, runs the owning backend's resolved optimizer options, then dumps
 // the post-opt DAG. Which backend actually encodes the chunk is irrelevant to
 // the dump, so the same observer is owned by BOTH render backends:
@@ -15,7 +15,7 @@
 //     baseline; its real encode stays byte-identical on encoders::encodeChunk.
 //
 // SIDE-EFFECT NEUTRAL.
-//   observeAndExport reads only `slot` and writes only dump files plus the
+//   observeAndExport reads only the borrowed payload and writes only dump files plus the
 //   process-global atomic perf counters (which no-op unless DXMT_PERF_COUNTERS
 //   is set). It touches no Metal / queue / cache / pool state, so an enabled
 //   dump leaves the Metal command stream byte-identical to a disabled run
@@ -63,14 +63,21 @@ class DagObserver {
   // chunk that contains a Present. SINGLE WRITER: only the encode thread calls
   // this, so no atomic / lock is needed.
   void observeAndExport(
+      core::SourcePayloadView payload, std::uint64_t seqId,
+      framegraph::ResourceAliasResolver aliasResolver = {});
+  void observeAndExport(
       const core::ChunkSlot& slot,
       framegraph::ResourceAliasResolver aliasResolver = {});
 
   // Explicit-directory observe+export test seam: writes the pre-opt + post-opt
   // DAG JSON to `dumpDir` for the caller-supplied `frameId`, bypassing the
   // framegraph::dumpDagDir() static DXMT9_RENDERER_DUMP_DAG cache. const /
-  // counter-free w.r.t. observe_frame_; reads only `slot`, writes only those
+  // counter-free w.r.t. observe_frame_; reads only `payload`, writes only those
   // files plus the observation-only perf counters.
+  void observeAndExportDagToDir(core::SourcePayloadView payload,
+                                std::uint64_t seqId,
+                                std::uint64_t frameId,
+                                const std::string& dumpDir) const;
   void observeAndExportDagToDir(const core::ChunkSlot& slot,
                                 std::uint64_t frameId,
                                 const std::string& dumpDir) const;
@@ -82,6 +89,10 @@ class DagObserver {
   // `targetFrame` set only chunks whose observe frame falls in the inclusive
   // window [max(1, targetFrame-radius), targetFrame+radius] dump; with
   // std::nullopt every chunk dumps (radius ignored).
+  void observeAndExportDagToDirForFrame(
+      core::SourcePayloadView payload, std::uint64_t seqId,
+      const std::string& dumpDir,
+      std::optional<std::uint64_t> targetFrame, std::uint64_t radius = 0);
   void observeAndExportDagToDirForFrame(
       const core::ChunkSlot& slot, const std::string& dumpDir,
       std::optional<std::uint64_t> targetFrame, std::uint64_t radius = 0);

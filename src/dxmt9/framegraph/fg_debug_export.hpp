@@ -26,7 +26,7 @@
 #include "fg_dag.hpp"
 #include "fg_optimizer.hpp"  // framegraph::OptimizerOptions
 
-#include "../dxmt9_backend_types.hpp"  // core::ChunkSlot, core::MetalCommandKind
+#include "../dxmt9_source_payload.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -54,7 +54,7 @@ struct SnapshotAccess {
 // Optional per-draw D3D9 detail (DEBUG-ONLY; DXMT9_RENDERER_DUMP_DAG_DRAWS).
 //
 // This is L1-debug only: it carries a BOUNDED, cheaply-resolved per-draw
-// summary read out of the source core::ChunkSlot hot state for the JSON dump.
+// summary read out of the source payload hot state for the JSON dump.
 // It is NOT the deferred L2 production `DrawDescriptor` (spec.md §3.3), which
 // carries per-draw geometry/bindings for the mesh / GPU-driven path and remains
 // a separate, deferred production data structure. Field sources (resolved by
@@ -127,7 +127,8 @@ struct DagSnapshot {
 // caller-supplied (the FrameGraph carries frame_id but not the chunk seq id,
 // which onChunkReady sources from its ImportContext — spec.md §3.5).
 //
-// `slot` is the source ChunkSlot the FrameGraph's DrawRefs index into. It is
+// The optional source payload is the storage the FrameGraph's DrawRefs index
+// into. The legacy pointer overload below is retained for existing callers.
 // OPTIONAL: when non-null AND DXMT9_RENDERER_DUMP_DAG_DRAWS is set, each
 // SnapshotPass gets a per-draw `draws_detail` resolved from the slot's hot
 // state (DEBUG-ONLY; encode-neutral — pure read). When `slot` is null or the
@@ -137,6 +138,9 @@ struct DagSnapshot {
 DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
                           const char* stage,
                           const core::ChunkSlot* slot = nullptr);
+DagSnapshot buildSnapshot(const FrameGraph& fg, std::uint64_t chunk_seq_id,
+                          const char* stage,
+                          core::SourcePayloadView payload);
 
 // ---------------------------------------------------------------------------
 // Format serializers. The const-FrameGraph overloads build a snapshot then
@@ -156,6 +160,9 @@ std::string serializeDagDot(const DagSnapshot& snapshot);
 std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
                              const char* stage,
                              const core::ChunkSlot* slot = nullptr);
+std::string serializeDagJson(const FrameGraph& fg, std::uint64_t chunk_seq_id,
+                             const char* stage,
+                             core::SourcePayloadView payload);
 
 // `flowchart TD`: one node per pass, one labeled edge per Edge (the re-entry
 // case shows as two edges sharing a resource into a later pass).
@@ -246,6 +253,7 @@ bool dumpDagDraws();
 // inter-present frame, so the observe-path frame counter advances after it.
 // Pure/cheap: a single linear scan of slot.commandHeaders, no payload deref.
 bool chunkContainsPresent(const core::ChunkSlot& slot);
+bool chunkContainsPresent(core::SourcePayloadView payload);
 
 // Side-effect-neutral file dump (R-BACK-39.7). If the dump dir is set, writes
 // `dag-frame<frameId>-chunk<seqId>-<stage>.{json,dot,mermaid}` per selected
@@ -258,5 +266,8 @@ bool chunkContainsPresent(const core::ChunkSlot& slot);
 void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
                   std::uint64_t chunk_seq_id, const char* stage,
                   const core::ChunkSlot* slot = nullptr);
+void writeDagDump(const FrameGraph& fg, std::uint64_t frame_id,
+                  std::uint64_t chunk_seq_id, const char* stage,
+                  core::SourcePayloadView payload);
 
 }  // namespace dxmt9::framegraph

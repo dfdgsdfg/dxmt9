@@ -218,6 +218,49 @@ std::optional<SourcePayloadLayout> makeSourcePayloadLayout(
   return layout;
 }
 
+std::optional<ArenaSourcePayloadLayout> makeArenaSourcePayloadLayout(
+    std::span<const SourcePayloadLayout> segments,
+    std::size_t pageSize,
+    std::size_t maxPages) noexcept {
+  if (segments.empty() ||
+      segments.size() > kMaxArenaSourcePayloadSegments || pageSize == 0 ||
+      maxPages == 0) {
+    return std::nullopt;
+  }
+
+  ArenaSourcePayloadLayout result{};
+  std::size_t cursor = 0;
+  for (std::size_t i = 0; i < segments.size(); ++i) {
+    const auto& segment = segments[i];
+    std::size_t offset = 0;
+    std::size_t end = 0;
+    if (segment.usedBytes == 0 || segment.pageCount == 0 ||
+        !isPowerOfTwo(segment.requiredBaseAlignment) ||
+        pageSize % segment.requiredBaseAlignment != 0 ||
+        !checkedAlignUp(cursor, segment.requiredBaseAlignment, offset) ||
+        !checkedAdd(offset, segment.usedBytes, end)) {
+      return std::nullopt;
+    }
+    result.segments[i] = ArenaSourcePayloadSegmentLayout{
+        .layout = segment,
+        .byteOffset = offset,
+    };
+    cursor = end;
+  }
+  if (cursor > std::numeric_limits<std::size_t>::max() - (pageSize - 1)) {
+    return std::nullopt;
+  }
+  const std::size_t pages = (cursor + pageSize - 1) / pageSize;
+  if (pages == 0 || pages > maxPages ||
+      pages > std::numeric_limits<std::uint32_t>::max()) {
+    return std::nullopt;
+  }
+  result.segmentCount = segments.size();
+  result.usedBytes = cursor;
+  result.pageCount = pages;
+  return result;
+}
+
 namespace {
 
 bool preflightRegion(std::span<std::byte> memory,
@@ -1303,42 +1346,152 @@ bool ArenaSourcePayloadAssembler::tryAppendDepthResolve(
   return true;
 }
 
+bool ArenaSourcePayloadChain::initialize(
+    std::span<const ArenaSourcePayloadBlock* const> segments) noexcept {
+  if (readable_ || segments.empty() ||
+      segments.size() > kMaxArenaSourcePayloadSegments) {
+    return false;
+  }
+  std::array<const ArenaSourcePayloadBlock*,
+             kMaxArenaSourcePayloadSegments> nextSegments{};
+  std::array<std::size_t, kMaxArenaSourcePayloadSegments + 1> nextOffsets{};
+  std::size_t commandCount = 0;
+  for (std::size_t i = 0; i < segments.size(); ++i) {
+    const auto* segment = segments[i];
+    if (!segment || !segment->readable() ||
+        segment->commandHeaders_.size() >
+            std::numeric_limits<std::size_t>::max() - commandCount) {
+      return false;
+    }
+    nextSegments[i] = segment;
+    nextOffsets[i] = commandCount;
+    commandCount += segment->commandHeaders_.size();
+  }
+  nextOffsets[segments.size()] = commandCount;
+  segments_ = nextSegments;
+  commandOffsets_ = nextOffsets;
+  segmentCount_ = segments.size();
+  readable_ = true;
+  return true;
+}
+
+void ArenaSourcePayloadChain::clear() noexcept {
+  segments_ = {};
+  commandOffsets_ = {};
+  segmentCount_ = 0;
+  readable_ = false;
+}
+
+bool ArenaSourcePayloadChain::locateCommand(
+    std::size_t logicalCommandIndex,
+    std::size_t& segmentIndex,
+    std::size_t& localCommandIndex) const noexcept {
+  if (!readable_ || logicalCommandIndex >= commandCount()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < segmentCount_; ++i) {
+    if (logicalCommandIndex < commandOffsets_[i + 1]) {
+      segmentIndex = i;
+      localCommandIndex = logicalCommandIndex - commandOffsets_[i];
+      return true;
+    }
+  }
+  return false;
+}
+
 std::size_t SourcePayloadView::commandCount() const noexcept {
   if (legacy_) {
     return legacy_->commandCount();
   }
-  return arena_ ? arena_->commandHeaders_.size() : 0;
+  if (arena_) {
+    return arena_->commandHeaders_.size();
+  }
+  return arenaChain_ ? arenaChain_->commandCount() : 0;
 }
 
 std::size_t SourcePayloadView::presentRecordCount() const noexcept {
   if (legacy_) {
     return legacy_->presentRecords.size();
   }
-  return arena_ ? arena_->presentRecords_.size() : 0;
+  if (arena_) {
+    return arena_->presentRecords_.size();
+  }
+  std::size_t count = 0;
+  if (arenaChain_) {
+    for (std::size_t i = 0; i < arenaChain_->segmentCount(); ++i) {
+      count += arenaChain_->segment(i)->presentRecords_.size();
+    }
+  }
+  return count;
 }
 
 bool SourcePayloadView::drawOnlyCommandStream() const noexcept {
   if (legacy_) {
     return legacy_->drawOnlyCommandStream();
   }
-  if (!arena_ || arena_->commandHeaders_.empty() ||
-      arena_->commandHeaders_.size() != arena_->drawRunRecords_.size()) {
+  if (!isArena() || commandCount() == 0) {
     return false;
   }
-  for (const auto& header : arena_->commandHeaders_.span()) {
-    if (header.kind != MetalCommandKind::DrawRun) {
+  for (std::size_t i = 0; i < commandCount(); ++i) {
+    if (commandAt(i).kind() != MetalCommandKind::DrawRun) {
       return false;
     }
   }
   return true;
 }
 
+bool SourcePayloadView::locateCommand(
+    std::size_t logicalCommandIndex,
+    std::size_t& segmentIndex,
+    std::size_t& localCommandIndex) const noexcept {
+  if (legacy_) {
+    if (logicalCommandIndex >= legacy_->commandCount()) {
+      return false;
+    }
+    segmentIndex = 0;
+    localCommandIndex = logicalCommandIndex;
+    return true;
+  }
+  if (arena_) {
+    if (logicalCommandIndex >= arena_->commandHeaders_.size()) {
+      return false;
+    }
+    segmentIndex = 0;
+    localCommandIndex = logicalCommandIndex;
+    return true;
+  }
+  return arenaChain_ && arenaChain_->locateCommand(
+                            logicalCommandIndex, segmentIndex,
+                            localCommandIndex);
+}
+
 SourceCommandView SourcePayloadView::commandAt(std::size_t index) const noexcept {
   if (legacy_) {
-    SourceCommandView result{.command = legacy_->commandAt(index)};
+    if (index >= legacy_->commandHeaders.size()) {
+      return {};
+    }
+    SourceCommandView result{
+        .command = legacy_->commandAt(index),
+        .payloadIndex = legacy_->commandHeaders[index].payloadIndex.value,
+        .localCommandIndex = index,
+    };
     if (result.command.clear) {
       result.clear = makeClearView(*result.command.clear);
     }
+    return result;
+  }
+  if (arenaChain_) {
+    std::size_t segmentIndex = 0;
+    std::size_t localCommandIndex = 0;
+    if (!arenaChain_->locateCommand(index, segmentIndex,
+                                    localCommandIndex)) {
+      return {};
+    }
+    SourceCommandView result =
+        SourcePayloadView(*arenaChain_->segment(segmentIndex))
+            .commandAt(localCommandIndex);
+    result.segmentIndex = segmentIndex;
+    result.localCommandIndex = localCommandIndex;
     return result;
   }
   if (!arena_ || index >= arena_->commandHeaders_.size()) {
@@ -1346,7 +1499,10 @@ SourceCommandView SourcePayloadView::commandAt(std::size_t index) const noexcept
   }
 
   const auto& header = arena_->commandHeaders_[index];
-  SourceCommandView result{};
+  SourceCommandView result{
+      .payloadIndex = header.payloadIndex.value,
+      .localCommandIndex = index,
+  };
   result.command.kind = header.kind;
   const auto payloadIndex = header.payloadIndex.value;
   switch (header.kind) {

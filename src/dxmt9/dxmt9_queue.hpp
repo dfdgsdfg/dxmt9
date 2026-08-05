@@ -10,10 +10,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <deque>
 #include <condition_variable>
@@ -309,6 +311,28 @@ struct ResolvedPublishedSource {
   }
 };
 
+// Stable, pointer-free attribution for one logical command in a published
+// source. The Tape source/storage generations disambiguate recycled control
+// slots; slotIndex is diagnostic only and completion remains source-granular.
+struct PublishedCommandRef {
+  CpuReadyTape::SourceRef source{};
+  u64 seqId = 0;
+  u32 slotIndex = std::numeric_limits<u32>::max();
+  u32 commandIndex = std::numeric_limits<u32>::max();
+
+  constexpr bool valid() const noexcept {
+    return source.valid() && seqId != 0 &&
+           slotIndex != std::numeric_limits<u32>::max() &&
+           commandIndex != std::numeric_limits<u32>::max();
+  }
+
+  friend constexpr bool operator==(PublishedCommandRef,
+                                   PublishedCommandRef) noexcept = default;
+};
+
+static_assert(std::is_trivially_copyable_v<PublishedCommandRef>);
+static_assert(std::is_standard_layout_v<PublishedCommandRef>);
+
 QueueCompletionSource completionSourceForReadySlot(
     const ReadySlotSnapshot& snapshot) noexcept;
 
@@ -327,6 +351,7 @@ struct QueueSubmissionRecord {
     u64 seqId = 0;
     u32 slotIndex = 0;
     u32 commandIndex = 0;
+    PublishedCommandRef sourceCommand{};
     u64 rtHandle = 0;
     u64 depthHandle = 0;
     u64 psoHandle = 0;

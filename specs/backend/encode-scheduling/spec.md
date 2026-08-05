@@ -46,12 +46,18 @@ logical pass; Metal 4 does not cross it.
 
 Published source payload remains owned by queue storage. In the promoted tape
 lane, `ChunkSlot` becomes a control shell that references a
-`SourcePayloadBlock`; it no longer owns the replayed SoA vectors. The replay
-worker constructs every SoA and re-entrant owner, including shader-layout
-context, directly in the block's reserved page run. Sealing hands the block to
-the queue in O(1) by locator. There is no `ChunkSlot -> tape` payload copy.
-`SessionSourceRef` and partition snapshots are compact generation-checked
-locators; they do not copy payload arenas or retain transient resolved spans.
+`SourcePayloadBlockChain`; it no longer owns the replayed SoA vectors. One
+logical source owns the whole ordered chain and one completion identity. The
+replay worker constructs every SoA and re-entrant owner, including shader-layout
+context, directly in the chain's reserved page runs. Sealing hands the complete
+chain to the queue in O(1) by locator. There is no `ChunkSlot -> tape` payload
+copy and no independently published block. `SourcePayloadView` is the sole
+read-only payload input to FrameGraph construction, replay planning, and serial
+encoding. `SessionSourceRef`, FrameGraph command references, and partition
+snapshots are compact generation-checked `(retainedSourceIndex, commandIndex)`
+or equivalent source-qualified locators; they do not copy payload arenas or
+retain transient resolved spans. `sourceOrdinal` names only the monotonic global
+publication order, never a source-table index.
 
 The physical command buffer is not call-local while `OpenStreaming`. The
 coordinator-owned session envelope or pending `QueueSubmissionRecord` owns it;
@@ -70,7 +76,8 @@ initialization. It contains:
 CpuReadyTapeConfig {
   pageSize, pageCount, sourceSlotCount, readyFifoCount
   retentionEntryCount, allocatorTicketCount
-  maxPagesPerSource, maxRetainedHandlesPerSource
+  maxPagesPerPayloadSegment, maxPayloadSegmentsPerSource, maxPagesPerSource
+  maxRetainedHandlesPerSource
   maxSessionSources, maxSessionPages, maxSessionBytes, maxSessionDraws
   highWater[dimension], lowWater[dimension]
 }
@@ -93,16 +100,23 @@ streaming profile must not change default-off allocation or admission policy.
 | Retention table | bounded generation-stamped blocks of retained backend handles | source lifetime |
 | Allocator tickets | bounded locators for uniform, binding, and transient ranges | source lifetime |
 
-A source receives one contiguous, non-wrapping page run. When the circular tail
-cannot fit the run before the backing end, deterministic padding advances to
-page zero; the padding remains unavailable until older FIFO allocations reclaim.
-This keeps every typed SoA contiguous and lets existing encoder paths resolve
-one span without a gather copy.
+A source receives an ordered chain of one or more packed payload segments. Each
+ordinary segment is one contiguous, non-wrapping page run no larger than
+`maxPagesPerPayloadSegment`; the sum of all source runs may not exceed
+`maxPagesPerSource`, and the number of ordinary plus jumbo segments may not
+exceed `maxPayloadSegmentsPerSource`. When the circular tail cannot fit the next
+run before the backing end, deterministic padding advances to page zero; the
+padding remains unavailable until older FIFO allocations reclaim. A segment
+packs consecutive regions and records without a gather copy. A record is never
+split: if one canonical record does not fit the ordinary segment cap, a
+dedicated jumbo segment may exceed that cap but remains subject to the source
+page and segment-count limits.
 
 ```text
 CpuReadySourceId  { sourceSlotIndex, sourceGeneration }
-SourcePayloadBlockId { sourceSlotIndex, sourceGeneration, firstPage, pageCount,
-                       pageGeneration }
+SourcePayloadBlockId { sourceSlotIndex, sourceGeneration, segmentIndex,
+                       firstPage, pageCount, pageGeneration, jumbo }
+SourcePayloadBlockChain { sourceId, blockIds[], totalPages, usedBytes }
 
 SourcePayloadLayout {
   reservedBytes, usedBytes, maximumAlignment
@@ -112,13 +126,13 @@ SourcePayloadLayout {
 }
 
 PublicationTicket {
-  id, payloadBlock
+  id, payloadBlockChain
   rawOrdinal, sourceOrdinal, seqId
   state: Writing | Sealed | Aborted
 }
 
 CpuReadySourceRef {
-  id, payloadBlock
+  id, payloadBlockChain
   sourceOrdinal, seqId
   recordRange, drawRunRange, drawParamRange, stateRange
   uniformRange, bindingRange, retainedHandleBlock, allocatorTickets
@@ -136,16 +150,20 @@ Resolution validates state, all generations, the declared page run, and its
 byte extents before returning a span. A mismatch is stale-reference failure,
 never a reason to inspect reused storage.
 
-`SourcePayloadBlock` is the final home of imported command headers, typed
+`SourcePayloadBlockChain` is the final home of imported command headers, typed
 records, draw params, state records, uniform and binding bytes, and re-entrant
-queue-local owners such as `DrawShaderLayoutContext`. Its fields use arena-backed
-SoA containers constructed directly in the reserved run. `SourcePayloadLayout`
-fixes aligned, non-overlapping region offsets before construction. Each region
-reserves its exact or conservative upper-bound capacity once, appends without
-reallocation or relocation, and publishes only `actualCount`; bounded unused
-slack remains inaccessible and pinned until reclaim. Destruction at reclaim runs
-the block's explicit owner destructors before page generations advance. The
-control-shell `ChunkSlot` contains only lifecycle state and IDs into this storage.
+queue-local owners such as `DrawShaderLayoutContext`. Each block uses
+arena-backed SoA regions constructed directly in its reserved run.
+`SourcePayloadLayout` fixes aligned, non-overlapping region offsets and stable
+global command indices before construction. Each region reserves its exact or
+conservative upper-bound capacity once, appends without reallocation or
+relocation, and publishes only `actualCount`; bounded unused slack remains
+inaccessible and pinned until reclaim. Destruction at reclaim runs every block's
+explicit owner destructors before any page generation advances. The
+control-shell `ChunkSlot` contains only lifecycle state and IDs into this
+storage. `SourcePayloadView` resolves across the chain synchronously while
+presenting one logical ordered command stream; block boundaries are invisible
+to FrameGraph ownership, replay order, partitioning, and completion.
 
 `Represented` and `Submitted` are lifetime pins, not locks. After the
 coordinator resolves a generation-checked locator, the synchronous encode call
@@ -156,29 +174,31 @@ destruction always occurs after the finish thread detaches the completed prefix
 and releases the scheduling lock.
 
 The legacy single-source lane retains its current payload-owning `ChunkSlot`, or
-an equivalent dedicated `LegacyPayloadBlock`, as a no-copy bypass during
-migration and for a valid source whose final block size exceeds the tape's
-per-source limit. It is drained in FIFO order, disables pass streaming for that
-source, and never copies a sealed slot into the tape. A source larger than both
-the negotiated chunk limit and the bypass limit is rejected as already-invalid
-input.
+an equivalent dedicated `LegacyPayloadBlock`, as a no-copy rollback during
+migration and for a valid source whose final chain exceeds the tape's total page
+or segment-count limit. It is drained in FIFO order, disables pass streaming for
+that source, and never copies a sealed source into the tape. Query-, Readback-, or
+`UpdateTexture`-dependent work also remains in an explicit ordered non-payload
+control/compatibility disposition until canonical Arena sizing and ownership are
+defined. A source larger than both the negotiated chunk limit and the rollback
+limit is rejected as already-invalid input.
 
 ### 3.2 Publication and Admission
 
 The raw queue supplies one already assigned `rawOrdinal` and `seqId` per logical
 source. After all required bounded capacity is reserved, the single replay
-worker assigns `sourceOrdinal` in the same strict order and publishes a compact
-`PublicationTicket`. The ticket, not the payload, is visible while construction
-continues. Its three identities are fixed through seal, ordered legacy bypass,
-or abort and are never reused. There is a one-to-one, order-isomorphic mapping
-for admitted sources. A future source split must allocate independent sequence
-identities before admission and is not implicit in this design.
+worker assigns global `sourceOrdinal` in the same strict order and publishes a
+compact `PublicationTicket`. The ticket, not any payload block, is visible while
+construction continues. Its three identities are fixed through complete-chain
+seal, ordered legacy rollback, or abort and are never reused. There is a
+one-to-one, order-isomorphic mapping for logical sources; adding payload segments
+does not split that mapping or allocate additional sequence identities.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Candidate: pop raw FIFO entry
-  Candidate --> Reserved: reserve source slot + page run + retention capacity
-  Reserved --> Writing: construct final SoAs in SourcePayloadBlock
+  Candidate --> Reserved: reserve source slot + complete block chain + retention capacity
+  Reserved --> Writing: construct final SoAs in SourcePayloadBlockChain
   Writing --> Sealed: validate locators + retain + mark + summarize
   Sealed --> Ready: atomic FIFO publication
   Ready --> Represented: dequeue maximal compatible prefix
@@ -189,7 +209,7 @@ stateDiagram-v2
   Reclaiming --> Reclaimed: destroy outside lock + advance generations
   Reclaimed --> [*]
 
-  Candidate --> LegacyBypass: cannot fit per-source tape limit
+  Candidate --> LegacyBypass: cannot fit source page/segment limits
   Reserved --> Aborted: abort before construction
   Writing --> Aborted: destroy partial block
   Aborted --> [*]: wake encode coordinator
@@ -199,7 +219,12 @@ The protocol is:
 
 1. The replay worker pops one raw FIFO entry without holding the scheduling
    lock, validates every wire header, length, nested range, and arithmetic
-   product, and computes one `SourcePayloadLayout` from structural counts only.
+   product, and computes one complete `SourcePayloadBlockChain` layout from
+   structural counts only. The packing pass preserves command order and stable
+   command indices, starts a new ordinary segment when the next indivisible
+   record will not fit, and assigns an oversized indivisible record to one jumbo
+   segment. It rejects or selects ordered legacy rollback before construction
+   if the total page or segment-count limit cannot hold the source.
    Exact counts are preferred; conservative upper bounds are permitted when
    fixed by validated wire metadata. This sizing pass does not execute shader,
    state, or draw semantic transformation and cannot replay the transform twice.
@@ -207,27 +232,29 @@ The protocol is:
    resource identities, captured backing snapshots, and raw-residency tokens
    fixed synchronously at commit admission. The default-off path never enters
    this planner and retains the historical combined synchronous mark/capture.
-2. Under the scheduling lock it reserves one source descriptor, one page run,
-   retention entries, and allocator-ticket capacity as one transaction. Failure
-   leaves every cursor unchanged and exposes no ticket. Success fixes the three
-   identities and publishes one `Writing` `PublicationTicket` for the immediate
-   successor; no payload range is yet resolvable.
-3. It releases the lock, binds each arena-backed SoA to its precomputed region
-   with capacity reserved once, and constructs the final `SourcePayloadBlock` in
-   place. Append cannot allocate another payload extent, relocate an earlier
-   element, or leave growth-history extents. Only the ticket control record is
-   visible in `Writing`; source payload and summaries remain unavailable to
+2. Under the scheduling lock it reserves one source descriptor, every page run
+   and block descriptor in the chain, retention entries, and allocator-ticket
+   capacity as one transaction. Failure leaves every cursor unchanged and
+   exposes no ticket. Success fixes the three identities and publishes one
+   `Writing` `PublicationTicket` for the immediate successor; no payload range
+   is yet resolvable.
+3. It releases the lock, binds each arena-backed SoA to its precomputed block
+   region with capacity reserved once, and constructs the final
+   `SourcePayloadBlockChain` in place. Append cannot allocate an unplanned
+   payload extent, relocate an earlier element, split a record, or leave
+   growth-history extents. Only the ticket control record is visible in
+   `Writing`; every source payload block and summary remains unavailable to
    scheduling.
 4. It completes nested-range validation, retention, exact resource marking for
    the admitted source `seqId`, access/semantic summaries, and explicit owner
    construction. An error before seal destroys the partial block and returns the
    whole reservation; deferred replay failure follows the existing fail-stop
    contract.
-5. Under the scheduling lock it seals every extent, changes the ticket to
-   `Sealed`, publishes the source as `Ready`, retires the construction ticket,
+5. Under the scheduling lock it seals every extent and block, changes the ticket
+   to `Sealed`, publishes the source as `Ready`, retires the construction ticket,
    appends the source ID to the FIFO, and wakes the encode coordinator in one
-   transaction. No later source can publish around it because the replay worker
-   is single-writer.
+   transaction. No segment has an intermediate Ready state. No later source can
+   publish around it because the replay worker is single-writer.
 6. The coordinator copies a finite FIFO prefix of IDs and summaries without
    changing ownership, then moves only its maximal compatible prefix from
    `Ready` to `Represented` in one transaction. The suffix never leaves
@@ -241,8 +268,11 @@ The protocol is:
 ### 3.3 Capacity and Back-Pressure
 
 Hard capacities are fixed at queue creation for source descriptors, pages/bytes,
-per-source pages/bytes, retention entries, allocator tickets, ready FIFO entries,
-and session source references. Each dimension has fixed high and low watermarks.
+ordinary pages per payload segment, payload segments per source, total pages per
+source, retention entries, allocator tickets, ready FIFO entries, and session
+source references. Each aggregate pressure dimension has fixed high and low
+watermarks; the three per-source packing limits are validated independently
+before transactional reservation.
 Admission closes when the head candidate would cross any high watermark. Once a
 dimension closes admission it remains closed until ordered reclaim takes that
 dimension to or below its low watermark; the same head candidate is then
@@ -288,13 +318,41 @@ The raw replay watermark and CPU-ready publication watermark are distinct.
 Scoped drain never executes a later record before an earlier record and does
 not make replay itself parallel or out of order.
 
+### 3.5 Ordered Non-Payload Control Dispositions
+
+Query, Readback, and `UpdateTexture` do not enter the Arena payload schema until
+their exact canonical record, nested payload, retention, and fan-out sizing is
+defined. Admission classifies affected work before partial Arena construction
+and emits one fixed control-shell disposition at its original raw/source-order
+fence:
+
+```text
+OrderedControlDisposition {
+  kind: Query | Readback | UpdateTexture
+  rawOrdinal, fenceSeqId, compatibilityLocator
+}
+```
+
+The disposition owns no Arena payload pages and is not an empty
+`SourcePayloadView`. The coordinator cannot inspect or represent a younger
+source across it. It first closes the active logical pass and submits any older
+session prefix required by the operation, then dispatches the existing
+compatibility or synchronous direct path. Readback completes its required wait
+before younger observable work; Query retains issue-point order; and
+`UpdateTexture` retains its copy/initializer ordering and fan-out ownership.
+The disposition is a migration boundary, not permission to duplicate the
+operation in both payload and control lanes.
+
 ## 4. Ready-Prefix Consumers
 
 The queue owns one immutable `ReadyPrefixSnapshot` over an already-ready FIFO
 prefix. Snapshot construction copies generation-stamped source IDs and compact
-summaries under the scheduling lock; it never exposes page pointers. Payload
-resolution is legal only after the coordinator atomically changes the selected
-source to `Represented`. Consumers use the snapshot synchronously:
+summaries under the scheduling lock; it never exposes page pointers. The oldest
+not-yet-represented source ordinal is the head-stable frontier: snapshot
+exhaustion records that exact next ordinal, and later publication may satisfy
+but never replace it. Payload resolution is legal only after the coordinator
+atomically changes the selected source to `Represented`. Consumers use the
+snapshot synchronously:
 
 | Consumer | Reads | Does not do |
 |---|---|---|
@@ -383,8 +441,10 @@ side effects, query status, and terminal boundary are known.
 
 At each encode iteration the coordinator locks scheduling once and copies at
 most `kMaxReadyPrefixSources` consecutive IDs and compact summaries without
-changing source state. DCE copies summary-only proof data and never borrows page
-pointers. The coordinator then moves only the maximal
+changing source state. The snapshot begins at the session's head-stable frontier
+and cannot skip an unready or control-disposition head in favor of a younger
+Ready source. DCE copies summary-only proof data and never borrows page pointers.
+The coordinator then moves only the maximal
 `SessionAdmissionCompatible` prefix atomically from `Ready` to `Represented`.
 The suffix remains in the ready FIFO throughout; there is no snapshot-owned
 suffix state to restore. Before emitting any Metal command from this newly
@@ -418,10 +478,16 @@ For each represented source the serial session path:
 5. retains the original `seqId`, retention block, allocator tickets, and
    completion identity until session completion.
 
-A Present source may attach only as the final source. The coordinator ends the
-logical pass, delegates drawable acquisition and `presentDrawable` to the
-Presenter, attaches the frame token to that tail, and finalizes immediately.
-No earlier source may acquire a drawable or carry the token.
+A Present source may attach only as the final source. Its Present command,
+canonical present-source read, and pending backbuffer identity are part of the
+same Arena `SourcePayloadView` and source completion identity; its publication
+does not touch the Presenter. When ordered replay reaches the Present tail, the
+coordinator ends the logical pass, delegates drawable acquisition and
+`presentDrawable` to the Presenter, attaches the frame token to that tail, and
+finalizes immediately. No earlier source or payload block may acquire a
+drawable or carry the token. Abort before Presenter handoff releases any
+reserved pacing state; abort after handoff follows the existing Presenter/error
+completion contract and never reports a successful present early.
 
 ### 5.3 Deterministic Release and Completion
 
@@ -477,8 +543,12 @@ and submitted when required; it is never rewound. Failure after emission from
 the new batch is a fail-stop invariant breach and cannot rewind the session.
 
 One Metal tail or joint group may cover several source IDs. Completion expands
-those IDs strictly in order after the tail or joint group completes. The
-present token belongs only to a represented present tail.
+those IDs strictly in order after the tail or joint group completes. Replay and
+diagnostics attribute work with `(source ID, commandIndex)` even when a source
+spans several payload blocks, but block, segment, command, graph-node, and
+partition boundaries do not add completion entries. Exactly one completion and
+reclaim transition applies to each logical source `seqId`. The present token
+belongs only to a represented present tail.
 
 ### 5.4 Locking and Thread Ordering
 
@@ -509,7 +579,7 @@ advance generations, and signals admission after unlocking.
 | Condition | Required action |
 |---|---|
 | Queue creation cannot allocate the bounded tape | disable the tape and retain the legacy single-source path, or fail device creation; never expose a partial tape |
-| Candidate exceeds the per-source tape bound | ordered legacy single-source bypass with pass streaming disabled; never copy a sealed slot |
+| Candidate exceeds total source pages or segment count, or jumbo exceeds total source pages | ordered legacy single-source rollback with pass streaming disabled; never copy a sealed source |
 | Temporary high-water pressure | replay worker waits; coordinator submits the available prefix; finish completion/reclaim remains runnable |
 | Validation, owner construction, or retention failure before seal | destroy the partial block, roll back the complete reservation, then follow deferred-replay fail-stop/error policy |
 | Stale source/page/retention generation | reject before dereference and poison the affected scheduling lane |
@@ -620,15 +690,16 @@ Required scheduling counters include:
 - CPU-ready source/page/byte/retention/ticket current and peak occupancy,
   per-dimension high-water closes and low-water reopen/reclaim wakeups;
 - admission wait time/count, head candidate dimensions, wrap padding,
-  payload reserved/used/slack bytes, pre-seal rollback, legacy oversize bypass,
-  and stale-generation rejection;
+  payload reserved/used/slack bytes, segments per source, jumbo records/pages,
+  pre-seal rollback, legacy oversize bypass, and stale-generation rejection;
 - state-transition counts for Writing, Sealed, Aborted, Ready, Represented,
   restored, Submitted, Completed, Reclaiming, and Reclaimed;
 - unsubmitted session current/peak occupancy, admitted sources/bytes/draws,
   open-session park/wake count and duration, render-continuation allow/reject
   reason, and release-event reason/fence/watermark;
-- raw replay ordinal, published `sourceOrdinal`, published `seqId`, completion
-  watermark, and reclaim watermark;
+- raw replay ordinal, published global `sourceOrdinal`, published `seqId`,
+  source-qualified command attribution, completion watermark, and reclaim
+  watermark;
 - identity/explicit partition counts, draws and cost per range, planner CPU
   time, validation fallback, and parallel eligibility/rejection;
 - partition-job current/peak occupancy, worker CPU, join wait, and lane;
@@ -637,6 +708,9 @@ Required scheduling counters include:
 
 Promotion uses the ordered gates in `R-BACK-2.50`. Moving a wait between
 counters or saturating a new bounded queue is not overlap progress.
+`DXMT9_CPU_READY_TAPE` remains default off and the payload-owning legacy lane
+remains available until those gates pass. Treating the Arena as unconditional
+or deleting rollback is a promotion decision, not a storage-only refactor.
 
 ## 10. Verification Mapping
 
@@ -644,10 +718,10 @@ counters or saturating a new bounded queue is not overlap progress.
 |---|---|
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
-| Tape layout and ABA | missing pure specs for non-wrapping reserve/wrap padding, all-or-nothing rollback, generation rejection, ordered reclaim, and oversize bypass |
+| Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
 | CPU-ready admission and session progress | missing `CpuReadySessionProgress` model plus fake actors covering high/low hysteresis, replay-only admission wait, producer-quiescent session parking, ordered progress-event release, finish wake, shutdown, and no progress cycle |
-| Pass streaming | extend the existing lifecycle spec for admission-vs-render predicates, cross-source active-pass continuation, suffix-stays-Ready selection, ordered event-driven non-present release, producer-quiescent parking, and Present-tail ownership |
-| Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with tape pins, generation advance after completion, and joint groups |
+| Pass streaming | extend the existing lifecycle spec for admission-vs-render predicates, head-stable frontier, cross-source active-pass continuation, suffix-stays-Ready selection, ordered control dispositions, event-driven non-present release, producer-quiescent parking, and Arena Present-tail ownership |
+| Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |
 | Parallel order and join | missing fake-child executor spec and formal/refinement evidence |
 | Logical-pass actions across segments | render-pass-actions native spec extension and Metal integration evidence |
