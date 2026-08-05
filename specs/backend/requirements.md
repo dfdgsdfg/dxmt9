@@ -258,9 +258,18 @@ logical render-pass, and submission boundaries, and define overlap,
 **R-BACK-2.51** *(Commit-replay offload contract.)* The commit-replay
 offload path (`DXMT9_OFFLOAD_COMMIT_REPLAY`, **engine default ON since
 2026-07-10** — explicit `0` opts out; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE`
-unset follows the offload state because the pair is coupled) must (a) keep wire header/range
-validation, import, and handle-marking synchronous on the app thread before
-any record is handed off; (b) preserve record order
+unset follows the offload state because the pair is coupled) must (a) keep wire
+header/range validation and import synchronous on the app thread before any
+record is handed off. The default and Legacy lanes also keep the historical
+combined resource-mark/backing-capture step synchronous before handoff. An
+explicitly admitted CPU-ready Direct lane may instead persist canonical
+resource identities, backing snapshots, wrapper retention, and raw-residency
+tokens on the app thread, then apply the exact owning `seqId` resource mark
+after strict admission and before `Sealed -> Ready` visibility as required by
+`R-BACK-2.38` and `R-BACK-2.60`. StateOnly performs no resource mark; an
+opt-in planned Legacy lane marks before semantic replay. Disabling the
+CPU-ready gate must preserve the historical combined synchronous path and skip
+worker planning; (b) preserve record order
 by draining the raw-chunk queue through a single FIFO replay worker, never
 reordering or parallelizing replay across chunks; (c) pace present-bearing
 commits with a present-ordinal frame-latency boundary

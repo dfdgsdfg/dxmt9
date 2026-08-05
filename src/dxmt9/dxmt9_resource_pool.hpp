@@ -7,9 +7,15 @@
 // Concurrency contract:
 //
 //  * **Mutating ops** (`createBuffer`/`createTexture`/`createSurface`,
-//    `destroy*`, `mark*`, `finalizeBufferMap`, `reclaim*`) must be called
-//    with `CommandQueue::mutex_` held. DeviceImpl wraps each PE-side
-//    entry point with `std::lock_guard lock(queue_.mutex_)`.
+//    `destroy*`, `finalizeBufferMap`, `reclaim*`) normally require
+//    `CommandQueue::mutex_`. The only exception is strict arena publication's
+//    `mark*` phase: while the strict ticket/source transaction remains pinned,
+//    admission must retain every raw handle record and every captured renamed
+//    backing used by the immutable source snapshot. The publisher may then
+//    release the queue scheduling lock and stamp those retained objects with
+//    that ticket's exact seqId; HandleArena's own mutex serializes the stamps.
+//    This exception does not permit capture, lookup of later-live Pool state,
+//    or any other Pool mutation outside `CommandQueue::mutex_`.
 //
 //  * **Lookup ops** (`findBuffer`/`findTexture`/`findSurface`) may be
 //    called without the queue mutex. HandleArena serializes its own slot
@@ -81,6 +87,12 @@ using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
 bool dynamicBufferRenameEnabled() noexcept;
+
+enum class CapturedBufferSnapshotStatus : u8 {
+  NotRequired,
+  Valid,
+  Invalid,
+};
 
 // R-BACK-5.8 / 5.11 — per-buffer-handle backing-version entry. DYNAMIC +
 // DEFAULT buffers rotate these Shared allocations on D3DLOCK_DISCARD;
@@ -683,7 +695,11 @@ struct Pool {
                       std::size_t byteCount);
 
   // Stamp lastUsedSeqId on a record so the finish-thread GC respects the
-  // in-flight watermark. No-ops on zero handle.
+  // in-flight watermark. No-ops on zero handle. These operations synchronize
+  // through HandleArena's own mutex and are the explicit §5.4 exception used
+  // by strict arena publication after app admission has retained the raw
+  // handle table/backing-residency leases: callers must run them outside the
+  // CommandQueue scheduling mutex, with the exact reserved ticket seqId.
   void markBufferUse(core::Handle handle, u64 seqId);
   void markBufferSnapshotUse(core::Handle handle,
                              const core::DrawBufferBindingSnapshot& snapshot,
@@ -693,6 +709,9 @@ struct Pool {
 
   core::ChunkBufferBindingSnapshot captureChunkBufferBinding(
       core::Handle handle) const noexcept;
+  CapturedBufferSnapshotStatus validateCapturedBufferSnapshot(
+      core::Handle handle,
+      const core::DrawBufferBindingSnapshot& snapshot) const noexcept;
   core::DrawBufferBindingSnapshot snapshotBufferBinding(core::Handle handle) const noexcept;
 
   // Per-command-kind bulk marks. Walk the descriptor's resources and stamp

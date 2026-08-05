@@ -540,7 +540,7 @@ esac
         )
         self.assertIn("DXMT_CAPTURE_RANGE=820:900:20", result.stdout)
         self.assertIn(
-            "DXMT_EXPERIMENT_CAPTURE_DIR=/Users/dididi/workspaces/dxmt9/"
+            f"DXMT_EXPERIMENT_CAPTURE_DIR={REPO_ROOT}/"
             "traces/app-d3d9-3dmark05-capture-range/analysis/captures",
             result.stdout,
         )
@@ -565,7 +565,7 @@ esac
             result.stdout,
         )
         self.assertIn(
-            "DXMT_EXPERIMENT_CAPTURE_DIR=/Users/dididi/workspaces/dxmt9/traces/custom-captures",
+            f"DXMT_EXPERIMENT_CAPTURE_DIR={REPO_ROOT}/traces/custom-captures",
             result.stdout,
         )
 

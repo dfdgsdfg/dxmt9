@@ -147,6 +147,14 @@ class Device {
     markChunkResources(entries);
     return core::ChunkBufferBindingCaptureResult::Unsupported;
   }
+  virtual core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots) {
+    // Compatibility backends may only implement the historical combined
+    // hook. Production DeviceImpl overrides this with capture-only behavior.
+    return markChunkResourcesAndCaptureBufferBindings(entries, snapshots);
+  }
+  virtual bool supportsCpuReadyArenaReplay() const noexcept { return false; }
   virtual bool dynamicBufferRenameEnabled() const noexcept { return false; }
   // Phase 14: chunk importer toggles per-draw markDrawResources off
   // around the record-iteration block so bulk markChunkResources is the
@@ -232,6 +240,12 @@ struct DEVICE_DESC {
                        // device returned by WMT::CopyAllDevices()).
   core::BackendLimits limits{};
 };
+
+constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
+    const char* value) noexcept {
+  return value && value[0] != '\0' &&
+         !(value[0] == '0' && value[1] == '\0');
+}
 
 std::unique_ptr<Device> CreateDXMT9Device(const DEVICE_DESC& desc);
 

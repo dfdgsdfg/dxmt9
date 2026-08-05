@@ -45,13 +45,13 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 
 static_assert(std::is_trivially_copyable_v<RetainedEncodeSourceLocator>);
 static_assert(std::is_standard_layout_v<RetainedEncodeSourceLocator>);
-static_assert(sizeof(RetainedEncodeSourceLocator) == 16);
+static_assert(sizeof(RetainedEncodeSourceLocator) == 48);
 static_assert(std::is_trivially_copyable_v<EncodePartitionEntrySnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionEntrySnapshot>);
-static_assert(sizeof(EncodePartitionEntrySnapshot) == 64);
+static_assert(sizeof(EncodePartitionEntrySnapshot) == 96);
 static_assert(std::is_trivially_copyable_v<EncodePartitionRangeSnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionRangeSnapshot>);
-static_assert(sizeof(EncodePartitionRangeSnapshot) == 80);
+static_assert(sizeof(EncodePartitionRangeSnapshot) == 112);
 static_assert(!std::is_pointer_v<decltype(EncodePartitionEntrySnapshot::source)>);
 static_assert(!std::is_pointer_v<decltype(EncodePartitionEntrySnapshot::uniformHandle)>);
 static_assert(!std::is_pointer_v<decltype(
@@ -62,6 +62,10 @@ static_assert(!std::is_pointer_v<decltype(
 EncodePartitionEntrySnapshot makeSnapshot() {
   return EncodePartitionEntrySnapshot{
       .source = RetainedEncodeSourceLocator{
+          .tapeSource = {
+              .id = {.index = 5, .generation = 7},
+              .storage = {.firstPage = 9, .pageCount = 1, .generation = 11},
+          },
           .sourceOrdinal = 3,
           .slotIndex = 7,
           .seqId = 0x123456789abcdef0ull,
@@ -88,11 +92,18 @@ EncodePartitionEntrySnapshot makeSnapshot() {
 
 void sourceLocatorKeepsRetainedOrderAndReuseIdentity() {
   auto first = makeSnapshot();
-  first.source = {.sourceOrdinal = 0, .slotIndex = 7, .seqId = 41};
+  first.source.sourceOrdinal = 0;
+  first.source.slotIndex = 7;
+  first.source.seqId = 41;
   auto second = makeSnapshot();
-  second.source = {.sourceOrdinal = 1, .slotIndex = 8, .seqId = 42};
+  second.source.sourceOrdinal = 1;
+  second.source.slotIndex = 8;
+  second.source.seqId = 42;
   auto reused = makeSnapshot();
-  reused.source = {.sourceOrdinal = 2, .slotIndex = 7, .seqId = 43};
+  reused.source.sourceOrdinal = 2;
+  reused.source.slotIndex = 7;
+  reused.source.seqId = 43;
+  ++reused.source.tapeSource.id.generation;
   const std::vector<EncodePartitionEntrySnapshot> order{first, second, reused};
 
   checkEq(order[0].source.sourceOrdinal, std::uint32_t{0},
@@ -146,7 +157,7 @@ void partitionRangeSpanForwardsWithExistingOptions() {
       },
   };
   options.partitionRanges = ranges;
-  std::array<dxmt9::core::metalqueue::ReadySlotSnapshot, 1> sources{};
+  std::array<dxmt9::core::metalqueue::ResolvedPublishedSource, 1> sources{};
   options.sessionLookaheadSources = sources;
   options.disableMidChunkCommits = true;
   options.allowInjectedCommandBufferMidChunkCommits = true;
@@ -170,7 +181,7 @@ void partitionRangeSpanForwardsWithExistingOptions() {
 struct ResolverFixture {
   dxmt9::core::ChunkSlot slot{};
   EncodePartitionEntrySnapshot snapshot{};
-  std::array<dxmt9::core::metalqueue::ReadySlotSnapshot, 1> sources{};
+  std::array<dxmt9::core::metalqueue::ResolvedPublishedSource, 1> sources{};
 
   ResolverFixture() {
     slot.seqId = 41;
@@ -220,6 +231,14 @@ struct ResolverFixture {
         : record.uniformHandle;
     snapshot = EncodePartitionEntrySnapshot{
         .source = RetainedEncodeSourceLocator{
+            .tapeSource = {
+                .id = {.index = 2, .generation = 17},
+                .storage = {
+                    .firstPage = 3,
+                    .pageCount = 1,
+                    .generation = 19,
+                },
+            },
             .sourceOrdinal = 0,
             .slotIndex = 7,
             .seqId = slot.seqId,
@@ -238,13 +257,17 @@ struct ResolverFixture {
             .size = param.bindingSnapshotRange.size,
         },
     };
-    sources[0] = dxmt9::core::metalqueue::ReadySlotSnapshot{
+    sources[0] = dxmt9::core::metalqueue::ResolvedPublishedSource{
+        .source = snapshot.source.tapeSource,
         .slotIndex = 7,
         .seqId = slot.seqId,
+        .payload = dxmt9::core::SourcePayloadView(slot),
+        .sourceId = snapshot.source.tapeSource.id,
+        .storage = snapshot.source.tapeSource.storage,
+        .slot = &slot,
         .hasPresent = false,
         .commandBegin = 1,
         .commandCount = 1,
-        .slot = &slot,
     };
   }
 };
@@ -297,6 +320,16 @@ void retainedSourceResolverRejectsEveryLocatorLayer() {
   snapshot.source.seqId += 1;
   expect(snapshot, EncodePartitionEntryValidation::SourceIdentityMismatch,
          "stale source sequence is rejected");
+
+  snapshot = fixture.snapshot;
+  ++snapshot.source.tapeSource.id.generation;
+  expect(snapshot, EncodePartitionEntryValidation::SourceIdentityMismatch,
+         "stale retained source generation is rejected");
+
+  snapshot = fixture.snapshot;
+  ++snapshot.source.tapeSource.storage.generation;
+  expect(snapshot, EncodePartitionEntryValidation::SourceIdentityMismatch,
+         "stale retained storage generation is rejected");
 
   snapshot = fixture.snapshot;
   snapshot.commandIndex = 0;

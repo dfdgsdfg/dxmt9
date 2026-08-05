@@ -173,6 +173,56 @@ test('dxmt9-cpu-ready-tape-spec',
      cpu_ready_tape_spec,
      env: dxmt9_native_test_env)
 
+cpu_ready_plan_spec = executable(
+  'dxmt9-cpu-ready-plan-spec',
+  'cpu_ready_plan_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-plan-spec',
+     cpu_ready_plan_spec,
+     env: dxmt9_native_test_env)
+
+source_payload_spec = executable(
+  'dxmt9-source-payload-spec',
+  'source_payload_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-source-payload-spec',
+     source_payload_spec,
+     env: dxmt9_native_test_env)
+
+cpu_ready_arena_lease_spec = executable(
+  'dxmt9-cpu-ready-arena-lease-spec',
+  'cpu_ready_arena_lease_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-arena-lease-spec',
+     cpu_ready_arena_lease_spec,
+     env: dxmt9_native_test_env)
+
+cpu_ready_production_routing_spec = executable(
+  'dxmt9-cpu-ready-production-routing-spec',
+  'cpu_ready_production_routing_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-production-routing-spec',
+     cpu_ready_production_routing_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+     ])
+
 encode_partition_snapshot_spec = executable(
   'dxmt9-encode-partition-snapshot-spec',
   'encode_partition_snapshot_spec.cpp',
@@ -495,9 +545,22 @@ replay_byte_identity_spec = executable(
 )
 
 test('dxmt9-replay-byte-identity-off-spec', replay_byte_identity_spec,
-     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=0'])
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=0',
+       'DXMT9_CPU_READY_TAPE=0',
+     ])
 test('dxmt9-replay-byte-identity-on-spec', replay_byte_identity_spec,
-     env: dxmt9_native_test_env_vars + ['DXMT9_OFFLOAD_COMMIT_REPLAY=1'])
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_CPU_READY_TAPE=0',
+     ])
+test('dxmt9-replay-byte-identity-tape-oversize-spec',
+     replay_byte_identity_spec,
+     args: ['--oversize'],
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_CPU_READY_TAPE=1',
+     ])
 
 present_ordinal_boundary_spec = executable(
   'dxmt9-present-ordinal-boundary-spec',

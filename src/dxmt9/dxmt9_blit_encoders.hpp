@@ -9,6 +9,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_source_payload.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <string>
@@ -67,6 +68,11 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
                       const core::ClearDesc& clear,
                       std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
+void encodeClearPass(WMT::CommandBuffer& commandBuffer,
+                     resources::Pool& pool,
+                     const core::ClearCommandView& clear,
+                     std::span<const WMTSampleBufferAttachmentInfo>
+                         sampleBufferAttachments = {});
 
 // R-FORMAT-11 — RESZ multisample depth resolve. Resolves the bound
 // multisampled depth surface (`msaaDepthSource`) into the bound INTZ depth

@@ -1602,6 +1602,20 @@ struct Counters {
   std::atomic<std::uint64_t> queueSequenceWaits{0};
   std::atomic<std::uint64_t> queueSequenceWaitNs{0};
   std::atomic<std::uint64_t> queueSequenceWaitMaxNs{0};
+  std::atomic<std::uint64_t> cpuReadyTapeResidentSources{0};
+  std::atomic<std::uint64_t> cpuReadyTapeResidentSourcesPeak{0};
+  std::atomic<std::uint64_t> cpuReadyTapeResidentPages{0};
+  std::atomic<std::uint64_t> cpuReadyTapeResidentPagesPeak{0};
+  std::atomic<std::uint64_t> cpuReadyTapeReadyEntries{0};
+  std::atomic<std::uint64_t> cpuReadyTapeReadyEntriesPeak{0};
+  std::atomic<std::uint64_t> cpuReadyTapeAdmissionCloses{0};
+  std::atomic<std::uint64_t> cpuReadyTapeAdmissionReopens{0};
+  std::atomic<std::uint64_t> cpuReadyTapeWrapPaddingPages{0};
+  std::atomic<std::uint64_t> cpuReadyTapeAdmissionWaits{0};
+  std::atomic<std::uint64_t> cpuReadyTapeAdmissionWaitNs{0};
+  std::atomic<std::uint64_t> cpuReadyTapeAdmissionWaitMaxNs{0};
+  std::atomic<std::uint64_t> cpuReadyTapeLegacyOversizeBypass{0};
+  std::atomic<std::uint64_t> cpuReadyTapeReclaimWakeups{0};
   std::atomic<std::uint64_t> mapBufferCalls{0};
   std::atomic<std::uint64_t> mapBufferWaitSeq{0};
   std::atomic<std::uint64_t> mapBufferNoWaitSeq{0};
@@ -1814,6 +1828,7 @@ struct Counters {
   PercentileRing queueWriterWaitRing;
   PercentileRing queueCommitWaitRing;
   PercentileRing queueSequenceWaitRing;
+  PercentileRing cpuReadyTapeAdmissionWaitRing;
   PercentileRing mapBufferTotalRing;
   PercentileRing mapBufferMutexWaitRing;
   PercentileRing mapBufferWaitRing;
@@ -3764,6 +3779,23 @@ constexpr CounterEntry kCounterTable[] = {
     {"queue_sequence_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.5},
     {"queue_sequence_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.95},
     {"queue_sequence_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::queueSequenceWaitRing, 0.99},
+    {"cpu_ready_tape_resident_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeResidentSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_resident_sources_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeResidentSourcesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_resident_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeResidentPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_resident_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeResidentPagesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_ready_entries", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeReadyEntries, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_ready_entries_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeReadyEntriesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_closes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeAdmissionCloses, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_reopens", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeAdmissionReopens, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_wrap_padding_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeWrapPaddingPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_waits", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeAdmissionWaits, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::cpuReadyTapeAdmissionWaitNs, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_wait_max_ms", CounterEntry::Kind::Milliseconds, &Counters::cpuReadyTapeAdmissionWaitMaxNs, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_admission_wait_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::cpuReadyTapeAdmissionWaitRing, 0.5},
+    {"cpu_ready_tape_admission_wait_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::cpuReadyTapeAdmissionWaitRing, 0.95},
+    {"cpu_ready_tape_admission_wait_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::cpuReadyTapeAdmissionWaitRing, 0.99},
+    {"cpu_ready_tape_legacy_oversize_bypass", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeLegacyOversizeBypass, nullptr, nullptr, 0.0},
+    {"cpu_ready_tape_reclaim_wakeups", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyTapeReclaimWakeups, nullptr, nullptr, 0.0},
     {"map_buffer_calls", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferCalls, nullptr, nullptr, 0.0},
     {"map_buffer_wait_seq", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferWaitSeq, nullptr, nullptr, 0.0},
     {"map_buffer_no_wait_seq", CounterEntry::Kind::UnsignedCount, &Counters::mapBufferNoWaitSeq, nullptr, nullptr, 0.0},
@@ -8741,6 +8773,40 @@ void countQueueSequenceWait(std::uint64_t nanoseconds) {
   add(counters().queueSequenceWaitNs, nanoseconds);
   updateMax(counters().queueSequenceWaitMaxNs, nanoseconds);
   recordRing(counters().queueSequenceWaitRing, nanoseconds);
+}
+
+void recordCpuReadyTapeStats(std::uint64_t residentSources,
+                             std::uint64_t residentPages,
+                             std::uint64_t readyEntries,
+                             std::uint64_t admissionCloses,
+                             std::uint64_t admissionReopens,
+                             std::uint64_t wrapPaddingPages) {
+  auto& c = counters();
+  store(c.cpuReadyTapeResidentSources, residentSources);
+  updateMax(c.cpuReadyTapeResidentSourcesPeak, residentSources);
+  store(c.cpuReadyTapeResidentPages, residentPages);
+  updateMax(c.cpuReadyTapeResidentPagesPeak, residentPages);
+  store(c.cpuReadyTapeReadyEntries, readyEntries);
+  updateMax(c.cpuReadyTapeReadyEntriesPeak, readyEntries);
+  store(c.cpuReadyTapeAdmissionCloses, admissionCloses);
+  store(c.cpuReadyTapeAdmissionReopens, admissionReopens);
+  store(c.cpuReadyTapeWrapPaddingPages, wrapPaddingPages);
+}
+
+void countCpuReadyTapeAdmissionWait(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.cpuReadyTapeAdmissionWaits);
+  add(c.cpuReadyTapeAdmissionWaitNs, nanoseconds);
+  updateMax(c.cpuReadyTapeAdmissionWaitMaxNs, nanoseconds);
+  recordRing(c.cpuReadyTapeAdmissionWaitRing, nanoseconds);
+}
+
+void countCpuReadyTapeLegacyOversizeBypass() {
+  add(counters().cpuReadyTapeLegacyOversizeBypass);
+}
+
+void countCpuReadyTapeReclaimWakeup() {
+  add(counters().cpuReadyTapeReclaimWakeups);
 }
 
 void countMapBufferWait(std::uint64_t totalNanoseconds,

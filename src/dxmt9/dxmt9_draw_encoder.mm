@@ -5468,7 +5468,8 @@ void initializeEncodeChunkSessionGpuSamplingStorage(
 std::size_t sessionGpuSamplingCommandCount(
     const core::ChunkSlot& slot,
     std::size_t currentCommandCount,
-    std::span<const core::metalqueue::ReadySlotSnapshot> lookaheadSources) noexcept {
+    std::span<const core::metalqueue::ResolvedPublishedSource>
+        lookaheadSources) noexcept {
   if (lookaheadSources.empty()) {
     return currentCommandCount;
   }
@@ -9523,7 +9524,8 @@ private:
     for (std::size_t i = 0; i < expectedSources.size(); ++i) {
       const auto& expected = expectedSources[i];
       const auto& actual = actualSources[i];
-      if (expected.slotIndex != actual.slotIndex ||
+      if (expected.source != actual.source ||
+          expected.slotIndex != actual.slotIndex ||
           expected.seqId != actual.seqId ||
           expected.hasPresent != actual.hasPresent ||
           expected.commandBegin != actual.commandBegin ||
@@ -9812,12 +9814,15 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       activePass.hot ? makeAttachmentHazard(*activePass.hot) : HazardProbe{};
   std::size_t logicalDistance = 0;
   for (const auto& source : sources) {
-    if (!source.slot) {
+    const core::SourcePayloadView sourcePayload = source.payload.valid()
+        ? source.payload
+        : source.slot ? core::SourcePayloadView(*source.slot)
+                      : core::SourcePayloadView{};
+    if (!sourcePayload.valid()) {
       return Proof::BlockNoLookahead;
     }
-    const auto& slot = *source.slot;
     const std::size_t traversalCount =
-        source.commandOrder.empty() ? slot.commandCount()
+        source.commandOrder.empty() ? sourcePayload.commandCount()
                                     : source.commandOrder.size();
     const std::size_t firstCommandIndex =
         std::min(source.firstCommandIndex, traversalCount);
@@ -9829,17 +9834,19 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       const std::size_t commandIndex = source.commandOrder.empty()
           ? traversalIndex
           : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
-      if (commandIndex >= slot.commandCount()) {
+      if (commandIndex >= sourcePayload.commandCount()) {
         return Proof::BlockNoLookahead;
       }
       ++logicalDistance;
-      const auto next = slot.commandAt(commandIndex);
+      const auto sourceCommand = sourcePayload.commandAt(commandIndex);
+      const auto& next = sourceCommand.command;
       if (next.kind != Kind::DrawRun) {
         withinActivePass = false;
       }
       switch (next.kind) {
         case Kind::Clear:
-          if (next.clear && next.clear->depthStencil.handle == depthHandle) {
+          if (sourceCommand.clear &&
+              sourceCommand.clear->depthStencil.handle == depthHandle) {
             // R-BACK-15.7: the next op on this depth handle is a clear,
             // so storing tile contents would be wasted bandwidth.
             return finish(Proof::AllowNextClear, logicalDistance);
@@ -10024,12 +10031,15 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       activePass.hot ? makeAttachmentHazard(*activePass.hot) : HazardProbe{};
   std::size_t logicalDistance = 0;
   for (const auto& source : sources) {
-    if (!source.slot) {
+    const core::SourcePayloadView sourcePayload = source.payload.valid()
+        ? source.payload
+        : source.slot ? core::SourcePayloadView(*source.slot)
+                      : core::SourcePayloadView{};
+    if (!sourcePayload.valid()) {
       return Proof::BlockNoLookahead;
     }
-    const auto& slot = *source.slot;
     const std::size_t traversalCount =
-        source.commandOrder.empty() ? slot.commandCount()
+        source.commandOrder.empty() ? sourcePayload.commandCount()
                                     : source.commandOrder.size();
     const std::size_t firstCommandIndex =
         std::min(source.firstCommandIndex, traversalCount);
@@ -10041,18 +10051,20 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       const std::size_t commandIndex = source.commandOrder.empty()
           ? traversalIndex
           : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
-      if (commandIndex >= slot.commandCount()) {
+      if (commandIndex >= sourcePayload.commandCount()) {
         return Proof::BlockNoLookahead;
       }
       ++logicalDistance;
-      const auto next = slot.commandAt(commandIndex);
+      const auto sourceCommand = sourcePayload.commandAt(commandIndex);
+      const auto& next = sourceCommand.command;
       if (next.kind != Kind::DrawRun) {
         withinActivePass = false;
       }
       switch (next.kind) {
         case Kind::Clear:
-          if (next.clear && next.clear->clearColor) {
-            for (const auto& attachment : next.clear->colorAttachments) {
+          if (sourceCommand.clear && sourceCommand.clear->clearColor) {
+            for (const auto& attachment :
+                 sourceCommand.clear->colorAttachments) {
               if (attachment.handle == colorHandle) {
                 return finish(Proof::AllowNextClear, logicalDistance);
               }
@@ -14900,16 +14912,28 @@ bool encodeDraw(EncodeContext& ctx,
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
-    const core::ChunkSlot& slot,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId,
     EncodeChunkOptions options) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
-  const EncodeChunkReplayRange replayRange =
-      encodeChunkReplayRange(slotIndex, slot, options);
-  if (!replayRange.valid) {
+  const core::ChunkSlot* legacySlot = payload.legacyPayload();
+  const EncodeChunkReplayRange replayRange = legacySlot
+      ? encodeChunkReplayRange(slotIndex, *legacySlot, options)
+      : EncodeChunkReplayRange{
+            .commandBegin = 0,
+            .commandEnd = payload.commandCount(),
+            .valid = !options.sessionSource.has_value() &&
+                     !options.replayCommandPlanActive &&
+                     options.partitionRanges.empty() &&
+                     options.sessionLookaheadSources.empty(),
+        };
+  if (!replayRange.valid || !options.partitionSource.valid() ||
+      (options.sessionSource.has_value() &&
+       options.partitionSource != options.sessionSource->source)) {
     return std::nullopt;
   }
   std::vector<std::size_t> replayOrdinalByCommandIndex;
@@ -14918,11 +14942,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       options.replayCommandOrder.size() <= replayRange.commandCount()) {
     replayOrdinalByCommandIndex.resize(replayRange.commandCount());
   }
-  const EncodePartitionReplayStream partitionReplayStream =
-      makeEncodePartitionReplayStream(
-          slotIndex, slot, replayRange.commandBegin,
-          replayRange.commandCount(), options.replayCommandPlanActive,
-          options.replayCommandOrder, replayOrdinalByCommandIndex);
+  EncodePartitionReplayStream partitionReplayStream{};
+  partitionReplayStream = makeEncodePartitionReplayStream(
+      slotIndex, payload, sourceSeqId, replayRange.commandBegin,
+      replayRange.commandCount(), options.replayCommandPlanActive,
+      options.replayCommandOrder, replayOrdinalByCommandIndex,
+      options.partitionSource);
   if (!partitionReplayStream.valid) {
     return std::nullopt;
   }
@@ -14933,7 +14958,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     useExplicitPartitionPlan = static_cast<bool>(validation);
   }
 
-  const bool traceEncodeProgress = traceEncodeProgressForSeq(slot.seqId);
+  const bool traceEncodeProgress = traceEncodeProgressForSeq(sourceSeqId);
   auto traceEncodeStage = [&](const char* stage) {
     if (!traceEncodeProgress) {
       return;
@@ -14941,14 +14966,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::ostringstream out;
     out << "[dxmt9-encode-progress]"
         << " stage=" << stage
-        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " seq=" << static_cast<unsigned long long>(sourceSeqId)
         << " slot=" << slotIndex
-        << " commands=" << slot.commandCount()
+        << " commands=" << payload.commandCount()
         << " command_begin=" << replayRange.commandBegin
         << " command_end=" << replayRange.commandEnd
         << " command_plan=" << (options.replayCommandPlanActive ? 1 : 0)
         << " command_order=" << options.replayCommandOrder.size()
-        << " draw_only=" << (slot.drawOnlyCommandStream() ? 1 : 0);
+        << " draw_only=" << (legacySlot &&
+                                 legacySlot->drawOnlyCommandStream() ? 1 : 0);
     emitQueueTraceLine(out.str());
   };
   auto traceEncodeCommand = [&](const char* phase,
@@ -14961,7 +14987,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::ostringstream out;
     out << "[dxmt9-encode-progress]"
         << " stage=command." << phase
-        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " seq=" << static_cast<unsigned long long>(sourceSeqId)
         << " slot=" << slotIndex
         << " command=" << commandIndex
         << " kind=" << metalCommandKindName(kind);
@@ -15001,7 +15027,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto& captureAlreadyStartedAtChunkBegin =
       call.captureAlreadyStartedAtChunkBegin;
   std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest =
-      ctx.queue.metalCaptureForChunkBegin(slot.seqId);
+      ctx.queue.metalCaptureForChunkBegin(sourceSeqId);
   if (earlyCaptureRequest.has_value()) {
     traceEncodeStage("before-start-capture");
     captureAlreadyStartedAtChunkBegin =
@@ -15046,15 +15072,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   auto& bindingState = session.binding;
   auto& diagnosticsState = session.diagnostics;
   auto& completionState = session.completion;
-  encode_session::LifecycleRuntime lifecycle(ctx, session, call, slot.seqId,
+  encode_session::LifecycleRuntime lifecycle(ctx, session, call, sourceSeqId,
                                              slotIndex);
 
   traceEncodeStage("before-gpu-sampling-setup");
   initializeEncodeChunkSessionGpuSamplingStorage(
       session, WMT::Device{ctx.device.handle},
-      options.sessionLookaheadSources.empty()
+      !legacySlot || options.sessionLookaheadSources.empty()
           ? replayRange.commandCount()
-          : sessionGpuSamplingCommandCount(slot,
+          : sessionGpuSamplingCommandCount(*legacySlot,
                                            replayRange.commandCount(),
                                            options.sessionLookaheadSources));
   traceEncodeStage("after-gpu-sampling-setup");
@@ -15077,7 +15103,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // chunk so the slab is retained until the matching command buffer
   // completes. R-BACK-12.24 argbuf populator threads this through to
   // `reserveTransientBuffer` / `uploadTransientBuffer`.
-  const u64 encodeChunkSeqId = slot.seqId;
+  const u64 encodeChunkSeqId = sourceSeqId;
 
   // R-BACK-12.22..12.26 — constants-only argbuf reopen gate. Tracks the
   // uniform payload hash last written into the active encoder's argbuf
@@ -15320,7 +15346,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     std::ostringstream out;
     out << "[dxmt9-encode-progress]"
         << " stage=renderpass." << stage
-        << " seq=" << static_cast<unsigned long long>(slot.seqId)
+        << " seq=" << static_cast<unsigned long long>(sourceSeqId)
         << " slot=" << slotIndex
         << " command=" << commandIndex
         << " encoder=" << static_cast<unsigned long long>(diagnosticsState.renderEncoderIndex)
@@ -15382,17 +15408,17 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                core::metalqueue::kMaxEncodeSessionSources>
         storeProofLookaheadStorage{};
     std::size_t storeProofLookaheadCount = 0;
-    auto appendStoreProofLookahead = [&](const core::ChunkSlot* sourceSlot,
+    auto appendStoreProofLookahead = [&](core::SourcePayloadView sourcePayload,
                                          std::size_t firstCommandIndex,
                                          std::size_t commandEndIndex,
                                          std::span<const std::uint32_t>
                                              commandOrder = {}) {
-      if (!sourceSlot ||
+      if (!sourcePayload.valid() ||
           storeProofLookaheadCount >= storeProofLookaheadStorage.size()) {
         return;
       }
       const std::size_t traversalCount =
-          commandOrder.empty() ? sourceSlot->commandCount()
+          commandOrder.empty() ? sourcePayload.commandCount()
                                : commandOrder.size();
       const std::size_t clampedFirst =
           std::min(firstCommandIndex, traversalCount);
@@ -15400,31 +15426,32 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           std::min(commandEndIndex, traversalCount);
       storeProofLookaheadStorage[storeProofLookaheadCount++] =
           RenderPassStoreProofLookaheadSource{
-              .slot = sourceSlot,
+              .payload = sourcePayload,
               .commandOrder = commandOrder,
               .firstCommandIndex = clampedFirst,
               .commandEndIndex = clampedEnd,
           };
     };
-    auto firstCommandAfter = [](const core::ChunkSlot& sourceSlot,
+    auto firstCommandAfter = [](core::SourcePayloadView sourcePayload,
                                 std::size_t commandIndex) {
-      return commandIndex < sourceSlot.commandCount()
+      return commandIndex < sourcePayload.commandCount()
           ? commandIndex + 1u
-          : sourceSlot.commandCount();
+          : sourcePayload.commandCount();
     };
     const bool selectedSessionLookaheadStartsHere =
-        !options.replayCommandPlanActive &&
+        legacySlot && !options.replayCommandPlanActive &&
         !options.sessionLookaheadSources.empty() &&
         (options.sessionSource.has_value()
              ? readySlotSnapshotMatchesCompletionSource(
                    options.sessionLookaheadSources.front(),
                    *options.sessionSource,
                    slotIndex,
-                   slot)
+                   *legacySlot)
              : readySlotSnapshotMatchesReplayRange(
                    options.sessionLookaheadSources.front(),
+                   options.partitionSource,
                    slotIndex,
-                   slot,
+                   *legacySlot,
                    replayRange));
     bool selectedSessionLookaheadValid = selectedSessionLookaheadStartsHere;
     if (selectedSessionLookaheadValid) {
@@ -15442,7 +15469,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const std::size_t firstSourceEnd =
             firstSource.commandBegin + firstSource.commandCount;
         const std::size_t nextCommand =
-            firstCommandAfter(*firstSource.slot, lookaheadStartIndex);
+            firstCommandAfter(firstSource.payload, lookaheadStartIndex);
         selectedSessionLookaheadValid =
             lookaheadStartIndex >= firstSource.commandBegin &&
             lookaheadStartIndex < firstSourceEnd &&
@@ -15452,11 +15479,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     if (selectedSessionLookaheadValid) {
       for (std::size_t i = 0; i < options.sessionLookaheadSources.size(); ++i) {
         const auto& source = options.sessionLookaheadSources[i];
-        const auto* sourceSlot = source.slot;
         const std::size_t sourceEnd = source.commandBegin + source.commandCount;
         appendStoreProofLookahead(
-            sourceSlot,
-            i == 0u ? firstCommandAfter(*sourceSlot, lookaheadStartIndex)
+            source.payload,
+            i == 0u ? firstCommandAfter(source.payload, lookaheadStartIndex)
                     : source.commandBegin,
             sourceEnd);
       }
@@ -15466,8 +15492,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                          deferSessionFinalization)) {
       if (!options.replayCommandPlanActive) {
         appendStoreProofLookahead(
-            &slot, firstCommandAfter(slot, lookaheadStartIndex),
-            slot.commandCount());
+            payload, firstCommandAfter(payload, lookaheadStartIndex),
+            payload.commandCount());
       } else if (lookaheadStartIndex >= replayRange.commandBegin &&
                  lookaheadStartIndex < replayRange.commandEnd) {
         const std::size_t relative =
@@ -15475,7 +15501,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const std::size_t replayOrdinal =
             replayOrdinalByCommandIndex[relative];
         appendStoreProofLookahead(
-            &slot, replayOrdinal + 1u, options.replayCommandOrder.size(),
+            payload, replayOrdinal + 1u,
+            options.replayCommandOrder.size(),
             options.replayCommandOrder);
       }
     }
@@ -16156,7 +16183,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
               recorder->userdata, upPayloads);
         } else {
           upSlices = ctx.queue.uploadTransientBufferBatchWithCompletedSeqId(
-              upPayloads, /*alignment=*/16, slot.seqId,
+              upPayloads, /*alignment=*/16, sourceSeqId,
               ctx.transientCompletedSeqId);
         }
         if (!upSlices.empty()) {
@@ -16492,7 +16519,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           : 0ull;
       traceEncodeCommand("drawrun.before-encode-draw", commandIndex,
                          Kind::DrawRun, command);
-      if (encodeDraw(ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView, slot.seqId,
+      if (encodeDraw(ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView, sourceSeqId,
                      /*skipBaseStateBind=*/skipBaseStateBind,
                      anyUpData ? &preData : nullptr,
                      &param,
@@ -16643,26 +16670,36 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   };
 
   auto encodeCompleteCommand = [&](std::size_t commandIndex,
-                                   const core::MetalCommandView& command) {
+                                   const core::SourceCommandView& source) {
+      const auto& command = source.command;
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
       switch (command.kind) {
       case Kind::Clear: {
-        if (!command.clear) break;
-        const auto& clear = *command.clear;
+        if (!source.clear.has_value()) break;
+        const auto& clearView = *source.clear;
         flushRender(perf::EncoderSplitReason::ClearBarrier);
         flushBlit();
         flushPendingClear();
-        if (clear.rects.empty()) {
-          passState.pendingClear = clear;
+        if (clearView.rects.empty()) {
+          passState.pendingClear = core::ClearDesc{
+              .colorAttachments = clearView.colorAttachments,
+              .depthStencil = clearView.depthStencil,
+              .clearColor = clearView.clearColor,
+              .clearDepth = clearView.clearDepth,
+              .clearStencil = clearView.clearStencil,
+              .color = clearView.color,
+              .depth = clearView.depth,
+              .stencil = clearView.stencil,
+          };
           passState.pendingClearCommandIndex = commandIndex;
         } else {
           const auto sampleAttachment = makeRenderEncoderGpuAttachment(
               core::metalqueue::RenderEncoderGpuPassType::Clear,
               commandIndex,
-              clear.colorAttachments[0].handle.value,
-              clear.depthStencil.handle.value);
-          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clear,
+              clearView.colorAttachments[0].handle.value,
+              clearView.depthStencil.handle.value);
+          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clearView,
                                            sampleAttachment.span());
           recordRenderEncoderGpuAttachment(sampleAttachment);
           commandBufferHasWork = true;
@@ -16789,7 +16826,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           // request so `record.metalCapture` triggers stopCapture at
           // commit time. For non-target frames the call is a no-op apart
           // from the counter bump.
-          diagnosticsState.metalCaptureRequest = ctx.queue.notePresentChunkForCapture(slot.seqId);
+          diagnosticsState.metalCaptureRequest =
+              ctx.queue.notePresentChunkForCapture(sourceSeqId);
           if (diagnosticsState.metalCaptureRequest.has_value()) {
             // Capture was started at an earlier chunk-begin; this
             // chunk's commit should only call stopCapture, never
@@ -16809,7 +16847,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         auto pendingDrawableToken = ctx.queue.takeDrawableToken(present.presentId);
         const bool noteAfterAcquire = presentBoundaryAfterAcquireEnabled();
         if (!noteAfterAcquire) {
-          ctx.queue.notePresentDequeued(slot.seqId);
+          ctx.queue.notePresentDequeued(sourceSeqId);
         }
         const auto sampleAttachment = makeRenderEncoderGpuAttachment(
             core::metalqueue::RenderEncoderGpuPassType::Present,
@@ -16819,19 +16857,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         const bool presentEncoded = dxmt9::encodePresent(commandBuffer, ctx.pool,
                                                           presenter,
                                                           std::move(pendingDrawableToken),
-                                                          present, presentSource, slot.seqId,
+                                                          present, presentSource, sourceSeqId,
                                                           sampleAttachment.span());
         if (presentEncoded) {
           recordRenderEncoderGpuAttachment(sampleAttachment);
         }
         if (noteAfterAcquire) {
-          ctx.queue.notePresentDequeued(slot.seqId);
+          ctx.queue.notePresentDequeued(sourceSeqId);
         }
         if (presentEncoded) {
           commandBufferHasWork = true;
           ctx.queue.backBufferDiscardAfterPresent_ = true;
           if (presenter) {
-            completionState.postCommitCallbacks.push_back([presenter, seqId = slot.seqId] {
+            completionState.postCommitCallbacks.push_back([presenter, seqId = sourceSeqId] {
               presenter->preAcquireNextDrawable(seqId);
             });
           }
@@ -16882,57 +16920,57 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       useExplicitPartitionPlan);
   EncodePartitionSerialBatch partitionBatch{};
   while (partitionCursor.next(partitionBatch)) {
-    if (partitionBatch.kind == EncodePartitionRangeKind::CommandSegment) {
-      const std::uint64_t ordinalEnd =
-          static_cast<std::uint64_t>(partitionBatch.replayOrdinalBegin) +
-          partitionBatch.replayOrdinalCount;
-      for (std::uint64_t ordinal = partitionBatch.replayOrdinalBegin;
-           ordinal < ordinalEnd; ++ordinal) {
-        std::uint32_t commandIndex = 0;
+      if (partitionBatch.kind == EncodePartitionRangeKind::CommandSegment) {
+        const std::uint64_t ordinalEnd =
+            static_cast<std::uint64_t>(partitionBatch.replayOrdinalBegin) +
+            partitionBatch.replayOrdinalCount;
+        for (std::uint64_t ordinal = partitionBatch.replayOrdinalBegin;
+             ordinal < ordinalEnd; ++ordinal) {
+          std::uint32_t commandIndex = 0;
+          const bool resolvedCommand = partitionReplayStream.commandIndexAt(
+              static_cast<std::size_t>(ordinal), commandIndex);
+          if (!resolvedCommand) {
+            abortEncodePartitionInvariant(
+                "CommandSegment replay ordinal resolution failed");
+          }
+          encodeCompleteCommand(commandIndex, payload.commandAt(commandIndex));
+        }
+        continue;
+      }
+
+      std::uint32_t commandIndex = 0;
+      core::MetalCommandView command{};
+      if (partitionBatch.identityResolved) {
+        if (partitionBatch.ranges.size() != 1u ||
+            !partitionBatch.identityPartition.entry.drawRunRecord ||
+            partitionBatch.identityPartition.drawParams.empty()) {
+          abortEncodePartitionInvariant(
+              "identity DrawRun batch is malformed");
+        }
+        commandIndex = partitionBatch.ranges.front().entry.commandIndex;
+        command = partitionBatch.identityPartition.entry.command;
+      } else {
         const bool resolvedCommand = partitionReplayStream.commandIndexAt(
-            static_cast<std::size_t>(ordinal), commandIndex);
+            partitionBatch.replayOrdinalBegin, commandIndex);
         if (!resolvedCommand) {
           abortEncodePartitionInvariant(
-              "CommandSegment replay ordinal resolution failed");
+              "explicit DrawRun replay ordinal resolution failed");
         }
-        encodeCompleteCommand(commandIndex, slot.commandAt(commandIndex));
+        command = payload.commandAt(commandIndex).command;
       }
-      continue;
-    }
-
-    std::uint32_t commandIndex = 0;
-    core::MetalCommandView command{};
-    if (partitionBatch.identityResolved) {
-      if (partitionBatch.ranges.size() != 1u ||
-          !partitionBatch.identityPartition.entry.drawRunRecord ||
-          partitionBatch.identityPartition.drawParams.empty()) {
-        abortEncodePartitionInvariant(
-            "identity DrawRun batch is malformed");
-      }
-      commandIndex = partitionBatch.ranges.front().entry.commandIndex;
-      command = partitionBatch.identityPartition.entry.command;
-    } else {
-      const bool resolvedCommand = partitionReplayStream.commandIndexAt(
-          partitionBatch.replayOrdinalBegin, commandIndex);
-      if (!resolvedCommand) {
-        abortEncodePartitionInvariant(
-            "explicit DrawRun replay ordinal resolution failed");
-      }
-      command = slot.drawRunCommandAt(commandIndex);
-    }
-    traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
-    // TLA+: EncoderLifecycle / opCount advances once for the complete source
-    // command even when that DrawRun has multiple explicit subranges.
-    encodeDrawRunCommand(
-        commandIndex, command,
-        partitionBatch.identityResolved
-            ? std::span<const EncodePartitionRangeSnapshot>{}
-            : partitionBatch.ranges);
-    traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
-    traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
-                       command);
-    applyPerRecordSplitPolicy(/*presentRecord=*/false);
-    traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
+      traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
+      // TLA+: EncoderLifecycle / opCount advances once for the complete source
+      // command even when that DrawRun has multiple explicit subranges.
+      encodeDrawRunCommand(
+          commandIndex, command,
+          partitionBatch.identityResolved
+              ? std::span<const EncodePartitionRangeSnapshot>{}
+              : partitionBatch.ranges);
+      traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
+      traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
+                         command);
+      applyPerRecordSplitPolicy(/*presentRecord=*/false);
+      traceEncodeCommand("end", commandIndex, Kind::DrawRun, command);
   }
 
   if (options.session && options.sessionSource.has_value()) {
@@ -16960,7 +16998,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
   traceEncodeStage("after-record-chunk-sub-cb-count");
 
-  const u64 seqId = slot.seqId;
+  const u64 seqId = sourceSeqId;
   if (argbufPayloadDeltaSourcePerf) {
     traceEncodeStage("before-argbuf-payload-delta-source-emit");
     argbufPayloadDeltaSourceAttribution.emit(seqId);
@@ -16997,6 +17035,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("return-record");
   return record;
   }  // @autoreleasepool
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+    EncodeContext& ctx,
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot,
+    EncodeChunkOptions options) {
+  return encodeChunk(ctx, slotIndex, core::SourcePayloadView(slot), slot.seqId,
+                     std::move(options));
 }
 
 }  // namespace dxmt9::encoders

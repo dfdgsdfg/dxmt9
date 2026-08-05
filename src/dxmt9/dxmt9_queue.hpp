@@ -212,6 +212,9 @@ NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
     const ChunkSlot& slot) noexcept;
 
 struct QueueCompletionSource {
+  CpuReadyTape::SourceRef source{};
+  // Temporary control index is retained for diagnostics only. Completion and
+  // reclaim identity is source + seqId and never resolves this live shell.
   size_t slotIndex = 0;
   u64 seqId = 0;
   bool hasPresent = false;
@@ -226,7 +229,8 @@ struct EncodeSessionSourceList {
   size_t count = 0;
 
   bool canAppend(QueueCompletionSource source) const noexcept {
-    if (source.seqId == 0 || count >= entries.size()) {
+    if (!source.source.valid() || source.seqId == 0 ||
+        count >= entries.size()) {
       return false;
     }
     if (count > 0) {
@@ -281,22 +285,39 @@ struct ReadySlotSnapshot {
   size_t commandBegin = 0;
   size_t commandCount = 0;
   CpuReadySourceId sourceId{};
-  // Non-owning payload view resolved from sourceId while the control shell is
-  // in Encoding. It is call-local and must not be used to reclaim the source.
-  ChunkSlot* slot = nullptr;
+  CpuReadyStorageRef storage{};
+};
+
+// Synchronous call-local resolution: either while the queue lock holds a Ready
+// prefix stable for selection, or while a Represented Tape pin protects an
+// encode call. Never store this in a lifecycle/session/partition/submission
+// snapshot or callback.
+struct ResolvedPublishedSource {
+  CpuReadyTape::SourceRef source{};
+  size_t slotIndex = 0;
+  u64 seqId = 0;
+  SourcePayloadView payload{};
+  CpuReadySourceId sourceId{};
+  CpuReadyStorageRef storage{};
+  const ChunkSlot* slot = nullptr;
+  bool hasPresent = false;
+  size_t commandBegin = 0;
+  size_t commandCount = 0;
+
+  bool valid() const noexcept {
+    return source.valid() && seqId != 0 && payload.valid();
+  }
 };
 
 QueueCompletionSource completionSourceForReadySlot(
     const ReadySlotSnapshot& snapshot) noexcept;
 
 using ReadySlotBatchAppendPredicate =
-    std::function<bool(std::span<const ReadySlotSnapshot> selected,
+    std::function<bool(std::span<const ResolvedPublishedSource> selected,
                        size_t candidateSlotIndex,
-                       const ChunkSlot& candidateSlot)>;
+                       const SourcePayloadView& candidatePayload)>;
 using ReadySlotBatchPrefixSelector =
-    std::function<size_t(const std::deque<size_t>& readySlots,
-                         std::span<const ChunkSlotControl> slots,
-                         size_t maxCount)>;
+    std::function<size_t(std::span<const ResolvedPublishedSource> candidates)>;
 
 struct QueueSubmissionRecord {
   struct RenderEncoderGpuSample {
@@ -317,6 +338,9 @@ struct QueueSubmissionRecord {
   // on Metal same-queue in-order execution to make tail completion imply all
   // earlier sub-CBs in this chunk have completed.
   WMT::Reference<WMT::CommandBuffer> commandBuffer{};
+  // CPU-only lifecycle specs may exercise submit preflight without creating an
+  // Objective-C command buffer. Production must leave this false.
+  bool testOnlyAllowNullCommandBuffer = false;
   // Total command buffers in the chunk chain, including the tail above.
   // 1 means the public record is the whole chunk; >1 means earlier sub-CBs
   // were already committed during encodeChunk.
@@ -354,6 +378,13 @@ struct QueueSubmissionRecord {
   std::vector<std::function<void()>> completionCallbacks;
   std::vector<std::shared_ptr<void>> retainedPayloads;
 };
+
+// A standalone represented source must complete through exactly its own Tape
+// locator and command range. Empty records receive that singleton; non-empty
+// records are accepted only when they are already the exact same singleton.
+bool assignOrValidateSingleCompletionSource(
+    QueueSubmissionRecord& record,
+    const ReadySlotSnapshot& source) noexcept;
 
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
@@ -547,7 +578,7 @@ void traceQueueSlotsEvent(const char* event,
  *   writingSlot               -> *SubmissionBinding::writingSlot
  *   writeIndex                -> *SubmissionBinding::writeIndex
  *   nextSeqId                 -> *SubmissionBinding::nextSeqId
- *   readySlots                -> *SubmissionBinding::readySlots
+ *   readySlots                -> SubmissionBinding::cpuReadyTape Ready FIFO
  *   completedSeqQueue         -> *SubmissionBinding::completedSeqQueue
  *   pendingCompletion         -> pendingCompletion_
  *   inflightCount             -> *SubmissionBinding::inflightCount
@@ -575,7 +606,6 @@ class QueueLifecycleController {
     std::optional<size_t>* writingSlot = nullptr;
     size_t* writeIndex = nullptr;
     u64* nextSeqId = nullptr;
-    std::deque<size_t>* readySlots = nullptr;
     std::deque<u64>* completedSeqQueue = nullptr;
     std::deque<u64>* completedPresentSeqQueue = nullptr;
     size_t* inflightCount = nullptr;
@@ -631,6 +661,11 @@ class QueueLifecycleController {
   size_t dequeueReadySlotBatchPrefix(std::unique_lock<std::mutex>& lock,
                                      std::span<ReadySlotSnapshot> out,
                                      const ReadySlotBatchPrefixSelector& selectPrefix);
+  ResolvedPublishedSource resolveRepresentedSource(
+      const ReadySlotSnapshot& source) const noexcept;
+  // Fail-stop a structurally inconsistent Tape/source resolution. This is an
+  // owner-only surface used by CommandQueue's synchronous encode loops.
+  void poisonTapeFailure() noexcept;
   // Encoded-head carrier for open-CB / pending-tail experiments. Sources must
   // already be dequeued into Encoding state; this records their completion
   // identity without making them ready-visible or GPU-complete.
@@ -640,29 +675,32 @@ class QueueLifecycleController {
   // TLA+: EncodeDequeue followed by EncodeSubmitToGpu or EncodeCompleteInline.
   bool runEncodeIteration(
       std::unique_lock<std::mutex>& lock,
-      const std::function<std::optional<QueueSubmissionRecord>(size_t, ChunkSlot&)>& encodeFn,
+      const std::function<std::optional<QueueSubmissionRecord>(
+          const ReadySlotSnapshot&, const SourcePayloadView&)>& encodeFn,
       const std::function<void(u64)>& onInlineComplete = {});
   // TLA+: present-bearing metadata append before CommitPublish.
-  void appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
+  bool appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
   // TLA+: EncodeSubmitToGpu.
-  void submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
+  bool submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                           size_t slotIndex,
                           u64 seqId,
                           const char* context = "queue");
   // TLA+: EncodeSubmitToGpu for an externally prepared tail submission.
   // Used by split encode carriers once they have assembled the final
   // fixed completion-source chain.
-  void submitEncodedSubmission(std::unique_lock<std::mutex>& lock,
+  bool submitEncodedSubmission(std::unique_lock<std::mutex>& lock,
                                QueueSubmissionRecord& record);
   // TLA+: EncodeCompleteInline.
-  std::vector<DrawShaderLayoutContext> completeInlineChunk(size_t slotIndex, u64 seqId);
+  bool completeInlineChunk(std::unique_lock<std::mutex>& lock,
+                           size_t slotIndex,
+                           u64 seqId);
   // TLA+: FinishDequeue, and PresentComplete for eligible present seq IDs.
   bool drainCompletedSequence(std::unique_lock<std::mutex>& lock, u64& seqId);
   // TLA+: FinishDequeue followed by ReclaimFree.
   bool runFinishIteration(std::unique_lock<std::mutex>& lock,
                           const std::function<void(u64)>& onAfterFinish = {});
   // TLA+: ReclaimFree.
-  std::vector<DrawShaderLayoutContext> reclaimCompletedGpuSlots(u64 seqId);
+  bool reclaimCompletedTapeHead(std::unique_lock<std::mutex>& lock, u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
   // Queue-local observation used by experimental open-CB carriers to decide
@@ -782,8 +820,8 @@ class QueueLifecycleController {
   void noteWaitSeqEnd(const QueueControllerState& state,
                       u64 targetSeqId) const;
   void transition(QueueTransitionRecord record, const std::function<void()>& mutate = {});
-  void enqueueSubmission(QueueSubmissionRecord record);
-  void submit(QueueSubmissionRecord& record);
+  bool enqueueSubmission(QueueSubmissionRecord& record);
+  bool submit(QueueSubmissionRecord& record);
 
   SubmissionBinding submissionBinding_{};
 

@@ -269,7 +269,8 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 - **Sibling wait counters**: `present_acquire_wait_ms` (drawable acquire),
   `present_boundary_wait_ms` (present-boundary policy), `sync_wait_ms`
   (synchronous flush), `queue_writer_wait_ms` / `queue_commit_wait_ms` /
-  `queue_sequence_wait_ms` (queue ring / submit ordering). Together they
+  `queue_sequence_wait_ms` (queue ring / submit ordering), and
+  `cpu_ready_tape_admission_wait_ms` (Direct arena capacity). Together they
   enumerate every CPU stall the runtime can attribute.
 - **Present scheduling counters**: `present_schedule_requested_sync`,
   `present_schedule_requested_immediate`,

@@ -342,12 +342,18 @@ because the pair is coupled) moves the record-replay phase of
 worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
 The observable contract is `R-BACK-2.51`. The mechanics:
 
-- The synchronous phase keeps wire header/range validation, handle generation
-  checks, and `markChunkResources`; the boundary is the existing
-  `noteCommitChunkReplayStartForCompletionGap()` marker. Everything after it
-  (record replay, draw-submission construction, publish) runs on the worker
-  via a bounded FIFO raw-chunk queue holding unix-owned copies of the wire
-  blob plus addref'd wrapper retention for every record-resolved object.
+- The synchronous phase always keeps wire header/range validation, handle
+  generation checks, canonical resource identities, backing snapshots, raw
+  residency, and wrapper retention. With the CPU-ready promotion gate off, it
+  also keeps the historical combined `markChunkResources` + backing-capture
+  operation before handoff, and the worker skips structural planning and
+  directly uses Legacy replay. With the gate on, a Direct candidate applies
+  the exact strict source `seqId` mark after admission and before seal/Ready;
+  StateOnly emits no mark, and a planned Legacy lane marks before semantic
+  replay. The replay boundary remains the existing
+  `noteCommitChunkReplayStartForCompletionGap()` marker. Worker-owned record
+  replay, draw-submission construction, and publication consume the bounded
+  FIFO's unix-owned wire copy and addref'd resolved wrappers.
 - Present pacing re-anchors on the app thread: present-bearing commits wait a
   present-ordinal frame-latency boundary
   (`CommandQueue::waitPresentOrdinalBoundary`, pure mapping

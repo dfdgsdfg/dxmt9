@@ -41,6 +41,31 @@ struct RetainedWireHandle {
 };
 
 using ReplaySeq = std::uint64_t;
+using RawOrdinal = ReplaySeq;
+
+// One decision covers the complete immutable raw V2 chunk. Records are never
+// split between lanes, and RawCommandChunk::replaySeq is the rawOrdinal used by
+// this decision.
+enum class V2ReplayLane : std::uint8_t {
+  DirectArenaCandidate,
+  StateOnly,
+  Legacy,  // Existing ReplayOffloadWorker path, including paced Present.
+  Inline,  // Synchronous-read boundary; currently Readback only.
+  Reject,
+};
+
+enum class V2ReplayReason : std::uint8_t {
+  Eligible,
+  Query,
+  Readback,
+  UpdateTexture,
+  Present,
+  TriangleFan,
+  UnknownRecord,
+  InvalidImportedView,
+  StructuralOverflow,
+  Oversize,
+};
 
 struct ReplayDrainTarget {
   ReplaySeq lastQueuedSeq = 0;
@@ -124,9 +149,20 @@ struct RawCommandChunk {
   std::vector<void*> resolvedObjects;
   std::vector<RetainedWireHandle> retainedWrappers;
   std::vector<ReplayDrainTarget*> ledgerTargets;
+  // Validated, deduplicated unix-side resource identities. The app thread
+  // persists these before handoff. Legacy admission may have already stamped
+  // the current queue sequence; Direct publication stamps its exact reserved
+  // ticket sequence after strict admission.
+  std::vector<dxmt9::core::ChunkHandleEntry> resourceEntries;
   std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
+  // Raw FIFO identity. For V2 planning/admission, replaySeq == rawOrdinal.
   ReplaySeq replaySeq = 0;
   bool bufferSnapshotsCaptured = false;
+  // Admission-time cutover decision. The worker never re-reads the runtime
+  // gate: false preserves the historical synchronous combined mark/capture
+  // plus direct Legacy replay; true permits structural lane planning.
+  bool cpuReadyTapePlanningEnabled = false;
+  bool resourcesMarkedBeforeReplay = false;
 };
 
 class ReplayBufferSnapshotResolver {

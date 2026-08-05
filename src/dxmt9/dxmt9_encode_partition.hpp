@@ -60,13 +60,13 @@ struct EncodePartitionEntryResolution {
 // free so the caller can fail open to source-order serial encoding.
 EncodePartitionEntryResolution resolveEncodePartitionEntry(
     const EncodePartitionEntrySnapshot& snapshot,
-    std::span<const core::metalqueue::ReadySlotSnapshot> sources) noexcept;
+    std::span<const core::metalqueue::ResolvedPublishedSource> sources) noexcept;
 
 // Exact current-source view of the already selected effective replay stream.
 // `source` is by value, but its ChunkSlot pointer and command-order span are
 // borrowed only for the synchronous encode call.
 struct EncodePartitionReplayStream {
-  core::metalqueue::ReadySlotSnapshot source{};
+  core::metalqueue::ResolvedPublishedSource source{};
   bool commandOrderActive = false;
   std::span<const std::uint32_t> commandOrder{};
   bool valid = false;
@@ -87,7 +87,19 @@ EncodePartitionReplayStream makeEncodePartitionReplayStream(
     // factory initializes this caller-owned scratch and writes each selected
     // command's replay ordinal, proving range and uniqueness without another
     // warm-path allocation. Source order and active empty DCE need no scratch.
-    std::span<std::size_t> replayOrdinalByCommandIndex = {}) noexcept;
+    std::span<std::size_t> replayOrdinalByCommandIndex = {},
+    core::CpuReadyTape::SourceRef tapeSource = {}) noexcept;
+
+EncodePartitionReplayStream makeEncodePartitionReplayStream(
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t seqId,
+    std::size_t commandBegin,
+    std::size_t commandCount,
+    bool commandOrderActive,
+    std::span<const std::uint32_t> commandOrder,
+    std::span<std::size_t> replayOrdinalByCommandIndex = {},
+    core::CpuReadyTape::SourceRef tapeSource = {}) noexcept;
 
 // Synthesizes one locator-only entry against the exact current source. Returns
 // false if the selected command/draw is malformed or cannot be represented;
@@ -167,7 +179,6 @@ public:
 private:
   const EncodePartitionReplayStream* stream_ = nullptr;
   std::size_t replayOrdinal_ = 0;
-  bool drawOnlyCommandStream_ = false;
   bool pendingDrawRun_ = false;
   EncodePartitionRangeSnapshot pendingRange_{};
   ResolvedEncodePartition pendingPartition_{};

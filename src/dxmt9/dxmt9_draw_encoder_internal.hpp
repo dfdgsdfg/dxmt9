@@ -201,11 +201,13 @@ inline EncodeChunkReplayRange encodeChunkReplayRange(
 }
 
 inline bool readySlotSnapshotMatchesCompletionSource(
-    const core::metalqueue::ReadySlotSnapshot& snapshot,
+    const core::metalqueue::ResolvedPublishedSource& snapshot,
     const core::metalqueue::QueueCompletionSource& source,
     std::size_t slotIndex,
     const core::ChunkSlot& slot) noexcept {
   return snapshot.slot == &slot &&
+         snapshot.sourceId == source.source.id &&
+         snapshot.storage == source.source.storage &&
          snapshot.slotIndex == slotIndex &&
          snapshot.slotIndex == source.slotIndex &&
          snapshot.seqId == slot.seqId &&
@@ -216,11 +218,14 @@ inline bool readySlotSnapshotMatchesCompletionSource(
 }
 
 inline bool readySlotSnapshotMatchesReplayRange(
-    const core::metalqueue::ReadySlotSnapshot& snapshot,
+    const core::metalqueue::ResolvedPublishedSource& snapshot,
+    core::CpuReadyTape::SourceRef source,
     std::size_t slotIndex,
     const core::ChunkSlot& slot,
     EncodeChunkReplayRange replayRange) noexcept {
   return snapshot.slot == &slot &&
+         snapshot.sourceId == source.id &&
+         snapshot.storage == source.storage &&
          snapshot.slotIndex == slotIndex &&
          snapshot.seqId == slot.seqId &&
          snapshot.commandBegin == replayRange.commandBegin &&

@@ -1,0 +1,667 @@
+#include "../../../src/dxmt9/dxmt9_command_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_source_payload.hpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
+namespace dxmt9 {
+
+struct CommandQueueArenaLeaseTestAccess {
+  struct LifecycleResult {
+    bool dequeued = false;
+    bool resolvedArena = false;
+    bool sawClear = false;
+    bool submitted = false;
+    bool completed = false;
+    bool reclaimed = false;
+    bool staleResolveRejected = false;
+    std::size_t commandCount = 0;
+    std::size_t residentSources = 0;
+    std::uint64_t generationBefore = 0;
+    std::uint64_t generationAfter = 0;
+  };
+
+  static void ensureEmptyLegacyWriter(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    (void)queue.queueLifecycle_.ensureWriterSlot(lock, kMaxQueuedChunks);
+  }
+
+  static void setWriteIndex(CommandQueue& queue, std::size_t index) {
+    std::lock_guard lock(queue.mutex_);
+    queue.writeIndex_ = index;
+  }
+
+  static void setCurrentBackBuffer(CommandQueue& queue, core::Handle handle) {
+    std::lock_guard lock(queue.mutex_);
+    queue.currentBackBuffer_ = handle;
+  }
+
+  static void setStopped(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.stop_ = true;
+  }
+
+  static core::Handle currentBackBuffer(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.currentBackBuffer_;
+  }
+
+  static std::uint64_t nextSeqId(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.nextSeqId_;
+  }
+
+  static std::size_t writeIndex(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.writeIndex_;
+  }
+
+  static core::ChunkSlotControl control(CommandQueue& queue,
+                                        std::size_t index) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.slots_[index];
+  }
+
+  static bool admissionIsFullyVisible(
+      CommandQueue& queue,
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        queue.activeArenaBuild_.load(std::memory_order_relaxed) !=
+            (queue.arenaBuildContext_ ? &*queue.arenaBuildContext_ : nullptr) ||
+        !queue.arenaBuildContext_ ||
+        queue.arenaBuildContext_->controlIndex != controlIndex ||
+        queue.arenaBuildContext_->reservation.ticket != ticket) {
+      return false;
+    }
+    const auto memory = queue.cpuReadyTape_.writableStorage(ticket);
+    return memory.size() >= queue.arenaBuildContext_->layout.usedBytes &&
+           queue.arenaBuildContext_->reservation.arenaPayload->boundTo(
+               memory.first(queue.arenaBuildContext_->layout.usedBytes));
+  }
+
+  static const core::ArenaSourcePayloadBlock* publishedArena(
+      CommandQueue& queue,
+      core::CpuReadyPublicationTicket ticket) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.resolveArena(
+        ticket.id, ticket.storage, core::CpuReadyTape::State::Ready);
+  }
+
+  static std::size_t residentSources(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.stats().residentSources;
+  }
+
+  static LifecycleResult publishToReclaim(
+      CommandQueue& queue,
+      core::CpuReadyPublicationTicket ticket) {
+    using namespace core;
+    using namespace core::metalqueue;
+    LifecycleResult result{};
+    ReadySlotSnapshot locator{};
+    QueueCompletionSource completionSource{};
+    {
+      std::unique_lock lock(queue.mutex_);
+      result.generationBefore =
+          queue.cpuReadyTape_.sourceGenerationAt(ticket.id.index);
+      result.dequeued = queue.queueLifecycle_.dequeueReadySlot(lock, locator);
+      if (!result.dequeued) {
+        return result;
+      }
+      {
+        const auto resolved =
+            queue.queueLifecycle_.resolveRepresentedSource(locator);
+        result.resolvedArena = resolved.valid() && resolved.payload.isArena() &&
+                               resolved.slot == nullptr;
+        result.commandCount = resolved.payload.commandCount();
+        result.sawClear = result.commandCount == 1u &&
+                          resolved.payload.commandAt(0).kind() ==
+                              MetalCommandKind::Clear;
+      }
+
+      QueueSubmissionRecord record{};
+      record.testOnlyAllowNullCommandBuffer = true;
+      record.slotIndex = locator.slotIndex;
+      record.seqId = locator.seqId;
+      completionSource = completionSourceForReadySlot(locator);
+      const std::array sources{completionSource};
+      if (!record.assignFixedCompletionSources(sources)) {
+        return result;
+      }
+      result.submitted =
+          queue.queueLifecycle_.submitEncodedSubmission(lock, record);
+    }
+    if (!result.submitted) {
+      return result;
+    }
+
+    QueueLifecycleController::PendingCompletion pending{};
+    pending.slotIndex = completionSource.slotIndex;
+    pending.seqId = completionSource.seqId;
+    (void)pending.fixedCompletionSources.append(completionSource);
+    queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
+    bool completionStop = false;
+    result.completed =
+        queue.queueLifecycle_.processOnePendingCompletion(completionStop);
+
+    {
+      std::unique_lock lock(queue.mutex_);
+      result.reclaimed = result.completed &&
+          queue.queueLifecycle_.runFinishIteration(lock);
+      result.residentSources = queue.cpuReadyTape_.residentCount();
+      result.generationAfter =
+          queue.cpuReadyTape_.sourceGenerationAt(ticket.id.index);
+      result.staleResolveRejected =
+          !queue.cpuReadyTape_.resolveSourcePayload(
+              ticket.id, ticket.storage, CpuReadyTape::State::Ready).valid();
+    }
+    return result;
+  }
+};
+
+}  // namespace dxmt9
+
+namespace {
+
+struct TestFailure : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+void check(bool condition, std::string_view message) {
+  if (!condition) {
+    throw TestFailure(std::string(message));
+  }
+}
+
+dxmt9::core::SourcePayloadCapacity groupedDrawCapacity() {
+  using namespace dxmt9::core;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 2;
+  capacity.drawHotStates = 2;
+  capacity.drawShaderLayouts = 2;
+  capacity.drawDebugSnapshots = 2;
+  capacity.drawPsoSubviews = 2;
+  capacity.drawUniformFixedPayloads = 3;
+  capacity.drawUniformVertexConstants = 3;
+  capacity.drawUniformVertexConstantBytes =
+      3 * sizeof(VertexShaderConstants);
+  capacity.drawUniformPixelConstants = 3;
+  capacity.drawUniformPixelConstantBytes = 3 * sizeof(PixelShaderConstants);
+  capacity.drawUniformPayloads = 3;
+  capacity.drawParams = 3;
+  capacity.drawPayloadBytes =
+      4 * (sizeof(DrawBindingOverride) + sizeof(DrawBindingSnapshot));
+  capacity.drawRunRecords = 2;
+  return capacity;
+}
+
+dxmt9::core::SourcePayloadCapacity singleDrawCapacity(
+    std::size_t commandCount = 1) {
+  using namespace dxmt9::core;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = commandCount;
+  capacity.drawHotStates = commandCount;
+  capacity.drawShaderLayouts = commandCount;
+  capacity.drawDebugSnapshots = commandCount;
+  capacity.drawPsoSubviews = commandCount;
+  capacity.drawUniformFixedPayloads = commandCount;
+  capacity.drawUniformVertexConstants = commandCount;
+  capacity.drawUniformVertexConstantBytes =
+      commandCount * sizeof(VertexShaderConstants);
+  capacity.drawUniformPixelConstants = commandCount;
+  capacity.drawUniformPixelConstantBytes =
+      commandCount * sizeof(PixelShaderConstants);
+  capacity.drawUniformPayloads = commandCount;
+  capacity.drawParams = commandCount;
+  capacity.drawPayloadBytes = 4096;
+  capacity.drawRunRecords = commandCount;
+  return capacity;
+}
+
+dxmt9::core::SourcePayloadLayout makeLayout(
+    const dxmt9::core::SourcePayloadCapacity& capacity) {
+  const auto layout =
+      dxmt9::core::makeSourcePayloadLayout(capacity, 4096, 64);
+  check(layout.has_value(), "arena lease fixture layout must build");
+  return *layout;
+}
+
+struct SyntheticBufferHandleGuard {
+  dxmt9::resources::BufferRecord* record = nullptr;
+
+  ~SyntheticBufferHandleGuard() {
+    if (!record) {
+      return;
+    }
+    record->buffer.handle = NULL_OBJECT_HANDLE;
+    for (auto& entry : record->renameRing) {
+      entry.buffer.handle = NULL_OBJECT_HANDLE;
+    }
+  }
+};
+
+dxmt9::core::DrawRunSubmission materializedSubmission(
+    dxmt9::core::Handle attachment,
+    std::uint64_t stateGeneration,
+    std::uint64_t uniformGeneration) {
+  using namespace dxmt9::core;
+  DrawRunSubmission submission{
+      .state = CanonicalDrawState{},
+      .uniforms = DrawUniformPayload{},
+      .draw = DrawParam{.primitiveCount = 1},
+      .stateGeneration = stateGeneration,
+      .uniformGeneration = uniformGeneration,
+      .stateLane = DrawRunSubmissionStateLane::FullNoIndex,
+  };
+  submission.materializedState().hot.colorAttachments[0].handle = attachment;
+  return submission;
+}
+
+void testExplicitControlIndexGroupingAndExactSnapshotMark() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  static_assert(!std::is_copy_constructible_v<
+                CommandQueue::CpuReadyArenaBuildLease>);
+  static_assert(std::is_move_constructible_v<
+                CommandQueue::CpuReadyArenaBuildLease>);
+
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  CommandQueueArenaLeaseTestAccess::setWriteIndex(queue, 5);
+  const Handle oldBackBuffer{70};
+  CommandQueueArenaLeaseTestAccess::setCurrentBackBuffer(queue, oldBackBuffer);
+
+  BufferDesc bufferDesc{};
+  bufferDesc.size = 64;
+  bufferDesc.pool = Pool::Default;
+  bufferDesc.usage = UsageDynamic;
+  const auto buffer = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, bufferDesc);
+  auto* bufferRecord = queue.pool().findBuffer(buffer.value);
+  check(bufferRecord && bufferRecord->renameRing.size() == 1,
+        "dynamic buffer fixture must seed a rename ring");
+  bufferRecord->renameRing.emplace_back();
+  SyntheticBufferHandleGuard handleGuard{bufferRecord};
+  constexpr obj_handle_t activeBacking = 0x1234u;
+  constexpr obj_handle_t capturedBacking = 0x5678u;
+  bufferRecord->buffer.handle = activeBacking;
+  bufferRecord->renameRing[0].buffer.handle = activeBacking;
+  bufferRecord->renameRing[1].buffer.handle = capturedBacking;
+
+  const auto layout = makeLayout(groupedDrawCapacity());
+  auto lease = queue.beginCpuReadyArenaSource(101, layout);
+  check(lease.has_value(), "direct arena admission must succeed");
+  const auto ticket = lease->ticket();
+  check(ticket.id.index == 0,
+        "fixture must allocate source index zero");
+  check(CommandQueueArenaLeaseTestAccess::admissionIsFullyVisible(
+            queue, ticket, 5),
+        "reserve, Tape storage bind, context emplace, and active publication "
+        "must all be visible under the scheduling mutex");
+  check(CommandQueueArenaLeaseTestAccess::nextSeqId(queue) ==
+            ticket.seqId + 1,
+        "strict admission must consume nextSeqId immediately");
+
+  std::array<DrawRunSubmission, 3> submissions{
+      materializedSubmission(Handle{11}, 7, 9),
+      DrawRunSubmission{},
+      materializedSubmission(Handle{22}, 8, 10),
+  };
+  submissions[1].state.reset();
+  submissions[1].uniforms.reset();
+  submissions[1].stateMaterialized = false;
+  submissions[1].stateGeneration = 7;
+  submissions[1].uniformGeneration = 9;
+  submissions[1].stateLane = DrawRunSubmissionStateLane::FullNoIndex;
+  submissions[1].draw.primitiveCount = 1;
+  submissions[1].bindingOverride.streamMask = 1;
+  submissions[1].bindingOverride.streams[0].buffer = buffer;
+  submissions[1].bindingOverride.streams[0].stride = 16;
+  DrawBindingSnapshot captured{};
+  captured.streamMask = 1;
+  captured.streams[0].buffer = buffer;
+  captured.streams[0].stride = 16;
+  captured.streams[0].snapshot.metalHandle = capturedBacking;
+  submissions[1].payload.bindingSnapshotData =
+      drawBindingSnapshotBytes(captured);
+
+  queue.submitDrawRunBatch(submissions);
+  check(CommandQueueArenaLeaseTestAccess::currentBackBuffer(queue) ==
+            oldBackBuffer,
+        "active appends must not expose pending backbuffer semantics");
+
+  const std::array<ChunkHandleEntry, 1> resources{{
+      ChunkHandleEntry{.kind = ChunkHandleKind::Buffer, .handle = buffer},
+  }};
+  check(lease->publish(resources), "valid grouped arena source must publish");
+  check(CommandQueueArenaLeaseTestAccess::currentBackBuffer(queue) ==
+            Handle{22},
+        "publish lock must commit the final draw-group backbuffer semantic");
+  check(CommandQueueArenaLeaseTestAccess::writeIndex(queue) == 6,
+        "publish must advance from the selected control index");
+  const auto selectedControl =
+      CommandQueueArenaLeaseTestAccess::control(queue, 5);
+  const auto unrelatedControl =
+      CommandQueueArenaLeaseTestAccess::control(queue, ticket.id.index);
+  check(selectedControl.state == ChunkSlot::State::Pending &&
+            selectedControl.sourceId == ticket.id &&
+            unrelatedControl.state == ChunkSlot::State::Free,
+        "source index and explicit control index must remain independent");
+
+  const auto* arena =
+      CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket);
+  check(arena != nullptr, "published arena owner must resolve from Tape");
+  const SourcePayloadView view(*arena);
+  check(view.valid() && view.commandCount() == 2 &&
+            view.commandAt(0).kind() == MetalCommandKind::DrawRun &&
+            view.commandAt(1).kind() == MetalCommandKind::DrawRun,
+        "incompatible attachment states must remain two ordered DrawRuns");
+  const auto firstRun = view.commandAt(0).command;
+  const auto secondRun = view.commandAt(1).command;
+  check(firstRun.drawParams.size() == 2 &&
+            secondRun.drawParams.size() == 1,
+        "compatible elided draw must stay in its accepted group");
+  check(firstRun.drawParams[1].bindingOverrideRange.size ==
+            sizeof(DrawBindingOverride) &&
+            firstRun.drawParams[1].bindingSnapshotRange.size ==
+                sizeof(DrawBindingSnapshot),
+        "elided draw must retain prepared override and captured snapshot");
+  check(bufferRecord->lastUsedSeqId == ticket.seqId &&
+            bufferRecord->renameRing[0].lastUsedSeqId == ticket.seqId &&
+            bufferRecord->renameRing[1].lastUsedSeqId == ticket.seqId,
+        "logical, active, and captured backing uses must be marked with the "
+        "exact strict ticket seqId");
+}
+
+void testActiveMismatchFailStopsWithoutFallback() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto lease = queue.beginCpuReadyArenaSource(1, layout);
+  check(lease.has_value(), "mismatch fixture admission must succeed");
+  const auto ticket = lease->ticket();
+  queue.submitReadback(ReadbackDesc{});
+  check(!lease->publish(),
+        "unexpected direct-lane command must make publish fail");
+  check(queue.cpuReadyArenaPoisoned(),
+        "post-admission mismatch must poison the direct queue lane");
+  check(CommandQueueArenaLeaseTestAccess::residentSources(queue) == 0 &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(queue) ==
+                ticket.seqId + 1,
+        "two-phase abort must reclaim ownership without reusing identity");
+  check(CommandQueueArenaLeaseTestAccess::control(queue, 0).state ==
+            ChunkSlot::State::Free &&
+            CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket) ==
+                nullptr,
+        "failed direct source must leave no legacy or arena publication");
+}
+
+void testLegacyWriterBoundaryBeforeStrictAdmission() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::ensureEmptyLegacyWriter(queue);
+    auto lease = queue.beginCpuReadyArenaSource(1, layout);
+    check(lease.has_value() && lease->seqId() == 1,
+          "empty legacy writer must abort without consuming a seq identity");
+    ClearDesc clear{};
+    clear.colorAttachments[0].handle = Handle{31};
+    queue.submitClear(clear);
+    check(lease->publish(), "arena source after empty writer must publish");
+  }
+
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    ClearDesc legacyClear{};
+    legacyClear.colorAttachments[0].handle = Handle{41};
+    queue.submitClear(legacyClear);
+    auto lease = queue.beginCpuReadyArenaSource(2, layout);
+    check(lease.has_value() && lease->seqId() == 2,
+          "non-empty legacy writer must publish before strict admission");
+    const auto legacyControl =
+        CommandQueueArenaLeaseTestAccess::control(queue, 0);
+    check(legacyControl.state == ChunkSlot::State::Pending &&
+              legacyControl.seqId == 1,
+          "legacy publication must keep its original control and seq");
+    ClearDesc arenaClear{};
+    arenaClear.colorAttachments[0].handle = Handle{42};
+    queue.submitClear(arenaClear);
+    check(lease->publish(),
+          "strict source after non-empty legacy publication must publish");
+    check(CommandQueueArenaLeaseTestAccess::currentBackBuffer(queue) ==
+              Handle{42},
+          "strict publish must commit semantics after the legacy boundary");
+  }
+}
+
+void testActiveSingleDrawPreservesUpAndStateBlockBypass() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity(2));
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(7, layout);
+  check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Ready,
+        "single-draw fixture must receive typed Ready admission");
+  const auto ticket = begin->ticket();
+
+  std::array<u8, 12> upVertices{};
+  std::array<u8, 6> upIndices{};
+  CanonicalDrawState upState{};
+  upState.hot.colorAttachments[0].handle = Handle{51};
+  const DrawParam upDraw{
+      .primitiveCount = 1,
+      .indexed = true,
+  };
+  const DrawParamPayloadView upPayload{
+      .userVertexData = upVertices,
+      .userIndexData = upIndices,
+  };
+  queue.submitDrawRun(std::move(upState), DrawUniformPayload{},
+                      std::span<const DrawParam>(&upDraw, 1),
+                      std::span<const DrawParamPayloadView>(&upPayload, 1));
+
+  // State-block recording disables replay batching and reaches the same
+  // single-run queue ingress with ordinary (non-UP) draw parameters.
+  CanonicalDrawState stateBlockState{};
+  stateBlockState.hot.colorAttachments[0].handle = Handle{52};
+  const DrawParam stateBlockDraw{.primitiveCount = 2};
+  queue.submitDrawRun(std::move(stateBlockState), DrawUniformPayload{},
+                      std::span<const DrawParam>(&stateBlockDraw, 1));
+  check(begin->publish(),
+        "active single-run ingress must publish without legacy fallback");
+
+  const auto* arena =
+      CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket);
+  check(arena != nullptr, "single-run source must resolve from Tape");
+  const SourcePayloadView view(*arena);
+  check(view.commandCount() == 2 &&
+            view.commandAt(0).command.drawParams.size() == 1 &&
+            view.commandAt(1).command.drawParams.size() == 1,
+        "UP and state-block bypass draws must remain separate DrawRuns");
+  const auto& upParam = view.commandAt(0).command.drawParams[0];
+  check(upParam.userVertexRange.size == upVertices.size() &&
+            upParam.userIndexRange.size == upIndices.size(),
+        "single-run arena assembly must preserve UP vertex/index payloads");
+  check(CommandQueueArenaLeaseTestAccess::currentBackBuffer(queue) ==
+            Handle{52},
+        "single-run publish must commit final state-block draw semantics");
+}
+
+void testTypedBeginStatusAndMissingAdmissionSnapshot() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto invalid = queue.beginCpuReadyArenaSource(0, layout);
+    check(invalid.status == CommandQueue::CpuReadyArenaBeginStatus::Invalid &&
+              !invalid,
+          "typed begin must distinguish invalid admission input");
+    auto active = queue.beginCpuReadyArenaSource(1, layout);
+    auto pressure = queue.beginCpuReadyArenaSource(2, layout);
+    check(active &&
+              pressure.status ==
+                  CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure &&
+              !pressure,
+          "typed begin must expose an overlapping transaction as pressure");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    CommandQueueArenaLeaseTestAccess::setStopped(queue);
+    const auto stopped = queue.beginCpuReadyArenaSource(1, layout);
+    check(stopped.status == CommandQueue::CpuReadyArenaBeginStatus::Stopped,
+          "typed begin must distinguish a stopped queue");
+  }
+  {
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    BufferDesc desc{};
+    desc.size = 64;
+    desc.pool = Pool::Default;
+    desc.usage = UsageDynamic;
+    const auto buffer = queue.pool().createBuffer(
+        WMT::Device{NULL_OBJECT_HANDLE}, desc);
+    auto* record = queue.pool().findBuffer(buffer.value);
+    check(record && record->renameRing.size() == 1,
+          "missing-snapshot fixture must create a versioned buffer");
+    SyntheticBufferHandleGuard handleGuard{record};
+    constexpr obj_handle_t backing = 0x3344u;
+    record->buffer.handle = backing;
+    record->renameRing[0].buffer.handle = backing;
+
+    auto begin = queue.beginCpuReadyArenaSource(1, layout);
+    check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Ready &&
+              begin.lease.has_value(),
+          "missing-snapshot fixture admission must succeed first");
+    CanonicalDrawState state{};
+    state.hot.streamMask = 1;
+    state.hot.streamBuffers[0] = buffer;
+    state.hot.streamStrides[0] = 16;
+    const DrawParam draw{.primitiveCount = 1};
+    queue.submitDrawRun(std::move(state), DrawUniformPayload{},
+                        std::span<const DrawParam>(&draw, 1));
+    check(!begin->publish(),
+          "missing app-admission snapshot must fail-stop after admission");
+    check(queue.cpuReadyArenaPoisoned() && record->lastUsedSeqId == 0,
+          "failed snapshot validation must happen before resource marking");
+    const auto corrupt = queue.beginCpuReadyArenaSource(2, layout);
+    check(corrupt.status == CommandQueue::CpuReadyArenaBeginStatus::Corrupt,
+          "typed begin must expose the sticky fail-stop lane as corrupt");
+  }
+}
+
+void testArenaClearMarksCommonViewResourcesAtExactSeq() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  SurfaceDesc desc{};
+  desc.width = 1;
+  desc.height = 1;
+  desc.format = Format::NullRt;
+  desc.pool = Pool::Default;
+  desc.renderTarget = true;
+  const auto surface = queue.pool().createSurface(
+      WMT::Device{NULL_OBJECT_HANDLE}, BackendLimits{}, desc);
+  const auto untouchedDepth = queue.pool().createSurface(
+      WMT::Device{NULL_OBJECT_HANDLE}, BackendLimits{}, desc);
+  auto* record = queue.pool().findSurface(surface.value);
+  auto* untouchedDepthRecord = queue.pool().findSurface(untouchedDepth.value);
+  check(record != nullptr && untouchedDepthRecord != nullptr,
+        "clear resource fixture surfaces must exist");
+
+  auto begin = queue.beginCpuReadyArenaSource(3, layout);
+  check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Ready &&
+            begin.lease.has_value(),
+        "clear resource fixture admission must succeed");
+  const auto seqId = begin->seqId();
+  ClearDesc clear{};
+  clear.colorAttachments[0].handle = surface;
+  clear.depthStencil.handle = untouchedDepth;
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  check(begin->publish(), "clear-only arena source must publish");
+  check(record->lastUsedSeqId == seqId,
+        "SourceCommandView clear attachments must mark the exact ticket seq "
+        "without help from the raw handle table");
+  check(untouchedDepthRecord->lastUsedSeqId == 0,
+        "clear marking must not stamp an attachment whose depth/stencil flags "
+        "are both disabled");
+}
+
+void testArenaPublishToReclaimLifecycle() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto layout = makeLayout(capacity);
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = queue.beginCpuReadyArenaSource(9, layout);
+  check(begin.status == CommandQueue::CpuReadyArenaBeginStatus::Ready &&
+            begin.lease.has_value(),
+        "lifecycle fixture strict admission must succeed");
+  const auto ticket = begin->ticket();
+  ClearDesc clear{};
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  check(begin->publish(), "lifecycle fixture arena source must publish");
+
+  const auto result =
+      CommandQueueArenaLeaseTestAccess::publishToReclaim(queue, ticket);
+  check(result.dequeued && result.resolvedArena && result.sawClear &&
+            result.commandCount == 1u,
+        "Ready arena source must become Represented and resolve through the "
+        "common call-local SourcePayloadView");
+  check(result.submitted && result.completed && result.reclaimed,
+        "arena source must traverse Submitted, Completed, and FIFO reclaim");
+  check(result.residentSources == 0u && result.staleResolveRejected,
+        "reclaimed arena owner must no longer resolve");
+  check(result.generationAfter == result.generationBefore + 1u,
+        "arena reclaim must advance the source generation");
+}
+
+}  // namespace
+
+int main() {
+  try {
+    testExplicitControlIndexGroupingAndExactSnapshotMark();
+    testActiveMismatchFailStopsWithoutFallback();
+    testLegacyWriterBoundaryBeforeStrictAdmission();
+    testActiveSingleDrawPreservesUpAndStateBlockBypass();
+    testTypedBeginStatusAndMissingAdmissionSnapshot();
+    testArenaClearMarksCommonViewResourcesAtExactSeq();
+    testArenaPublishToReclaimLifecycle();
+  } catch (const std::exception& error) {
+    std::cerr << "cpu_ready_arena_lease_spec: " << error.what() << '\n';
+    return 1;
+  }
+  return 0;
+}

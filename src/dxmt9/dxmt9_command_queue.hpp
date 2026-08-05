@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <condition_variable>
 #include <cstdint>
@@ -53,6 +54,7 @@ namespace dxmt9 {
 
 class Device;
 class CommandQueue;
+struct CommandQueueArenaLeaseTestAccess;
 class Presenter;
 class PresentDrawableToken;
 
@@ -78,6 +80,30 @@ enum class DceChunkLookaheadAction : std::uint8_t {
   UseReady,
   FailOpen,
 };
+
+enum class DceChunkLookaheadSourceAction : std::uint8_t {
+  Poison,
+  EncodeCurrentHoldNext,
+  EncodeCurrentExposeLegacyLookahead,
+};
+
+// A Direct arena successor is a valid FIFO source, but it cannot be exposed
+// through the legacy ChunkSlot-only semantic proof window. Encode the legacy
+// current source fail-open and keep the arena successor as the next current.
+inline DceChunkLookaheadSourceAction resolveDceChunkLookaheadSourceAction(
+    bool currentValid,
+    bool currentHasLegacySlot,
+    bool hasNext,
+    bool nextValid,
+    bool nextHasLegacySlot) noexcept {
+  if (!currentValid || !currentHasLegacySlot || (hasNext && !nextValid)) {
+    return DceChunkLookaheadSourceAction::Poison;
+  }
+  if (hasNext && nextHasLegacySlot) {
+    return DceChunkLookaheadSourceAction::EncodeCurrentExposeLegacyLookahead;
+  }
+  return DceChunkLookaheadSourceAction::EncodeCurrentHoldNext;
+}
 
 // Pure no-wait policy for the one-next-chunk DCE window. A FIFO-ready successor
 // is selected opportunistically after prefix encode; otherwise the held source
@@ -289,6 +315,9 @@ struct PresentOrdinalGate {
 };
 
 class CommandQueue {
+ private:
+  struct ArenaBuildContext;
+
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
   // constructs the queue-owned pool / pipeline cache / shader archive /
@@ -318,6 +347,11 @@ class CommandQueue {
   CommandQueue(InertTestQueueTag,
                WMT::Reference<WMT::CommandQueue> queue,
                core::BackendLimits limits);
+
+  // Native contract fixture for the queue-owned arena transaction. It binds
+  // the lifecycle controller but starts no Metal objects or worker threads.
+  struct ArenaLeaseTestQueueTag {};
+  CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits);
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -367,6 +401,87 @@ class CommandQueue {
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
+
+  // Move-only capability for one replay-thread-owned direct arena source.
+  // Admission fixes and consumes raw/source/seq identities under mutex_; all
+  // builder appends then run outside the queue lock. Destruction without a
+  // successful publish is a fail-stop two-phase abort, never legacy fallback.
+  class CpuReadyArenaBuildLease {
+   public:
+    CpuReadyArenaBuildLease() = default;
+    ~CpuReadyArenaBuildLease();
+
+    CpuReadyArenaBuildLease(const CpuReadyArenaBuildLease&) = delete;
+    CpuReadyArenaBuildLease& operator=(
+        const CpuReadyArenaBuildLease&) = delete;
+    CpuReadyArenaBuildLease(CpuReadyArenaBuildLease&& other) noexcept;
+    CpuReadyArenaBuildLease& operator=(
+        CpuReadyArenaBuildLease&& other) noexcept;
+
+    explicit operator bool() const noexcept { return queue_ != nullptr; }
+    core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
+    std::uint64_t seqId() const noexcept { return ticket_.seqId; }
+    bool publish(
+        std::span<const core::ChunkHandleEntry> resources = {}) noexcept;
+
+   private:
+    friend class CommandQueue;
+    CpuReadyArenaBuildLease(
+        CommandQueue& queue,
+        core::CpuReadyPublicationTicket ticket,
+        std::size_t controlIndex) noexcept
+        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex) {}
+
+    void abort() noexcept;
+
+    CommandQueue* queue_ = nullptr;
+    core::CpuReadyPublicationTicket ticket_{};
+    std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
+  };
+
+  enum class CpuReadyArenaBeginStatus : std::uint8_t {
+    Ready,
+    TemporaryPressure,
+    Stopped,
+    Corrupt,
+    Invalid,
+  };
+
+  struct CpuReadyArenaBeginResult {
+    CpuReadyArenaBeginStatus status = CpuReadyArenaBeginStatus::Invalid;
+    std::optional<CpuReadyArenaBuildLease> lease{};
+
+    bool has_value() const noexcept { return lease.has_value(); }
+    explicit operator bool() const noexcept { return has_value(); }
+    CpuReadyArenaBuildLease* operator->() noexcept { return &*lease; }
+    const CpuReadyArenaBuildLease* operator->() const noexcept {
+      return &*lease;
+    }
+    CpuReadyArenaBuildLease& operator*() noexcept { return *lease; }
+    const CpuReadyArenaBuildLease& operator*() const noexcept {
+      return *lease;
+    }
+  };
+
+  struct CpuReadyArenaPlanLimits {
+    std::size_t pageSize = 0;
+    std::size_t maxPages = 0;
+  };
+
+  CpuReadyArenaBeginResult beginCpuReadyArenaSource(
+      std::uint64_t rawOrdinal,
+      const core::SourcePayloadLayout& layout) noexcept;
+  CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
+    const auto& values = cpuReadyTape_.config().values();
+    return {
+        .pageSize = values.pageSize,
+        .maxPages = values.maxPagesPerSource,
+    };
+  }
+  void rejectActiveCpuReadyArenaSource() noexcept;
+  bool cpuReadyArenaPoisoned() const noexcept {
+    return arenaBuildPoisoned_.load(std::memory_order_acquire);
+  }
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
   // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse
@@ -378,6 +493,11 @@ class CommandQueue {
   markChunkResourcesAndCaptureBufferBindings(
       std::span<const core::ChunkHandleEntry> entries,
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
+  core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots);
+  bool waitForCpuReadyArenaAdmission(
+      const core::SourcePayloadLayout& layout) noexcept;
 
   // Phase 14: chunk importer toggles this around a chunk's record-iter
   // block. While true, submitDrawRun skips per-draw
@@ -608,7 +728,8 @@ class CommandQueue {
   // External callers should not use these.
   using EncodeChunkFn =
       std::function<std::optional<core::metalqueue::QueueSubmissionRecord>(
-          std::size_t slotIndex, core::ChunkSlot& slot)>;
+          const core::metalqueue::ReadySlotSnapshot& source,
+          const core::SourcePayloadView& payload)>;
   using OnSubmittedFn = std::function<void(std::uint64_t completedSeqId)>;
   void runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubmitted);
   // Opt-in one-next-source proof window used by FrameGraph DCE. Holds at most
@@ -651,7 +772,7 @@ class CommandQueue {
   //   writingSlot_        -> writingSlot
   //   writeIndex_         -> writeIndex
   //   inflightCount_      -> inflightCount
-  //   readySlots_         -> readySlots
+  //   cpuReadyTape_ Ready FIFO -> readySlots
   //   completedSeqQueue_  -> completedSeqQueue
   //
   // TLA+: PresentFrameLatency
@@ -676,7 +797,8 @@ class CommandQueue {
   // like the other present-ordinal state above it.
   PresentOrdinalGate presentOrdinalGate_{};
 
-  core::CpuReadyTape cpuReadyTape_{kCommandChunkCount};
+  core::CpuReadyTape cpuReadyTape_{
+      core::CpuReadyTapeConfig::queueCompatibility(kCommandChunkCount)};
   std::array<core::ChunkSlotControl, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.
   // Set on the first command append and consumed when the slot is published;
@@ -685,7 +807,6 @@ class CommandQueue {
   std::optional<size_t> writingSlot_{};
   size_t writeIndex_ = 0;
   size_t inflightCount_ = 0;
-  std::deque<size_t> readySlots_{};
   std::deque<std::uint64_t> completedSeqQueue_{};
   std::deque<std::uint64_t> completedPresentSeqQueue_{};
   std::condition_variable presentDequeuedCv_{};
@@ -726,6 +847,90 @@ class CommandQueue {
   bool stop_ = true;
 
  private:
+  friend struct CommandQueueArenaLeaseTestAccess;
+
+  struct ArenaBuildContext {
+    ArenaBuildContext(core::CpuReadyTape::Reservation value,
+                      std::size_t selectedControlIndex,
+                      const core::SourcePayloadLayout& sourceLayout,
+                      std::span<std::byte> memory) noexcept
+        : reservation(value),
+          controlIndex(selectedControlIndex),
+          layout(sourceLayout),
+          builder(*reservation.arenaPayload, layout, memory),
+          assembler(builder),
+          ownerThread(std::this_thread::get_id()) {}
+
+    core::CpuReadyTape::Reservation reservation{};
+    std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
+    core::SourcePayloadLayout layout{};
+    core::ArenaSourcePayloadBuilder builder;
+    core::ArenaSourcePayloadAssembler assembler;
+    std::thread::id ownerThread{};
+    std::atomic<bool> failed{false};
+    std::atomic<bool> publishing{false};
+    core::Handle pendingBackBuffer{};
+    bool updatesBackBuffer = false;
+  };
+
+  enum class ActiveArenaAppendResult {
+    Inactive,
+    Appended,
+    Failed,
+  };
+
+  template <typename Append>
+  ActiveArenaAppendResult appendActiveArena(Append&& append) noexcept {
+    if (!arenaAdmissionActive_.load(std::memory_order_acquire)) {
+      return ActiveArenaAppendResult::Inactive;
+    }
+    auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+    if (!context || context->ownerThread != std::this_thread::get_id() ||
+        context->failed.load(std::memory_order_acquire) ||
+        context->publishing.load(std::memory_order_acquire) ||
+        !append(*context)) {
+      if (context) {
+        context->failed.store(true, std::memory_order_release);
+      }
+      arenaBuildPoisoned_.store(true, std::memory_order_release);
+      return ActiveArenaAppendResult::Failed;
+    }
+    return ActiveArenaAppendResult::Appended;
+  }
+
+  ActiveArenaAppendResult appendActiveArenaDrawRunBatch(
+      std::span<core::DrawRunSubmission> submissions) noexcept;
+  ActiveArenaAppendResult appendActiveArenaDrawRun(
+      core::CanonicalDrawState& state,
+      const core::DrawUniformPayload& uniforms,
+      std::span<const core::DrawParam> draws,
+      std::span<const core::DrawParamPayloadView> payloads) noexcept;
+  ActiveArenaAppendResult appendActiveArenaClear(
+      const core::ClearDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaSurfaceCopy(
+      const core::SurfaceCopyDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaStretchRect(
+      const core::StretchRectDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaColorFill(
+      const core::ColorFillDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveArenaDepthResolve(
+      const core::DepthResolveDesc& value) noexcept;
+  ActiveArenaAppendResult rejectIfActiveArena() noexcept;
+  bool publishCpuReadyArenaSource(
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex,
+      std::span<const core::ChunkHandleEntry> resources) noexcept;
+  void abortCpuReadyArenaSource(
+      core::CpuReadyPublicationTicket ticket,
+      std::size_t controlIndex) noexcept;
+
+  std::optional<ArenaBuildContext> arenaBuildContext_{};
+  std::atomic<ArenaBuildContext*> activeArenaBuild_{nullptr};
+  std::atomic<bool> arenaAdmissionActive_{false};
+  std::atomic<bool> arenaBuildPoisoned_{false};
+  std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
+  std::uint64_t nextArenaBuildGeneration_ = 1;
+
   // Assemble the EncodeContext handed to encoders::encodeChunk. Uses
   // queue-owned state only (device_, limits_, allocators_, pool_,
   // pipelineCache_, shaderArchive_, *this). No upper-Device pointer —

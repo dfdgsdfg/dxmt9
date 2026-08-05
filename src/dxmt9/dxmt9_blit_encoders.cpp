@@ -358,10 +358,12 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
   encoder.endEncoding();
 }
 
-void encodeClearPass(WMT::CommandBuffer& commandBuffer,
-                      resources::Pool& pool,
-                      const core::ClearDesc& clear,
-                      std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+template <typename Clear>
+void encodeClearPassImpl(
+    WMT::CommandBuffer& commandBuffer,
+    resources::Pool& pool,
+    const Clear& clear,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   const bool hasDepthStencilTarget =
       (clear.clearDepth || clear.clearStencil) && clear.depthStencil.handle;
   const bool hasColorTarget = clear.clearColor &&
@@ -424,6 +426,22 @@ void encodeClearPass(WMT::CommandBuffer& commandBuffer,
         "Clear[rt=0x%llx,depth=0x%llx]", rt0, depth));
     encoder.endEncoding();
   }
+}
+
+void encodeClearPass(
+    WMT::CommandBuffer& commandBuffer,
+    resources::Pool& pool,
+    const core::ClearDesc& clear,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  encodeClearPassImpl(commandBuffer, pool, clear, sampleBufferAttachments);
+}
+
+void encodeClearPass(
+    WMT::CommandBuffer& commandBuffer,
+    resources::Pool& pool,
+    const core::ClearCommandView& clear,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  encodeClearPassImpl(commandBuffer, pool, clear, sampleBufferAttachments);
 }
 
 void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,

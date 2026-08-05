@@ -200,7 +200,10 @@ The protocol is:
    Exact counts are preferred; conservative upper bounds are permitted when
    fixed by validated wire metadata. This sizing pass does not execute shader,
    state, or draw semantic transformation and cannot replay the transform twice.
-   It then obtains the existing unix-owned wire/retention inputs.
+   It then obtains the existing unix-owned wire/retention inputs, canonical
+   resource identities, captured backing snapshots, and raw-residency tokens
+   fixed synchronously at commit admission. The default-off path never enters
+   this planner and retains the historical combined synchronous mark/capture.
 2. Under the scheduling lock it reserves one source descriptor, one page run,
    retention entries, and allocator-ticket capacity as one transaction. Failure
    leaves every cursor unchanged and exposes no ticket. Success fixes the three
@@ -212,8 +215,8 @@ The protocol is:
    element, or leave growth-history extents. Only the ticket control record is
    visible in `Writing`; source payload and summaries remain unavailable to
    scheduling.
-4. It completes nested-range validation, retention, resource marking for the
-   raw entry's `seqId`, access/semantic summaries, and explicit owner
+4. It completes nested-range validation, retention, exact resource marking for
+   the admitted source `seqId`, access/semantic summaries, and explicit owner
    construction. An error before seal destroys the partial block and returns the
    whole reservation; deferred replay failure follows the existing fail-stop
    contract.

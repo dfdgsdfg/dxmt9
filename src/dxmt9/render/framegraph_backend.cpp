@@ -39,8 +39,8 @@ bool isFeatureSeparator(unsigned char ch) {
   return std::isspace(ch) || ch == ',' || ch == ';';
 }
 
-const core::metalqueue::ReadySlotSnapshot* selectedNextSource(
-    std::span<const core::metalqueue::ReadySlotSnapshot> selected,
+const core::metalqueue::ResolvedPublishedSource* selectedNextSource(
+    std::span<const core::metalqueue::ResolvedPublishedSource> selected,
     std::size_t slotIndex,
     const core::ChunkSlot& slot) noexcept {
   if (selected.size() < 2u) {

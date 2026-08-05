@@ -14,6 +14,7 @@ dxmt9_frontend_core_srcs = files(
 )
 
 dxmt9_frontend_provider_srcs = files(
+  'device_c_cpu_ready_plan.cpp',
   'device_c_chunk_replay.cpp',
   'device_c_chunk_v2_draw.cpp',
   'device_c_chunk_v2_nondraw.cpp',

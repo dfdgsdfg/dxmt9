@@ -58,6 +58,17 @@ std::span<const core::u8> payloadBytes(
                                    range.size);
 }
 
+std::span<const core::u8> payloadBytes(
+    core::SourcePayloadView payload,
+    core::DrawPayloadRange range) noexcept {
+  const auto arena = payload.drawPayloadBytes();
+  if (range.empty() || range.offset > arena.size() ||
+      range.size > arena.size() - range.offset) {
+    return {};
+  }
+  return arena.subspan(range.offset, range.size);
+}
+
 bool snapshotForResolvedDrawParam(
     const EncodePartitionReplayStream& stream,
     std::uint32_t commandIndex,
@@ -65,15 +76,21 @@ bool snapshotForResolvedDrawParam(
     std::uint32_t drawParamIndex,
     EncodePartitionEntrySnapshot& snapshot,
     ResolvedEncodePartitionEntry& resolved) noexcept {
-  if (!stream.valid || !stream.source.slot ||
+  const core::CpuReadyTape::SourceRef streamSource{
+      .id = stream.source.sourceId,
+      .storage = stream.source.storage,
+  };
+  const core::SourcePayloadView payload = stream.source.payload;
+  if (!stream.valid || !payload.valid() || !streamSource.valid() ||
       stream.source.slotIndex > std::numeric_limits<std::uint32_t>::max()) {
     return false;
   }
 
-  const core::ChunkSlot& slot = *stream.source.slot;
   const std::size_t sourceCommandEnd =
       stream.source.commandBegin + stream.source.commandCount;
-  if (stream.source.seqId == 0 || slot.seqId != stream.source.seqId ||
+  if (stream.source.seqId == 0 ||
+      (stream.source.slot &&
+       stream.source.slot->seqId != stream.source.seqId) ||
       commandIndex < stream.source.commandBegin ||
       commandIndex >= sourceCommandEnd) {
     return false;
@@ -81,36 +98,43 @@ bool snapshotForResolvedDrawParam(
   if (command.kind != core::MetalCommandKind::DrawRun ||
       !command.drawRunRecord || !command.drawState.hot ||
       !command.drawState.shaderLayout || !command.drawState.debug ||
-      commandIndex >= slot.commandHeaders.size()) {
+      commandIndex >= payload.commandCount()) {
     return false;
   }
   const auto& record = *command.drawRunRecord;
-  if (record.firstParam > slot.drawParams.size() ||
-      record.paramCount > slot.drawParams.size() - record.firstParam ||
+  const auto drawParams = payload.drawParams();
+  if (record.firstParam > drawParams.size() ||
+      record.paramCount > drawParams.size() - record.firstParam ||
       command.drawParams.size() != record.paramCount ||
       drawParamIndex < record.firstParam ||
       drawParamIndex - record.firstParam >= record.paramCount ||
-      drawParamIndex >= slot.drawParams.size()) {
+      drawParamIndex >= drawParams.size()) {
     return false;
   }
-  const auto& param = slot.drawParams[drawParamIndex];
+  const auto& param = drawParams[drawParamIndex];
   const core::DrawUniformHandle uniformHandle =
       param.uniformHandle.valid() ? param.uniformHandle : record.uniformHandle;
-  const auto* uniform = slot.drawUniformPayloadRecord(uniformHandle);
+  const auto uniforms = payload.drawUniformPayloads();
+  const auto* uniform = uniformHandle.valid() &&
+                                uniformHandle.index < uniforms.size() &&
+                                uniforms[uniformHandle.index].handle ==
+                                    uniformHandle
+                            ? &uniforms[uniformHandle.index]
+                            : nullptr;
   if (!uniform) {
     return false;
   }
 
   core::DrawPayloadRange bindingOverrideBytes{};
   if (!absolutePayloadRange(record, param.bindingOverrideRange,
-                            slot.drawPayloadArena.size(),
+                            payload.drawPayloadBytes().size(),
                             sizeof(core::DrawBindingOverride),
                             bindingOverrideBytes)) {
     return false;
   }
   core::DrawPayloadRange bindingSnapshotBytes{};
   if (!absolutePayloadRange(record, param.bindingSnapshotRange,
-                            slot.drawPayloadArena.size(),
+                            payload.drawPayloadBytes().size(),
                             sizeof(core::DrawBindingSnapshot),
                             bindingSnapshotBytes)) {
     return false;
@@ -118,12 +142,20 @@ bool snapshotForResolvedDrawParam(
 
   snapshot = EncodePartitionEntrySnapshot{
       .source = RetainedEncodeSourceLocator{
+          .tapeSource = core::CpuReadyTape::SourceRef{
+              .id = stream.source.sourceId,
+              .storage = stream.source.storage,
+          },
           .sourceOrdinal = 0,
           .slotIndex = static_cast<std::uint32_t>(stream.source.slotIndex),
           .seqId = stream.source.seqId,
       },
       .commandIndex = commandIndex,
-      .drawRunRecordIndex = slot.commandHeaders[commandIndex].payloadIndex.value,
+      .drawRunRecordIndex = stream.source.slot
+                                ? stream.source.slot
+                                      ->commandHeaders[commandIndex]
+                                      .payloadIndex.value
+                                : 0,
       .stateIndex = record.stateIndex,
       .drawParamIndex = drawParamIndex,
       .uniformHandle = uniformHandle,
@@ -131,14 +163,14 @@ bool snapshotForResolvedDrawParam(
       .bindingSnapshotBytes = bindingSnapshotBytes,
   };
   resolved = ResolvedEncodePartitionEntry{
-      .slot = &slot,
+      .slot = stream.source.slot,
       .command = command,
       .drawRunRecord = &record,
       .drawState = command.drawState,
       .drawParam = &param,
       .uniform = uniform,
-      .bindingOverrideBytes = payloadBytes(slot, bindingOverrideBytes),
-      .bindingSnapshotBytes = payloadBytes(slot, bindingSnapshotBytes),
+      .bindingOverrideBytes = payloadBytes(payload, bindingOverrideBytes),
+      .bindingSnapshotBytes = payloadBytes(payload, bindingSnapshotBytes),
   };
   return true;
 }
@@ -150,11 +182,11 @@ bool snapshotForDrawParam(
     EncodePartitionEntrySnapshot& snapshot,
     ResolvedEncodePartitionEntry& resolved) noexcept {
   std::uint32_t commandIndex = 0;
-  if (!stream.valid || !stream.source.slot ||
+  if (!stream.valid || !stream.source.payload.valid() ||
       !stream.commandIndexAt(replayOrdinal, commandIndex)) {
     return false;
   }
-  const auto command = stream.source.slot->commandAt(commandIndex);
+  const auto command = stream.source.payload.commandAt(commandIndex).command;
   return snapshotForResolvedDrawParam(stream, commandIndex, command,
                                       drawParamIndex, snapshot, resolved);
 }
@@ -175,14 +207,21 @@ EncodePartitionRangeValidationResult rejectRange(
 
 EncodePartitionEntryResolution resolveEncodePartitionEntry(
     const EncodePartitionEntrySnapshot& snapshot,
-    std::span<const core::metalqueue::ReadySlotSnapshot> sources) noexcept {
+    std::span<const core::metalqueue::ResolvedPublishedSource> sources) noexcept {
   if (snapshot.source.sourceOrdinal >= sources.size()) {
     return reject(Validation::SourceOrdinalOutOfRange);
   }
 
   const auto& source = sources[snapshot.source.sourceOrdinal];
+  const core::CpuReadyTape::SourceRef resolvedSource{
+      .id = source.sourceId,
+      .storage = source.storage,
+  };
   const core::ChunkSlot* slot = source.slot;
-  if (!slot || source.slotIndex != snapshot.source.slotIndex ||
+  if (!snapshot.source.tapeSource.valid() || !resolvedSource.valid() ||
+      !slot || source.sourceId != snapshot.source.tapeSource.id ||
+      source.storage != snapshot.source.tapeSource.storage ||
+      source.slotIndex != snapshot.source.slotIndex ||
       source.seqId == 0 || source.seqId != snapshot.source.seqId ||
       slot->seqId != snapshot.source.seqId) {
     return reject(Validation::SourceIdentityMismatch);
@@ -287,19 +326,21 @@ bool EncodePartitionReplayStream::commandIndexAt(
 
 EncodePartitionReplayStream makeEncodePartitionReplayStream(
     std::size_t slotIndex,
-    const core::ChunkSlot& slot,
+    core::SourcePayloadView payload,
+    std::uint64_t seqId,
     std::size_t commandBegin,
     std::size_t commandCount,
     bool commandOrderActive,
     std::span<const std::uint32_t> commandOrder,
-    std::span<std::size_t> replayOrdinalByCommandIndex) noexcept {
+    std::span<std::size_t> replayOrdinalByCommandIndex,
+    core::CpuReadyTape::SourceRef tapeSource) noexcept {
   const bool sourceRangeValid =
-      commandBegin <= slot.commandCount() &&
-      commandCount <= slot.commandCount() - commandBegin;
+      commandBegin <= payload.commandCount() &&
+      commandCount <= payload.commandCount() - commandBegin;
   const std::size_t replayCount =
       commandOrderActive ? commandOrder.size() : commandCount;
   bool replaySelectionValid =
-      sourceRangeValid &&
+      tapeSource.valid() && sourceRangeValid &&
       replayCount <= std::numeric_limits<std::uint32_t>::max();
   if (replaySelectionValid && !commandOrderActive) {
     replaySelectionValid = commandOrder.empty();
@@ -341,18 +382,36 @@ EncodePartitionReplayStream makeEncodePartitionReplayStream(
     }
   }
   return EncodePartitionReplayStream{
-      .source = core::metalqueue::ReadySlotSnapshot{
+      .source = core::metalqueue::ResolvedPublishedSource{
+          .source = tapeSource,
           .slotIndex = slotIndex,
-          .seqId = slot.seqId,
-          .hasPresent = false,
+          .seqId = seqId,
+          .payload = payload,
+          .sourceId = tapeSource.id,
+          .storage = tapeSource.storage,
+          .slot = payload.legacyPayload(),
           .commandBegin = commandBegin,
           .commandCount = commandCount,
-          .slot = const_cast<core::ChunkSlot*>(&slot),
       },
       .commandOrderActive = commandOrderActive,
       .commandOrder = commandOrder,
       .valid = replaySelectionValid,
   };
+}
+
+EncodePartitionReplayStream makeEncodePartitionReplayStream(
+    std::size_t slotIndex,
+    const core::ChunkSlot& slot,
+    std::size_t commandBegin,
+    std::size_t commandCount,
+    bool commandOrderActive,
+    std::span<const std::uint32_t> commandOrder,
+    std::span<std::size_t> replayOrdinalByCommandIndex,
+    core::CpuReadyTape::SourceRef tapeSource) noexcept {
+  return makeEncodePartitionReplayStream(
+      slotIndex, core::SourcePayloadView(slot), slot.seqId, commandBegin,
+      commandCount, commandOrderActive, commandOrder,
+      replayOrdinalByCommandIndex, tapeSource);
 }
 
 bool buildEncodePartitionEntrySnapshot(
@@ -390,7 +449,7 @@ EncodePartitionResolution resolveEncodePartition(
     };
   }
 
-  const std::span<const core::metalqueue::ReadySlotSnapshot> sources(
+  const std::span<const core::metalqueue::ResolvedPublishedSource> sources(
       &stream.source, 1u);
   const auto entry = resolveEncodePartitionEntry(range.entry, sources);
   if (!entry) {
@@ -555,9 +614,7 @@ EncodePartitionRangeValidationResult validateEncodePartitionRanges(
 
 EncodePartitionIdentityCursor::EncodePartitionIdentityCursor(
     const EncodePartitionReplayStream& stream) noexcept
-    : stream_(&stream),
-      drawOnlyCommandStream_(stream.source.slot &&
-                             stream.source.slot->drawOnlyCommandStream()) {}
+    : stream_(&stream) {}
 
 bool EncodePartitionIdentityCursor::next(
     EncodePartitionRangeSnapshot& range) noexcept {
@@ -583,9 +640,8 @@ bool EncodePartitionIdentityCursor::next(
 
   std::uint32_t commandIndex = 0;
   if (stream_->commandIndexAt(replayOrdinal_, commandIndex)) {
-    const auto command = drawOnlyCommandStream_
-        ? stream_->source.slot->drawRunCommandAt(commandIndex)
-        : stream_->source.slot->commandAt(commandIndex);
+    const auto command =
+        stream_->source.payload.commandAt(commandIndex).command;
     EncodePartitionEntrySnapshot entry{};
     ResolvedEncodePartitionEntry resolved{};
     if (command.kind == core::MetalCommandKind::DrawRun &&
@@ -613,9 +669,8 @@ bool EncodePartitionIdentityCursor::next(
   while (replayOrdinal_ < stream_->replayOrdinalCount()) {
     std::uint32_t nextCommandIndex = 0;
     if (stream_->commandIndexAt(replayOrdinal_, nextCommandIndex)) {
-      const auto next = drawOnlyCommandStream_
-          ? stream_->source.slot->drawRunCommandAt(nextCommandIndex)
-          : stream_->source.slot->commandAt(nextCommandIndex);
+      const auto next =
+          stream_->source.payload.commandAt(nextCommandIndex).command;
       EncodePartitionEntrySnapshot entry{};
       ResolvedEncodePartitionEntry resolved{};
       if (next.kind == core::MetalCommandKind::DrawRun &&

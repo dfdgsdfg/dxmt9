@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -40,6 +41,17 @@
 #endif
 
 namespace dxmt9 {
+
+namespace {
+
+void recordCpuReadyTapeStats(const core::CpuReadyTape& tape) {
+  const auto& stats = tape.stats();
+  perf::recordCpuReadyTapeStats(
+      stats.residentSources, stats.residentPages, stats.readyFifoEntries,
+      stats.admissionCloses, stats.admissionReopens, stats.wrapPaddingPages);
+}
+
+}  // namespace
 
 namespace {
 // Tiny helper that uploads a printf-formatted label to the bridge as an
@@ -470,8 +482,23 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
   // submits can only happen after CreateDXMT9Device returns.
   startThreads(
       [this] {
-        auto encodeSingleSource = [this](std::size_t slotIndex,
-                                          core::ChunkSlot& slot) {
+        auto encodeSingleSource = [this](
+                                          const core::metalqueue::ReadySlotSnapshot& source,
+                                          const core::SourcePayloadView& payload) {
+              const auto* legacySlot = payload.legacyPayload();
+              if (!legacySlot) {
+                auto ctx = makeEncodeContext();
+                encoders::EncodeChunkOptions options{};
+                options.partitionSource = core::CpuReadyTape::SourceRef{
+                    .id = source.sourceId,
+                    .storage = source.storage,
+                };
+                return backend_->onSourceReady(
+                    ctx, source.slotIndex, payload, source.seqId,
+                    std::move(options));
+              }
+              auto& slot = *const_cast<core::ChunkSlot*>(legacySlot);
+              const std::size_t slotIndex = source.slotIndex;
               traceEncodeFnStage("entry", slotIndex, slot);
               if (encodeSlotPsoPrefetchEnabled() &&
                   !slot.prefetchedPipelinesSealed()) {
@@ -484,7 +511,13 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits)
               auto ctx = makeEncodeContext();
               traceEncodeFnStage("after-make-context", slotIndex, slot);
               traceEncodeFnStage("before-backend-onChunkReady", slotIndex, slot);
-              auto submission = backend_->onChunkReady(ctx, slotIndex, slot);
+              encoders::EncodeChunkOptions options{};
+              options.partitionSource = core::CpuReadyTape::SourceRef{
+                  .id = source.sourceId,
+                  .storage = source.storage,
+              };
+              auto submission = backend_->onChunkReady(
+                  ctx, slotIndex, slot, std::move(options));
               traceEncodeFnStage(submission.has_value()
                                      ? "after-backend-onChunkReady-submission"
                                      : "after-backend-onChunkReady-inline",
@@ -521,6 +554,13 @@ CommandQueue::CommandQueue(InertTestQueueTag,
     : queue_(std::move(queue)),
       queueView_(queue_.handle),
       limits_(limits) {}
+
+CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
+                           core::BackendLimits limits)
+    : limits_(limits) {
+  bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
+  stop_ = false;
+}
 
 encoders::EncodeContext CommandQueue::makeEncodeContext() {
   // Snapshot + reset the chunk-import dirty accumulator. The dirty
@@ -1882,6 +1922,7 @@ void CommandQueue::stopThreads() {
   {
     std::lock_guard lock(mutex_);
     stop_ = true;
+    cpuReadyTape_.stopAdmission();
     encodeCv_.notify_all();
     finishCv_.notify_all();
     presentCompletedCv_.notify_all();
@@ -1901,8 +1942,26 @@ namespace {
 
 core::ChunkSlot& currentSlotUnlocked(CommandQueue& q) {
   // TLA+: RingSafety — caller holds q.mutex_ and has ensured a writing slot.
-  DXMT_ASSERT(q.slots_[*q.writingSlot_].payload != nullptr);
-  return *q.slots_[*q.writingSlot_].payload;
+  auto& control = q.slots_[*q.writingSlot_];
+  auto* payload = q.cpuReadyTape_.resolveForWrite(
+      core::CpuReadyPublicationTicket{
+          .id = control.sourceId,
+          .storage = control.storage,
+      });
+  DXMT_ASSERT(payload != nullptr && payload == control.payload);
+  if (!payload || payload != control.payload) {
+    // This helper's reference return cannot represent a stale locator. Stop
+    // every producer/consumer surface and terminate before any release-build
+    // dereference rather than returning an invalid reference.
+    q.cpuReadyTape_.stopAdmission();
+    q.stop_ = true;
+    q.writeCv_.notify_all();
+    q.encodeCv_.notify_all();
+    q.finishCv_.notify_all();
+    q.presentCompletedCv_.notify_all();
+    std::terminate();
+  }
+  return *payload;
 }
 
 void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lock) {
@@ -1911,6 +1970,28 @@ void ensureWritingSlotUnlocked(CommandQueue& q, std::unique_lock<std::mutex>& lo
 
 std::uint64_t seqIdForMark(CommandQueue& q, std::uint64_t seqId) {
   return seqId == 0 ? q.nextSeqId_ : seqId;
+}
+
+void markChunkResourcesWithExactSeq(
+    resources::Pool& pool,
+    std::span<const core::ChunkHandleEntry> entries,
+    std::uint64_t seqId) {
+  for (const auto& entry : entries) {
+    switch (entry.kind) {
+    case core::ChunkHandleKind::Texture:
+      pool.markTextureUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Surface:
+      pool.markSurfaceUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Buffer:
+      pool.markBufferUse(entry.handle, seqId);
+      break;
+    case core::ChunkHandleKind::Shader:
+    case core::ChunkHandleKind::VertexDecl:
+      break;
+    }
+  }
 }
 
 std::uint64_t steadyClockNanoseconds() {
@@ -2181,6 +2262,7 @@ void countDrawRunBatchDiscardedMaterializedStates(
 struct DrawSubmitScratch {
   std::vector<core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<core::DrawParamPayloadView> snapshotPayloads;
+  std::vector<core::DrawRunSubmission> arenaSubmissions;
   bool inUse = false;
 };
 
@@ -2200,6 +2282,7 @@ public:
   ~ScopedDrawSubmitScratchUse() {
     scratch_.bindingSnapshots.clear();
     scratch_.snapshotPayloads.clear();
+    scratch_.arenaSubmissions.clear();
     scratch_.inUse = false;
   }
 
@@ -2477,6 +2560,138 @@ void markDrawRunPayloadResources(resources::Pool& pool,
       markDrawBindingSnapshotResource(pool, snapshot, seqId);
     }
   }
+}
+
+void markArenaSourceResources(resources::Pool& pool,
+                              const core::SourcePayloadView& payload,
+                              std::uint64_t seqId) {
+  for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+    const auto sourceCommand = payload.commandAt(i);
+    const auto command = sourceCommand.command;
+    switch (command.kind) {
+    case core::MetalCommandKind::DrawRun:
+      if (command.drawState.hot) {
+        pool.markDrawResources(*command.drawState.hot, seqId);
+      }
+      markDrawRunPayloadResources(pool, command, seqId);
+      break;
+    case core::MetalCommandKind::Clear:
+      if (sourceCommand.clear) {
+        if (sourceCommand.clear->clearColor) {
+          for (const auto& attachment : sourceCommand.clear->colorAttachments) {
+            pool.markSurfaceUse(attachment.handle, seqId);
+          }
+        }
+        if (sourceCommand.clear->clearDepth ||
+            sourceCommand.clear->clearStencil) {
+          pool.markSurfaceUse(sourceCommand.clear->depthStencil.handle, seqId);
+        }
+      }
+      break;
+    case core::MetalCommandKind::SurfaceCopy:
+      if (command.surfaceCopy) {
+        pool.markSurfaceCopyResources(*command.surfaceCopy, seqId);
+      }
+      break;
+    case core::MetalCommandKind::StretchRect:
+      if (command.stretchRect) {
+        pool.markStretchResources(*command.stretchRect, seqId);
+      }
+      break;
+    case core::MetalCommandKind::Readback:
+      if (command.readback) {
+        pool.markReadbackResources(*command.readback, seqId);
+      }
+      break;
+    case core::MetalCommandKind::ColorFill:
+      if (command.colorFill) {
+        pool.markColorFillResources(*command.colorFill, seqId);
+      }
+      break;
+    case core::MetalCommandKind::DepthResolve:
+      if (command.depthResolve) {
+        pool.markDepthResolveResources(*command.depthResolve, seqId);
+      }
+      break;
+    case core::MetalCommandKind::Present:
+      if (command.present && command.present->presentSource) {
+        pool.markSurfaceUse(command.present->presentSource, seqId);
+      }
+      break;
+    }
+  }
+}
+
+bool validateArenaDrawAdmissionSnapshots(
+    const resources::Pool& pool,
+    const core::SourcePayloadView& payload) noexcept {
+  const auto validateBinding = [&](core::Handle handle,
+                                   const core::DrawBufferBindingSnapshot& value) {
+    return pool.validateCapturedBufferSnapshot(handle, value) !=
+           resources::CapturedBufferSnapshotStatus::Invalid;
+  };
+
+  for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+    const auto command = payload.commandAt(i).command;
+    if (command.kind != core::MetalCommandKind::DrawRun ||
+        !command.drawState.hot) {
+      continue;
+    }
+    const auto& hot = *command.drawState.hot;
+    const auto arena = core::drawRunPayloadBytes(command);
+    for (const auto& param : command.drawParams) {
+      core::DrawBindingOverride override{};
+      const auto overrideBytes =
+          core::drawRunPayloadBytes(param.bindingOverrideRange, arena);
+      if (!overrideBytes.empty() &&
+          !copyDrawBindingOverride(overrideBytes, override)) {
+        return false;
+      }
+      core::DrawBindingSnapshot snapshot{};
+      const auto snapshotBytes =
+          core::drawRunPayloadBytes(param.bindingSnapshotRange, arena);
+      if (!snapshotBytes.empty() &&
+          !copyDrawBindingSnapshot(snapshotBytes, snapshot)) {
+        return false;
+      }
+
+      const std::uint32_t streamMask = hot.streamMask | override.streamMask;
+      for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
+        if ((streamMask & (1u << stream)) == 0) {
+          continue;
+        }
+        const core::Handle handle =
+            (override.streamMask & (1u << stream)) != 0
+                ? override.streams[stream].buffer
+                : hot.streamBuffers[stream];
+        const bool snapshotMatches =
+            (snapshot.streamMask & (1u << stream)) != 0 &&
+            snapshot.streams[stream].buffer == handle;
+        if (!validateBinding(
+                handle, snapshotMatches
+                            ? snapshot.streams[stream].snapshot
+                            : core::DrawBufferBindingSnapshot{})) {
+          return false;
+        }
+      }
+
+      if (!param.indexed) {
+        continue;
+      }
+      const core::Handle indexBuffer = override.indexBufferValid
+          ? override.indexBuffer
+          : hot.indexBuffer;
+      const bool snapshotMatches = snapshot.indexSnapshotValid &&
+                                   snapshot.indexBuffer == indexBuffer;
+      if (!validateBinding(
+              indexBuffer, snapshotMatches
+                               ? snapshot.indexSnapshot
+                               : core::DrawBufferBindingSnapshot{})) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool splitStretchChunk() {
@@ -2767,6 +2982,20 @@ bool maybePublishOpenCbSemanticBoundaryChunkUnlocked(
   return true;
 }
 
+// Publishing the current Writing source consumes its reserve-time Ready
+// ticket. The only additional admission needed by these split paths is a
+// second reservation for the next writer control. GPU-resident Tape sources
+// are deliberately irrelevant here.
+bool hasNextCpuReadyWriterHeadroomUnlocked(const CommandQueue& q) {
+  if (!q.writingSlot_ || q.slots_.empty()) {
+    return false;
+  }
+  const std::size_t nextControlIndex =
+      (q.writeIndex_ + 1u) % q.slots_.size();
+  return q.slots_[nextControlIndex].state == core::ChunkSlot::State::Free &&
+         q.cpuReadyTape_.canReserve();
+}
+
 const core::FlatDrawStateRecord* lastDrawTailState(
     const core::ChunkSlot& slot) noexcept {
   if (slot.commandHeaders.empty() ||
@@ -2799,9 +3028,9 @@ bool maybePublishOpenCbDrawAttachmentBoundaryChunkUnlocked(
       render::openCbCarrierDrawAttachmentKeysMatch(*tailHot, nextHot)) {
     return false;
   }
-  // Keep one slot of publish headroom so the boundary publish cannot eat
-  // the writer's next slot and block the producer on its own diagnostic.
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+  // Keep one control and one Tape reservation of headroom so the boundary
+  // publish cannot block the producer on its own diagnostic.
+  if (!hasNextCpuReadyWriterHeadroomUnlocked(q)) {
     return false;
   }
   const bool published =
@@ -2826,7 +3055,7 @@ bool maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(
 
   auto& slot = currentSlotUnlocked(q);
   if (!render::openCbCarrierShouldPublishWaitStartSlot(
-          /*readySlotsEmpty=*/q.readySlots_.empty(),
+          /*readySlotsEmpty=*/q.cpuReadyTape_.readyEmpty(),
           /*hasPendingRecord=*/false,
           q.queueLifecycle_.completionWaitActive(),
           q.stop_,
@@ -2835,7 +3064,7 @@ bool maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(
           !slot.presentRecords.empty())) {
     return false;
   }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+  if (!hasNextCpuReadyWriterHeadroomUnlocked(q)) {
     return false;
   }
   if (!maybePublishOpenCbSemanticBoundaryChunkUnlocked(q, pool, lock)) {
@@ -2848,15 +3077,31 @@ bool maybePublishOpenCbProducerActiveWaitCpuReadySlotUnlocked(
 bool firstOpenCbReadySourceCanAppendToPendingUnlocked(
     const CommandQueue& q,
     bool hasPendingSession) {
-  if (q.readySlots_.empty()) {
+  if (q.cpuReadyTape_.readyEmpty()) {
     return false;
   }
-  const std::size_t slotIndex = q.readySlots_.front();
+  std::array<core::CpuReadyTape::ReadyEntry, 1> candidates{};
+  if (q.cpuReadyTape_.copyReadyPrefix(candidates) != 1u) {
+    return false;
+  }
+  const auto& candidate = candidates[0];
+  const std::size_t slotIndex = candidate.controlIndex;
   if (slotIndex >= q.slots_.size()) {
     return false;
   }
-  const auto* payload = q.slots_[slotIndex].payload;
-  return payload && render::openCbCarrierSlotCanAppendToPending(
+  const auto& control = q.slots_[slotIndex];
+  if (control.state != core::ChunkSlot::State::Pending ||
+      control.sourceId != candidate.source.id ||
+      control.storage != candidate.source.storage ||
+      control.seqId != candidate.seqId) {
+    return false;
+  }
+  const auto* payload = q.cpuReadyTape_.resolve(
+      candidate.source.id, candidate.source.storage,
+      core::CpuReadyTape::State::Ready);
+  return payload && payload == control.payload &&
+         payload->seqId == candidate.seqId &&
+         render::openCbCarrierSlotCanAppendToPending(
                         *payload, hasPendingSession);
 }
 
@@ -2875,7 +3120,7 @@ bool maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
   }
   auto& slot = currentSlotUnlocked(q);
   if (!render::openCbCarrierShouldPublishWaitStartSlot(
-          q.readySlots_.empty(),
+          q.cpuReadyTape_.readyEmpty(),
           hasPendingRecord,
           completionWaitActive,
           q.stop_,
@@ -2884,7 +3129,7 @@ bool maybePublishOpenCbWaitStartCpuReadySlotUnlocked(
           !slot.presentRecords.empty())) {
     return false;
   }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+  if (!hasNextCpuReadyWriterHeadroomUnlocked(q)) {
     return false;
   }
   if (!maybePublishOpenCbSemanticBoundaryChunkUnlocked(q, pool, lock)) {
@@ -2910,7 +3155,7 @@ bool maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
   }
   auto& slot = currentSlotUnlocked(q);
   if (!render::openCbCarrierShouldPublishActiveWaitSlot(
-          q.readySlots_.empty(),
+          q.cpuReadyTape_.readyEmpty(),
           pendingCanReleaseAtSemanticBoundary,
           completionWaitActive,
           semanticReleaseUsedDuringWait,
@@ -2919,7 +3164,7 @@ bool maybePublishOpenCbActiveWaitCpuReadySlotUnlocked(
           !slot.presentRecords.empty())) {
     return false;
   }
-  if (q.inflightCount_ + 2u > kMaxQueuedChunks) {
+  if (!hasNextCpuReadyWriterHeadroomUnlocked(q)) {
     return false;
   }
   if (!maybePublishOpenCbSemanticBoundaryChunkUnlocked(q, pool, lock)) {
@@ -3068,10 +3313,42 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
              : core::ChunkBufferBindingCaptureResult::Complete;
 }
 
+core::ChunkBufferBindingCaptureResult
+CommandQueue::captureChunkBufferBindings(
+    std::span<const core::ChunkHandleEntry> entries,
+    std::vector<core::ChunkBufferBindingSnapshot>& snapshots) {
+  snapshots.clear();
+  snapshots.reserve(entries.size());
+  if (entries.empty()) {
+    return core::ChunkBufferBindingCaptureResult::Complete;
+  }
+  std::unique_lock lock(mutex_);
+  bool missingRequired = false;
+  for (const auto& entry : entries) {
+    if (entry.kind != core::ChunkHandleKind::Buffer) {
+      continue;
+    }
+    snapshots.push_back(pool_.captureChunkBufferBinding(entry.handle));
+    missingRequired |= snapshots.back().requiresCapturedBacking &&
+                       !snapshots.back().snapshot.valid();
+  }
+  return missingRequired
+             ? core::ChunkBufferBindingCaptureResult::MissingRequired
+             : core::ChunkBufferBindingCaptureResult::Complete;
+}
+
 void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
                                  const core::DrawUniformPayload& uniforms,
                                  std::span<const core::DrawParam> draws,
                                  std::span<const core::DrawParamPayloadView> payloads) {
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  if (appendActiveArenaDrawRun(state, uniforms, draws, payloads) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   if (draws.empty()) {
     return;
   }
@@ -3083,10 +3360,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   // codebase_conventions.rules.md; debug-only guard, no-op unless
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRun");
-  for (std::size_t i = 0; i < draws.size(); ++i) {
-    perf::countSubmitDraw();
-  }
-  PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex_);
   std::span<const core::DrawParamPayloadView> effectivePayloads{};
   {
@@ -3155,11 +3428,7 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
   ScopedDrawSubmitScratchUse scratchUse(scratch);
   scratch.bindingSnapshots.reserve(submissions.size());
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRunBatch");
-  for (std::size_t i = 0; i < submissions.size(); ++i) {
-    perf::countSubmitDraw();
-  }
   countDrawSubmissionAdjacentStateGenerations(submissions);
-  PerfScope scope(perf::countSubmitDrawCpuTime);
   std::unique_lock lock(mutex, std::defer_lock);
   {
     PerfScope stageScope(perf::countSubmitDrawRunBatchQueueLockCpuTime);
@@ -3251,8 +3520,499 @@ void submitDrawRunBatchImpl(CommandQueue& queue,
   }
 }
 
+CommandQueue::CpuReadyArenaBuildLease::~CpuReadyArenaBuildLease() {
+  abort();
+}
+
+CommandQueue::CpuReadyArenaBuildLease::CpuReadyArenaBuildLease(
+    CpuReadyArenaBuildLease&& other) noexcept
+    : queue_(other.queue_),
+      ticket_(other.ticket_),
+      controlIndex_(other.controlIndex_) {
+  other.queue_ = nullptr;
+  other.ticket_ = {};
+  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+}
+
+CommandQueue::CpuReadyArenaBuildLease&
+CommandQueue::CpuReadyArenaBuildLease::operator=(
+    CpuReadyArenaBuildLease&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  abort();
+  queue_ = other.queue_;
+  ticket_ = other.ticket_;
+  controlIndex_ = other.controlIndex_;
+  other.queue_ = nullptr;
+  other.ticket_ = {};
+  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  return *this;
+}
+
+bool CommandQueue::CpuReadyArenaBuildLease::publish(
+    std::span<const core::ChunkHandleEntry> resources) noexcept {
+  if (!queue_) {
+    return false;
+  }
+  auto* queue = queue_;
+  const auto ticket = ticket_;
+  if (!queue->publishCpuReadyArenaSource(
+          ticket, controlIndex_, resources)) {
+    queue_ = nullptr;
+    ticket_ = {};
+    controlIndex_ = std::numeric_limits<std::size_t>::max();
+    return false;
+  }
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  return true;
+}
+
+void CommandQueue::CpuReadyArenaBuildLease::abort() noexcept {
+  if (!queue_) {
+    return;
+  }
+  queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+}
+
+CommandQueue::CpuReadyArenaBeginResult
+CommandQueue::beginCpuReadyArenaSource(
+    std::uint64_t rawOrdinal,
+    const core::SourcePayloadLayout& layout) noexcept {
+  if (rawOrdinal == 0 || layout.usedBytes == 0 || layout.pageCount == 0 ||
+      layout.requiredBaseAlignment > core::kCpuReadyPageArenaAlignment) {
+    return {.status = CpuReadyArenaBeginStatus::Invalid};
+  }
+  if (arenaBuildPoisoned_.load(std::memory_order_acquire)) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+
+  std::unique_lock lock(mutex_);
+  if (stop_) {
+    return {.status = CpuReadyArenaBeginStatus::Stopped};
+  }
+  if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+      arenaBuildContext_.has_value()) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  if (writingSlot_) {
+    (void)queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::SemanticBoundary);
+        });
+    if (stop_) {
+      return {.status = CpuReadyArenaBeginStatus::Stopped};
+    }
+    if (writingSlot_) {
+      return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+    }
+  }
+  if (writeIndex_ >= slots_.size()) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  if (slots_[writeIndex_].state != core::ChunkSlot::State::Free) {
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  const auto probe = cpuReadyTape_.probeArenaReserve(layout.pageCount);
+  switch (probe) {
+  case core::CpuReadyTape::ReserveProbe::Ready:
+    break;
+  case core::CpuReadyTape::ReserveProbe::TemporaryPressure:
+    return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  case core::CpuReadyTape::ReserveProbe::Stopped:
+    return {.status = CpuReadyArenaBeginStatus::Stopped};
+  case core::CpuReadyTape::ReserveProbe::Corrupt:
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  case core::CpuReadyTape::ReserveProbe::InvalidRequest:
+    return {.status = CpuReadyArenaBeginStatus::Invalid};
+  }
+  if (nextSeqId_ == 0 ||
+      nextSeqId_ == std::numeric_limits<std::uint64_t>::max()) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+
+  const std::uint64_t seqId = nextSeqId_;
+  const std::uint64_t buildGeneration = nextArenaBuildGeneration_++;
+  const core::CpuReadyAdmissionIdentity identity{
+      .rawOrdinal = rawOrdinal,
+      .sourceOrdinal = seqId,
+      .seqId = seqId,
+      .buildGeneration = buildGeneration == 0 ? nextArenaBuildGeneration_++
+                                             : buildGeneration,
+  };
+  auto reservation = cpuReadyTape_.reserve(
+      layout.pageCount, layout.usedBytes, identity);
+  if (!reservation) {
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  recordCpuReadyTapeStats(cpuReadyTape_);
+
+  const std::size_t controlIndex = writeIndex_;
+  auto& control = slots_[controlIndex];
+  control.state = core::ChunkSlot::State::Writing;
+  control.seqId = 0;
+  control.sourceId = reservation->id;
+  control.storage = reservation->storage;
+  control.payload = nullptr;
+  ++nextSeqId_;
+  arenaAdmissionActive_.store(true, std::memory_order_release);
+  auto memory = cpuReadyTape_.writableStorage(reservation->ticket);
+  if (memory.size() < layout.usedBytes) {
+    lock.unlock();
+    abortCpuReadyArenaSource(reservation->ticket, controlIndex);
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  arenaBuildContext_.emplace(
+      *reservation, controlIndex, layout, memory.first(layout.usedBytes));
+  auto* context = &*arenaBuildContext_;
+  if (!context->builder.good()) {
+    context->failed.store(true, std::memory_order_release);
+    lock.unlock();
+    abortCpuReadyArenaSource(reservation->ticket, controlIndex);
+    return {.status = CpuReadyArenaBeginStatus::Corrupt};
+  }
+  activeArenaBuild_.store(context, std::memory_order_release);
+  lock.unlock();
+  return {
+      .status = CpuReadyArenaBeginStatus::Ready,
+      .lease = CpuReadyArenaBuildLease(
+          *this, reservation->ticket, controlIndex),
+  };
+}
+
+bool CommandQueue::waitForCpuReadyArenaAdmission(
+    const core::SourcePayloadLayout& layout) noexcept {
+  arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
+  const auto waitStarted = std::chrono::steady_clock::now();
+  std::unique_lock lock(mutex_);
+  bool admissionResolved = false;
+  while (!admissionResolved) {
+    if (stop_ || arenaBuildPoisoned_.load(std::memory_order_acquire)) {
+      break;
+    }
+    if (!arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+        !arenaBuildContext_.has_value() && writeIndex_ < slots_.size() &&
+        slots_[writeIndex_].state == core::ChunkSlot::State::Free) {
+      admissionResolved =
+          cpuReadyTape_.probeArenaReserve(layout.pageCount) !=
+          core::CpuReadyTape::ReserveProbe::TemporaryPressure;
+      recordCpuReadyTapeStats(cpuReadyTape_);
+      if (admissionResolved) {
+        break;
+      }
+    }
+    writeCv_.wait(lock);
+  }
+  const bool admitted = !stop_ &&
+      !arenaBuildPoisoned_.load(std::memory_order_acquire);
+  arenaAdmissionWaiterCount_.fetch_sub(1, std::memory_order_acq_rel);
+  perf::countCpuReadyTapeAdmissionWait(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - waitStarted).count()));
+  return admitted;
+}
+
+CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
+    noexcept {
+  if (!arenaAdmissionActive_.load(std::memory_order_acquire)) {
+    return ActiveArenaAppendResult::Inactive;
+  }
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (context) {
+    context->failed.store(true, std::memory_order_release);
+  }
+  arenaBuildPoisoned_.store(true, std::memory_order_release);
+  return ActiveArenaAppendResult::Failed;
+}
+
+void CommandQueue::rejectActiveCpuReadyArenaSource() noexcept {
+  (void)rejectIfActiveArena();
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaDrawRunBatch(
+    std::span<core::DrawRunSubmission> submissions) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (submissions.empty() || !submissions.front().stateMaterialized) {
+      return false;
+    }
+    countDrawSubmissionAdjacentStateGenerations(submissions);
+
+    std::size_t batchStart = 0;
+    while (batchStart < submissions.size()) {
+      std::size_t batchEnd = batchStart + 1u;
+      while (batchEnd < submissions.size() &&
+             drawSubmissionStatesCompatibleWithAcceptedPrevious(
+                 submissions[batchStart], submissions[batchEnd - 1u],
+                 submissions[batchEnd])) {
+        ++batchEnd;
+      }
+      auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
+      countDrawRunBatchDiscardedMaterializedStates(batch);
+      prepareDrawRunBatchBindingOverrides(batch);
+      // Direct replay payloads already carry the app-admission concrete
+      // backing snapshot. Never recapture from Pool on the replay thread:
+      // doing so would substitute a later rename generation. Publish validates
+      // every versioned binding through Pool's own synchronization before
+      // marking it, outside the queue scheduling mutex.
+      if (!context.assembler.tryAppendDrawRunBatch(batch)) {
+        return false;
+      }
+      context.pendingBackBuffer = batch.front()
+                                      .materializedState()
+                                      .hot.colorAttachments[0].handle;
+      context.updatesBackBuffer = true;
+      perf::countSubmitDrawRunBatchGroup(
+          static_cast<std::uint32_t>(batch.size()));
+      batchStart = batchEnd;
+    }
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaDrawRun(
+    core::CanonicalDrawState& state,
+    const core::DrawUniformPayload& uniforms,
+    std::span<const core::DrawParam> draws,
+    std::span<const core::DrawParamPayloadView> payloads) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (draws.empty()) {
+      return true;
+    }
+    auto& scratch = drawSubmitScratch();
+    ScopedDrawSubmitScratchUse scratchUse(scratch);
+    scratch.arenaSubmissions.clear();
+    scratch.arenaSubmissions.reserve(draws.size());
+    const auto backBuffer = state.hot.colorAttachments[0].handle;
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+      auto& submission = scratch.arenaSubmissions.emplace_back();
+      submission.draw = draws[i];
+      submission.payload = drawPayloadAt(payloads, i);
+      submission.stateGeneration = 1;
+      submission.uniformGeneration = 1;
+      submission.stateLane = core::DrawRunSubmissionStateLane::BindingAgnostic;
+      if (i == 0) {
+        submission.state.emplace(std::move(state));
+        submission.uniforms.emplace(uniforms);
+        submission.stateMaterialized = true;
+      } else {
+        submission.stateMaterialized = false;
+      }
+    }
+    if (!context.assembler.tryAppendDrawRunBatch(
+            scratch.arenaSubmissions)) {
+      return false;
+    }
+    context.pendingBackBuffer = backBuffer;
+    context.updatesBackBuffer = true;
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaClear(
+    const core::ClearDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (!context.assembler.tryAppendClear(value)) {
+      return false;
+    }
+    if (value.colorAttachments[0].handle) {
+      context.pendingBackBuffer = value.colorAttachments[0].handle;
+      context.updatesBackBuffer = true;
+    }
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaSurfaceCopy(
+    const core::SurfaceCopyDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (!context.assembler.tryAppendSurfaceCopy(value)) {
+      return false;
+    }
+    context.pendingBackBuffer = value.destination;
+    context.updatesBackBuffer = true;
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaStretchRect(
+    const core::StretchRectDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (!context.assembler.tryAppendStretchRect(value)) {
+      return false;
+    }
+    context.pendingBackBuffer = value.destination;
+    context.updatesBackBuffer = true;
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaColorFill(
+    const core::ColorFillDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    if (!context.assembler.tryAppendColorFill(value)) {
+      return false;
+    }
+    context.pendingBackBuffer = value.destination;
+    context.updatesBackBuffer = true;
+    return true;
+  });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveArenaDepthResolve(
+    const core::DepthResolveDesc& value) noexcept {
+  return appendActiveArena([&](ArenaBuildContext& context) {
+    return context.assembler.tryAppendDepthResolve(value);
+  });
+}
+
+bool CommandQueue::publishCpuReadyArenaSource(
+    core::CpuReadyPublicationTicket ticket,
+    std::size_t controlIndex,
+    std::span<const core::ChunkHandleEntry> resources) noexcept {
+  auto* context = activeArenaBuild_.load(std::memory_order_acquire);
+  if (!context || context->reservation.ticket != ticket ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->failed.load(std::memory_order_acquire) ||
+      context->controlIndex != controlIndex || !context->builder.publish()) {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
+
+  // Phase 1 fixes the exact transaction and immutable published payload while
+  // holding the scheduling mutex. `publishing` keeps every producer path out
+  // until phase 3 seals or fail-stops this same capability.
+  {
+    std::unique_lock lock(mutex_);
+    if (controlIndex >= slots_.size() || !arenaBuildContext_ ||
+        &*arenaBuildContext_ != context ||
+        activeArenaBuild_.load(std::memory_order_relaxed) != context ||
+        context->reservation.ticket != ticket ||
+        context->controlIndex != controlIndex ||
+        context->failed.load(std::memory_order_acquire)) {
+      lock.unlock();
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
+    const auto& control = slots_[controlIndex];
+    if (control.state != core::ChunkSlot::State::Writing ||
+        control.sourceId != ticket.id || control.storage != ticket.storage) {
+      lock.unlock();
+      abortCpuReadyArenaSource(ticket, controlIndex);
+      return false;
+    }
+    context->publishing.store(true, std::memory_order_release);
+  }
+
+  // Resource retention is deliberately outside the scheduling lock (§5.4).
+  // The arena owner and view remain pinned by the active strict transaction.
+  const core::SourcePayloadView payloadView(*context->reservation.arenaPayload);
+  if (!payloadView.valid() ||
+      !validateArenaDrawAdmissionSnapshots(pool_, payloadView)) {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
+  markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
+  markArenaSourceResources(pool_, payloadView, ticket.seqId);
+
+  // Phase 3 revalidates the same ticket/context/control after marking. No
+  // writer can advance either ring while arenaAdmissionActive_ remains set.
+  std::unique_lock lock(mutex_);
+  if (controlIndex >= slots_.size() || !arenaBuildContext_ ||
+      &*arenaBuildContext_ != context ||
+      activeArenaBuild_.load(std::memory_order_relaxed) != context ||
+      context->reservation.ticket != ticket ||
+      context->controlIndex != controlIndex ||
+      !context->publishing.load(std::memory_order_acquire) ||
+      context->failed.load(std::memory_order_acquire)) {
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
+  auto& control = slots_[controlIndex];
+  if (control.state != core::ChunkSlot::State::Writing ||
+      control.sourceId != ticket.id || control.storage != ticket.storage ||
+      !cpuReadyTape_.sealAndPublish(ticket, controlIndex,
+                                   context->layout.usedBytes)) {
+    lock.unlock();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    abortCpuReadyArenaSource(ticket, controlIndex);
+    return false;
+  }
+  control.seqId = ticket.seqId;
+  control.state = core::ChunkSlot::State::Pending;
+  lastCommittedSeqId_ = ticket.seqId;
+  ++inflightCount_;
+  writeIndex_ = (controlIndex + 1) % slots_.size();
+  if (context->updatesBackBuffer) {
+    currentBackBuffer_ = context->pendingBackBuffer;
+  }
+  activeArenaBuild_.store(nullptr, std::memory_order_release);
+  arenaBuildContext_.reset();
+  arenaAdmissionActive_.store(false, std::memory_order_release);
+  recordCpuReadyTapeStats(cpuReadyTape_);
+  lock.unlock();
+  writeCv_.notify_all();
+  encodeCv_.notify_one();
+  return true;
+}
+
+void CommandQueue::abortCpuReadyArenaSource(
+    core::CpuReadyPublicationTicket ticket,
+    std::size_t controlIndex) noexcept {
+  std::optional<core::CpuReadyTape::DetachedArenaOwner> owner;
+  {
+    std::unique_lock lock(mutex_);
+    if (controlIndex < slots_.size()) {
+      owner = cpuReadyTape_.beginArenaAbort(ticket);
+      activeArenaBuild_.store(nullptr, std::memory_order_release);
+      arenaBuildContext_.reset();
+    }
+    stop_ = true;
+    cpuReadyTape_.stopAdmission();
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+  }
+  if (owner) {
+    owner->destroy();
+  }
+  {
+    std::lock_guard lock(mutex_);
+    if (owner && cpuReadyTape_.finishArenaAbort(ticket, std::move(*owner)) &&
+        controlIndex < slots_.size()) {
+      slots_[controlIndex] = {};
+    }
+    arenaAdmissionActive_.store(false, std::memory_order_release);
+    recordCpuReadyTapeStats(cpuReadyTape_);
+  }
+  writeCv_.notify_all();
+  encodeCv_.notify_all();
+  finishCv_.notify_all();
+  presentCompletedCv_.notify_all();
+}
+
 void CommandQueue::submitDrawRunBatch(
     std::span<core::DrawRunSubmission> submissions) {
+  for (std::size_t i = 0; i < submissions.size(); ++i) {
+    perf::countSubmitDraw();
+  }
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+  if (appendActiveArenaDrawRunBatch(submissions) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
                          skipDrawResourceMarking_,
                          forceDrawResourceMarkingAfterSplit_,
@@ -3261,6 +4021,9 @@ void CommandQueue::submitDrawRunBatch(
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
+  if (appendActiveArenaClear(desc) != ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   maybePublishOpenCbSemanticBoundaryChunkUnlocked(*this, pool_, lock);
@@ -3277,6 +4040,10 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
 }
 
 void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
+  if (appendActiveArenaSurfaceCopy(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   maybePublishOpenCbSemanticBoundaryChunkUnlocked(*this, pool_, lock);
@@ -3289,6 +4056,10 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
 
 void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   perf::countSubmitStretch();
+  if (appendActiveArenaStretchRect(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::unique_lock lock(mutex_);
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
@@ -3314,6 +4085,9 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
 }
 
 void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
+  if (rejectIfActiveArena() != ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::lock_guard lock(mutex_);
   // Readback is satisfied synchronously in CommandQueue::readbackSurface.
   // Still mark resources so NoUseAfterFree remains meaningful.
@@ -3322,6 +4096,10 @@ void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
 }
 
 void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
+  if (appendActiveArenaColorFill(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   std::unique_lock lock(mutex_);
   ensureWritingSlotUnlocked(*this, lock);
   maybePublishOpenCbSemanticBoundaryChunkUnlocked(*this, pool_, lock);
@@ -3333,6 +4111,10 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 }
 
 void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
+  if (appendActiveArenaDepthResolve(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   // R-FORMAT-11 — RESZ MSAA depth resolve. Fire-and-forget surface op:
   // append the command + mark both endpoints, mirroring submitColorFill.
   // The destination is the INTZ depth texture, not the present back buffer,
@@ -3347,6 +4129,9 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 }
 
 std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
+  if (rejectIfActiveArena() != ActiveArenaAppendResult::Inactive) {
+    return 0;
+  }
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
   PerfScope scope(perf::countSubmitPresentCpuTime);
@@ -3429,10 +4214,11 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
             openCbCarrierEnabled(), hasCurrentPrePresentWork)) {
       // H229 carrier: publish the pre-present head as its own chunk so the
       // encode thread's carrier lane sees an appendable head followed by a
-      // Present-only closing tail. Requires one slot of headroom beyond the
-      // head + tail commits; without it the head stays fused to the tail
-      // (byte-identical to the default single-chunk present).
-      if (inflightCount_ + 2u <= kMaxQueuedChunks) {
+      // Present-only closing tail. The current head already owns its Ready
+      // ticket; split only when the next control and a second Tape reservation
+      // are both available for the tail. Without that headroom the head stays
+      // fused to the tail (byte-identical to the default single-chunk present).
+      if (hasNextCpuReadyWriterHeadroomUnlocked(*this)) {
         const bool headCommitted = queueLifecycle_.commitCurrentChunk(
             lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
               prepareSlotForPublish(*this, pool_, slot,
@@ -3443,7 +4229,9 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         }
       }
       ensureWritingSlotUnlocked(*this, lock);
-      queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle);
+      if (!queueLifecycle_.appendPresentCommand(queuedDesc, sourceHandle)) {
+        return 0;
+      }
       const bool tailCommitted = queueLifecycle_.commitCurrentChunk(
           lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
             prepareSlotForPublish(*this, pool_, slot,
@@ -3766,6 +4554,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
   // appended suffix.
   using core::metalqueue::QueueSubmissionRecord;
   using core::metalqueue::ReadySlotSnapshot;
+  using core::metalqueue::ResolvedPublishedSource;
 
   std::optional<ReadySlotSnapshot> held;
   while (true) {
@@ -3780,71 +4569,124 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
 
     ReadySlotSnapshot current = *held;
     held.reset();
-    DXMT_ASSERT(current.slot != nullptr);
-    auto& slot = *current.slot;
-    lock.unlock();
-
-    traceEncodeFnStage("entry", current.slotIndex, slot);
-    traceEncodeFnStage("before-make-context", current.slotIndex, slot);
-    auto ctx = makeEncodeContext();
-    traceEncodeFnStage("after-make-context", current.slotIndex, slot);
-
-    std::vector<std::uint32_t> predictedPrefix =
-        backend_->dceLookaheadReplayPrefix(ctx, current.slotIndex, slot);
-    if (encodeSlotPsoPrefetchEnabled() &&
-        !slot.prefetchedPipelinesSealed()) {
-      traceEncodeFnStage("before-pso-prefetch", current.slotIndex, slot);
-      PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
-      prefetchSlotPipelines(slot);
-      traceEncodeFnStage("after-pso-prefetch", current.slotIndex, slot);
-    }
-
-    bool predictedPrefixValid =
-        !predictedPrefix.empty() &&
-        predictedPrefix.size() < slot.commandCount();
-    std::vector<bool> predictedCommands(slot.commandCount(), false);
-    for (const std::uint32_t commandIndex : predictedPrefix) {
-      if (commandIndex >= slot.commandCount() ||
-          predictedCommands[commandIndex] ||
-          slot.commandHeaders[commandIndex].kind ==
-              core::MetalCommandKind::Present) {
-        predictedPrefixValid = false;
-        break;
-      }
-      predictedCommands[commandIndex] = true;
-    }
-    if (!predictedPrefixValid) {
-      predictedPrefix.clear();
-    }
-
+    std::optional<encoders::EncodeContext> ctx;
+    std::vector<std::uint32_t> predictedPrefix;
     bool encodedPrefix = false;
     std::optional<QueueSubmissionRecord> prefixSubmission;
     encoders::EncodeChunkSession prefixSession;
-    if (!predictedPrefix.empty()) {
-      prefixSession = encoders::makeEncodeChunkSession();
-      encoders::EncodeChunkOptions prefixOptions{};
-      prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
-      prefixOptions.session = prefixSession.get();
-      prefixOptions.deferSessionFinalization = true;
-      prefixOptions.replayCommandPlanActive = true;
-      prefixOptions.replayCommandOrder = predictedPrefix;
-      prefixOptions.skipBackendPlanning = true;
-      traceEncodeFnStage("before-dce-lookahead-prefix",
-                         current.slotIndex, slot);
-      prefixSubmission = backend_->onChunkReady(
-          ctx, current.slotIndex, slot, std::move(prefixOptions));
-      traceEncodeFnStage(prefixSubmission.has_value()
-                             ? "after-dce-lookahead-prefix"
-                             : "after-dce-lookahead-prefix-null",
-                         current.slotIndex, slot);
-      if (prefixSubmission.has_value() &&
-          prefixSubmission->commandBuffer) {
-        encodedPrefix = true;
-        perf::countFramegraphDceLookaheadPrefix(predictedPrefix.size());
-      } else {
-        prefixSubmission.reset();
-        prefixSession.reset();
+    {
+      const ResolvedPublishedSource resolved =
+          queueLifecycle_.resolveRepresentedSource(current);
+      if (!resolved.valid()) {
+        queueLifecycle_.poisonTapeFailure();
+        return;
+      }
+      if (!resolved.slot) {
+        auto arenaCtx = makeEncodeContext();
+        encoders::EncodeChunkOptions arenaOptions{};
+        arenaOptions.partitionSource = resolved.source;
+        lock.unlock();
+        auto arenaSubmission = backend_->onSourceReady(
+            arenaCtx, current.slotIndex, resolved.payload, current.seqId,
+            std::move(arenaOptions));
+        if (arenaSubmission.has_value() &&
+            !arenaSubmission->commandBuffer) {
+          arenaSubmission.reset();
+        }
+        lock.lock();
+        if (arenaSubmission.has_value()) {
+          if (!core::metalqueue::assignOrValidateSingleCompletionSource(
+                  *arenaSubmission, current)) {
+            abortDceLookaheadPendingFailOpen(
+                "arena completion source retention failed");
+          }
+          if (!queueLifecycle_.submitEncodedSubmission(lock,
+                                                       *arenaSubmission)) {
+            abortDceLookaheadPendingFailOpen(
+                "arena submission preflight failed");
+          }
+          auto callbacks = std::move(arenaSubmission->postCommitCallbacks);
+          lock.unlock();
+          for (auto& callback : callbacks) {
+            if (callback) {
+              callback();
+            }
+          }
+          lock.lock();
+        } else {
+          if (!queueLifecycle_.completeInlineChunk(
+                  lock, current.slotIndex, current.seqId)) {
+            return;
+          }
+          if (onSubmitted) {
+            onSubmitted(current.seqId);
+          }
+        }
+        continue;
+      }
+      auto& slot = *resolved.slot;
+      lock.unlock();
+
+      traceEncodeFnStage("entry", current.slotIndex, slot);
+      traceEncodeFnStage("before-make-context", current.slotIndex, slot);
+      ctx.emplace(makeEncodeContext());
+      traceEncodeFnStage("after-make-context", current.slotIndex, slot);
+
+      predictedPrefix =
+          backend_->dceLookaheadReplayPrefix(*ctx, current.slotIndex, slot);
+      if (encodeSlotPsoPrefetchEnabled() &&
+          !slot.prefetchedPipelinesSealed()) {
+        traceEncodeFnStage("before-pso-prefetch", current.slotIndex, slot);
+        PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
+        prefetchSlotPipelines(const_cast<core::ChunkSlot&>(slot));
+        traceEncodeFnStage("after-pso-prefetch", current.slotIndex, slot);
+      }
+
+      bool predictedPrefixValid =
+          !predictedPrefix.empty() &&
+          predictedPrefix.size() < slot.commandCount();
+      std::vector<bool> predictedCommands(slot.commandCount(), false);
+      for (const std::uint32_t commandIndex : predictedPrefix) {
+        if (commandIndex >= slot.commandCount() ||
+            predictedCommands[commandIndex] ||
+            slot.commandHeaders[commandIndex].kind ==
+                core::MetalCommandKind::Present) {
+          predictedPrefixValid = false;
+          break;
+        }
+        predictedCommands[commandIndex] = true;
+      }
+      if (!predictedPrefixValid) {
         predictedPrefix.clear();
+      }
+
+      if (!predictedPrefix.empty()) {
+        prefixSession = encoders::makeEncodeChunkSession();
+        encoders::EncodeChunkOptions prefixOptions{};
+        prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
+        prefixOptions.session = prefixSession.get();
+        prefixOptions.deferSessionFinalization = true;
+        prefixOptions.replayCommandPlanActive = true;
+        prefixOptions.replayCommandOrder = predictedPrefix;
+        prefixOptions.skipBackendPlanning = true;
+        prefixOptions.partitionSource = resolved.source;
+        traceEncodeFnStage("before-dce-lookahead-prefix",
+                           current.slotIndex, slot);
+        prefixSubmission = backend_->onChunkReady(
+            *ctx, current.slotIndex, slot, std::move(prefixOptions));
+        traceEncodeFnStage(prefixSubmission.has_value()
+                               ? "after-dce-lookahead-prefix"
+                               : "after-dce-lookahead-prefix-null",
+                           current.slotIndex, slot);
+        if (prefixSubmission.has_value() &&
+            prefixSubmission->commandBuffer) {
+          encodedPrefix = true;
+          perf::countFramegraphDceLookaheadPrefix(predictedPrefix.size());
+        } else {
+          prefixSubmission.reset();
+          prefixSession.reset();
+          predictedPrefix.clear();
+        }
       }
     }
 
@@ -3852,7 +4694,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
     ReadySlotSnapshot next{};
     bool hasNext = false;
     const DceChunkLookaheadAction action =
-        resolveDceChunkLookaheadAction(!readySlots_.empty());
+        resolveDceChunkLookaheadAction(!cpuReadyTape_.readyEmpty());
     if (action == DceChunkLookaheadAction::UseReady) {
       hasNext = queueLifecycle_.dequeueReadySlot(lock, next);
       DXMT_ASSERT(hasNext);
@@ -3863,11 +4705,25 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       perf::countFramegraphDceLookaheadFailOpen();
     }
 
-    std::array<ReadySlotSnapshot, 2> selected{current, next};
-    encoders::EncodeChunkOptions options{};
+    std::array<ResolvedPublishedSource, 2> selected{};
+    selected[0] = queueLifecycle_.resolveRepresentedSource(current);
     if (hasNext) {
+      selected[1] = queueLifecycle_.resolveRepresentedSource(next);
+    }
+    const DceChunkLookaheadSourceAction sourceAction =
+        resolveDceChunkLookaheadSourceAction(
+            selected[0].valid(), selected[0].slot != nullptr, hasNext,
+            selected[1].valid(), selected[1].slot != nullptr);
+    if (sourceAction == DceChunkLookaheadSourceAction::Poison) {
+      queueLifecycle_.poisonTapeFailure();
+      return;
+    }
+    encoders::EncodeChunkOptions options{};
+    options.partitionSource = selected[0].source;
+    if (sourceAction ==
+        DceChunkLookaheadSourceAction::EncodeCurrentExposeLegacyLookahead) {
       options.sessionLookaheadSources =
-          std::span<const ReadySlotSnapshot>(selected);
+          std::span<const ResolvedPublishedSource>(selected);
     }
     if (encodedPrefix) {
       options.allowInjectedCommandBufferMidChunkCommits = true;
@@ -3878,42 +4734,57 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       options.replayCommandsAlreadyEncoded = predictedPrefix;
     }
 
-    lock.unlock();
-    traceEncodeFnStage("before-backend-onChunkReady",
-                       current.slotIndex, slot);
-    std::optional<QueueSubmissionRecord> submission =
-        backend_->onChunkReady(ctx, current.slotIndex, slot,
-                               std::move(options));
-    if (submission.has_value() && !submission->commandBuffer) {
-      submission.reset();
-    }
-    if (encodedPrefix) {
-      if (!submission.has_value()) {
-        abortDceLookaheadPendingFailOpen(
-            "suffix encode returned no command buffer");
+    std::optional<QueueSubmissionRecord> submission;
+    {
+      const auto& slot = *selected[0].slot;
+      lock.unlock();
+      traceEncodeFnStage("before-backend-onChunkReady",
+                         current.slotIndex, slot);
+      submission = backend_->onChunkReady(
+          *ctx, current.slotIndex, slot, std::move(options));
+      if (submission.has_value() && !submission->commandBuffer) {
+        submission.reset();
       }
-      const std::uint64_t prefixChainLength =
-          std::max<std::uint64_t>(
-              1u, prefixSubmission->commandBufferChainLength);
-      const std::uint64_t suffixChainLength =
-          std::max<std::uint64_t>(
-              1u, submission->commandBufferChainLength);
-      submission->commandBufferChainLength =
-          prefixChainLength + suffixChainLength - 1u;
-      if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
-              std::move(prefixSession), *submission)) {
-        abortDceLookaheadPendingFailOpen("session retain failed");
+      if (encodedPrefix) {
+        if (!submission.has_value()) {
+          abortDceLookaheadPendingFailOpen(
+              "suffix encode returned no command buffer");
+        }
+        const std::uint64_t prefixChainLength =
+            std::max<std::uint64_t>(
+                1u, prefixSubmission->commandBufferChainLength);
+        const std::uint64_t suffixChainLength =
+            std::max<std::uint64_t>(
+                1u, submission->commandBufferChainLength);
+        submission->commandBufferChainLength =
+            prefixChainLength + suffixChainLength - 1u;
+        if (!encoders::retainEncodeChunkSessionUntilSubmissionComplete(
+                std::move(prefixSession), *submission)) {
+          abortDceLookaheadPendingFailOpen("session retain failed");
+        }
       }
+      traceEncodeFnStage(submission.has_value()
+                             ? "after-backend-onChunkReady-submission"
+                             : "after-backend-onChunkReady-inline",
+                         current.slotIndex, slot);
     }
-    traceEncodeFnStage(submission.has_value()
-                           ? "after-backend-onChunkReady-submission"
-                           : "after-backend-onChunkReady-inline",
-                       current.slotIndex, slot);
+    selected = {};
     lock.lock();
 
     if (submission.has_value()) {
+      if (submission->fixedCompletionSources.empty()) {
+        const std::array completionSources{
+            core::metalqueue::completionSourceForReadySlot(current),
+        };
+        if (!submission->assignFixedCompletionSources(completionSources)) {
+          abortDceLookaheadPendingFailOpen(
+              "completion source retention failed");
+        }
+      }
+      if (!queueLifecycle_.submitEncodedSubmission(lock, *submission)) {
+        abortDceLookaheadPendingFailOpen("submission preflight failed");
+      }
       auto callbacks = std::move(submission->postCommitCallbacks);
-      queueLifecycle_.submitEncodedSubmission(lock, *submission);
       lock.unlock();
       for (auto& callback : callbacks) {
         if (callback) {
@@ -3922,12 +4793,10 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
       }
       lock.lock();
     } else {
-      auto deferredReleases =
-          queueLifecycle_.completeInlineChunk(current.slotIndex,
-                                              current.seqId);
-      lock.unlock();
-      deferredReleases.clear();
-      lock.lock();
+      if (!queueLifecycle_.completeInlineChunk(
+              lock, current.slotIndex, current.seqId)) {
+        return;
+      }
       if (onSubmitted) {
         onSubmitted(current.seqId);
       }
@@ -3936,7 +4805,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
     if (hasNext) {
       held = next;
       // TLA+: DceChunkLookahead / BoundedHold.
-      DXMT_ASSERT(held->slot != nullptr);
+      DXMT_ASSERT(held->sourceId.valid());
     }
   }
 }
@@ -3959,6 +4828,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::QueueCompletionSource;
   using core::metalqueue::QueueSubmissionRecord;
   using core::metalqueue::ReadySlotSnapshot;
+  using core::metalqueue::ResolvedPublishedSource;
 
   std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
@@ -3967,7 +4837,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
   bool pendingCanReleaseAtSemanticBoundary = false;
   bool semanticReleaseUsedDuringWait = false;
 
-  auto encodeSource = [this](const ReadySlotSnapshot& source,
+  auto encodeSource = [this](const ResolvedPublishedSource& source,
                              encoders::EncodeChunkOptions options) {
     DXMT_ASSERT(source.slot != nullptr);
     auto& slot = *source.slot;
@@ -3976,7 +4846,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
         !slot.prefetchedPipelinesSealed()) {
       traceEncodeFnStage("before-pso-prefetch", source.slotIndex, slot);
       PerfScope scope(perf::countEncodeSlotPsoPrefetchCpuTime);
-      prefetchSlotPipelines(slot);
+      prefetchSlotPipelines(const_cast<core::ChunkSlot&>(slot));
       traceEncodeFnStage("after-pso-prefetch", source.slotIndex, slot);
     }
     traceEncodeFnStage("before-make-context", source.slotIndex, slot);
@@ -4001,13 +4871,10 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
   auto completeInlineSnapshot = [this, &onSubmitted](
                                     std::unique_lock<std::mutex>& lock,
                                     const ReadySlotSnapshot& source) {
-    DXMT_ASSERT(source.slot != nullptr);
     const std::uint64_t seqId = source.seqId;
-    auto deferredReleases =
-        queueLifecycle_.completeInlineChunk(source.slotIndex, seqId);
-    lock.unlock();
-    deferredReleases.clear();
-    lock.lock();
+    if (!queueLifecycle_.completeInlineChunk(lock, source.slotIndex, seqId)) {
+      return;
+    }
     if (onSubmitted) {
       onSubmitted(seqId);
     }
@@ -4030,14 +4897,17 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
 
   auto submitRecordLocked = [this](std::unique_lock<std::mutex>& lock,
                                    QueueSubmissionRecord& record) {
+    if (!queueLifecycle_.submitEncodedSubmission(lock, record)) {
+      return false;
+    }
     auto callbacks = std::move(record.postCommitCallbacks);
-    queueLifecycle_.submitEncodedSubmission(lock, record);
     lock.unlock();
     for (auto& callback : callbacks) {
       if (callback) {
         callback();
       }
     }
+    return true;
   };
 
   auto finalizePendingSessionForSubmitLocked =
@@ -4081,7 +4951,9 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
         if (!finalizePendingSessionForSubmitLocked(lock)) {
           return false;
         }
-        submitRecordLocked(lock, *pendingRecord);
+        if (!submitRecordLocked(lock, *pendingRecord)) {
+          return false;
+        }
         pendingRecord.reset();
         pendingSources.clear();
         pendingSession.reset();
@@ -4105,7 +4977,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
       }
     }
 
-    if (pendingRecord.has_value() && !readySlots_.empty()) {
+    if (pendingRecord.has_value() && !cpuReadyTape_.readyEmpty()) {
       // f1fb1b04: never hold pending work across a producer sequence wait.
       if (render::openCbCarrierShouldSubmitForProducerWait(
               pendingRecord.has_value(),
@@ -4146,7 +5018,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
       }
     }
 
-    if (pendingRecord.has_value() && readySlots_.empty()) {
+    if (pendingRecord.has_value() && cpuReadyTape_.readyEmpty()) {
       if (render::openCbCarrierShouldSubmitForProducerWait(
               pendingRecord.has_value(),
               queueLifecycle_.producerSequenceWaitActive())) {
@@ -4190,7 +5062,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
       }
       const auto waitAction =
           render::selectOpenCbCarrierPendingWaitAction(
-              pendingRecord.has_value(), readySlots_.empty(), stop_,
+              pendingRecord.has_value(), cpuReadyTape_.readyEmpty(), stop_,
               writerActive);
       if (waitAction ==
           render::OpenCbCarrierPendingWaitAction::SubmitPending) {
@@ -4212,7 +5084,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
                               &pendingCanReleaseAtSemanticBoundary,
                               &semanticReleaseUsedDuringWait,
                               waitObservedCompletionWaitActive] {
-          return stop_ || !readySlots_.empty() ||
+          return stop_ || !cpuReadyTape_.readyEmpty() ||
                  !writingSlot_.has_value() ||
                  queueLifecycle_.producerSequenceWaitActive() ||
                  render::openCbCarrierWaitTransitionNeedsRecheck(
@@ -4221,7 +5093,7 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
                      pendingCanReleaseAtSemanticBoundary,
                      semanticReleaseUsedDuringWait);
         });
-        if (pendingRecord.has_value() && readySlots_.empty()) {
+        if (pendingRecord.has_value() && cpuReadyTape_.readyEmpty()) {
           if (render::openCbCarrierShouldSubmitForProducerWait(
                   pendingRecord.has_value(),
                   queueLifecycle_.producerSequenceWaitActive())) {
@@ -4243,7 +5115,8 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
             continue;
           }
         }
-        if (readySlots_.empty() && (stop_ || !writingSlot_.has_value())) {
+        if (cpuReadyTape_.readyEmpty() &&
+            (stop_ || !writingSlot_.has_value())) {
           if (submitPendingRecordLocked(lock)) {
             perf::countOpenCbCarrierReleased(
                 perf::OpenCbCarrierReleaseReason::Drain);
@@ -4262,11 +5135,8 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.dequeueReadySlotBatchPrefix(
             lock,
             std::span<ReadySlotSnapshot>(scratch),
-            [](const std::deque<std::size_t>& readySlots,
-               std::span<const core::ChunkSlotControl> slots,
-               std::size_t maxCount) noexcept -> std::size_t {
-              return render::selectOpenCbCarrierBatchPrefix(
-                  readySlots, slots, maxCount);
+            [](std::span<const ResolvedPublishedSource> candidates) noexcept {
+              return render::selectOpenCbCarrierBatchPrefix(candidates);
             });
     if (count == 0) {
       if (pendingRecord.has_value()) {
@@ -4283,9 +5153,17 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
     // before exposing cross-source sessionLookaheadSources. The retained
     // QueueCompletionSource metadata feeds preflight, sessionSource, and
     // completion expansion from one list.
-    const bool selectedPrefixStartsSession =
-        scratch[0].slot &&
-        render::openCbCarrierSlotCanBeSessionHead(*scratch[0].slot);
+    bool selectedPrefixStartsSession = false;
+    {
+      const auto first = queueLifecycle_.resolveRepresentedSource(scratch[0]);
+      if (!first.valid()) {
+        queueLifecycle_.poisonTapeFailure();
+        return;
+      }
+      selectedPrefixStartsSession =
+          first.slot &&
+          render::openCbCarrierSlotCanBeSessionHead(*first.slot);
+    }
     std::array<QueueCompletionSource, kCommandChunkCount>
         selectedCompletionSources{};
     bool selectedCompletionSourcesValid = false;
@@ -4317,17 +5195,66 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
         lock.lock();
       }
       const ReadySlotSnapshot source = scratch[sourceIndex];
-      DXMT_ASSERT(source.slot != nullptr);
-      const bool sourceHasFinalPresentTail =
-          render::openCbCarrierSlotHasFinalPresentTail(*source.slot);
-      const bool sourceIsSemanticBoundary =
-          source.slot->publishReason ==
-          perf::ChunkPublishReason::SemanticBoundary;
-      const bool sourceCanStartSession =
-          render::openCbCarrierSlotCanBeSessionHead(*source.slot);
-      bool sourceCanAppendToPending =
-          render::openCbCarrierSlotCanAppendToPending(
-              *source.slot, static_cast<bool>(pendingSession));
+      const auto commonSource =
+          queueLifecycle_.resolveRepresentedSource(source);
+      if (!commonSource.valid()) {
+        queueLifecycle_.poisonTapeFailure();
+        return;
+      }
+      if (!commonSource.slot) {
+        if (pendingRecord.has_value()) {
+          perf::countOpenCbCarrierReleased(
+              perf::OpenCbCarrierReleaseReason::NonAppendable);
+          if (!submitPendingRecordLocked(lock)) {
+            abortOpenCbPendingFailOpen("arena source boundary");
+          }
+          if (!lock.owns_lock()) {
+            lock.lock();
+          }
+        }
+        encoders::EncodeChunkOptions arenaOptions{};
+        arenaOptions.partitionSource = commonSource.source;
+        lock.unlock();
+        auto arenaCtx = makeEncodeContext();
+        auto arenaSubmission = backend_->onSourceReady(
+            arenaCtx, commonSource.slotIndex, commonSource.payload,
+            commonSource.seqId, std::move(arenaOptions));
+        if (arenaSubmission.has_value() &&
+            !arenaSubmission->commandBuffer) {
+          arenaSubmission.reset();
+        }
+        lock.lock();
+        if (arenaSubmission.has_value()) {
+          if (!core::metalqueue::assignOrValidateSingleCompletionSource(
+                  *arenaSubmission, source)) {
+            abortOpenCbPendingFailOpen(
+                "arena standalone completion source retention failed");
+          }
+          if (!submitRecordLocked(lock, *arenaSubmission)) {
+            abortOpenCbPendingFailOpen("arena standalone submit failed");
+          }
+        } else {
+          completeInlineSnapshot(lock, source);
+        }
+        continue;
+      }
+      bool sourceHasFinalPresentTail = false;
+      bool sourceIsSemanticBoundary = false;
+      bool sourceCanStartSession = false;
+      bool sourceCanAppendToPending = false;
+      {
+        const auto& resolved = commonSource;
+        sourceHasFinalPresentTail =
+            render::openCbCarrierSlotHasFinalPresentTail(*resolved.slot);
+        sourceIsSemanticBoundary =
+            resolved.slot->publishReason ==
+            perf::ChunkPublishReason::SemanticBoundary;
+        sourceCanStartSession =
+            render::openCbCarrierSlotCanBeSessionHead(*resolved.slot);
+        sourceCanAppendToPending =
+            render::openCbCarrierSlotCanAppendToPending(
+                *resolved.slot, static_cast<bool>(pendingSession));
+      }
 
       if (pendingRecord.has_value() && !sourceCanAppendToPending) {
         perf::countOpenCbCarrierReleased(
@@ -4414,6 +5341,10 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
       }
 
       encoders::EncodeChunkOptions options{};
+      options.partitionSource = core::CpuReadyTape::SourceRef{
+          .id = source.sourceId,
+          .storage = source.storage,
+      };
       if (appendToPending || startPending) {
         // Source boundaries must not become extra command buffers, but
         // semantic pass/barrier boundaries keep the normal mid-chunk
@@ -4426,18 +5357,37 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
         options.deferSessionFinalization = !sourceHasFinalPresentTail;
         options.sessionSource =
             appendToPending ? appendRetained : startRetained;
-        if (selectedPrefixStartsSession && selectedCompletionSourcesValid) {
-          options.sessionLookaheadSources =
-              std::span<const ReadySlotSnapshot>(scratch.data() + sourceIndex,
-                                                 count - sourceIndex);
-        }
       }
       if (appendToPending) {
         options.commandBuffer = pendingRecord->commandBuffer;
       }
 
-      lock.unlock();
-      auto submission = encodeSource(source, std::move(options));
+      std::optional<QueueSubmissionRecord> submission;
+      {
+        std::array<ResolvedPublishedSource, kCommandChunkCount>
+            resolvedLookahead{};
+        const std::size_t resolvedCount =
+            selectedPrefixStartsSession && selectedCompletionSourcesValid
+            ? count - sourceIndex
+            : 1u;
+        for (std::size_t i = 0; i < resolvedCount; ++i) {
+          resolvedLookahead[i] = queueLifecycle_.resolveRepresentedSource(
+              scratch[sourceIndex + i]);
+          if (!resolvedLookahead[i].valid() ||
+              !resolvedLookahead[i].slot) {
+            queueLifecycle_.poisonTapeFailure();
+            return;
+          }
+        }
+        if (resolvedCount > 1u) {
+          options.sessionLookaheadSources =
+              std::span<const ResolvedPublishedSource>(
+                  resolvedLookahead.data(), resolvedCount);
+        }
+        lock.unlock();
+        submission =
+            encodeSource(resolvedLookahead[0], std::move(options));
+      }
       lock.lock();
 
       if (!submission.has_value()) {
@@ -4460,7 +5410,9 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
 
       if (startPending) {
         if (!startRetainedValid) {
-          submitRecordLocked(lock, *submission);
+          if (!submitRecordLocked(lock, *submission)) {
+            abortOpenCbPendingFailOpen("unretained session submit failed");
+          }
           pendingSession.reset();
           pendingCanReleaseAtSemanticBoundary = false;
           continue;
@@ -4514,7 +5466,9 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
               lock.lock();
             }
             if (submission->commandBuffer) {
-              submitRecordLocked(lock, *submission);
+              if (!submitRecordLocked(lock, *submission)) {
+                abortOpenCbPendingFailOpen("merge fallback submit failed");
+              }
             } else {
               completeInlineSnapshot(lock, source);
             }
@@ -4539,14 +5493,18 @@ void CommandQueue::runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted) {
                 std::move(pendingSession), *submission)) {
           abortOpenCbPendingFailOpen("merged tail session retain failed");
         }
-        submitRecordLocked(lock, *submission);
+        if (!submitRecordLocked(lock, *submission)) {
+          abortOpenCbPendingFailOpen("merged tail submit failed");
+        }
         perf::countOpenCbCarrierTailSubmitted();
         pendingSession.reset();
         pendingCanReleaseAtSemanticBoundary = false;
         continue;
       }
 
-      submitRecordLocked(lock, *submission);
+      if (!submitRecordLocked(lock, *submission)) {
+        abortOpenCbPendingFailOpen("standalone submit failed");
+      }
     }
   }
 }
@@ -4556,7 +5514,6 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .writingSlot = &writingSlot_,
       .writeIndex = &writeIndex_,
       .nextSeqId = &nextSeqId_,
-      .readySlots = &readySlots_,
       .completedSeqQueue = &completedSeqQueue_,
       .completedPresentSeqQueue = &completedPresentSeqQueue_,
       .inflightCount = &inflightCount_,

@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <span>
 
 // H229 open-CB overlap carrier — pure decision helpers.
@@ -145,13 +144,6 @@ OpenCbCarrierPendingWaitAction selectOpenCbCarrierPendingWaitAction(
 // the maximal run of session heads with no tail visible yet. Returns 0 to
 // fall back to single-source dequeue.
 std::size_t selectOpenCbCarrierBatchPrefix(
-    const std::deque<std::size_t>& readySlots,
-    std::span<const core::ChunkSlot> slots,
-    std::size_t maxCount) noexcept;
-
-std::size_t selectOpenCbCarrierBatchPrefix(
-    const std::deque<std::size_t>& readySlots,
-    std::span<const core::ChunkSlotControl> slots,
-    std::size_t maxCount) noexcept;
+    std::span<const core::metalqueue::ResolvedPublishedSource> candidates) noexcept;
 
 }  // namespace dxmt9::render

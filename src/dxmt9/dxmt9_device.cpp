@@ -39,6 +39,14 @@ bool shouldInitializeTextureWithZero(const core::TextureDesc& desc) {
          (desc.usage & core::UsageDepthStencil) == 0u;
 }
 
+bool cpuReadyTapeDirectReplayEnabled() noexcept {
+  static const bool enabled = [] {
+    return resolveCpuReadyTapeDirectReplayEnabled(
+        std::getenv("DXMT9_CPU_READY_TAPE"));
+  }();
+  return enabled;
+}
+
 // M6 — sampled once at device init and logged so triage on a bug report
 // can immediately see which Metal counter / family features the running
 // device exposes. Cheap: ~10 selector dispatches at process start.
@@ -260,6 +268,14 @@ class DeviceImpl final : public Device {
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots) override {
     return queue_.markChunkResourcesAndCaptureBufferBindings(entries,
                                                              snapshots);
+  }
+  core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
+      std::span<const core::ChunkHandleEntry> entries,
+      std::vector<core::ChunkBufferBindingSnapshot>& snapshots) override {
+    return queue_.captureChunkBufferBindings(entries, snapshots);
+  }
+  bool supportsCpuReadyArenaReplay() const noexcept override {
+    return cpuReadyTapeDirectReplayEnabled();
   }
   bool dynamicBufferRenameEnabled() const noexcept override {
     return resources::dynamicBufferRenameEnabled();

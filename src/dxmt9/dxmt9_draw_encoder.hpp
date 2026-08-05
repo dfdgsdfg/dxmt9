@@ -221,6 +221,9 @@ struct RenderPassActionSummary {
 };
 
 struct RenderPassStoreProofLookaheadSource {
+  core::SourcePayloadView payload{};
+  // Compatibility locator for existing pure tests and legacy callers. New
+  // runtime callers provide payload directly.
   const core::ChunkSlot* slot = nullptr;
   // Optional complete, duplicate-free source-command permutation. When
   // present, firstCommandIndex / commandEndIndex are ordinal positions in
@@ -533,6 +536,9 @@ struct EncodeChunkOptions {
   // itself is call-local and must not be retained. Empty selects allocation-
   // free identity traversal of the effective replay stream.
   std::span<const EncodePartitionRangeSnapshot> partitionRanges{};
+  // Stable Tape identity used by partition snapshots independently of
+  // EncodeSession participation. Required for any published partition entry.
+  core::CpuReadyTape::SourceRef partitionSource{};
   // Optional session owner for render-pass carry candidates. When a final
   // submission is returned, the caller must transfer the session owner into the
   // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()
@@ -550,9 +556,10 @@ struct EncodeChunkOptions {
   std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
   // Call-local selected FIFO source suffix used for load/store and FrameGraph
   // lookahead proofs, and as partitionRanges' retained source table. The span
-  // points at already dequeued ReadySlotSnapshot entries and must not be
-  // retained by encodeChunk or EncodeSession.
-  std::span<const core::metalqueue::ReadySlotSnapshot> sessionLookaheadSources{};
+  // points at synchronously resolved, Represented-pinned sources and must not
+  // be retained by encodeChunk or EncodeSession.
+  std::span<const core::metalqueue::ResolvedPublishedSource>
+      sessionLookaheadSources{};
   // Optional validated source-command replay plan produced by the Frame Graph.
   // Passcoalesce supplies a complete permutation; DCE may supply an ordered
   // subset, including an empty subset when every command belongs to a proven
@@ -583,6 +590,16 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
     const core::ChunkSlot& slot,
+    EncodeChunkOptions options = {});
+
+// Common immutable source entrypoint. Arena sources use source-order identity
+// serial replay; locator partitions and cross-source lookahead remain legacy
+// ChunkSlot-only until their metadata no longer embeds ChunkSlot indices.
+std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+    EncodeContext& ctx,
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t seqId,
     EncodeChunkOptions options = {});
 
 }  // namespace encoders

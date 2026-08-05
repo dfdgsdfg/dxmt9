@@ -1182,6 +1182,15 @@ void countSyncWait(std::uint64_t nanoseconds);
 void countQueueWriterWait(std::uint64_t nanoseconds);
 void countQueueCommitWait(std::uint64_t nanoseconds);
 void countQueueSequenceWait(std::uint64_t nanoseconds);
+void recordCpuReadyTapeStats(std::uint64_t residentSources,
+                             std::uint64_t residentPages,
+                             std::uint64_t readyEntries,
+                             std::uint64_t admissionCloses,
+                             std::uint64_t admissionReopens,
+                             std::uint64_t wrapPaddingPages);
+void countCpuReadyTapeAdmissionWait(std::uint64_t nanoseconds);
+void countCpuReadyTapeLegacyOversizeBypass();
+void countCpuReadyTapeReclaimWakeup();
 void countMapBufferWait(std::uint64_t totalNanoseconds,
                         std::uint64_t mutexNanoseconds,
                         std::uint64_t sequenceNanoseconds,

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace dxmt9::render {
@@ -42,6 +43,21 @@ class IRenderBackend {
       std::size_t slotIndex,
       const core::ChunkSlot& slot,
       encoders::EncodeChunkOptions options = {}) = 0;
+  virtual std::optional<core::metalqueue::QueueSubmissionRecord> onSourceReady(
+      encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      core::SourcePayloadView payload,
+      std::uint64_t seqId,
+      encoders::EncodeChunkOptions options = {}) {
+    if (const auto* legacy = payload.legacyPayload()) {
+      return onChunkReady(ctx, slotIndex, *legacy, std::move(options));
+    }
+    // FrameGraph metadata is still ChunkSlot-indexed. Arena sources fail open
+    // to the same identity serial partition consumer until that planner also
+    // accepts SourcePayloadView.
+    return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
+                                 std::move(options));
+  }
   virtual BackendMode mode() const = 0;
   virtual BackendCaps caps() const { return {}; }
   // Opt-in queue planning seam for bounded cross-chunk proofs. The queue may

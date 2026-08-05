@@ -10,7 +10,6 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <exception>
 #include <iostream>
 #include <span>
@@ -25,6 +24,7 @@ namespace {
 using dxmt9::core::ChunkSlot;
 using dxmt9::core::FlatDrawStateRecord;
 using dxmt9::core::Handle;
+using dxmt9::core::metalqueue::ResolvedPublishedSource;
 using dxmt9::render::OpenCbCarrierPendingWaitAction;
 
 struct TestFailure : std::runtime_error {
@@ -267,7 +267,71 @@ void pendingWaitActionSubmitsOnStopOrInactiveWriter() {
           "no pending carrier never selects a pending wait action");
 }
 
+void arenaStandaloneSubmissionRetainsTapeCompletionIdentity() {
+  using namespace dxmt9::core;
+  using namespace dxmt9::core::metalqueue;
+
+  const ReadySlotSnapshot source{
+      .slotIndex = 7,
+      .seqId = 19,
+      .hasPresent = false,
+      .commandBegin = 0,
+      .commandCount = 2,
+      .sourceId = CpuReadySourceId{.index = 3, .generation = 11},
+      .storage = CpuReadyStorageRef{
+          .firstPage = 5,
+          .pageCount = 2,
+          .generation = 13,
+      },
+  };
+  QueueSubmissionRecord record{};
+  check(assignOrValidateSingleCompletionSource(
+            record, source),
+        "standalone arena submission must retain its Tape locator");
+  checkEq(record.fixedCompletionSources.size(), std::size_t{1},
+          "standalone arena submission retains exactly one source");
+  const auto& retained = record.fixedCompletionSources.entries[0];
+  check(retained.source.id == source.sourceId &&
+            retained.source.storage == source.storage &&
+            retained.slotIndex == source.slotIndex &&
+            retained.seqId == source.seqId &&
+            retained.commandCount == source.commandCount,
+        "retained completion source preserves arena identity and range");
+
+  check(assignOrValidateSingleCompletionSource(
+            record, source),
+        "already-retained standalone identity remains valid");
+  checkEq(record.fixedCompletionSources.size(), std::size_t{1},
+          "idempotent retention must not duplicate completion sources");
+
+  QueueSubmissionRecord wrongIdentity{};
+  auto wrong = completionSourceForReadySlot(source);
+  ++wrong.seqId;
+  const std::array wrongSources{wrong};
+  check(wrongIdentity.assignFixedCompletionSources(wrongSources) &&
+            !assignOrValidateSingleCompletionSource(wrongIdentity, source),
+        "nonempty standalone record must reject a mismatched locator");
+
+  QueueSubmissionRecord multiple{};
+  auto following = completionSourceForReadySlot(source);
+  ++following.seqId;
+  following.source.id.index += 1u;
+  following.source.storage.firstPage += following.source.storage.pageCount;
+  const std::array multipleSources{
+      completionSourceForReadySlot(source), following};
+  check(multiple.assignFixedCompletionSources(multipleSources) &&
+            !assignOrValidateSingleCompletionSource(multiple, source),
+        "standalone record must reject multiple completion sources");
+}
+
 void batchPrefixSelectsHeadsUpToPresentTail() {
+  auto resolve = [](ChunkSlot& slot) {
+    return ResolvedPublishedSource{
+        .payload = dxmt9::core::SourcePayloadView(slot),
+        .slot = &slot,
+        .commandCount = slot.commandCount(),
+    };
+  };
   std::array<ChunkSlot, 4> slots{};
   slots[0].appendClear({});
   slots[1].appendClear({});
@@ -275,52 +339,66 @@ void batchPrefixSelectsHeadsUpToPresentTail() {
   slots[3].appendClear({});
 
   // head, head, tail, head -> select head..tail (3 sources).
-  std::deque<std::size_t> ready{0, 1, 2, 3};
+  std::array<ResolvedPublishedSource, 4> ready{{
+      resolve(slots[0]),
+      resolve(slots[1]),
+      resolve(slots[2]),
+      resolve(slots[3]),
+  }};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              ready, std::span<const ChunkSlot>(slots.data(), slots.size()), 4),
+              ready),
           std::size_t{3},
           "prefix runs through appendable heads and closes at the tail");
 
   // Tail first -> 0 (fall back to single-source dequeue of the tail).
-  std::deque<std::size_t> tailFirst{2, 0};
+  std::array<ResolvedPublishedSource, 2> tailFirst{{
+      resolve(slots[2]),
+      resolve(slots[0]),
+  }};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              tailFirst, std::span<const ChunkSlot>(slots.data(), slots.size()), 2),
+              tailFirst),
           std::size_t{0},
           "leading present tail falls back to single-source dequeue");
 
   // Heads only, no tail visible -> select every head.
-  std::deque<std::size_t> headsOnly{0, 1, 3};
+  std::array<ResolvedPublishedSource, 3> headsOnly{{
+      resolve(slots[0]),
+      resolve(slots[1]),
+      resolve(slots[3]),
+  }};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              headsOnly, std::span<const ChunkSlot>(slots.data(), slots.size()), 3),
+              headsOnly),
           std::size_t{3},
           "session heads without a visible tail are all selected");
 
   // Capacity clamps before the tail is reached.
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              ready, std::span<const ChunkSlot>(slots.data(), slots.size()), 2),
+              std::span<const ResolvedPublishedSource>(ready.data(), 2)),
           std::size_t{2},
           "caller capacity clamps the selected prefix");
 
   // Non-head (empty) source in the prefix rejects the batch.
   std::array<ChunkSlot, 2> withEmpty{};
   withEmpty[0].appendClear({});
-  std::deque<std::size_t> emptySecond{0, 1};
+  std::array<ResolvedPublishedSource, 2> emptySecond{{
+      resolve(withEmpty[0]),
+      resolve(withEmpty[1]),
+  }};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              emptySecond,
-              std::span<const ChunkSlot>(withEmpty.data(), withEmpty.size()), 2),
+              emptySecond),
           std::size_t{0},
           "non-appendable source in the prefix falls back to single dequeue");
 
-  // Out-of-range slot index rejects the batch.
-  std::deque<std::size_t> outOfRange{9};
+  // Candidate spans carry already-resolved payload views; null rejects before
+  // the selector can inspect any external slot table.
+  std::array<ResolvedPublishedSource, 1> unresolved{};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              outOfRange, std::span<const ChunkSlot>(slots.data(), slots.size()), 1),
+              unresolved),
           std::size_t{0},
-          "out-of-range slot index falls back to single dequeue");
+          "unresolved candidate falls back to single dequeue");
 
-  std::deque<std::size_t> emptyQueue{};
   checkEq(dxmt9::render::selectOpenCbCarrierBatchPrefix(
-              emptyQueue, std::span<const ChunkSlot>(slots.data(), slots.size()), 4),
+              std::span<const ResolvedPublishedSource>{}),
           std::size_t{0}, "empty ready queue selects nothing");
 }
 
@@ -339,6 +417,7 @@ int main() {
     initializerWaitReleasesActiveRenderSessions();
     waitTransitionRecheckCoversLatchAndWaitEnd();
     pendingWaitActionSubmitsOnStopOrInactiveWriter();
+    arenaStandaloneSubmissionRetainsTapeCompletionIdentity();
     batchPrefixSelectsHeadsUpToPresentTail();
   } catch (const TestFailure& error) {
     std::cerr << "open_cb_carrier_spec failed: " << error.what() << '\n';

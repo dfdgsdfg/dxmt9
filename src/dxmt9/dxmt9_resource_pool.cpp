@@ -1008,6 +1008,31 @@ Pool::captureChunkBufferBinding(core::Handle handle) const noexcept {
   return capture;
 }
 
+CapturedBufferSnapshotStatus Pool::validateCapturedBufferSnapshot(
+    core::Handle handle,
+    const core::DrawBufferBindingSnapshot& snapshot) const noexcept {
+  if (!handle) {
+    return CapturedBufferSnapshotStatus::NotRequired;
+  }
+  auto status = CapturedBufferSnapshotStatus::Invalid;
+  bufferArena_.inspect(handle.value, [&](const BufferRecord& rec) {
+    if (!rec.hasVersionedBacking()) {
+      status = CapturedBufferSnapshotStatus::NotRequired;
+      return;
+    }
+    if (!snapshot.valid()) {
+      return;
+    }
+    for (const auto& entry : rec.renameRing) {
+      if (entry.buffer && entry.buffer.handle == snapshot.metalHandle) {
+        status = CapturedBufferSnapshotStatus::Valid;
+        return;
+      }
+    }
+  });
+  return status;
+}
+
 core::DrawBufferBindingSnapshot
 Pool::snapshotBufferBinding(core::Handle handle) const noexcept {
   return captureChunkBufferBinding(handle).snapshot;

@@ -19,6 +19,22 @@ using dxmt9::encoders::EncodePartitionRangeValidation;
 using dxmt9::encoders::EncodePartitionReplayStream;
 using dxmt9::core::DrawParam;
 
+dxmt9::core::CpuReadyTape::SourceRef testTapeSource(
+    std::size_t slotIndex,
+    std::uint64_t seqId) {
+  return {
+      .id = {
+          .index = static_cast<std::uint32_t>(slotIndex),
+          .generation = seqId,
+      },
+      .storage = {
+          .firstPage = static_cast<std::uint32_t>(slotIndex),
+          .pageCount = 1,
+          .generation = seqId,
+      },
+  };
+}
+
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
@@ -69,7 +85,7 @@ struct MixedFixture {
       count = slot.commandCount() - begin;
     }
     return dxmt9::encoders::makeEncodePartitionReplayStream(
-        4, slot, begin, count, false, {});
+        4, slot, begin, count, false, {}, {}, testTapeSource(4, slot.seqId));
   }
 
   EncodePartitionReplayStream ordered(
@@ -78,7 +94,7 @@ struct MixedFixture {
         slot.commandCount());
     return dxmt9::encoders::makeEncodePartitionReplayStream(
         4, slot, 0, slot.commandCount(), true, order,
-        replayOrdinalByCommandIndex);
+        replayOrdinalByCommandIndex, testTapeSource(4, slot.seqId));
   }
 };
 
@@ -144,6 +160,11 @@ void identityTraversesMixedSourceOrder() {
 
 void replayStreamValidProvesActiveOrderContract() {
   MixedFixture fixture;
+  const auto missingLocator =
+      dxmt9::encoders::makeEncodePartitionReplayStream(
+          4, fixture.slot, 0, fixture.slot.commandCount(), false, {});
+  check(!missingLocator.valid,
+        "replay stream rejects a missing stable Tape locator");
   auto make = [&](std::size_t commandBegin,
                   std::size_t commandCount,
                   bool commandOrderActive,
@@ -151,7 +172,8 @@ void replayStreamValidProvesActiveOrderContract() {
                   std::span<std::size_t> scratch = {}) {
     return dxmt9::encoders::makeEncodePartitionReplayStream(
         4, fixture.slot, commandBegin, commandCount,
-        commandOrderActive, commandOrder, scratch);
+        commandOrderActive, commandOrder, scratch,
+        testTapeSource(4, fixture.slot.seqId));
   };
 
   const std::array<std::uint32_t, 2> validReorder{3u, 1u};
@@ -260,7 +282,8 @@ void identityRetainsEmptyAndMalformedDrawRunsAsCommands() {
   slot.drawRunRecords[1].paramCount = 2;
 
   const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
-      3, slot, 0, slot.commandCount(), false, {});
+      3, slot, 0, slot.commandCount(), false, {}, {},
+      testTapeSource(3, slot.seqId));
   const auto ranges = identityRanges(stream);
   checkEq(ranges.size(), std::size_t{1},
           "adjacent non-encodable draw runs coalesce as commands");
@@ -449,7 +472,7 @@ void partitionBoundariesLimitCompatibleIndexedMergeCandidates() {
                      dxmt9::core::DrawUniformPayload{}, draws,
                      payloads);
   const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
-      2, slot, 0, 1, false, {});
+      2, slot, 0, 1, false, {}, {}, testTapeSource(2, slot.seqId));
   const auto identity = identityRanges(stream);
   checkEq(identity.size(), std::size_t{1},
           "merge fixture identity is one full draw range");

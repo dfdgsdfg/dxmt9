@@ -4,6 +4,7 @@
 // (state setters); both are referenced via extern "C" forward decls.
 
 #include "device_c_provider.hpp"
+#include "device_c_cpu_ready_plan.hpp"
 #include "device_c_chunk_v2_replay.hpp"
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_offload.hpp"
@@ -948,7 +949,7 @@ int32_t replayResolvedV2Chunk(
   return dxmt9::core::D3D_OK;
 }
 
-bool markResolvedV2Resources(
+bool persistResolvedV2ResourcesAndCaptureBindings(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     const dxmt9::d3d9::ImportedChunkV2View& imported) {
   auto& scratch = replayScratchArena();
@@ -994,10 +995,17 @@ bool markResolvedV2Resources(
       scratch.coreEntries.push_back({.kind = kind, .handle = handle});
     }
   }
+  raw.resourceEntries = scratch.coreEntries;
   if (auto upper = device->dev().upperDevice()) {
-    const auto captureResult =
-        upper->markChunkResourcesAndCaptureBufferBindings(
-            scratch.coreEntries, raw.bufferSnapshots);
+    raw.cpuReadyTapePlanningEnabled =
+        upper->supportsCpuReadyArenaReplay();
+    const auto captureResult = raw.cpuReadyTapePlanningEnabled
+        ? upper->captureChunkBufferBindings(raw.resourceEntries,
+                                            raw.bufferSnapshots)
+        : upper->markChunkResourcesAndCaptureBufferBindings(
+              raw.resourceEntries, raw.bufferSnapshots);
+    raw.resourcesMarkedBeforeReplay =
+        !raw.cpuReadyTapePlanningEnabled;
     raw.bufferSnapshotsCaptured =
         captureResult ==
         dxmt9::core::ChunkBufferBindingCaptureResult::Complete;
@@ -1021,6 +1029,122 @@ bool v2ChunkRequiresInlineReplay(
       });
 }
 
+bool importOwnedV2Chunk(dxmt9::d3d9::RawCommandChunk& raw,
+                        dxmt9::d3d9::ImportedChunkV2View& imported) noexcept {
+  const auto bytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
+      raw.recordBlob.size());
+  return raw.preflightValidated && raw.replaySeq != 0 &&
+         dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+             bytes,
+             dxmt9::d3d9::V2ChunkEnvelope{
+                 .version = raw.wireVersion,
+                 .recordCount = raw.recordCount,
+                 .handleCount = raw.handleCount,
+             },
+             imported) &&
+         raw.resolvedObjects.size() == imported.handles.size();
+}
+
+void markLegacyV2Resources(D9CDevice* device,
+                           dxmt9::d3d9::RawCommandChunk& raw) {
+  if (raw.resourcesMarkedBeforeReplay) {
+    return;
+  }
+  if (auto upper = device->dev().upperDevice()) {
+    upper->markChunkResources(raw.resourceEntries);
+    raw.resourcesMarkedBeforeReplay = true;
+  }
+}
+
+int32_t replayPlannedV2Chunk(D9CDevice* device,
+                             dxmt9::d3d9::RawCommandChunk& raw,
+                             bool pacedByPresentOrdinal,
+                             bool allowDirectArena) {
+  if (!raw.cpuReadyTapePlanningEnabled || !allowDirectArena) {
+    // Gate-off is the historical R-BACK-2.51(a) lane: admission already used
+    // the combined mark/capture hook before handoff and the worker performs no
+    // planning or repeated marking. A gate-on synchronous caller has no
+    // worker handoff, so mark immediately before its compatibility replay.
+    markLegacyV2Resources(device, raw);
+    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+  }
+
+  dxmt9::d3d9::ImportedChunkV2View imported;
+  if (!importOwnedV2Chunk(raw, imported)) {
+    return commitChunkFail("v2-planned-import");
+  }
+  auto upper = device->dev().upperDevice();
+  auto* queue = upper ? &upper->queue() : nullptr;
+  const auto limits = queue
+      ? queue->cpuReadyArenaPlanLimits()
+      : dxmt9::CommandQueue::CpuReadyArenaPlanLimits{};
+  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+      imported, raw.replaySeq,
+      dxmt9::d3d9::V2CpuReadyPlanOptions{
+          .pageSize = limits.pageSize == 0 ? 4096 : limits.pageSize,
+          .maxPages = limits.maxPages == 0
+                          ? std::numeric_limits<std::uint32_t>::max()
+                          : limits.maxPages,
+      });
+  switch (plan.lane) {
+  case dxmt9::d3d9::V2ReplayLane::Reject:
+    return commitChunkFail("v2-planned-reject");
+  case dxmt9::d3d9::V2ReplayLane::StateOnly:
+    // State-only chunks mutate the replay shadow exactly once but publish no
+    // GPU source and therefore consume neither a queue seq nor resource marks.
+    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+  case dxmt9::d3d9::V2ReplayLane::Legacy:
+    if (plan.reason == dxmt9::d3d9::V2ReplayReason::Oversize) {
+      dxmt9::perf::countCpuReadyTapeLegacyOversizeBypass();
+    }
+    [[fallthrough]];
+  case dxmt9::d3d9::V2ReplayLane::Inline:
+    markLegacyV2Resources(device, raw);
+    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+  case dxmt9::d3d9::V2ReplayLane::DirectArenaCandidate:
+    break;
+  }
+
+  if (!queue || !plan.layout.has_value()) {
+    // No D3D semantics have run yet, so a stub/non-production backend may
+    // still use the compatibility lane without duplication.
+    markLegacyV2Resources(device, raw);
+    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+  }
+
+  dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
+  while (true) {
+    begin = queue->beginCpuReadyArenaSource(plan.rawOrdinal, *plan.layout);
+    if (begin.status !=
+        dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
+      break;
+    }
+    if (!queue->waitForCpuReadyArenaAdmission(*plan.layout)) {
+      return commitChunkFail("v2-arena-pressure-stopped");
+    }
+  }
+  if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
+      !begin.has_value()) {
+    // Oversize was classified by the structural planner. Any remaining
+    // admission failure is queue terminal/corruption, not a legacy fallback.
+    return commitChunkFail("v2-arena-admission");
+  }
+
+  auto lease = std::move(*begin);
+  const int32_t hr = replayResolvedV2Chunk(
+      device, raw, pacedByPresentOrdinal);
+  if (failed(hr)) {
+    // Lease destruction performs the two-phase fail-stop abort. Replaying the
+    // raw chunk through Legacy here would duplicate already-applied semantics.
+    return hr;
+  }
+  if (!lease.publish(raw.resourceEntries)) {
+    return commitChunkFail("v2-arena-publish");
+  }
+  return dxmt9::core::D3D_OK;
+}
+
 }  // namespace
 
 // Runs on the ReplayOffloadWorker thread. V2 admission has already validated
@@ -1033,8 +1157,9 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     return commitChunkFail("offload-unsupported-wire-version");
   }
   const auto replayCpuStart = std::chrono::steady_clock::now();
-  const int32_t hr = replayResolvedV2Chunk(
-      d, chunk, /*pacedByPresentOrdinal=*/true);
+  const int32_t hr = replayPlannedV2Chunk(
+      d, chunk, /*pacedByPresentOrdinal=*/true,
+      /*allowDirectArena=*/true);
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   if (failed(hr)) {
     dxmt9::perf::countCommandChunkV2Reject();
@@ -1127,7 +1252,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       return commitChunkFail("v2-owned-preflight-view");
     }
     CommitChunkPhaseTimer markPhase(phaseSplit);
-    const bool resourcesMarked = markResolvedV2Resources(d, raw, imported);
+    const bool resourcesMarked =
+        persistResolvedV2ResourcesAndCaptureBindings(d, raw, imported);
     markPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCpuTime);
     if (!resourcesMarked) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -1218,8 +1344,9 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       dxmt9::perf::countCommandChunkV2Reject();
       return commitChunkFail("v2-replay-ledger-stopped-inline");
     }
-    const int32_t hr = replayResolvedV2Chunk(
-        d, raw, /*pacedByPresentOrdinal=*/false);
+    const int32_t hr = replayPlannedV2Chunk(
+        d, raw, /*pacedByPresentOrdinal=*/false,
+        /*allowDirectArena=*/false);
     if (!failed(hr)) {
       d->replayDrainLedger.publishReplayed(raw);
     } else {

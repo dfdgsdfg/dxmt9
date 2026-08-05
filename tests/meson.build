@@ -4,7 +4,7 @@ dxmt9_native_test_env = environment()
 # asserts nothing. Pinning this off means a leaked shell/CI variable cannot
 # silently re-baseline pe_producer_differential_spec's certification.
 dxmt9_native_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
-dxmt9_native_test_env_vars = []
+dxmt9_native_test_env_vars = ['DXMT9_UPDATE_PE_PRODUCER_GOLDEN=0']
 if host_machine.system() == 'darwin'
   dxmt9_test_link_args += meson.get_compiler('cpp').get_supported_link_arguments([
     '-Wl,-no_warn_duplicate_libraries',
@@ -178,6 +178,10 @@ test('dxmt9-run-d3d9-conformance', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-cpu-ready-tape-release-contract', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_cpu_ready_tape_release_contract.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'])
 test('dxmt9-run-experiment-wsi-acquisition', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_wsi_layer_acquisition_extract.py')],
      workdir: meson.project_source_root(),

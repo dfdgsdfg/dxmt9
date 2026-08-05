@@ -13,9 +13,10 @@ struct EncodeContext;
 struct EncodeChunkSessionState;
 
 // Stable identity for one source retained by an encode session. The ordinal
-// selects the source within the retained table; slotIndex + seqId reject a
-// stale ordinal after queue-slot reuse.
+// selects the source within the retained table; Tape source/storage generations
+// plus seqId reject a stale ordinal after temporary-control reuse.
 struct RetainedEncodeSourceLocator {
+  core::CpuReadyTape::SourceRef tapeSource{};
   std::uint32_t sourceOrdinal = 0;
   std::uint32_t slotIndex = 0;
   std::uint64_t seqId = 0;
@@ -78,13 +79,13 @@ struct EncodePartitionRangeSnapshot {
 
 static_assert(std::is_trivially_copyable_v<RetainedEncodeSourceLocator>);
 static_assert(std::is_standard_layout_v<RetainedEncodeSourceLocator>);
-static_assert(sizeof(RetainedEncodeSourceLocator) == 16);
+static_assert(sizeof(RetainedEncodeSourceLocator) == 48);
 static_assert(std::is_trivially_copyable_v<EncodePartitionEntrySnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionEntrySnapshot>);
-static_assert(sizeof(EncodePartitionEntrySnapshot) == 64);
+static_assert(sizeof(EncodePartitionEntrySnapshot) == 96);
 static_assert(std::is_trivially_copyable_v<EncodePartitionRangeSnapshot>);
 static_assert(std::is_standard_layout_v<EncodePartitionRangeSnapshot>);
-static_assert(sizeof(EncodePartitionRangeSnapshot) == 80);
+static_assert(sizeof(EncodePartitionRangeSnapshot) == 112);
 
 struct EncodeChunkSessionDeleter {
   void operator()(EncodeChunkSessionState* session) const noexcept;

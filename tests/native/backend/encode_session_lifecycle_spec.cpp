@@ -206,11 +206,25 @@ dxmt9::encoders::EncodeChunkOptions deferredOptions(
     dxmt9::encoders::EncodeChunkSessionState& session,
     WMT::Reference<WMT::CommandBuffer> commandBuffer,
     dxmt9::core::metalqueue::QueueCompletionSource source) {
+  if (!source.source.valid()) {
+    source.source = dxmt9::core::CpuReadyTape::SourceRef{
+        .id = {
+            .index = static_cast<std::uint32_t>(source.slotIndex),
+            .generation = source.seqId,
+        },
+        .storage = {
+            .firstPage = static_cast<std::uint32_t>(source.slotIndex),
+            .pageCount = 1,
+            .generation = source.seqId,
+        },
+    };
+  }
   dxmt9::encoders::EncodeChunkOptions options{};
   options.commandBuffer = std::move(commandBuffer);
   options.session = &session;
   options.deferSessionFinalization = true;
   options.sessionSource = source;
+  options.partitionSource = source.source;
   return options;
 }
 
@@ -222,6 +236,17 @@ dxmt9::core::metalqueue::QueueCompletionSource partitionSource(
     std::size_t slotIndex,
     std::uint64_t seqId) {
   return dxmt9::core::metalqueue::QueueCompletionSource{
+      .source = {
+          .id = {
+              .index = static_cast<std::uint32_t>(slotIndex),
+              .generation = seqId,
+          },
+          .storage = {
+              .firstPage = static_cast<std::uint32_t>(slotIndex),
+              .pageCount = 1,
+              .generation = seqId,
+          },
+      },
       .slotIndex = slotIndex,
       .seqId = seqId,
       .hasPresent = false,
@@ -300,7 +325,8 @@ std::vector<dxmt9::encoders::EncodePartitionRangeSnapshot> makeDrawRanges(
     const dxmt9::core::ChunkSlot& slot,
     std::span<const std::pair<std::uint32_t, std::uint32_t>> subranges) {
   const auto stream = dxmt9::encoders::makeEncodePartitionReplayStream(
-      slotIndex, slot, kPartitionCommandIndex, 1u, false, {});
+      slotIndex, slot, kPartitionCommandIndex, 1u, false, {}, {},
+      partitionSource(slotIndex, slot.seqId).source);
   check(stream.valid, "DrawRun fixture replay stream is valid");
   const std::uint32_t firstParam =
       slot.commandAt(kPartitionCommandIndex).drawRunRecord->firstParam;
@@ -510,6 +536,14 @@ void finalizerValidationFailureIsNoMutationAndRetryable() {
   const std::array<dxmt9::core::metalqueue::QueueCompletionSource, 1>
       mismatchedSources{
           dxmt9::core::metalqueue::QueueCompletionSource{
+              .source = {
+                  .id = {.index = 9, .generation = 99},
+                  .storage = {
+                      .firstPage = 9,
+                      .pageCount = 1,
+                      .generation = 99,
+                  },
+              },
               .slotIndex = 99,
               .seqId = 99,
               .hasPresent = false,
@@ -576,6 +610,150 @@ void finalizerValidationFailureIsNoMutationAndRetryable() {
         "successful retry clears deferred session payload");
 }
 
+void finalizerRejectsSourceAndStorageGenerationMismatches() {
+  Harness harness;
+  auto ctx = harness.makeContext();
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 57;
+  slot.appendClear({});
+  const dxmt9::core::metalqueue::QueueCompletionSource source{
+      .source = {
+          .id = {.index = 2, .generation = 7},
+          .storage = {.firstPage = 3, .pageCount = 1, .generation = 11},
+      },
+      .slotIndex = 4,
+      .seqId = slot.seqId,
+      .hasPresent = false,
+      .commandBegin = 0,
+      .commandCount = 1,
+  };
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, source.slotIndex, slot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("encode-session-locator-cb-token"),
+          source));
+  check(submission.has_value(), "locator mismatch fixture encode succeeds");
+
+  auto mismatched = source;
+  ++mismatched.source.id.generation;
+  const std::array sourceGenerationMismatch{mismatched};
+  check(submission->assignFixedCompletionSources(sourceGenerationMismatch),
+        "fixture installs source-generation mismatch");
+  check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "same slot/seq/range with a different source generation is rejected");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "source-generation rejection preserves session ownership");
+
+  mismatched = source;
+  ++mismatched.source.storage.generation;
+  const std::array storageGenerationMismatch{mismatched};
+  submission->fixedCompletionSources.clear();
+  check(submission->assignFixedCompletionSources(storageGenerationMismatch),
+        "fixture installs storage-generation mismatch");
+  check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "same slot/seq/range with a different storage generation is rejected");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "storage-generation rejection preserves session ownership");
+
+  submission->fixedCompletionSources.clear();
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "clearing the mismatched record permits locator-correct publication");
+  check(submission->explicitCompletionSourceSpan().front().source ==
+            source.source,
+        "successful finalization publishes the full source locator");
+}
+
+void encodeChunkRejectsPartitionAndSessionLocatorMismatchBeforeEffects() {
+  Harness harness;
+  auto ctx = harness.makeContext();
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 58;
+  slot.appendClear({});
+  const auto source = partitionSource(4, slot.seqId);
+  auto options = deferredOptions(
+      *session,
+      retainedToken<WMT::CommandBuffer>("partition-source-mismatch-cb-token"),
+      source);
+  ++options.partitionSource.storage.generation;
+
+  const auto submission = dxmt9::encoders::encodeChunk(
+      ctx, source.slotIndex, slot, std::move(options));
+  check(!submission.has_value(),
+        "valid but different partition/session storage generation rejects encode");
+  check(dxmt9::encoders::encodeChunkSessionSources(*session).empty(),
+        "locator mismatch appends no session completion source");
+  check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session) &&
+            !dxmt9::encoders::encodeChunkSessionHasDeferredSubmissionPayload(
+                *session),
+        "locator mismatch is rejected before EncodeSession or Metal effects");
+}
+
+void arenaSourcePayloadExecutesThroughIdentitySerialEncodeChunk() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{
+                   retainedToken<WMT::RenderCommandEncoder>(
+                       "arena-source-render-encoder").handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+
+  dxmt9::core::SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  capacity.clearRects = 2;
+  const auto layout = dxmt9::core::makeSourcePayloadLayout(
+      capacity, 4096, 2);
+  check(layout.has_value(), "arena clear layout is representable");
+  std::vector<std::byte> memory(layout->usedBytes);
+  dxmt9::core::ArenaSourcePayloadBlock block;
+  dxmt9::core::ArenaSourcePayloadBuilder builder(
+      block, *layout, std::span<std::byte>(memory));
+  check(builder.good(), "arena clear builder binds final storage");
+
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  clear.rects = {
+      {.left = 1, .top = 2, .right = 11, .bottom = 12},
+      {.left = 21, .top = 22, .right = 31, .bottom = 32},
+  };
+  check(builder.tryAppendClearCommand(clear) && builder.publish(),
+        "arena multi-rect clear publishes");
+  const dxmt9::core::SourcePayloadView payload(block);
+  const auto sourceCommand = payload.commandAt(0);
+  check(sourceCommand.clear.has_value() &&
+            sourceCommand.clear->rects.size() == 2,
+        "arena clear exposes its borrowed rect span");
+  const auto* rectStorage = sourceCommand.clear->rects.data();
+
+  dxmt9::encoders::EncodeChunkOptions options{};
+  options.commandBuffer = retainedToken<WMT::CommandBuffer>(
+      "arena-source-command-buffer");
+  options.partitionSource = dxmt9::core::CpuReadyTape::SourceRef{
+      .id = {.index = 3, .generation = 7},
+      .storage = {.firstPage = 5, .pageCount = 1, .generation = 9},
+  };
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, 6, payload, 71, std::move(options));
+  check(submission.has_value(),
+        "arena SourcePayloadView produces a serial submission");
+  checkEq(submission->seqId, std::uint64_t{71},
+          "arena serial submission retains source seq");
+  checkEq(capture.splitPolicyCalls, std::size_t{1},
+          "arena clear command executes exactly once");
+  check(payload.commandAt(0).clear->rects.data() == rectStorage,
+        "arena multi-rect clear remains backed by source storage");
+}
+
 void explicitDrawRunSubrangesExecuteThroughEncodeChunk() {
   const std::array<std::pair<std::uint32_t, std::uint32_t>, 2> twoSubranges{
       std::pair{0u, 2u},
@@ -607,6 +785,7 @@ void explicitDrawRunSubrangesExecuteThroughEncodeChunk() {
         retainedToken<WMT::CommandBuffer>("partition-command-buffer");
     options.partitionRanges = ranges;
     options.sessionSource = partitionSource(slotIndex, slot.seqId);
+    options.partitionSource = options.sessionSource->source;
     auto submission = dxmt9::encoders::encodeChunk(
         ctx, slotIndex, slot, std::move(options));
     check(submission.has_value(),
@@ -640,6 +819,7 @@ void invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects() {
       retainedToken<WMT::CommandBuffer>("fallback-command-buffer");
   options.partitionRanges = ranges;
   options.sessionSource = partitionSource(slotIndex, slot.seqId);
+  options.partitionSource = options.sessionSource->source;
   auto submission = dxmt9::encoders::encodeChunk(
       ctx, slotIndex, slot, std::move(options));
   check(submission.has_value(),
@@ -777,6 +957,9 @@ int main() {
   try {
     encodeChunkThenFinalizerPublishesAndResetsOneSession();
     finalizerValidationFailureIsNoMutationAndRetryable();
+    finalizerRejectsSourceAndStorageGenerationMismatches();
+    encodeChunkRejectsPartitionAndSessionLocatorMismatchBeforeEffects();
+    arenaSourcePayloadExecutesThroughIdentitySerialEncodeChunk();
     explicitDrawRunSubrangesExecuteThroughEncodeChunk();
     invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects();
     explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer();
