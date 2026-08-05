@@ -79,6 +79,8 @@ CpuReadyTapeConfig {
   maxPagesPerPayloadSegment, maxPayloadSegmentsPerSource, maxPagesPerSource
   maxRetainedHandlesPerSource
   maxSessionSources, maxSessionPages, maxSessionBytes, maxSessionDraws
+  maxDirectReservationFootprint[dimension]
+  successorHeadroom[dimension]
   highWater[dimension], lowWater[dimension]
 }
 ```
@@ -87,9 +89,13 @@ Every value is immutable after queue creation. For every bounded dimension,
 `0 <= lowWater < highWater <= hardCapacity`; all derived products and byte
 ranges are overflow-checked before allocation or reservation. Exact defaults
 are policy, but the configured values and rejected invalid configurations are
-observable. The default-off compatibility profile and the opt-in streaming
-profile may choose different aggregate page capacities while retaining the
-same source, Ready, compatibility-payload, and per-source bounds; selecting a
+observable. For every admission dimension,
+`maxSessionFootprint + successorHeadroom <= highWater`, and
+`successorHeadroom >= maxDirectReservationFootprint`. The reservation footprint
+includes deterministic circular-wrap padding and every descriptor or ticket
+charged by construction, not only used payload pages. The default-off
+compatibility profile and the opt-in streaming profile may choose different
+aggregate capacities while retaining the same semantic limits; selecting a
 streaming profile must not change default-off allocation or admission policy.
 
 | Region | Shape | Owner |
@@ -279,6 +285,28 @@ dimension to or below its low watermark; the same head candidate is then
 re-evaluated. This hysteresis and FIFO head-of-line rule make admission
 independent of timing and worker scheduling.
 
+Before the first source of a streaming session becomes `Represented`, the
+coordinator acquires one generation-stamped `SessionCapacityLease`. The lease
+reserves a fixed capacity vector for the maximum unsubmitted session working set
+and a separate `successorHeadroom` vector large enough for one worst-case
+ordinary Direct candidate. Submitted older sources remain charged to physical
+residency, so their presence may delay lease acquisition until reclaim; it may
+not shrink a lease or force an already-open session to submit. Acquisition
+atomically incorporates the already-resident Ready head into the lease account;
+those pages and descriptors are not double-reserved. Actual session sources
+charge the fixed source/page/byte/draw credits. Unused credits remain reserved
+until deterministic session finalization releases the admission lease; each
+submitted source's physical residency charge remains until its normal ordered
+completion and reclaim.
+
+The planner computes each candidate's complete reservation footprint before
+construction, including non-wrapping segment runs, circular-wrap padding,
+source/Ready descriptors, retention, and allocator tickets. A candidate within
+the ordinary Direct bound is admitted only from `successorHeadroom`. A larger
+candidate is classified deterministically before construction as an isolated
+bounded Arena session, ordered legacy rollback, or invalid input. It never
+borrows an open session's successor reserve.
+
 Only the replay worker waits on `cpuReadyAdmissionCv`. It waits with the
 scheduling lock released. The application may encounter the pre-existing bounded
 raw-queue pressure, but the encode coordinator, finish thread, Presenter, and
@@ -292,13 +320,14 @@ A capacity wait cannot own a resource needed by completion. In particular:
 - submitted sources and completion records do not require free tape pages;
 - finish-thread completion and ordered reclaim do not run on the replay worker;
 - the replay worker holds no scheduling, queue, resource-pool, or raw-queue lock
-  while waiting; and
-- admission or raw-writer pressure posts an ordered session-release event, and
-  the encode coordinator submits a represented visible prefix before waiting
-  for the capacity-dependent tail.
+  while waiting;
+- a session opens only after its fixed lease is available; and
+- live admission or raw-writer pressure may wake a progress re-evaluation but
+  cannot post a release event or choose a submission boundary.
 
-Temporary pressure therefore delays new publication but cannot delay the
-completion/reclaim transition that clears it.
+Temporary pressure therefore delays lease acquisition or new publication but
+cannot delay the completion/reclaim transition that clears it and cannot alter
+the session grouping produced from identical source summaries and configuration.
 
 ### 3.4 Scoped Replay Drain
 
@@ -387,8 +416,8 @@ RenderContinuationCompatible(activePass, sourceEntrySummary)
 `SessionAdmissionCompatible` requires a sealed generation-valid source, the
 next FIFO `sourceOrdinal`, a strictly increasing order-isomorphic `seqId` with
 no intervening independent queue work, an equal `SessionAdmissionKey`, no prior
-Present in the session, and available fixed session
-source/page/byte/draw/command-buffer caps. Reset, shutdown, device loss, or
+Present in the session, a valid session capacity lease, and available fixed
+session source/page/byte/draw/command-buffer credits. Reset, shutdown, device loss, or
 global observation that requires independent submission rejects admission. It
 does not require the current render pass to continue. An admitted source may
 close one pass and start another inside the same session and command-buffer
@@ -503,30 +532,37 @@ SessionReleaseEvent { reason, fenceRawOrdinal, fenceSeqId }
 ```
 
 Explicit API and semantic events are ordinary ordered raw control records, so
-their fences inherit FIFO order without another unbounded queue. The two events
-that can arise when the raw path itself cannot advance use fixed queue-owned
-coalescing latches: `admissionPressureRelease` fences immediately before the
-capacity-blocked candidate, and `rawWriterPressureRelease` fences at the last
-accepted raw ordinal. Posting either latch allocates nothing and never waits.
-The coordinator clears a latch only after the fenced prefix is submitted or
-proved empty. Device-loss and shutdown use the accepted-work watermark as their
+their fences inherit FIFO order without another unbounded queue. Fixed-cap
+events use one queue-owned coalescing latch per session: `sessionCapRelease`
+fences immediately before the first candidate that would exceed a configured
+session credit. Posting the latch allocates nothing and never waits. The
+coordinator clears it only after the deterministic predecessor prefix is
+submitted or proved empty. Admission and raw-writer pressure have wake latches
+for progress re-evaluation only; they carry no release fence and cannot finalize
+a session. Device-loss and shutdown use the accepted-work watermark as their
 terminal fence.
 
 The reasons are Present, explicit Flush, direct observation/readback, producer
-wait for a covered sequence, admission or raw-writer capacity dependency, fixed
-session cap, semantic independent-submission boundary, orderly shutdown, and
-device loss. The event is ordered with raw work; it cannot finalize before all
-older admissible sources reach the session or a preceding semantic/capacity
-boundary is established. Admission pressure posts the event before the replay
-worker waits, and a writer-capacity event is posted before the producer depends
-on encode/submit progress. This prevents an open session from withholding the
-completion needed to release its own producer or storage pressure.
+wait for a covered sequence, fixed session cap, semantic independent-submission
+boundary, orderly shutdown, and device loss. The event is ordered with raw work;
+it cannot finalize before all older admissible sources reach the session or a
+preceding semantic or fixed-cap boundary is established. The session capacity
+lease prevents an open session from withholding the storage needed for its next
+ordinary candidate. If older submitted residency prevents acquiring a new
+lease, replay waits for reclaim before opening that session; it does not submit
+another session based on current occupancy.
 
 A ready source rejected by `SessionAdmissionCompatible` remains `Ready` and
 posts the corresponding fixed-cap or semantic independent-submission event at
 the predecessor fence. A `RenderContinuationCompatible` rejection closes only
 the active pass and does not post a session-release event unless the exact
 command also requires an independent submission.
+
+Fixed-cap selection is a pure function of the configured credit vector and the
+ordered source summaries. GPU progress can change only the wait before lease
+acquisition. It cannot change the selected predecessor prefix. A first source
+that exceeds the ordinary Direct footprint follows its preselected isolated or
+rollback disposition rather than creating a pressure release.
 
 Timeout, elapsed or spin budget, completion-wait/GPU state, and worker-arrival
 timing are not release inputs. Consequently identical logical records and fixed
@@ -692,6 +728,9 @@ Required scheduling counters include:
 - admission wait time/count, head candidate dimensions, wrap padding,
   payload reserved/used/slack bytes, segments per source, jumbo records/pages,
   pre-seal rollback, legacy oversize bypass, and stale-generation rejection;
+- session-lease current/peak/denial and wait, reserved/used/slack credits by
+  dimension, successor-headroom current/minimum, isolated-source reason, and
+  deterministic session-cap releases by limiting dimension;
 - state-transition counts for Writing, Sealed, Aborted, Ready, Represented,
   restored, Submitted, Completed, Reclaiming, and Reclaimed;
 - unsubmitted session current/peak occupancy, admitted sources/bytes/draws,
@@ -708,6 +747,8 @@ Required scheduling counters include:
 
 Promotion uses the ordered gates in `R-BACK-2.50`. Moving a wait between
 counters or saturating a new bounded queue is not overlap progress.
+`admissionPressureRelease` and `rawWriterPressureRelease` are forbidden steady-
+state release reasons; any nonzero pressure-created release fails promotion.
 `DXMT9_CPU_READY_TAPE` remains default off and the payload-owning legacy lane
 remains available until those gates pass. Treating the Arena as unconditional
 or deleting rollback is a promotion decision, not a storage-only refactor.
@@ -719,7 +760,7 @@ or deleting rollback is a promotion decision, not a storage-only refactor.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | missing `CpuReadySessionProgress` model plus fake actors covering high/low hysteresis, replay-only admission wait, producer-quiescent session parking, ordered progress-event release, finish wake, shutdown, and no progress cycle |
+| CPU-ready admission and session progress | missing `CpuReadySessionProgress` model plus fake actors covering high/low hysteresis, replay-only admission wait, fixed session-lease acquisition, successor reserve, deterministic cap selection, completion-schedule-independent grouping, finish wake, shutdown, and no progress cycle |
 | Pass streaming | extend the existing lifecycle spec for admission-vs-render predicates, head-stable frontier, cross-source active-pass continuation, suffix-stays-Ready selection, ordered control dispositions, event-driven non-present release, producer-quiescent parking, and Arena Present-tail ownership |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |

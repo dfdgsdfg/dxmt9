@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50` and `R-BACK-2.57`
-through `R-BACK-2.64` are authoritative here.
+through `R-BACK-2.65` are authoritative here.
 
 ## 1. Producer / Encode Overlap
 
@@ -129,18 +129,21 @@ boundaries are non-boundaries.
 producer quiescence, but must submit its represented prefix when an ordered
 event creates a D3D-visible or queue-progress obligation: a Present tail,
 explicit Flush, direct observation or readback, producer wait for a covered
-`seqId`, source-admission or raw-writer capacity dependency, a fixed
-source/byte/draw/command-buffer cap, a semantic independent-submission boundary,
-orderly shutdown, or device loss. Each event carries an ordered fence and must
-not overtake older raw or CPU-ready work. Wallclock timeout, spin count,
-completion-wait/GPU state, ready-snapshot exhaustion, and worker-arrival timing
-are forbidden release inputs. At release the session must submit normally or
-prove that no source was consumed; it must not inline-complete unsubmitted
-visible work or attach a present token to a non-present prefix. Snapshot entries
-beyond the maximal compatible prefix remain in `Ready` FIFO order and never
-enter a snapshot-owned lifecycle state. A represented prefix rolled back before
-any Metal side effect from that newly represented batch must return ahead of
-every younger source; an older already-emitted session prefix is never rewound.
+`seqId`, a deterministic fixed source/page/byte/draw/command-buffer session cap,
+a semantic independent-submission boundary, orderly shutdown, or device loss.
+Each event carries an ordered fence and must not overtake older raw or CPU-ready
+work. Wallclock timeout, spin count, completion-wait/GPU state, live admission or
+raw-writer pressure, ready-snapshot exhaustion, and worker-arrival timing are
+forbidden release inputs. Capacity pressure may delay session opening or source
+publication, and may wake the coordinator to process an already-established
+semantic or fixed-cap event, but must not invent a submission boundary. At
+release the session must submit normally or prove that no source was consumed;
+it must not inline-complete unsubmitted visible work or attach a present token
+to a non-present prefix. Snapshot entries beyond the maximal compatible prefix
+remain in `Ready` FIFO order and never enter a snapshot-owned lifecycle state. A
+represented prefix rolled back before any Metal side effect from that newly
+represented batch must return ahead of every younger source; an older
+already-emitted session prefix is never rewound.
 
 **R-BACK-2.45** Session storage must remain data-oriented: fixed-size values,
 small inline arrays, queue-owned arenas, and bounded spans or views. It must not
@@ -286,17 +289,17 @@ wait for tape admission; the encode
 coordinator may park an open session for future publication but must never wait
 while holding the scheduling lock or for free capacity after a release event
 from `R-BACK-2.44`; the finish thread never waits for publication or capacity.
-Admission pressure publishes the corresponding ordered release event so a
-represented prefix is submitted before that prefix can participate in a
-capacity/completion cycle. Reclaim by the finish thread is the normal admission
-wake-up owner and must be able to acquire the tape metadata lock and release
-pages even while the replay worker is blocked. A source that exceeds the total
-page or segment-count limit, or a jumbo record that exceeds the total source
-limit, must use the ordered legacy one-source rollback path or fail the
-already-invalid oversized input; temporary pressure must not create a second payload copy, reorder
-sources, or hide a represented prefix. Current/peak occupancy, high-water hits,
-admission wait, segment/jumbo counts, bypass reason, and reclaim wakeups must be
-observable.
+Admission and session representation must obey the capacity-credit and headroom
+contract in `R-BACK-2.65`; live pressure must not submit a represented prefix or
+otherwise choose its boundary. Reclaim by the finish thread is the normal
+admission wake-up owner and must be able to acquire the tape metadata lock and
+release pages even while the replay worker is blocked. A source that exceeds
+the total page or segment-count limit, or a jumbo record that exceeds the total
+source limit, must use the ordered legacy one-source rollback path or fail the
+already-invalid oversized input; temporary pressure must not create a second
+payload copy, reorder sources, hide a represented prefix, or fragment a session.
+Current/peak occupancy, high-water hits, admission wait, segment/jumbo counts,
+bypass reason, and reclaim wakeups must be observable.
 
 **R-BACK-2.61** Direct device calls may replace a full deferred-replay drain
 with a scoped FIFO-prefix drain only when admission produced complete canonical
@@ -349,3 +352,31 @@ complete group together in source order. Load occurs only on the first logical
 segment, store or resolve only on the last, and completion publishes only after
 the joint tail. A capability-selected legacy serial fallback is mandatory; an
 already committed command buffer must never be resumed by later work.
+
+**R-BACK-2.65** CPU-ready admission must reserve deterministic headroom before
+opening an `EncodeSession`. Configuration defines a bounded capacity vector for
+one ordinary Direct source's worst-case reservation footprint, including payload
+pages, circular-wrap padding, block descriptors, source/Ready entries,
+retention, and allocator tickets. `successorHeadroom` must cover that complete
+vector. A generation-stamped session capacity lease reserves the fixed maximum
+unsubmitted session footprint plus `successorHeadroom`; a configuration whose
+sum exceeds any admission high watermark is invalid. The coordinator acquires
+the lease before representing the first session source. Residency already owned
+by Ready sources incorporated into the lease is charged once, not reserved a
+second time. Older submitted residency may delay lease acquisition or source
+publication until reclaim, but GPU completion timing must not change which
+sources share a session.
+
+Each admitted source is charged against fixed `maxSessionSources`,
+`maxSessionPages`, `maxSessionBytes`, and `maxSessionDraws` credits. If the next
+Ready source would cross any credit, the coordinator posts one ordered
+`SessionCap` event at the predecessor fence, leaves the candidate `Ready`, and
+submits exactly the deterministic predecessor prefix. A candidate larger than
+the ordinary Direct reservation footprint is classified before construction as
+an isolated bounded Arena session, ordered legacy rollback, or invalid input; it
+must not consume successor headroom or split an already-open session in response
+to current occupancy. Raw-writer or Arena admission pressure may block and wake
+progress, but is not a release reason. Promotion requires zero pressure-created
+session releases and observable lease current/peak/denial, reserved/used/slack
+credits, successor-headroom minimum, fixed-cap release reason, and isolated or
+rollback reason.

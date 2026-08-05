@@ -4,14 +4,14 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-07-19
+updated: 2026-08-05
 source: docs/perfomance/overview-3dmark05-gt2.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H232` - phase-aligned GT2 traces locate the 307ms CPU-to-display backlog in queued-GPU run-ahead, not compositor retirement; an Immediate effective latency of one halves the backlog and eliminates drawable waits with throughput inside noise.
+Latest tracked row: `H233` - a clean `0eaa0d27` / `c8d8f83d` GT2 comparison fixes the segmented-Arena regression boundary: full-arena admission pressure creates 17.16 session releases per Present and raises command buffers 5.93x.
 
 ## Start Here
 
@@ -22,6 +22,7 @@ Latest tracked row: `H232` - phase-aligned GT2 traces locate the 307ms CPU-to-di
 
 ## Recent Leaf Documents
 
+- [present-pacing-arena-admission-regression-boundary.233 - Segmented Arena Admission Turns Capacity Pressure Into Session Fragmentation](present-pacing-arena-admission-regression-boundary.233.md)
 - [present-pacing-post-defselect-cpu-attribution.05 - The Producer Thread Cannot Be Split By Image](present-pacing-post-defselect-cpu-attribution.05.md)
 - [present-pacing-drain-fence-attribution.207 - The Blocked Locks Are Mostly MANAGED](present-pacing-drain-fence-attribution.207.md)
 - [present-pacing-drain-fence-attribution.206 - One Of 84 Bridge Entry Points Owns 99.8% Of The Drain Fence](present-pacing-drain-fence-attribution.206.md)
