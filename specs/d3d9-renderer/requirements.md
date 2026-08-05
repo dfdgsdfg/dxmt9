@@ -688,6 +688,29 @@ render pass has its own ICB; cross-pass batching is the optimizer's job
 ICB instances. The selected `mesh` and `objectschedule` features without
 `gpudriven` must encode mesh dispatches through the CPU-side direct API.
 
+**R-BACK-36.5** *(Classic-draw ICB materialization lane — staged, post-partitioning.)*
+A lane may offload per-draw Metal command materialization for **unmodified
+classic draws** — no mesh conversion, no object scheduling — by recording a
+per-pass draw tape (POD descriptors carrying PSO selection, argument-buffer
+offsets, and vertex/index ranges resolved from the existing chunk-slot SoA and
+bindless address model) and populating a per-pass ICB from it: CPU-prefilled on
+the encode path first; GPU-compute-filled only after the CPU-prefilled form is
+promoted. Encoder-level dynamic state that ICB commands cannot express
+(depth/stencil state, cull mode, viewport/scissor, stencil reference, blend
+color) must partition the pass into statically pre-encoded ICB ranges with the
+state calls recorded between `executeCommandsInBuffer` calls — inside one
+render encoder, never splitting the render pass or command buffer, and never
+introducing a runtime CPU round-trip. Draws whose semantics the ICB command
+set cannot express fall back to direct encoding in source order within the
+same pass (mixed stream). PSO selection follows R-BACK-36.2; ICB scope follows
+R-BACK-36.3. Implementation must not begin before (a) a measured per-pass
+encoder-dynamic-state transition histogram on GT2 plus at least one GPU-bound
+workload establishes the ICB-expressible draw share and expected range counts,
+and (b) the partition track (`R-BACK-2.62`–`2.63`) is either promoted or
+measured to its ceiling. A deterministic ICB-content verification seam is a
+promotion precondition, and the R-BACK-2.50 gate order (mechanism →
+visual/locality → FPS) applies.
+
 ---
 
 ## 8. Bindless Infrastructure

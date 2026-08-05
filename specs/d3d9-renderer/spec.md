@@ -1228,6 +1228,35 @@ argbuf and constant buffers bound by the linearizer are visible inside
 indirect commands. `inheritPipelineState` is set by the mode choice in
 §10.2.
 
+### 10.4 Staged classic-draw materialization lane (R-BACK-36.5)
+
+The mesh/objectschedule ladder above is the full modern path. R-BACK-36.5
+stages a shallower lane that keeps classic draws and offloads only the
+per-draw Metal materialization cost. Its design shape, for when its
+prerequisites are met:
+
+```
+[render pass open]                       — CPU, session/boundary logic unchanged
+  executeCommandsInBuffer(icb, range A)  — expressible draw era
+  setDepthStencilState(...)              — statically pre-encoded state call
+  executeCommandsInBuffer(icb, range B)  — next era
+  <direct-encoded draws>                 — non-expressible fallback, source order
+[render pass close]
+```
+
+The tape is a per-pass array of POD draw descriptors resolved from
+queue-owned slot storage (`drawParams`, uniform/argbuf offsets, prefetched
+PSO handles per the R-BACK-2.59 prefetch-memo carve-out) — the same data the
+serial encoder consumes today, reformatted with GPU-resolvable addresses via
+the §9 bindless model. Range boundaries are known at CPU encode time from
+the tape, so the state sandwich is fully pre-encoded: no runtime CPU
+round-trip, no pass or command-buffer split (the failure shape measured as
+CB +127% in the tape-integration experiment must not recur here). Pass
+structure, hazard splits, clear folding, present, PSO compilation, and
+residency declaration remain CPU-owned. The prerequisite measurement
+(encoder-dynamic-state transition histogram) and gating are normative in
+R-BACK-36.5; this section is the design sketch only.
+
 ---
 
 ## 11. Compatibility Routing
