@@ -173,6 +173,28 @@ test('dxmt9-cpu-ready-tape-spec',
      cpu_ready_tape_spec,
      env: dxmt9_native_test_env)
 
+encode_session_admission_spec = executable(
+  'dxmt9-encode-session-admission-spec',
+  'encode_session_admission_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-encode-session-admission-spec',
+     encode_session_admission_spec)
+
+session_release_event_spec = executable(
+  'dxmt9-session-release-event-spec',
+  'session_release_event_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-session-release-event-spec',
+     session_release_event_spec)
+
 cpu_ready_plan_spec = executable(
   'dxmt9-cpu-ready-plan-spec',
   'cpu_ready_plan_spec.cpp',

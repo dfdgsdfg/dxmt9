@@ -149,10 +149,27 @@ dxmt9::core::metalqueue::ResolvedPublishedSource resolvedSource(
     std::size_t slotIndex, std::uint64_t seqId,
     dxmt9::core::SourcePayloadView payload,
     dxmt9::core::CpuReadyTape::SourceRef source) {
+  const std::size_t usedBytes =
+      dxmt9::core::measureSourcePayloadLogicalExtent(payload);
+  const dxmt9::core::CpuReadySourceMetadata metadata{
+      .rawOrdinal = seqId,
+      .sourceOrdinal = seqId,
+      .seqId = seqId,
+      .buildGeneration = source.id.generation,
+      .usedBytes = usedBytes,
+      .pageCount = source.storage.pageCount,
+  };
   return dxmt9::core::metalqueue::ResolvedPublishedSource{
       .source = source,
       .slotIndex = slotIndex,
       .seqId = seqId,
+      .metadata = metadata,
+      .semantic = dxmt9::core::summarizeSourcePayload(
+          payload,
+          dxmt9::core::SourceSemanticSummaryContext{
+              .byteCount = usedBytes,
+              .pageCount = source.storage.pageCount,
+          }),
       .payload = payload,
       .sourceId = source.id,
       .storage = source.storage,

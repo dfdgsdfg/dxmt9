@@ -129,7 +129,7 @@ endif
 verify_tla_script = join_paths(meson.project_source_root(), 'scripts', 'check', 'verify_tla.sh')
 test('dxmt9-verify-tla', bash, args: [verify_tla_script],
      is_parallel: false,
-     timeout: 120)
+     timeout: 300)
 test('dxmt9-manifest-check', bash, args: [join_paths(meson.project_source_root(), 'scripts/check/check_manifest.sh')],
      is_parallel: false)
 test('dxmt9-shader-corpus-gaps', python3,

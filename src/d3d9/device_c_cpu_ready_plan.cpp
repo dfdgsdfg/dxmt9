@@ -1,4 +1,5 @@
 #include "device_c_cpu_ready_plan.hpp"
+#include "device_c_ordered_control.hpp"
 
 #include <cstring>
 #include <limits>
@@ -54,11 +55,13 @@ bool loadFixed(const ImportedRecordV2View& record, T& out) noexcept {
 
 V2CpuReadyPlan fallback(RawOrdinal rawOrdinal,
                         V2ReplayLane lane,
-                        V2ReplayReason reason) noexcept {
+                        V2ReplayReason reason,
+                        bool containsOrderedControls = false) noexcept {
   return V2CpuReadyPlan{
       .rawOrdinal = rawOrdinal,
       .lane = lane,
       .reason = reason,
+      .containsOrderedControls = containsOrderedControls,
   };
 }
 
@@ -309,6 +312,54 @@ V2CpuReadyPlan planCpuReadyChunkV2(
                     V2ReplayReason::InvalidImportedView);
   }
 
+  // Ordered controls force whole-raw compatibility replay, but every control
+  // in the immutable stream must be structurally valid before replay applies
+  // any D3D or Metal effect. Keep this preflight allocation-free and retain
+  // only the routing fact; replay rebuilds each exact-index disposition.
+  bool containsOrderedControls = false;
+  V2ReplayLane orderedLane = V2ReplayLane::Legacy;
+  V2ReplayReason orderedReason = V2ReplayReason::Eligible;
+  for (std::size_t i = 0; i < imported.records.size(); ++i) {
+    const auto record = imported.record(i);
+    if (record.header.type != imported.records[i].type ||
+        record.payload.size() != imported.records[i].payloadSize) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::InvalidImportedView);
+    }
+
+    V2ReplayReason reason = V2ReplayReason::Eligible;
+    switch (record.header.type) {
+    case D9C_COMMAND_RECORD_QUERY_ISSUE:
+      reason = V2ReplayReason::Query;
+      break;
+    case D9C_COMMAND_RECORD_READBACK:
+      reason = V2ReplayReason::Readback;
+      break;
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+      reason = V2ReplayReason::UpdateTexture;
+      break;
+    default:
+      continue;
+    }
+    if (!makeOrderedControlDisposition(record, rawOrdinal, i)) {
+      return fallback(rawOrdinal, V2ReplayLane::Reject,
+                      V2ReplayReason::InvalidImportedView);
+    }
+    if (!containsOrderedControls) {
+      orderedReason = reason;
+    }
+    containsOrderedControls = true;
+    if (reason == V2ReplayReason::Readback) {
+      // Any synchronous observation makes the complete raw an Inline lane,
+      // even if an earlier Query first selected compatibility replay.
+      orderedLane = V2ReplayLane::Inline;
+      orderedReason = reason;
+    }
+  }
+  if (containsOrderedControls) {
+    return fallback(rawOrdinal, orderedLane, orderedReason, true);
+  }
+
   V2CpuReadyPlan plan{
       .rawOrdinal = rawOrdinal,
       .lane = V2ReplayLane::DirectArenaCandidate,
@@ -361,20 +412,6 @@ V2CpuReadyPlan planCpuReadyChunkV2(
         record.payload.size() != imported.records[i].payloadSize) {
       return fallback(rawOrdinal, V2ReplayLane::Reject,
                       V2ReplayReason::InvalidImportedView);
-    }
-
-    switch (record.header.type) {
-    case D9C_COMMAND_RECORD_QUERY_ISSUE:
-      return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                      V2ReplayReason::Query);
-    case D9C_COMMAND_RECORD_READBACK:
-      return fallback(rawOrdinal, V2ReplayLane::Inline,
-                      V2ReplayReason::Readback);
-    case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
-      return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                      V2ReplayReason::UpdateTexture);
-    default:
-      break;
     }
 
     if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {

@@ -913,6 +913,182 @@ void explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer() {
         "DrawRun finalization clears the active render pass");
 }
 
+void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner =
+      retainedToken<WMT::RenderCommandEncoder>("close-pass-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::size_t firstSlotIndex = 11u;
+  auto firstSlot = makeDrawRunSlot(75u);
+  const auto firstSource =
+      partitionSource(firstSlotIndex, firstSlot.seqId);
+  auto firstSubmission = dxmt9::encoders::encodeChunk(
+      ctx, firstSlotIndex, firstSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("close-pass-command-buffer"),
+          firstSource));
+  check(firstSubmission.has_value(),
+        "first deferred source returns its command-buffer carrier");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "first deferred source leaves a render pass active");
+  checkEq(capture.renderPassBegins, std::size_t{1},
+          "first source begins one render pass");
+  checkEq(capture.renderPassEnds, std::size_t{0},
+          "deferred source does not end its render pass");
+  const auto commandBufferHandle = firstSubmission->commandBuffer.handle;
+
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *firstSubmission) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed,
+        "ordered-control ClosePass closes an active pass");
+  check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "ClosePass clears only the active render-pass state");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "ClosePass executes the production pass-end path once");
+  checkEq(firstSubmission->commandBuffer.handle, commandBufferHandle,
+          "ClosePass preserves the command-buffer carrier");
+  check(firstSubmission->explicitCompletionSourceSpan().empty(),
+        "ClosePass does not publish completion ownership");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "ClosePass preserves retained session sources");
+
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *firstSubmission) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::NoActivePass,
+        "repeated ClosePass is an idempotent no-op");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "idempotent ClosePass does not repeat pass-end side effects");
+
+  constexpr std::size_t secondSlotIndex = 12u;
+  auto secondSlot = makeDrawRunSlot(76u);
+  const auto secondSource =
+      partitionSource(secondSlotIndex, secondSlot.seqId);
+  auto secondSubmission = dxmt9::encoders::encodeChunk(
+      ctx, secondSlotIndex, secondSlot,
+      deferredOptions(*session, std::move(firstSubmission->commandBuffer),
+                      secondSource));
+  check(secondSubmission.has_value(),
+        "session resumes encoding after an ordered-control ClosePass");
+  checkEq(secondSubmission->commandBuffer.handle, commandBufferHandle,
+          "resumed session keeps the same command-buffer chain");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "later source opens a new pass in the retained session");
+  checkEq(capture.renderPassBegins, std::size_t{2},
+          "later source begins exactly one replacement render pass");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{2},
+          "resumed session preserves ordered source ownership");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *secondSubmission),
+        "resumed session finalizes into its tail carrier");
+  checkEq(capture.renderPassEnds, std::size_t{2},
+          "finalizer ends only the resumed active pass");
+  const auto published = secondSubmission->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{2},
+          "finalizer publishes both retained sources");
+  checkEq(published[0].seqId, firstSource.seqId,
+          "finalizer preserves first source order");
+  checkEq(published[1].seqId, secondSource.seqId,
+          "finalizer preserves second source order");
+}
+
+void closePassRejectsMissingCarrierWithoutMutation() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "close-pass-rejection-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::size_t slotIndex = 13u;
+  auto slot = makeDrawRunSlot(77u);
+  const auto source = partitionSource(slotIndex, slot.seqId);
+  auto submission = dxmt9::encoders::encodeChunk(
+      ctx, slotIndex, slot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("close-pass-rejection-cb"),
+          source));
+  check(submission.has_value(),
+        "rejection fixture returns a command-buffer carrier");
+
+  dxmt9::core::metalqueue::QueueSubmissionRecord wrongCarrier{};
+  wrongCarrier.commandBuffer =
+      retainedToken<WMT::CommandBuffer>("close-pass-wrong-live-cb");
+  wrongCarrier.slotIndex = submission->slotIndex;
+  wrongCarrier.seqId = submission->seqId;
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, wrongCarrier) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::
+                InvalidCommandBufferCarrier,
+        "ClosePass rejects a different live command-buffer carrier");
+  check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, wrongCarrier),
+        "session finalizer rejects a different live command-buffer tail");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session) &&
+            capture.renderPassEnds == 0,
+        "wrong live carrier rejection is side-effect free");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "wrong live carrier preserves source ownership");
+
+  constexpr std::size_t continuationSlotIndex = 14u;
+  auto continuationSlot = makeDrawRunSlot(78u);
+  const auto continuationSource =
+      partitionSource(continuationSlotIndex, continuationSlot.seqId);
+  auto rejectedContinuation = dxmt9::encoders::encodeChunk(
+      ctx, continuationSlotIndex, continuationSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>(
+              "continuation-wrong-live-command-buffer"),
+          continuationSource));
+  check(!rejectedContinuation.has_value(),
+        "injected continuation rejects a different live command buffer");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session) &&
+            capture.renderPassEnds == 0,
+        "continuation identity rejection emits no pass-end side effects");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "continuation identity rejection does not retain its source");
+
+  auto savedCommandBuffer = std::move(submission->commandBuffer);
+
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *submission) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::
+                InvalidCommandBufferCarrier,
+        "active ClosePass rejects a missing command-buffer carrier");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "carrier rejection preserves the active pass");
+  checkEq(capture.renderPassEnds, std::size_t{0},
+          "carrier rejection has no pass-end side effects");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{1},
+          "carrier rejection preserves retained source ownership");
+
+  submission->commandBuffer = std::move(savedCommandBuffer);
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *submission) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed,
+        "ClosePass succeeds after restoring the carrier");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *submission),
+        "closed rejection fixture finalizes normally");
+}
+
 void partialCommandSegmentSessionFinalizesWithoutTargets() {
   Harness harness;
   auto ctx = harness.makeContext();
@@ -989,6 +1165,8 @@ int main() {
     explicitDrawRunSubrangesExecuteThroughEncodeChunk();
     invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects();
     explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer();
+    closePassIsIdempotentAndSessionResumesOnSameCommandBuffer();
+    closePassRejectsMissingCarrierWithoutMutation();
     partialCommandSegmentSessionFinalizesWithoutTargets();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()

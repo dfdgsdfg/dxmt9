@@ -585,7 +585,9 @@ struct QueueFixture {
   void addReadySlot(std::size_t slotIndex,
                     std::uint64_t seqId,
                     bool appendClear = false,
-                    const std::function<void(ChunkSlot&)>& beforePublish = {}) {
+                    const std::function<void(ChunkSlot&)>& beforePublish = {},
+                    std::size_t usedBytes = 0,
+                    std::uint64_t rawOrdinal = 0) {
     const auto reservation = cpuReadyTape.reserve();
     check(reservation.has_value(), "fixture reserves CPU-ready payload");
     slots[slotIndex].sourceId = reservation->id;
@@ -598,7 +600,8 @@ struct QueueFixture {
       beforePublish(*slots[slotIndex].payload);
     }
     check(cpuReadyTape.sealAndPublish(
-              reservation->ticket, seqId, seqId, slotIndex),
+              reservation->ticket, seqId, seqId, slotIndex,
+              usedBytes, rawOrdinal),
           "fixture publishes CPU-ready payload");
     slots[slotIndex].state = ChunkSlot::State::Pending;
     slots[slotIndex].seqId = seqId;
@@ -1191,6 +1194,248 @@ void dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects() {
           "fallback snapshot records whole-source begin");
   checkEq(snapshots[0].commandCount, fixture.slots[0].commandCount(),
           "fallback snapshot records command count");
+}
+
+void tentativeReadyPrefixKeepsControlsPendingAndSuffixReady() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  checkEq(fixture.controller.reserveReadySlotBatchPrefix(
+              lock, std::span<ReadySlotSnapshot>(snapshots),
+              [](std::span<const ResolvedPublishedSource>) { return 0u; }),
+          0u,
+          "transactional selector rejection leaves the Ready FIFO intact");
+  checkEq(fixture.cpuReadyTape.readyCount(), 3u,
+          "zero-prefix selection does not consume a fallback source");
+
+  const std::size_t count =
+      fixture.controller.reserveReadySlotBatchPrefix(
+          lock, std::span<ReadySlotSnapshot>(snapshots),
+          [](std::span<const ResolvedPublishedSource> candidates) {
+            checkEq(candidates.size(), 3u,
+                    "tentative selector sees the bounded Ready prefix");
+            return 2u;
+          });
+  checkEq(count, 2u, "two-source prefix is reserved tentatively");
+  check(fixture.cpuReadyTape.state(
+            snapshots[0].sourceId, snapshots[0].storage) ==
+            CpuReadyTape::State::TentativeRepresented &&
+            fixture.cpuReadyTape.state(
+                snapshots[1].sourceId, snapshots[1].storage) ==
+                CpuReadyTape::State::TentativeRepresented,
+        "selected Tape sources enter tentative representation");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending &&
+            fixture.slots[1].state == ChunkSlot::State::Pending,
+        "tentative reservation does not expose Encoding controls");
+  checkEq(fixture.cpuReadyTape.readyCount(), 1u,
+          "unselected suffix remains Ready-visible");
+  checkEq(fixture.readyControlIndex(), 2u,
+          "unselected suffix retains FIFO head identity");
+  check(fixture.controller.resolveTentativeSource(lock, snapshots[0]).valid() &&
+            fixture.controller.resolveTentativeSource(lock, snapshots[1]).valid(),
+        "pure preflight resolves exact tentative snapshots under the queue lock");
+
+  check(fixture.controller.restoreReservedReadySlotBatch(
+            lock,
+            std::span<const ReadySlotSnapshot>(snapshots.data(), count)),
+        "fixture restores tentative prefix after inspection");
+}
+
+void tentativeRestorePrecedesYoungerReadyPublication() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+
+  std::array<ReadySlotSnapshot, 2> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.reserveReadySlotBatchPrefix(
+          lock, std::span<ReadySlotSnapshot>(snapshots),
+          [](std::span<const ResolvedPublishedSource>) { return 2u; });
+  checkEq(count, 2u, "fixture reserves the older prefix");
+
+  lock.unlock();
+  fixture.addReadySlot(3, 4);
+  lock.lock();
+  check(fixture.controller.restoreReservedReadySlotBatch(
+            lock,
+            std::span<const ReadySlotSnapshot>(snapshots.data(), count)),
+        "queue restores an exact tentative prefix");
+  std::array<CpuReadyTape::ReadyEntry, 4> ready{};
+  checkEq(fixture.cpuReadyTape.copyReadyPrefix(ready), ready.size(),
+          "restored FIFO contains old prefix, suffix, and younger publication");
+  checkEq(ready[0].controlIndex, 0u, "first restored source is oldest");
+  checkEq(ready[1].controlIndex, 1u, "second restored source follows");
+  checkEq(ready[2].controlIndex, 2u, "old suffix remains after restored prefix");
+  checkEq(ready[3].controlIndex, 3u, "younger publication remains last");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending &&
+            fixture.slots[1].state == ChunkSlot::State::Pending &&
+            fixture.slots[2].state == ChunkSlot::State::Pending &&
+            fixture.slots[3].state == ChunkSlot::State::Pending,
+        "restore leaves every Ready control Pending");
+}
+
+void tentativeCommitAloneMovesExactPrefixToEncoding() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1);
+  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(2, 3);
+
+  std::array<ReadySlotSnapshot, 2> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.reserveReadySlotBatchPrefix(
+          lock, std::span<ReadySlotSnapshot>(snapshots),
+          [](std::span<const ResolvedPublishedSource>) { return 2u; });
+  checkEq(count, 2u, "fixture reserves two tentative sources");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending &&
+            fixture.slots[1].state == ChunkSlot::State::Pending,
+        "pre-commit controls remain Pending");
+  check(!fixture.controller.commitReservedReadySlotBatch(
+            lock,
+            std::span<const ReadySlotSnapshot>(snapshots.data(), 1u)),
+        "commit rejects a proper subset of the reserved prefix");
+  auto reordered = snapshots;
+  std::swap(reordered[0], reordered[1]);
+  check(!fixture.controller.commitReservedReadySlotBatch(
+            lock, std::span<const ReadySlotSnapshot>(reordered)),
+        "commit rejects reordered tentative identities");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending &&
+            fixture.slots[1].state == ChunkSlot::State::Pending,
+        "inexact commit attempts do not expose Encoding controls");
+  check(fixture.controller.commitReservedReadySlotBatch(
+            lock,
+            std::span<const ReadySlotSnapshot>(snapshots.data(), count)),
+        "exact tentative prefix commits");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding &&
+            fixture.slots[1].state == ChunkSlot::State::Encoding,
+        "commit is the only operation that exposes Encoding controls");
+  check(fixture.slots[2].state == ChunkSlot::State::Pending &&
+            fixture.cpuReadyTape.readyCount() == 1u &&
+            fixture.readyControlIndex() == 2u,
+        "commit leaves the unselected suffix Pending and Ready-visible");
+  check(fixture.controller.resolveRepresentedSource(snapshots[0]).valid() &&
+            fixture.controller.resolveRepresentedSource(snapshots[1]).valid(),
+        "committed snapshots resolve under represented lifetime");
+  check(!fixture.controller.resolveTentativeSource(lock, snapshots[0]).valid(),
+        "committed snapshot no longer resolves as tentative");
+}
+
+void tentativeQueueApisRejectUnlockedStaleAndTamperedSnapshots() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1, true, {}, 19, 11);
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count =
+      fixture.controller.reserveReadySlotBatchPrefix(
+          lock, std::span<ReadySlotSnapshot>(snapshots),
+          [](std::span<const ResolvedPublishedSource>) { return 1u; });
+  checkEq(count, 1u, "fixture reserves one tentative source");
+
+  ReadySlotSnapshot tampered = snapshots[0];
+  ++tampered.metadata.usedBytes;
+  check(!fixture.controller.resolveTentativeSource(lock, tampered).valid() &&
+            !fixture.controller.commitReservedReadySlotBatch(
+                lock, std::span<const ReadySlotSnapshot>(&tampered, 1)) &&
+            !fixture.controller.restoreReservedReadySlotBatch(
+                lock, std::span<const ReadySlotSnapshot>(&tampered, 1)),
+        "metadata tampering cannot resolve, commit, or restore a tentative source");
+
+  ReadySlotSnapshot stale = snapshots[0];
+  ++stale.storage.generation;
+  check(!fixture.controller.resolveTentativeSource(lock, stale).valid(),
+        "storage generation mismatch is rejected before payload use");
+  ReadySlotSnapshot changedRange = snapshots[0];
+  changedRange.commandCount = 0;
+  check(!fixture.controller.resolveTentativeSource(lock, changedRange).valid(),
+        "a valid but non-identical command range is not the reserved snapshot");
+  check(fixture.slots[0].state == ChunkSlot::State::Pending &&
+            fixture.cpuReadyTape.state(
+                snapshots[0].sourceId, snapshots[0].storage) ==
+                CpuReadyTape::State::TentativeRepresented,
+        "rejected snapshots leave the live tentative owner unchanged");
+
+  lock.unlock();
+  check(!fixture.controller.resolveTentativeSource(lock, snapshots[0]).valid() &&
+            !fixture.controller.commitReservedReadySlotBatch(
+                lock, std::span<const ReadySlotSnapshot>(snapshots)) &&
+            !fixture.controller.restoreReservedReadySlotBatch(
+                lock, std::span<const ReadySlotSnapshot>(snapshots)),
+        "tentative queue operations require ownership of the bound queue lock");
+  lock.lock();
+  check(fixture.controller.restoreReservedReadySlotBatch(
+            lock, std::span<const ReadySlotSnapshot>(snapshots)),
+        "exact snapshot remains restorable after rejected attempts");
+}
+
+void dequeueCarriesGenerationCheckedAdmissionMetadata() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 7, true, {}, 23, 41);
+
+  std::array<ReadySlotSnapshot, 1> snapshots{};
+  std::unique_lock lock(fixture.mutex);
+  const std::size_t count = fixture.controller.dequeueReadySlotBatch(
+      lock, std::span<ReadySlotSnapshot>(snapshots));
+  checkEq(count, 1u, "test setup dequeues one represented source");
+  const auto& metadata = snapshots[0].metadata;
+  checkEq(metadata.rawOrdinal, 41ull,
+          "snapshot preserves raw admission order");
+  checkEq(metadata.sourceOrdinal, 7ull,
+          "snapshot preserves source admission order");
+  checkEq(metadata.seqId, 7ull,
+          "snapshot preserves publication sequence identity");
+  checkEq(metadata.usedBytes, 23u,
+          "snapshot preserves the sealed storage extent");
+  checkEq(metadata.pageCount, fixture.slots[0].storage.pageCount,
+          "snapshot preserves the admitted page extent");
+  check(!metadata.strictAdmission,
+        "compatibility publication remains distinguishable from strict admission");
+  const auto& semantic = snapshots[0].semantic;
+  check(semantic.valid() && semantic.entryStable() &&
+            semantic.entryKind ==
+                dxmt9::core::SourceEntryEncoderKind::Render &&
+            semantic.firstBoundary ==
+                dxmt9::core::SourceSemanticBoundaryKind::Clear &&
+            semantic.firstBoundaryOrdinal == 0 &&
+            semantic.commandCount == 1 && semantic.drawCount == 0 &&
+            semantic.byteCount == metadata.usedBytes &&
+            semantic.pageCount == metadata.pageCount,
+        "snapshot carries the sealed source summary and exact extent");
+
+  const auto resolved =
+      fixture.controller.resolveRepresentedSource(snapshots[0]);
+  check(resolved.valid() && resolved.metadata == metadata &&
+            resolved.semantic == semantic,
+        "represented resolution revalidates immutable metadata and semantics");
+
+  ReadySlotSnapshot tampered = snapshots[0];
+  ++tampered.metadata.usedBytes;
+  check(!fixture.controller.resolveRepresentedSource(tampered).valid(),
+        "metadata mutation is rejected against the live Tape generation");
+  std::array<QueueCompletionSource, 1> retained{};
+  checkEq(fixture.controller.retainEncodedSourcesForPendingTail(
+              lock,
+              std::span<const ReadySlotSnapshot>(&tampered, 1),
+              std::span<QueueCompletionSource>(retained)),
+          0u,
+          "tampered metadata cannot be retained into completion ownership");
+  check(fixture.slots[0].state == ChunkSlot::State::Encoding,
+        "metadata rejection preserves the live encode owner");
+
+  tampered = snapshots[0];
+  ++tampered.semantic.commandCount;
+  check(!fixture.controller.resolveRepresentedSource(tampered).valid() &&
+            fixture.controller.retainEncodedSourcesForPendingTail(
+                lock,
+                std::span<const ReadySlotSnapshot>(&tampered, 1),
+                std::span<QueueCompletionSource>(retained)) == 0u,
+        "semantic mutation is rejected against the sealed Tape generation");
 }
 
 void completionSourceForReadySlotPreservesPresentMetadata() {
@@ -2412,6 +2657,11 @@ int main() {
     dequeueReadySlotBatchHonorsAppendPredicate();
     dequeueReadySlotBatchPrefixUsesCompleteSelectorCount();
     dequeueReadySlotBatchPrefixFallsBackToSingleWhenSelectorRejects();
+    tentativeReadyPrefixKeepsControlsPendingAndSuffixReady();
+    tentativeRestorePrecedesYoungerReadyPublication();
+    tentativeCommitAloneMovesExactPrefixToEncoding();
+    tentativeQueueApisRejectUnlockedStaleAndTamperedSnapshots();
+    dequeueCarriesGenerationCheckedAdmissionMetadata();
     completionSourceForReadySlotPreservesPresentMetadata();
     completionSourceForReadySlotPreservesRangeMetadata();
     retainEncodedSourcesRejectsPendingSources();

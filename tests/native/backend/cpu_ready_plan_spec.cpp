@@ -1,4 +1,5 @@
 #include "device_c_cpu_ready_plan.hpp"
+#include "device_c_ordered_control.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,15 +12,22 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
 using dxmt9::d3d9::ImportedChunkV2View;
+using dxmt9::d3d9::OrderedControlDisposition;
+using dxmt9::d3d9::OrderedControlKind;
 using dxmt9::d3d9::RawCommandChunk;
 using dxmt9::d3d9::V2ChunkEnvelope;
 using dxmt9::d3d9::V2ReplayLane;
 using dxmt9::d3d9::V2ReplayReason;
+using dxmt9::core::metalqueue::SessionReleaseAction;
+
+static_assert(std::is_trivially_copyable_v<OrderedControlDisposition>);
+static_assert(std::is_standard_layout_v<OrderedControlDisposition>);
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -341,6 +349,8 @@ void eligibleWholeRawPlanHasTypedCapacity() {
             plan.reason == V2ReplayReason::Eligible &&
             plan.logicalSource && plan.requiresAdmission() && plan.layout,
         "one whole eligible raw chunk becomes one direct arena candidate");
+  check(!plan.containsOrderedControls,
+        "an eligible Arena plan has no compatibility disposition");
   check(plan.capacity.commandHeaders == 6 &&
             plan.capacity.drawRunRecords == 1 &&
             plan.capacity.clearRecords == 1 &&
@@ -376,31 +386,36 @@ void stateOnlyRawHasNoLogicalSourceOrAdmission() {
   check(plan.lane == V2ReplayLane::StateOnly &&
             plan.reason == V2ReplayReason::Eligible &&
             !plan.logicalSource && !plan.layout &&
+            !plan.containsOrderedControls &&
             !plan.requiresAdmission() &&
             plan.replaysSemanticsExactlyOnce(),
         "state-only raw replays exactly once without source admission");
 }
 
-RecordSpec blockingRecord(std::uint32_t type) {
+RecordSpec blockingRecord(std::uint32_t type,
+                          std::uint32_t firstHandle = 0) {
   switch (type) {
   case D9C_COMMAND_RECORD_QUERY_ISSUE:
     return {
         .type = type,
         .payload = bytesOf(D9CCommandChunkWireQueryIssueV2{
-            .queryHandleIndex = 0}),
+            .queryHandleIndex = firstHandle,
+            .flags = 0x41u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_QUERY, 10)},
     };
   case D9C_COMMAND_RECORD_READBACK:
     return {
         .type = type,
-        .payload = bytesOf(D9CCommandChunkWireReadbackV2{0, 1}),
+        .payload = bytesOf(D9CCommandChunkWireReadbackV2{
+            firstHandle, firstHandle + 1u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 11),
                     handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 12)},
     };
   case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
     return {
         .type = type,
-        .payload = bytesOf(D9CCommandChunkWireUpdateTextureV2{0, 1}),
+        .payload = bytesOf(D9CCommandChunkWireUpdateTextureV2{
+            firstHandle, firstHandle + 1u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 13),
                     handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14)},
     };
@@ -417,23 +432,72 @@ void blockersSelectOneWholeRawFallbackLane() {
     std::uint32_t type;
     V2ReplayLane lane;
     V2ReplayReason reason;
+    OrderedControlKind kind;
+    SessionReleaseAction action;
+    std::uint32_t handleCount;
   };
   const std::array expected{
       Expected{D9C_COMMAND_RECORD_QUERY_ISSUE,
-               V2ReplayLane::Legacy, V2ReplayReason::Query},
+               V2ReplayLane::Legacy, V2ReplayReason::Query,
+               OrderedControlKind::Query,
+               SessionReleaseAction::ClosePass, 1},
       Expected{D9C_COMMAND_RECORD_READBACK,
-               V2ReplayLane::Inline, V2ReplayReason::Readback},
+               V2ReplayLane::Inline, V2ReplayReason::Readback,
+               OrderedControlKind::Readback,
+               SessionReleaseAction::SubmitAndWait, 2},
       Expected{D9C_COMMAND_RECORD_UPDATE_TEXTURE,
-               V2ReplayLane::Legacy, V2ReplayReason::UpdateTexture},
+               V2ReplayLane::Legacy, V2ReplayReason::UpdateTexture,
+               OrderedControlKind::UpdateTexture,
+               SessionReleaseAction::SubmitSession, 2},
   };
   for (const auto& item : expected) {
-    const std::array records{drawRecord(), blockingRecord(item.type)};
+    const std::array records{
+        drawRecord(), blockingRecord(item.type), drawRecord()};
     const auto fixture = makeValidatedFixture(records);
     const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 5);
     check(plan.lane == item.lane && plan.reason == item.reason &&
-              !plan.requiresAdmission(),
+              !plan.requiresAdmission() && plan.containsOrderedControls,
           "one blocker must route the complete raw chunk off the arena lane");
+    const auto control = dxmt9::d3d9::makeOrderedControlDisposition(
+        fixture.view().record(1), 5, 1);
+    check(control && control->valid(),
+          "the exact control descriptor rebuilds from the validated raw");
+    check(control->kind == item.kind &&
+              control->requiredReleaseAction == item.action &&
+              control->rawOrdinal == 5 && control->recordIndex == 1 &&
+              control->recordType == item.type &&
+              control->firstHandle == 0 &&
+              control->handleCount == item.handleCount &&
+              control->primaryHandleIndex == 0,
+          "the validated raw rebuilds the control's exact order and locator");
+    check((item.handleCount == 1 &&
+               control->secondaryHandleIndex ==
+                   dxmt9::d3d9::kNoOrderedControlHandleIndex &&
+               control->controlFlags == 0x41u) ||
+              (item.handleCount == 2 &&
+               control->secondaryHandleIndex == 1 &&
+               control->controlFlags == 0),
+          "control-specific locator fields preserve the validated wire form");
   }
+
+  const std::array multipleBlockers{
+      drawRecord(),
+      blockingRecord(D9C_COMMAND_RECORD_QUERY_ISSUE),
+      blockingRecord(D9C_COMMAND_RECORD_READBACK, 1),
+      drawRecord(),
+  };
+  const auto multipleFixture = makeValidatedFixture(multipleBlockers);
+  const auto multiple = dxmt9::d3d9::planCpuReadyChunkV2(
+      multipleFixture.view(), 17);
+  check(multiple.containsOrderedControls &&
+            multiple.lane == V2ReplayLane::Inline &&
+            multiple.reason == V2ReplayReason::Readback,
+        "all controls preflight and any readback selects whole-raw Inline");
+  auto invalid = *dxmt9::d3d9::makeOrderedControlDisposition(
+      multipleFixture.view().record(1), 17, 1);
+  invalid.requiredReleaseAction = SessionReleaseAction::SubmitSession;
+  check(!OrderedControlDisposition{}.valid() && !invalid.valid(),
+        "default and action-mismatched dispositions are structurally invalid");
 
   const D9CCommandChunkWireRecordHeaderV2 unknownHeader{
       .type = 0xffff,
@@ -446,6 +510,7 @@ void blockersSelectOneWholeRawFallbackLane() {
       dxmt9::d3d9::planCpuReadyChunkV2(unknown, 6);
   check(unknownPlan.lane == V2ReplayLane::Reject &&
             unknownPlan.reason == V2ReplayReason::UnknownRecord &&
+            !unknownPlan.containsOrderedControls &&
             !unknownPlan.replaysSemanticsExactlyOnce(),
         "defensive unknown records reject rather than replay through legacy");
 }
@@ -683,6 +748,7 @@ void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
       beforeDrawFixture.view(), 25);
   check(beforeDraw.lane == V2ReplayLane::Legacy &&
             beforeDraw.reason == V2ReplayReason::Present &&
+            !beforeDraw.containsOrderedControls &&
             beforeDraw.replaysSemanticsExactlyOnce(),
         "Present before later work falls back as one ordered legacy source");
 
@@ -695,6 +761,7 @@ void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
       repeatedFixture.view(), 26);
   check(repeated.lane == V2ReplayLane::Legacy &&
             repeated.reason == V2ReplayReason::Present &&
+            !repeated.containsOrderedControls &&
             repeated.replaysSemanticsExactlyOnce(),
         "multiple Present records fall back as one ordered legacy source");
 }
@@ -722,7 +789,7 @@ void oversizeAndOverflowFallbackBeforeReplay() {
        .maxPages = 1});
   check(oversize.lane == V2ReplayLane::Legacy &&
             oversize.reason == V2ReplayReason::Oversize &&
-            !oversize.layout,
+            !oversize.layout && !oversize.containsOrderedControls,
         "a valid plan beyond the configured page lane falls back pre-replay");
 
   std::array<D9CCommandChunkWireClearV2, 2> clears{{
@@ -747,7 +814,8 @@ void oversizeAndOverflowFallbackBeforeReplay() {
       dxmt9::d3d9::planCpuReadyChunkV2(arithmeticFixture, 13);
   check(overflow.lane == V2ReplayLane::Reject &&
             overflow.reason == V2ReplayReason::StructuralOverflow &&
-            !overflow.layout && !overflow.replaysSemanticsExactlyOnce(),
+            !overflow.layout && !overflow.containsOrderedControls &&
+            !overflow.replaysSemanticsExactlyOnce(),
         "u32 capacity overflow rejects before semantic replay");
 
 }

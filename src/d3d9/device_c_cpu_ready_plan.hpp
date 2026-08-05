@@ -52,6 +52,12 @@ struct V2CpuReadyPlan {
              core::kMaxArenaSourcePayloadSegments> segments{};
   std::size_t segmentCount = 0;
   std::optional<core::ArenaSourcePayloadLayout> arenaLayout{};
+  // True when the complete raw stream contains at least one structurally
+  // validated Query, Readback, or UpdateTexture. The plan intentionally does
+  // not retain a variable-size disposition list: compatibility replay rebuilds
+  // each allocation-free descriptor at its exact record index after this
+  // whole-raw preflight has succeeded.
+  bool containsOrderedControls = false;
   // Temporary compatibility surface for the existing production replay
   // connection. Multi-segment plans intentionally leave this empty; P3 moves
   // production routing to arenaLayout and the segment table.

@@ -3,12 +3,14 @@
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_resource_initializer.hpp"
+#include "render/encode_session_admission.hpp"
 #include "render/open_cb_carrier.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -47,11 +49,50 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::QueueSubmissionRecord;
   using core::metalqueue::ReadySlotSnapshot;
   using core::metalqueue::ResolvedPublishedSource;
+  using core::metalqueue::SessionReleaseAckResult;
+  using core::metalqueue::SessionReleaseAction;
+  using core::metalqueue::SessionReleaseCompletion;
+  using core::metalqueue::SessionReleasePressureKind;
 
   std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
   EncodeSessionSourceList pendingSources;
   encoders::EncodeChunkSession pendingSession;
+  render::EncodeSessionAdmissionState pendingAdmission{};
+  bool exactReplaySingleSource = false;
+  const auto& tapeValues = cpuReadyTape_.config().values();
+  const render::EncodeSessionLimits admissionLimits{
+      .maxSources = static_cast<std::uint32_t>(
+          core::metalqueue::kMaxEncodeSessionSources),
+      .maxPages = static_cast<std::uint32_t>(std::min<std::size_t>(
+          tapeValues.pageCount,
+          std::numeric_limits<std::uint32_t>::max())),
+      .maxBytes = tapeValues.pageSize * tapeValues.pageCount,
+      .maxDraws = std::numeric_limits<std::uint32_t>::max(),
+      .maxCommandBuffers = static_cast<std::uint32_t>(
+          core::metalqueue::kMaxEncodeSessionSources),
+  };
+  const render::SessionAdmissionKey admissionKey{
+      .queueLifetimeEpoch = 1,
+      .allocatorPolicyEpoch = 1,
+      .lane = render::EncodeQueueLane::CpuReadySerial,
+      .captureMode = render::EncodeCaptureMode::Disabled,
+      .completionMode = queue_
+          ? render::EncodeCompletionMode::Metal
+          : render::EncodeCompletionMode::TestNullCommandBuffer,
+  };
+
+  const auto admissionCandidateFor =
+      [&admissionKey](const ResolvedPublishedSource& source) {
+        return render::SessionAdmissionCandidate{
+            .key = admissionKey,
+            .semantic = source.semantic,
+            .rawOrdinal = source.metadata.rawOrdinal,
+            .sourceOrdinal = source.metadata.sourceOrdinal,
+            .seqId = source.seqId,
+            .predictedCommandBuffers = 1,
+        };
+      };
 
   auto completeInlineSnapshot = [this, &onSubmitted](
                                     std::unique_lock<std::mutex>& lock,
@@ -102,7 +143,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           return true;
         }
         if (!encoders::encodeChunkSessionHasDeferredSubmissionPayload(
-                *pendingSession)) {
+                *pendingSession) &&
+            encoders::encodeChunkSessionSources(*pendingSession).empty()) {
           pendingSession.reset();
           return true;
         }
@@ -126,7 +168,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       };
 
   auto submitPendingRecordLocked =
-      [&pendingRecord, &pendingSources, &pendingSession,
+      [&pendingRecord, &pendingSources, &pendingSession, &pendingAdmission,
        &finalizePendingSessionForSubmitLocked, &submitRecordLocked](
           std::unique_lock<std::mutex>& lock) {
         if (!pendingRecord.has_value()) {
@@ -141,6 +183,74 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingRecord.reset();
         pendingSources.clear();
         pendingSession.reset();
+        pendingAdmission = {};
+        return true;
+      };
+
+  auto processNextReleaseLocked =
+      [this, &pendingRecord, &pendingSession,
+       &submitPendingRecordLocked](std::unique_lock<std::mutex>& lock) {
+        const auto release = sessionReleaseState_.peekNext();
+        if (!release ||
+            release->event.fenceSeqId > sessionReleaseCoveredSeqId_) {
+          return false;
+        }
+
+        SessionReleaseCompletion completion =
+            SessionReleaseCompletion::SessionSubmitted;
+        if (release->event.action == SessionReleaseAction::ClosePass) {
+          completion = SessionReleaseCompletion::PassClosed;
+          if (pendingSession && pendingRecord) {
+            lock.unlock();
+            auto ctx = makeEncodeContext();
+            const auto closed =
+                encoders::closeEncodeChunkSessionRenderPass(
+                    ctx, *pendingSession, *pendingRecord);
+            lock.lock();
+            if (closed == encoders::EncodeChunkSessionPassCloseResult::
+                              InvalidCommandBufferCarrier) {
+              abortCpuReadySessionFailOpen(
+                  "ordered ClosePass command-buffer carrier");
+            }
+          }
+        } else if (pendingRecord &&
+                   !submitPendingRecordLocked(lock)) {
+          abortCpuReadySessionFailOpen("ordered session release submit");
+        }
+        if (!lock.owns_lock()) {
+          lock.lock();
+        }
+
+        // The posting thread reached the raw control before publishing the
+        // event. Once its fixed sequence prefix is represented and the action
+        // above has executed, that ordered-control identity covers the raw
+        // fence even when the control itself does not become a Tape source.
+        sessionReleaseCoveredRawOrdinal_ = std::max(
+            sessionReleaseCoveredRawOrdinal_,
+            release->event.fenceRawOrdinal);
+        const auto acknowledged = sessionReleaseState_.acknowledge(
+            *release, completion, sessionReleaseCoveredRawOrdinal_,
+            sessionReleaseCoveredSeqId_);
+        if (acknowledged != SessionReleaseAckResult::Acknowledged) {
+          abortCpuReadySessionFailOpen("ordered release acknowledgement");
+        }
+        switch (release->event.reason) {
+        case core::metalqueue::SessionReleaseReason::ProducerSequenceWait:
+          perf::countCpuReadySessionReleased(
+              perf::CpuReadySessionReleaseReason::ProducerWait);
+          break;
+        case core::metalqueue::SessionReleaseReason::AdmissionPressure:
+          perf::countCpuReadySessionReleased(
+              perf::CpuReadySessionReleaseReason::AdmissionPressure);
+          break;
+        case core::metalqueue::SessionReleaseReason::RawWriterPressure:
+          perf::countCpuReadySessionReleased(
+              perf::CpuReadySessionReleaseReason::WriterPressure);
+          break;
+        default:
+          break;
+        }
+        sessionReleaseCv_.notify_all();
         return true;
       };
 
@@ -168,14 +278,49 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   while (true) {
     std::unique_lock lock(mutex_);
 
+    if (processNextReleaseLocked(lock)) {
+      if (testOnlyPauseAfterNextSessionReleaseAck_) {
+        testOnlyPauseAfterNextSessionReleaseAck_ = false;
+        testOnlyPausedAfterSessionReleaseAck_ = true;
+        sessionReleaseCv_.notify_all();
+        sessionReleaseCv_.wait(lock, [this] {
+          return stop_ || !testOnlyPausedAfterSessionReleaseAck_;
+        });
+      }
+      if (stop_) {
+        return;
+      }
+      continue;
+    }
+
     if (const auto reason = pendingPressureReleaseReason()) {
+      const auto posted =
+          *reason == perf::CpuReadySessionReleaseReason::ProducerWait
+              ? sessionReleaseState_.tryPostOrdered(
+                    core::metalqueue::SessionReleaseReason::
+                        ProducerSequenceWait,
+                    SessionReleaseAction::SubmitSession,
+                    pendingAdmission.lastRawOrdinal,
+                    pendingAdmission.lastSeqId)
+              : sessionReleaseState_.postOrAdvancePressure(
+                    *reason ==
+                            perf::CpuReadySessionReleaseReason::
+                                AdmissionPressure
+                        ? SessionReleasePressureKind::Admission
+                        : SessionReleasePressureKind::RawWriter,
+                    pendingAdmission.lastRawOrdinal,
+                    pendingAdmission.lastSeqId);
+      if (posted.accepted()) {
+        encodeCv_.notify_one();
+        continue;
+      }
+      // Temporary compatibility fallback for an observation that cannot be
+      // ordered against an already-posted newer control. The fixed release
+      // transport above remains the primary path.
       if (!submitPendingRecordLocked(lock)) {
         abortCpuReadySessionFailOpen("ordered pressure fence release");
       }
       perf::countCpuReadySessionReleased(*reason);
-      if (!lock.owns_lock()) {
-        lock.lock();
-      }
       if (stop_) {
         return;
       }
@@ -196,6 +341,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       // shutdown, or an ordered pressure fence re-evaluates the pending work.
       encodeCv_.wait(lock, [this] {
         return stop_ || !cpuReadyTape_.readyEmpty() ||
+               sessionReleaseState_.hasPending() ||
                queueLifecycle_.producerSequenceWaitActive() ||
                arenaAdmissionWaiterCount_.load(std::memory_order_acquire) >
                    0 ||
@@ -204,14 +350,104 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       continue;
     }
 
+    bool blockedByPendingCompatibility = false;
+    core::metalqueue::SessionReleaseReason blockedReleaseReason =
+        core::metalqueue::SessionReleaseReason::IndependentSubmission;
+    const auto releaseFence = sessionReleaseState_.peekNext();
     const std::size_t count =
-        queueLifecycle_.dequeueReadySlotBatchPrefix(
-            lock,
-            std::span<ReadySlotSnapshot>(scratch),
-            [](std::span<const ResolvedPublishedSource> candidates) noexcept {
-              return render::selectCpuReadySessionBatchPrefix(candidates);
+        queueLifecycle_.reserveReadySlotBatchPrefix(
+            lock, std::span<ReadySlotSnapshot>(scratch),
+            [&, releaseFence](
+                std::span<const ResolvedPublishedSource> candidates) noexcept {
+              render::EncodeSessionAdmissionState planned = pendingAdmission;
+              std::size_t selected = 0;
+              for (const auto& candidate : candidates) {
+                if (releaseFence &&
+                    ((releaseFence->event.fenceSeqId != 0 &&
+                      candidate.seqId > releaseFence->event.fenceSeqId) ||
+                     (releaseFence->event.fenceRawOrdinal != 0 &&
+                      candidate.metadata.rawOrdinal != 0 &&
+                      candidate.metadata.rawOrdinal >
+                          releaseFence->event.fenceRawOrdinal))) {
+                  break;
+                }
+                if (exactReplaySingleSource) {
+                  return std::size_t{1};
+                }
+
+                const auto admission = admissionCandidateFor(candidate);
+                const auto decision = render::classifySessionAdmission(
+                    planned, admission, admissionLimits);
+                const bool hasPlannedSession = planned.valid();
+                const bool exactCompatible = hasPlannedSession
+                    ? render::openCbCarrierSourceCanAppendToPending(
+                          candidate.payload, true)
+                    : render::openCbCarrierSourceCanBeSessionHead(
+                          candidate.payload);
+                const bool initializerBoundary =
+                    hasPlannedSession && pendingSession &&
+                    encoders::encodeChunkSessionHasActiveRender(
+                        *pendingSession) &&
+                    initializer_ &&
+                    initializer_->hasPendingUploadsUnlocked();
+
+                if (decision != render::SessionAdmissionDecision::Admit ||
+                    !exactCompatible || initializerBoundary) {
+                  if (selected == 0 && pendingRecord.has_value()) {
+                    blockedByPendingCompatibility = true;
+                    blockedReleaseReason = initializerBoundary
+                        ? core::metalqueue::SessionReleaseReason::
+                              InitializerWait
+                        : decision == render::SessionAdmissionDecision::
+                                         SubmitPrefixBeforeCandidate
+                            ? core::metalqueue::SessionReleaseReason::SessionCap
+                            : core::metalqueue::SessionReleaseReason::
+                                  IndependentSubmission;
+                  }
+                  if (selected == 0 && !pendingRecord.has_value()) {
+                    // Invalid/isolated heads still execute through the exact
+                    // serial encoder; they simply cannot start a joined
+                    // session based on this preflight.
+                    return std::size_t{1};
+                  }
+                  break;
+                }
+                if (!render::appendSessionAdmission(
+                        planned, admission, admissionLimits)) {
+                  if (selected == 0 && pendingRecord.has_value()) {
+                    blockedByPendingCompatibility = true;
+                    blockedReleaseReason =
+                        core::metalqueue::SessionReleaseReason::SessionCap;
+                  }
+                  break;
+                }
+                ++selected;
+                if (candidate.semantic.hasPresent()) {
+                  break;
+                }
+              }
+              return selected;
             });
     if (count == 0) {
+      if (blockedByPendingCompatibility && pendingRecord.has_value()) {
+        const auto posted = sessionReleaseState_.tryPostOrdered(
+            blockedReleaseReason, SessionReleaseAction::SubmitSession,
+            pendingAdmission.lastRawOrdinal,
+            pendingAdmission.lastSeqId);
+        if (posted.accepted()) {
+          encodeCv_.notify_one();
+          continue;
+        }
+        // A younger externally posted fence can make this predecessor-fence
+        // post regress. Submit the already-encoded older prefix directly so
+        // the incompatible candidate can become covered by that event; merely
+        // spinning on the younger event would deadlock both sides.
+        if (!submitPendingRecordLocked(lock)) {
+          abortCpuReadySessionFailOpen(
+              "semantic compatibility release fallback");
+        }
+        continue;
+      }
       if (pendingRecord.has_value()) {
         if (!submitPendingRecordLocked(lock)) {
           abortCpuReadySessionFailOpen("queue drained");
@@ -220,6 +456,51 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             perf::CpuReadySessionReleaseReason::Drain);
       }
       return;
+    }
+
+    bool tentativePreflightValid = true;
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto resolved =
+          queueLifecycle_.resolveTentativeSource(lock, scratch[i]);
+      if (!resolved.valid() || resolved.metadata != scratch[i].metadata ||
+          resolved.semantic != scratch[i].semantic) {
+        tentativePreflightValid = false;
+        break;
+      }
+    }
+    const bool testOnlyRestore =
+        testOnlyRestoreNextCpuReadySessionPreflight_;
+    testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+    if (!tentativePreflightValid || testOnlyRestore) {
+      if (!queueLifecycle_.restoreReservedReadySlotBatch(
+              lock, std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
+        queueLifecycle_.poisonTapeFailure();
+        return;
+      }
+      exactReplaySingleSource = true;
+      if (testOnlyRestore) {
+        return;
+      }
+      continue;
+    }
+    if (!queueLifecycle_.commitReservedReadySlotBatch(
+            lock,
+            std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
+      if (!queueLifecycle_.restoreReservedReadySlotBatch(
+              lock, std::span<const ReadySlotSnapshot>(scratch.data(), count))) {
+        queueLifecycle_.poisonTapeFailure();
+        return;
+      }
+      exactReplaySingleSource = true;
+      continue;
+    }
+    exactReplaySingleSource = false;
+    for (std::size_t i = 0; i < count; ++i) {
+      sessionReleaseCoveredSeqId_ =
+          std::max(sessionReleaseCoveredSeqId_, scratch[i].seqId);
+      sessionReleaseCoveredRawOrdinal_ = std::max(
+          sessionReleaseCoveredRawOrdinal_,
+          scratch[i].metadata.rawOrdinal);
     }
 
     // H185 invariant (kind-neutral): validate + retain the whole selected
@@ -271,6 +552,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         queueLifecycle_.poisonTapeFailure();
         return;
       }
+      const auto sourceAdmission = admissionCandidateFor(commonSource);
       const bool sourceIsArena = commonSource.payload.isArena();
       const bool sourceHasFinalPresentTail =
           render::openCbCarrierSourceHasFinalPresentTail(commonSource.payload);
@@ -456,6 +738,17 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           continue;
         }
         pendingRecord = std::move(*submission);
+        pendingAdmission = {};
+        if (!render::appendSessionAdmission(
+                pendingAdmission, sourceAdmission, admissionLimits)) {
+          perf::countCpuReadySessionReleased(
+              perf::CpuReadySessionReleaseReason::FailPath);
+          if (!submitPendingRecordLocked(lock)) {
+            abortCpuReadySessionFailOpen(
+                "initial session admission state rejected");
+          }
+          continue;
+        }
         perf::countCpuReadySessionPendingStarted();
         continue;
       }
@@ -509,6 +802,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingRecord.reset();
         pendingSources.clear();
         if (!sourceHasFinalPresentTail) {
+          if (!render::appendSessionAdmission(
+                  pendingAdmission, sourceAdmission, admissionLimits)) {
+            abortCpuReadySessionFailOpen(
+                "appended session admission state rejected");
+          }
           pendingSources = mergedSources;
           pendingRecord = std::move(*submission);
           perf::countCpuReadySessionHeadAppended(sourceIsArena);
@@ -525,6 +823,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         }
         perf::countCpuReadySessionTailSubmitted();
         pendingSession.reset();
+        pendingAdmission = {};
         continue;
       }
 

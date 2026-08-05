@@ -116,6 +116,24 @@ std::optional<core::metalqueue::PublishedCommandRef>
 encodeChunkSessionPendingClearCommand(
     const EncodeChunkSessionState& session) noexcept;
 
+enum class EncodeChunkSessionPassCloseResult : std::uint8_t {
+  NoActivePass,
+  Closed,
+  InvalidCommandBufferCarrier,
+};
+
+// End only the active render pass while retaining the EncodeSession and its
+// command-buffer chain. This is the production ordered-control ClosePass
+// primitive: it neither finalizes nor submits the carrier, and all shadows,
+// sidecars, callbacks, and retained completion sources remain session-owned so
+// later sources can resume encoding into the same command buffer. Calling it
+// when no render pass is active is an idempotent no-op. An active pass requires
+// the current session command-buffer carrier; rejection is side-effect free.
+EncodeChunkSessionPassCloseResult closeEncodeChunkSessionRenderPass(
+    EncodeContext& ctx,
+    EncodeChunkSessionState& session,
+    core::metalqueue::QueueSubmissionRecord& commandBufferCarrier);
+
 // A deterministic preflight rejection (missing/conflicting command-buffer
 // ownership or completion-source mismatch) is side-effect free: record and
 // session ownership remain unchanged and the caller may correct the record and

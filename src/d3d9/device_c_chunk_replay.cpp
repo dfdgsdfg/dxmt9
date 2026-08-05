@@ -5,6 +5,7 @@
 
 #include "device_c_provider.hpp"
 #include "device_c_cpu_ready_plan.hpp"
+#include "device_c_ordered_control.hpp"
 #include "device_c_chunk_v2_replay.hpp"
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_offload.hpp"
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -72,6 +74,35 @@ extern "C" int32_t dxmt9c_device_set_fvf(D9CDevice* d, uint32_t fvf);
 // device_c_swapchain_query_stateblock.cpp; chunk replay routes
 // D9C_COMMAND_RECORD_QUERY_ISSUE through it.
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags);
+
+// Native production-routing observer. It never replaces dispatch: tests may
+// observe the exact ordered-control phases while replayResolvedV2Chunk still
+// executes the queue release API and the real record sink. Production leaves
+// the callback null, so non-control records pay no cost.
+using Dxmt9OrderedControlReplayObserver = void (*)(
+    void* userdata, std::uint32_t phase, std::uint32_t recordIndex,
+    std::uint32_t recordType, std::int32_t result);
+namespace {
+Dxmt9OrderedControlReplayObserver gOrderedControlReplayObserver = nullptr;
+void* gOrderedControlReplayObserverUserdata = nullptr;
+
+void observeOrderedControlReplay(std::uint32_t phase,
+                                 std::size_t recordIndex,
+                                 std::uint32_t recordType,
+                                 std::int32_t result = 0) {
+  if (gOrderedControlReplayObserver) {
+    gOrderedControlReplayObserver(
+        gOrderedControlReplayObserverUserdata, phase,
+        static_cast<std::uint32_t>(recordIndex), recordType, result);
+  }
+}
+}  // namespace
+
+extern "C" void dxmt9_test_set_ordered_control_replay_observer(
+    void* userdata, Dxmt9OrderedControlReplayObserver observer) {
+  gOrderedControlReplayObserverUserdata = userdata;
+  gOrderedControlReplayObserver = observer;
+}
 
 // Forward declarations for the per-call interactive C ABI entries that
 // remain in device_c_draw.cpp. The chunk dispatcher routes the matching
@@ -888,7 +919,8 @@ int32_t replayResolvedV2Chunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
     dxmt9::CommandQueue::CpuReadyArenaBuildLease* arenaLease = nullptr,
-    std::span<const dxmt9::d3d9::V2CpuReadySegmentPlan> arenaSegments = {}) {
+    std::span<const dxmt9::d3d9::V2CpuReadySegmentPlan> arenaSegments = {},
+    bool containsOrderedControls = false) {
   const auto bytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
       raw.recordBlob.size());
@@ -917,6 +949,34 @@ int32_t replayResolvedV2Chunk(
     }
     if (coveredRecords != imported.records.size()) {
       return commitChunkFail("v2-replay-segment-cover");
+    }
+  }
+  if (containsOrderedControls) {
+    // The planner already performed this complete scan. Repeat it against the
+    // exact immutable replay view before constructing the sink or applying any
+    // semantic effect, so no later malformed control can fail after an older
+    // record has executed.
+    bool foundOrderedControl = false;
+    for (std::size_t index = 0; index < imported.records.size(); ++index) {
+      const auto record = imported.record(index);
+      switch (record.header.type) {
+      case D9C_COMMAND_RECORD_QUERY_ISSUE:
+      case D9C_COMMAND_RECORD_READBACK:
+      case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+        foundOrderedControl = true;
+        if (!dxmt9::d3d9::makeOrderedControlDisposition(
+                record, raw.replaySeq, index)) {
+          return commitChunkFail(
+              "v2-ordered-control-preflight",
+              static_cast<std::uint32_t>(index), record.header.type);
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    if (!foundOrderedControl) {
+      return commitChunkFail("v2-ordered-control-preflight-empty");
     }
   }
 
@@ -978,9 +1038,59 @@ int32_t replayResolvedV2Chunk(
             record.wire.header.type)) {
       flushPendingDrawSubmissions();
     }
+    std::optional<dxmt9::d3d9::OrderedControlDisposition> orderedControl;
+    if (containsOrderedControls) {
+      switch (record.wire.header.type) {
+      case D9C_COMMAND_RECORD_QUERY_ISSUE:
+      case D9C_COMMAND_RECORD_READBACK:
+      case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+        orderedControl = dxmt9::d3d9::makeOrderedControlDisposition(
+            record.wire, raw.replaySeq, index);
+        if (!orderedControl) {
+          flushPendingDrawSubmissions();
+          return commitChunkFail("v2-ordered-control-rebuild",
+                                 static_cast<std::uint32_t>(index),
+                                 record.wire.header.type);
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    if (orderedControl) {
+      observeOrderedControlReplay(/*BeforeRelease=*/1u, index,
+                                  record.wire.header.type);
+      auto upper = device->dev().upperDevice();
+      auto* queue = upper ? &upper->queue() : nullptr;
+      const auto reason = orderedControl->kind ==
+                                  dxmt9::d3d9::OrderedControlKind::UpdateTexture
+                              ? dxmt9::core::metalqueue::
+                                    SessionReleaseReason::IndependentSubmission
+                              : dxmt9::core::metalqueue::
+                                    SessionReleaseReason::DirectObservation;
+      if (!orderedControl->valid() || !queue ||
+          !queue->releaseCpuReadySessionBeforeOrderedControl(
+              reason, orderedControl->requiredReleaseAction,
+              orderedControl->rawOrdinal)) {
+        return commitChunkFail("v2-ordered-control-release",
+                               static_cast<std::uint32_t>(index),
+                               record.wire.header.type);
+      }
+      observeOrderedControlReplay(/*AfterRelease=*/2u, index,
+                                  record.wire.header.type);
+    }
+    const bool dispatchingOrderedControl = orderedControl.has_value();
+    if (dispatchingOrderedControl) {
+      observeOrderedControlReplay(/*BeforeDispatch=*/3u, index,
+                                  record.wire.header.type);
+    }
     const auto hr = dxmt9::d3d9::isSparseRecordV2(record.wire.header.type)
                         ? dxmt9::d3d9::replaySparseRecordV2(record, sink)
                         : dxmt9::d3d9::replayNonDrawRecordV2(record, sink);
+    if (dispatchingOrderedControl) {
+      observeOrderedControlReplay(/*AfterDispatch=*/4u, index,
+                                  record.wire.header.type, hr);
+    }
     if (failed(hr)) {
       flushPendingDrawSubmissions();
       return commitChunkFail("v2-replay", static_cast<std::uint32_t>(index),
@@ -1107,11 +1217,10 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
                              bool allowDirectArena) {
-  if (!raw.cpuReadyTapePlanningEnabled || !allowDirectArena) {
+  if (!raw.cpuReadyTapePlanningEnabled) {
     // Gate-off is the historical R-BACK-2.51(a) lane: admission already used
-    // the combined mark/capture hook before handoff and the worker performs no
-    // planning or repeated marking. A gate-on synchronous caller has no
-    // worker handoff, so mark immediately before its compatibility replay.
+    // the combined mark/capture hook before handoff and replay performs no
+    // planning or repeated marking.
     markLegacyV2Resources(device, raw);
     return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
   }
@@ -1153,9 +1262,21 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
     [[fallthrough]];
   case dxmt9::d3d9::V2ReplayLane::Inline:
     markLegacyV2Resources(device, raw);
-    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+    return replayResolvedV2Chunk(
+        device, raw, pacedByPresentOrdinal, nullptr, {},
+        plan.containsOrderedControls);
   case dxmt9::d3d9::V2ReplayLane::DirectArenaCandidate:
     break;
+  }
+
+  if (!allowDirectArena) {
+    // Inline execution (including synchronous Readback) still needs the
+    // ordered-control plan and release hooks when the Tape gate is enabled.
+    // Only Direct arena construction depends on worker-side arena admission.
+    markLegacyV2Resources(device, raw);
+    return replayResolvedV2Chunk(
+        device, raw, pacedByPresentOrdinal, nullptr, {},
+        plan.containsOrderedControls);
   }
 
   if (!queue || !plan.arenaLayout.has_value()) {

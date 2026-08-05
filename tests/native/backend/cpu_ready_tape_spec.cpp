@@ -32,8 +32,11 @@ using dxmt9::core::ChunkSlot;
 using dxmt9::core::ChunkSlotControl;
 using dxmt9::core::CpuReadyAdmissionIdentity;
 using dxmt9::core::CpuReadySourceId;
+using dxmt9::core::CpuReadySourceMetadata;
 using dxmt9::core::CpuReadyStorageRef;
 using dxmt9::core::CpuReadyTape;
+using dxmt9::core::SourceEntryEncoderKind;
+using dxmt9::core::SourceSemanticBoundaryKind;
 
 static_assert(std::is_move_constructible_v<
               CpuReadyTape::DetachedArenaOwner>);
@@ -434,6 +437,243 @@ void representPrefixIsAtomicAndPreservesReadySuffix() {
   check(tape.copyReadyPrefix(suffix) == 1u &&
             suffix[0] == ready[2],
         "Ready suffix retains its original FIFO locator and order");
+}
+
+void readyMetadataIsAdmissionOwnedAndGenerationChecked() {
+  CpuReadyTape legacy{makeConfig(4, 4, 4, 1, 4, 0, 4, 0)};
+  const auto source = legacy.reserve();
+  check(source.has_value(), "legacy fixture reserves one source");
+  source->payload->appendClear({});
+  source->payload->appendPresent({}, dxmt9::core::Handle{0x31});
+  check(legacy.sealAndPublish(source->ticket, 20, 30, 2, 37, 10),
+        "legacy publication fixes source scheduling metadata");
+
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(legacy.copyReadyPrefix(ready) == 1u,
+        "legacy publication exposes one Ready entry");
+  const CpuReadySourceMetadata expected{
+      .rawOrdinal = 10,
+      .sourceOrdinal = 20,
+      .seqId = 30,
+      .buildGeneration = 0,
+      .usedBytes = 37,
+      .pageCount = source->storage.pageCount,
+      .strictAdmission = false,
+  };
+  check(ready[0].metadata == expected &&
+            legacy.sourceMetadata(source->id, source->storage,
+                                  CpuReadyTape::State::Ready) == expected,
+        "legacy Ready metadata preserves every admission/publication fact");
+  check(ready[0].semantic.sealed() && ready[0].semantic.entryStable() &&
+            ready[0].semantic.entryKind == SourceEntryEncoderKind::Render &&
+            ready[0].semantic.firstBoundary ==
+                SourceSemanticBoundaryKind::Clear &&
+            ready[0].semantic.firstBoundaryOrdinal == 0 &&
+            ready[0].semantic.commandCount == 2 &&
+            ready[0].semantic.drawCount == 0 &&
+            ready[0].semantic.byteCount == 37 &&
+            ready[0].semantic.pageCount == source->storage.pageCount &&
+            ready[0].semantic.hasPresent() &&
+            ready[0].semantic.hasFinalPresentTail(),
+        "legacy publication seals exact counts and semantic boundaries");
+
+  auto tampered = ready;
+  ++tampered[0].metadata.usedBytes;
+  check(!legacy.reserveReadyPrefixForRepresentation(tampered) &&
+            legacy.state(source->id, source->storage) ==
+                CpuReadyTape::State::Ready &&
+            legacy.readyCount() == 1u,
+        "tampered metadata cannot reserve a represented prefix");
+  tampered = ready;
+  ++tampered[0].semantic.commandCount;
+  check(!legacy.reserveReadyPrefixForRepresentation(tampered) &&
+            legacy.state(source->id, source->storage) ==
+                CpuReadyTape::State::Ready,
+        "tampered semantic summary cannot reserve a represented prefix");
+
+  CpuReadyTape arena{makeSeparatedPayloadConfig()};
+  const auto layout = makeMinimalArenaLayout();
+  const CpuReadyAdmissionIdentity identity{
+      .rawOrdinal = 11,
+      .sourceOrdinal = 21,
+      .seqId = 31,
+      .buildGeneration = 41,
+  };
+  const auto strict =
+      arena.reserve(layout.pageCount, layout.usedBytes, identity);
+  check(strict.has_value(), "strict fixture reserves one arena source");
+  publishMinimalArena(arena, *strict, layout);
+  check(arena.sealAndPublish(strict->ticket, 3, layout.usedBytes),
+        "strict publication fixes arena scheduling metadata");
+  check(arena.copyReadyPrefix(ready) == 1u &&
+            ready[0].metadata == CpuReadySourceMetadata{
+                .rawOrdinal = 11,
+                .sourceOrdinal = 21,
+                .seqId = 31,
+                .buildGeneration = 41,
+                .usedBytes = layout.usedBytes,
+                .pageCount = strict->storage.pageCount,
+                .strictAdmission = true,
+            },
+        "arena Ready metadata preserves strict admission identity and extent");
+  check(ready[0].semantic.valid() && ready[0].semantic.entryStable() &&
+            ready[0].semantic.entryKind == SourceEntryEncoderKind::Blit &&
+            ready[0].semantic.firstBoundary ==
+                SourceSemanticBoundaryKind::Blit &&
+            ready[0].semantic.firstBoundaryOrdinal == 0 &&
+            ready[0].semantic.commandCount == 1 &&
+            ready[0].semantic.drawCount == 0 &&
+            ready[0].semantic.byteCount == layout.usedBytes &&
+            ready[0].semantic.pageCount == layout.pageCount &&
+            !ready[0].semantic.hasPresent(),
+        "arena publication seals the final chain's summary and exact extent");
+}
+
+void legacyDefaultPublicationMeasuresLogicalExtent() {
+  CpuReadyTape tape{makeConfig(2, 2, 2, 1, 2, 0, 2, 0)};
+  const auto source = tape.reserve();
+  check(source.has_value(), "production-like Legacy source reserves");
+  source->payload->appendClear({});
+  const std::size_t expected =
+      dxmt9::core::measureSourcePayloadLogicalExtent(
+          dxmt9::core::SourcePayloadView(*source->payload));
+  check(expected != 0,
+        "non-empty Legacy payload has a deterministic logical extent");
+  check(tape.sealAndPublish(source->ticket, 1, 1, 0),
+        "production-like Legacy seal derives its default extent");
+
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(tape.copyReadyPrefix(ready) == ready.size() &&
+            ready[0].metadata.usedBytes == expected &&
+            ready[0].semantic.byteCount == expected &&
+            ready[0].semantic.byteCount != 0,
+        "Legacy metadata and summary retain the exact derived byte extent");
+}
+
+void tentativeRepresentationRestoresExactReadyOrderAndAccounting() {
+  CpuReadyTape tape{makeConfig(5, 5, 5, 1, 5, 0, 5, 0)};
+  std::array<CpuReadyTape::Reservation, 4> sources{};
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto source = tape.reserve();
+    check(source.has_value(), "fixture reserves initial Ready source");
+    sources[i] = *source;
+    check(tape.sealAndPublish(source->ticket, i + 1u, i + 1u, i),
+          "fixture publishes initial Ready source");
+  }
+
+  std::array<CpuReadyTape::ReadyEntry, 3> initial{};
+  check(tape.copyReadyPrefix(initial) == initial.size(),
+        "fixture copies the initial FIFO");
+  const auto reservationsBefore = tape.stats().readyPublicationReservations;
+  const auto selected =
+      std::span<const CpuReadyTape::ReadyEntry>(initial.data(), 2u);
+  check(tape.reserveReadyPrefixForRepresentation(selected),
+        "validated FIFO prefix enters tentative representation");
+  check(tape.state(sources[0].id, sources[0].storage) ==
+            CpuReadyTape::State::TentativeRepresented &&
+            tape.state(sources[1].id, sources[1].storage) ==
+                CpuReadyTape::State::TentativeRepresented &&
+            tape.readyCount() == 1u &&
+            tape.stats().readyPublicationReservations == reservationsBefore,
+        "tentative reservation removes FIFO visibility without releasing admission");
+
+  const auto younger = tape.reserve();
+  check(younger.has_value(),
+        "a younger source may publish behind a tentative prefix");
+  sources[3] = *younger;
+  check(tape.sealAndPublish(younger->ticket, 4, 4, 3),
+        "younger publication appends behind the retained suffix");
+  check(tape.restoreReservedReadyPrefix(selected),
+        "tentative failure restores its exact FIFO prefix");
+
+  std::array<CpuReadyTape::ReadyEntry, 4> restored{};
+  check(tape.copyReadyPrefix(restored) == restored.size() &&
+            restored[0] == initial[0] && restored[1] == initial[1] &&
+            restored[2] == initial[2] &&
+            restored[3].source.id == younger->id &&
+            tape.stats().readyPublicationReservations == 4u,
+        "restore preserves old prefix, old suffix, younger publication, and accounting");
+
+  check(tape.reserveReadyPrefixForRepresentation(
+            std::span<const CpuReadyTape::ReadyEntry>(restored.data(), 2u)) &&
+            tape.commitReservedReadyPrefix(
+                std::span<const CpuReadyTape::ReadyEntry>(restored.data(), 2u)),
+        "a retried tentative prefix commits atomically");
+  check(tape.state(sources[0].id, sources[0].storage) ==
+            CpuReadyTape::State::Represented &&
+            tape.state(sources[1].id, sources[1].storage) ==
+                CpuReadyTape::State::Represented &&
+            tape.readyCount() == 2u &&
+            tape.stats().readyPublicationReservations == 2u,
+        "commit releases only the selected prefix admission reservations");
+  check(!tape.restoreReservedReadyPrefix(
+            std::span<const CpuReadyTape::ReadyEntry>(restored.data(), 2u)),
+        "committed representation cannot be rolled back as tentative");
+  std::array<CpuReadyTape::ReadyEntry, 2> suffix{};
+  check(tape.copyReadyPrefix(suffix) == suffix.size() &&
+            suffix[0] == initial[2] && suffix[1] == restored[3],
+        "failed post-commit restore leaves the younger Ready suffix unchanged");
+}
+
+void tentativeRepresentationRejectsReorderedOrSubstitutedCapabilities() {
+  CpuReadyTape tape{makeConfig(4, 4, 4, 1, 4, 0, 4, 0)};
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto source = tape.reserve();
+    check(source.has_value(), "fixture reserves tentative source");
+    check(tape.sealAndPublish(source->ticket, i + 1u, i + 1u, i),
+          "fixture publishes tentative source");
+  }
+
+  std::array<CpuReadyTape::ReadyEntry, 3> ready{};
+  check(tape.copyReadyPrefix(ready) == ready.size(),
+        "fixture copies three exact Ready capabilities");
+  const auto exact =
+      std::span<const CpuReadyTape::ReadyEntry>(ready.data(), 2u);
+  check(tape.reserveReadyPrefixForRepresentation(exact),
+        "fixture reserves the exact two-entry prefix");
+
+  const std::array reordered{ready[1], ready[0]};
+  check(!tape.commitReservedReadyPrefix(reordered) &&
+            !tape.restoreReservedReadyPrefix(reordered),
+        "commit and restore reject a reordered tentative capability");
+  const std::array substituted{ready[0], ready[2]};
+  check(!tape.commitReservedReadyPrefix(substituted) &&
+            !tape.restoreReservedReadyPrefix(substituted),
+        "commit and restore reject a substituted tentative capability");
+  check(tape.state(ready[0].source.id, ready[0].source.storage) ==
+                CpuReadyTape::State::TentativeRepresented &&
+            tape.state(ready[1].source.id, ready[1].source.storage) ==
+                CpuReadyTape::State::TentativeRepresented &&
+            tape.restoreReservedReadyPrefix(exact),
+        "failed capability checks preserve the exact tentative transaction");
+
+  std::array<CpuReadyTape::ReadyEntry, 3> restored{};
+  check(tape.copyReadyPrefix(restored) == restored.size() &&
+            restored == ready,
+        "exact restore retains the original FIFO identity and order");
+}
+
+void staleMetadataValidationCountsOneRejectPerCall() {
+  CpuReadyTape tape{makeConfig(2, 2, 2, 1, 2, 0, 2, 0)};
+  const auto source = tape.reserve();
+  check(source.has_value(), "fixture reserves one metadata source");
+  check(tape.sealAndPublish(source->ticket, 7, 7, 0),
+        "fixture publishes one metadata source");
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(tape.copyReadyPrefix(ready) == ready.size(),
+        "fixture copies the metadata capability");
+
+  auto stale = ready[0].metadata;
+  ++stale.seqId;
+  const auto before = tape.stats().staleRejects;
+  check(!tape.matches(ready[0].source, stale,
+                      CpuReadyTape::State::Ready) &&
+            tape.stats().staleRejects == before + 1u,
+        "metadata mismatch increments stale rejection exactly once");
+  check(!tape.matches(ready[0].source, stale, ready[0].semantic,
+                      CpuReadyTape::State::Ready) &&
+            tape.stats().staleRejects == before + 2u,
+        "semantic metadata mismatch increments stale rejection exactly once");
 }
 
 void payloadLayoutIsAlignedBoundedAndOverflowSafe() {
@@ -1137,6 +1377,11 @@ int main() {
     readyAdmissionDistinguishesHardHighAndLowWater();
     sealAndPublishFailureLeavesWritingAndCursorsUnchanged();
     representPrefixIsAtomicAndPreservesReadySuffix();
+    readyMetadataIsAdmissionOwnedAndGenerationChecked();
+    legacyDefaultPublicationMeasuresLogicalExtent();
+    tentativeRepresentationRestoresExactReadyOrderAndAccounting();
+    tentativeRepresentationRejectsReorderedOrSubstitutedCapabilities();
+    staleMetadataValidationCountsOneRejectPerCall();
     payloadLayoutIsAlignedBoundedAndOverflowSafe();
     payloadIsInvisibleUntilAtomicSeal();
     abortRollsBackWholeNewestReservation();

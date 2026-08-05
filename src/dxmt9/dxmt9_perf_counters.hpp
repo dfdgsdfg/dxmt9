@@ -27,6 +27,7 @@ enum class EncoderSplitReason : std::uint8_t {
   Present,
   PresentAcquire,
   TileMidPassIneligible,
+  OrderedControl,
 };
 
 enum class RenderPassDepthStoreProof : std::uint8_t {
