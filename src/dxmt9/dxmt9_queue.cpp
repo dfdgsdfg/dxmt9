@@ -306,8 +306,8 @@ bool commandRangeHasPresent(const SourcePayloadView& payload,
 ReadySlotSnapshot makeReadySlotSnapshot(const CpuReadyTape::ReadyEntry& ready,
                                         [[maybe_unused]] ChunkSlotControl& slot,
                                         SourcePayloadView payload) noexcept {
-  // dequeueReadySlotBatch* calls this only after resolving both locator
-  // generations and successfully transitioning Ready -> Encoding.
+  // Prefix selection calls this only while the queue lock keeps the Ready
+  // entry, both locator generations, and its sealed payload stable.
   DXMT_ASSERT(payload.valid());
   DXMT_ASSERT(slot.sourceId == ready.source.id);
   DXMT_ASSERT(slot.storage == ready.source.storage);
@@ -315,6 +315,8 @@ ReadySlotSnapshot makeReadySlotSnapshot(const CpuReadyTape::ReadyEntry& ready,
   return ReadySlotSnapshot{
       .slotIndex = ready.controlIndex,
       .seqId = ready.seqId,
+      .metadata = ready.metadata,
+      .semantic = ready.semantic,
       .hasPresent = commandRangeHasPresent(payload, 0, payload.commandCount()),
       .commandBegin = 0,
       .commandCount = payload.commandCount(),
@@ -1513,15 +1515,40 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
     std::unique_lock<std::mutex>& lock,
     std::span<ReadySlotSnapshot> out,
     const ReadySlotBatchPrefixSelector& selectPrefix) {
+  const size_t count = reserveReadySlotBatchPrefix(
+      lock, out,
+      [&selectPrefix](std::span<const ResolvedPublishedSource> candidates) {
+        size_t selected = selectPrefix ? selectPrefix(candidates) : 0u;
+        return selected == 0 ? std::size_t{1} : selected;
+      });
+  if (count == 0) {
+    return 0;
+  }
+  const auto selected =
+      std::span<const ReadySlotSnapshot>(out.data(), count);
+  if (!commitReservedReadySlotBatch(lock, selected)) {
+    (void)restoreReservedReadySlotBatch(lock, selected);
+    poisonTapeFailure();
+    return 0;
+  }
+  return count;
+}
+
+size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
+    std::unique_lock<std::mutex>& lock,
+    std::span<ReadySlotSnapshot> out,
+    const ReadySlotBatchPrefixSelector& selectPrefix) {
   // TLA+: QueueLifecycleRefinement / EncodeDequeue.
-  if (out.empty()) {
+  if (!lock.owns_lock() || lock.mutex() != submissionBinding_.mutex ||
+      out.empty()) {
     return 0;
   }
   auto* cpuReadyTape = submissionBinding_.cpuReadyTape;
   auto* encodeCv = submissionBinding_.encodeCv;
   auto* stop = submissionBinding_.stop;
   if (!cpuReadyTape || !encodeCv || !stop ||
-      out.size() > kMaxEncodeSessionSources) {
+      out.size() > kMaxEncodeSessionSources ||
+      tentativeReadyPrefixCount_ != 0) {
     return 0;
   }
 
@@ -1541,7 +1568,6 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
     return 0;
   }
 
-  std::array<ReadySlotSnapshot, kMaxEncodeSessionSources> candidates{};
   std::array<ResolvedPublishedSource, kMaxEncodeSessionSources> resolved{};
   for (size_t i = 0; i < maxCount; ++i) {
     const auto& candidate = ready[i];
@@ -1568,18 +1594,21 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
         return 0;
       }
     }
-    candidates[i] = makeReadySlotSnapshot(candidate, control, payload);
+    const ReadySlotSnapshot snapshot =
+        makeReadySlotSnapshot(candidate, control, payload);
     resolved[i] = ResolvedPublishedSource{
         .source = candidate.source,
         .slotIndex = candidate.controlIndex,
         .seqId = candidate.seqId,
+        .metadata = candidate.metadata,
+        .semantic = candidate.semantic,
         .payload = payload,
         .sourceId = candidate.source.id,
         .storage = candidate.source.storage,
         .slot = payload.legacyPayload(),
-        .hasPresent = candidates[i].hasPresent,
-        .commandBegin = candidates[i].commandBegin,
-        .commandCount = candidates[i].commandCount,
+        .hasPresent = snapshot.hasPresent,
+        .commandBegin = snapshot.commandBegin,
+        .commandCount = snapshot.commandCount,
     };
   }
 
@@ -1587,45 +1616,207 @@ size_t QueueLifecycleController::dequeueReadySlotBatchPrefix(
   if (selectPrefix) {
     count = selectPrefix(std::span<const ResolvedPublishedSource>(
         resolved.data(), maxCount));
-    DXMT_ASSERT(count <= maxCount);
-    count = std::min(count, maxCount);
+    if (count > maxCount) {
+      return 0;
+    }
   }
   if (count == 0) {
-    count = 1u;
+    return 0;
   }
 
   for (size_t i = 0; i < count; ++i) {
-    traceEncodeIterationStage("dequeue.selected", ready[i].controlIndex,
+    traceEncodeIterationStage("dequeue.reserved", ready[i].controlIndex,
                               submissionBinding_.slots[ready[i].controlIndex]);
   }
+  if (!cpuReadyTape->reserveReadyPrefixForRepresentation(
+          std::span<const CpuReadyTape::ReadyEntry>(ready.data(), count))) {
+    poisonTapeFailure();
+    return 0;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const auto& source = resolved[i];
+    out[i] = ReadySlotSnapshot{
+        .slotIndex = source.slotIndex,
+        .seqId = source.seqId,
+        .metadata = source.metadata,
+        .semantic = source.semantic,
+        .hasPresent = source.hasPresent,
+        .commandBegin = source.commandBegin,
+        .commandCount = source.commandCount,
+        .sourceId = source.sourceId,
+        .storage = source.storage,
+    };
+    tentativeReadyPrefix_[i] = out[i];
+  }
+  tentativeReadyPrefixCount_ = count;
+  recordCpuReadyTapeStats(*cpuReadyTape);
+  return count;
+}
+
+ResolvedPublishedSource QueueLifecycleController::resolveTentativeSource(
+    std::unique_lock<std::mutex>& lock,
+    const ReadySlotSnapshot& source) const noexcept {
+  if (!lock.owns_lock() || lock.mutex() != submissionBinding_.mutex ||
+      source.slotIndex >= submissionBinding_.slots.size() ||
+      tentativeReadyPrefixCount_ == 0) {
+    return {};
+  }
+  bool exactSnapshot = false;
+  for (size_t i = 0; i < tentativeReadyPrefixCount_; ++i) {
+    if (tentativeReadyPrefix_[i] == source) {
+      exactSnapshot = true;
+      break;
+    }
+  }
+  if (!exactSnapshot) {
+    return {};
+  }
+  const CpuReadyTape::SourceRef locator{
+      .id = source.sourceId,
+      .storage = source.storage,
+  };
+  if (!locator.valid() || source.seqId == 0 || !source.metadata.valid() ||
+      source.metadata.seqId != source.seqId ||
+      !submissionBinding_.cpuReadyTape ||
+      !submissionBinding_.cpuReadyTape->matches(
+          locator, source.metadata, source.semantic,
+          CpuReadyTape::State::TentativeRepresented)) {
+    return {};
+  }
+  const auto& control = submissionBinding_.slots[source.slotIndex];
+  auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
+      locator.id, locator.storage,
+      CpuReadyTape::State::TentativeRepresented);
+  if (control.state != ChunkSlot::State::Pending ||
+      control.sourceId != source.sourceId ||
+      control.storage != source.storage || control.seqId != source.seqId ||
+      !payload.valid() ||
+      (payload.isLegacy() && payload.legacyPayload() != control.payload) ||
+      (payload.isArena() && control.payload != nullptr) ||
+      !commandRangeWithinSource(payload, source.commandBegin,
+                                source.commandCount) ||
+      commandRangeHasPresent(payload, source.commandBegin,
+                             source.commandCount) != source.hasPresent) {
+    return {};
+  }
+  return ResolvedPublishedSource{
+      .source = locator,
+      .slotIndex = source.slotIndex,
+      .seqId = source.seqId,
+      .metadata = source.metadata,
+      .semantic = source.semantic,
+      .payload = payload,
+      .sourceId = source.sourceId,
+      .storage = source.storage,
+      .slot = payload.legacyPayload(),
+      .hasPresent = source.hasPresent,
+      .commandBegin = source.commandBegin,
+      .commandCount = source.commandCount,
+  };
+}
+
+bool QueueLifecycleController::commitReservedReadySlotBatch(
+    std::unique_lock<std::mutex>& lock,
+    std::span<const ReadySlotSnapshot> sources) {
+  if (!lock.owns_lock() || lock.mutex() != submissionBinding_.mutex ||
+      sources.empty() || sources.size() > kMaxEncodeSessionSources ||
+      sources.size() != tentativeReadyPrefixCount_ ||
+      !std::equal(sources.begin(), sources.end(),
+                  tentativeReadyPrefix_.begin()) ||
+      !submissionBinding_.cpuReadyTape) {
+    return false;
+  }
+  std::array<CpuReadyTape::ReadyEntry, kMaxEncodeSessionSources> ready{};
+  for (size_t i = 0; i < sources.size(); ++i) {
+    const auto resolved = resolveTentativeSource(lock, sources[i]);
+    if (!resolved.valid()) {
+      return false;
+    }
+    for (size_t j = 0; j < i; ++j) {
+      if (sources[j].slotIndex == sources[i].slotIndex) {
+        return false;
+      }
+    }
+    ready[i] = CpuReadyTape::ReadyEntry{
+        .source = resolved.source,
+        .controlIndex = resolved.slotIndex,
+        .seqId = resolved.seqId,
+        .metadata = resolved.metadata,
+        .semantic = resolved.semantic,
+    };
+  }
+
+  auto* cpuReadyTape = submissionBinding_.cpuReadyTape;
   recordNoEnqueueWaitGapToEncodeDequeue();
-  bool represented = false;
+  bool committed = false;
   encodeDequeue(ready[0].controlIndex, ready[0].seqId, [&] {
-    represented = cpuReadyTape->representReadyPrefix(
-        std::span<const CpuReadyTape::ReadyEntry>(ready.data(), count));
-    if (!represented) {
-      poisonTapeFailure();
+    committed = cpuReadyTape->commitReservedReadyPrefix(
+        std::span<const CpuReadyTape::ReadyEntry>(ready.data(), sources.size()));
+    if (!committed) {
       return;
     }
-    for (size_t i = 0; i < count; ++i) {
-      submissionBinding_.slots[ready[i].controlIndex].state =
+    for (const auto& source : sources) {
+      submissionBinding_.slots[source.slotIndex].state =
           ChunkSlot::State::Encoding;
     }
     recordCpuReadyTapeStats(*cpuReadyTape);
   });
-  if (!represented) {
-    return 0;
+  if (!committed) {
+    return false;
   }
-  for (size_t i = 0; i < count; ++i) {
-    auto& control = submissionBinding_.slots[ready[i].controlIndex];
-    traceEncodeIterationStage("dequeue.after-transition",
-                              ready[i].controlIndex, control);
-    out[i] = candidates[i];
+  for (size_t i = 0; i < tentativeReadyPrefixCount_; ++i) {
+    tentativeReadyPrefix_[i] = {};
+  }
+  tentativeReadyPrefixCount_ = 0;
+  for (const auto& source : sources) {
+    traceEncodeIterationStage("dequeue.after-transition", source.slotIndex,
+                              submissionBinding_.slots[source.slotIndex]);
   }
   if (submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
   }
-  return count;
+  return true;
+}
+
+bool QueueLifecycleController::restoreReservedReadySlotBatch(
+    std::unique_lock<std::mutex>& lock,
+    std::span<const ReadySlotSnapshot> sources) {
+  if (!lock.owns_lock() || lock.mutex() != submissionBinding_.mutex ||
+      sources.empty() || sources.size() > kMaxEncodeSessionSources ||
+      sources.size() != tentativeReadyPrefixCount_ ||
+      !std::equal(sources.begin(), sources.end(),
+                  tentativeReadyPrefix_.begin()) ||
+      !submissionBinding_.cpuReadyTape) {
+    return false;
+  }
+  std::array<CpuReadyTape::ReadyEntry, kMaxEncodeSessionSources> ready{};
+  for (size_t i = 0; i < sources.size(); ++i) {
+    const auto resolved = resolveTentativeSource(lock, sources[i]);
+    if (!resolved.valid()) {
+      return false;
+    }
+    ready[i] = CpuReadyTape::ReadyEntry{
+        .source = resolved.source,
+        .controlIndex = resolved.slotIndex,
+        .seqId = resolved.seqId,
+        .metadata = resolved.metadata,
+        .semantic = resolved.semantic,
+    };
+  }
+  if (!submissionBinding_.cpuReadyTape->restoreReservedReadyPrefix(
+          std::span<const CpuReadyTape::ReadyEntry>(
+              ready.data(), sources.size()))) {
+    return false;
+  }
+  for (size_t i = 0; i < tentativeReadyPrefixCount_; ++i) {
+    tentativeReadyPrefix_[i] = {};
+  }
+  tentativeReadyPrefixCount_ = 0;
+  recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
+  if (submissionBinding_.encodeCv) {
+    submissionBinding_.encodeCv->notify_all();
+  }
+  return true;
 }
 
 ResolvedPublishedSource QueueLifecycleController::resolveRepresentedSource(
@@ -1635,9 +1826,11 @@ ResolvedPublishedSource QueueLifecycleController::resolveRepresentedSource(
       .storage = source.storage,
   };
   if (!locator.valid() || source.seqId == 0 ||
+      !source.metadata.valid() || source.metadata.seqId != source.seqId ||
       !submissionBinding_.cpuReadyTape ||
       !submissionBinding_.cpuReadyTape->matches(
-          locator, source.seqId, CpuReadyTape::State::Represented)) {
+          locator, source.metadata, source.semantic,
+          CpuReadyTape::State::Represented)) {
     return {};
   }
   auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
@@ -1653,6 +1846,8 @@ ResolvedPublishedSource QueueLifecycleController::resolveRepresentedSource(
       .source = locator,
       .slotIndex = source.slotIndex,
       .seqId = source.seqId,
+      .metadata = source.metadata,
+      .semantic = source.semantic,
       .payload = payload,
       .sourceId = source.sourceId,
       .storage = source.storage,
@@ -1679,6 +1874,10 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
       return 0;
     }
     const auto& liveSlot = submissionBinding_.slots[source.slotIndex];
+    const CpuReadyTape::SourceRef locator{
+        .id = source.sourceId,
+        .storage = source.storage,
+    };
     const auto livePayload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
         source.sourceId, source.storage, CpuReadyTape::State::Encoding);
     if (liveSlot.sourceId != source.sourceId ||
@@ -1687,6 +1886,10 @@ size_t QueueLifecycleController::retainEncodedSourcesForPendingTail(
         liveSlot.state != ChunkSlot::State::Encoding ||
         liveSlot.seqId != source.seqId ||
         liveSlot.seqId == 0 ||
+        !source.metadata.valid() || source.metadata.seqId != source.seqId ||
+        !submissionBinding_.cpuReadyTape->matches(
+            locator, source.metadata, source.semantic,
+            CpuReadyTape::State::Encoding) ||
         !commandRangeWithinSource(livePayload,
                                   source.commandBegin,
                                   source.commandCount) ||
@@ -2445,8 +2648,17 @@ void QueueLifecycleController::assertQueueLifecycleInvariants(size_t inflightLim
       case ChunkSlot::State::Pending:
         DXMT_ASSERT(binding.cpuReadyTape);
         {
+          const auto tapeState = binding.cpuReadyTape->state(
+              slot.sourceId, slot.storage);
+          DXMT_ASSERT(tapeState == CpuReadyTape::State::Ready ||
+                      tapeState ==
+                          CpuReadyTape::State::TentativeRepresented);
+          const auto expectedTapeState =
+              tapeState == CpuReadyTape::State::TentativeRepresented
+                  ? CpuReadyTape::State::TentativeRepresented
+                  : CpuReadyTape::State::Ready;
           const auto payload = binding.cpuReadyTape->resolveSourcePayload(
-              slot.sourceId, slot.storage, CpuReadyTape::State::Ready);
+              slot.sourceId, slot.storage, expectedTapeState);
           DXMT_ASSERT(payload.valid());
           DXMT_ASSERT((payload.isLegacy() &&
                        payload.legacyPayload() == slot.payload) ||

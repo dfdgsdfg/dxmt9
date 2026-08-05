@@ -420,6 +420,7 @@ struct Counters {
   std::atomic<std::uint64_t> renderSplitPresent{0};
   std::atomic<std::uint64_t> renderSplitPresentAcquire{0};
   std::atomic<std::uint64_t> renderSplitTileMidPassIneligible{0};
+  std::atomic<std::uint64_t> renderSplitOrderedControl{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
@@ -2007,6 +2008,8 @@ std::atomic<std::uint64_t>& splitReasonCounter(Counters& c, EncoderSplitReason r
       return c.renderSplitPresentAcquire;
     case EncoderSplitReason::TileMidPassIneligible:
       return c.renderSplitTileMidPassIneligible;
+    case EncoderSplitReason::OrderedControl:
+      return c.renderSplitOrderedControl;
   }
   return c.renderSplitFinal;
 }
@@ -2035,6 +2038,8 @@ const char* splitReasonName(EncoderSplitReason reason) {
       return "present_acquire";
     case EncoderSplitReason::TileMidPassIneligible:
       return "tile_midpass";
+    case EncoderSplitReason::OrderedControl:
+      return "ordered_control";
   }
   return "unknown";
 }
@@ -2420,6 +2425,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_split_present", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresent, nullptr, nullptr, 0.0},
     {"render_split_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitPresentAcquire, nullptr, nullptr, 0.0},
     {"render_split_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitTileMidPassIneligible, nullptr, nullptr, 0.0},
+    {"render_split_ordered_control", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitOrderedControl, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},

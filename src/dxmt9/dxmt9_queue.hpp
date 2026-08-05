@@ -283,11 +283,16 @@ struct EncodeSessionSourceList {
 struct ReadySlotSnapshot {
   size_t slotIndex = 0;
   u64 seqId = 0;
+  CpuReadySourceMetadata metadata{};
+  SourceSemanticSummary semantic{};
   bool hasPresent = false;
   size_t commandBegin = 0;
   size_t commandCount = 0;
   CpuReadySourceId sourceId{};
   CpuReadyStorageRef storage{};
+
+  friend constexpr bool operator==(ReadySlotSnapshot,
+                                   ReadySlotSnapshot) noexcept = default;
 };
 
 // Synchronous call-local resolution: either while the queue lock holds a Ready
@@ -298,6 +303,8 @@ struct ResolvedPublishedSource {
   CpuReadyTape::SourceRef source{};
   size_t slotIndex = 0;
   u64 seqId = 0;
+  CpuReadySourceMetadata metadata{};
+  SourceSemanticSummary semantic{};
   SourcePayloadView payload{};
   CpuReadySourceId sourceId{};
   CpuReadyStorageRef storage{};
@@ -307,9 +314,21 @@ struct ResolvedPublishedSource {
   size_t commandCount = 0;
 
   bool valid() const noexcept {
-    return source.valid() && seqId != 0 && payload.valid();
+    return source.valid() && seqId != 0 && metadata.valid() &&
+           semantic.sealed() && payload.valid();
   }
 };
+
+static_assert(sizeof(ReadySlotSnapshot) <= 384,
+              "Ready source capability must remain compact");
+static_assert(sizeof(ResolvedPublishedSource) <= 448,
+              "synchronous resolved source must remain compact");
+static_assert(
+    kMaxEncodeSessionSources *
+            (sizeof(CpuReadyTape::ReadyEntry) +
+             sizeof(ResolvedPublishedSource)) <=
+        25u * 1024u,
+    "Ready-prefix selector scratch must stay within its fixed stack budget");
 
 // Stable, pointer-free attribution for one logical command in a published
 // source. The Tape source/storage generations disambiguate recycled control
@@ -686,6 +705,24 @@ class QueueLifecycleController {
   size_t dequeueReadySlotBatchPrefix(std::unique_lock<std::mutex>& lock,
                                      std::span<ReadySlotSnapshot> out,
                                      const ReadySlotBatchPrefixSelector& selectPrefix);
+  // Transactional form of EncodeDequeue. A selected FIFO prefix leaves Ready
+  // visibility but keeps its control slots Pending until exact semantic
+  // preflight commits it. Returning zero leaves both Tape and controls intact;
+  // unlike dequeueReadySlotBatchPrefix, selector rejection does not fall back
+  // to one source.
+  size_t reserveReadySlotBatchPrefix(
+      std::unique_lock<std::mutex>& lock,
+      std::span<ReadySlotSnapshot> out,
+      const ReadySlotBatchPrefixSelector& selectPrefix);
+  ResolvedPublishedSource resolveTentativeSource(
+      std::unique_lock<std::mutex>& lock,
+      const ReadySlotSnapshot& source) const noexcept;
+  bool commitReservedReadySlotBatch(
+      std::unique_lock<std::mutex>& lock,
+      std::span<const ReadySlotSnapshot> sources);
+  bool restoreReservedReadySlotBatch(
+      std::unique_lock<std::mutex>& lock,
+      std::span<const ReadySlotSnapshot> sources);
   ResolvedPublishedSource resolveRepresentedSource(
       const ReadySlotSnapshot& source) const noexcept;
   // Fail-stop a structurally inconsistent Tape/source resolution. This is an
@@ -855,6 +892,9 @@ class QueueLifecycleController {
   bool submit(QueueSubmissionRecord& record);
 
   SubmissionBinding submissionBinding_{};
+  std::array<ReadySlotSnapshot, kMaxEncodeSessionSources>
+      tentativeReadyPrefix_{};
+  size_t tentativeReadyPrefixCount_ = 0;
 
  public:
   // Records that have been committed to Metal and are awaiting GPU completion.

@@ -52,6 +52,12 @@
 #include <thread>
 #include <vector>
 
+using OrderedControlReplayObserver = void (*)(
+    void* userdata, std::uint32_t phase, std::uint32_t recordIndex,
+    std::uint32_t recordType, std::int32_t result);
+extern "C" void dxmt9_test_set_ordered_control_replay_observer(
+    void* userdata, OrderedControlReplayObserver observer);
+
 namespace dxmt9 {
 
 struct CommandQueueArenaLeaseTestAccess {
@@ -133,6 +139,45 @@ struct CommandQueueArenaLeaseTestAccess {
 
   static void runCpuReadySessionEncodeLoop(CommandQueue& queue) {
     queue.runCpuReadySessionEncodeLoop({});
+  }
+
+  static void enableCpuReadySessionReleaseLane(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.cpuReadySessionLaneEnabled_ = true;
+  }
+
+  static void restoreNextTentativePreflightAndReturn(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyRestoreNextCpuReadySessionPreflight_ = true;
+  }
+
+  static void pauseAfterNextSessionReleaseAck(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPauseAfterNextSessionReleaseAck_ = true;
+  }
+
+  static bool pausedAfterSessionReleaseAck(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyPausedAfterSessionReleaseAck_;
+  }
+
+  static void resumeAfterSessionReleaseAck(CommandQueue& queue) {
+    {
+      std::lock_guard lock(queue.mutex_);
+      queue.testOnlyPausedAfterSessionReleaseAck_ = false;
+    }
+    queue.sessionReleaseCv_.notify_all();
+  }
+
+  static bool hasPendingSessionRelease(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.sessionReleaseState_.hasPending();
+  }
+
+  static std::uint64_t acknowledgedSessionReleaseOrdinal(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.sessionReleaseState_.acknowledgedOrdinal();
   }
 
   static void requestStop(CommandQueue& queue) {
@@ -401,6 +446,58 @@ RecordSpec clearRecord() {
   };
 }
 
+RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
+                      std::uint32_t absoluteHandleIndex) {
+  D9CCommandChunkWireDrawHeaderV2 draw{
+      .primitiveType = 4u,
+      .primitiveCount = 1u,
+      .sectionCount = 1u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+  };
+  draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
+      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDescV2),
+      alignof(D9CCommandChunkWireStreamBindingV2)));
+  const D9CCommandChunkWireSectionDescV2 section{
+      .kind = D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
+      .elementSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+      .count = 1u,
+      .payloadOffset = draw.sectionPayloadOffset,
+      .byteSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+  };
+  const D9CCommandChunkWireStreamBindingV2 stream{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = absoluteHandleIndex,
+      .offset = 0u,
+      .stride = 16u,
+      .frequency = 1u,
+  };
+  std::vector<std::byte> payload(
+      draw.sectionPayloadOffset + sizeof(stream));
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  std::memcpy(payload.data() + draw.sectionTableOffset,
+              &section, sizeof(section));
+  std::memcpy(payload.data() + draw.sectionPayloadOffset,
+              &stream, sizeof(stream));
+  return {
+      .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      .payload = std::move(payload),
+      .handles = {dxmt9::d3d9::wireHandleEntryV2(bufferIdentity)},
+  };
+}
+
+RecordSpec queryIssueRecord(const D9CWireObjectIdentity& queryIdentity,
+                            std::uint32_t absoluteHandleIndex) {
+  return {
+      .type = D9C_COMMAND_RECORD_QUERY_ISSUE,
+      .payload = bytesOf(D9CCommandChunkWireQueryIssueV2{
+          .queryHandleIndex = absoluteHandleIndex,
+          .flags = 2u,
+      }),
+      .handles = {dxmt9::d3d9::wireHandleEntryV2(queryIdentity)},
+  };
+}
+
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                      std::uint64_t rawOrdinal) {
   dxmt9::d3d9::WireObjectRegistry registry;
@@ -409,6 +506,20 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
       fixture.bytes, fixture.envelope, registry,
       [](std::uint32_t, void*) noexcept {}, raw);
   check(prepared, "session join raw chunk must pass owned preflight");
+  raw.replaySeq = rawOrdinal;
+  raw.cpuReadyTapePlanningEnabled = true;
+  return raw;
+}
+
+dxmt9::d3d9::RawCommandChunk makeRaw(
+    const WireFixture& fixture, std::uint64_t rawOrdinal,
+    const dxmt9::d3d9::WireObjectRegistry& registry) {
+  dxmt9::d3d9::RawCommandChunk raw;
+  const bool prepared = dxmt9::d3d9::prepareV2OffloadChunk(
+      fixture.bytes, fixture.envelope, registry,
+      [](std::uint32_t, void*) noexcept {}, raw);
+  check(prepared,
+        "resource-bearing session join chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
   raw.cpuReadyTapePlanningEnabled = true;
   return raw;
@@ -440,11 +551,13 @@ struct SessionJoinDevice final : dxmt9::Device {
                      const DrawUniformPayload& uniforms,
                      std::span<const DrawParam> draws,
                      std::span<const DrawParamPayloadView> payloads) override {
+    drawCalls.fetch_add(1, std::memory_order_relaxed);
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
 
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
+  std::atomic<std::uint32_t> drawCalls{0};
   std::uint64_t nextHandle_ = 1;
 };
 
@@ -781,6 +894,511 @@ void productionLoopReleasesForActualWriterCapacityWait() {
         "compatibility writer");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
         "writer-pressure completion must leave no Arena residency");
+}
+
+void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
+  RuntimeFixture fixture;
+  fixture.publishArenaClear(1);
+  fixture.publishArenaClear(2);
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableCpuReadySessionReleaseLane(queue);
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      pauseAfterNextSessionReleaseAck(queue);
+
+  std::atomic<bool> releaseResult{false};
+  std::thread releaseThread([&] {
+    releaseResult.store(
+        queue.releaseCpuReadySessionBeforeOrderedControl(
+            dxmt9::core::metalqueue::SessionReleaseReason::DirectObservation,
+            dxmt9::core::metalqueue::SessionReleaseAction::ClosePass, 2),
+        std::memory_order_release);
+  });
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+              hasPendingSessionRelease(queue);
+        }),
+        "Query-style ClosePass must publish its ordered fence before wait");
+
+  // This publication is deliberately younger than the already-fixed event.
+  // It must remain Ready while the older prefix closes its pass.
+  fixture.publishArenaClear(3);
+  const auto expectedSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(expectedSources.size() == 3,
+        "ClosePass fixture publishes two fenced sources and one suffix");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+              pausedAfterSessionReleaseAck(queue);
+        }),
+        "encode coordinator must acknowledge ClosePass after its action");
+  releaseThread.join();
+
+  check(releaseResult.load(std::memory_order_acquire),
+        "ordered ClosePass poster returns only after acknowledgement");
+  check(backendState->calls.size() == 2,
+        "release fence represents only the older compatibility prefix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1,
+        "source younger than the release fence stays Ready");
+  check(!backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire),
+        "ClosePass must not submit the pending non-present session");
+  check(backendState->calls[0].session != 0 &&
+            backendState->calls[0].session == backendState->calls[1].session,
+        "ClosePass keeps one queue-owned EncodeSession for the fenced prefix");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      resumeAfterSessionReleaseAck(queue);
+  check(waitUntil([&] {
+          return backendState->observedBackendCalls.load(
+                     std::memory_order_acquire) == 3;
+        }),
+        "resumed coordinator appends the younger suffix");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->calls[2].session == backendState->calls[0].session,
+        "Query-style ClosePass preserves the session across the suffix");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire) &&
+            backendState->backendCallCountAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 3,
+        "only the later shutdown drain submits the preserved session");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "ClosePass fixture completes every merged source after final submit");
+}
+
+void orderedSubmitAcknowledgesAfterNonPresentPrefixSubmission() {
+  RuntimeFixture fixture;
+  fixture.publishArenaClear(1);
+  fixture.publishArenaClear(2);
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableCpuReadySessionReleaseLane(queue);
+  const auto expectedSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(expectedSources.size() == 2 && !expectedSources[0].hasPresent &&
+            !expectedSources[1].hasPresent,
+        "SubmitSession fixture is a non-present prefix");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::atomic<bool> releaseResult{false};
+  std::thread releaseThread([&] {
+    releaseResult.store(
+        queue.releaseCpuReadySessionBeforeOrderedControl(
+            dxmt9::core::metalqueue::SessionReleaseReason::
+                IndependentSubmission,
+            dxmt9::core::metalqueue::SessionReleaseAction::SubmitSession, 2),
+        std::memory_order_release);
+  });
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+              hasPendingSessionRelease(queue);
+        }),
+        "SubmitSession event must be visible before coordinator start");
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  releaseThread.join();
+
+  check(releaseResult.load(std::memory_order_acquire),
+        "SubmitSession poster observes coordinator acknowledgement");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire),
+        "acknowledgement follows physical non-present prefix submission");
+  check(backendState->backendCallCountAtFirstRecordSubmit.load(
+            std::memory_order_relaxed) == 2,
+        "ordered submit covers the complete fixed prefix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            acknowledgedSessionReleaseOrdinal(queue) != 0,
+        "queue-owned release state records the acknowledged action");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "SubmitSession transitions every fenced source to GPU");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "submitted prefix completes and reclaims normally");
+}
+
+void tentativeCoordinatorPreflightRestoresExactFifoOrder() {
+  RuntimeFixture fixture;
+  fixture.publishArenaClear(1);
+  fixture.publishArenaClear(2);
+  fixture.publishArenaClear(3);
+  auto& queue = fixture.routing->queue_;
+  const auto before =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      restoreNextTentativePreflightAndReturn(queue);
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      runCpuReadySessionEncodeLoop(queue);
+  const auto after =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(after.size() == before.size() && after.size() == 3,
+        "tentative preflight restore returns the complete prefix to Ready");
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    check(sameCompletionSource(before[i], after[i]),
+          "tentative restore preserves exact FIFO identity and order");
+  }
+  check(backendState->calls.empty(),
+        "restored preflight emits no backend or Metal effects");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      stopAndRunCpuReadySessionEncodeLoop(queue);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, before) == before.size(),
+      "restored sources remain consumable through the normal session path");
+}
+
+struct OrderedControlReplayEvent {
+  std::uint32_t phase = 0;
+  std::uint32_t recordIndex = 0;
+  std::uint32_t recordType = 0;
+  std::int32_t result = 0;
+  std::uint32_t drawCalls = 0;
+  std::uint64_t queryIssuedSequence = 0;
+  std::size_t backendCalls = 0;
+};
+
+struct OrderedControlReplayTrace {
+  SessionJoinDevice* routing = nullptr;
+  dxmt9::core::Query* query = nullptr;
+  ProductionLoopBackendState* backend = nullptr;
+  std::vector<OrderedControlReplayEvent> events;
+};
+
+void recordOrderedControlReplayEvent(void* userdata, std::uint32_t phase,
+                                     std::uint32_t recordIndex,
+                                     std::uint32_t recordType,
+                                     std::int32_t result) {
+  auto& trace = *static_cast<OrderedControlReplayTrace*>(userdata);
+  trace.events.push_back(OrderedControlReplayEvent{
+      .phase = phase,
+      .recordIndex = recordIndex,
+      .recordType = recordType,
+      .result = result,
+      .drawCalls = trace.routing->drawCalls.load(std::memory_order_relaxed),
+      .queryIssuedSequence = trace.query->issuedSequenceId(),
+      .backendCalls = trace.backend
+          ? trace.backend->observedBackendCalls.load(std::memory_order_acquire)
+          : 0,
+  });
+}
+
+void productionReplayFencesQueryBetweenOlderAndYoungerDraws() {
+  RuntimeFixture fixture;
+  auto buffer = fixture.device->CreateBuffer(BufferDesc{
+      .size = 256u,
+      .pool = Pool::Default,
+      .usage = UsageVertexBuffer,
+  });
+  auto query = fixture.device->CreateQuery(QueryType::Occlusion);
+  check(buffer != nullptr && query != nullptr,
+        "ordered-control production resources must construct");
+  D9CBuffer wireBuffer(buffer, fixture.cDevice.get());
+  D9CQuery wireQuery(query, fixture.cDevice.get());
+  const std::array records{
+      drawRecord(wireBuffer.wireIdentity, 0u),
+      queryIssueRecord(wireQuery.wireIdentity, 1u),
+      drawRecord(wireBuffer.wireIdentity, 2u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 77,
+                     fixture.cDevice->wireObjects);
+
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableCpuReadySessionReleaseLane(queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      pauseAfterNextSessionReleaseAck(queue);
+  OrderedControlReplayTrace trace{
+      .routing = fixture.routing,
+      .query = query.get(),
+      .backend = backendState.get(),
+  };
+  dxmt9_test_set_ordered_control_replay_observer(
+      &trace, recordOrderedControlReplayEvent);
+
+  std::atomic<std::int32_t> replayResult{D3DERR_INVALIDCALL};
+  std::thread replayThread([&] {
+    replayResult.store(
+        dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw),
+        std::memory_order_release);
+  });
+  const bool releasePublished = waitUntil([&] {
+    return dxmt9::CommandQueueArenaLeaseTestAccess::
+        hasPendingSessionRelease(queue);
+  });
+  const auto olderSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  replayThread.join();
+  dxmt9_test_set_ordered_control_replay_observer(nullptr, nullptr);
+
+  const bool coordinatorPaused = waitUntil([&] {
+    return dxmt9::CommandQueueArenaLeaseTestAccess::
+        pausedAfterSessionReleaseAck(queue);
+  });
+  const bool youngerPublished =
+      dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(queue);
+  const auto youngerSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      resumeAfterSessionReleaseAck(queue);
+  const bool youngerEncoded = waitUntil([&] {
+    return backendState->observedBackendCalls.load(
+               std::memory_order_acquire) == 2;
+  });
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> allSources;
+  allSources.insert(allSources.end(), olderSources.begin(), olderSources.end());
+  allSources.insert(allSources.end(), youngerSources.begin(),
+                    youngerSources.end());
+
+  check(releasePublished && replayResult.load(std::memory_order_acquire) ==
+                                D3D_OK,
+        "mixed draw/query/draw replay must publish and satisfy its ordered "
+        "release");
+  check(olderSources.size() == 1 && youngerPublished &&
+            coordinatorPaused && youngerSources.size() == 1,
+        "Query fence must split exactly one older and one younger source");
+  check(youngerEncoded && backendState->calls.size() == 2,
+        "production coordinator must encode both sides exactly once");
+  check(trace.events.size() == 4,
+        "one Query record must emit one complete release/dispatch trace");
+  for (std::size_t i = 0; i < trace.events.size(); ++i) {
+    const auto& event = trace.events[i];
+    check(event.phase == i + 1u && event.recordIndex == 1u &&
+              event.recordType == D9C_COMMAND_RECORD_QUERY_ISSUE,
+          "ordered replay trace must identify exact Query record and phase");
+  }
+  check(trace.events[0].drawCalls == 1u &&
+            trace.events[0].queryIssuedSequence == 0u &&
+            trace.events[0].backendCalls == 0u,
+        "older draw must replay before release while Query remains untouched");
+  check(trace.events[1].drawCalls == 1u &&
+            trace.events[1].queryIssuedSequence == 0u &&
+            trace.events[1].backendCalls == 1u,
+        "release acknowledgement must follow older-source session encode");
+  check(trace.events[2].drawCalls == 1u &&
+            trace.events[2].queryIssuedSequence == 0u &&
+            trace.events[2].backendCalls == 1u,
+        "Query dispatch must begin only after the older release completes");
+  check(trace.events[3].result == D3D_OK &&
+            trace.events[3].drawCalls == 1u &&
+            trace.events[3].queryIssuedSequence == 2u &&
+            trace.events[3].backendCalls == 1u,
+        "real Query side effect must occur exactly once before younger draw");
+  check(fixture.routing->drawCalls.load(std::memory_order_relaxed) == 2u &&
+            query->issuedSequenceId() == 2u,
+        "mixed raw replay must dispatch both draws and the Query exactly "
+        "once with no fallback replay");
+  check(allSources.size() == 2 &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, allSources),
+        "shutdown must submit the preserved session containing both sides");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "both fenced sources must retain exact completion attribution");
+}
+
+void productionReplayFencesEveryQueryInOneRaw() {
+  RuntimeFixture fixture;
+  auto buffer = fixture.device->CreateBuffer(BufferDesc{
+      .size = 256u,
+      .pool = Pool::Default,
+      .usage = UsageVertexBuffer,
+  });
+  auto query = fixture.device->CreateQuery(QueryType::Occlusion);
+  check(buffer != nullptr && query != nullptr,
+        "multi-control production resources must construct");
+  D9CBuffer wireBuffer(buffer, fixture.cDevice.get());
+  D9CQuery wireQuery(query, fixture.cDevice.get());
+  const std::array records{
+      drawRecord(wireBuffer.wireIdentity, 0u),
+      queryIssueRecord(wireQuery.wireIdentity, 1u),
+      drawRecord(wireBuffer.wireIdentity, 2u),
+      queryIssueRecord(wireQuery.wireIdentity, 3u),
+      drawRecord(wireBuffer.wireIdentity, 4u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 79,
+                     fixture.cDevice->wireObjects);
+
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableCpuReadySessionReleaseLane(queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  OrderedControlReplayTrace trace{
+      .routing = fixture.routing,
+      .query = query.get(),
+      .backend = backendState.get(),
+  };
+  dxmt9_test_set_ordered_control_replay_observer(
+      &trace, recordOrderedControlReplayEvent);
+
+  std::atomic<std::int32_t> replayResult{D3DERR_INVALIDCALL};
+  std::thread replayThread([&] {
+    replayResult.store(
+        dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw),
+        std::memory_order_release);
+  });
+  const bool firstReleasePublished = waitUntil([&] {
+    return dxmt9::CommandQueueArenaLeaseTestAccess::
+        hasPendingSessionRelease(queue);
+  });
+  const auto firstSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  replayThread.join();
+  dxmt9_test_set_ordered_control_replay_observer(nullptr, nullptr);
+
+  const bool bothFencedPrefixesEncoded =
+      backendState->observedBackendCalls.load(std::memory_order_acquire) == 2;
+  const bool finalSourcePublished =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          publishLegacyWritingSlot(queue);
+  const bool finalSourceEncoded = waitUntil([&] {
+    return backendState->observedBackendCalls.load(
+               std::memory_order_acquire) == 3;
+  });
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> allSources;
+  for (const auto& call : backendState->calls) {
+    check(call.sessionSource.has_value(),
+          "every fenced draw range retains an exact completion source");
+    allSources.push_back(*call.sessionSource);
+  }
+
+  check(firstReleasePublished && firstSources.size() == 1 &&
+            replayResult.load(std::memory_order_acquire) == D3D_OK,
+        "the first Query publishes and satisfies exactly its older draw prefix");
+  check(bothFencedPrefixesEncoded && finalSourcePublished &&
+            finalSourceEncoded && backendState->calls.size() == 3,
+        "both Query fences and the final drain encode three draw ranges once");
+  check(trace.events.size() == 8,
+        "both Query records emit complete release/dispatch traces");
+  for (std::size_t i = 0; i < trace.events.size(); ++i) {
+    const auto& event = trace.events[i];
+    check(event.phase == i % 4u + 1u &&
+              event.recordIndex == (i < 4u ? 1u : 3u) &&
+              event.recordType == D9C_COMMAND_RECORD_QUERY_ISSUE,
+          "each trace phase belongs to its exact Query record");
+  }
+  check(trace.events[1].backendCalls == 1u &&
+            trace.events[3].queryIssuedSequence == 2u &&
+            trace.events[4].drawCalls == 2u &&
+            trace.events[4].backendCalls == 1u &&
+            trace.events[5].backendCalls == 2u &&
+            trace.events[7].result == D3D_OK &&
+            trace.events[7].queryIssuedSequence == 4u,
+        "the second Query independently releases the interstitial draw before "
+        "its side effect");
+  check(fixture.routing->drawCalls.load(std::memory_order_relaxed) == 3u &&
+            query->issuedSequenceId() == 4u,
+        "multi-control raw replay dispatches all records exactly once");
+  check(allSources.size() == 3 &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, allSources),
+        "one preserved session submits all three ordered draw ranges");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "all three ranges retain exact FIFO completion attribution");
+}
+
+void productionReplayGateOffLeavesQueryInCompatibilityWriter() {
+  RuntimeFixture fixture;
+  auto buffer = fixture.device->CreateBuffer(BufferDesc{
+      .size = 256u,
+      .pool = Pool::Default,
+      .usage = UsageVertexBuffer,
+  });
+  auto query = fixture.device->CreateQuery(QueryType::Occlusion);
+  check(buffer != nullptr && query != nullptr,
+        "gate-off ordered-control resources must construct");
+  D9CBuffer wireBuffer(buffer, fixture.cDevice.get());
+  D9CQuery wireQuery(query, fixture.cDevice.get());
+  const std::array records{
+      drawRecord(wireBuffer.wireIdentity, 0u),
+      queryIssueRecord(wireQuery.wireIdentity, 1u),
+      drawRecord(wireBuffer.wireIdentity, 2u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 78,
+                     fixture.cDevice->wireObjects);
+
+  OrderedControlReplayTrace trace{
+      .routing = fixture.routing,
+      .query = query.get(),
+  };
+  dxmt9_test_set_ordered_control_replay_observer(
+      &trace, recordOrderedControlReplayEvent);
+  const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+  dxmt9_test_set_ordered_control_replay_observer(nullptr, nullptr);
+
+  auto& queue = fixture.routing->queue_;
+  check(hr == D3D_OK && trace.events.size() == 4,
+        "gate-off mixed replay must retain historical dispatch behavior");
+  check(fixture.routing->drawCalls.load(std::memory_order_relaxed) == 2u &&
+            query->issuedSequenceId() == 2u,
+        "gate-off path must dispatch both draws and Query exactly once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0 &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::
+                hasPendingSessionRelease(queue) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::
+                acknowledgedSessionReleaseOrdinal(queue) == 0,
+        "disabled release lane must not publish, fence, or acknowledge at "
+        "the Query edge");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            publishLegacyWritingSlot(queue),
+        "gate-off draws remain publishable as one compatibility source");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1,
+        "gate-off replay must leave one combined compatibility source");
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeBatch(queue, 1);
+  check(completion.dequeued == 1 && completion.retained == 1 &&
+            completion.submitted && completion.completed,
+        "gate-off compatibility source must remain normally consumable");
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,6 +1786,12 @@ int main() {
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
     productionLoopReleasesForActualWriterCapacityWait();
+    orderedClosePassKeepsFencedSuffixReadyAndPreservesSession();
+    orderedSubmitAcknowledgesAfterNonPresentPrefixSubmission();
+    tentativeCoordinatorPreflightRestoresExactFifoOrder();
+    productionReplayFencesQueryBetweenOlderAndYoungerDraws();
+    productionReplayFencesEveryQueryInOneRaw();
+    productionReplayGateOffLeavesQueryInCompatibilityWriter();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_session_join_spec failed: " << error.what()
               << '\n';

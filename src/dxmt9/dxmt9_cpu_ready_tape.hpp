@@ -2,6 +2,7 @@
 
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_source_payload.hpp"
+#include "dxmt9_source_semantics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -265,6 +266,30 @@ struct CpuReadyAdmissionIdentity {
   }
 };
 
+// Immutable scheduling facts fixed by source admission/publication.  The
+// source/storage generations remain the authority for resolving this value;
+// consumers must revalidate the metadata against the live Tape entry before
+// using it to make an ordering or capacity decision.
+struct CpuReadySourceMetadata {
+  std::uint64_t rawOrdinal = 0;
+  std::uint64_t sourceOrdinal = 0;
+  std::uint64_t seqId = 0;
+  std::uint64_t buildGeneration = 0;
+  // Exact planned storage extent for Arena sources. Legacy callers may supply
+  // an explicit page-backed extent; the production default is the immutable
+  // payload's deterministic logical replay footprint.
+  std::size_t usedBytes = 0;
+  std::uint32_t pageCount = 0;
+  bool strictAdmission = false;
+
+  constexpr bool valid() const noexcept {
+    return sourceOrdinal != 0 && seqId != 0 && pageCount != 0;
+  }
+
+  friend constexpr bool operator==(CpuReadySourceMetadata,
+                                   CpuReadySourceMetadata) noexcept = default;
+};
+
 struct CpuReadyLayoutRegionRequest {
   std::size_t byteCount = 0;
   std::size_t alignment = 1;
@@ -365,6 +390,7 @@ class CpuReadyTape {
     Writing,
     Sealed,
     Ready,
+    TentativeRepresented,
     Represented,
     Encoding = Represented,
     Submitted,
@@ -407,11 +433,16 @@ class CpuReadyTape {
     SourceRef source{};
     std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
     std::uint64_t seqId = 0;
+    CpuReadySourceMetadata metadata{};
+    SourceSemanticSummary semantic{};
 
     constexpr bool valid() const noexcept {
       return source.valid() &&
              controlIndex != std::numeric_limits<std::size_t>::max() &&
-             seqId != 0;
+             seqId != 0 && metadata.valid() && metadata.seqId == seqId &&
+             metadata.pageCount == source.storage.pageCount &&
+             semantic.sealed() && semantic.byteCount == metadata.usedBytes &&
+             semantic.pageCount == metadata.pageCount;
     }
 
     friend constexpr bool operator==(ReadyEntry, ReadyEntry) noexcept = default;
@@ -502,6 +533,8 @@ class CpuReadyTape {
         entries_(std::make_unique<Entry[]>(config.values().sourceSlotCount)),
         readyFifo_(std::make_unique<ReadyEntry[]>(
             config.values().readyFifoCount)),
+        tentativeReadyPrefix_(std::make_unique<ReadyEntry[]>(
+            config.values().readyFifoCount)),
         pages_(std::make_unique<Page[]>(config.values().pageCount)),
         pageArena_(allocateCpuReadyAlignedBytes(
             config.values().pageSize * config.values().pageCount)),
@@ -549,7 +582,9 @@ class CpuReadyTape {
       const auto& ready = readyFifo_[readyIndex(i)];
       const auto* entry = resolveEntry(ready.source.id, ready.source.storage);
       if (!ready.valid() || !entry || entry->state != State::Ready ||
-          entry->seqId != ready.seqId || !entry->readyPublicationReserved) {
+          !metadataMatchesEntry(ready.metadata, *entry) ||
+          !semanticMatchesEntry(ready.semantic, *entry) ||
+          !entry->readyPublicationReserved) {
         noteStaleReject();
         return 0;
       }
@@ -596,21 +631,48 @@ class CpuReadyTape {
   bool matches(SourceRef source, std::uint64_t seqId,
                State expected) const noexcept {
     const auto* entry = resolveEntry(source.id, source.storage);
-    if (!entry || entry->state != expected || expected == State::Writing ||
-        expected == State::Sealed || expected == State::Reclaiming ||
-        seqId == 0 || entry->seqId != seqId ||
-        (entry->payloadKind == PayloadKind::Legacy
-             ? !compatibilityPayload(*entry) ||
-                   compatibilityPayload(*entry)->seqId != seqId
-             : entry->arenaPayloadCount == 0 ||
-                   (entry->arenaPayloadCount == 1
-                        ? !arenaPayload(*entry) ||
-                              !arenaPayload(*entry)->readable()
-                        : !entry->arenaChain.readable()))) {
+    if (!entryMatches(entry, seqId, expected)) {
       noteStaleReject();
       return false;
     }
     return true;
+  }
+
+  bool matches(SourceRef source, CpuReadySourceMetadata metadata,
+               State expected) const noexcept {
+    const auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || !metadataMatchesEntry(metadata, *entry) ||
+        !entryMatches(entry, metadata.seqId, expected)) {
+      noteStaleReject();
+      return false;
+    }
+    return true;
+  }
+
+  bool matches(SourceRef source, CpuReadySourceMetadata metadata,
+               const SourceSemanticSummary& semantic,
+               State expected) const noexcept {
+    const auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || !metadataMatchesEntry(metadata, *entry) ||
+        !semanticMatchesEntry(semantic, *entry) ||
+        !entryMatches(entry, metadata.seqId, expected)) {
+      noteStaleReject();
+      return false;
+    }
+    return true;
+  }
+
+  std::optional<CpuReadySourceMetadata> sourceMetadata(
+      CpuReadySourceId id, CpuReadyStorageRef storage,
+      State expected) const noexcept {
+    const auto* entry = resolveEntry(id, storage);
+    if (!entry || entry->state != expected ||
+        expected == State::Writing || expected == State::Sealed ||
+        expected == State::Reclaiming) {
+      noteStaleReject();
+      return std::nullopt;
+    }
+    return metadataForEntry(*entry);
   }
 
   void stopAdmission() noexcept {
@@ -913,7 +975,7 @@ class CpuReadyTape {
         (rawOrdinal != 0 && rawOrdinal <= rawOrdinalHighWater_) ||
         sourceOrdinal <= sourceOrdinalHighWater_ ||
         seqId <= seqIdHighWater_ || controlIndex == kInvalidIndex ||
-        usedBytes > reservedBytes || !entry->readyPublicationReserved ||
+        !entry->readyPublicationReserved ||
         readyCount_ >= config_.values().readyFifoCount ||
         readyFifo_[readyTail_].valid()) {
       noteStaleReject();
@@ -924,16 +986,35 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
+    if (usedBytes != 0) {
+      // Explicit extents continue to describe caller-written Tape storage and
+      // must fit the reserved page run.
+      if (usedBytes > reservedBytes) {
+        noteStaleReject();
+        return false;
+      }
+    } else {
+      // Legacy compatibility payloads live in their ChunkSlot vectors rather
+      // than the page arena. Give production publication a deterministic
+      // logical byte extent so session caps cannot treat non-empty work as
+      // free. Arena publication retains its exact planned storage extent.
+      usedBytes = measureSourcePayloadLogicalExtent(SourcePayloadView(*payload));
+    }
+    const auto semantic = makeSealedSemanticSummary(
+        SourcePayloadView(*payload), usedBytes, ticket.storage.pageCount);
     payload->seqId = seqId;
     entry->rawOrdinal = rawOrdinal;
     entry->sourceOrdinal = sourceOrdinal;
     entry->seqId = seqId;
     entry->usedBytes = usedBytes;
+    entry->semantic = semantic;
     entry->state = State::Ready;
     readyFifo_[readyTail_] = ReadyEntry{
         .source = SourceRef{.id = ticket.id, .storage = ticket.storage},
         .controlIndex = controlIndex,
         .seqId = seqId,
+        .metadata = metadataForEntry(*entry),
+        .semantic = entry->semantic,
     };
     readyTail_ = (readyTail_ + 1) % config_.values().readyFifoCount;
     ++readyCount_;
@@ -994,12 +1075,20 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
+    const SourcePayloadView payloadView = entry->arenaPayloadCount == 1
+        ? SourcePayloadView(*payloads[0])
+        : SourcePayloadView(entry->arenaChain);
+    const auto semantic = makeSealedSemanticSummary(
+        payloadView, usedBytes, ticket.storage.pageCount);
     entry->usedBytes = usedBytes;
+    entry->semantic = semantic;
     entry->state = State::Ready;
     readyFifo_[readyTail_] = ReadyEntry{
         .source = SourceRef{.id = ticket.id, .storage = ticket.storage},
         .controlIndex = controlIndex,
         .seqId = entry->seqId,
+        .metadata = metadataForEntry(*entry),
+        .semantic = entry->semantic,
     };
     readyTail_ = (readyTail_ + 1) % config_.values().readyFifoCount;
     ++readyCount_;
@@ -1009,7 +1098,27 @@ class CpuReadyTape {
   }
 
   bool representReadyPrefix(std::span<const ReadyEntry> selected) noexcept {
-    if (selected.empty() || selected.size() > readyCount_) {
+    if (!reserveReadyPrefixForRepresentation(selected)) {
+      return false;
+    }
+    if (!commitReservedReadyPrefix(selected)) {
+      const bool restored = restoreReservedReadyPrefix(selected);
+      DXMT_ASSERT(restored);
+      (void)restored;
+      return false;
+    }
+    return true;
+  }
+
+  // Removes one validated FIFO prefix from Ready without making it
+  // irrevocably Represented.  The caller retains the copied ReadyEntry values
+  // as the generation-stamped capability passed to commit or restore.  Only
+  // one tentative prefix may exist, so restore always returns it ahead of
+  // every younger Ready publication.
+  bool reserveReadyPrefixForRepresentation(
+      std::span<const ReadyEntry> selected) noexcept {
+    if (selected.empty() || selected.size() > readyCount_ ||
+        tentativeRepresentationCount_ != 0) {
       noteStaleReject();
       return false;
     }
@@ -1017,25 +1126,82 @@ class CpuReadyTape {
       const auto& ready = readyFifo_[readyIndex(i)];
       auto* entry = resolveEntry(ready.source.id, ready.source.storage);
       if (selected[i] != ready || !ready.valid() || !entry ||
-          entry->state != State::Ready || entry->seqId != ready.seqId ||
+          entry->state != State::Ready ||
+          !metadataMatchesEntry(ready.metadata, *entry) ||
+          !semanticMatchesEntry(ready.semantic, *entry) ||
           !entry->readyPublicationReserved) {
         noteStaleReject();
         return false;
       }
     }
     for (std::size_t i = 0; i < selected.size(); ++i) {
+      tentativeReadyPrefix_[i] = selected[i];
       auto& ready = readyFifo_[readyHead_];
       auto* entry = resolveEntry(ready.source.id, ready.source.storage);
-      entry->state = State::Represented;
-      entry->readyPublicationReserved = false;
+      entry->state = State::TentativeRepresented;
       ready = {};
       readyHead_ = (readyHead_ + 1) % config_.values().readyFifoCount;
     }
     readyCount_ -= selected.size();
-    readyPublicationReservations_ -= selected.size();
+    tentativeRepresentationCount_ = selected.size();
     stats_.readyFifoEntries = readyCount_;
+    return true;
+  }
+
+  bool commitReservedReadyPrefix(
+      std::span<const ReadyEntry> selected) noexcept {
+    if (!validateTentativePrefix(selected)) {
+      noteStaleReject();
+      return false;
+    }
+    for (const auto& ready : selected) {
+      auto* entry = resolveEntry(ready.source.id, ready.source.storage);
+      entry->state = State::Represented;
+      entry->readyPublicationReserved = false;
+    }
+    readyPublicationReservations_ -= selected.size();
+    for (std::size_t i = 0; i < tentativeRepresentationCount_; ++i) {
+      tentativeReadyPrefix_[i] = {};
+    }
+    tentativeRepresentationCount_ = 0;
     stats_.readyPublicationReservations = readyPublicationReservations_;
     refreshAdmissionAfterRelease();
+    return true;
+  }
+
+  bool restoreReservedReadyPrefix(
+      std::span<const ReadyEntry> selected) noexcept {
+    if (!validateTentativePrefix(selected) ||
+        selected.size() > config_.values().readyFifoCount - readyCount_) {
+      noteStaleReject();
+      return false;
+    }
+    std::size_t restoredHead = readyHead_;
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+      restoredHead = restoredHead == 0
+          ? config_.values().readyFifoCount - 1u
+          : restoredHead - 1u;
+    }
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+      const std::size_t index =
+          (restoredHead + i) % config_.values().readyFifoCount;
+      if (readyFifo_[index].valid()) {
+        noteStaleReject();
+        return false;
+      }
+    }
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+      const std::size_t index =
+          (restoredHead + i) % config_.values().readyFifoCount;
+      const auto& ready = tentativeReadyPrefix_[i];
+      readyFifo_[index] = ready;
+      resolveEntry(ready.source.id, ready.source.storage)->state = State::Ready;
+      tentativeReadyPrefix_[i] = {};
+    }
+    readyHead_ = restoredHead;
+    readyCount_ += selected.size();
+    tentativeRepresentationCount_ = 0;
+    stats_.readyFifoEntries = readyCount_;
     return true;
   }
 
@@ -1326,6 +1492,7 @@ class CpuReadyTape {
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
     std::uint64_t buildGeneration = 0;
+    SourceSemanticSummary semantic{};
     bool strictAdmission = false;
     bool readyPublicationReserved = false;
     bool arenaOwnerDetached = false;
@@ -1362,6 +1529,96 @@ class CpuReadyTape {
            ticket.sourceOrdinal == entry.sourceOrdinal &&
            ticket.seqId == entry.seqId &&
            ticket.buildGeneration == entry.buildGeneration;
+  }
+
+  static CpuReadySourceMetadata metadataForEntry(
+      const Entry& entry) noexcept {
+    return CpuReadySourceMetadata{
+        .rawOrdinal = entry.rawOrdinal,
+        .sourceOrdinal = entry.sourceOrdinal,
+        .seqId = entry.seqId,
+        .buildGeneration = entry.buildGeneration,
+        .usedBytes = entry.usedBytes,
+        .pageCount = entry.storage.pageCount,
+        .strictAdmission = entry.strictAdmission,
+    };
+  }
+
+  static bool metadataMatchesEntry(CpuReadySourceMetadata metadata,
+                                   const Entry& entry) noexcept {
+    return metadata.valid() && metadata == metadataForEntry(entry);
+  }
+
+  static SourceSemanticSummary makeSealedSemanticSummary(
+      SourcePayloadView payload,
+      std::size_t usedBytes,
+      std::uint32_t pageCount) noexcept {
+    // Publication is the first point where the complete immutable payload is
+    // visible. Keep route and resource canonicalization conservative here;
+    // exact replay remains the authority for render-pass continuation.
+    return summarizeSourcePayload(
+        payload,
+        SourceSemanticSummaryContext{
+            .byteCount = usedBytes,
+            .pageCount = pageCount,
+            .firstRenderRoute = RenderRoute::Unknown,
+            .passActionEpoch = 1,
+            .sealed = true,
+            .entryStable = payload.valid(),
+            .resourcesCanonicalized = false,
+        });
+  }
+
+  static bool semanticMatchesEntry(
+      const SourceSemanticSummary& semantic,
+      const Entry& entry) noexcept {
+    return semantic.sealed() && semantic == entry.semantic &&
+           semantic.byteCount == entry.usedBytes &&
+           semantic.pageCount == entry.storage.pageCount;
+  }
+
+  bool entryMatches(const Entry* entry, std::uint64_t seqId,
+                    State expected) const noexcept {
+    return entry && entry->state == expected &&
+           expected != State::Writing && expected != State::Sealed &&
+           expected != State::Reclaiming && seqId != 0 &&
+           entry->seqId == seqId &&
+           (entry->payloadKind == PayloadKind::Legacy
+                ? compatibilityPayload(*entry) &&
+                      compatibilityPayload(*entry)->seqId == seqId
+                : entry->arenaPayloadCount != 0 &&
+                      (entry->arenaPayloadCount == 1
+                           ? arenaPayload(*entry) &&
+                                 arenaPayload(*entry)->readable()
+                           : entry->arenaChain.readable()));
+  }
+
+  bool validateTentativePrefix(
+      std::span<const ReadyEntry> selected) const noexcept {
+    if (selected.empty() ||
+        selected.size() != tentativeRepresentationCount_) {
+      return false;
+    }
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+      const auto& ready = selected[i];
+      if (ready != tentativeReadyPrefix_[i]) {
+        return false;
+      }
+      const auto* entry = resolveEntry(ready.source.id, ready.source.storage);
+      if (!ready.valid() || !entry ||
+          entry->state != State::TentativeRepresented ||
+          !entry->readyPublicationReserved ||
+          !metadataMatchesEntry(ready.metadata, *entry) ||
+          !semanticMatchesEntry(ready.semantic, *entry)) {
+        return false;
+      }
+      for (std::size_t j = 0; j < i; ++j) {
+        if (selected[j].source.id == ready.source.id) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   std::size_t previousSourceIndex(std::size_t index) const noexcept {
@@ -1939,6 +2196,7 @@ class CpuReadyTape {
   const CpuReadyTapeConfig config_;
   std::unique_ptr<Entry[]> entries_{};
   std::unique_ptr<ReadyEntry[]> readyFifo_{};
+  std::unique_ptr<ReadyEntry[]> tentativeReadyPrefix_{};
   std::unique_ptr<Page[]> pages_{};
   CpuReadyAlignedBytes pageArena_{};
   std::unique_ptr<CpuReadyArenaOwnerSlot[]> arenaOwners_{};
@@ -1956,6 +2214,7 @@ class CpuReadyTape {
   std::size_t compatibilityResident_ = 0;
   std::size_t compatibilityWritingCount_ = 0;
   std::size_t readyPublicationReservations_ = 0;
+  std::size_t tentativeRepresentationCount_ = 0;
   std::uint64_t nextPageAllocationGeneration_ = 0;
   std::uint64_t rawOrdinalHighWater_ = 0;
   std::uint64_t sourceOrdinalHighWater_ = 0;

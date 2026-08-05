@@ -27,6 +27,7 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "dxmt9_session_release.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "dxmt9_transient_resource_arena.hpp"
 #include "dxmt9_uniform_dirty.hpp"
@@ -511,6 +512,18 @@ class CommandQueue {
   bool waitForCpuReadyArenaAdmission(
       const core::ArenaSourcePayloadLayout& layout) noexcept;
 
+  // Ordered-control synchronization for the CPU-ready session lane. The
+  // caller supplies only backend release semantics and the raw-stream fence;
+  // this queue publishes any older compatibility slot, fixes the sequence
+  // fence, wakes the encode coordinator, and waits until the requested pass
+  // or submission action is acknowledged. SubmitAndWait additionally waits
+  // for GPU completion of the fixed sequence fence. The default-off lane is a
+  // no-op so its existing compatibility ordering remains unchanged.
+  bool releaseCpuReadySessionBeforeOrderedControl(
+      core::metalqueue::SessionReleaseReason reason,
+      core::metalqueue::SessionReleaseAction action,
+      std::uint64_t fenceRawOrdinal);
+
   // Phase 14: chunk importer toggles this around a chunk's record-iter
   // block. While true, submitDrawRun skips per-draw
   // pool_.markDrawResources because chunk.handles[] bulk retention
@@ -872,6 +885,10 @@ class CommandQueue {
   std::condition_variable encodeCv_{};
   std::condition_variable finishCv_{};
   std::condition_variable presentCompletedCv_{};
+  std::condition_variable sessionReleaseCv_{};
+  core::metalqueue::SessionReleaseState sessionReleaseState_{};
+  std::uint64_t sessionReleaseCoveredRawOrdinal_ = 0;
+  std::uint64_t sessionReleaseCoveredSeqId_ = 0;
   bool stop_ = true;
 
  private:
@@ -1018,6 +1035,12 @@ class CommandQueue {
   std::atomic<bool> arenaBuildPoisoned_{false};
   std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
   std::uint64_t nextArenaBuildGeneration_ = 1;
+  // Native coordinator fault seam: fail one post-reservation semantic
+  // preflight, restore the exact tentative prefix, then return from the
+  // manually-driven encode loop. Never set by production.
+  bool testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+  bool testOnlyPauseAfterNextSessionReleaseAck_ = false;
+  bool testOnlyPausedAfterSessionReleaseAck_ = false;
 
   // Assemble the EncodeContext handed to encoders::encodeChunk. Uses
   // queue-owned state only (device_, limits_, allocators_, pool_,

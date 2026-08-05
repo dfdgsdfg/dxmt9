@@ -44,7 +44,9 @@ dxmt9_runtime_srcs = files(
   'dxmt9_presenter.mm',
   'dxmt9_presenter_macdrv.cpp',
   'dxmt9_signposts.cpp',
+  'dxmt9_session_release.cpp',
   'dxmt9_source_payload.cpp',
+  'dxmt9_source_semantics.cpp',
   'dxmt9_transient_resource_arena.cpp',
   'dxmt9_queue.cpp',
   'dxmt9_queue_trace.cpp',
@@ -64,6 +66,7 @@ dxmt9_runtime_srcs = files(
   'render/decision_recorder.cpp',
   'render/open_cb_carrier.cpp',
   'render/framegraph_backend.cpp',
+  'render/encode_session_admission.cpp',
   'render/traditional_backend.cpp',
 ) + dxmt9_shader_pipeline_srcs
 

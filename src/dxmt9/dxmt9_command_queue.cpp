@@ -1947,6 +1947,7 @@ void CommandQueue::stopThreads() {
     finishCv_.notify_all();
     presentCompletedCv_.notify_all();
     presentDequeuedCv_.notify_all();
+    sessionReleaseCv_.notify_all();
     writeCv_.notify_all();
   }
   queueLifecycle_.notifyPendingCompletionStop();
@@ -4664,6 +4665,60 @@ void CommandQueue::submitFlush() {
         prepareSlotForPublish(*this, pool_, slot,
                               perf::ChunkPublishReason::Flush);
       });
+}
+
+bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
+    core::metalqueue::SessionReleaseReason reason,
+    core::metalqueue::SessionReleaseAction action,
+    std::uint64_t fenceRawOrdinal) {
+  if (!cpuReadySessionLaneEnabled_) {
+    return true;
+  }
+
+  std::unique_lock lock(mutex_);
+  if (stop_) {
+    return false;
+  }
+  (void)queueLifecycle_.commitCurrentChunk(
+      lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+        prepareSlotForPublish(*this, pool_, slot,
+                              perf::ChunkPublishReason::SemanticBoundary);
+      });
+  const std::uint64_t fenceSeqId = lastCommittedSeqId_;
+
+  core::metalqueue::SessionReleasePostResult posted{};
+  while (!stop_) {
+    posted = sessionReleaseState_.tryPostOrdered(
+        reason, action, fenceRawOrdinal, fenceSeqId);
+    if (posted.accepted()) {
+      break;
+    }
+    if (posted.status !=
+        core::metalqueue::SessionReleasePostStatus::Full) {
+      return false;
+    }
+    sessionReleaseCv_.wait(lock, [this] {
+      return stop_ || !sessionReleaseState_.orderedFull();
+    });
+  }
+  if (stop_ || !posted.accepted()) {
+    return false;
+  }
+
+  encodeCv_.notify_one();
+  const std::uint64_t eventOrdinal = posted.snapshot.event.ordinal;
+  sessionReleaseCv_.wait(lock, [this, eventOrdinal] {
+    return stop_ ||
+           sessionReleaseState_.acknowledgedOrdinal() >= eventOrdinal;
+  });
+  if (stop_) {
+    return false;
+  }
+  if (action == core::metalqueue::SessionReleaseAction::SubmitAndWait &&
+      fenceSeqId > completedSeqId_) {
+    queueLifecycle_.waitForSequence(lock, fenceSeqId);
+  }
+  return !stop_;
 }
 
 core::HResult CommandQueue::waitForVBlank() {

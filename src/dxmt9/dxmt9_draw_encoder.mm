@@ -5381,6 +5381,11 @@ struct EncodeChunkSessionStorage {
   BindingState binding{};
   DiagnosticsState diagnostics{};
   CompletionState completion{};
+  // Identity of the current tail command buffer in this session's in-order
+  // chain. This is non-owning: the queue's pending submission carrier owns the
+  // WMT::Reference. It changes only when the encoder legitimately replaces the
+  // tail during a mid-chunk split.
+  obj_handle_t commandBufferChainTail = NULL_OBJECT_HANDLE;
 };
 
 EncodeChunkSessionStorage* createStorage() {
@@ -9459,6 +9464,8 @@ private:
   bool canFinalizeIntoSubmission(
       const core::metalqueue::QueueSubmissionRecord& record) const {
     return call_.commandBuffer &&
+           (storage_.commandBufferChainTail == NULL_OBJECT_HANDLE ||
+            storage_.commandBufferChainTail == call_.commandBuffer.handle) &&
            !(record.renderEncoderGpuSampleBuffer &&
              storage_.diagnostics.renderEncoderGpuSampleBuffer &&
              record.renderEncoderGpuSampleBuffer.handle !=
@@ -9597,6 +9604,36 @@ private:
 };
 
 }  // namespace encode_session
+
+EncodeChunkSessionPassCloseResult closeEncodeChunkSessionRenderPass(
+    EncodeContext& ctx,
+    EncodeChunkSessionState& sessionState,
+    core::metalqueue::QueueSubmissionRecord& commandBufferCarrier) {
+  if (!sessionState.storage) {
+    return EncodeChunkSessionPassCloseResult::InvalidCommandBufferCarrier;
+  }
+  if (!encode_session::storageHasActiveRender(*sessionState.storage)) {
+    return EncodeChunkSessionPassCloseResult::NoActivePass;
+  }
+  if (!commandBufferCarrier.commandBuffer ||
+      sessionState.storage->commandBufferChainTail == NULL_OBJECT_HANDLE ||
+      sessionState.storage->commandBufferChainTail !=
+          commandBufferCarrier.commandBuffer.handle) {
+    return EncodeChunkSessionPassCloseResult::InvalidCommandBufferCarrier;
+  }
+
+  encode_session::EncodeCallState call{};
+  // Copy the reference deliberately. The carrier remains the sole published
+  // owner of this command-buffer chain; LifecycleRuntime only needs a live
+  // handle while it executes the exact normal semantic-boundary endRender
+  // sequence.
+  call.commandBuffer = commandBufferCarrier.commandBuffer;
+  encode_session::LifecycleRuntime lifecycle(
+      ctx, *sessionState.storage, call, {}, commandBufferCarrier.seqId,
+      commandBufferCarrier.slotIndex);
+  lifecycle.endRender(perf::EncoderSplitReason::OrderedControl);
+  return EncodeChunkSessionPassCloseResult::Closed;
+}
 
 bool finalizeEncodeChunkSessionIntoSubmission(
     EncodeContext& ctx,
@@ -15041,6 +15078,19 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   traceEncodeStage("begin");
 
+  const bool injectedCommandBuffer = options.hasInjectedCommandBuffer();
+  if (options.session) {
+    if (!options.session->storage ||
+        (options.session->storage->commandBufferChainTail !=
+             NULL_OBJECT_HANDLE &&
+         (!injectedCommandBuffer ||
+          options.session->storage->commandBufferChainTail !=
+              options.commandBuffer.handle))) {
+      traceEncodeStage("session-command-buffer-mismatch");
+      return std::nullopt;
+    }
+  }
+
   // M3 — Metal frame capture: ask the controller whether this chunk is
   // the first chunk of the target frame. If so, start capture BEFORE
   // `newCommandBuffer()` so Apple's MTLCaptureManager records every CB
@@ -15063,7 +15113,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                          : "after-start-capture-failed");
   }
 
-  const bool injectedCommandBuffer = options.hasInjectedCommandBuffer();
   traceEncodeStage(injectedCommandBuffer ? "before-use-injected-command-buffer"
                                          : "before-new-command-buffer");
   call.commandBuffer = injectedCommandBuffer
@@ -15089,6 +15138,10 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       options.session ? *options.session->storage : localSession;
   if (options.session) {
     initializeEncodeChunkSessionStorage(session, ctx.dirty);
+    if (session.commandBufferChainTail == NULL_OBJECT_HANDLE) {
+      session.commandBufferChainTail = commandBuffer.handle;
+    }
+    DXMT_ASSERT(session.commandBufferChainTail == commandBuffer.handle);
   }
   const bool deferSessionFinalization =
       options.deferSessionFinalization && options.session != nullptr;
@@ -15940,6 +15993,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       ++session.completion.committedSubCommandBuffers;
     }
     commandBuffer = std::move(next);
+    if (options.session) {
+      session.commandBufferChainTail = commandBuffer.handle;
+    }
     commandBufferHasWork = false;
   };
 
