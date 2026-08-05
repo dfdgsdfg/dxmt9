@@ -472,36 +472,35 @@ void directRawPublishesAndCompletesArenaSource() {
         "completed Direct source must release Tape residency");
 }
 
-void segmentedPresentRawPublishesOneLogicalSourceAndCompletion() {
+void oversizeSegmentedPresentTakesOneLegacyRollbackSource() {
   RuntimeFixture fixture;
-  // 17K D3D rects make the first indivisible Clear exceed the ordinary
-  // 64-page block cap. Present is the final raw record and therefore becomes
-  // the second planned block while the Tape publishes one logical source.
+  // 17K D3D rects exceed the fixed 64-page ordinary Direct footprint. The
+  // complete raw therefore rolls back before construction and replays once
+  // through the ordered Legacy lane, including its final Present.
   const std::array records{clearRecord(17000), presentRecord()};
   auto raw = makeRaw(makeWireFixture(records), 1);
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
   check(hr == D3D_OK && fixture.routing->clearCalls == 1 &&
             fixture.routing->presentCalls == 1 &&
             fixture.routing->lastPresentSeqId == 1,
-        "segmented Direct replay applies Clear and final Present exactly "
-        "once at the reserved seq");
+        "oversize rollback applies Clear and final Present exactly once at "
+        "the reserved seq");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
             fixture.routing->queue_) == 1 &&
             dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
                 fixture.routing->queue_) == 2,
-        "segmented Direct replay publishes one Ready source and consumes one "
-        "queue sequence");
+        "oversize rollback publishes one Legacy Ready source and consumes "
+        "one queue sequence");
 
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-  check(completion.dequeued && completion.arena &&
-            completion.arenaSegmentCount == 2 &&
-            completion.commandCount == 2 && completion.finalPresent &&
-            completion.presentSource.value != 0 &&
+  check(completion.dequeued && !completion.arena &&
+            completion.arenaSegmentCount == 0 &&
+            completion.commandCount == 2 && !completion.finalPresent &&
             completion.submitted && completion.completed &&
             completion.reclaimed && completion.seqId == 1,
-        "two Arena blocks resolve as one ordered Clear/Present source with "
+        "oversize Clear/Present rolls back to one ordered Legacy source and "
         "one completion identity");
 }
 
@@ -680,7 +679,7 @@ int main() {
   try {
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
-    segmentedPresentRawPublishesOneLogicalSourceAndCompletion();
+    oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();

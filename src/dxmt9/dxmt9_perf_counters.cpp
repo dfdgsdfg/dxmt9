@@ -172,12 +172,35 @@ struct Counters {
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionTailSubmitted{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedProducerWait{0};
-  std::atomic<std::uint64_t> cpuReadySessionReleasedAdmissionPressure{0};
-  std::atomic<std::uint64_t> cpuReadySessionReleasedWriterPressure{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedNonAppendable{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedInitializerWait{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedDrain{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedFailPath{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseCurrent{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeasePeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseAcquisitions{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseDenials{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseReservedSources{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseReservedPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseReservedBytes{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseReservedDraws{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseUsedSources{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseUsedPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseUsedBytes{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseUsedDraws{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseSlackSources{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseSlackPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseSlackBytes{0};
+  std::atomic<std::uint64_t> cpuReadySessionLeaseSlackDraws{0};
+  std::atomic<std::uint64_t> cpuReadySessionSuccessorHeadroomMinPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapSources{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapBytes{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapDraws{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapCommandBuffers{0};
+  std::atomic<std::uint64_t> cpuReadySessionIsolated{0};
+  std::atomic<std::uint64_t> cpuReadySessionLegacyRollback{0};
+  std::atomic<std::uint64_t> cpuReadySessionInvalidDisposition{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
@@ -2165,12 +2188,35 @@ constexpr CounterEntry kCounterTable[] = {
     {"cpu_ready_session_arena_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionArenaHeadAppended, nullptr, nullptr, 0.0},
     {"cpu_ready_session_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionTailSubmitted, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedProducerWait, nullptr, nullptr, 0.0},
-    {"cpu_ready_session_released_admission_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedAdmissionPressure, nullptr, nullptr, 0.0},
-    {"cpu_ready_session_released_writer_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedWriterPressure, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_non_appendable", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedNonAppendable, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_initializer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedInitializerWait, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_drain", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedDrain, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_fail_path", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedFailPath, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_current", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseCurrent, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeasePeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_acquisitions", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseAcquisitions, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_denials", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseDenials, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_reserved_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseReservedSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_reserved_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseReservedPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_reserved_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseReservedBytes, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_reserved_draws", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseReservedDraws, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_used_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseUsedSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_used_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseUsedPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_used_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseUsedBytes, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_used_draws", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseUsedDraws, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_slack_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseSlackSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_slack_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseSlackPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_slack_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseSlackBytes, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_lease_slack_draws", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLeaseSlackDraws, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_successor_headroom_min_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionSuccessorHeadroomMinPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapBytes, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_draws", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapDraws, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapCommandBuffers, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_isolated", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionIsolated, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_legacy_rollback", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLegacyRollback, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_invalid_disposition", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionInvalidDisposition, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
@@ -4027,6 +4073,17 @@ void updateMax(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
   }
 }
 
+void updateMin(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
+  if (!enabled()) {
+    return;
+  }
+  auto current = counter.load(std::memory_order_relaxed);
+  while ((current == 0 || current > value) &&
+         !counter.compare_exchange_weak(current, value,
+                                        std::memory_order_relaxed)) {
+  }
+}
+
 void recordCpuTime(std::atomic<std::uint64_t>& total,
                    std::atomic<std::uint64_t>& max,
                    std::uint64_t nanoseconds) {
@@ -4361,12 +4418,6 @@ void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason) {
   case CpuReadySessionReleaseReason::ProducerWait:
     add(c.cpuReadySessionReleasedProducerWait);
     break;
-  case CpuReadySessionReleaseReason::AdmissionPressure:
-    add(c.cpuReadySessionReleasedAdmissionPressure);
-    break;
-  case CpuReadySessionReleaseReason::WriterPressure:
-    add(c.cpuReadySessionReleasedWriterPressure);
-    break;
   case CpuReadySessionReleaseReason::NonAppendable:
     add(c.cpuReadySessionReleasedNonAppendable);
     break;
@@ -4378,6 +4429,113 @@ void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason) {
     break;
   case CpuReadySessionReleaseReason::FailPath:
     add(c.cpuReadySessionReleasedFailPath);
+    break;
+  }
+}
+
+void countCpuReadySessionLeaseAcquired(
+    std::uint64_t reservedSources,
+    std::uint64_t reservedPages,
+    std::uint64_t reservedBytes,
+    std::uint64_t reservedDraws,
+    std::uint64_t successorHeadroomPages) {
+  auto& c = counters();
+  add(c.cpuReadySessionLeaseAcquisitions);
+  std::uint64_t current = 0;
+  if (enabled()) {
+    current = c.cpuReadySessionLeaseCurrent.fetch_add(
+                  1, std::memory_order_relaxed) +
+              1;
+  }
+  updateMax(c.cpuReadySessionLeasePeak, current);
+  store(c.cpuReadySessionLeaseReservedSources, reservedSources);
+  store(c.cpuReadySessionLeaseReservedPages, reservedPages);
+  store(c.cpuReadySessionLeaseReservedBytes, reservedBytes);
+  store(c.cpuReadySessionLeaseReservedDraws, reservedDraws);
+  updateMin(c.cpuReadySessionSuccessorHeadroomMinPages,
+            successorHeadroomPages);
+}
+
+void countCpuReadySessionLeaseDenied() {
+  add(counters().cpuReadySessionLeaseDenials);
+}
+
+void recordCpuReadySessionLeaseUsed(std::uint64_t usedSources,
+                                    std::uint64_t usedPages,
+                                    std::uint64_t usedBytes,
+                                    std::uint64_t usedDraws,
+                                    std::uint64_t slackSources,
+                                    std::uint64_t slackPages,
+                                    std::uint64_t slackBytes,
+                                    std::uint64_t slackDraws) {
+  auto& c = counters();
+  store(c.cpuReadySessionLeaseUsedSources, usedSources);
+  store(c.cpuReadySessionLeaseUsedPages, usedPages);
+  store(c.cpuReadySessionLeaseUsedBytes, usedBytes);
+  store(c.cpuReadySessionLeaseUsedDraws, usedDraws);
+  store(c.cpuReadySessionLeaseSlackSources, slackSources);
+  store(c.cpuReadySessionLeaseSlackPages, slackPages);
+  store(c.cpuReadySessionLeaseSlackBytes, slackBytes);
+  store(c.cpuReadySessionLeaseSlackDraws, slackDraws);
+}
+
+void countCpuReadySessionLeaseReleased() {
+  auto& c = counters();
+  if (enabled()) {
+    auto current = c.cpuReadySessionLeaseCurrent.load(
+        std::memory_order_relaxed);
+    while (current != 0 &&
+           !c.cpuReadySessionLeaseCurrent.compare_exchange_weak(
+               current, current - 1, std::memory_order_relaxed)) {
+    }
+  }
+  store(c.cpuReadySessionLeaseReservedSources, 0);
+  store(c.cpuReadySessionLeaseReservedPages, 0);
+  store(c.cpuReadySessionLeaseReservedBytes, 0);
+  store(c.cpuReadySessionLeaseReservedDraws, 0);
+  store(c.cpuReadySessionLeaseUsedSources, 0);
+  store(c.cpuReadySessionLeaseUsedPages, 0);
+  store(c.cpuReadySessionLeaseUsedBytes, 0);
+  store(c.cpuReadySessionLeaseUsedDraws, 0);
+  store(c.cpuReadySessionLeaseSlackSources, 0);
+  store(c.cpuReadySessionLeaseSlackPages, 0);
+  store(c.cpuReadySessionLeaseSlackBytes, 0);
+  store(c.cpuReadySessionLeaseSlackDraws, 0);
+}
+
+void countCpuReadySessionCapRelease(CpuReadySessionCapDimension dimension) {
+  auto& c = counters();
+  switch (dimension) {
+  case CpuReadySessionCapDimension::Sources:
+    add(c.cpuReadySessionCapSources);
+    break;
+  case CpuReadySessionCapDimension::Pages:
+    add(c.cpuReadySessionCapPages);
+    break;
+  case CpuReadySessionCapDimension::Bytes:
+    add(c.cpuReadySessionCapBytes);
+    break;
+  case CpuReadySessionCapDimension::Draws:
+    add(c.cpuReadySessionCapDraws);
+    break;
+  case CpuReadySessionCapDimension::CommandBuffers:
+    add(c.cpuReadySessionCapCommandBuffers);
+    break;
+  }
+}
+
+void countCpuReadySessionDisposition(
+    CpuReadySessionDisposition disposition) {
+  auto& c = counters();
+  switch (disposition) {
+  case CpuReadySessionDisposition::Isolated:
+    add(c.cpuReadySessionIsolated);
+    break;
+  case CpuReadySessionDisposition::LegacyRollback:
+    add(c.cpuReadySessionLegacyRollback);
+    break;
+  case CpuReadySessionDisposition::Invalid:
+    add(c.cpuReadySessionInvalidDisposition);
     break;
   }
 }

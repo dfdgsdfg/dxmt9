@@ -37,7 +37,7 @@ logical pass; Metal 4 does not cross it.
 | Owner | Owns | Must not own or mutate |
 |---|---|---|
 | Import/replay worker | FIFO raw replay, canonical resource summaries, immutable CPU-ready publication | Metal encoders, partition-worker state, reordered replay |
-| CPU-ready store | bounded source metadata, retained storage references, admission/publication watermarks, fixed pressure-release latches | D3D9 semantic decisions or GPU completion |
+| CPU-ready store | bounded source metadata, retained storage references, admission/publication watermarks, fixed pressure wake state | D3D9 semantic decisions, release fences, or GPU completion |
 | Encode coordinator | `EncodeSession`, logical pass, CB or joint group, parent parallel encoder, source and partition order, finalization | PE state or worker-local child state |
 | Serial executor | current range and coordinator-owned native shadow | asynchronous borrowed spans |
 | Partition worker | immutable range, child/segment encoder, partition-local native shadow | session-global hazards, pass actions, completion, source storage mutation |
@@ -532,15 +532,15 @@ SessionReleaseEvent { reason, fenceRawOrdinal, fenceSeqId }
 ```
 
 Explicit API and semantic events are ordinary ordered raw control records, so
-their fences inherit FIFO order without another unbounded queue. Fixed-cap
-events use one queue-owned coalescing latch per session: `sessionCapRelease`
-fences immediately before the first candidate that would exceed a configured
-session credit. Posting the latch allocates nothing and never waits. The
-coordinator clears it only after the deterministic predecessor prefix is
-submitted or proved empty. Admission and raw-writer pressure have wake latches
-for progress re-evaluation only; they carry no release fence and cannot finalize
-a session. Device-loss and shutdown use the accepted-work watermark as their
-terminal fence.
+their fences inherit FIFO order without another unbounded queue. A fixed-cap
+event is posted once per session at the predecessor immediately before the first
+candidate that would exceed a configured session credit. Posting uses the
+queue-owned fixed-capacity event transport, allocates nothing, and never waits.
+The coordinator clears it only after the deterministic predecessor prefix is
+submitted or proved empty. Admission and raw-writer pressure are wake
+observations for progress re-evaluation only; they carry no release fence and
+cannot finalize a session. Device-loss and shutdown use the accepted-work
+watermark as their terminal fence.
 
 The reasons are Present, explicit Flush, direct observation/readback, producer
 wait for a covered sequence, fixed session cap, semantic independent-submission

@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_cpu_ready_tape.hpp"
+#include "../../../src/dxmt9/render/encode_session_admission.hpp"
 
 #include <array>
 #include <cstddef>
@@ -305,9 +306,13 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
         "compatibility profile preserves the 256 KiB page arena");
   check(session.pageCount == 512u && session.highWaterPages == 512u &&
             session.lowWaterPages == 256u &&
-            session.maxPagesPerSource == 512u,
-        "session profile lets one segmented source use bounded total page "
-        "headroom");
+            session.maxPagesPerSource == 64u,
+        "session profile reserves one bounded ordinary Direct footprint");
+  check(dxmt9::render::worstCaseNonWrappingReservationPages(
+            session.maxPagesPerSource) == 127u &&
+            session.highWaterPages - 127u == 385u,
+        "ordinary payload plus worst-case circular padding leaves a fixed "
+        "session page budget");
   check(session.sourceSlotCount == legacy.sourceSlotCount &&
             session.readyFifoCount == legacy.readyFifoCount &&
             session.compatibilityPayloadCount ==
@@ -513,6 +518,7 @@ void readyMetadataIsAdmissionOwnedAndGenerationChecked() {
                 .buildGeneration = 41,
                 .usedBytes = layout.usedBytes,
                 .pageCount = strict->storage.pageCount,
+                .paddingPagesBefore = 0,
                 .strictAdmission = true,
             },
         "arena Ready metadata preserves strict admission identity and extent");
@@ -1150,7 +1156,14 @@ void wrapPaddingAndOrderedReclaimAreDeterministic() {
   check(wrapped->storage.firstPage + wrapped->storage.pageCount <=
             tape.config().values().pageCount,
         "wrapped source run never crosses the backing end");
-  check(representPublished(tape, *wrapped, 3, 2) &&
+  check(tape.sealAndPublish(wrapped->ticket, 3, 3, 2),
+        "wrapped source publishes its immutable footprint");
+  std::array<CpuReadyTape::ReadyEntry, 1> wrappedReady{};
+  check(tape.copyReadyPrefix(wrappedReady) == 1u &&
+            wrappedReady[0].metadata.pageCount == 2u &&
+            wrappedReady[0].metadata.paddingPagesBefore == 1u,
+        "Ready metadata includes payload pages and actual wrap padding");
+  check(tape.representReadyPrefix(wrappedReady) &&
             tape.transition(wrapped->id, wrapped->storage,
                             CpuReadyTape::State::Represented,
                             CpuReadyTape::State::Submitted) &&

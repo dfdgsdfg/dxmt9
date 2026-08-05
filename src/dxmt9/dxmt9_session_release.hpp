@@ -16,8 +16,6 @@ enum class SessionReleaseReason : std::uint8_t {
   ExplicitFlush,
   DirectObservation,
   ProducerSequenceWait,
-  AdmissionPressure,
-  RawWriterPressure,
   SessionCap,
   IndependentSubmission,
   InitializerWait,
@@ -52,14 +50,7 @@ static_assert(std::is_standard_layout_v<SessionReleaseEvent>);
 
 enum class SessionReleaseOrigin : std::uint8_t {
   Ordered,
-  AdmissionPressure,
-  RawWriterPressure,
   Terminal,
-};
-
-enum class SessionReleasePressureKind : std::uint8_t {
-  Admission,
-  RawWriter,
 };
 
 struct SessionReleaseSnapshot {
@@ -119,8 +110,8 @@ bool sessionReleaseCompletionSatisfies(
     SessionReleaseCompletion completion) noexcept;
 
 // Fixed-capacity, queue-lock-owned release transport. This class performs no
-// locking and allocates no memory. Ordinary semantic/API events retain strict
-// FIFO identity. Only pressure and terminal events use coalescing latches.
+// locking and allocates no memory. Ordinary semantic/API and fixed-cap events
+// retain strict FIFO identity. Only terminal events use a coalescing latch.
 class SessionReleaseState {
  public:
   static constexpr std::size_t orderedCapacity() noexcept {
@@ -130,11 +121,6 @@ class SessionReleaseState {
   SessionReleasePostResult tryPostOrdered(
       SessionReleaseReason reason,
       SessionReleaseAction action,
-      std::uint64_t fenceRawOrdinal,
-      std::uint64_t fenceSeqId) noexcept;
-
-  SessionReleasePostResult postOrAdvancePressure(
-      SessionReleasePressureKind kind,
       std::uint64_t fenceRawOrdinal,
       std::uint64_t fenceSeqId) noexcept;
 
@@ -157,7 +143,6 @@ class SessionReleaseState {
     return orderedCount_ == ordered_.size();
   }
   std::size_t orderedSize() const noexcept { return orderedCount_; }
-  bool pressureActive(SessionReleasePressureKind kind) const noexcept;
   bool terminalRequested() const noexcept { return terminalRequested_; }
   bool terminalPending() const noexcept { return terminal_.active; }
   std::uint64_t acknowledgedOrdinal() const noexcept {
@@ -181,10 +166,6 @@ class SessionReleaseState {
                              std::uint64_t seqId,
                              std::uint64_t priorRawOrdinal,
                              std::uint64_t priorSeqId) noexcept;
-  static SessionReleaseReason pressureReason(
-      SessionReleasePressureKind kind) noexcept;
-  static SessionReleaseOrigin pressureOrigin(
-      SessionReleasePressureKind kind) noexcept;
 
   std::uint64_t allocateOrdinal() noexcept;
   SessionReleasePostResult postQueued(
@@ -201,17 +182,12 @@ class SessionReleaseState {
       std::uint64_t fenceSeqId) noexcept;
   SessionReleaseSnapshot snapshotFor(const Latch& latch,
                                      SessionReleaseOrigin origin) const noexcept;
-  const Latch& pressureLatch(SessionReleasePressureKind kind) const noexcept;
-  Latch& pressureLatch(SessionReleasePressureKind kind) noexcept;
-  bool latchIsNewest(const Latch& latch) const noexcept;
 
   std::array<SessionReleaseEvent,
              kMaxOrderedSessionReleaseEvents> ordered_{};
   std::size_t orderedHead_ = 0;
   std::size_t orderedTail_ = 0;
   std::size_t orderedCount_ = 0;
-  Latch admissionPressure_{};
-  Latch rawWriterPressure_{};
   Latch terminal_{};
   std::uint64_t nextOrdinal_ = 1;
   std::uint64_t acknowledgedOrdinal_ = 0;

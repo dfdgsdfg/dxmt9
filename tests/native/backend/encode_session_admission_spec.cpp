@@ -31,6 +31,10 @@ using dxmt9::render::EncodeSessionLimits;
 using dxmt9::render::RenderContinuationDecision;
 using dxmt9::render::SessionAdmissionCandidate;
 using dxmt9::render::SessionAdmissionDecision;
+using dxmt9::render::SessionCapacityDimension;
+using dxmt9::render::SessionCapacityLeaseState;
+using dxmt9::render::SessionCapacityPolicy;
+using dxmt9::render::SessionCapacityVector;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -248,6 +252,10 @@ void admissionSeparatesOrderingCapsAndIsolation() {
               keyed, differentKey, limits),
           SessionAdmissionDecision::SubmitPrefixBeforeCandidate,
           "admission-key changes submit the older prefix");
+  checkEq(dxmt9::render::classifySessionAdmissionDetailed(
+              keyed, differentKey, limits).limitingDimension,
+          SessionCapacityDimension::None,
+          "a semantic key boundary must not be mislabeled as SessionCap");
 
   SourceSemanticSummary observed = semantic;
   observed.flags |= dxmt9::core::SourceSemanticGlobalObservation;
@@ -283,6 +291,106 @@ void admissionSeparatesOrderingCapsAndIsolation() {
               keyed, candidate(3, 3, semantic), presentLimits),
           SessionAdmissionDecision::SubmitPrefixBeforeCandidate,
           "no source may append after a session Present");
+}
+
+void leaseHeadroomAndCapGroupingAreDeterministic() {
+  checkEq(dxmt9::render::worstCaseNonWrappingReservationPages(1),
+          std::uint64_t{1},
+          "one page needs no additional wrap padding");
+  checkEq(dxmt9::render::worstCaseNonWrappingReservationPages(4),
+          std::uint64_t{7},
+          "headroom covers payload plus the worst three-page tail");
+
+  const SessionCapacityPolicy policy{
+      .highWater = {3, 17, 1700, 30, 3, 3, 3, 3, 3},
+      .maxSession = {2, 10, 1000, 20, 2, 2, 2, 2, 2},
+      .successorHeadroom = {1, 7, 700, 10, 1, 1, 1, 1, 1},
+      .ordinaryDirect = {1, 4, 400, 10, 1, 1, 1, 1, 1},
+  };
+  check(policy.valid(),
+        "fixed session footprint plus complete successor headroom fits highs");
+  auto invalid = policy;
+  invalid.successorHeadroom.pages = 6;
+  check(!invalid.valid(),
+        "configuration rejects missing circular-wrap successor credit");
+
+  SessionCapacityLeaseState leases;
+  const SessionCapacityVector firstCharge{1, 4, 400, 10, 1, 1, 1, 1, 1};
+  auto unavailable = SessionCapacityVector{};
+  unavailable.pages = 1;
+  check(!leases.acquire(policy, unavailable, firstCharge),
+        "older submitted residency delays fixed lease acquisition");
+  check(leases.acquire(policy, {}, firstCharge) &&
+            leases.lease().generation == 1,
+        "coordinator atomically acquires and charges the Ready head");
+  check(leases.lease().reserved == policy.highWater,
+        "lease reserves fixed session and successor vectors once");
+  check(leases.lease().used == firstCharge &&
+            leases.charge(
+                1, SessionCapacityVector{1, 4, 400, 10, 1, 1, 1, 1, 1}),
+        "resident Ready heads transfer into used session credits");
+  check(!leases.charge(
+            1, SessionCapacityVector{1, 1, 1, 1, 1, 1, 1, 1, 1}),
+        "a candidate beyond the fixed cap cannot consume the lease");
+  check(!leases.release(2) && leases.lease().valid(),
+        "a stale generation cannot release the live lease");
+  check(leases.release(1), "the owning generation releases the lease");
+  check(leases.acquire(policy, {}, firstCharge) &&
+            leases.lease().generation == 2,
+        "released lease identity is never reused");
+  check(!leases.charge(1, firstCharge),
+        "a stale generation cannot charge its successor lease");
+
+  ChunkSlot slot{};
+  appendDraw(slot, 0x20);
+  const auto semantic = summarize(slot);
+  const EncodeSessionLimits limits{
+      .maxSources = 2,
+      .maxPages = 4,
+      .maxBytes = 16384,
+      .maxDraws = 2,
+      .maxCommandBuffers = 2,
+  };
+  const std::array candidates{
+      candidate(1, 1, semantic),
+      candidate(2, 2, semantic),
+      candidate(3, 3, semantic),
+  };
+  const auto selectPrefix = [&](std::span<const std::uint32_t>
+                                    completionSchedule) {
+    // Completion schedule is deliberately not an input to classification.
+    (void)completionSchedule;
+    EncodeSessionAdmissionState session{};
+    std::size_t selected = 0;
+    for (const auto& next : candidates) {
+      const auto result = dxmt9::render::classifySessionAdmissionDetailed(
+          session, next, limits);
+      if (result.decision != SessionAdmissionDecision::Admit) {
+        checkEq(result.limitingDimension,
+                SessionCapacityDimension::Sources,
+                "first over-cap candidate names the limiting dimension");
+        break;
+      }
+      check(dxmt9::render::appendSessionAdmission(session, next, limits),
+            "selected prefix charges exactly once");
+      ++selected;
+    }
+    return selected;
+  };
+  constexpr std::array scheduleA{1u, 2u, 3u};
+  constexpr std::array scheduleB{3u, 1u, 2u};
+  check(selectPrefix(scheduleA) == 2 && selectPrefix(scheduleB) == 2,
+        "completion order cannot change the fixed-cap predecessor prefix");
+
+  auto wrapped = candidates.front();
+  wrapped.reservationPages = 5;
+  const auto wrappedResult =
+      dxmt9::render::classifySessionAdmissionDetailed({}, wrapped, limits);
+  check(wrappedResult.decision ==
+            SessionAdmissionDecision::ProcessCandidateIsolated &&
+            wrappedResult.limitingDimension ==
+                SessionCapacityDimension::Pages,
+        "admission charges actual payload-plus-wrap pages, not payload alone");
 }
 
 ActiveRenderContinuationState activeFor(
@@ -399,6 +507,7 @@ int main() {
   try {
     sourceSummaryIsFlatAndClassifiesBoundaries();
     admissionSeparatesOrderingCapsAndIsolation();
+    leaseHeadroomAndCapGroupingAreDeterministic();
     continuationIsConservativeAndRouteAsymmetric();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_admission_spec failed: "

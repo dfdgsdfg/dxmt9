@@ -11,8 +11,10 @@
  * obligation: production still drains shutdown directly and does not yet call
  * SessionReleaseState::requestTerminal.
  *
- * Environment actions (Publish, PostOrdinaryRelease, Post*Pressure, and
- * RequestShutdown) are not fair.  The liveness claims below are conditional
+ * Environment actions (Publish, PostOrdinaryRelease, and RequestShutdown) are
+ * not fair. Pressure latches remain in the state type only as a refinement
+ * guard for the retired predecessor; no action can activate them. The
+ * liveness claims below are conditional
  * on an event having been posted.  Weak fairness is applied only to enabled
  * coordinator, completion, and finish-thread actions.
  *)
@@ -564,11 +566,6 @@ Next ==
   \/ SubmitSession
   \/ PostAnyOrdinaryRelease
   \/ AckOrdinaryRelease
-  \/ PostAdmissionPressure
-  \/ PostWriterPressure
-  \/ AckAdmissionPressure
-  \/ AckWriterPressure
-  \/ RejectAnyStalePressureAck
   \/ RequestShutdown
   \/ AckTerminalFence
   \/ CompleteSubmitted
@@ -582,8 +579,6 @@ SystemFairness ==
   /\ WF_vars(ClosePass)
   /\ WF_vars(SubmitSession)
   /\ WF_vars(AckOrdinaryRelease)
-  /\ WF_vars(AckAdmissionPressure)
-  /\ WF_vars(AckWriterPressure)
   /\ WF_vars(AckTerminalFence)
   /\ WF_vars(CompleteSubmitted)
   /\ WF_vars(ReclaimCompleted)
@@ -691,6 +686,12 @@ NoStalePressureAck ==
   /\ (lastPressureAck.requestedGeneration #
         lastPressureAck.liveGeneration => ~lastPressureAck.accepted)
 
+NoPressureCreatedRelease ==
+  /\ ~admissionLatch.active
+  /\ ~writerLatch.active
+  /\ admissionAckGeneration = 0
+  /\ writerAckGeneration = 0
+
 TerminalFenceSafety ==
   /\ (~shutdownRequested => terminalFence = 0)
   /\ (shutdownRequested => terminalFence = nextSource - 1)
@@ -710,6 +711,7 @@ Safety ==
   /\ AckAfterRequiredActionAndFenceCoverage
   /\ NoCompletionBeforeSubmit
   /\ NoStalePressureAck
+  /\ NoPressureCreatedRelease
   /\ TerminalFenceSafety
 
 ShutdownProgress == shutdownRequested ~> shutdownComplete

@@ -178,17 +178,45 @@ void countOpenCbCarrierReleased(OpenCbCarrierReleaseReason reason);
 // deliberately has no completion-wait or producer-quiescence release.
 enum class CpuReadySessionReleaseReason : std::uint8_t {
   ProducerWait,
-  AdmissionPressure,
-  WriterPressure,
   NonAppendable,
   InitializerWait,
   Drain,
   FailPath,
 };
+enum class CpuReadySessionCapDimension : std::uint8_t {
+  Sources,
+  Pages,
+  Bytes,
+  Draws,
+  CommandBuffers,
+};
+enum class CpuReadySessionDisposition : std::uint8_t {
+  Isolated,
+  LegacyRollback,
+  Invalid,
+};
 void countCpuReadySessionPendingStarted();
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason);
+void countCpuReadySessionLeaseAcquired(
+    std::uint64_t reservedSources,
+    std::uint64_t reservedPages,
+    std::uint64_t reservedBytes,
+    std::uint64_t reservedDraws,
+    std::uint64_t successorHeadroomPages);
+void countCpuReadySessionLeaseDenied();
+void recordCpuReadySessionLeaseUsed(std::uint64_t usedSources,
+                                    std::uint64_t usedPages,
+                                    std::uint64_t usedBytes,
+                                    std::uint64_t usedDraws,
+                                    std::uint64_t slackSources,
+                                    std::uint64_t slackPages,
+                                    std::uint64_t slackBytes,
+                                    std::uint64_t slackDraws);
+void countCpuReadySessionLeaseReleased();
+void countCpuReadySessionCapRelease(CpuReadySessionCapDimension dimension);
+void countCpuReadySessionDisposition(CpuReadySessionDisposition disposition);
 void countChunkPublishPresentPrePresentOpportunityTail(
     ChunkPublishTailCommandKind kind, bool drawOnly);
 void countChunkPublishSlotResidency(ChunkPublishReason reason,

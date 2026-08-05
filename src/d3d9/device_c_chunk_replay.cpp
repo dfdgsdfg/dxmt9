@@ -1250,6 +1250,8 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
       });
   switch (plan.lane) {
   case dxmt9::d3d9::V2ReplayLane::Reject:
+    dxmt9::perf::countCpuReadySessionDisposition(
+        dxmt9::perf::CpuReadySessionDisposition::Invalid);
     return commitChunkFail("v2-planned-reject");
   case dxmt9::d3d9::V2ReplayLane::StateOnly:
     // State-only chunks mutate the replay shadow exactly once but publish no
@@ -1258,6 +1260,8 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
   case dxmt9::d3d9::V2ReplayLane::Legacy:
     if (plan.reason == dxmt9::d3d9::V2ReplayReason::Oversize) {
       dxmt9::perf::countCpuReadyTapeLegacyOversizeBypass();
+      dxmt9::perf::countCpuReadySessionDisposition(
+          dxmt9::perf::CpuReadySessionDisposition::LegacyRollback);
     }
     [[fallthrough]];
   case dxmt9::d3d9::V2ReplayLane::Inline:

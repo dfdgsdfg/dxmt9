@@ -775,9 +775,8 @@ class QueueLifecycleController {
   bool producerSequenceWaitActive();
   // Queue-local observation for a compatibility writer blocked either on a
   // free control/Tape reservation or on the GPU-inflight publication cap.
-  // The Tape-gated session lane treats both as one ordered raw-writer pressure
-  // fence: a parked pending session may own the source whose submission and
-  // completion are required to let that writer advance.
+  // This is a diagnostic/wakeup signal only. The Tape-gated session lane must
+  // not derive a release fence or submission boundary from live pressure.
   bool producerWriterPressureActive();
   // Diagnostic stage probes from the last no-enqueue completion wait end to
   // producer-side commit_chunk milestones.

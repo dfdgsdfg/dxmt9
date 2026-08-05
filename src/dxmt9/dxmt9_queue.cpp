@@ -1249,8 +1249,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
       observeWriterWait(*writeIndex, slots[*writeIndex].seqId, inflightLimit);
       // The compatibility writer is now unable to publish the next Legacy
       // source. Register the whole real wait interval before dropping the
-      // scheduling mutex so a parked Tape session can submit the represented
-      // source that owns this control/Tape capacity.
+      // scheduling mutex; the encode lane may re-evaluate an existing ordered
+      // event, but this observation cannot create a submission boundary.
       beginWriterPressure();
     }
     writeCv->wait(lock);
@@ -1384,9 +1384,8 @@ bool QueueLifecycleController::commitCurrentChunk(
   const bool waitNeeded = *inflightCount >= inflightLimit;
   if (waitNeeded) {
     observeCommitWait(writingSlotIndexBeforeWait, slot.seqId, inflightLimit);
-    // Register the blocked producer so a parked Tape-gated encode session can
-    // observe an ordered raw-writer pressure fence and release the pending
-    // work whose completion frees these inflight tickets.
+    // Register the blocked producer as a diagnostic/wakeup observation only.
+    // Fixed caps and semantic events remain the sole session-boundary inputs.
     {
       std::lock_guard pendingLock(pendingCompletionMutex_);
       ++producerWriterPressureDepth_;
@@ -2358,6 +2357,9 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   perf::countCpuReadyTapeReclaimWakeup();
   if (submissionBinding_.writeCv) {
     submissionBinding_.writeCv->notify_all();
+  }
+  if (submissionBinding_.encodeCv) {
+    submissionBinding_.encodeCv->notify_one();
   }
   return true;
 }

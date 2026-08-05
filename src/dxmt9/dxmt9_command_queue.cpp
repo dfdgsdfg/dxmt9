@@ -3719,9 +3719,8 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   arenaAdmissionWaiterCount_.fetch_add(1, std::memory_order_acq_rel);
   const auto waitStarted = std::chrono::steady_clock::now();
   std::unique_lock lock(mutex_);
-  // Wake a parked Tape-gated encode session: this registered waiter is an
-  // ordered admission-pressure fence, and the parked session may be pinning
-  // the pages/slots this reservation needs.
+  // Wake a parked Tape-gated encode session for deterministic re-evaluation.
+  // This live pressure observation carries no release fence.
   encodeCv_.notify_one();
   bool admissionResolved = false;
   while (!admissionResolved) {

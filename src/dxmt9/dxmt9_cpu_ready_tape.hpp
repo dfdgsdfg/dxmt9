@@ -188,6 +188,7 @@ class CpuReadyTapeConfig {
   static CpuReadyTapeConfig queueSessionStreaming(
       std::size_t controlCapacity) {
     constexpr std::size_t kPageCapacityMultiplier = 16;
+    constexpr std::size_t kOrdinaryDirectPages = 64;
     if (controlCapacity >
         std::numeric_limits<std::size_t>::max() /
             kPageCapacityMultiplier) {
@@ -200,11 +201,13 @@ class CpuReadyTapeConfig {
         .sourceSlotCount = controlCapacity * 2,
         .readyFifoCount = controlCapacity,
         .compatibilityPayloadCount = controlCapacity * 2,
-        // Streaming admits one logical source as several independently sized
-        // Arena blocks. Its total bound is the Tape page policy, not the
-        // legacy compatibility payload count; the ordinary per-segment cap
-        // remains 64 pages in the structural planner.
-        .maxPagesPerSource = controlCapacity * kPageCapacityMultiplier,
+        // Sources beyond the ordinary Direct footprint take the deterministic
+        // ordered legacy rollback disposition. Keeping the physical arena
+        // larger reserves a fixed session prefix plus one non-wrapping
+        // successor (payload + worst-case circular tail padding).
+        .maxPagesPerSource = std::min(
+            kOrdinaryDirectPages,
+            controlCapacity * kPageCapacityMultiplier),
         .highWaterSources = controlCapacity * 2,
         .lowWaterSources = controlCapacity,
         .highWaterPages = controlCapacity * kPageCapacityMultiplier,
@@ -280,6 +283,9 @@ struct CpuReadySourceMetadata {
   // payload's deterministic logical replay footprint.
   std::size_t usedBytes = 0;
   std::uint32_t pageCount = 0;
+  // Physical circular-arena pages owned by this source. This includes the
+  // discarded tail immediately preceding a wrapped non-contiguous request.
+  std::uint32_t paddingPagesBefore = 0;
   bool strictAdmission = false;
 
   constexpr bool valid() const noexcept {
@@ -525,6 +531,17 @@ class CpuReadyTape {
     bool admissionClosed = false;
   };
 
+  // Physical residency that cannot be incorporated into a new session lease.
+  // Ready sources are excluded because the lease charges them once as they
+  // become the deterministic session prefix or its immediate Ready successor.
+  struct UnleasedCapacity {
+    std::size_t sources = 0;
+    std::size_t pages = 0;
+    std::size_t payloadBlocks = 0;
+    std::size_t retentionEntries = 0;
+    std::size_t allocatorTickets = 0;
+  };
+
   explicit CpuReadyTape(std::size_t capacity)
       : CpuReadyTape(CpuReadyTapeConfig::compatibility(capacity)) {}
 
@@ -571,6 +588,22 @@ class CpuReadyTape {
   std::size_t readyCount() const noexcept { return readyCount_; }
   bool readyEmpty() const noexcept { return readyCount_ == 0; }
   const Stats& stats() const noexcept { return stats_; }
+
+  UnleasedCapacity unleasedCapacity() const noexcept {
+    UnleasedCapacity result{};
+    for (std::size_t i = 0; i < capacity(); ++i) {
+      const auto& entry = entries_[i];
+      if (entry.state == State::Free || entry.state == State::Ready) {
+        continue;
+      }
+      ++result.sources;
+      result.pages += entry.paddingBefore + entry.storage.pageCount;
+      result.payloadBlocks += std::max<std::size_t>(1, entry.arenaPayloadCount);
+      ++result.retentionEntries;
+      ++result.allocatorTickets;
+    }
+    return result;
+  }
 
   std::uint64_t sourceGenerationAt(std::size_t index) const noexcept {
     return index < capacity() ? entries_[index].generation : 0;
@@ -1540,6 +1573,7 @@ class CpuReadyTape {
         .buildGeneration = entry.buildGeneration,
         .usedBytes = entry.usedBytes,
         .pageCount = entry.storage.pageCount,
+        .paddingPagesBefore = static_cast<std::uint32_t>(entry.paddingBefore),
         .strictAdmission = entry.strictAdmission,
     };
   }

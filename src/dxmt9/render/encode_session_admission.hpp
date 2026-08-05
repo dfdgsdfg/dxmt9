@@ -56,6 +56,92 @@ struct EncodeSessionLimits {
   }
 };
 
+enum class SessionCapacityDimension : std::uint8_t {
+  None,
+  Sources,
+  Pages,
+  Bytes,
+  Draws,
+  CommandBuffers,
+};
+
+struct SessionCapacityVector {
+  std::uint64_t sources = 0;
+  std::uint64_t pages = 0;
+  std::uint64_t bytes = 0;
+  std::uint64_t draws = 0;
+  std::uint64_t payloadBlocks = 0;
+  std::uint64_t readyEntries = 0;
+  std::uint64_t retentionEntries = 0;
+  std::uint64_t allocatorTickets = 0;
+  std::uint64_t commandBuffers = 0;
+
+  friend constexpr bool operator==(const SessionCapacityVector&,
+                                   const SessionCapacityVector&) = default;
+};
+
+// Fixed queue-creation policy for R-BACK-2.65. Page headroom includes the
+// payload run plus the maximum circular tail discarded before a non-wrapping
+// run. The other fields name physical source/Ready/block ownership through the
+// source credit and logical session limits through the remaining dimensions.
+struct SessionCapacityPolicy {
+  SessionCapacityVector highWater{};
+  SessionCapacityVector maxSession{};
+  SessionCapacityVector successorHeadroom{};
+  SessionCapacityVector ordinaryDirect{};
+
+  bool valid() const noexcept;
+};
+
+struct SessionCapacityLease {
+  std::uint64_t generation = 0;
+  SessionCapacityVector reserved{};
+  SessionCapacityVector used{};
+  SessionCapacityVector successorRemaining{};
+
+  constexpr bool valid() const noexcept { return generation != 0; }
+};
+
+struct SessionCapacityLeaseStats {
+  std::uint64_t acquisitions = 0;
+  std::uint64_t denials = 0;
+  std::uint64_t releases = 0;
+  std::uint64_t peakCurrent = 0;
+  SessionCapacityVector reserved{};
+  SessionCapacityVector used{};
+  SessionCapacityVector slack{};
+  SessionCapacityVector successorMinimum{};
+};
+
+constexpr std::uint64_t worstCaseNonWrappingReservationPages(
+    std::uint64_t payloadPages) noexcept {
+  return payloadPages == 0 ||
+                 payloadPages >
+                     std::numeric_limits<std::uint64_t>::max() / 2u + 1u
+             ? 0
+             : payloadPages * 2u - 1u;
+}
+
+class SessionCapacityLeaseState {
+ public:
+  bool acquire(const SessionCapacityPolicy& policy,
+               const SessionCapacityVector& unavailable,
+               const SessionCapacityVector& initialCharge) noexcept;
+  bool charge(std::uint64_t generation,
+              const SessionCapacityVector& candidate) noexcept;
+  bool uncharge(std::uint64_t generation,
+                const SessionCapacityVector& candidate) noexcept;
+  bool release(std::uint64_t generation) noexcept;
+
+  const SessionCapacityLease& lease() const noexcept { return lease_; }
+  const SessionCapacityLeaseStats& stats() const noexcept { return stats_; }
+
+ private:
+  std::uint64_t nextGeneration_ = 1;
+  SessionCapacityLease lease_{};
+  SessionCapacityLeaseStats stats_{};
+};
+
 enum EncodeSessionAdmissionFlags : std::uint32_t {
   EncodeSessionAdmissionValid = 1u << 0,
   EncodeSessionAdmissionHasPresent = 1u << 1,
@@ -93,6 +179,12 @@ struct SessionAdmissionCandidate {
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
   std::uint32_t predictedCommandBuffers = 1;
+  // Zero keeps pure semantic/unit callers compatible. Production supplies
+  // payload pages plus the source's actual circular wrap padding.
+  std::uint32_t reservationPages = 0;
+  std::uint32_t payloadBlocks = 1;
+  std::uint32_t retentionEntries = 1;
+  std::uint32_t allocatorTickets = 1;
 };
 
 enum class SessionAdmissionDecision : std::uint8_t {
@@ -101,6 +193,20 @@ enum class SessionAdmissionDecision : std::uint8_t {
   ProcessCandidateIsolated,
   RejectInvalid,
 };
+
+struct SessionAdmissionResult {
+  SessionAdmissionDecision decision = SessionAdmissionDecision::RejectInvalid;
+  SessionCapacityDimension limitingDimension =
+      SessionCapacityDimension::None;
+};
+
+SessionCapacityVector sessionCapacityFor(
+    const SessionAdmissionCandidate& candidate) noexcept;
+
+SessionAdmissionResult classifySessionAdmissionDetailed(
+    const EncodeSessionAdmissionState& session,
+    const SessionAdmissionCandidate& candidate,
+    const EncodeSessionLimits& limits) noexcept;
 
 SessionAdmissionDecision classifySessionAdmission(
     const EncodeSessionAdmissionState& session,
@@ -149,6 +255,10 @@ static_assert(std::is_trivially_copyable_v<EncodeSessionAdmissionState>);
 static_assert(std::is_standard_layout_v<EncodeSessionAdmissionState>);
 static_assert(std::is_trivially_copyable_v<SessionAdmissionCandidate>);
 static_assert(std::is_standard_layout_v<SessionAdmissionCandidate>);
+static_assert(std::is_trivially_copyable_v<SessionCapacityVector>);
+static_assert(std::is_standard_layout_v<SessionCapacityVector>);
+static_assert(std::is_trivially_copyable_v<SessionCapacityLease>);
+static_assert(std::is_standard_layout_v<SessionCapacityLease>);
 static_assert(std::is_trivially_copyable_v<ActiveRenderContinuationState>);
 static_assert(std::is_standard_layout_v<ActiveRenderContinuationState>);
 

@@ -773,11 +773,9 @@ class CommandQueue {
   // the H229 carrier, a parked pending session has no completion-wait or
   // producer-quiescence release; it finalizes only on ordered fences —
   // Present tail, non-appendable/semantic source, session-source cap or
-  // preflight failure, producer sequence wait, arena admission pressure,
-  // compatibility control/Tape or inflight-cap writer pressure,
-  // initializer-wait boundary, and shutdown drain — so a parked session
-  // cannot withhold completion needed to release its own producer or Tape
-  // storage pressure.
+  // preflight failure, producer sequence wait, initializer-wait boundary, and
+  // shutdown drain. Admission and writer pressure only wake deterministic
+  // lease/boundary re-evaluation and never select a submission fence.
   void runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted);
   std::optional<core::metalqueue::QueueSubmissionRecord>
   encodeCpuReadySessionSource(

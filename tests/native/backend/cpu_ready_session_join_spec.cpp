@@ -189,6 +189,21 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.writeCv_.notify_all();
   }
 
+  static bool postOrderedSubmit(CommandQueue& queue,
+                                std::uint64_t rawOrdinal,
+                                std::uint64_t seqId) {
+    bool accepted = false;
+    {
+      std::lock_guard lock(queue.mutex_);
+      accepted = queue.sessionReleaseState_.tryPostOrdered(
+          core::metalqueue::SessionReleaseReason::ExplicitFlush,
+          core::metalqueue::SessionReleaseAction::SubmitSession,
+          rawOrdinal, seqId).accepted();
+    }
+    queue.encodeCv_.notify_one();
+    return accepted;
+  }
+
   // Drive the real compatibility writer-acquire path, then discard the empty
   // reservation once capacity becomes available. This is the production wait
   // that a Legacy Present/query source reaches after Direct Arena sources have
@@ -813,7 +828,7 @@ bool waitUntil(Predicate&& predicate,
   return true;
 }
 
-void productionLoopReleasesForActualWriterCapacityWait() {
+void productionLoopReleasesAtDeterministicCapBeforeWriterPressure() {
   RuntimeFixture fixture;
   for (std::uint64_t rawOrdinal = 1;
        rawOrdinal <= dxmt9::kCommandChunkCount; ++rawOrdinal) {
@@ -836,16 +851,47 @@ void productionLoopReleasesForActualWriterCapacityWait() {
         runCpuReadySessionEncodeLoop(queue);
   });
 
+  const auto predecessorSources = std::span(expectedSources).first(
+      dxmt9::kMaxQueuedChunks);
   const bool pendingParked = waitUntil([&] {
     return backendState->observedBackendCalls.load(std::memory_order_acquire) ==
-           expectedSources.size();
+           predecessorSources.size();
   });
   if (!pendingParked) {
     dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
     encodeThread.join();
     check(false,
-          "production loop must encode the full source prefix before parking");
+          "production loop must encode the fixed predecessor prefix before "
+          "parking the Ready suffix behind submitted residency");
   }
+
+  // The fixed 31-source cap submits before any writer is started. Live writer
+  // pressure therefore has no release identity and cannot change grouping.
+  const bool submittedAtFixedCap = waitUntil([&] {
+    return backendState->firstRecordPostCommitRan.load(
+        std::memory_order_acquire);
+  });
+  if (!submittedAtFixedCap) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false,
+          "the deterministic source cap must submit its predecessor prefix");
+  }
+
+  const std::size_t finishedSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+          queue, predecessorSources);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+            queue, dxmt9::kCommandChunkCount,
+            expectedSources.back().seqId),
+        "explicit ordered control submits the final cap suffix");
+  const auto suffix = std::span(expectedSources).last(1);
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+              queue, suffix);
+        }),
+        "ordered reclaim releases the next fixed lease and the ordered "
+        "control submits the final cap suffix");
 
   std::atomic<bool> writerFinished{false};
   std::atomic<bool> writerAcquired{false};
@@ -856,44 +902,30 @@ void productionLoopReleasesForActualWriterCapacityWait() {
         std::memory_order_release);
     writerFinished.store(true, std::memory_order_release);
   });
-
-  // No stop or synthetic helper flag is involved: entering the real
-  // ensureWriterSlot wait must register writer pressure, wake the parked
-  // encode loop, and physically submit its pending record.
-  const bool submittedForWriterPressure = waitUntil([&] {
-    return backendState->firstRecordPostCommitRan.load(
-        std::memory_order_acquire);
-  });
-  if (!submittedForWriterPressure) {
-    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
-    writerThread.join();
-    encodeThread.join();
-    check(false,
-          "actual compatibility-writer pressure must submit the parked "
-          "session before shutdown");
-  }
-
-  const std::size_t finishedSources =
-      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
-          queue, expectedSources);
   const bool writerProceeded = waitUntil([&] {
     return writerFinished.load(std::memory_order_acquire);
   });
-
-  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   writerThread.join();
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   encodeThread.join();
 
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, suffix),
+        "ordered control submits the still-Ready cap suffix through its own "
+        "session");
+  const std::size_t finishedSuffix =
+      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(queue, suffix);
+
   check(backendState->backendCallCountAtFirstRecordSubmit.load(
-            std::memory_order_relaxed) == expectedSources.size(),
-        "writer-pressure release must retain the whole encoded FIFO prefix");
-  check(finishedSources == expectedSources.size(),
-        "writer-pressure submission must complete and reclaim every source");
+            std::memory_order_relaxed) == predecessorSources.size(),
+        "fixed cap fences exactly the deterministic predecessor prefix");
+  check(finishedSources == predecessorSources.size() && finishedSuffix == 1,
+        "cap predecessor and Ready suffix complete through separate sessions");
   check(writerProceeded && writerAcquired.load(std::memory_order_acquire),
-        "completion of the pressure-released prefix must unblock the actual "
+        "completion of the cap-released prefix must unblock the actual "
         "compatibility writer");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
-        "writer-pressure completion must leave no Arena residency");
+        "cap and suffix completion must leave no Arena residency");
 }
 
 void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
@@ -1785,7 +1817,7 @@ int main() {
     mixedLegacyAndArenaSourcesShareOneSubmission();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
-    productionLoopReleasesForActualWriterCapacityWait();
+    productionLoopReleasesAtDeterministicCapBeforeWriterPressure();
     orderedClosePassKeepsFencedSuffixReadyAndPreservesSession();
     orderedSubmitAcknowledgesAfterNonPresentPrefixSubmission();
     tentativeCoordinatorPreflightRestoresExactFifoOrder();

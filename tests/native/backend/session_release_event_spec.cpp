@@ -106,90 +106,6 @@ void testOrdinaryFenceAndActionMustBeCovered() {
         "SubmitAndWait acknowledges at submit rather than GPU completion");
 }
 
-void testPressureLatchCoalescesMaxFenceAndRejectsStaleAck() {
-  SessionReleaseState state;
-  const auto first = state.postOrAdvancePressure(
-      SessionReleasePressureKind::Admission, 3, 5);
-  const auto advanced = state.postOrAdvancePressure(
-      SessionReleasePressureKind::Admission, 7, 11);
-  check(first.status == SessionReleasePostStatus::Posted &&
-            advanced.status == SessionReleasePostStatus::Advanced,
-        "an active pressure latch advances without allocating another cell");
-  check(first.snapshot.event.ordinal == advanced.snapshot.event.ordinal &&
-            advanced.snapshot.generation == first.snapshot.generation + 1u,
-        "pressure coalescing retains identity and advances generation");
-  check(advanced.snapshot.event.fenceRawOrdinal == 7 &&
-            advanced.snapshot.event.fenceSeqId == 11,
-        "pressure coalescing retains the maximum covered fence");
-  check(state.acknowledge(first.snapshot,
-                          SessionReleaseCompletion::SessionSubmitted,
-                          7, 11) == SessionReleaseAckResult::Stale,
-        "an acknowledgement cannot clear an advanced pressure generation");
-  check(state.acknowledge(advanced.snapshot,
-                          SessionReleaseCompletion::SessionSubmitted,
-                          7, 11) == SessionReleaseAckResult::Acknowledged,
-        "the current pressure generation clears after full fence coverage");
-  check(!state.pressureActive(SessionReleasePressureKind::Admission),
-        "pressure acknowledgement clears only the selected latch");
-}
-
-void testPressureLatchesRemainIndependentAndOrdered() {
-  SessionReleaseState state;
-  const auto admission = state.postOrAdvancePressure(
-      SessionReleasePressureKind::Admission, 2, 2);
-  const auto writer = state.postOrAdvancePressure(
-      SessionReleasePressureKind::RawWriter, 3, 3);
-  check(admission.accepted() && writer.accepted(),
-        "both fixed pressure latches may be active");
-  check(state.peekNext() == admission.snapshot,
-        "global event order includes independent pressure latches");
-  check(state.acknowledge(admission.snapshot,
-                          SessionReleaseCompletion::SessionSubmitted,
-                          2, 2) == SessionReleaseAckResult::Acknowledged,
-        "older admission pressure acknowledges first");
-  check(state.peekNext() == writer.snapshot,
-        "writer pressure remains pending after admission acknowledgement");
-}
-
-void testPressureAdvanceAfterYoungerEventAllocatesNewOrdinal() {
-  SessionReleaseState state;
-  const auto pressure1 = state.postOrAdvancePressure(
-      SessionReleasePressureKind::Admission, 1, 1);
-  const auto ordinary2 = state.tryPostOrdered(
-      SessionReleaseReason::ExplicitFlush,
-      SessionReleaseAction::SubmitSession, 2, 2);
-  const auto pressure3 = state.postOrAdvancePressure(
-      SessionReleasePressureKind::Admission, 3, 3);
-  check(pressure1.status == SessionReleasePostStatus::Posted &&
-            ordinary2.status == SessionReleasePostStatus::Posted &&
-            pressure3.status == SessionReleasePostStatus::Posted &&
-            pressure1.snapshot.event.ordinal <
-                ordinary2.snapshot.event.ordinal &&
-            ordinary2.snapshot.event.ordinal <
-                pressure3.snapshot.event.ordinal,
-        "pressure observed after a younger event receives a new ordinal");
-  check(state.peekNext() == pressure1.snapshot,
-        "later pressure cannot move its fence onto the older latch");
-  check(state.acknowledge(pressure1.snapshot,
-                          SessionReleaseCompletion::SessionSubmitted,
-                          1, 1) == SessionReleaseAckResult::Acknowledged &&
-            state.pressureActive(SessionReleasePressureKind::Admission),
-        "acknowledging P1 retains the independently ordered P3 obligation");
-  check(state.peekNext() == ordinary2.snapshot &&
-            state.acknowledge(ordinary2.snapshot,
-                              SessionReleaseCompletion::SessionSubmitted,
-                              2, 2) ==
-                SessionReleaseAckResult::Acknowledged,
-        "the intervening E2 event remains ahead of P3");
-  check(state.peekNext() == pressure3.snapshot &&
-            state.acknowledge(pressure3.snapshot,
-                              SessionReleaseCompletion::SessionSubmitted,
-                              3, 3) ==
-                SessionReleaseAckResult::Acknowledged &&
-            !state.pressureActive(SessionReleasePressureKind::Admission),
-        "P3 acknowledges only after P1 and E2 in global FIFO order");
-}
-
 void testRegressingFenceIsRejected() {
   SessionReleaseState state;
   check(state.tryPostOrdered(
@@ -201,10 +117,11 @@ void testRegressingFenceIsRejected() {
             SessionReleaseAction::SubmitSession, 9, 21).status ==
             SessionReleasePostStatus::Invalid,
         "raw fence regression is rejected");
-  check(state.postOrAdvancePressure(
-            SessionReleasePressureKind::Admission, 11, 19).status ==
+  check(state.tryPostOrdered(
+            SessionReleaseReason::SessionCap,
+            SessionReleaseAction::SubmitSession, 11, 19).status ==
             SessionReleasePostStatus::Invalid,
-        "sequence fence regression is rejected across event origins");
+        "sequence fence regression is rejected for fixed-cap events");
 }
 
 void testTerminalLatchIsStickyAndOrdered() {
@@ -293,9 +210,6 @@ int main() {
     testOrdinaryEventsAreStrictFifo();
     testOrdinaryFifoFullDoesNotOverwrite();
     testOrdinaryFenceAndActionMustBeCovered();
-    testPressureLatchCoalescesMaxFenceAndRejectsStaleAck();
-    testPressureLatchesRemainIndependentAndOrdered();
-    testPressureAdvanceAfterYoungerEventAllocatesNewOrdinal();
     testRegressingFenceIsRejected();
     testTerminalLatchIsStickyAndOrdered();
     testTerminalRequestsClampUnknownAndRegressedFences();

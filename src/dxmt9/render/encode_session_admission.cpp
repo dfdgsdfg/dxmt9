@@ -11,11 +11,17 @@ bool addWithin(T lhs, T rhs, T limit) noexcept {
   return rhs <= limit && lhs <= limit - rhs;
 }
 
+std::uint32_t candidatePageFootprint(
+    const SessionAdmissionCandidate& candidate) noexcept {
+  return candidate.reservationPages != 0 ? candidate.reservationPages
+                                         : candidate.semantic.pageCount;
+}
+
 bool candidateFits(const EncodeSessionAdmissionState& session,
                    const SessionAdmissionCandidate& candidate,
                    const EncodeSessionLimits& limits) noexcept {
   return addWithin(session.sources, std::uint32_t{1}, limits.maxSources) &&
-         addWithin(session.pages, candidate.semantic.pageCount,
+         addWithin(session.pages, candidatePageFootprint(candidate),
                    limits.maxPages) &&
          addWithin(session.bytes, candidate.semantic.byteCount,
                    limits.maxBytes) &&
@@ -25,11 +31,93 @@ bool candidateFits(const EncodeSessionAdmissionState& session,
                    limits.maxCommandBuffers);
 }
 
+SessionCapacityDimension limitingDimension(
+    const EncodeSessionAdmissionState& session,
+    const SessionAdmissionCandidate& candidate,
+    const EncodeSessionLimits& limits) noexcept {
+  if (!addWithin(session.sources, std::uint32_t{1}, limits.maxSources)) {
+    return SessionCapacityDimension::Sources;
+  }
+  if (!addWithin(session.pages, candidatePageFootprint(candidate),
+                 limits.maxPages)) {
+    return SessionCapacityDimension::Pages;
+  }
+  if (!addWithin(session.bytes, candidate.semantic.byteCount,
+                 limits.maxBytes)) {
+    return SessionCapacityDimension::Bytes;
+  }
+  if (!addWithin(session.draws, candidate.semantic.drawCount,
+                 limits.maxDraws)) {
+    return SessionCapacityDimension::Draws;
+  }
+  if (!addWithin(session.commandBuffers, candidate.predictedCommandBuffers,
+                 limits.maxCommandBuffers)) {
+    return SessionCapacityDimension::CommandBuffers;
+  }
+  return SessionCapacityDimension::None;
+}
+
+constexpr bool vectorAtMost(const SessionCapacityVector& left,
+                            const SessionCapacityVector& right) noexcept {
+  return left.sources <= right.sources && left.pages <= right.pages &&
+         left.bytes <= right.bytes && left.draws <= right.draws &&
+         left.payloadBlocks <= right.payloadBlocks &&
+         left.readyEntries <= right.readyEntries &&
+         left.retentionEntries <= right.retentionEntries &&
+         left.allocatorTickets <= right.allocatorTickets &&
+         left.commandBuffers <= right.commandBuffers;
+}
+
+constexpr bool addVector(const SessionCapacityVector& left,
+                         const SessionCapacityVector& right,
+                         SessionCapacityVector& result) noexcept {
+  const auto add = [](std::uint64_t a, std::uint64_t b,
+                      std::uint64_t& out) {
+    if (b > std::numeric_limits<std::uint64_t>::max() - a) {
+      return false;
+    }
+    out = a + b;
+    return true;
+  };
+  return add(left.sources, right.sources, result.sources) &&
+         add(left.pages, right.pages, result.pages) &&
+         add(left.bytes, right.bytes, result.bytes) &&
+         add(left.draws, right.draws, result.draws) &&
+         add(left.payloadBlocks, right.payloadBlocks,
+             result.payloadBlocks) &&
+         add(left.readyEntries, right.readyEntries,
+             result.readyEntries) &&
+         add(left.retentionEntries, right.retentionEntries,
+             result.retentionEntries) &&
+         add(left.allocatorTickets, right.allocatorTickets,
+             result.allocatorTickets) &&
+         add(left.commandBuffers, right.commandBuffers,
+             result.commandBuffers);
+}
+
+constexpr SessionCapacityVector subtractVector(
+    const SessionCapacityVector& left,
+    const SessionCapacityVector& right) noexcept {
+  return {
+      .sources = left.sources - right.sources,
+      .pages = left.pages - right.pages,
+      .bytes = left.bytes - right.bytes,
+      .draws = left.draws - right.draws,
+      .payloadBlocks = left.payloadBlocks - right.payloadBlocks,
+      .readyEntries = left.readyEntries - right.readyEntries,
+      .retentionEntries = left.retentionEntries - right.retentionEntries,
+      .allocatorTickets = left.allocatorTickets - right.allocatorTickets,
+      .commandBuffers = left.commandBuffers - right.commandBuffers,
+  };
+}
+
 bool candidateIdentityValid(
     const SessionAdmissionCandidate& candidate) noexcept {
   return candidate.key.valid() && candidate.semantic.valid() &&
          candidate.sourceOrdinal != 0 && candidate.seqId != 0 &&
-         candidate.predictedCommandBuffers != 0;
+         candidate.predictedCommandBuffers != 0 &&
+         candidate.payloadBlocks != 0 && candidate.retentionEntries != 0 &&
+         candidate.allocatorTickets != 0;
 }
 
 bool candidateMustBeIsolated(
@@ -40,6 +128,150 @@ bool candidateMustBeIsolated(
 }
 
 }  // namespace
+
+bool SessionCapacityPolicy::valid() const noexcept {
+  SessionCapacityVector reserved{};
+  return highWater.sources != 0 && highWater.pages != 0 &&
+         highWater.bytes != 0 && highWater.draws != 0 &&
+         highWater.payloadBlocks != 0 && highWater.readyEntries != 0 &&
+         highWater.retentionEntries != 0 &&
+         highWater.allocatorTickets != 0 &&
+         highWater.commandBuffers != 0 && maxSession.sources != 0 &&
+         maxSession.pages != 0 && maxSession.bytes != 0 &&
+         maxSession.draws != 0 && maxSession.payloadBlocks != 0 &&
+         maxSession.readyEntries != 0 && maxSession.retentionEntries != 0 &&
+         maxSession.allocatorTickets != 0 &&
+         maxSession.commandBuffers != 0 &&
+         successorHeadroom.sources != 0 &&
+         successorHeadroom.pages != 0 &&
+         successorHeadroom.bytes != 0 &&
+         successorHeadroom.draws != 0 &&
+         successorHeadroom.payloadBlocks != 0 &&
+         successorHeadroom.readyEntries != 0 &&
+         successorHeadroom.retentionEntries != 0 &&
+         successorHeadroom.allocatorTickets != 0 &&
+         successorHeadroom.commandBuffers != 0 &&
+         ordinaryDirect.sources == 1 && ordinaryDirect.pages != 0 &&
+         ordinaryDirect.bytes != 0 && ordinaryDirect.draws != 0 &&
+         ordinaryDirect.payloadBlocks != 0 &&
+         ordinaryDirect.readyEntries == 1 &&
+         ordinaryDirect.retentionEntries != 0 &&
+         ordinaryDirect.allocatorTickets != 0 &&
+         ordinaryDirect.commandBuffers != 0 &&
+         successorHeadroom.pages >=
+             worstCaseNonWrappingReservationPages(ordinaryDirect.pages) &&
+         vectorAtMost(ordinaryDirect, successorHeadroom) &&
+         addVector(maxSession, successorHeadroom, reserved) &&
+         vectorAtMost(reserved, highWater);
+}
+
+bool SessionCapacityLeaseState::acquire(
+    const SessionCapacityPolicy& policy,
+    const SessionCapacityVector& unavailable,
+    const SessionCapacityVector& initialCharge) noexcept {
+  if (lease_.valid() || !policy.valid() || nextGeneration_ == 0) {
+    ++stats_.denials;
+    return false;
+  }
+  SessionCapacityVector reserved{};
+  SessionCapacityVector physicalClaim{};
+  if (!addVector(policy.maxSession, policy.successorHeadroom, reserved) ||
+      !addVector(unavailable, reserved, physicalClaim) ||
+      !vectorAtMost(physicalClaim, policy.highWater) ||
+      !vectorAtMost(initialCharge, policy.maxSession)) {
+    ++stats_.denials;
+    return false;
+  }
+  lease_ = {
+      .generation = nextGeneration_++,
+      .reserved = reserved,
+      .used = initialCharge,
+      .successorRemaining = policy.successorHeadroom,
+  };
+  ++stats_.acquisitions;
+  stats_.peakCurrent = std::max<std::uint64_t>(stats_.peakCurrent, 1);
+  stats_.reserved = reserved;
+  stats_.used = initialCharge;
+  stats_.slack = subtractVector(policy.maxSession, initialCharge);
+  stats_.successorMinimum = policy.successorHeadroom;
+  return true;
+}
+
+bool SessionCapacityLeaseState::charge(
+    std::uint64_t generation,
+    const SessionCapacityVector& candidate) noexcept {
+  if (!lease_.valid() || generation != lease_.generation) {
+    return false;
+  }
+  SessionCapacityVector next{};
+  if (!addVector(lease_.used, candidate, next) ||
+      !vectorAtMost(next, subtractVector(lease_.reserved,
+                                         lease_.successorRemaining))) {
+    return false;
+  }
+  lease_.used = next;
+  stats_.used = next;
+  stats_.slack = subtractVector(
+      subtractVector(lease_.reserved, lease_.successorRemaining), next);
+  return true;
+}
+
+bool SessionCapacityLeaseState::uncharge(
+    std::uint64_t generation,
+    const SessionCapacityVector& candidate) noexcept {
+  if (!lease_.valid() || generation != lease_.generation ||
+      !vectorAtMost(candidate, lease_.used)) {
+    return false;
+  }
+  lease_.used = subtractVector(lease_.used, candidate);
+  stats_.used = lease_.used;
+  stats_.slack = subtractVector(
+      subtractVector(lease_.reserved, lease_.successorRemaining),
+      lease_.used);
+  return true;
+}
+
+bool SessionCapacityLeaseState::release(std::uint64_t generation) noexcept {
+  if (!lease_.valid() || generation != lease_.generation) {
+    return false;
+  }
+  lease_ = {};
+  ++stats_.releases;
+  stats_.reserved = {};
+  stats_.used = {};
+  stats_.slack = {};
+  return true;
+}
+
+SessionCapacityVector sessionCapacityFor(
+    const SessionAdmissionCandidate& candidate) noexcept {
+  return {
+      .sources = 1,
+      .pages = candidatePageFootprint(candidate),
+      .bytes = candidate.semantic.byteCount,
+      .draws = candidate.semantic.drawCount,
+      .payloadBlocks = candidate.payloadBlocks,
+      .readyEntries = 1,
+      .retentionEntries = candidate.retentionEntries,
+      .allocatorTickets = candidate.allocatorTickets,
+      .commandBuffers = candidate.predictedCommandBuffers,
+  };
+}
+
+SessionAdmissionResult classifySessionAdmissionDetailed(
+    const EncodeSessionAdmissionState& session,
+    const SessionAdmissionCandidate& candidate,
+    const EncodeSessionLimits& limits) noexcept {
+  const auto decision = classifySessionAdmission(session, candidate, limits);
+  return {
+      .decision = decision,
+      .limitingDimension =
+          decision == SessionAdmissionDecision::SubmitPrefixBeforeCandidate ||
+                  decision == SessionAdmissionDecision::ProcessCandidateIsolated
+              ? limitingDimension(session, candidate, limits)
+              : SessionCapacityDimension::None,
+  };
+}
 
 SessionAdmissionDecision classifySessionAdmission(
     const EncodeSessionAdmissionState& session,
@@ -96,7 +328,7 @@ bool appendSessionAdmission(
         .lastSeqId = candidate.seqId,
         .bytes = candidate.semantic.byteCount,
         .sources = 1,
-        .pages = candidate.semantic.pageCount,
+        .pages = candidatePageFootprint(candidate),
         .draws = candidate.semantic.drawCount,
         .commandBuffers = candidate.predictedCommandBuffers,
         .flags = EncodeSessionAdmissionValid |
@@ -111,7 +343,7 @@ bool appendSessionAdmission(
   session.lastSeqId = candidate.seqId;
   session.bytes += candidate.semantic.byteCount;
   ++session.sources;
-  session.pages += candidate.semantic.pageCount;
+  session.pages += candidatePageFootprint(candidate);
   session.draws += candidate.semantic.drawCount;
   session.commandBuffers += candidate.predictedCommandBuffers;
   if (candidate.semantic.hasPresent()) {

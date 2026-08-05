@@ -32,8 +32,6 @@ bool sessionReleaseCompletionSatisfies(
 bool SessionReleaseState::ordinaryReason(
     SessionReleaseReason reason) noexcept {
   switch (reason) {
-  case SessionReleaseReason::AdmissionPressure:
-  case SessionReleaseReason::RawWriterPressure:
   case SessionReleaseReason::Shutdown:
   case SessionReleaseReason::DeviceLoss:
     return false;
@@ -56,20 +54,6 @@ bool SessionReleaseState::fenceNotBefore(
   return rawOrdinal >= priorRawOrdinal && seqId >= priorSeqId;
 }
 
-SessionReleaseReason SessionReleaseState::pressureReason(
-    SessionReleasePressureKind kind) noexcept {
-  return kind == SessionReleasePressureKind::Admission
-             ? SessionReleaseReason::AdmissionPressure
-             : SessionReleaseReason::RawWriterPressure;
-}
-
-SessionReleaseOrigin SessionReleaseState::pressureOrigin(
-    SessionReleasePressureKind kind) noexcept {
-  return kind == SessionReleasePressureKind::Admission
-             ? SessionReleaseOrigin::AdmissionPressure
-             : SessionReleaseOrigin::RawWriterPressure;
-}
-
 std::uint64_t SessionReleaseState::allocateOrdinal() noexcept {
   if (nextOrdinal_ == 0 ||
       nextOrdinal_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -89,25 +73,6 @@ SessionReleaseSnapshot SessionReleaseState::snapshotFor(
       .event = latch.event,
       .generation = latch.generation,
   };
-}
-
-const SessionReleaseState::Latch& SessionReleaseState::pressureLatch(
-    SessionReleasePressureKind kind) const noexcept {
-  return kind == SessionReleasePressureKind::Admission
-             ? admissionPressure_
-             : rawWriterPressure_;
-}
-
-SessionReleaseState::Latch& SessionReleaseState::pressureLatch(
-    SessionReleasePressureKind kind) noexcept {
-  return kind == SessionReleasePressureKind::Admission
-             ? admissionPressure_
-             : rawWriterPressure_;
-}
-
-bool SessionReleaseState::latchIsNewest(const Latch& latch) const noexcept {
-  return latch.active && nextOrdinal_ > 1 &&
-         latch.event.ordinal == nextOrdinal_ - 1u;
 }
 
 SessionReleasePostResult SessionReleaseState::postQueued(
@@ -212,32 +177,6 @@ SessionReleasePostResult SessionReleaseState::postOrAdvanceLatch(
   };
 }
 
-SessionReleasePostResult SessionReleaseState::postOrAdvancePressure(
-    SessionReleasePressureKind kind,
-    std::uint64_t fenceRawOrdinal,
-    std::uint64_t fenceSeqId) noexcept {
-  if (terminalRequested_) {
-    return {.status = SessionReleasePostStatus::Stopped};
-  }
-  if (!fenceNotBefore(fenceRawOrdinal, fenceSeqId,
-                      lastFenceRawOrdinal_, lastFenceSeqId_)) {
-    return {.status = SessionReleasePostStatus::Invalid};
-  }
-  auto& latch = pressureLatch(kind);
-  if (latch.active && !latchIsNewest(latch)) {
-    // Moving the old latch's fence past a younger event would make that
-    // younger event wait behind work that was observed after it. Preserve the
-    // global ordinal by allocating this pressure observation in the bounded
-    // ordinary FIFO instead. It remains distinguishable by its reason.
-    return postQueued(pressureReason(kind),
-                      SessionReleaseAction::SubmitSession,
-                      fenceRawOrdinal, fenceSeqId);
-  }
-  return postOrAdvanceLatch(
-      latch, pressureOrigin(kind), pressureReason(kind),
-      SessionReleaseAction::SubmitSession, fenceRawOrdinal, fenceSeqId);
-}
-
 SessionReleasePostResult SessionReleaseState::requestTerminal(
     SessionReleaseReason reason,
     std::uint64_t fenceRawOrdinal,
@@ -280,10 +219,6 @@ SessionReleaseState::peekNext() const noexcept {
         .generation = 1,
     });
   }
-  consider(snapshotFor(admissionPressure_,
-                       SessionReleaseOrigin::AdmissionPressure));
-  consider(snapshotFor(rawWriterPressure_,
-                       SessionReleaseOrigin::RawWriterPressure));
   consider(snapshotFor(terminal_, SessionReleaseOrigin::Terminal));
   return next;
 }
@@ -319,12 +254,6 @@ SessionReleaseAckResult SessionReleaseState::acknowledge(
     orderedHead_ = nextIndex(orderedHead_);
     --orderedCount_;
     break;
-  case SessionReleaseOrigin::AdmissionPressure:
-    admissionPressure_ = {};
-    break;
-  case SessionReleaseOrigin::RawWriterPressure:
-    rawWriterPressure_ = {};
-    break;
   case SessionReleaseOrigin::Terminal:
     terminal_ = {};
     break;
@@ -334,22 +263,7 @@ SessionReleaseAckResult SessionReleaseState::acknowledge(
 }
 
 bool SessionReleaseState::hasPending() const noexcept {
-  return !orderedEmpty() || admissionPressure_.active ||
-         rawWriterPressure_.active || terminal_.active;
-}
-
-bool SessionReleaseState::pressureActive(
-    SessionReleasePressureKind kind) const noexcept {
-  if (pressureLatch(kind).active) {
-    return true;
-  }
-  const auto reason = pressureReason(kind);
-  for (std::size_t i = 0; i < orderedCount_; ++i) {
-    if (ordered_[(orderedHead_ + i) % ordered_.size()].reason == reason) {
-      return true;
-    }
-  }
-  return false;
+  return !orderedEmpty() || terminal_.active;
 }
 
 }  // namespace dxmt9::core::metalqueue
