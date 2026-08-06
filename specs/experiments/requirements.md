@@ -20,10 +20,32 @@ coarser and human-reviewable.
 a known-working open-source game, tech demo, or SDK sample that exercises a
 meaningful subset of the D3D9 surface area.
 
-**R-WILD-1.2** Experiments must not require Wine. They must run the application
-against dxmt9 directly via a native macOS launcher that injects dxmt9 as the
-D3D9 implementation (no PE loader, no Wine DLL stack). If a Wine path is
-unavoidable, it must be documented as a dependency.
+**R-WILD-1.2** Every experiment runs through the documented launcher harness
+(`run_experiment.py` + catalogue launchers), in one of two lanes:
+
+- **Native lane** — native macOS sample binaries link or inject dxmt9
+  directly (no PE loader, no Wine DLL stack). This is the preferred lane
+  when the application source is available to build natively.
+- **Wine lane** — real Windows PE applications (the wild catalogue: 3DMark05,
+  SFIV, and peers) run under a managed Wine runtime. The Wine runtime is a
+  first-class, manifest-selected dependency governed by
+  `specs/experiments/runtime/` (`R-RT-*`) and the operational rules in
+  `agents/rules/test_wild.rules.md`; it is not an ad-hoc exception. The
+  catalogue entry's `wine_id` names the runtime, and runs record the resolved
+  `wine_root` in `result.json` so every result states the runtime it ran
+  under.
+
+An experiment must not depend on a Wine build outside the manifest, and the
+native lane must not silently acquire a Wine dependency — moving an entry
+between lanes is a catalogue change, not a launcher default.
+
+> *Revised 2026-08-06.* The original clause required all experiments to be
+> Wine-free with native injection, treating Wine as an "unavoidable
+> documented dependency". That predates the wild catalogue: real PE
+> applications cannot run without a PE loader, the winemetal bridge exists
+> precisely because Wine is the production environment, and the runtime
+> manifest (`R-RT-*`) has since made the Wine dependency explicit, versioned,
+> and audited. The native lane remains for buildable samples.
 
 **R-WILD-1.3** Each experiment must be reproducible: given the same application
 binary and the same dxmt9 build, the outcome must be deterministic across runs
