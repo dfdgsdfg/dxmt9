@@ -17,6 +17,18 @@ the unix side. Wine `dlls/d3d9/tests` are used as an oracle for public Windows
 D3D9 API behaviour; they do not require dxmt9 to copy Wine's `dlls/d3d9` or
 wined3d internal architecture.
 
+**Compatibility precedence.** The compatibility target is observable
+**Windows D3D9 behaviour**. The primary oracle for that behaviour is the Wine
+`dlls/d3d9/tests` suite (cross-validated against real Windows), cited per
+conformance case as `behavioral-oracle`. Where Windows behaviour and Wine
+**runtime** behaviour diverge on surfaces the application observes through
+Wine itself — loader semantics, HWND/WSI integration, wow64 boundaries, and
+the documented no-op/default contracts — **Wine-runtime compatibility wins**,
+and the divergence must be recorded as `dxmt9-policy` with its rationale.
+Wine's internal implementation structure (`wined3d`) is never a requirement,
+and a Wine implementation bug that its own test suite marks `todo_wine` is
+not a compatibility target.
+
 Detailed subtopic contracts live in:
 
 - `caps/requirements.md` for `D3DCAPS9` and capability consistency.
