@@ -161,6 +161,18 @@ queue_completion_sources_spec = executable(
 test('dxmt9-queue-completion-sources-spec',
      queue_completion_sources_spec)
 
+post_encode_payload_retirement_spec = executable(
+  'dxmt9-post-encode-payload-retirement-spec',
+  'post_encode_payload_retirement_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-post-encode-payload-retirement-spec',
+     post_encode_payload_retirement_spec,
+     args: [meson.project_source_root()])
+
 cpu_ready_tape_spec = executable(
   'dxmt9-cpu-ready-tape-spec',
   'cpu_ready_tape_spec.cpp',
@@ -257,6 +269,25 @@ test('dxmt9-cpu-ready-session-join-spec',
      cpu_ready_session_join_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+     ])
+
+test('dxmt9-cpu-ready-session-join-perf-off-spec',
+     cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_SESSION_JOIN_PERF_OFF_CASE=1',
+     ])
+
+# The split policy is read once per process. Re-run the focused repeated-source
+# transaction in a separate process so PerNRecords must carry its threshold
+# across fragment calls (three one-record fragments, threshold=3).
+test('dxmt9-cpu-ready-session-join-per-n-records-spec',
+     cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_SESSION_JOIN_SPLIT_POLICY_CASE=per-n-records',
+       'DXMT9_MID_CHUNK_COMMIT_POLICY=per-n-records',
+       'DXMT9_MID_CHUNK_COMMIT_RECORDS=3',
      ])
 
 encode_partition_snapshot_spec = executable(

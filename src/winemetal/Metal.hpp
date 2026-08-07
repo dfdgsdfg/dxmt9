@@ -474,6 +474,22 @@ public:
 class RenderCommandEncoder : public CommandEncoder {
 public:
   void
+  setColorStoreAction(WMTStoreAction action, uint32_t color_attachment_index) {
+    MTLRenderCommandEncoder_setColorStoreAction(
+        handle, action, color_attachment_index);
+  }
+
+  void
+  setDepthStoreAction(WMTStoreAction action) {
+    MTLRenderCommandEncoder_setDepthStoreAction(handle, action);
+  }
+
+  void
+  setStencilStoreAction(WMTStoreAction action) {
+    MTLRenderCommandEncoder_setStencilStoreAction(handle, action);
+  }
+
+  void
   encodeCommands(const wmtcmd_render_nop *cmd_head) {
     MTLRenderCommandEncoder_encodeCommands(handle, (const wmtcmd_base *)cmd_head);
   }

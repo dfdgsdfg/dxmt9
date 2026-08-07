@@ -49,6 +49,12 @@ PressureAck ==
    liveGeneration : 0 .. MaxPressureGeneration,
    accepted : BOOLEAN]
 
+CapacityWakeState ==
+  [phase : {"Inactive", "NeedDenial", "Waiting", "Woken",
+            "DirectStarted"},
+   generation : 0 .. MaxSources,
+   observedGeneration : 0 .. MaxSources]
+
 VARIABLES
   nextSource,
   ready,
@@ -80,7 +86,8 @@ VARIABLES
   lastRollbackPrefix,
   lastRollbackSuffix,
   lastRollbackReady,
-  lastRollbackPreEffect
+  lastRollbackPreEffect,
+  capacityWake
 
 vars ==
   <<nextSource, ready, tentative, tentativeBaseSuffix,
@@ -91,7 +98,7 @@ vars ==
     admissionAckGeneration, writerAckGeneration, lastPressureAck,
     shutdownRequested, terminalFence, terminalAck, shutdownComplete,
     lastRollbackPrefix, lastRollbackSuffix, lastRollbackReady,
-    lastRollbackPreEffect>>
+    lastRollbackPreEffect, capacityWake>>
 
 SeqSet(seq) == {seq[i] : i \in DOMAIN seq}
 
@@ -141,19 +148,30 @@ EmptyPressureAck ==
    liveGeneration |-> 0, accepted |-> FALSE]
 
 Init ==
-  /\ nextSource = 1
-  /\ ready = <<>>
+  /\ \/ /\ nextSource = 1
+         /\ ready = <<>>
+         /\ submitted = <<>>
+         /\ effectsThrough = 0
+         /\ passClosedThrough = 0
+         /\ capacityWake =
+              [phase |-> "Inactive", generation |-> 0,
+               observedGeneration |-> 0]
+     \/ /\ nextSource = 1
+         /\ ready = <<>>
+         /\ submitted = <<>>
+         /\ effectsThrough = 0
+         /\ passClosedThrough = 0
+         /\ capacityWake =
+              [phase |-> "NeedDenial", generation |-> 0,
+               observedGeneration |-> 0]
   /\ tentative = <<>>
   /\ tentativeBaseSuffix = <<>>
   /\ tentativeValidation = "Pass"
   /\ validationFailedOnce = {}
   /\ session = <<>>
   /\ passOpen = FALSE
-  /\ submitted = <<>>
   /\ completed = <<>>
   /\ reclaimed = 0
-  /\ effectsThrough = 0
-  /\ passClosedThrough = 0
   /\ releaseQ = <<>>
   /\ releaseGeneration = 0
   /\ ordinaryAckGeneration = 0
@@ -173,6 +191,35 @@ Init ==
   /\ lastRollbackReady = <<>>
   /\ lastRollbackPreEffect = TRUE
 
+SeedStartupCapacityBlocker ==
+  /\ capacityWake.phase = "NeedDenial"
+  /\ nextSource = 1
+  /\ ready = <<>>
+  /\ tentative = <<>>
+  /\ session = <<>>
+  /\ submitted = <<>>
+  /\ completed = <<>>
+  /\ reclaimed = 0
+  /\ nextSource' = 3
+  /\ ready' = <<2>>
+  /\ submitted' = <<1>>
+  /\ effectsThrough' = 1
+  /\ passClosedThrough' = 1
+  /\ capacityWake' =
+       [capacityWake EXCEPT
+          !.phase = "Waiting",
+          !.observedGeneration = capacityWake.generation]
+  /\ UNCHANGED <<tentative, tentativeBaseSuffix, tentativeValidation,
+                  validationFailedOnce, session, passOpen, completed,
+                  reclaimed, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect>>
+
 Publish ==
   /\ ~shutdownRequested
   /\ ~admissionLatch.active
@@ -191,10 +238,11 @@ Publish ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 ReservePrefix(count, outcome) ==
   /\ tentative = <<>>
+  /\ capacityWake.phase # "Waiting"
   /\ count \in 1 .. MaxBatch
   /\ count <= Len(ready)
   /\ count + Len(session) <= MaxSessionLen
@@ -214,7 +262,7 @@ ReservePrefix(count, outcome) ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 ReserveAny ==
   \E count \in 1 .. MaxBatch, outcome \in ValidationOutcomes :
@@ -229,6 +277,10 @@ CommitTentative ==
   /\ tentative' = <<>>
   /\ tentativeBaseSuffix' = <<>>
   /\ tentativeValidation' = "Pass"
+  /\ capacityWake' =
+       IF capacityWake.phase = "Woken" /\ 2 \in SeqSet(tentative)
+       THEN [capacityWake EXCEPT !.phase = "DirectStarted"]
+       ELSE capacityWake
   /\ UNCHANGED <<nextSource, ready, validationFailedOnce, submitted,
                   completed, reclaimed, passClosedThrough, releaseQ,
                   releaseGeneration, ordinaryAckGeneration,
@@ -258,7 +310,7 @@ RollbackTentative ==
                   ackedSubmitFences, ackedPassCloseFences, admissionLatch,
                   writerLatch, admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
-                  terminalAck, shutdownComplete>>
+                  terminalAck, shutdownComplete, capacityWake>>
 
 ClosePass ==
   /\ passOpen
@@ -275,7 +327,7 @@ ClosePass ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 SubmitSession ==
   /\ session # <<>>
@@ -292,7 +344,7 @@ SubmitSession ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 PostOrdinaryRelease(kind) ==
   /\ ~shutdownRequested
@@ -314,7 +366,7 @@ PostOrdinaryRelease(kind) ==
                   writerLatch, admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 PostAnyOrdinaryRelease == \E kind \in ReleaseKinds : PostOrdinaryRelease(kind)
 
@@ -342,7 +394,7 @@ AckOrdinaryRelease ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 PostAdmissionPressure ==
   /\ ~shutdownRequested
@@ -362,7 +414,7 @@ PostAdmissionPressure ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 PostWriterPressure ==
   /\ ~shutdownRequested
@@ -382,7 +434,7 @@ PostWriterPressure ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 AckAdmissionPressure ==
   /\ admissionLatch.active
@@ -405,7 +457,7 @@ AckAdmissionPressure ==
                   writerAckGeneration, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 AckWriterPressure ==
   /\ writerLatch.active
@@ -426,7 +478,7 @@ AckWriterPressure ==
                   admissionLatch, admissionAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 RejectStaleAdmissionAck(generation) ==
   /\ admissionLatch.active
@@ -444,7 +496,7 @@ RejectStaleAdmissionAck(generation) ==
                   admissionAckGeneration, writerAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 RejectStaleWriterAck(generation) ==
   /\ writerLatch.active
@@ -462,7 +514,7 @@ RejectStaleWriterAck(generation) ==
                   admissionAckGeneration, writerAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 RejectAnyStalePressureAck ==
   (\E generation \in 0 .. MaxPressureGeneration :
@@ -483,7 +535,7 @@ RequestShutdown ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, terminalAck, shutdownComplete,
                   lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 AckTerminalFence ==
   /\ shutdownRequested
@@ -502,7 +554,7 @@ AckTerminalFence ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 CompleteSubmitted ==
   /\ submitted # <<>>
@@ -517,19 +569,37 @@ CompleteSubmitted ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, capacityWake>>
 
 ReclaimCompleted ==
   /\ completed # <<>>
   /\ Head(completed) = reclaimed + 1
   /\ reclaimed' = Head(completed)
   /\ completed' = Tail(completed)
+  /\ capacityWake' =
+       [capacityWake EXCEPT !.generation = @ + 1]
   /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
                   tentativeValidation, validationFailedOnce, session,
                   passOpen, submitted, effectsThrough, passClosedThrough,
                   releaseQ, releaseGeneration, ordinaryAckGeneration,
                   ackedSubmitFences, ackedPassCloseFences, admissionLatch,
                   writerLatch, admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect>>
+
+WakeCapacityLease ==
+  /\ capacityWake.phase = "Waiting"
+  /\ capacityWake.generation # capacityWake.observedGeneration
+  /\ capacityWake' = [capacityWake EXCEPT !.phase = "Woken"]
+  /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
@@ -555,22 +625,25 @@ FinishShutdown ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
 
 Next ==
-  \/ Publish
-  \/ ReserveAny
-  \/ CommitTentative
-  \/ RollbackTentative
-  \/ ClosePass
-  \/ SubmitSession
-  \/ PostAnyOrdinaryRelease
-  \/ AckOrdinaryRelease
-  \/ RequestShutdown
-  \/ AckTerminalFence
-  \/ CompleteSubmitted
-  \/ ReclaimCompleted
-  \/ FinishShutdown
+  IF capacityWake.phase = "NeedDenial"
+  THEN SeedStartupCapacityBlocker
+  ELSE \/ Publish
+       \/ ReserveAny
+       \/ CommitTentative
+       \/ RollbackTentative
+       \/ ClosePass
+       \/ SubmitSession
+       \/ PostAnyOrdinaryRelease
+       \/ AckOrdinaryRelease
+       \/ RequestShutdown
+       \/ AckTerminalFence
+       \/ CompleteSubmitted
+       \/ ReclaimCompleted
+       \/ WakeCapacityLease
+       \/ FinishShutdown
 
 SystemFairness ==
   /\ WF_vars(ReserveAny)
@@ -582,6 +655,8 @@ SystemFairness ==
   /\ WF_vars(AckTerminalFence)
   /\ WF_vars(CompleteSubmitted)
   /\ WF_vars(ReclaimCompleted)
+  /\ WF_vars(SeedStartupCapacityBlocker)
+  /\ WF_vars(WakeCapacityLease)
   /\ WF_vars(FinishShutdown)
 
 Spec == Init /\ [][Next]_vars /\ SystemFairness
@@ -618,6 +693,7 @@ TypeOK ==
   /\ lastRollbackSuffix \in Seq(SourceIds)
   /\ lastRollbackReady \in Seq(SourceIds)
   /\ lastRollbackPreEffect \in BOOLEAN
+  /\ capacityWake \in CapacityWakeState
 
 BoundedStores ==
   /\ ResidentCount <= MaxResident
@@ -692,6 +768,13 @@ NoPressureCreatedRelease ==
   /\ admissionAckGeneration = 0
   /\ writerAckGeneration = 0
 
+CapacityWakeMatchesReclaim ==
+  /\ capacityWake.observedGeneration <= capacityWake.generation
+  /\ (capacityWake.phase = "Waiting" =>
+        \/ capacityWake.observedGeneration < capacityWake.generation
+        \/ submitted # <<>>
+        \/ completed # <<>>)
+
 TerminalFenceSafety ==
   /\ (~shutdownRequested => terminalFence = 0)
   /\ (shutdownRequested => terminalFence = nextSource - 1)
@@ -712,6 +795,7 @@ Safety ==
   /\ NoCompletionBeforeSubmit
   /\ NoStalePressureAck
   /\ NoPressureCreatedRelease
+  /\ CapacityWakeMatchesReclaim
   /\ TerminalFenceSafety
 
 ShutdownProgress == shutdownRequested ~> shutdownComplete
@@ -720,6 +804,14 @@ OrdinaryReleaseProgress ==
   \A generation \in 1 .. MaxReleaseGeneration :
     (releaseGeneration >= generation) ~>
       (ordinaryAckGeneration >= generation)
+
+StartupCapacityWakeProgress ==
+  (capacityWake.phase = "Waiting") ~>
+    (capacityWake.phase \in {"Woken", "DirectStarted"})
+
+StartupDirectProgress ==
+  (capacityWake.phase = "Woken") ~>
+    (capacityWake.phase = "DirectStarted")
 
 AdmissionPressureProgress ==
   \A generation \in 1 .. MaxPressureGeneration :

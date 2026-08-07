@@ -9,6 +9,7 @@
 #include "dxmt9_draw_shader.hpp"
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
+#include "dxmt9_post_encode_retirement.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,21 @@ using u16 = std::uint16_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 using i32 = std::int32_t;
+
+// This is the only locator-bearing -> locator-free attribution conversion.
+// Callers must invoke it while the source is synchronously represented for
+// encode; the returned value carries no authority to resolve Tape storage.
+inline constexpr std::optional<EncodedCommandId>
+encodedCommandIdAtSynchronousEncodeSeam(
+    core::metalqueue::PublishedCommandRef source) noexcept {
+  if (!source.valid()) {
+    return std::nullopt;
+  }
+  return EncodedCommandId{
+      .seqId = source.seqId,
+      .commandIndex = source.commandIndex,
+  };
+}
 
 // Hazard tracking primitives shared with encodeChunk. The bloom filter
 // is the cheap pre-screen; the exact handle list resolves false
@@ -150,14 +166,361 @@ inline perf::EncoderSplitReason renderPassEntrySplitReason(
   return nonSplitFallback;
 }
 
-inline bool useSourceLocalStoreProofLookahead(
-    bool externalEncodeSession,
-    bool sessionMayContinue) noexcept {
-  // R-BACK-2.48: source-local lookahead only proves the current source's
-  // suffix. A carried EncodeSession that can accept later sources must stay
-  // conservative, but the finalizing call has no future source; its current
-  // suffix is the remaining logical stream suffix.
-  return !externalEncodeSession || !sessionMayContinue;
+enum class NaturalFallbackReentryRelation : u8 {
+  Excluded,
+  SameWindow,
+  CrossWindow,
+};
+
+enum class ShortReentryDisposition : u8 {
+  Ordinary,
+  NaturalSameWindow,
+  NaturalCrossWindow,
+  PlannedComposite,
+  EligibilityPresent,
+  EligibilityOther,
+  PermutationRejected,
+  MixedOrInvalid,
+  Count,
+};
+
+enum class ShortReentrySourceShape : u8 {
+  AllSameSource,
+  PriorAndInterveningSameCurrentNewer,
+  PriorOlderInterveningAndCurrentSame,
+  MixedOrInvalid,
+  Count,
+};
+
+enum class ShortReentryClearOpenTarget : u8 {
+  Excluded,
+  Exact,
+  NaturalCross,
+};
+
+// The narrow A | Clear(B)+B | A shape left by the GT2 locality audit. The
+// exact close reason and immediate B clear-open bit keep this from becoming a
+// broad marginal cross-product: it names only a source-boundary return whose
+// prior A was physically ended by the Clear folded into B.
+inline ShortReentryClearOpenTarget classifyShortReentryClearOpenTarget(
+    std::uint32_t interveningPasses,
+    ShortReentryDisposition disposition,
+    ShortReentrySourceShape sourceShape,
+    bool interveningOpenedWithClear,
+    std::optional<perf::EncoderSplitReason> priorCloseReason) noexcept {
+  if (interveningPasses != 1u ||
+      sourceShape !=
+          ShortReentrySourceShape::PriorAndInterveningSameCurrentNewer ||
+      !interveningOpenedWithClear || !priorCloseReason.has_value() ||
+      *priorCloseReason != perf::EncoderSplitReason::ClearBarrier) {
+    return ShortReentryClearOpenTarget::Excluded;
+  }
+  return disposition == ShortReentryDisposition::NaturalCrossWindow
+      ? ShortReentryClearOpenTarget::NaturalCross
+      : ShortReentryClearOpenTarget::Exact;
+}
+
+// Classifies source ownership across the complete physical
+// prior-A | intervening passes | current-A interval. A d2 interval belongs to
+// one of the directional buckets only when both intervening passes agree;
+// split or non-monotonic source identities remain explicitly mixed.
+inline ShortReentrySourceShape classifyShortReentrySourceShape(
+    u64 priorSameKeySeq,
+    std::span<const u64> interveningSeqs,
+    u64 currentSeq) noexcept {
+  if (priorSameKeySeq == 0u || currentSeq == 0u ||
+      interveningSeqs.empty() || interveningSeqs.size() > 2u ||
+      std::any_of(interveningSeqs.begin(), interveningSeqs.end(),
+                  [](u64 seq) { return seq == 0u; })) {
+    return ShortReentrySourceShape::MixedOrInvalid;
+  }
+
+  const bool allInterveningMatchPrior = std::all_of(
+      interveningSeqs.begin(), interveningSeqs.end(),
+      [priorSameKeySeq](u64 seq) { return seq == priorSameKeySeq; });
+  if (allInterveningMatchPrior && currentSeq == priorSameKeySeq) {
+    return ShortReentrySourceShape::AllSameSource;
+  }
+  if (allInterveningMatchPrior && currentSeq > priorSameKeySeq) {
+    return ShortReentrySourceShape::PriorAndInterveningSameCurrentNewer;
+  }
+
+  const bool allInterveningMatchCurrent = std::all_of(
+      interveningSeqs.begin(), interveningSeqs.end(),
+      [currentSeq](u64 seq) { return seq == currentSeq; });
+  if (allInterveningMatchCurrent && priorSameKeySeq < currentSeq) {
+    return ShortReentrySourceShape::PriorOlderInterveningAndCurrentSame;
+  }
+  return ShortReentrySourceShape::MixedOrInvalid;
+}
+
+inline bool canonicalOrdinaryReplayWindow(
+    const ReplayWindowProvenance& provenance) noexcept {
+  return provenance.disposition == ReplayWindowDisposition::Ordinary &&
+      provenance.windowId == 0u && provenance.sourceIndex == 0u &&
+      provenance.sourceCount == 0u;
+}
+
+// Classifies the complete physical prior-A | intervening passes | current-A
+// interval. This is intentionally limited to d1/d2: the frame tracker retains
+// every provenance value needed for those intervals without allocation.
+inline ShortReentryDisposition classifyShortReentryDisposition(
+    const ReplayWindowProvenance& priorSameKey,
+    std::span<const ReplayWindowProvenance> intervening,
+    const ReplayWindowProvenance& current) noexcept {
+  if (intervening.empty() || intervening.size() > 2u) {
+    return ShortReentryDisposition::MixedOrInvalid;
+  }
+
+  std::array<ReplayWindowProvenance, 4> interval{};
+  interval[0] = priorSameKey;
+  std::copy(intervening.begin(), intervening.end(), interval.begin() + 1u);
+  interval[intervening.size() + 1u] = current;
+  const std::size_t intervalSize = intervening.size() + 2u;
+
+  bool allOrdinary = true;
+  for (std::size_t i = 0; i < intervalSize; ++i) {
+    if (canonicalOrdinaryReplayWindow(interval[i])) {
+      continue;
+    }
+    allOrdinary = false;
+    if (!interval[i].valid()) {
+      return ShortReentryDisposition::MixedOrInvalid;
+    }
+  }
+  if (allOrdinary) {
+    return ShortReentryDisposition::Ordinary;
+  }
+
+  const auto isNatural = [](const ReplayWindowProvenance& provenance) {
+    return provenance.disposition ==
+        ReplayWindowDisposition::NaturalAfterMergeFallback;
+  };
+  const auto firstNatural = std::find_if(
+      interval.begin(), interval.begin() + intervalSize, isNatural);
+  if (firstNatural != interval.begin() + intervalSize) {
+    const bool allSameNatural = std::all_of(
+        interval.begin(), interval.begin() + intervalSize,
+        [&](const ReplayWindowProvenance& provenance) {
+          return isNatural(provenance) &&
+              provenance.windowId == firstNatural->windowId &&
+              provenance.sourceCount == firstNatural->sourceCount;
+        });
+    return allSameNatural ? ShortReentryDisposition::NaturalSameWindow
+                          : ShortReentryDisposition::NaturalCrossWindow;
+  }
+
+  // Natural has precedence above to preserve the existing exact attribution
+  // contract. For the remaining dispositions, Ordinary is transparent: one
+  // touched special window names the interval, while multiple special kinds
+  // or identities are explicitly mixed.
+  const ReplayWindowProvenance* special = nullptr;
+  for (std::size_t i = 0; i < intervalSize; ++i) {
+    if (canonicalOrdinaryReplayWindow(interval[i])) {
+      continue;
+    }
+    if (!special) {
+      special = &interval[i];
+      continue;
+    }
+    if (interval[i].disposition != special->disposition ||
+        interval[i].windowId != special->windowId ||
+        interval[i].sourceCount != special->sourceCount) {
+      return ShortReentryDisposition::MixedOrInvalid;
+    }
+  }
+  if (!special) {
+    return ShortReentryDisposition::MixedOrInvalid;
+  }
+  switch (special->disposition) {
+  case ReplayWindowDisposition::PlannedComposite:
+    return ShortReentryDisposition::PlannedComposite;
+  case ReplayWindowDisposition::EligibilityPresent:
+    return ShortReentryDisposition::EligibilityPresent;
+  case ReplayWindowDisposition::EligibilityOther:
+    return ShortReentryDisposition::EligibilityOther;
+  case ReplayWindowDisposition::PermutationRejectedFallback:
+    return ShortReentryDisposition::PermutationRejected;
+  case ReplayWindowDisposition::Ordinary:
+  case ReplayWindowDisposition::NaturalAfterMergeFallback:
+    break;
+  }
+  return ShortReentryDisposition::MixedOrInvalid;
+}
+
+enum class ActiveSeedMergeJoinRelation : u8 {
+  NotTarget,
+  Matched,
+  Mismatch,
+};
+
+enum class ActiveSeedMergeContinuationRelation : u8 {
+  NotTarget,
+  Continued,
+  Mismatch,
+};
+
+// Call-local, allocation-free exact-locator resolver. Replay order may be a
+// validated non-monotonic command permutation, so resolution is a bounded
+// linear lookup rather than a command-index cursor.
+struct ActiveSeedMergeTargetResolver {
+  std::span<const ActiveSeedMergeTargetWitness> targets{};
+  const ActiveSeedMergeTargetWitness* current = nullptr;
+  std::size_t resolved = 0;
+
+  void beginCommand(std::uint32_t sourceIndex,
+                    std::uint32_t commandIndex) noexcept {
+    current = nullptr;
+    for (const auto& target : targets) {
+      if (target.retainedSourceIndex == sourceIndex &&
+          target.commandIndex == commandIndex) {
+        current = &target;
+        break;
+      }
+    }
+  }
+
+  const ActiveSeedMergeTargetWitness* currentTarget() const noexcept {
+    return current;
+  }
+
+  bool consumeCurrent() noexcept {
+    if (!current || resolved >= targets.size()) {
+      current = nullptr;
+      return false;
+    }
+    ++resolved;
+    current = nullptr;
+    return true;
+  }
+
+  void endCommand() noexcept { current = nullptr; }
+
+  std::size_t unconsumed() const noexcept {
+    return targets.size() - std::min(targets.size(), resolved);
+  }
+};
+
+inline ActiveSeedMergeContinuationRelation
+classifyActiveSeedMergeContinuation(
+    const ActiveSeedMergeTicketContext& context,
+    const ActiveSeedMergeTargetWitness& target,
+    const ReplayWindowProvenance& current,
+    std::uint32_t currentSourceIndex,
+    std::uint32_t currentCommandIndex,
+    RenderPassInstanceToken activeInstance) noexcept {
+  if (target.retainedSourceIndex != currentSourceIndex ||
+      target.commandIndex != currentCommandIndex) {
+    return ActiveSeedMergeContinuationRelation::NotTarget;
+  }
+  if (!context.valid() || !target.valid() || !current.valid() ||
+      current.disposition !=
+          ReplayWindowDisposition::NaturalAfterMergeFallback ||
+      current.windowId != context.windowId ||
+      current.sourceCount != context.sourceCount ||
+      current.sourceIndex != currentSourceIndex ||
+      activeInstance != context.seed) {
+    return ActiveSeedMergeContinuationRelation::Mismatch;
+  }
+  return ActiveSeedMergeContinuationRelation::Continued;
+}
+
+inline ActiveSeedMergeJoinRelation classifyActiveSeedMergePassStart(
+    const ActiveSeedMergeTicketContext& context,
+    const ActiveSeedMergeTargetWitness& target,
+    const ReplayWindowProvenance& current,
+    std::uint32_t currentSourceIndex,
+    std::uint32_t currentCommandIndex,
+    std::optional<RenderPassInstanceToken> priorSameKey,
+    std::span<const ReplayWindowProvenance> intervening) noexcept {
+  if (target.retainedSourceIndex != currentSourceIndex ||
+      target.commandIndex != currentCommandIndex) {
+    return ActiveSeedMergeJoinRelation::NotTarget;
+  }
+  if (!context.valid() || !target.valid() ||
+      !current.valid() ||
+      current.disposition !=
+          ReplayWindowDisposition::NaturalAfterMergeFallback ||
+      current.windowId != context.windowId ||
+      current.sourceCount != context.sourceCount ||
+      current.sourceIndex != currentSourceIndex ||
+      !priorSameKey.has_value() || *priorSameKey != context.seed ||
+      intervening.empty() || intervening.size() > 4u) {
+    return ActiveSeedMergeJoinRelation::Mismatch;
+  }
+  for (const auto& pass : intervening) {
+    if (!pass.valid() ||
+        pass.disposition !=
+            ReplayWindowDisposition::NaturalAfterMergeFallback ||
+        pass.windowId != current.windowId ||
+        pass.sourceCount != current.sourceCount) {
+      return ActiveSeedMergeJoinRelation::Mismatch;
+    }
+  }
+  return ActiveSeedMergeJoinRelation::Matched;
+}
+
+inline bool isNaturalFallbackWindow(
+    const ReplayWindowProvenance& provenance) noexcept {
+  return provenance.valid() &&
+      provenance.disposition ==
+          ReplayWindowDisposition::NaturalAfterMergeFallback;
+}
+
+inline bool sameNaturalFallbackWindow(
+    const ReplayWindowProvenance& left,
+    const ReplayWindowProvenance& right) noexcept {
+  return isNaturalFallbackWindow(left) && isNaturalFallbackWindow(right) &&
+      left.windowId == right.windowId &&
+      left.sourceCount == right.sourceCount;
+}
+
+// Classify the complete prior-A | intervening passes | current-A interval.
+// Looking only at current-A would misattribute a window-crossing A-B-A to the
+// current source. SameWindow therefore requires every physical pass in the
+// interval to carry the same NaturalAfterMerge fallback window identity.
+inline NaturalFallbackReentryRelation classifyNaturalFallbackReentry(
+    const ReplayWindowProvenance& priorSameKey,
+    std::span<const ReplayWindowProvenance> intervening,
+    const ReplayWindowProvenance& current) noexcept {
+  bool touchesNatural =
+      isNaturalFallbackWindow(priorSameKey) ||
+      isNaturalFallbackWindow(current);
+  bool sameWindow = sameNaturalFallbackWindow(priorSameKey, current);
+  for (const auto& pass : intervening) {
+    touchesNatural = touchesNatural || isNaturalFallbackWindow(pass);
+    sameWindow = sameWindow &&
+        sameNaturalFallbackWindow(priorSameKey, pass);
+  }
+  if (sameWindow) {
+    return NaturalFallbackReentryRelation::SameWindow;
+  }
+  return touchesNatural ? NaturalFallbackReentryRelation::CrossWindow
+                        : NaturalFallbackReentryRelation::Excluded;
+}
+
+inline NaturalFallbackReentryRelation
+classifyNaturalFallbackReentryFromRecentHistory(
+    const ReplayWindowProvenance& priorSameKey,
+    const std::array<ReplayWindowProvenance, 4>& recent,
+    std::uint32_t currentPassIndex,
+    std::uint32_t interveningPasses,
+    const ReplayWindowProvenance& current) noexcept {
+  if (interveningPasses < 1u || interveningPasses > recent.size() ||
+      currentPassIndex < interveningPasses) {
+    return NaturalFallbackReentryRelation::Excluded;
+  }
+  std::array<ReplayWindowProvenance, 4> interval{};
+  const std::uint32_t firstIntervening =
+      currentPassIndex - interveningPasses;
+  for (std::uint32_t i = 0; i < interveningPasses; ++i) {
+    interval[i] = recent[(firstIntervening + i) % recent.size()];
+  }
+  return classifyNaturalFallbackReentry(
+      priorSameKey,
+      std::span<const ReplayWindowProvenance>(interval.data(),
+                                               interveningPasses),
+      current);
 }
 
 struct EncodeChunkReplayRange {
@@ -175,6 +538,21 @@ inline EncodeChunkReplayRange encodeChunkReplayRange(
     const core::ChunkSlot& slot,
     const EncodeChunkOptions& options) noexcept {
   const std::size_t slotCommandCount = slot.commandCount();
+  if (options.preRegisteredFragment.has_value()) {
+    const auto& fragment = *options.preRegisteredFragment;
+    if (options.sessionSource.has_value() || !options.session ||
+        !options.deferSessionFinalization ||
+        fragment.commandCount == 0 ||
+        fragment.commandBegin > slotCommandCount ||
+        fragment.commandCount > slotCommandCount - fragment.commandBegin) {
+      return EncodeChunkReplayRange{.valid = false};
+    }
+    return EncodeChunkReplayRange{
+        .commandBegin = fragment.commandBegin,
+        .commandEnd = fragment.commandBegin + fragment.commandCount,
+        .valid = true,
+    };
+  }
   if (!options.sessionSource.has_value()) {
     return EncodeChunkReplayRange{
         .commandBegin = 0,
@@ -208,6 +586,21 @@ inline EncodeChunkReplayRange encodeChunkReplayRange(
     std::uint64_t sourceSeqId,
     const EncodeChunkOptions& options) noexcept {
   const std::size_t commandCount = payload.commandCount();
+  if (options.preRegisteredFragment.has_value()) {
+    const auto& fragment = *options.preRegisteredFragment;
+    if (options.sessionSource.has_value() || !options.session ||
+        !options.deferSessionFinalization ||
+        fragment.commandCount == 0 ||
+        fragment.commandBegin > commandCount ||
+        fragment.commandCount > commandCount - fragment.commandBegin) {
+      return EncodeChunkReplayRange{.valid = false};
+    }
+    return EncodeChunkReplayRange{
+        .commandBegin = fragment.commandBegin,
+        .commandEnd = fragment.commandBegin + fragment.commandCount,
+        .valid = true,
+    };
+  }
   if (!options.sessionSource.has_value()) {
     return EncodeChunkReplayRange{
         .commandBegin = 0,
@@ -297,6 +690,177 @@ inline bool readySlotSnapshotMatchesReplayRange(
          snapshot.seqId == slot.seqId &&
          snapshot.commandBegin == replayRange.commandBegin &&
          snapshot.commandCount == replayRange.commandCount();
+}
+
+// Fixed, synchronous Store-proof view over the current replay-plan suffix
+// followed by the already-represented FIFO source suffix. The descriptors own
+// no payload; their views remain valid only for the surrounding encode call.
+struct RenderPassStoreProofLookaheadPlan {
+  std::array<RenderPassStoreProofLookaheadSource,
+             core::metalqueue::kMaxReadyPrefixSources>
+      sources{};
+  std::size_t count = 0;
+  bool invalid = false;
+  bool storageTruncated = false;
+
+  std::span<const RenderPassStoreProofLookaheadSource> view() const noexcept {
+    return std::span<const RenderPassStoreProofLookaheadSource>(sources.data(),
+                                                                count);
+  }
+};
+
+struct RenderPassStoreProofLookaheadInput {
+  std::size_t slotIndex = 0;
+  core::SourcePayloadView payload{};
+  std::uint64_t sourceSeqId = 0;
+  EncodeChunkReplayRange replayRange{};
+  const core::metalqueue::QueueCompletionSource* sessionSource = nullptr;
+  core::CpuReadyTape::SourceRef partitionSource{};
+  std::span<const core::metalqueue::ResolvedPublishedSource> retainedSources{};
+  bool replayCommandPlanActive = false;
+  std::span<const std::uint32_t> replayCommandOrder{};
+  std::span<const std::size_t> replayOrdinalByCommandIndex{};
+  std::size_t lookaheadStartIndex = 0;
+};
+
+inline RenderPassStoreProofLookaheadPlan
+makeRenderPassStoreProofLookaheadPlan(
+    const RenderPassStoreProofLookaheadInput& input) noexcept {
+  RenderPassStoreProofLookaheadPlan result{};
+  auto append = [&](core::SourcePayloadView payload,
+                    std::size_t firstCommandIndex,
+                    std::size_t commandEndIndex,
+                    std::span<const std::uint32_t> commandOrder = {}) {
+    const std::size_t traversalCount =
+        commandOrder.empty() ? payload.commandCount() : commandOrder.size();
+    if (!payload.valid() || firstCommandIndex > commandEndIndex ||
+        commandEndIndex > traversalCount ||
+        result.count >= result.sources.size()) {
+      return false;
+    }
+    result.sources[result.count++] = RenderPassStoreProofLookaheadSource{
+        .payload = payload,
+        .commandOrder = commandOrder,
+        .firstCommandIndex = firstCommandIndex,
+        .commandEndIndex = commandEndIndex,
+    };
+    return true;
+  };
+  auto appendCurrentSourceSuffix = [&]() {
+    if (!input.replayCommandPlanActive) {
+      if (!input.payload.valid() ||
+          input.lookaheadStartIndex >= input.payload.commandCount()) {
+        return false;
+      }
+      return append(input.payload, input.lookaheadStartIndex + 1u,
+                    input.payload.commandCount());
+    }
+    if (!input.replayRange.valid || !input.payload.valid() ||
+        input.lookaheadStartIndex < input.replayRange.commandBegin ||
+        input.lookaheadStartIndex >= input.replayRange.commandEnd) {
+      return false;
+    }
+    const std::size_t relative =
+        input.lookaheadStartIndex - input.replayRange.commandBegin;
+    if (relative >= input.replayOrdinalByCommandIndex.size()) {
+      return false;
+    }
+    const std::size_t replayOrdinal =
+        input.replayOrdinalByCommandIndex[relative];
+    if (replayOrdinal >= input.replayCommandOrder.size() ||
+        input.replayCommandOrder[replayOrdinal] !=
+            input.lookaheadStartIndex) {
+      return false;
+    }
+    return append(input.payload, replayOrdinal + 1u,
+                  input.replayCommandOrder.size(),
+                  input.replayCommandOrder);
+  };
+
+  if (input.retainedSources.size() > result.sources.size()) {
+    if (input.replayCommandPlanActive) {
+      result.invalid = true;
+      return result;
+    }
+    result.storageTruncated = true;
+    if (!appendCurrentSourceSuffix()) {
+      result.invalid = true;
+    }
+    return result;
+  }
+
+  if (input.retainedSources.empty()) {
+    if (!appendCurrentSourceSuffix()) {
+      result.invalid = true;
+    }
+    return result;
+  }
+
+  const bool startsAtCurrentSource = input.sessionSource
+      ? readySlotSnapshotMatchesCompletionSource(
+            input.retainedSources.front(), *input.sessionSource,
+            input.slotIndex, input.payload, input.sourceSeqId)
+      : readySlotSnapshotMatchesReplayRange(
+            input.retainedSources.front(), input.partitionSource,
+            input.slotIndex, input.payload, input.sourceSeqId,
+            input.replayRange);
+  bool retainedSourcesValid = startsAtCurrentSource;
+  for (const auto& source : input.retainedSources) {
+    if (!source.payload.valid() ||
+        source.commandBegin > source.payload.commandCount() ||
+        source.commandCount >
+            source.payload.commandCount() - source.commandBegin) {
+      retainedSourcesValid = false;
+      break;
+    }
+  }
+  const auto& firstSource = input.retainedSources.front();
+  const std::size_t firstSourceEnd =
+      firstSource.commandBegin + firstSource.commandCount;
+  retainedSourcesValid = retainedSourcesValid &&
+      input.lookaheadStartIndex >= firstSource.commandBegin &&
+      input.lookaheadStartIndex < firstSourceEnd;
+  if (!retainedSourcesValid) {
+    result.invalid = true;
+    if (!input.replayCommandPlanActive) {
+      appendCurrentSourceSuffix();
+    }
+    return result;
+  }
+
+  if (input.replayCommandPlanActive) {
+    // Source zero is represented by the replay-order suffix below. Appending
+    // its natural range as well would duplicate the current source and can
+    // turn a valid future Clear proof into a false intervening draw.
+    if (!appendCurrentSourceSuffix()) {
+      result.invalid = true;
+      result.count = 0;
+      return result;
+    }
+    for (std::size_t i = 1; i < input.retainedSources.size(); ++i) {
+      const auto& source = input.retainedSources[i];
+      if (!append(source.payload, source.commandBegin,
+                  source.commandBegin + source.commandCount)) {
+        result.invalid = true;
+        result.count = 0;
+        return result;
+      }
+    }
+    return result;
+  }
+
+  for (std::size_t i = 0; i < input.retainedSources.size(); ++i) {
+    const auto& source = input.retainedSources[i];
+    if (!append(source.payload,
+                i == 0u ? input.lookaheadStartIndex + 1u
+                        : source.commandBegin,
+                source.commandBegin + source.commandCount)) {
+      result.invalid = true;
+      result.count = 0;
+      return result;
+    }
+  }
+  return result;
 }
 
 // Per-draw view from DrawParam. Constructed once at encodeDraw entry; all

@@ -816,7 +816,7 @@ void chunkSlotReserveAtLeast(Vector& storage, std::size_t required) {
 }  // namespace detail
 
 struct ChunkSlot {
-  enum class State { Free, Writing, Pending, Encoding, GPU };
+  enum class State { Free, Writing, Pending, Encoding, Retiring, GPU };
 
   u64 seqId = 0;
   dxmt9::perf::ChunkPublishReason publishReason =

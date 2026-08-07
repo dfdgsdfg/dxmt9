@@ -19,6 +19,8 @@ const char* slotStateName(QueueSlotState state) {
       return "pending";
     case QueueSlotState::Encoding:
       return "encoding";
+    case QueueSlotState::Retiring:
+      return "retiring";
     case QueueSlotState::GPU:
       return "gpu";
   }

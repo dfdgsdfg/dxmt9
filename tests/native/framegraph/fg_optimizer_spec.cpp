@@ -19,8 +19,10 @@
 #include "../../../src/dxmt9/framegraph/fg_builder.hpp"
 #include "../../../src/dxmt9/framegraph/fg_dag.hpp"
 #include "../../../src/dxmt9/framegraph/fg_optimizer.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 
 #include <array>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -68,6 +70,48 @@ u32 addRenderPass(FrameGraph& g, std::uint64_t color0, std::uint64_t depth) {
   g.draws.push_back(DrawRef{.command_index = static_cast<u32>(g.passes.size())});
   g.passes.push_back(pass);
   return static_cast<u32>(g.passes.size() - 1u);
+}
+
+u32 addReplayRenderPass(FrameGraph& g, std::uint64_t color0,
+                        std::uint64_t depth, u32 command_index) {
+  PassNode pass{};
+  pass.kind = PassKind::Render;
+  pass.targets = colorDepth(color0, depth);
+  pass.draws.first = static_cast<u32>(g.draws.size());
+  pass.draws.count = 1;
+  g.draws.push_back(DrawRef{.command_index = command_index});
+  pass.commands.first = static_cast<u32>(g.commands.size());
+  pass.commands.count = 1;
+  g.commands.push_back(CommandRef{
+      .command_index = command_index,
+      .kind = dxmt9::core::MetalCommandKind::DrawRun,
+  });
+  g.passes.push_back(pass);
+  return static_cast<u32>(g.passes.size() - 1u);
+}
+
+ActiveRenderPlanningSeed activeSeed(std::uint64_t color0,
+                                    std::uint64_t depth = 0) {
+  ActiveRenderPlanningSeed seed{};
+  seed.targets = colorDepth(color0, depth);
+  if (color0 != 0) {
+    seed.write_dependencies[seed.dependency_count++] =
+        ResourceHandle{color0};
+  }
+  if (depth != 0) {
+    seed.write_dependencies[seed.dependency_count++] =
+        ResourceHandle{depth};
+  }
+  seed.complete = true;
+  return seed;
+}
+
+bool sameGraph(const FrameGraph& left, const FrameGraph& right) {
+  return left.passes == right.passes &&
+      left.resources == right.resources && left.edges == right.edges &&
+      left.draws == right.draws && left.commands == right.commands &&
+      left.frame_id == right.frame_id &&
+      left.flush_boundary == right.flush_boundary;
 }
 
 ResourceNode& addResource(FrameGraph& g, std::uint64_t handle) {
@@ -180,9 +224,9 @@ void testLoadStoreMemorylessDontCare() {
 void testPassCoalesceSafe() {
   FrameGraph g;
   // pass0 rt=A, pass1 rt=0x9000 (independent), pass2 rt=A. pass0/pass2 match.
-  addRenderPass(g, 0xA000u, 0xD000u);  // 0
-  addRenderPass(g, 0x9000u, 0u);       // 1 (rt=0x9000, independent)
-  addRenderPass(g, 0xA000u, 0xD000u);  // 2
+  addReplayRenderPass(g, 0xA000u, 0xD000u, 0u);
+  addReplayRenderPass(g, 0x9000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0xD000u, 2u);
   // No edges: pass1 is independent of 0 and 2.
   ResourceNode& a = addResource(g, 0xA000u);
   access(a, 0, AccessKind::Write);
@@ -192,9 +236,21 @@ void testPassCoalesceSafe() {
   runLifetime(g);
 
   OptimizerStats stats{};
-  runPassCoalesce(g, &stats);
+  runPassCoalesce(g, &stats, true);
 
   check(stats.pass_coalesced_count == 1, "one coalesce happened");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_merged == 1u &&
+            stats.pass_coalesce_return_move_before == 0u &&
+            stats.pass_coalesce_return_move_after == 1u &&
+            stats.pass_coalesce_return_blocked_cycle == 0u &&
+            stats.pass_coalesce_return_candidates ==
+                stats.pass_coalesce_return_merged +
+                    stats.pass_coalesce_return_blocked_cycle +
+                    stats.pass_coalesce_return_second_non_draw +
+                    stats.pass_coalesce_return_non_render_intervener +
+                    stats.pass_coalesce_return_missing_invariant,
+        "movable B is one conserved merged return with move-after");
   check(g.passes.size() == 2, "3 passes -> 2 (pass0+pass2 merged)");
   // Merged pass keeps both draws in submission order.
   bool found_merged = false;
@@ -213,9 +269,9 @@ void testPassCoalesceSafe() {
 
 void testPassCoalesceBlockedByDependency() {
   FrameGraph g;
-  addRenderPass(g, 0xA000u, 0xD000u);  // 0 writes A
-  addRenderPass(g, 0x9000u, 0u);       // 1 reads A, writes 0x9000
-  addRenderPass(g, 0xA000u, 0xD000u);  // 2 reads 0x9000, writes A
+  addReplayRenderPass(g, 0xA000u, 0xD000u, 0u);  // writes A
+  addReplayRenderPass(g, 0x9000u, 0u, 1u);       // reads A, writes 0x9000
+  addReplayRenderPass(g, 0xA000u, 0xD000u, 2u);  // reads 0x9000, writes A
   // Edges: 0->1 (A), 1->2 (0x9000). Pass1 both consumes the pair's product (A)
   // and produces for the pair (0x9000) -> wedged -> NOT coalescable.
   g.edges.push_back(Edge{.src_pass = 0, .dst_pass = 1, .resource = ResourceHandle{0xA000u}});
@@ -230,10 +286,534 @@ void testPassCoalesceBlockedByDependency() {
   runLifetime(g);
 
   OptimizerStats stats{};
-  runPassCoalesce(g, &stats);
+  runPassCoalesce(g, &stats, true);
 
   check(stats.pass_coalesced_count == 0, "dependency-wedged pair not coalesced");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_blocked_cycle == 1u &&
+            stats.pass_coalesce_return_merged == 0u,
+        "dependency-wedged B is one conserved blocked-cycle return");
   check(g.passes.size() == 3, "all three passes survive");
+}
+
+void testPassCoalesceReportsReturningNonDrawSemantics() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0u, 2u);
+  g.commands.back().kind = dxmt9::core::MetalCommandKind::Clear;
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(g.passes.size() == 3 && stats.pass_coalesced_count == 0,
+        "returning A with non-draw semantics remains unmerged");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_second_non_draw == 1u &&
+            stats.pass_coalesce_return_merged == 0u,
+        "returning non-draw A is conserved in its semantic blocker bucket");
+}
+
+void testPassCoalesceReturnDiagnosticsExcludeAdjacentPair() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xA000u, 0u, 1u);
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 1u && g.passes.size() == 1u,
+        "adjacent A-A retains existing coalescing behavior");
+  check(stats.pass_coalesce_return_candidates == 0u &&
+            stats.pass_coalesce_return_merged == 0u,
+        "adjacent A-A is not classified as an A-B-A return");
+}
+
+void testPassCoalesceObservesSemanticIntervener() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0u, 2u);
+  g.commands[1].kind = dxmt9::core::MetalCommandKind::Clear;
+  g.passes[1].flags.contains_event_query = true;
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesce_return_merged == 1u &&
+            stats.pass_coalesce_return_non_draw_intervener == 1u &&
+            stats.pass_coalesce_return_semantic_intervener == 1u,
+        "semantic B is observed without changing existing merge behavior");
+}
+
+void testPassCoalesceReturnDedupeSurvivesUnrelatedMerge() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0u, 2u);
+  addReplayRenderPass(g, 0xC000u, 0u, 3u);
+  addReplayRenderPass(g, 0xC000u, 0u, 4u);
+  g.edges.push_back(Edge{
+      .src_pass = 0,
+      .dst_pass = 1,
+      .resource = ResourceHandle{0xAB01u},
+  });
+  g.edges.push_back(Edge{
+      .src_pass = 1,
+      .dst_pass = 2,
+      .resource = ResourceHandle{0xAB02u},
+  });
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 1u && g.passes.size() == 4u,
+        "unrelated adjacent C-C still coalesces");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_blocked_cycle == 1u,
+        "unrelated merge does not recount the stable wedged A-B-A window");
+}
+
+void testPassCoalesceReturnDedupeAllowsChangedWindow() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xB000u, 0u, 2u);
+  addReplayRenderPass(g, 0xA000u, 0u, 3u);
+  g.edges.push_back(Edge{
+      .src_pass = 0,
+      .dst_pass = 1,
+      .resource = ResourceHandle{0xAB11u},
+  });
+  g.edges.push_back(Edge{
+      .src_pass = 1,
+      .dst_pass = 3,
+      .resource = ResourceHandle{0xAB12u},
+  });
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 1u && g.passes.size() == 3u,
+        "interior adjacent B-B merge creates a new pass incarnation");
+  check(stats.pass_coalesce_return_candidates == 2u &&
+            stats.pass_coalesce_return_blocked_cycle == 2u,
+        "changed A-[Bmerged]-A window is a distinct diagnostic candidate");
+}
+
+void testPassCoalesceMixedSeedCountsSourceOwnedReturn() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0u, 2u);
+  check(applyActiveRenderPlanningSeed(g, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "mixed-seed fixture applies active A");
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 2u,
+        "seed merges first A and the resulting source return");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_merged == 1u,
+        "seed lineage retains the absorbed source A ownership");
+}
+
+void testPassCoalesceCommandlessSourceEndsPureSeedExclusion() {
+  FrameGraph g;
+  PassNode commandlessA{};
+  commandlessA.kind = PassKind::Render;
+  commandlessA.targets = colorDepth(0xA000u, 0u);
+  g.passes.push_back(commandlessA);
+  addReplayRenderPass(g, 0xB000u, 0u, 0u);
+  addReplayRenderPass(g, 0xA000u, 0u, 1u);
+  check(applyActiveRenderPlanningSeed(g, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "commandless-source fixture applies active A");
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 2u,
+        "seed merges commandless source A before its later return");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_merged == 1u,
+        "commandless source membership ends pure virtual-seed exclusion");
+}
+
+void testPassCoalesceReturnDiagnosticsAreReplayNeutral() {
+  FrameGraph baseline;
+  addReplayRenderPass(baseline, 0xA000u, 0u, 0u);
+  addReplayRenderPass(baseline, 0xB000u, 0u, 1u);
+  addReplayRenderPass(baseline, 0xA000u, 0u, 2u);
+  FrameGraph observed = baseline;
+  OptimizerStats baselineStats{};
+  OptimizerStats observedStats{};
+
+  runPassCoalesce(baseline, &baselineStats, false);
+  runPassCoalesce(observed, &observedStats, true);
+
+  check(sameGraph(baseline, observed),
+        "return diagnostics do not change valid graph planning output");
+  check(baselineStats.pass_coalesce_return_candidates == 0u &&
+            observedStats.pass_coalesce_return_candidates == 1u &&
+            observedStats.pass_coalesce_return_merged == 1u,
+        "collection flag changes only R7 diagnostic statistics");
+}
+
+void testPassCoalesceMalformedRangeHardensToMissingInvariant() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  addReplayRenderPass(g, 0xB000u, 0u, 1u);
+  addReplayRenderPass(g, 0xA000u, 0u, 2u);
+  g.passes[2].commands.first =
+      static_cast<u32>(g.commands.size() + 1u);
+  const FrameGraph malformed = g;
+
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(sameGraph(g, malformed),
+        "malformed command range conservatively preserves the graph");
+  check(stats.pass_coalesce_return_candidates == 1u &&
+            stats.pass_coalesce_return_missing_invariant == 1u,
+        "malformed return has one conserved missing-invariant terminal");
+}
+
+void testSourceLocalReturnCounterSnapshotAudit() {
+  using dxmt9::perf::FramegraphSourceLocalPassCoalesceDiagnostic;
+  using dxmt9::perf::FramegraphSourceProvenance;
+  const auto before =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalPassCoalesce();
+
+  dxmt9::perf::recordFramegraphSourceLocalPassCoalesce(
+      FramegraphSourceProvenance::Legacy, true,
+      FramegraphSourceLocalPassCoalesceDiagnostic{
+          .candidates = 4u,
+          .merged = 1u,
+          .blockedCycle = 1u,
+          .secondNonDraw = 1u,
+          .missingInvariant = 1u,
+          .dependencyKept = 1u,
+          .moveBefore = 1u,
+          .nonDrawIntervener = 1u,
+          .semanticIntervener = 1u,
+      });
+  dxmt9::perf::recordFramegraphSourceLocalPassCoalesce(
+      FramegraphSourceProvenance::Arena, false,
+      FramegraphSourceLocalPassCoalesceDiagnostic{
+          .candidates = 2u,
+          .merged = 1u,
+          .nonRenderIntervener = 1u,
+          .moveAfter = 1u,
+          .commandlessIntervener = 1u,
+          .commandlessReturn = 1u,
+      });
+
+  const auto after =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalPassCoalesce();
+  check(after.candidates - before.candidates == 6u &&
+            after.merged - before.merged == 2u &&
+            after.blockedCycle - before.blockedCycle == 1u &&
+            after.secondNonDraw - before.secondNonDraw == 1u &&
+            after.nonRenderIntervener - before.nonRenderIntervener == 1u &&
+            after.missingInvariant - before.missingInvariant == 1u &&
+            after.dependencyKept - before.dependencyKept == 1u &&
+            after.moveBefore - before.moveBefore == 1u &&
+            after.moveAfter - before.moveAfter == 1u &&
+            after.nonDrawIntervener - before.nonDrawIntervener == 1u &&
+            after.semanticIntervener - before.semanticIntervener == 1u &&
+            after.commandlessIntervener - before.commandlessIntervener == 1u &&
+            after.commandlessReturn - before.commandlessReturn == 1u &&
+            after.candidates - before.candidates ==
+                (after.merged - before.merged) +
+                    (after.blockedCycle - before.blockedCycle) +
+                    (after.secondNonDraw - before.secondNonDraw) +
+                    (after.nonRenderIntervener -
+                     before.nonRenderIntervener) +
+                    (after.missingInvariant - before.missingInvariant),
+        "source-local return counters preserve aggregate classification");
+  check(after.legacyCandidates - before.legacyCandidates == 4u &&
+            after.arenaCandidates - before.arenaCandidates == 2u &&
+            after.unknownCandidates == before.unknownCandidates &&
+            after.identityKnownCandidates - before.identityKnownCandidates ==
+                4u &&
+            after.identityMissingCandidates -
+                    before.identityMissingCandidates ==
+                2u &&
+            after.legacyCandidates - before.legacyCandidates +
+                    after.arenaCandidates - before.arenaCandidates +
+                    after.unknownCandidates - before.unknownCandidates ==
+                after.candidates - before.candidates,
+        "source-local counters split representation and identity availability");
+}
+
+void testSourceLocalReplayOutcomeCountersConservePopulation() {
+  using dxmt9::perf::FramegraphSourceLocalFrontierRollbackReason;
+  using dxmt9::perf::FramegraphSourceLocalPassCoalesceDiagnostic;
+  using dxmt9::perf::FramegraphSourceLocalReplayOutcome;
+  using dxmt9::perf::FramegraphSourceProvenance;
+  const auto aggregateBefore =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalPassCoalesce();
+  const auto outcomeBefore =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalReplayOutcome();
+
+  dxmt9::perf::recordFramegraphSourceLocalPassCoalesce(
+      FramegraphSourceProvenance::Legacy, true,
+      FramegraphSourceLocalPassCoalesceDiagnostic{
+          .candidates = 10u,
+          .merged = 6u,
+          .missingInvariant = 4u,
+      });
+  dxmt9::perf::recordFramegraphSourceLocalFrontierRollback(
+      FramegraphSourceLocalFrontierRollbackReason::InvalidPlan, 1u, 0u);
+  dxmt9::perf::recordFramegraphSourceLocalFrontierRollback(
+      FramegraphSourceLocalFrontierRollbackReason::LiveSetMismatch, 1u, 1u);
+  dxmt9::perf::recordFramegraphSourceLocalFrontierRollback(
+      FramegraphSourceLocalFrontierRollbackReason::DuplicateCommand, 1u, 0u);
+  dxmt9::perf::recordFramegraphSourceLocalFrontierRollback(
+      FramegraphSourceLocalFrontierRollbackReason::MovedHeadUnproved, 1u, 1u);
+  dxmt9::perf::recordFramegraphSourceLocalReplayOutcome(
+      FramegraphSourceLocalReplayOutcome::FinalInvalid, 1u, 1u);
+  dxmt9::perf::recordFramegraphSourceLocalReplayOutcome(
+      FramegraphSourceLocalReplayOutcome::FinalNaturalOrder, 2u, 1u);
+  dxmt9::perf::recordFramegraphSourceLocalReplayOutcome(
+      FramegraphSourceLocalReplayOutcome::FinalReorderedActivated, 3u, 2u);
+
+  const auto aggregateAfter =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalPassCoalesce();
+  const auto outcomeAfter =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalReplayOutcome();
+  const auto delta = [](const auto& after, const auto& before) {
+    return dxmt9::perf::test::FramegraphSourceLocalReplayOutcomeCount{
+        .sources = after.sources - before.sources,
+        .candidates = after.candidates - before.candidates,
+        .merged = after.merged - before.merged,
+    };
+  };
+  const auto rollback = delta(outcomeAfter.frontierRollback,
+                              outcomeBefore.frontierRollback);
+  const auto rollbackInvalid = delta(
+      outcomeAfter.frontierRollbackInvalidPlan,
+      outcomeBefore.frontierRollbackInvalidPlan);
+  const auto rollbackLiveSet = delta(
+      outcomeAfter.frontierRollbackLiveSetMismatch,
+      outcomeBefore.frontierRollbackLiveSetMismatch);
+  const auto rollbackDuplicate = delta(
+      outcomeAfter.frontierRollbackDuplicateCommand,
+      outcomeBefore.frontierRollbackDuplicateCommand);
+  const auto rollbackMovedHead = delta(
+      outcomeAfter.frontierRollbackMovedHeadUnproved,
+      outcomeBefore.frontierRollbackMovedHeadUnproved);
+  const auto invalid = delta(outcomeAfter.finalInvalid,
+                             outcomeBefore.finalInvalid);
+  const auto natural = delta(outcomeAfter.finalNaturalOrder,
+                             outcomeBefore.finalNaturalOrder);
+  const auto activated = delta(outcomeAfter.finalReorderedActivated,
+                               outcomeBefore.finalReorderedActivated);
+
+  check(rollback.sources == 4u && rollback.candidates == 4u &&
+            rollback.merged == 2u && invalid.sources == 1u &&
+            invalid.candidates == 1u && invalid.merged == 1u &&
+            natural.sources == 1u && natural.candidates == 2u &&
+            natural.merged == 1u && activated.sources == 1u &&
+            activated.candidates == 3u && activated.merged == 2u,
+        "replay outcome counters update only their selected terminal bucket");
+  check(rollbackInvalid.sources + rollbackLiveSet.sources +
+                rollbackDuplicate.sources + rollbackMovedHead.sources ==
+            rollback.sources &&
+            rollbackInvalid.candidates + rollbackLiveSet.candidates +
+                    rollbackDuplicate.candidates +
+                    rollbackMovedHead.candidates ==
+                rollback.candidates &&
+            rollbackInvalid.merged + rollbackLiveSet.merged +
+                    rollbackDuplicate.merged + rollbackMovedHead.merged ==
+                rollback.merged &&
+            rollbackInvalid.sources == 1u &&
+            rollbackLiveSet.sources == 1u &&
+            rollbackDuplicate.sources == 1u &&
+            rollbackMovedHead.sources == 1u,
+        "frontier rollback reasons conserve broad rollback on every axis");
+  check(rollback.sources + invalid.sources + natural.sources +
+                activated.sources ==
+            7u &&
+            rollback.candidates + invalid.candidates + natural.candidates +
+                    activated.candidates ==
+                aggregateAfter.candidates - aggregateBefore.candidates &&
+            rollback.merged + invalid.merged + natural.merged +
+                    activated.merged ==
+                aggregateAfter.merged - aggregateBefore.merged,
+        "replay outcome source, candidate, and merged axes conserve totals");
+}
+
+void testActiveRenderSeedMovesLegalSamePassToHead() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xB000u, 0u, 0u);
+  addReplayRenderPass(g, 0xA000u, 0u, 1u);
+  ResourceNode& b = addResource(g, 0xB000u);
+  access(b, 0, AccessKind::Write);
+  ResourceNode& a = addResource(g, 0xA000u);
+  access(a, 1, AccessKind::Write);
+
+  check(applyActiveRenderPlanningSeed(g, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "complete active A seed applies");
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 1,
+        "active A coalesces with current later A");
+  check(stats.pass_coalesce_return_candidates == 0u,
+        "virtual active seed is excluded from source-owned A-B-A counters");
+  check(g.commands.size() == 2 && g.commands[0].command_index == 1u &&
+            g.commands[1].command_index == 0u,
+        "active A plus current B,A plans current A,B");
+  check(activeRenderPlanningSeedProvesReplayHead(g, 1u),
+        "merged virtual seed proves the moved current head");
+}
+
+void testActiveRenderSeedReportsEmptyInterveningPass() {
+  FrameGraph g;
+  PassNode empty{};
+  empty.kind = PassKind::Render;
+  empty.targets = colorDepth(0xB000u, 0u);
+  g.passes.push_back(empty);
+  addReplayRenderPass(g, 0xA000u, 0u, 0u);
+  ResourceNode& a = addResource(g, 0xA000u);
+  access(a, 1, AccessKind::Write);
+
+  check(applyActiveRenderPlanningSeed(g, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "empty-intervening seed applies");
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesce_active_seed_merge_count == 1u &&
+            stats.pass_coalesce_active_seed_merge_distance_total == 2u &&
+            stats.pass_coalesce_active_seed_merge_distance_max == 2u &&
+            stats.pass_coalesce_active_seed_command_before == 0u &&
+            stats.pass_coalesce_active_seed_command_after == 0u &&
+            stats.pass_coalesce_active_seed_empty_intervening == 1u,
+        "active seed attributes a commandless intervening pass exactly");
+}
+
+void testActiveRenderSeedDependencyWedgeKeepsNaturalHead() {
+  FrameGraph g;
+  addReplayRenderPass(g, 0xB000u, 0u, 0u);
+  addReplayRenderPass(g, 0xA000u, 0u, 1u);
+  ResourceNode& a = addResource(g, 0xA000u);
+  access(a, 0, AccessKind::Read);
+  access(a, 1, AccessKind::Write);
+  ResourceNode& b = addResource(g, 0xB000u);
+  access(b, 0, AccessKind::Write);
+  access(b, 1, AccessKind::Read);
+  g.edges.push_back(Edge{
+      .src_pass = 0,
+      .dst_pass = 1,
+      .resource = ResourceHandle{0xA000u},
+  });
+  g.edges.push_back(Edge{
+      .src_pass = 0,
+      .dst_pass = 1,
+      .resource = ResourceHandle{0xB000u},
+  });
+
+  check(applyActiveRenderPlanningSeed(g, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "dependency-wedge seed applies before conservative planning");
+  OptimizerStats stats{};
+  runPassCoalesce(g, &stats, true);
+
+  check(stats.pass_coalesced_count == 0,
+        "seed-to-B-to-A dependency wedge blocks the head move");
+  check(g.commands.size() == 2 && g.commands[0].command_index == 0u &&
+            g.commands[1].command_index == 1u,
+        "dependency wedge retains natural B,A replay");
+  check(!activeRenderPlanningSeedProvesReplayHead(g, 0u),
+        "unmerged seed cannot authorize a head change");
+}
+
+void testInvalidActiveRenderSeedsAreNoMutationFallbacks() {
+  FrameGraph original;
+  addReplayRenderPass(original, 0xB000u, 0u, 0u);
+  addReplayRenderPass(original, 0xA000u, 0u, 1u);
+  auto unchanged = [&](const FrameGraph& graph) {
+    return graph.passes == original.passes &&
+           graph.resources == original.resources &&
+           graph.edges == original.edges && graph.draws == original.draws &&
+           graph.commands == original.commands &&
+           graph.frame_id == original.frame_id &&
+           graph.flush_boundary == original.flush_boundary;
+  };
+
+  auto invalid = activeSeed(0xA000u);
+  invalid.targets = {};
+  FrameGraph graph = original;
+  check(applyActiveRenderPlanningSeed(graph, invalid) ==
+            ActiveRenderPlanningSeedResult::Invalid && unchanged(graph),
+        "invalid target seed leaves natural B,A graph unchanged");
+
+  auto incomplete = activeSeed(0xA000u);
+  incomplete.complete = false;
+  graph = original;
+  check(applyActiveRenderPlanningSeed(graph, incomplete) ==
+            ActiveRenderPlanningSeedResult::Incomplete && unchanged(graph),
+        "incomplete seed leaves natural B,A graph unchanged");
+
+  auto overflow = activeSeed(0xA000u);
+  overflow.dependency_count =
+      static_cast<u32>(overflow.write_dependencies.size() + 1u);
+  graph = original;
+  check(applyActiveRenderPlanningSeed(graph, overflow) ==
+            ActiveRenderPlanningSeedResult::Overflow && unchanged(graph),
+        "overflow seed leaves natural B,A graph unchanged");
+}
+
+void testActiveRenderSeedDceAccounting() {
+  FrameGraph unmerged;
+  addReplayRenderPass(unmerged, 0xB000u, 0u, 0u);
+  ResourceNode& b = addResource(unmerged, 0xB000u);
+  access(b, 0, AccessKind::Write);
+  check(applyActiveRenderPlanningSeed(unmerged, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "unmerged active-render seed applies");
+
+  const std::array<ResourceHandle, 2> unmergedProof{
+      ResourceHandle{0xA000u},
+      ResourceHandle{0xB000u},
+  };
+  OptimizerStats unmergedStats{};
+  runDce(unmerged, &unmergedStats, DceLookaheadProof{unmergedProof});
+  check(unmerged.passes.size() == 2 &&
+            unmerged.passes[0].flags.active_render_seed &&
+            !unmerged.passes[0].flags.dead && unmerged.passes[1].flags.dead,
+        "DCE excludes only the commandless unmerged seed");
+  check(unmergedStats.dce_dropped == 1 &&
+            unmergedStats.dce_preserved_unprovable == 0,
+        "commandless seed contributes no DCE decision or stats");
+
+  FrameGraph merged;
+  addReplayRenderPass(merged, 0xA000u, 0u, 0u);
+  ResourceNode& a = addResource(merged, 0xA000u);
+  access(a, 0, AccessKind::Write);
+  check(applyActiveRenderPlanningSeed(merged, activeSeed(0xA000u)) ==
+            ActiveRenderPlanningSeedResult::Applied,
+        "mergeable active-render seed applies");
+  runPassCoalesce(merged, nullptr);
+  check(merged.passes.size() == 1 &&
+            merged.passes[0].flags.active_render_seed &&
+            merged.passes[0].commands.count == 1,
+        "passcoalesce folds a real command into the seed pass");
+
+  const std::array<ResourceHandle, 1> mergedProof{
+      ResourceHandle{0xA000u},
+  };
+  OptimizerStats mergedStats{};
+  runDce(merged, &mergedStats, DceLookaheadProof{mergedProof});
+  check(merged.passes[0].flags.dead && mergedStats.dce_dropped == 1 &&
+            mergedStats.dce_preserved_unprovable == 0,
+        "merged real-command seed pass retains normal DCE behavior");
 }
 
 void testDceOffKeepsAll() {
@@ -633,9 +1213,23 @@ void testFullPipelineWithBuilder() {
   }
 }
 
+void testActiveSeedWitnessOverflowPublishesNoPartialSet() {
+  std::array<dxmt9::encoders::ActiveSeedMergeCommandWitness, 1> storage{};
+  ActiveSeedMergeWitnessSink sink{.storage = storage};
+  sink.record(7u, 1u);
+  check(!sink.overflow && sink.count == 1u && sink.attempted == 1u,
+        "bounded witness sink accepts its pre-sized capacity");
+  sink.record(3u, 2u);
+  check(sink.overflow && sink.attempted == 2u && sink.count == 1u,
+        "the next mutation marks overflow without writing out of bounds");
+  check(sink.publishable().empty(),
+        "overflow fail-closes the complete witness set, not a partial prefix");
+}
+
 }  // namespace
 
 int main() {
+  setenv("DXMT_PERF_COUNTERS", "1", 1);
   try {
     testLifetime();
     testDefaultOptionsPreserveOrder();
@@ -643,6 +1237,22 @@ int main() {
     testLoadStoreMemorylessDontCare();
     testPassCoalesceSafe();
     testPassCoalesceBlockedByDependency();
+    testPassCoalesceReportsReturningNonDrawSemantics();
+    testPassCoalesceReturnDiagnosticsExcludeAdjacentPair();
+    testPassCoalesceObservesSemanticIntervener();
+    testPassCoalesceReturnDedupeSurvivesUnrelatedMerge();
+    testPassCoalesceReturnDedupeAllowsChangedWindow();
+    testPassCoalesceMixedSeedCountsSourceOwnedReturn();
+    testPassCoalesceCommandlessSourceEndsPureSeedExclusion();
+    testPassCoalesceReturnDiagnosticsAreReplayNeutral();
+    testPassCoalesceMalformedRangeHardensToMissingInvariant();
+    testSourceLocalReturnCounterSnapshotAudit();
+    testSourceLocalReplayOutcomeCountersConservePopulation();
+    testActiveRenderSeedMovesLegalSamePassToHead();
+    testActiveRenderSeedReportsEmptyInterveningPass();
+    testActiveRenderSeedDependencyWedgeKeepsNaturalHead();
+    testInvalidActiveRenderSeedsAreNoMutationFallbacks();
+    testActiveRenderSeedDceAccounting();
     testDceOffKeepsAll();
     testDceOnDropsProvablyDead();
     testDceNeverDropsPresentOrQuery();
@@ -656,6 +1266,7 @@ int main() {
     testMemorylessClassifier();
     testMemorylessBackbufferSkipped();
     testFullPipelineWithBuilder();
+    testActiveSeedWitnessOverflowPublishesNoPartialSet();
   } catch (const TestFailure& failure) {
     std::cerr << "fg_optimizer_spec failed: " << failure.what() << '\n';
     return 1;

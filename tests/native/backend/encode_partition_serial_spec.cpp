@@ -1,9 +1,12 @@
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_partition.hpp"
+#include "../../../src/dxmt9/dxmt9_render_pass_close_ledger.hpp"
 
 #include <array>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -511,9 +514,572 @@ void partitionBoundariesLimitCompatibleIndexedMergeCandidates() {
           "right explicit range retains only its internal merge candidates");
 }
 
+void naturalFallbackReentryRequiresTheCompleteSameWindowInterval() {
+  using dxmt9::encoders::NaturalFallbackReentryRelation;
+  using dxmt9::encoders::ReplayWindowDisposition;
+  using dxmt9::encoders::ReplayWindowProvenance;
+  const auto natural = [](std::uint64_t windowId,
+                          std::uint32_t sourceIndex) {
+    return ReplayWindowProvenance{
+        .disposition =
+            ReplayWindowDisposition::NaturalAfterMergeFallback,
+        .windowId = windowId,
+        .sourceIndex = sourceIndex,
+        .sourceCount = 3u,
+    };
+  };
+
+  const auto a0 = natural(41u, 0u);
+  const auto b = natural(41u, 1u);
+  const auto a1 = natural(41u, 2u);
+  const std::array sameIntervening{b};
+  checkEq(dxmt9::encoders::classifyNaturalFallbackReentry(
+              a0, sameIntervening, a1),
+          NaturalFallbackReentryRelation::SameWindow,
+          "A-B-A inside one natural fallback window is attributed exactly");
+
+  const std::array ordinaryIntervening{ReplayWindowProvenance{}};
+  checkEq(dxmt9::encoders::classifyNaturalFallbackReentry(
+              a0, ordinaryIntervening, a1),
+          NaturalFallbackReentryRelation::CrossWindow,
+          "an ordinary intervening pass prevents same-window attribution");
+
+  const auto laterA = natural(42u, 0u);
+  checkEq(dxmt9::encoders::classifyNaturalFallbackReentry(
+              a0, sameIntervening, laterA),
+          NaturalFallbackReentryRelation::CrossWindow,
+          "matching natural dispositions from different windows remain "
+          "cross-window");
+
+  constexpr std::uint32_t currentPassIndex = 5u;
+  for (std::uint32_t distance = 2u; distance <= 4u; ++distance) {
+    std::array<ReplayWindowProvenance, 4> recent{};
+    for (std::uint32_t pass = currentPassIndex - distance;
+         pass < currentPassIndex; ++pass) {
+      recent[pass % recent.size()] = natural(41u, pass % 3u);
+    }
+    checkEq(dxmt9::encoders::
+                classifyNaturalFallbackReentryFromRecentHistory(
+                    a0, recent, currentPassIndex, distance, a1),
+            NaturalFallbackReentryRelation::SameWindow,
+            "d2-d4 recent-history ring wrap preserves the complete window");
+  }
+
+  std::array<ReplayWindowProvenance, 4> naturalIntervening{};
+  naturalIntervening[3u] = natural(41u, 1u);
+  checkEq(dxmt9::encoders::
+              classifyNaturalFallbackReentryFromRecentHistory(
+                  ReplayWindowProvenance{}, naturalIntervening, 4u, 1u,
+                  ReplayWindowProvenance{}),
+          NaturalFallbackReentryRelation::CrossWindow,
+          "a natural-only intervening pass is a cross-window interval");
+
+  checkEq(dxmt9::encoders::
+              classifyNaturalFallbackReentryFromRecentHistory(
+                  a0, naturalIntervening, 5u, 5u, a1),
+          NaturalFallbackReentryRelation::Excluded,
+          "history beyond the bounded d1-d4 attribution range is excluded");
+
+  const ReplayWindowProvenance ordinary{};
+  const std::array ordinaryOnly{ordinary, ordinary};
+  checkEq(dxmt9::encoders::classifyNaturalFallbackReentry(
+              ordinary, ordinaryOnly, ordinary),
+          NaturalFallbackReentryRelation::Excluded,
+          "ordinary A-B-B-A does not enter natural fallback attribution");
+}
+
+void activeSeedMergeJoinRequiresExactPhysicalTokenAndTarget() {
+  using dxmt9::encoders::ActiveSeedMergeContinuationRelation;
+  using dxmt9::encoders::ActiveSeedMergeJoinRelation;
+  using dxmt9::encoders::ActiveSeedMergeTargetWitness;
+  using dxmt9::encoders::ActiveSeedMergeTicketContext;
+  using dxmt9::encoders::RenderPassInstanceToken;
+  using dxmt9::encoders::ReplayWindowDisposition;
+  using dxmt9::encoders::ReplayWindowProvenance;
+  const RenderPassInstanceToken seed{.seqId = 71u, .encoderIndex = 9u};
+  const ActiveSeedMergeTicketContext context{
+      .seed = seed, .windowId = 81u, .sourceCount = 2u};
+  const ActiveSeedMergeTargetWitness target{
+      .retainedSourceIndex = 1u,
+      .commandIndex = 3u,
+      .mergeOrdinal = 0u,
+      .mergeDistance = 1u,
+  };
+  const ReplayWindowProvenance current{
+      .disposition = ReplayWindowDisposition::NaturalAfterMergeFallback,
+      .windowId = 81u,
+      .sourceIndex = 1u,
+      .sourceCount = 2u,
+  };
+  const std::array intervening{ReplayWindowProvenance{
+      .disposition = ReplayWindowDisposition::NaturalAfterMergeFallback,
+      .windowId = 81u,
+      .sourceIndex = 0u,
+      .sourceCount = 2u,
+  }};
+
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, current, 1u, 3u, seed, intervening),
+          ActiveSeedMergeJoinRelation::Matched,
+          "exact source/command/window/token joins the physical seed");
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, current, 1u, 2u, seed, intervening),
+          ActiveSeedMergeJoinRelation::NotTarget,
+          "a different command is not allowed to consume the ticket");
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, current, 1u, 3u,
+              RenderPassInstanceToken{.seqId = 71u, .encoderIndex = 10u},
+              intervening),
+          ActiveSeedMergeJoinRelation::Mismatch,
+          "a different physical encoder token rejects aggregate-key inference");
+  auto wrongWindow = current;
+  wrongWindow.windowId = 82u;
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, wrongWindow, 1u, 3u, seed, intervening),
+          ActiveSeedMergeJoinRelation::Mismatch,
+          "a target from another fallback window fails closed");
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, current, 1u, 3u, seed,
+              std::span<const ReplayWindowProvenance>{}),
+          ActiveSeedMergeJoinRelation::Mismatch,
+          "unbounded re-entry distance cannot claim a seed bridge");
+  const std::array wrongIntervening{ReplayWindowProvenance{
+      .disposition = ReplayWindowDisposition::NaturalAfterMergeFallback,
+      .windowId = 82u,
+      .sourceIndex = 0u,
+      .sourceCount = 2u,
+  }};
+  checkEq(dxmt9::encoders::classifyActiveSeedMergePassStart(
+              context, target, current, 1u, 3u, seed,
+              wrongIntervening),
+          ActiveSeedMergeJoinRelation::Mismatch,
+          "every intervening physical pass must belong to the current window");
+
+  checkEq(dxmt9::encoders::classifyActiveSeedMergeContinuation(
+              context, target, current, 1u, 3u, seed),
+          ActiveSeedMergeContinuationRelation::Continued,
+          "an exact target already inside the physical seed is continued");
+  checkEq(dxmt9::encoders::classifyActiveSeedMergeContinuation(
+              context, target, current, 1u, 2u, seed),
+          ActiveSeedMergeContinuationRelation::NotTarget,
+          "continuation cannot consume a neighboring command target");
+  checkEq(dxmt9::encoders::classifyActiveSeedMergeContinuation(
+              context, target, current, 1u, 3u,
+              RenderPassInstanceToken{.seqId = 72u, .encoderIndex = 9u}),
+          ActiveSeedMergeContinuationRelation::Mismatch,
+          "continuation requires the exact active physical seed token");
+}
+
+void activeSeedTargetResolutionDoesNotAssumeCommandOrder() {
+  using dxmt9::encoders::ActiveSeedMergeTargetResolver;
+  using dxmt9::encoders::ActiveSeedMergeTargetWitness;
+  const std::array targets{
+      ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 0u,
+          .commandIndex = 1u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      },
+      ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 0u,
+          .commandIndex = 7u,
+          .mergeOrdinal = 1u,
+          .mergeDistance = 2u,
+      },
+  };
+  ActiveSeedMergeTargetResolver resolver{targets};
+  resolver.beginCommand(0u, 7u);
+  check(resolver.currentTarget() == &targets[1] &&
+            resolver.consumeCurrent(),
+        "reordered high command resolves its exact source-local target");
+  resolver.endCommand();
+  resolver.beginCommand(0u, 1u);
+  check(resolver.currentTarget() == &targets[0] &&
+            resolver.consumeCurrent(),
+        "later low command remains independently resolvable");
+  resolver.endCommand();
+  checkEq(resolver.unconsumed(), std::size_t{0},
+          "non-monotonic replay consumes both exact tickets");
+}
+
+void activeSeedDiagnosticTokenIsSeparateAndEmptyLookupIsCold() {
+  using dxmt9::encoders::ActiveSeedInstanceRevalidation;
+  using dxmt9::encoders::RenderPassInstanceToken;
+  const RenderPassInstanceToken planned{.seqId = 4u, .encoderIndex = 8u};
+  checkEq(dxmt9::encoders::classifyActiveSeedInstanceRevalidation(
+              planned, planned),
+          ActiveSeedInstanceRevalidation::Available,
+          "equal diagnostic tokens may publish attribution tickets");
+  checkEq(dxmt9::encoders::classifyActiveSeedInstanceRevalidation(
+              planned,
+              RenderPassInstanceToken{.seqId = 4u, .encoderIndex = 9u}),
+          ActiveSeedInstanceRevalidation::Stale,
+          "token-only mismatch is diagnostic stale, not semantic stale");
+  checkEq(dxmt9::encoders::classifyActiveSeedInstanceRevalidation(
+              planned, std::nullopt),
+          ActiveSeedInstanceRevalidation::Unavailable,
+          "missing observation token drops attribution conservatively");
+
+  dxmt9::encoders::ActiveSeedMergeTargetResolver empty{};
+  empty.beginCommand(0u, 7u);
+  check(empty.currentTarget() == nullptr && empty.unconsumed() == 0u,
+        "empty/perf-off target storage has no lookup result or terminal work");
+  const dxmt9::encoders::ActiveSeedMergeTicketContext context{
+      .seed = planned, .windowId = 2u, .sourceCount = 2u};
+  check(!dxmt9::encoders::activeSeedMergeTicketAttributionEnabled(
+            false, context, 1u) &&
+            !dxmt9::encoders::activeSeedMergeTicketAttributionEnabled(
+                true, context, 0u),
+        "perf-off or empty-target calls do not activate the audit path");
+}
+
+void shortReentryDispositionAndCloseCountersConserve() {
+  using dxmt9::encoders::ReplayWindowDisposition;
+  using dxmt9::encoders::ReplayWindowProvenance;
+  using dxmt9::encoders::ShortReentryClearOpenTarget;
+  using dxmt9::encoders::ShortReentryDisposition;
+  using dxmt9::encoders::ShortReentrySourceShape;
+  using dxmt9::perf::EncoderSplitReason;
+
+  const auto window = [](ReplayWindowDisposition disposition,
+                         std::uint64_t id,
+                         std::uint32_t sourceIndex = 0u) {
+    return ReplayWindowProvenance{
+        .disposition = disposition,
+        .windowId = id,
+        .sourceIndex = sourceIndex,
+        .sourceCount = 3u,
+    };
+  };
+  const auto classifyD1 = [&](ReplayWindowProvenance prior,
+                              ReplayWindowProvenance middle,
+                              ReplayWindowProvenance current) {
+    const std::array intervening{middle};
+    return dxmt9::encoders::classifyShortReentryDisposition(
+        prior, intervening, current);
+  };
+
+  const ReplayWindowProvenance ordinary{};
+  const auto natural0 = window(
+      ReplayWindowDisposition::NaturalAfterMergeFallback, 11u, 0u);
+  const auto natural1 = window(
+      ReplayWindowDisposition::NaturalAfterMergeFallback, 11u, 1u);
+  const auto natural2 = window(
+      ReplayWindowDisposition::NaturalAfterMergeFallback, 11u, 2u);
+  checkEq(classifyD1(ordinary, ordinary, ordinary),
+          ShortReentryDisposition::Ordinary,
+          "canonical ordinary interval has its own bucket");
+  checkEq(classifyD1(natural0, natural1, natural2),
+          ShortReentryDisposition::NaturalSameWindow,
+          "complete natural interval preserves one window identity");
+  checkEq(classifyD1(
+              natural0, natural1,
+              window(ReplayWindowDisposition::NaturalAfterMergeFallback,
+                     12u, 2u)),
+          ShortReentryDisposition::NaturalCrossWindow,
+          "natural window identity change is classified as cross-window");
+  checkEq(classifyD1(natural0, ordinary, ordinary),
+          ShortReentryDisposition::NaturalCrossWindow,
+          "any incomplete natural interval agrees with legacy cross-window "
+          "attribution");
+
+  const std::array homogeneousCases{
+      std::pair{ReplayWindowDisposition::PlannedComposite,
+                ShortReentryDisposition::PlannedComposite},
+      std::pair{ReplayWindowDisposition::EligibilityPresent,
+                ShortReentryDisposition::EligibilityPresent},
+      std::pair{ReplayWindowDisposition::EligibilityOther,
+                ShortReentryDisposition::EligibilityOther},
+      std::pair{ReplayWindowDisposition::PermutationRejectedFallback,
+                ShortReentryDisposition::PermutationRejected},
+  };
+  for (const auto& [disposition, expected] : homogeneousCases) {
+    checkEq(classifyD1(window(disposition, 20u, 0u),
+                       window(disposition, 20u, 1u),
+                       window(disposition, 20u, 2u)),
+            expected,
+            "homogeneous complete interval maps to one disposition bucket");
+  }
+  checkEq(classifyD1(
+              window(ReplayWindowDisposition::EligibilityPresent, 25u),
+              ordinary, ordinary),
+          ShortReentryDisposition::EligibilityPresent,
+          "ordinary windows are transparent around one eligibility cause");
+  checkEq(classifyD1(
+              window(ReplayWindowDisposition::PlannedComposite, 30u),
+              ordinary,
+              window(ReplayWindowDisposition::EligibilityOther, 31u, 2u)),
+          ShortReentryDisposition::MixedOrInvalid,
+          "different special dispositions remain explicitly mixed");
+  auto malformed = ordinary;
+  malformed.windowId = 1u;
+  checkEq(classifyD1(malformed, ordinary, ordinary),
+          ShortReentryDisposition::MixedOrInvalid,
+          "noncanonical ordinary provenance is invalid");
+
+  const std::array d2Intervening{natural1, natural2};
+  checkEq(dxmt9::encoders::classifyShortReentryDisposition(
+              natural0, d2Intervening, natural0),
+          ShortReentryDisposition::NaturalSameWindow,
+          "d2 classification consumes both intervening replay windows");
+  const std::array tooLong{ordinary, ordinary, ordinary};
+  checkEq(dxmt9::encoders::classifyShortReentryDisposition(
+              ordinary, tooLong, ordinary),
+          ShortReentryDisposition::MixedOrInvalid,
+          "unretained intervals fail into the explicit invalid bucket");
+
+  const auto classifySourceShape = [](std::uint64_t prior,
+                                      std::initializer_list<std::uint64_t> middle,
+                                      std::uint64_t current) {
+    return dxmt9::encoders::classifyShortReentrySourceShape(
+        prior, std::span<const std::uint64_t>(middle.begin(), middle.size()),
+        current);
+  };
+  checkEq(classifySourceShape(10u, {10u}, 10u),
+          ShortReentrySourceShape::AllSameSource,
+          "d1 entirely inside one source is classified exactly");
+  checkEq(classifySourceShape(10u, {10u}, 11u),
+          ShortReentrySourceShape::PriorAndInterveningSameCurrentNewer,
+          "d1 suffix ends before a newer returning source");
+  checkEq(classifySourceShape(10u, {11u}, 11u),
+          ShortReentrySourceShape::PriorOlderInterveningAndCurrentSame,
+          "d1 newer source owns the intervening and returning passes");
+  checkEq(classifySourceShape(10u, {11u}, 12u),
+          ShortReentrySourceShape::MixedOrInvalid,
+          "three distinct d1 sources remain mixed");
+  checkEq(classifySourceShape(20u, {20u, 20u}, 20u),
+          ShortReentrySourceShape::AllSameSource,
+          "d2 entirely inside one source is classified exactly");
+  checkEq(classifySourceShape(20u, {20u, 20u}, 21u),
+          ShortReentrySourceShape::PriorAndInterveningSameCurrentNewer,
+          "both d2 intervening passes must match the prior source");
+  checkEq(classifySourceShape(20u, {21u, 21u}, 21u),
+          ShortReentrySourceShape::PriorOlderInterveningAndCurrentSame,
+          "both d2 intervening passes must match the returning source");
+  checkEq(classifySourceShape(20u, {20u, 21u}, 21u),
+          ShortReentrySourceShape::MixedOrInvalid,
+          "split d2 intervening ownership is not collapsed directionally");
+  checkEq(classifySourceShape(20u, {20u, 20u}, 19u),
+          ShortReentrySourceShape::MixedOrInvalid,
+          "non-monotonic source identities remain invalid");
+  checkEq(classifySourceShape(0u, {20u}, 20u),
+          ShortReentrySourceShape::MixedOrInvalid,
+          "missing source identity remains explicit");
+
+  const auto clearOpenTarget = [&](std::uint32_t distance,
+                                   ShortReentryDisposition disposition,
+                                   ShortReentrySourceShape sourceShape,
+                                   bool openedWithClear,
+                                   std::optional<EncoderSplitReason> reason) {
+    return dxmt9::encoders::classifyShortReentryClearOpenTarget(
+        distance, disposition, sourceShape, openedWithClear, reason);
+  };
+  const auto directionalShape =
+      ShortReentrySourceShape::PriorAndInterveningSameCurrentNewer;
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::Ordinary,
+                          directionalShape, true,
+                          EncoderSplitReason::ClearBarrier),
+          ShortReentryClearOpenTarget::Exact,
+          "d1 directional clear-open return is the exact target");
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::NaturalCrossWindow,
+                          directionalShape, true,
+                          EncoderSplitReason::ClearBarrier),
+          ShortReentryClearOpenTarget::NaturalCross,
+          "natural cross-window target remains an exact subset");
+  checkEq(clearOpenTarget(2u, ShortReentryDisposition::NaturalCrossWindow,
+                          directionalShape, true,
+                          EncoderSplitReason::ClearBarrier),
+          ShortReentryClearOpenTarget::Excluded,
+          "d2 does not enter the narrow clear-open target");
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::NaturalCrossWindow,
+                          ShortReentrySourceShape::AllSameSource, true,
+                          EncoderSplitReason::ClearBarrier),
+          ShortReentryClearOpenTarget::Excluded,
+          "same-source returns do not enter the directional target");
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::NaturalCrossWindow,
+                          directionalShape, false,
+                          EncoderSplitReason::ClearBarrier),
+          ShortReentryClearOpenTarget::Excluded,
+          "a Clear close without a clear-open B pass is excluded");
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::NaturalCrossWindow,
+                          directionalShape, true, std::nullopt),
+          ShortReentryClearOpenTarget::Excluded,
+          "missing exact close identity fails closed");
+  checkEq(clearOpenTarget(1u, ShortReentryDisposition::NaturalCrossWindow,
+                          directionalShape, true,
+                          EncoderSplitReason::RenderTargetChange),
+          ShortReentryClearOpenTarget::Excluded,
+          "a non-Clear prior close is excluded");
+
+  const auto before =
+      dxmt9::perf::test::snapshotRenderPassShortReentryAttribution();
+  dxmt9::perf::countRenderPassShortReentryClearOpenTarget(false, 12u, 20u);
+  dxmt9::perf::countRenderPassShortReentryClearOpenTarget(true, 30u, 40u);
+  for (std::uint8_t disposition = 0u; disposition < 8u; ++disposition) {
+    dxmt9::perf::countRenderPassShortReentryDisposition(1u, disposition);
+    dxmt9::perf::countRenderPassShortReentryDisposition(2u, disposition);
+    const std::uint8_t sourceShape = disposition % 4u;
+    dxmt9::perf::countRenderPassShortReentrySourceShape(1u, sourceShape);
+    dxmt9::perf::countRenderPassShortReentrySourceShape(2u, sourceShape);
+  }
+  constexpr std::array closeReasons{
+      EncoderSplitReason::Final,
+      EncoderSplitReason::RenderTargetChange,
+      EncoderSplitReason::Hazard,
+      EncoderSplitReason::ClearBarrier,
+      EncoderSplitReason::SurfaceCopy,
+      EncoderSplitReason::StretchRect,
+      EncoderSplitReason::Readback,
+      EncoderSplitReason::ColorFill,
+      EncoderSplitReason::Present,
+      EncoderSplitReason::PresentAcquire,
+      EncoderSplitReason::TileMidPassIneligible,
+      EncoderSplitReason::OrderedControl,
+  };
+  for (const auto reason : closeReasons) {
+    dxmt9::perf::countRenderPassShortReentryPriorClose(reason);
+  }
+  for (std::uint32_t i = 0u; i < 4u; ++i) {
+    dxmt9::perf::countRenderPassShortReentryPriorCloseMissing();
+  }
+  const auto after =
+      dxmt9::perf::test::snapshotRenderPassShortReentryAttribution();
+  std::uint64_t dispositionDelta = 0u;
+  std::uint64_t sourceShapeDelta = 0u;
+  for (std::size_t i = 0; i < 8u; ++i) {
+    checkEq(after.distance1Disposition[i] - before.distance1Disposition[i],
+            std::uint64_t{1}, "each d1 disposition increments exactly once");
+    checkEq(after.distance2Disposition[i] - before.distance2Disposition[i],
+            std::uint64_t{1}, "each d2 disposition increments exactly once");
+    dispositionDelta +=
+        after.distance1Disposition[i] - before.distance1Disposition[i] +
+        after.distance2Disposition[i] - before.distance2Disposition[i];
+  }
+  for (std::size_t i = 0; i < 4u; ++i) {
+    checkEq(after.distance1SourceShape[i] - before.distance1SourceShape[i],
+            std::uint64_t{2},
+            "each d1 source shape receives two synthetic reentries");
+    checkEq(after.distance2SourceShape[i] - before.distance2SourceShape[i],
+            std::uint64_t{2},
+            "each d2 source shape receives two synthetic reentries");
+    sourceShapeDelta +=
+        after.distance1SourceShape[i] - before.distance1SourceShape[i] +
+        after.distance2SourceShape[i] - before.distance2SourceShape[i];
+  }
+  std::uint64_t closeDelta =
+      after.priorCloseMissing - before.priorCloseMissing;
+  for (std::size_t i = 0; i < closeReasons.size(); ++i) {
+    checkEq(after.priorCloseReason[i] - before.priorCloseReason[i],
+            std::uint64_t{1}, "each exact close reason increments once");
+    closeDelta += after.priorCloseReason[i] - before.priorCloseReason[i];
+  }
+  checkEq(dispositionDelta, std::uint64_t{16},
+          "d1+d2 disposition buckets conserve all short reentries");
+  checkEq(sourceShapeDelta, dispositionDelta,
+          "d1+d2 source-shape buckets conserve all short reentries");
+  checkEq(closeDelta, dispositionDelta,
+          "exact prior-close reasons plus missing conserve the same total");
+  checkEq(after.clearOpenTargetCount - before.clearOpenTargetCount,
+          std::uint64_t{2}, "all exact clear-open targets are counted");
+  checkEq(after.clearOpenTargetPriorStoreBytes -
+              before.clearOpenTargetPriorStoreBytes,
+          std::uint64_t{42}, "exact target prior Store bytes are summed");
+  checkEq(after.clearOpenTargetCurrentLoadBytes -
+              before.clearOpenTargetCurrentLoadBytes,
+          std::uint64_t{60}, "exact target current Load bytes are summed");
+  checkEq(after.clearOpenNaturalCrossCount -
+              before.clearOpenNaturalCrossCount,
+          std::uint64_t{1}, "natural cross remains a target subset");
+  checkEq(after.clearOpenNaturalCrossPriorStoreBytes -
+              before.clearOpenNaturalCrossPriorStoreBytes,
+          std::uint64_t{30},
+          "natural cross prior Store bytes are attributed exactly");
+  checkEq(after.clearOpenNaturalCrossCurrentLoadBytes -
+              before.clearOpenNaturalCrossCurrentLoadBytes,
+          std::uint64_t{40},
+          "natural cross current Load bytes are attributed exactly");
+}
+
+void physicalPassCloseLedgerRequiresExactTokensAndConservesFrame() {
+  using dxmt9::encoders::RenderPassCloseKey;
+  using dxmt9::encoders::RenderPassCloseLedger;
+  using dxmt9::encoders::RenderPassCloseRecord;
+  using dxmt9::encoders::RenderPassCloseTerminalRelation;
+  using dxmt9::encoders::RenderPassInstanceToken;
+  using dxmt9::encoders::SessionFinalizeCause;
+  using dxmt9::perf::EncoderSplitReason;
+
+  const RenderPassCloseKey a{.color0 = 11u, .depth = 21u, .sampleCount = 1u};
+  const RenderPassCloseKey b{.color0 = 12u, .depth = 21u, .sampleCount = 1u};
+  const RenderPassInstanceToken a0{.seqId = 30u, .encoderIndex = 7u};
+  const RenderPassInstanceToken b0{.seqId = 31u, .encoderIndex = 8u};
+  RenderPassCloseLedger<2> ledger;
+  check(ledger.noteClose(RenderPassCloseRecord{
+            .token = a0,
+            .key = a,
+            .splitReason = EncoderSplitReason::Final,
+            .finalizeCause = SessionFinalizeCause::SessionCap,
+            .storeBytes = 12u,
+        }),
+        "a valid exact close enters bounded storage");
+
+  const auto wrong = ledger.noteStart(
+      RenderPassInstanceToken{.seqId = 30u, .encoderIndex = 9u}, a, a0);
+  check(wrong.terminal == RenderPassCloseTerminalRelation::None &&
+            wrong.shortCrossPriorSplitReason == EncoderSplitReason::Final &&
+            wrong.shortCrossPriorStoreBytes == 12u,
+        "terminalization requires the exact token while an explicit exact "
+        "cross lookup remains available");
+  const auto nonAdjacent = ledger.noteStart(a0, b);
+  check(nonAdjacent.terminal ==
+            RenderPassCloseTerminalRelation::AdjacentDifferentKey &&
+            nonAdjacent.terminalCause == SessionFinalizeCause::SessionCap,
+        "the next exact pass terminalizes the prior close once");
+
+  check(ledger.noteClose(RenderPassCloseRecord{
+            .token = b0,
+            .key = b,
+            .splitReason = EncoderSplitReason::Hazard,
+            .finalizeCause = SessionFinalizeCause::FailOrOther,
+        }),
+        "the second close fits the fixed ledger");
+  const auto adjacent = ledger.noteStart(b0, b);
+  check(adjacent.terminal ==
+            RenderPassCloseTerminalRelation::AdjacentSameKey,
+        "same-key adjacency is attributed only through the exact prior token");
+  const auto cross = ledger.noteStart({}, a, a0);
+  check(cross.shortCrossPriorSplitReason == EncoderSplitReason::Final &&
+            cross.shortCrossPriorStoreBytes == 12u,
+        "a later short re-entry recovers the exact prior A close reason");
+  const auto missingCross = ledger.noteStart(
+      {}, a,
+      RenderPassInstanceToken{.seqId = a0.seqId,
+                              .encoderIndex = a0.encoderIndex + 1u});
+  check(missingCross.shortCrossLookupAttempted &&
+            !missingCross.shortCrossPriorSplitReason &&
+            missingCross.shortCrossPriorStoreBytes == 0u,
+        "a wrong-token short cross remains an explicit attribution miss");
+  const auto terminal = ledger.finishFrame();
+  checkEq(terminal.notReopenedBeforePresent, std::size_t{0},
+          "both recorded closes were terminalized before Present");
+  checkEq(ledger.size(), std::size_t{0},
+          "Present deterministically clears bounded close history");
+
+  check(!ledger.noteClose(RenderPassCloseRecord{}),
+        "invalid tokens fail closed without consuming capacity");
+  check(ledger.noteClose(RenderPassCloseRecord{
+            .token = a0, .key = a,
+            .splitReason = EncoderSplitReason::Present,
+        }),
+        "a final frame close can remain unmatched until Present");
+  checkEq(ledger.finishFrame().notReopenedBeforePresent, std::size_t{1},
+          "Present supplies the deterministic not-reopened terminal");
+}
+
 }  // namespace
 
 int main() {
+  setenv("DXMT_PERF_COUNTERS", "1", 1);
   try {
     identityTraversesMixedSourceOrder();
     replayStreamValidProvesActiveOrderContract();
@@ -524,6 +1090,12 @@ int main() {
     identitySerialBatchCarriesResolvedFullDrawRun();
     invalidPlansFailAllOrNothingToIdentity();
     partitionBoundariesLimitCompatibleIndexedMergeCandidates();
+    naturalFallbackReentryRequiresTheCompleteSameWindowInterval();
+    activeSeedMergeJoinRequiresExactPhysicalTokenAndTarget();
+    activeSeedTargetResolutionDoesNotAssumeCommandOrder();
+    activeSeedDiagnosticTokenIsSeparateAndEmptyLookupIsCold();
+    shortReentryDispositionAndCloseCountersConserve();
+    physicalPassCloseLedgerRequiresExactTokensAndConservesFrame();
   } catch (const std::exception& error) {
     std::cerr << "encode_partition_serial_spec: " << error.what() << '\n';
     return 1;

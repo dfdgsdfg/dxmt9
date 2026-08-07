@@ -25,10 +25,14 @@ using dxmt9::render::BackendMode;
 using dxmt9::render::FrameGraphBackend;
 using dxmt9::render::IRenderBackend;
 using dxmt9::render::RendererCompatProfile;
+using dxmt9::render::ReplayFrontierDecision;
+using dxmt9::render::classifyReplayFrontier;
 using dxmt9::render::resolveRendererCompatProfile;
 using dxmt9::render::resolveRendererFeatures;
 using dxmt9::render::replayPlanPreservesHeadStableFrontier;
 using dxmt9::render::selectFrameGraphLookahead;
+using ReplayFrontierState =
+    dxmt9::encoders::EncodeSessionReplayFrontierState;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -127,21 +131,115 @@ dxmt9::framegraph::ReplayCommandPlan replayPlan(
 
 void testHeadStableFrontierSelection() {
   const auto natural = replayPlan({0, 1, 2});
-  check(replayPlanPreservesHeadStableFrontier(replayPlan({0, 2, 1}),
-                                               natural),
-        "same live subset and natural head permits coalesced replay");
-  check(!replayPlanPreservesHeadStableFrontier(replayPlan({1, 0, 2}),
-                                                natural),
-        "moved live head requires no-coalesce fallback");
-  check(!replayPlanPreservesHeadStableFrontier(replayPlan({0, 2}), natural),
+  constexpr std::array states{
+      ReplayFrontierState::CleanClosedEncoderNoPendingClear,
+      ReplayFrontierState::PendingClear,
+      ReplayFrontierState::ActiveRenderComplete,
+      ReplayFrontierState::ActiveRenderUnproved,
+      ReplayFrontierState::ActiveBlitUnsupported,
+      ReplayFrontierState::InjectedUnknown,
+  };
+  for (const ReplayFrontierState state : states) {
+    check(classifyReplayFrontier(replayPlan({0, 2, 1}), natural, state) ==
+              ReplayFrontierDecision::AcceptedNaturalHead,
+          "natural head is accepted in every frontier state");
+  }
+  check(replayPlanPreservesHeadStableFrontier(
+            replayPlan({0, 2, 1}), natural,
+            ReplayFrontierState::InjectedUnknown),
+        "same live subset and natural head permits injected replay");
+  check(classifyReplayFrontier(
+            replayPlan({1, 0, 2}), natural,
+            ReplayFrontierState::InjectedUnknown) ==
+            ReplayFrontierDecision::FallbackMovedHeadUnproved,
+        "injected command buffer cannot prove a moved head");
+  check(classifyReplayFrontier(
+            replayPlan({1, 0, 2}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::AcceptedMovedHead,
+        "clean closed session proves a moved head without an active seed");
+  check(classifyReplayFrontier(
+            replayPlan({1, 0, 2}), natural,
+            ReplayFrontierState::ActiveRenderComplete) ==
+            ReplayFrontierDecision::FallbackMovedHeadUnproved,
+        "complete active render still requires an exact seed proof");
+  check(replayPlanPreservesHeadStableFrontier(
+            replayPlan({1, 0, 2}), natural,
+            ReplayFrontierState::ActiveRenderComplete, true),
+        "merged active-render seed may prove a moved live head");
+  constexpr std::array unsupportedMovedHeadStates{
+      ReplayFrontierState::PendingClear,
+      ReplayFrontierState::ActiveRenderUnproved,
+      ReplayFrontierState::ActiveBlitUnsupported,
+      ReplayFrontierState::InjectedUnknown,
+  };
+  for (const ReplayFrontierState state : unsupportedMovedHeadStates) {
+    check(classifyReplayFrontier(replayPlan({1, 0, 2}), natural, state,
+                                 true) ==
+              ReplayFrontierDecision::FallbackMovedHeadUnproved,
+          "unsupported frontier state rejects even a supplied seed proof");
+  }
+  check(classifyReplayFrontier(
+            replayPlan({0, 2}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackLiveSetMismatch,
+        "changed live-set size has a typed rollback reason");
+  check(!replayPlanPreservesHeadStableFrontier(
+            replayPlan({0, 2}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear),
         "changed DCE live subset requires no-coalesce fallback");
+  check(classifyReplayFrontier(
+            replayPlan({0, 1, 3}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackLiveSetMismatch,
+        "foreign optimized command has a typed live-set mismatch");
+  check(!replayPlanPreservesHeadStableFrontier(
+            replayPlan({1, 0}), natural,
+            ReplayFrontierState::ActiveRenderComplete, true),
+        "active-render seed cannot authorize a changed live subset");
+  check(classifyReplayFrontier(
+            replayPlan({0, 0, 2}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackDuplicateCommand,
+        "duplicate optimized command has a typed rollback reason");
+  check(!replayPlanPreservesHeadStableFrontier(
+            replayPlan({0, 0, 2}), natural,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear),
+        "duplicate optimized command IDs require fallback");
+  check(classifyReplayFrontier(replayPlan({0, 1, 2}),
+                               replayPlan({0, 0, 2}),
+                               ReplayFrontierState::
+                                   CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackDuplicateCommand,
+        "duplicate natural command has a typed rollback reason");
+  check(!replayPlanPreservesHeadStableFrontier(replayPlan({0, 1, 2}),
+            replayPlan({0, 0, 2}),
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear),
+        "duplicate natural command IDs require fallback");
+  check(!replayPlanPreservesHeadStableFrontier(
+            replayPlan({0, 0, 2}), replayPlan({0, 0, 2}),
+            ReplayFrontierState::ActiveRenderComplete, true),
+        "active-render proof cannot authorize duplicate command IDs");
 
   const auto empty = replayPlan({});
-  check(replayPlanPreservesHeadStableFrontier(empty, empty),
+  check(replayPlanPreservesHeadStableFrontier(
+            empty, empty, ReplayFrontierState::InjectedUnknown),
         "empty proven-live subset has a stable frontier");
   auto invalid = empty;
   invalid.valid = false;
-  check(!replayPlanPreservesHeadStableFrontier(invalid, empty),
+  check(classifyReplayFrontier(
+            invalid, empty,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackInvalidPlan,
+        "invalid optimized plan has a typed rollback reason");
+  check(classifyReplayFrontier(
+            empty, invalid,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear) ==
+            ReplayFrontierDecision::FallbackInvalidPlan,
+        "invalid natural plan has a typed rollback reason");
+  check(!replayPlanPreservesHeadStableFrontier(
+            invalid, empty,
+            ReplayFrontierState::CleanClosedEncoderNoPendingClear),
         "invalid optimized plan requires fallback");
 }
 

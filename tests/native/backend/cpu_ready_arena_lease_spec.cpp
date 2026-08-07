@@ -176,7 +176,10 @@ struct CommandQueueArenaLeaseTestAccess {
     QueueLifecycleController::PendingCompletion pending{};
     pending.slotIndex = completionSource.slotIndex;
     pending.seqId = completionSource.seqId;
-    (void)pending.fixedCompletionSources.append(completionSource);
+    const std::array pendingSources{completionSource};
+    if (!pending.assignFixedCompletionSources(pendingSources)) {
+      return result;
+    }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
     bool completionStop = false;
     result.completed =

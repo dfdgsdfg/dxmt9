@@ -57,3 +57,15 @@ fg_linearizer_spec = executable(
 
 test('dxmt9-framegraph-fg-linearizer-spec', fg_linearizer_spec,
      env: dxmt9_native_test_env)
+
+fg_multi_source_planner_spec = executable(
+  'dxmt9-framegraph-fg-multi-source-planner-spec',
+  'fg_multi_source_planner_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-framegraph-fg-multi-source-planner-spec',
+     fg_multi_source_planner_spec,
+     env: dxmt9_native_test_env)

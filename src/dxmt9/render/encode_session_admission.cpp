@@ -23,7 +23,7 @@ bool candidateFits(const EncodeSessionAdmissionState& session,
   return addWithin(session.sources, std::uint32_t{1}, limits.maxSources) &&
          addWithin(session.pages, candidatePageFootprint(candidate),
                    limits.maxPages) &&
-         addWithin(session.bytes, candidate.semantic.byteCount,
+         addWithin(session.residencyBytes.value, candidate.residencyBytes.value,
                    limits.maxBytes) &&
          addWithin(session.draws, candidate.semantic.drawCount,
                    limits.maxDraws) &&
@@ -42,7 +42,7 @@ SessionCapacityDimension limitingDimension(
                  limits.maxPages)) {
     return SessionCapacityDimension::Pages;
   }
-  if (!addWithin(session.bytes, candidate.semantic.byteCount,
+  if (!addWithin(session.residencyBytes.value, candidate.residencyBytes.value,
                  limits.maxBytes)) {
     return SessionCapacityDimension::Bytes;
   }
@@ -55,6 +55,39 @@ SessionCapacityDimension limitingDimension(
     return SessionCapacityDimension::CommandBuffers;
   }
   return SessionCapacityDimension::None;
+}
+
+SessionCapacityRejectionObservation capacityRejectionObservation(
+    const EncodeSessionAdmissionState& session,
+    const SessionAdmissionCandidate& candidate,
+    const EncodeSessionLimits& limits) noexcept {
+  const std::uint64_t payloadPages = candidate.semantic.pageCount;
+  const std::uint64_t requiredPages = candidatePageFootprint(candidate);
+  const std::uint64_t requiredTotalSources =
+      static_cast<std::uint64_t>(session.sources) + 1u;
+  const std::uint64_t requiredTotalPages =
+      static_cast<std::uint64_t>(session.pages) + requiredPages;
+  std::uint8_t exceededAxes = SessionCapacityExceededNone;
+  if (requiredTotalSources > limits.maxSources) {
+    exceededAxes |= SessionCapacityExceededSources;
+  }
+  if (requiredTotalPages > limits.maxPages) {
+    exceededAxes |= SessionCapacityExceededPages;
+  }
+  if (exceededAxes == SessionCapacityExceededNone) {
+    return {};
+  }
+  return {
+      .predecessorSources = session.sources,
+      .predecessorPages = session.pages,
+      .candidatePayloadPages = payloadPages,
+      .candidateWrapPaddingPages =
+          requiredPages > payloadPages ? requiredPages - payloadPages : 0u,
+      .candidateRequiredPages = requiredPages,
+      .requiredTotalSources = requiredTotalSources,
+      .requiredTotalPages = requiredTotalPages,
+      .exceededAxes = exceededAxes,
+  };
 }
 
 constexpr bool vectorAtMost(const SessionCapacityVector& left,
@@ -114,6 +147,7 @@ constexpr SessionCapacityVector subtractVector(
 bool candidateIdentityValid(
     const SessionAdmissionCandidate& candidate) noexcept {
   return candidate.key.valid() && candidate.semantic.valid() &&
+         candidate.residencyBytes.valid() &&
          candidate.sourceOrdinal != 0 && candidate.seqId != 0 &&
          candidate.predictedCommandBuffers != 0 &&
          candidate.payloadBlocks != 0 && candidate.retentionEntries != 0 &&
@@ -163,6 +197,28 @@ bool SessionCapacityPolicy::valid() const noexcept {
          vectorAtMost(ordinaryDirect, successorHeadroom) &&
          addVector(maxSession, successorHeadroom, reserved) &&
          vectorAtMost(reserved, highWater);
+}
+
+std::optional<SessionCapacityVector>
+sessionCapacityUnavailableForFirstLease(
+    const SessionCapacityLeaseAcquisitionSnapshot& snapshot,
+    const SessionCapacityVector& successorHeadroom) noexcept {
+  if (!snapshot.valid) {
+    return std::nullopt;
+  }
+  if (!snapshot.orderedTailWritingSuccessor.has_value()) {
+    return snapshot.olderUnavailable;
+  }
+  if (vectorAtMost(*snapshot.orderedTailWritingSuccessor,
+                   successorHeadroom)) {
+    return snapshot.olderUnavailable;
+  }
+  SessionCapacityVector unavailable{};
+  if (!addVector(snapshot.olderUnavailable,
+                 *snapshot.orderedTailWritingSuccessor, unavailable)) {
+    return std::nullopt;
+  }
+  return unavailable;
 }
 
 bool SessionCapacityLeaseState::acquire(
@@ -248,7 +304,7 @@ SessionCapacityVector sessionCapacityFor(
   return {
       .sources = 1,
       .pages = candidatePageFootprint(candidate),
-      .bytes = candidate.semantic.byteCount,
+      .bytes = candidate.residencyBytes.value,
       .draws = candidate.semantic.drawCount,
       .payloadBlocks = candidate.payloadBlocks,
       .readyEntries = 1,
@@ -258,18 +314,54 @@ SessionCapacityVector sessionCapacityFor(
   };
 }
 
+SessionCapacityVector sessionPhysicalResidencyCapacityFor(
+    const SessionAdmissionCandidate& candidate) noexcept {
+  return {
+      .sources = 1,
+      .pages = candidatePageFootprint(candidate),
+      .bytes = candidate.residencyBytes.value,
+      .payloadBlocks = candidate.payloadBlocks,
+      .readyEntries = 1,
+      .retentionEntries = candidate.retentionEntries,
+      .allocatorTickets = candidate.allocatorTickets,
+  };
+}
+
+bool retireSessionAdmissionResidency(
+    EncodeSessionAdmissionState& session,
+    const SessionAdmissionCandidate& candidate) noexcept {
+  const std::uint32_t pages = candidatePageFootprint(candidate);
+  if (!session.valid() || session.residentSources == 0u ||
+      pages > session.pages ||
+      candidate.residencyBytes.value > session.residencyBytes.value) {
+    return false;
+  }
+  --session.residentSources;
+  session.pages -= pages;
+  session.residencyBytes.value -= candidate.residencyBytes.value;
+  return true;
+}
+
 SessionAdmissionResult classifySessionAdmissionDetailed(
     const EncodeSessionAdmissionState& session,
     const SessionAdmissionCandidate& candidate,
     const EncodeSessionLimits& limits) noexcept {
   const auto decision = classifySessionAdmission(session, candidate, limits);
+  const bool rejectedBeforeCandidate =
+      decision == SessionAdmissionDecision::SubmitPrefixBeforeCandidate ||
+      decision == SessionAdmissionDecision::ProcessCandidateIsolated;
+  const SessionCapacityDimension dimension = rejectedBeforeCandidate
+      ? limitingDimension(session, candidate, limits)
+      : SessionCapacityDimension::None;
   return {
       .decision = decision,
-      .limitingDimension =
-          decision == SessionAdmissionDecision::SubmitPrefixBeforeCandidate ||
-                  decision == SessionAdmissionDecision::ProcessCandidateIsolated
-              ? limitingDimension(session, candidate, limits)
-              : SessionCapacityDimension::None,
+      .limitingDimension = dimension,
+      .capacityRejection =
+          rejectedBeforeCandidate &&
+                  (dimension == SessionCapacityDimension::Sources ||
+                   dimension == SessionCapacityDimension::Pages)
+              ? capacityRejectionObservation(session, candidate, limits)
+              : SessionCapacityRejectionObservation{},
   };
 }
 
@@ -326,8 +418,9 @@ bool appendSessionAdmission(
         .lastRawOrdinal = candidate.rawOrdinal,
         .lastSourceOrdinal = candidate.sourceOrdinal,
         .lastSeqId = candidate.seqId,
-        .bytes = candidate.semantic.byteCount,
+        .residencyBytes = candidate.residencyBytes,
         .sources = 1,
+        .residentSources = 1,
         .pages = candidatePageFootprint(candidate),
         .draws = candidate.semantic.drawCount,
         .commandBuffers = candidate.predictedCommandBuffers,
@@ -338,11 +431,14 @@ bool appendSessionAdmission(
     };
     return true;
   }
-  session.lastRawOrdinal = candidate.rawOrdinal;
+  if (candidate.rawOrdinal != 0u) {
+    session.lastRawOrdinal = candidate.rawOrdinal;
+  }
   session.lastSourceOrdinal = candidate.sourceOrdinal;
   session.lastSeqId = candidate.seqId;
-  session.bytes += candidate.semantic.byteCount;
+  session.residencyBytes.value += candidate.residencyBytes.value;
   ++session.sources;
+  ++session.residentSources;
   session.pages += candidatePageFootprint(candidate);
   session.draws += candidate.semantic.drawCount;
   session.commandBuffers += candidate.predictedCommandBuffers;
@@ -350,6 +446,99 @@ bool appendSessionAdmission(
     session.flags |= EncodeSessionAdmissionHasPresent;
   }
   return true;
+}
+
+MultiSourceSessionWindowPreflight preflightMultiSourceSessionWindow(
+    const EncodeSessionAdmissionState& pending,
+    std::span<const SessionAdmissionCandidate> candidates,
+    const EncodeSessionLimits& limits,
+    MultiSourceSessionWindowFrontier frontier,
+    bool captureBoundary,
+    bool initializerBoundary,
+    bool orderedReleaseBoundary) noexcept {
+  MultiSourceSessionWindowPreflight result{
+      .stagedAdmission = pending,
+  };
+  const bool fresh =
+      frontier == MultiSourceSessionWindowFrontier::FreshClean;
+  const bool carried =
+      frontier == MultiSourceSessionWindowFrontier::CleanClosed ||
+      frontier == MultiSourceSessionWindowFrontier::ActiveRenderComplete;
+  if ((!fresh && !carried) || (fresh && pending.valid()) ||
+      (carried && !pending.valid())) {
+    return result;
+  }
+  if (candidates.size() < 2u ||
+      candidates.size() > kMaxMultiSourceSessionWindowSources) {
+    result.reason = MultiSourceSessionWindowPreflightReason::SourceCount;
+    return result;
+  }
+  if (captureBoundary) {
+    result.reason = MultiSourceSessionWindowPreflightReason::CaptureBoundary;
+    return result;
+  }
+  if (initializerBoundary) {
+    result.reason =
+        MultiSourceSessionWindowPreflightReason::InitializerBoundary;
+    return result;
+  }
+  if (orderedReleaseBoundary) {
+    result.reason =
+        MultiSourceSessionWindowPreflightReason::OrderedReleaseBoundary;
+    return result;
+  }
+
+  std::uint64_t priorRawOrdinal = pending.lastRawOrdinal;
+  std::uint64_t priorSourceOrdinal = pending.lastSourceOrdinal;
+  std::uint64_t priorSeqId = pending.lastSeqId;
+  bool hasPrior = pending.valid();
+  for (const SessionAdmissionCandidate& candidate : candidates) {
+    if (!candidateIdentityValid(candidate)) {
+      result.reason =
+          MultiSourceSessionWindowPreflightReason::InvalidCandidate;
+      return result;
+    }
+    if (candidate.semantic.hasPresent()) {
+      result.reason =
+          MultiSourceSessionWindowPreflightReason::PresentBoundary;
+      return result;
+    }
+    if (candidate.semantic.requiresIsolation()) {
+      result.reason =
+          MultiSourceSessionWindowPreflightReason::IsolationBoundary;
+      return result;
+    }
+    if ((candidate.semantic.flags &
+         core::SourceSemanticInitializerRequirement) != 0u) {
+      result.reason = MultiSourceSessionWindowPreflightReason::
+          InitializerSemanticBoundary;
+      return result;
+    }
+    if (hasPrior &&
+        (priorSourceOrdinal == std::numeric_limits<std::uint64_t>::max() ||
+         priorSeqId == std::numeric_limits<std::uint64_t>::max() ||
+         candidate.sourceOrdinal != priorSourceOrdinal + 1u ||
+         candidate.seqId != priorSeqId + 1u ||
+         (priorRawOrdinal != 0u && candidate.rawOrdinal != 0u &&
+          candidate.rawOrdinal <= priorRawOrdinal))) {
+      result.reason = MultiSourceSessionWindowPreflightReason::
+          NonConsecutiveIdentity;
+      return result;
+    }
+    if (!appendSessionAdmission(result.stagedAdmission, candidate, limits)) {
+      result.reason =
+          MultiSourceSessionWindowPreflightReason::AdmissionRejected;
+      return result;
+    }
+    if (candidate.rawOrdinal != 0u) {
+      priorRawOrdinal = candidate.rawOrdinal;
+    }
+    priorSourceOrdinal = candidate.sourceOrdinal;
+    priorSeqId = candidate.seqId;
+    hasPrior = true;
+  }
+  result.reason = MultiSourceSessionWindowPreflightReason::Eligible;
+  return result;
 }
 
 RenderContinuationDecision classifyRenderContinuation(

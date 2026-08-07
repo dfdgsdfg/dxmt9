@@ -20,6 +20,16 @@ class ArenaPayloadFixture {
     capacity.drawShaderLayouts = slot.drawShaderLayouts.size();
     capacity.drawDebugSnapshots = slot.drawDebugSnapshots.size();
     capacity.drawPsoSubviews = slot.drawRunRecords.size();
+    capacity.drawUniformFixedPayloads = slot.drawUniformFixedPayloads.size();
+    capacity.drawUniformVertexConstants =
+        slot.drawUniformVertexConstants.size();
+    capacity.drawUniformVertexConstantBytes =
+        slot.drawUniformVertexConstantBytes.size();
+    capacity.drawUniformPixelConstants =
+        slot.drawUniformPixelConstants.size();
+    capacity.drawUniformPixelConstantBytes =
+        slot.drawUniformPixelConstantBytes.size();
+    capacity.drawUniformPayloads = slot.drawUniformPayloads.size();
     capacity.drawParams = slot.drawParams.size();
     capacity.drawPayloadBytes = slot.drawPayloadArena.size();
     capacity.drawRunRecords = slot.drawRunRecords.size();
@@ -36,12 +46,7 @@ class ArenaPayloadFixture {
 
     const auto layout =
         core::makeSourcePayloadLayout(capacity, 4096, 64);
-    if (!layout.has_value() || !slot.drawUniformFixedPayloads.empty() ||
-        !slot.drawUniformVertexConstants.empty() ||
-        !slot.drawUniformVertexConstantBytes.empty() ||
-        !slot.drawUniformPixelConstants.empty() ||
-        !slot.drawUniformPixelConstantBytes.empty() ||
-        !slot.drawUniformPayloads.empty()) {
+    if (!layout.has_value()) {
       return;
     }
 
@@ -68,6 +73,34 @@ class ArenaPayloadFixture {
           i < slot.drawPsoSubviews.size() ? slot.drawPsoSubviews[i]
                                           : core::DrawPsoSubview{};
       if (!builder.tryAppendDrawPsoSubview(pso)) return;
+    }
+    for (const auto& value : slot.drawUniformFixedPayloads) {
+      if (!builder.tryAppendDrawUniformFixedPayload(value)) return;
+    }
+    if (!slot.drawUniformVertexConstantBytes.empty()) {
+      std::size_t offset = 1;
+      if (!builder.tryAppendVertexConstantBytes(
+              slot.drawUniformVertexConstantBytes, 1, offset) ||
+          offset != 0) {
+        return;
+      }
+    }
+    for (const auto& value : slot.drawUniformVertexConstants) {
+      if (!builder.tryAppendDrawUniformVertexConstants(value)) return;
+    }
+    if (!slot.drawUniformPixelConstantBytes.empty()) {
+      std::size_t offset = 1;
+      if (!builder.tryAppendPixelConstantBytes(
+              slot.drawUniformPixelConstantBytes, 1, offset) ||
+          offset != 0) {
+        return;
+      }
+    }
+    for (const auto& value : slot.drawUniformPixelConstants) {
+      if (!builder.tryAppendDrawUniformPixelConstants(value)) return;
+    }
+    for (const auto& value : slot.drawUniformPayloads) {
+      if (!builder.tryAppendDrawUniformPayload(value)) return;
     }
     for (const auto& param : slot.drawParams) {
       if (!builder.tryAppendDrawParam(param)) return;

@@ -75,6 +75,42 @@ struct ResourceAliasResolver {
   }
 };
 
+inline constexpr std::size_t kActiveRenderPlanningDependencyCapacity =
+    core::kMaxRenderTargets + 1u;
+
+// Call-local, bounded value seed for one already-open render pass. The target
+// handles stay in source attachment identity for pass matching; dependency
+// handles are canonicalized through ResourceAliasResolver before cross-source
+// hazard edges are inferred.
+struct ActiveRenderPlanningSeed {
+  AttachmentSet targets{};
+  std::array<ResourceHandle, kActiveRenderPlanningDependencyCapacity>
+      write_dependencies{};
+  u32 dependency_count = 0;
+  bool complete = false;
+};
+
+enum class ActiveRenderPlanningSeedResult : u8 {
+  Applied,
+  Invalid,
+  Incomplete,
+  Overflow,
+};
+
+// Prepend a non-emitting active-render predecessor to one source-local graph
+// and infer only dependency edges from its bounded write snapshot. Failure is
+// side-effect free. The virtual pass cannot itself create a source command,
+// render-pass boundary, or command-buffer boundary.
+ActiveRenderPlanningSeedResult applyActiveRenderPlanningSeed(
+    FrameGraph& graph, const ActiveRenderPlanningSeed& seed,
+    ResourceAliasResolver alias_resolver = {});
+
+// True only when passcoalesce folded the virtual predecessor into the live
+// pass containing the optimized replay head. This is the proof that permits a
+// current-source head move; an unmerged seed remains a conservative no-op.
+bool activeRenderPlanningSeedProvesReplayHead(
+    const FrameGraph& graph, u32 replay_head_command) noexcept;
+
 // Build a FrameGraph DAG from one immutable published source payload.
 //
 // `payload` is borrowed for the duration of the call only; the returned graph

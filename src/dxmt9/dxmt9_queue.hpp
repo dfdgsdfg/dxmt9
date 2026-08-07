@@ -3,6 +3,7 @@
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_cpu_ready_tape.hpp"
+#include "dxmt9_post_encode_retirement.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <array>
@@ -66,7 +67,8 @@ enum class QueueSlotState {
   Writing = 1,
   Pending = 2,
   Encoding = 3,
-  GPU = 4,
+  Retiring = 4,
+  GPU = 5,
 };
 
 struct ActiveSlotInfo {
@@ -215,6 +217,9 @@ NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
 
 struct QueueCompletionSource {
   CpuReadyTape::SourceRef source{};
+  // Valid only after the queue has synchronously encoded and physically
+  // retired this source. Exactly one of source/receipt is authoritative.
+  PostEncodeCompletionReceipt receipt{};
   // Temporary control index is retained for diagnostics only. Completion and
   // reclaim identity is source + seqId and never resolves this live shell.
   size_t slotIndex = 0;
@@ -222,16 +227,43 @@ struct QueueCompletionSource {
   bool hasPresent = false;
   size_t commandBegin = 0;
   size_t commandCount = 0;
+
+  bool locatorBacked() const noexcept {
+    return source.valid() && !receipt.valid();
+  }
+  bool receiptBacked() const noexcept {
+    return !source.valid() && receipt.valid() && receipt.seqId == seqId;
+  }
+  bool completionIdentityValid() const noexcept {
+    return seqId != 0u && (locatorBacked() || receiptBacked());
+  }
 };
 
-inline constexpr size_t kMaxEncodeSessionSources = 32;
+bool queueCompletionSourceExactlyEqual(
+    const QueueCompletionSource& left,
+    const QueueCompletionSource& right) noexcept;
+bool queueCompletionSourceSpansExactlyEqual(
+    std::span<const QueueCompletionSource> left,
+    std::span<const QueueCompletionSource> right) noexcept;
+// Compares only the locator-free projection represented by the shadow:
+// dense seqId endpoints/count and tail-Present. Slot, source/storage locator,
+// and command-range validation remain the old list/Tape authority's job.
+bool encodedCompletionSpanShadowMatchesProjection(
+    const std::optional<encoders::EncodedCompletionSpan>& shadow,
+    std::span<const QueueCompletionSource> sources) noexcept;
+
+// Ready selection stays small and stack-bounded. Encoded-unsubmitted work is
+// independently bounded so physical Tape retirement does not turn the old
+// 30-source residency ceiling into a grouping boundary.
+inline constexpr size_t kMaxReadyPrefixSources = 32;
+inline constexpr size_t kMaxEncodeSessionSources = 128;
 
 struct EncodeSessionSourceList {
   std::array<QueueCompletionSource, kMaxEncodeSessionSources> entries{};
   size_t count = 0;
 
   bool canAppend(QueueCompletionSource source) const noexcept {
-    if (!source.source.valid() || source.seqId == 0 ||
+    if (!source.completionIdentityValid() ||
         count >= entries.size()) {
       return false;
     }
@@ -261,6 +293,31 @@ struct EncodeSessionSourceList {
     }
     *this = next;
     return true;
+  }
+
+  bool replaceIdentity(const QueueCompletionSource& expected,
+                       const QueueCompletionSource& replacement) noexcept {
+    if (!expected.completionIdentityValid() ||
+        !replacement.completionIdentityValid() ||
+        expected.seqId != replacement.seqId) {
+      return false;
+    }
+    for (size_t i = 0; i < count; ++i) {
+      auto& entry = entries[i];
+      if (entry.seqId == expected.seqId &&
+          entry.source == expected.source &&
+          entry.receipt == expected.receipt) {
+        entry.source = replacement.source;
+        entry.receipt = replacement.receipt;
+        return true;
+      }
+      if (entry.seqId == replacement.seqId &&
+          entry.source == replacement.source &&
+          entry.receipt == replacement.receipt) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void clear() noexcept {
@@ -324,7 +381,7 @@ static_assert(sizeof(ReadySlotSnapshot) <= 384,
 static_assert(sizeof(ResolvedPublishedSource) <= 448,
               "synchronous resolved source must remain compact");
 static_assert(
-    kMaxEncodeSessionSources *
+    kMaxReadyPrefixSources *
             (sizeof(CpuReadyTape::ReadyEntry) +
              sizeof(ResolvedPublishedSource)) <=
         25u * 1024u,
@@ -370,7 +427,7 @@ struct QueueSubmissionRecord {
     u64 seqId = 0;
     u32 slotIndex = 0;
     u32 commandIndex = 0;
-    PublishedCommandRef sourceCommand{};
+    encoders::EncodedCommandId sourceCommand{};
     u64 rtHandle = 0;
     u64 depthHandle = 0;
     u64 psoHandle = 0;
@@ -403,16 +460,20 @@ struct QueueSubmissionRecord {
   // paths fill this with every source slot completed by the same tail command
   // buffer, in strict seqId order, without heap allocation.
   EncodeSessionSourceList fixedCompletionSources{};
+  std::optional<encoders::EncodedCompletionSpan> completionSpanShadow{};
   std::span<const QueueCompletionSource> explicitCompletionSourceSpan()
       const noexcept {
     return fixedCompletionSources.span();
   }
   bool assignFixedCompletionSources(
-      std::span<const QueueCompletionSource> sources) {
-    if (!fixedCompletionSources.assign(sources)) {
-      return false;
-    }
-    return true;
+      std::span<const QueueCompletionSource> sources) noexcept;
+  void clearFixedCompletionSources() noexcept {
+    fixedCompletionSources.clear();
+    completionSpanShadow.reset();
+  }
+  bool completionSpanShadowMatchesSources() const noexcept {
+    return encodedCompletionSpanShadowMatchesProjection(
+        completionSpanShadow, explicitCompletionSourceSpan());
   }
   CommandBufferDiagnostics diagnostics{};
   const char* context = "queue";
@@ -422,6 +483,15 @@ struct QueueSubmissionRecord {
   std::vector<std::function<void()>> completionCallbacks;
   std::vector<std::shared_ptr<void>> retainedPayloads;
 };
+
+// True only when the record's non-empty explicit list, the queue-owned
+// pending list, and the session-owned list are the same complete FIFO source
+// sequence. Callers may use this before the first Metal effect to select an
+// empty canonical representation; it performs no mutation itself.
+bool hasExactRedundantFixedCompletionSources(
+    const QueueSubmissionRecord& record,
+    std::span<const QueueCompletionSource> pendingSources,
+    std::span<const QueueCompletionSource> sessionSources) noexcept;
 
 // A standalone represented source must complete through exactly its own Tape
 // locator and command range. Empty records receive that singleton; non-empty
@@ -440,6 +510,16 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
 CommandBufferDiagnostics mergeCommandBufferDiagnostics(
     CommandBufferDiagnostics aggregate,
     const CommandBufferDiagnostics& source) noexcept;
+// Fold metadata from an earlier encoded fragment carrier into the newest tail
+// without interpreting either record as a completion-source boundary. Record
+// identity and fixedCompletionSources remain those of newTail. Different live
+// CB handles are accepted only when newTail's fragment chain proves that it
+// committed the injected old tail and returned a successor command buffer.
+// Deterministic preflight rejection leaves both records unchanged.
+bool foldEncodedSessionFragmentCarrier(
+    QueueSubmissionRecord& newTail,
+    QueueSubmissionRecord& oldCarrier,
+    obj_handle_t injectedCommandBuffer = NULL_OBJECT_HANDLE);
 bool mergeEncodedPendingTailSubmission(
     QueueSubmissionRecord& tail,
     QueueSubmissionRecord& encodedHead,
@@ -674,6 +754,17 @@ class QueueLifecycleController {
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  // R-BACK-2.65 / SessionCapacityLease: publish every transition that can
+  // reduce the physical residency excluded from a new session lease. Callers
+  // hold the queue scheduling mutex, so the generation and the capacity
+  // snapshot used by the waiter change in one serialized transaction.
+  void noteCpuReadyCapacityProgress() noexcept;
+  std::uint64_t cpuReadyCapacityProgressGeneration() const noexcept {
+    return cpuReadyCapacityProgressGeneration_;
+  }
+  std::uint64_t gpuOutstandingCompletionSourceCount() const noexcept {
+    return gpuOutstandingCompletionSourceCount_;
+  }
   // TLA+: WriterAcquire, WriterWaitBegin, WriterWaitEnd.
   bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
   // TLA+: Present enqueue + CommitPublish for a present-bearing chunk.
@@ -725,6 +816,13 @@ class QueueLifecycleController {
       std::span<const ReadySlotSnapshot> sources);
   ResolvedPublishedSource resolveRepresentedSource(
       const ReadySlotSnapshot& source) const noexcept;
+  // Retire one fully encoded source while retaining locator-free completion
+  // authority. The caller owns the queue scheduling lock; Arena destruction
+  // and Legacy payload clearing run outside it, then the transaction relocks
+  // before generation/page/control release and writer notification.
+  PostEncodeReceiptResult retireEncodedSourcePayload(
+      std::unique_lock<std::mutex>& lock,
+      QueueCompletionSource& source);
   // Fail-stop a structurally inconsistent Tape/source resolution. This is an
   // owner-only surface used by CommandQueue's synchronous encode loops.
   void poisonTapeFailure() noexcept;
@@ -891,9 +989,12 @@ class QueueLifecycleController {
   bool submit(QueueSubmissionRecord& record);
 
   SubmissionBinding submissionBinding_{};
-  std::array<ReadySlotSnapshot, kMaxEncodeSessionSources>
+  std::array<ReadySlotSnapshot, kMaxReadyPrefixSources>
       tentativeReadyPrefix_{};
   size_t tentativeReadyPrefixCount_ = 0;
+  std::uint64_t cpuReadyCapacityProgressGeneration_ = 0;
+  PostEncodeCompletionLedger postEncodeCompletionLedger_{};
+  std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
 
  public:
   // Records that have been committed to Metal and are awaiting GPU completion.
@@ -907,10 +1008,26 @@ class QueueLifecycleController {
     std::string contextValue{};
     size_t slotIndex = 0;
     u64 seqId = 0;
+    bool gpuOutstandingCounted = false;
     EncodeSessionSourceList fixedCompletionSources{};
+    std::optional<encoders::EncodedCompletionSpan> completionSpanShadow{};
     std::span<const QueueCompletionSource> explicitCompletionSourceSpan()
         const noexcept {
       return fixedCompletionSources.span();
+    }
+    bool assignFixedCompletionSources(
+        std::span<const QueueCompletionSource> sources) noexcept {
+      QueueSubmissionRecord staged;
+      if (!staged.assignFixedCompletionSources(sources)) {
+        return false;
+      }
+      fixedCompletionSources = staged.fixedCompletionSources;
+      completionSpanShadow = staged.completionSpanShadow;
+      return true;
+    }
+    bool completionSpanShadowMatchesSources() const noexcept {
+      return encodedCompletionSpanShadowMatchesProjection(
+          completionSpanShadow, explicitCompletionSourceSpan());
     }
     u64 commandBufferChainLength = 1;
     std::chrono::steady_clock::time_point enqueueTime{};
@@ -929,6 +1046,10 @@ class QueueLifecycleController {
   // path without manufacturing a fake Objective-C command-buffer handle.
   // Production submissions enter the same pending queue through submit().
   void enqueuePendingCompletionForTest(PendingCompletion pending);
+  std::optional<PostEncodeCompletionReceipt> postEncodeReceiptForTest(
+      u64 seqId, PostEncodeReceiptState state) const noexcept {
+    return postEncodeCompletionLedger_.receiptFor(seqId, state);
+  }
 
   void notifyPendingCompletionStop() {
     pendingCompletionCv_.notify_all();

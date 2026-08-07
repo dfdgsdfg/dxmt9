@@ -36,8 +36,10 @@
 //   the unit-tested classifier path — see fg_optimizer/memoryless.cpp.
 
 #include "fg_dag.hpp"
+#include "../dxmt9_encode_attribution.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -56,6 +58,10 @@ struct OptimizerOptions {
   bool memoryless = false;
   bool dce = false;       // §5.1 — default OFF (chunk-conservative).
   bool reorder = false;
+  // Diagnostic-only source-local return classification. Production enables
+  // this only while perf counters are active; it never participates in an
+  // optimizer decision.
+  bool collect_passcoalesce_return_diagnostics = false;
 
   // Memoryless observation threshold (R-BACK-33.2). A surface must be observed
   // eligible for at least this many prior frames before promotion.
@@ -72,10 +78,80 @@ struct OptimizerStats {
   u32 dce_preserved_unprovable = 0;// §5.1 framegraph_dce_preserved_unprovable
   u32 pass_coalesced_count = 0;    // §5.4 framegraph_pass_coalesced_count
   u32 pass_coalesce_reorder_distance_max = 0; // §5.4 _reorder_distance_max
+  u32 pass_coalesce_blocked_cycle = 0;
+  u32 pass_coalesce_second_non_draw = 0;
+  // Source-owned matching-render-pass return diagnostics. Every non-adjacent
+  // matching pair considered by passcoalesce, excluding the separately
+  // attributed virtual active-render seed, contributes one terminal bucket:
+  // merged, blocked-cycle, second-non-draw, non-render-intervener, or missing-
+  // invariant. The remaining fields are orthogonal mechanism counts for
+  // classified interveners; dependency-kept is a command-bearing Move::Before
+  // producer, semantic means a query/lock/marker pass flag, and non-draw means
+  // a command kind other than DrawRun. They never participate in planning.
+  u64 pass_coalesce_return_candidates = 0;
+  u64 pass_coalesce_return_merged = 0;
+  u64 pass_coalesce_return_blocked_cycle = 0;
+  u64 pass_coalesce_return_second_non_draw = 0;
+  u64 pass_coalesce_return_non_render_intervener = 0;
+  u64 pass_coalesce_return_missing_invariant = 0;
+  u64 pass_coalesce_return_dependency_kept = 0;
+  u64 pass_coalesce_return_move_before = 0;
+  u64 pass_coalesce_return_move_after = 0;
+  u64 pass_coalesce_return_non_draw_intervener = 0;
+  u64 pass_coalesce_return_semantic_intervener = 0;
+  u64 pass_coalesce_return_commandless_intervener = 0;
+  u64 pass_coalesce_return_commandless = 0;
+  // Successful fixpoint merges whose left pass carries the virtual active-
+  // render seed. Distance is b-a before each mutation; intervening counts are
+  // pass counts partitioned by command-bearing Move and commandless passes.
+  u32 pass_coalesce_active_seed_merge_count = 0;
+  u64 pass_coalesce_active_seed_merge_distance_total = 0;
+  u32 pass_coalesce_active_seed_merge_distance_max = 0;
+  u64 pass_coalesce_active_seed_command_before = 0;
+  u64 pass_coalesce_active_seed_command_after = 0;
+  u64 pass_coalesce_active_seed_empty_intervening = 0;
   u32 memoryless_promoted = 0;     // §5.3 framegraph_virtual_attachment_emitted
   u32 memoryless_blocked_observation = 0; // _promotion_blocked_observation
   u32 memoryless_dropped_via_lock = 0;    // _dropped_via_lock
   u32 memoryless_dropped_via_readback = 0;// _dropped_via_readback
+};
+
+// Caller-sized, allocation-free sink consumed only at the exact successful
+// active-seed merge point. The multi-source planner sizes storage to the
+// initial non-seed pass count before optimizer mutation.
+struct ActiveSeedMergeWitnessSink {
+  std::span<encoders::ActiveSeedMergeCommandWitness> storage{};
+  std::size_t count = 0;
+  std::size_t attempted = 0;
+  bool overflow = false;
+
+  void record(std::uint32_t flattenedCommandIndex,
+              std::uint32_t mergeDistance) noexcept {
+    const std::size_t mergeOrdinal = attempted++;
+    if (count >= storage.size() ||
+        mergeOrdinal > std::numeric_limits<std::uint32_t>::max()) {
+      overflow = true;
+      return;
+    }
+    storage[count++] = encoders::ActiveSeedMergeCommandWitness{
+        .flattenedCommandIndex = flattenedCommandIndex,
+        .mergeOrdinal = static_cast<std::uint32_t>(mergeOrdinal),
+        .mergeDistance = mergeDistance,
+    };
+  }
+
+  void rejectUnrepresentable() noexcept {
+    ++attempted;
+    overflow = true;
+  }
+
+  std::span<const encoders::ActiveSeedMergeCommandWitness>
+  publishable() const noexcept {
+    return overflow
+        ? std::span<const encoders::ActiveSeedMergeCommandWitness>{}
+        : std::span<const encoders::ActiveSeedMergeCommandWitness>(
+              storage.data(), count);
+  }
 };
 
 // Bounded cross-chunk DCE evidence. The current chunk still owns an independent
@@ -147,7 +223,8 @@ class TransientAttachmentPool;
 void runOptimizer(FrameGraph& graph, const OptimizerOptions& options,
                   std::vector<MemorylessObservation>* observations = nullptr,
                   OptimizerStats* stats = nullptr,
-                  DceLookaheadProof dce_lookahead = {});
+                  DceLookaheadProof dce_lookahead = {},
+                  ActiveSeedMergeWitnessSink* activeSeedWitnesses = nullptr);
 
 // ---------------------------------------------------------------------------
 // Per-pass entry points (declared for direct unit testing).
@@ -168,7 +245,10 @@ inline bool resourceIsTransient(const ResourceNode& node) noexcept {
 // §5.4 / R-BACK-34 — coalesce matching-AttachmentSet pass pairs when every
 // intervening pass can move before P_a or after P_b without breaking edges.
 // Conservative: when unsure, do not merge. Feature-gated. Preserves draw order.
-void runPassCoalesce(FrameGraph& graph, OptimizerStats* stats);
+void runPassCoalesce(FrameGraph& graph, OptimizerStats* stats,
+                     bool collectReturnDiagnostics = false,
+                     ActiveSeedMergeWitnessSink* activeSeedWitnesses =
+                         nullptr);
 
 // §5.3 / R-BACK-33 — classifier + residency decision. Marks eligible
 // ResourceNodes ResidencyClass::Memoryless. Device-free: it does NOT acquire an

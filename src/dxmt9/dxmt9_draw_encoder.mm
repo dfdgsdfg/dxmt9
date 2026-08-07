@@ -5,6 +5,7 @@
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
+#include "dxmt9_render_pass_close_ledger.hpp"
 #include "dxmt9_encode_session_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_blit_encoders.hpp"
@@ -5324,12 +5325,16 @@ struct EncoderState {
 struct PassState {
   AttachmentKey activeKey{};
   HazardProbe activeWriteHazard{};
+  RenderPassInstanceToken activeInstance{};
   // R-BACK-13.1 / 13.6: current render encoder's chosen FFP path.
   bool activePassUsesTileFfp = false;
   std::optional<core::ClearDesc> pendingClear;
   core::metalqueue::PublishedCommandRef pendingClearCommand{};
   // R-BACK-15.4: color attachment handles bound on the active render encoder.
   std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
+  // Copied attachment identity/action facts for exactly-once late store-action
+  // resolution. No source payload or borrowed lookahead storage escapes here.
+  LateRenderPassStoreState lateStore{};
 };
 
 struct BindingState {
@@ -5357,8 +5362,6 @@ struct DiagnosticsState {
   ActiveColorAttachmentDump activeColorAttachmentDump{};
   ActiveDepthAttachmentDump activeDepthAttachmentDump{};
   std::vector<ActiveDrawTextureDump> activeDrawTextureDumps;
-  u64 activeRenderEncoderSeq = 0;
-  u64 activeRenderEncoderIndex = 0;
   ActiveEncoderBreakdown activeEncoderBreakdown;
   std::optional<VisibilityScoutPass> activeVisibilityScout;
   u64 renderEncoderIndex = 0;
@@ -5373,6 +5376,11 @@ struct CompletionState {
   std::vector<std::function<void()>> postCommitCallbacks;
   std::vector<std::function<void()>> completionCallbacks;
   std::uint64_t committedSubCommandBuffers = 0;
+  // Split-policy state belongs to the command-buffer chain, not one
+  // encodeChunk call. A source fragment is only a replay range edge and must
+  // not make an already-populated tail look empty or reset PerNRecords.
+  bool tailCommandBufferHasWork = false;
+  std::uint32_t recordsSinceLastSplit = 0;
 };
 
 struct EncodeChunkSessionStorage {
@@ -5406,6 +5414,87 @@ void resetStorage(EncodeChunkSessionStorage& storage) {
 bool storageHasActiveRender(
     const EncodeChunkSessionStorage& storage) noexcept {
   return static_cast<bool>(storage.encoder.activeRenderEncoder);
+}
+
+std::optional<ActiveRenderDependencySnapshot>
+storageActiveRenderDependencySnapshot(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  if (!storage.encoder.activeRenderEncoder ||
+      !storage.encoder.hasActiveRender ||
+      storage.pass.pendingClear.has_value()) {
+    return std::nullopt;
+  }
+
+  ActiveRenderDependencySnapshot snapshot{};
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    snapshot.colorAttachments[i] =
+        core::Handle{storage.pass.activeKey.colorHandles[i]};
+  }
+  snapshot.depthStencil = core::Handle{storage.pass.activeKey.depthHandle};
+  snapshot.sampleCount = storage.pass.activeKey.sampleCount;
+  snapshot.dependencyCount = static_cast<std::uint32_t>(
+      storage.pass.activeWriteHazard.exact.count);
+  if (storage.pass.activeWriteHazard.exact.count >
+      snapshot.writeDependencies.size()) {
+    return snapshot;
+  }
+  for (std::size_t i = 0;
+       i < storage.pass.activeWriteHazard.exact.count; ++i) {
+    snapshot.writeDependencies[i] =
+        core::Handle{storage.pass.activeWriteHazard.exact.handles[i]};
+  }
+  auto dependencyContains = [&](core::Handle handle) {
+    if (handle.value == 0) {
+      return true;
+    }
+    for (std::size_t i = 0; i < snapshot.dependencyCount; ++i) {
+      if (snapshot.writeDependencies[i] == handle) {
+        return true;
+      }
+    }
+    return false;
+  };
+  bool hasAttachment = snapshot.depthStencil.value != 0;
+  bool coversAttachments = dependencyContains(snapshot.depthStencil);
+  for (const core::Handle handle : snapshot.colorAttachments) {
+    hasAttachment = hasAttachment || handle.value != 0;
+    coversAttachments = coversAttachments && dependencyContains(handle);
+  }
+  snapshot.complete = snapshot.sampleCount != 0 && hasAttachment &&
+                      coversAttachments;
+  return snapshot;
+}
+
+std::optional<RenderPassInstanceToken> storageActiveRenderInstanceToken(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  if (!storage.encoder.activeRenderEncoder ||
+      !storage.encoder.hasActiveRender ||
+      storage.pass.pendingClear.has_value() ||
+      !storage.pass.activeInstance.valid()) {
+    return std::nullopt;
+  }
+  return storage.pass.activeInstance;
+}
+
+EncodeSessionReplayFrontierState storageReplayFrontierState(
+    const EncodeChunkSessionStorage& storage) noexcept {
+  const bool hasActiveRender = storage.encoder.activeRenderEncoder ||
+                               storage.encoder.hasActiveRender;
+  const auto snapshot = hasActiveRender
+                            ? storageActiveRenderDependencySnapshot(storage)
+                            : std::nullopt;
+  return replayFrontierStateForFacts({
+      .hasPendingClearPayload = storage.pass.pendingClear.has_value(),
+      .hasPendingClearCommand =
+          storage.pass.pendingClearCommand !=
+          core::metalqueue::PublishedCommandRef{},
+      .hasActiveRenderEncoder =
+          static_cast<bool>(storage.encoder.activeRenderEncoder),
+      .hasActiveBlitEncoder =
+          static_cast<bool>(storage.encoder.activeBlitEncoder),
+      .hasActiveRender = storage.encoder.hasActiveRender,
+      .activeRenderSnapshotComplete = snapshot && snapshot->complete,
+  });
 }
 
 bool storageHasDeferredSubmissionPayload(
@@ -5714,6 +5803,9 @@ struct RenderPassFrameTracker {
   std::array<std::uint64_t, 64> lastSeenSeq{};
   std::array<std::uint64_t, 64> lastSeenEncoder{};
   std::array<std::uint32_t, 64> lastSeenPass{};
+  std::array<ReplayWindowProvenance, 64> lastSeenReplayWindow{};
+  std::array<ReplayWindowProvenance, 4> recentReplayWindows{};
+  std::array<std::uint64_t, 4> recentSeqIds{};
   std::array<RenderPassReentryTopEntry, 32> reentryTop{};
   std::size_t seenCount = 0;
   std::uint32_t passIndex = 0;
@@ -5723,12 +5815,48 @@ struct RenderPassFrameTracker {
   std::uint64_t lastEncoder = 0;
   std::uint32_t lastPass = 0;
   RenderPassStoreProofSummary lastProof{};
+  bool lastOpenedWithClear = false;
   std::optional<RenderPassFrameKey> previousKeyForCurrent{};
   bool currentReadsPreviousColor = false;
   bool currentReadsPreviousDepth = false;
   std::optional<PendingRenderPassReentryTop> pendingReentry{};
+  RenderPassCloseLedger<> closeLedger{};
+
+  void noteClose(RenderPassCloseRecord record) noexcept {
+    if (!perf::enabled()) {
+      return;
+    }
+    if (record.splitReason == perf::EncoderSplitReason::Final) {
+      perf::countRenderPassFinalCloseCause(record.finalizeCause);
+    }
+    const bool recorded = closeLedger.noteClose(record);
+    if (recorded) {
+      perf::countRenderPassCloseLedgerRecorded();
+    } else {
+      perf::countRenderPassCloseLedgerMissing();
+    }
+    if (record.splitReason == perf::EncoderSplitReason::Final) {
+      if (recorded) {
+        perf::countRenderPassFinalCloseLedgerRecorded();
+      } else {
+        perf::countRenderPassFinalCloseLedgerMissing();
+      }
+    }
+  }
+
+  void finishCloseLedgerAtPresent() noexcept {
+    if (!perf::enabled()) {
+      return;
+    }
+    const auto terminal = closeLedger.finishFrame();
+    perf::countRenderPassCloseLedgerTerminalNotReopenedBeforePresent(
+        terminal.notReopenedBeforePresent);
+    perf::countRenderPassFinalCloseLedgerTerminalNotReopenedBeforePresent(
+        terminal.finalNotReopenedBeforePresent);
+  }
 
   void reset() {
+    finishCloseLedgerAtPresent();
     finalizePendingReentry(currentReadsPreviousColor, currentReadsPreviousDepth);
     emitReentryTop();
     seenCount = 0;
@@ -5736,6 +5864,11 @@ struct RenderPassFrameTracker {
     lastSeenSeq.fill(0);
     lastSeenEncoder.fill(0);
     lastSeenPass.fill(0);
+    if (perf::enabled()) {
+      lastSeenReplayWindow = {};
+      recentReplayWindows = {};
+      recentSeqIds = {};
+    }
     reentryTop = {};
     passIndex = 0;
     ++frameIndex;
@@ -5744,6 +5877,7 @@ struct RenderPassFrameTracker {
     lastEncoder = 0;
     lastPass = 0;
     lastProof = {};
+    lastOpenedWithClear = false;
     previousKeyForCurrent.reset();
     currentReadsPreviousColor = false;
     currentReadsPreviousDepth = false;
@@ -5762,13 +5896,18 @@ struct RenderPassFrameTracker {
   void remember(RenderPassFrameKey key,
                 std::uint32_t currentPassIndex,
                 std::uint64_t seq,
-                std::uint64_t encoder) noexcept {
+                std::uint64_t encoder,
+                ReplayWindowProvenance replayWindow,
+                bool replayWindowAttributionEnabled) noexcept {
     if (seenCount < seen.size()) {
       seen[seenCount] = key;
       lastSeenPassIndex[seenCount] = currentPassIndex;
       lastSeenSeq[seenCount] = seq;
       lastSeenEncoder[seenCount] = encoder;
       lastSeenPass[seenCount] = currentPassIndex;
+      if (replayWindowAttributionEnabled) {
+        lastSeenReplayWindow[seenCount] = replayWindow;
+      }
       ++seenCount;
     }
   }
@@ -5968,18 +6107,65 @@ struct RenderPassFrameTracker {
     }
   }
 
-  void noteStart(RenderPassFrameKey key,
+  ActiveSeedMergeJoinRelation noteStart(RenderPassFrameKey key,
                  RenderPassAttachmentFootprint footprint,
                  RenderPassStoreProofSummary proof,
+                 bool openedWithClear,
+                 std::uint64_t currentLoadBytes,
                  std::uint64_t seq,
-                 std::uint64_t encoder) {
+                 std::uint64_t encoder,
+                 ReplayWindowProvenance replayWindow,
+                 std::uint32_t sourceIndex,
+                 std::uint32_t commandIndex,
+                 const ActiveSeedMergeTicketContext& ticket,
+                 const ActiveSeedMergeTargetWitness* target) {
+    ActiveSeedMergeJoinRelation seedJoin = target
+        ? ActiveSeedMergeJoinRelation::Mismatch
+        : ActiveSeedMergeJoinRelation::NotTarget;
     if (!key.valid()) {
-      return;
+      return seedJoin;
     }
     const bool previousPassReadsPreviousColor = currentReadsPreviousColor;
     const bool previousPassReadsPreviousDepth = currentReadsPreviousDepth;
+    const bool previousPassOpenedWithClear = lastOpenedWithClear;
     finalizePendingReentry(previousPassReadsPreviousColor, previousPassReadsPreviousDepth);
     const std::uint32_t currentPassIndex = passIndex++;
+    const bool replayWindowAttributionEnabled = perf::enabled();
+    if (replayWindowAttributionEnabled) {
+      const auto closeObservation = closeLedger.noteStart(
+          last.has_value()
+              ? RenderPassInstanceToken{
+                    .seqId = lastSeq,
+                    .encoderIndex = lastEncoder,
+                }
+              : RenderPassInstanceToken{},
+          RenderPassCloseKey{
+              .color0 = key.color0,
+              .depth = key.depth,
+              .sampleCount = key.sampleCount,
+          });
+      if (closeObservation.terminal ==
+          RenderPassCloseTerminalRelation::AdjacentSameKey) {
+        perf::countRenderPassCloseLedgerTerminalAdjacent();
+        perf::countRenderPassCloseLedgerAdjacentCause(
+            closeObservation.terminalCause);
+        if (closeObservation.terminalSplitReason ==
+            perf::EncoderSplitReason::Final) {
+          perf::countRenderPassFinalCloseLedgerTerminalAdjacent();
+        }
+      } else if (closeObservation.terminal ==
+                 RenderPassCloseTerminalRelation::AdjacentDifferentKey) {
+        perf::countRenderPassCloseLedgerTerminalNonAdjacent();
+        if (closeObservation.terminalSplitReason ==
+            perf::EncoderSplitReason::Final) {
+          perf::countRenderPassFinalCloseLedgerTerminalNonAdjacent();
+        }
+      }
+    }
+    if (replayWindowAttributionEnabled &&
+        isNaturalFallbackWindow(replayWindow)) {
+      perf::countRenderPassNaturalFallbackBegin();
+    }
     if (last.has_value() && *last != key) {
       const bool sameRt = last->color0 != 0 && last->color0 == key.color0;
       const bool sameDepth = last->depth != 0 && last->depth == key.depth;
@@ -6001,6 +6187,136 @@ struct RenderPassFrameTracker {
         const std::uint32_t interveningPasses =
             currentPassIndex > lastPassIndex ? currentPassIndex - lastPassIndex - 1u : 0u;
         perf::countRenderPassSameKeyReentryDistance(interveningPasses);
+        std::optional<perf::EncoderSplitReason> shortPriorCloseReason{};
+        bool shortPriorCloseLookupAttempted = false;
+        if (replayWindowAttributionEnabled &&
+            interveningPasses >= 1u && interveningPasses <= 2u) {
+          std::array<ReplayWindowProvenance, 2> shortInterval{};
+          const std::uint32_t firstIntervening =
+              currentPassIndex - interveningPasses;
+          for (std::uint32_t i = 0; i < interveningPasses; ++i) {
+            shortInterval[i] = recentReplayWindows[
+                (firstIntervening + i) % recentReplayWindows.size()];
+          }
+          const auto disposition = classifyShortReentryDisposition(
+              lastSeenReplayWindow[*seenIndex],
+              std::span<const ReplayWindowProvenance>(
+                  shortInterval.data(), interveningPasses),
+              replayWindow);
+          perf::countRenderPassShortReentryDisposition(
+              interveningPasses, static_cast<std::uint8_t>(disposition));
+          std::array<std::uint64_t, 2> interveningSeqs{};
+          for (std::uint32_t i = 0; i < interveningPasses; ++i) {
+            interveningSeqs[i] = recentSeqIds[
+                (firstIntervening + i) % recentSeqIds.size()];
+          }
+          const auto sourceShape = classifyShortReentrySourceShape(
+              lastSeenSeq[*seenIndex],
+              std::span<const std::uint64_t>(interveningSeqs.data(),
+                                             interveningPasses),
+              seq);
+          perf::countRenderPassShortReentrySourceShape(
+              interveningPasses, static_cast<std::uint8_t>(sourceShape));
+
+          const auto closeObservation = closeLedger.noteStart(
+              {},
+              RenderPassCloseKey{
+                  .color0 = key.color0,
+                  .depth = key.depth,
+                  .sampleCount = key.sampleCount,
+              },
+              RenderPassInstanceToken{
+                  .seqId = lastSeenSeq[*seenIndex],
+                  .encoderIndex = lastSeenEncoder[*seenIndex],
+              });
+          shortPriorCloseLookupAttempted =
+              closeObservation.shortCrossLookupAttempted;
+          shortPriorCloseReason =
+              closeObservation.shortCrossPriorSplitReason;
+          if (shortPriorCloseReason) {
+            perf::countRenderPassShortReentryPriorClose(
+                *shortPriorCloseReason);
+          } else {
+            perf::countRenderPassShortReentryPriorCloseMissing();
+          }
+          const auto clearOpenTarget =
+              classifyShortReentryClearOpenTarget(
+                  interveningPasses, disposition, sourceShape,
+                  previousPassOpenedWithClear, shortPriorCloseReason);
+          if (clearOpenTarget !=
+              ShortReentryClearOpenTarget::Excluded) {
+            perf::countRenderPassShortReentryClearOpenTarget(
+                clearOpenTarget ==
+                    ShortReentryClearOpenTarget::NaturalCross,
+                closeObservation.shortCrossPriorStoreBytes,
+                currentLoadBytes);
+          }
+        }
+        if (replayWindowAttributionEnabled &&
+            interveningPasses >= 1u && interveningPasses <= 4u) {
+          const auto relation =
+              classifyNaturalFallbackReentryFromRecentHistory(
+              lastSeenReplayWindow[*seenIndex],
+              recentReplayWindows, currentPassIndex, interveningPasses,
+              replayWindow);
+          if (relation != NaturalFallbackReentryRelation::Excluded) {
+            perf::countRenderPassNaturalFallbackReentryDistance(
+                interveningPasses,
+                relation == NaturalFallbackReentryRelation::SameWindow);
+            if (relation == NaturalFallbackReentryRelation::CrossWindow) {
+              if (shortPriorCloseReason) {
+                perf::countRenderPassNaturalShortCrossPriorClose(
+                    *shortPriorCloseReason);
+              } else if (shortPriorCloseLookupAttempted) {
+                perf::countRenderPassNaturalShortCrossPriorCloseMissing();
+              } else {
+                const auto closeObservation = closeLedger.noteStart(
+                    {},
+                    RenderPassCloseKey{
+                        .color0 = key.color0,
+                        .depth = key.depth,
+                        .sampleCount = key.sampleCount,
+                    },
+                    RenderPassInstanceToken{
+                        .seqId = lastSeenSeq[*seenIndex],
+                        .encoderIndex = lastSeenEncoder[*seenIndex],
+                    });
+                if (closeObservation.shortCrossPriorSplitReason) {
+                  perf::countRenderPassNaturalShortCrossPriorClose(
+                      *closeObservation.shortCrossPriorSplitReason);
+                } else if (closeObservation.shortCrossLookupAttempted) {
+                  perf::countRenderPassNaturalShortCrossPriorCloseMissing();
+                }
+              }
+            }
+          }
+        }
+        if (target) {
+          std::array<ReplayWindowProvenance, 4> seedBridgeInterval{};
+          if (interveningPasses >= 1u && interveningPasses <= 4u) {
+            const std::uint32_t firstIntervening =
+                currentPassIndex - interveningPasses;
+            for (std::uint32_t i = 0; i < interveningPasses; ++i) {
+              seedBridgeInterval[i] = recentReplayWindows[
+                  (firstIntervening + i) % recentReplayWindows.size()];
+            }
+          }
+          seedJoin = classifyActiveSeedMergePassStart(
+              ticket, *target, replayWindow, sourceIndex, commandIndex,
+              RenderPassInstanceToken{
+                  .seqId = lastSeenSeq[*seenIndex],
+                  .encoderIndex = lastSeenEncoder[*seenIndex],
+              },
+              std::span<const ReplayWindowProvenance>(
+                  seedBridgeInterval.data(),
+                  interveningPasses >= 1u && interveningPasses <= 4u
+                      ? interveningPasses
+                      : 0u));
+          if (seedJoin == ActiveSeedMergeJoinRelation::Matched) {
+            perf::countRenderPassActiveSeedBridgeReentryDistance(
+                interveningPasses);
+          }
+        }
         const std::uint64_t preservationBytes = footprint.totalBytes() * 2u;
         const std::uint64_t priorASeq = lastSeenSeq[*seenIndex];
         const std::uint64_t priorAEncoder = lastSeenEncoder[*seenIndex];
@@ -6042,8 +6358,17 @@ struct RenderPassFrameTracker {
       lastSeenSeq[*seenIndex] = seq;
       lastSeenEncoder[*seenIndex] = encoder;
       lastSeenPass[*seenIndex] = currentPassIndex;
+      if (replayWindowAttributionEnabled) {
+        lastSeenReplayWindow[*seenIndex] = replayWindow;
+      }
     } else {
-      remember(key, currentPassIndex, seq, encoder);
+      remember(key, currentPassIndex, seq, encoder, replayWindow,
+               replayWindowAttributionEnabled);
+    }
+    if (replayWindowAttributionEnabled) {
+      recentReplayWindows[currentPassIndex % recentReplayWindows.size()] =
+          replayWindow;
+      recentSeqIds[currentPassIndex % recentSeqIds.size()] = seq;
     }
     previousKeyForCurrent = last;
     currentReadsPreviousColor = false;
@@ -6053,6 +6378,8 @@ struct RenderPassFrameTracker {
     lastEncoder = encoder;
     lastPass = currentPassIndex;
     lastProof = proof;
+    lastOpenedWithClear = openedWithClear;
+    return seedJoin;
   }
 
   void noteDrawRead(const core::FlatDrawStateRecord& hot) noexcept {
@@ -6064,6 +6391,11 @@ struct RenderPassFrameTracker {
     currentReadsPreviousDepth = currentReadsPreviousDepth || relation.depth;
   }
 };
+
+RenderPassFrameTracker& encodeThreadRenderPassFrameTracker() noexcept {
+  static thread_local RenderPassFrameTracker tracker;
+  return tracker;
+}
 
 bool clearMatchesColorAttachment(const std::optional<ClearDesc>& clear,
                                  std::size_t index,
@@ -9245,13 +9577,16 @@ public:
                    EncodeCallState& call,
                    core::CpuReadyTape::SourceRef source,
                    u64 seqId,
-                   std::size_t slotIndex)
+                   std::size_t slotIndex,
+                   SessionFinalizeCause finalizeCause =
+                       SessionFinalizeCause::FailOrOther)
       : ctx_(ctx),
         storage_(storage),
         call_(call),
         source_(source),
         seqId_(seqId),
-        slotIndex_(slotIndex) {}
+        slotIndex_(slotIndex),
+        finalizeCause_(finalizeCause) {}
 
   core::metalqueue::PublishedCommandRef commandRef(
       std::size_t commandIndex) const noexcept {
@@ -9306,6 +9641,13 @@ public:
             storage_.diagnostics.requestedRenderEncoderGpuSamples) {
       return result;
     }
+    const auto sourceCommand =
+        encodedCommandIdAtSynchronousEncodeSeam(command);
+    if (!sourceCommand) {
+      DXMT_ASSERT(false &&
+                  "GPU sample attribution requires a valid encoded command");
+      return result;
+    }
     const std::uint32_t startSample =
         storage_.diagnostics.renderEncoderGpuSampleCursor++;
     const std::uint32_t endSample =
@@ -9324,7 +9666,7 @@ public:
             .seqId = command.seqId,
             .slotIndex = command.slotIndex,
             .commandIndex = command.commandIndex,
-            .sourceCommand = command,
+            .sourceCommand = *sourceCommand,
             .rtHandle = rtHandle,
             .depthHandle = depthHandle,
             .psoHandle = psoHandle,
@@ -9358,6 +9700,199 @@ public:
     storage_.pass.pendingClearCommand = {};
   }
 
+  static perf::RenderPassLateStoreAspect perfLateStoreAspect(
+      LateRenderPassStoreAspect aspect) noexcept {
+    switch (aspect) {
+    case LateRenderPassStoreAspect::Color:
+      return perf::RenderPassLateStoreAspect::Color;
+    case LateRenderPassStoreAspect::Depth:
+      return perf::RenderPassLateStoreAspect::Depth;
+    case LateRenderPassStoreAspect::Stencil:
+      return perf::RenderPassLateStoreAspect::Stencil;
+    }
+    return perf::RenderPassLateStoreAspect::Color;
+  }
+
+  void setLateStoreAction(LateRenderPassStoreAttachment& attachment,
+                          WMTStoreAction action,
+                          perf::RenderPassLateStoreResolutionCause cause) {
+    DXMT_ASSERT(attachment.unresolved());
+    attachment.action = action;
+    if (auto* recorder = ctx_.drawRecorder;
+        recorder && recorder->resolveLateRenderPassStoreAction) {
+      recorder->resolveLateRenderPassStoreAction(
+          recorder->userdata,
+          static_cast<std::uint8_t>(attachment.aspect),
+          attachment.colorIndex,
+          static_cast<std::uint32_t>(action),
+          static_cast<std::uint8_t>(cause));
+    }
+    if (!suppressRecordedMetalCalls(ctx_)) {
+      switch (attachment.aspect) {
+      case LateRenderPassStoreAspect::Color:
+        storage_.encoder.activeRenderEncoder.setColorStoreAction(
+            action, attachment.colorIndex);
+        break;
+      case LateRenderPassStoreAspect::Depth:
+        storage_.encoder.activeRenderEncoder.setDepthStoreAction(action);
+        break;
+      case LateRenderPassStoreAspect::Stencil:
+        storage_.encoder.activeRenderEncoder.setStencilStoreAction(action);
+        break;
+      }
+    }
+    perf::countRenderPassLateStoreResolution(
+        perfLateStoreAspect(attachment.aspect), cause);
+  }
+
+  void accountLateStoreActions() {
+    auto& late = storage_.pass.lateStore;
+    for (std::size_t i = 0; i < late.count; ++i) {
+      auto& attachment = late.attachments[i];
+      if (attachment.accounted) {
+        continue;
+      }
+      DXMT_ASSERT(!attachment.unresolved());
+      switch (attachment.aspect) {
+      case LateRenderPassStoreAspect::Color:
+        perf::countRenderPassStoreActionColor(
+            static_cast<std::uint32_t>(attachment.action));
+        if (attachment.colorIndex == 0u) {
+          late.summary.color0StoreAction =
+              static_cast<std::uint64_t>(attachment.action);
+        }
+        break;
+      case LateRenderPassStoreAspect::Depth:
+        perf::countRenderPassStoreActionDepth(
+            static_cast<std::uint32_t>(attachment.action));
+        late.summary.depthStoreAction =
+            static_cast<std::uint64_t>(attachment.action);
+        break;
+      case LateRenderPassStoreAspect::Stencil:
+        perf::countRenderPassStoreActionStencil(
+            static_cast<std::uint32_t>(attachment.action));
+        late.summary.stencilStoreAction =
+            static_cast<std::uint64_t>(attachment.action);
+        break;
+      }
+      if (attachment.action == WMTStoreActionStore ||
+          attachment.action == WMTStoreActionMultisampleResolve ||
+          attachment.action == WMTStoreActionStoreAndMultisampleResolve) {
+        perf::countRenderPassTilePreservationBytes(attachment.pixelBytes);
+        switch (attachment.aspect) {
+        case LateRenderPassStoreAspect::Color:
+          late.summary.colorStoreBytes += attachment.pixelBytes;
+          break;
+        case LateRenderPassStoreAspect::Depth:
+          late.summary.depthStoreBytes += attachment.pixelBytes;
+          break;
+        case LateRenderPassStoreAspect::Stencil:
+          late.summary.stencilStoreBytes += attachment.pixelBytes;
+          break;
+        }
+      }
+      attachment.accounted = true;
+    }
+  }
+
+  void resolveLateStoreForClear(const core::ClearCommandView& clear) {
+    auto& late = storage_.pass.lateStore;
+    const bool fullClear = clear.rects.empty();
+    for (std::size_t i = 0; i < late.count; ++i) {
+      auto& attachment = late.attachments[i];
+      if (!attachment.unresolved()) {
+        continue;
+      }
+      bool matchingClear = false;
+      if (fullClear) {
+        switch (attachment.aspect) {
+        case LateRenderPassStoreAspect::Color:
+          matchingClear = clear.clearColor && attachment.handle &&
+              clear.colorAttachments[attachment.colorIndex].handle ==
+                  attachment.handle;
+          break;
+        case LateRenderPassStoreAspect::Depth:
+          matchingClear = clear.clearDepth && attachment.handle &&
+              clear.depthStencil.handle == attachment.handle;
+          break;
+        case LateRenderPassStoreAspect::Stencil:
+          matchingClear = clear.clearStencil && attachment.handle &&
+              clear.depthStencil.handle == attachment.handle;
+          break;
+        }
+      }
+      setLateStoreAction(
+          attachment,
+          matchingClear ? WMTStoreActionDontCare : WMTStoreActionStore,
+          matchingClear
+              ? perf::RenderPassLateStoreResolutionCause::Clear
+              : perf::RenderPassLateStoreResolutionCause::ClearMismatch);
+    }
+    accountLateStoreActions();
+  }
+
+  void resolveLateStoreForDraw(core::FlatDrawStateView drawState) {
+    auto& late = storage_.pass.lateStore;
+    for (std::size_t i = 0; i < late.count; ++i) {
+      auto& attachment = late.attachments[i];
+      if (!attachment.unresolved()) {
+        continue;
+      }
+      bool sampled = false;
+      if (drawState.hot) {
+        for (std::size_t textureIndex = 0;
+             textureIndex < drawState.hot->textures.size(); ++textureIndex) {
+          if ((drawState.hot->textureMask & (1u << textureIndex)) == 0u) {
+            continue;
+          }
+          const core::Handle texture = drawState.hot->textures[textureIndex];
+          sampled = texture == attachment.handle ||
+              (attachment.aliasTexture &&
+               texture == attachment.aliasTexture);
+          if (sampled) {
+            break;
+          }
+        }
+      }
+      setLateStoreAction(
+          attachment, WMTStoreActionStore,
+          sampled ? perf::RenderPassLateStoreResolutionCause::Sample
+                  : perf::RenderPassLateStoreResolutionCause::Draw);
+    }
+    accountLateStoreActions();
+  }
+
+  void resolveLateStoreForStoreCause(
+      perf::RenderPassLateStoreResolutionCause cause) {
+    auto& late = storage_.pass.lateStore;
+    for (std::size_t i = 0; i < late.count; ++i) {
+      auto& attachment = late.attachments[i];
+      if (attachment.unresolved()) {
+        setLateStoreAction(attachment, WMTStoreActionStore, cause);
+      }
+    }
+    accountLateStoreActions();
+  }
+
+  perf::RenderPassLateStoreResolutionCause lateStoreCloseCause(
+      perf::EncoderSplitReason reason) const noexcept {
+    if (reason != perf::EncoderSplitReason::Final) {
+      return perf::RenderPassLateStoreResolutionCause::IncompatibleClose;
+    }
+    switch (finalizeCause_) {
+    case SessionFinalizeCause::Drain:
+      return perf::RenderPassLateStoreResolutionCause::Drain;
+    case SessionFinalizeCause::FailOrOther:
+      return perf::RenderPassLateStoreResolutionCause::Error;
+    case SessionFinalizeCause::SessionCap:
+    case SessionFinalizeCause::Independent:
+    case SessionFinalizeCause::Initializer:
+    case SessionFinalizeCause::ProducerWait:
+      return perf::RenderPassLateStoreResolutionCause::Finalize;
+    }
+    return perf::RenderPassLateStoreResolutionCause::Error;
+  }
+
   void endRender(
       perf::EncoderSplitReason reason = perf::EncoderSplitReason::Final) {
     if (!storage_.encoder.activeRenderEncoder) {
@@ -9365,6 +9900,26 @@ public:
     }
     DXMT_ASSERT(storage_.encoder.hasActiveRender);
     DXMT_ASSERT(!storage_.encoder.activeBlitEncoder);
+    resolveLateStoreForStoreCause(lateStoreCloseCause(reason));
+    storage_.diagnostics.activeEncoderBreakdown.recordRenderPassActions(
+        storage_.pass.lateStore.summary);
+    if (perf::enabled()) {
+      const auto& summary = storage_.pass.lateStore.summary;
+      encodeThreadRenderPassFrameTracker().noteClose(RenderPassCloseRecord{
+          .token = storage_.pass.activeInstance,
+          .key = RenderPassCloseKey{
+              .color0 = storage_.pass.activeKey.colorHandles[0],
+              .depth = storage_.pass.activeKey.depthHandle,
+              .sampleCount = storage_.pass.activeKey.sampleCount,
+          },
+          .splitReason = reason,
+          .finalizeCause = reason == perf::EncoderSplitReason::Final
+              ? finalizeCause_
+              : SessionFinalizeCause::FailOrOther,
+          .storeBytes = summary.colorStoreBytes +
+              summary.depthStoreBytes + summary.stencilStoreBytes,
+      });
+    }
     if (auto* recorder = ctx_.drawRecorder;
         recorder && recorder->endRenderPass) {
       recorder->endRenderPass(recorder->userdata);
@@ -9403,8 +9958,8 @@ public:
     storage_.diagnostics.activeColorAttachmentDump = {};
     storage_.diagnostics.activeDepthAttachmentDump = {};
     storage_.diagnostics.activeDrawTextureDumps.clear();
-    storage_.diagnostics.activeRenderEncoderSeq = 0;
-    storage_.diagnostics.activeRenderEncoderIndex = 0;
+    storage_.pass.activeInstance = {};
+    storage_.pass.lateStore = {};
     storage_.encoder.activeRenderEncoder = {};
     storage_.encoder.hasActiveRender = false;
     storage_.binding.activeDrawStateKey.reset();
@@ -9527,6 +10082,9 @@ private:
   static bool validateSources(
       const EncodeChunkSessionState& sessionState,
       const core::metalqueue::QueueSubmissionRecord& record) {
+    if (!record.completionSpanShadowMatchesSources()) {
+      return false;
+    }
     const auto sessionSources = sessionState.sources.span();
     if (sessionSources.empty()) {
       return true;
@@ -9542,6 +10100,9 @@ private:
   static bool publishSources(
       const EncodeChunkSessionState& sessionState,
       core::metalqueue::QueueSubmissionRecord& record) {
+    if (!record.completionSpanShadowMatchesSources()) {
+      return false;
+    }
     const auto sessionSources = sessionState.sources.span();
     if (sessionSources.empty()) {
       return true;
@@ -9556,22 +10117,8 @@ private:
   static bool sourcesMatch(
       std::span<const core::metalqueue::QueueCompletionSource> expectedSources,
       std::span<const core::metalqueue::QueueCompletionSource> actualSources) {
-    if (actualSources.size() != expectedSources.size()) {
-      return false;
-    }
-    for (std::size_t i = 0; i < expectedSources.size(); ++i) {
-      const auto& expected = expectedSources[i];
-      const auto& actual = actualSources[i];
-      if (expected.source != actual.source ||
-          expected.slotIndex != actual.slotIndex ||
-          expected.seqId != actual.seqId ||
-          expected.hasPresent != actual.hasPresent ||
-          expected.commandBegin != actual.commandBegin ||
-          expected.commandCount != actual.commandCount) {
-        return false;
-      }
-    }
-    return true;
+    return core::metalqueue::queueCompletionSourceSpansExactlyEqual(
+        expectedSources, actualSources);
   }
 
   template <typename T>
@@ -9601,6 +10148,7 @@ private:
   core::CpuReadyTape::SourceRef source_{};
   u64 seqId_;
   std::size_t slotIndex_;
+  SessionFinalizeCause finalizeCause_ = SessionFinalizeCause::FailOrOther;
 };
 
 }  // namespace encode_session
@@ -9638,14 +10186,16 @@ EncodeChunkSessionPassCloseResult closeEncodeChunkSessionRenderPass(
 bool finalizeEncodeChunkSessionIntoSubmission(
     EncodeContext& ctx,
     EncodeChunkSessionState& sessionState,
-    core::metalqueue::QueueSubmissionRecord& record) {
+    core::metalqueue::QueueSubmissionRecord& record,
+    SessionFinalizeCause cause) {
   DXMT_ASSERT(sessionState.storage);
   encode_session::EncodeCallState call{};
   // Keep the record's ownership intact until all source validation and vector
   // capacity reservations have succeeded.
   call.commandBuffer = record.commandBuffer;
   encode_session::LifecycleRuntime lifecycle(
-      ctx, *sessionState.storage, call, {}, record.seqId, record.slotIndex);
+      ctx, *sessionState.storage, call, {}, record.seqId, record.slotIndex,
+      cause);
   const bool finalized =
       lifecycle.finalizeIntoSubmission(record, &sessionState,
                                        /*resetSessionAfterPublication=*/true);
@@ -9853,7 +10403,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance,
     core::Handle attachmentAliasTexture,
-    RenderPassStoreProofActivePass activePass) {
+    RenderPassStoreProofActivePass activePass,
+    LateRenderPassStoreAspect aspect,
+    perf::RenderPassNoLookaheadCause* noLookaheadCause) {
   using Proof = perf::RenderPassDepthStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -9870,7 +10422,16 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
   if (!depthHandle) {
     return Proof::BlockNullDepth;
   }
+  if (activePass.lookaheadInvalid) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+    }
+    return Proof::BlockNoLookahead;
+  }
   if (sources.empty()) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = perf::RenderPassNoLookaheadCause::Empty;
+    }
     return Proof::BlockNoLookahead;
   }
   using Kind = core::MetalCommandKind;
@@ -9888,6 +10449,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
         : source.slot ? core::SourcePayloadView(*source.slot)
                       : core::SourcePayloadView{};
     if (!sourcePayload.valid()) {
+      if (noLookaheadCause) {
+        *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+      }
       return Proof::BlockNoLookahead;
     }
     const std::size_t traversalCount =
@@ -9904,6 +10468,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
           ? traversalIndex
           : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
       if (commandIndex >= sourcePayload.commandCount()) {
+        if (noLookaheadCause) {
+          *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+        }
         return Proof::BlockNoLookahead;
       }
       ++logicalDistance;
@@ -9914,11 +10481,20 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       }
       switch (next.kind) {
         case Kind::Clear:
-          if (sourceCommand.clear &&
-              sourceCommand.clear->depthStencil.handle == depthHandle) {
-            // R-BACK-15.7: the next op on this depth handle is a clear,
-            // so storing tile contents would be wasted bandwidth.
-            return finish(Proof::AllowNextClear, logicalDistance);
+          if (sourceCommand.clear) {
+            if (sourceCommand.clear->depthStencil.handle != depthHandle) {
+              break;
+            }
+            const bool matchingAspect =
+                aspect == LateRenderPassStoreAspect::Stencil
+                    ? sourceCommand.clear->clearStencil
+                    : sourceCommand.clear->clearDepth;
+            if (sourceCommand.clear->rects.empty() && matchingAspect) {
+              // R-BACK-15.7: a full clear of this exact aspect discards the
+              // stored contents. A partial or other-aspect clear does not.
+              return finish(Proof::AllowNextClear, logicalDistance);
+            }
+            return finish(Proof::BlockClearMismatch, logicalDistance);
           }
           break;
         case Kind::DrawRun:
@@ -10009,6 +10585,19 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       }
     }
   }
+  // A deferred EncodeSession may append an unobserved FIFO source. Exact
+  // touches found above are conclusive, but exhausting only the retained
+  // prefix cannot prove that the attachment is dead.
+  if (activePass.lookaheadMayHaveFutureSources) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = activePass.lookaheadStorageTruncated
+          ? perf::RenderPassNoLookaheadCause::StorageTruncated
+          : activePass.lookaheadInvalid
+              ? perf::RenderPassNoLookaheadCause::Invalid
+              : perf::RenderPassNoLookaheadCause::SuffixExhausted;
+    }
+    return Proof::BlockNoLookahead;
+  }
   // R-BACK-15.7 end-of-chunk fall-through. Default keeps the defensive
   // sawPresent guard: a Present in this chunk implies the frame may
   // persist depth state across the chunk boundary (cross-frame shadow
@@ -10038,7 +10627,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance,
     core::Handle attachmentAliasTexture,
-    RenderPassStoreProofActivePass activePass) {
+    RenderPassStoreProofActivePass activePass,
+    LateRenderPassStoreAspect aspect,
+    perf::RenderPassNoLookaheadCause* noLookaheadCause) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -10053,7 +10644,9 @@ perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
       depthHandle,
       firstTouchCommandDistance,
       attachmentAliasTexture,
-      activePass);
+      activePass,
+      aspect,
+      noLookaheadCause);
 }
 
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -10070,7 +10663,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance,
     core::Handle attachmentAliasTexture,
-    RenderPassStoreProofActivePass activePass) {
+    RenderPassStoreProofActivePass activePass,
+    std::uint8_t colorAttachmentIndex,
+    perf::RenderPassNoLookaheadCause* noLookaheadCause) {
   using Proof = perf::RenderPassColorStoreProof;
   const auto noTouch = std::numeric_limits<std::uint32_t>::max();
   if (firstTouchCommandDistance) {
@@ -10087,7 +10682,16 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
   if (!colorHandle) {
     return Proof::BlockNullColor;
   }
+  if (activePass.lookaheadInvalid) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+    }
+    return Proof::BlockNoLookahead;
+  }
   if (sources.empty()) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = perf::RenderPassNoLookaheadCause::Empty;
+    }
     return Proof::BlockNoLookahead;
   }
   using Kind = core::MetalCommandKind;
@@ -10105,6 +10709,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
         : source.slot ? core::SourcePayloadView(*source.slot)
                       : core::SourcePayloadView{};
     if (!sourcePayload.valid()) {
+      if (noLookaheadCause) {
+        *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+      }
       return Proof::BlockNoLookahead;
     }
     const std::size_t traversalCount =
@@ -10121,6 +10728,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
           ? traversalIndex
           : static_cast<std::size_t>(source.commandOrder[traversalIndex]);
       if (commandIndex >= sourcePayload.commandCount()) {
+        if (noLookaheadCause) {
+          *noLookaheadCause = perf::RenderPassNoLookaheadCause::Invalid;
+        }
         return Proof::BlockNoLookahead;
       }
       ++logicalDistance;
@@ -10131,13 +10741,26 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       }
       switch (next.kind) {
         case Kind::Clear:
-          if (sourceCommand.clear && sourceCommand.clear->clearColor) {
+          if (sourceCommand.clear) {
+            bool handleAppears = false;
             for (const auto& attachment :
                  sourceCommand.clear->colorAttachments) {
-              if (attachment.handle == colorHandle) {
-                return finish(Proof::AllowNextClear, logicalDistance);
-              }
+              handleAppears = handleAppears || attachment.handle == colorHandle;
             }
+            if (!handleAppears) {
+              break;
+            }
+            const bool matchingSlot =
+                colorAttachmentIndex <
+                    sourceCommand.clear->colorAttachments.size() &&
+                sourceCommand.clear
+                        ->colorAttachments[colorAttachmentIndex]
+                        .handle == colorHandle;
+            return finish(sourceCommand.clear->rects.empty() &&
+                                  sourceCommand.clear->clearColor && matchingSlot
+                              ? Proof::AllowNextClear
+                              : Proof::BlockClearMismatch,
+                          logicalDistance);
           }
           break;
         case Kind::DrawRun:
@@ -10214,6 +10837,16 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       }
     }
   }
+  if (activePass.lookaheadMayHaveFutureSources) {
+    if (noLookaheadCause) {
+      *noLookaheadCause = activePass.lookaheadStorageTruncated
+          ? perf::RenderPassNoLookaheadCause::StorageTruncated
+          : activePass.lookaheadInvalid
+              ? perf::RenderPassNoLookaheadCause::Invalid
+              : perf::RenderPassNoLookaheadCause::SuffixExhausted;
+    }
+    return Proof::BlockNoLookahead;
+  }
   static const bool aggressive = []() {
     if (const char* v = std::getenv("DXMT9_AGGRESSIVE_COLOR_DONTCARE")) {
       return v[0] != '\0' && v[0] != '0';
@@ -10233,7 +10866,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance,
     core::Handle attachmentAliasTexture,
-    RenderPassStoreProofActivePass activePass) {
+    RenderPassStoreProofActivePass activePass,
+    std::uint8_t colorAttachmentIndex,
+    perf::RenderPassNoLookaheadCause* noLookaheadCause) {
   const std::size_t firstCommandIndex =
       startCommandIndex < slot.commandCount()
           ? startCommandIndex + 1u
@@ -10248,7 +10883,9 @@ perf::RenderPassColorStoreProof colorStoreProofForLookahead(
       colorHandle,
       firstTouchCommandDistance,
       attachmentAliasTexture,
-      activePass);
+      activePass,
+      colorAttachmentIndex,
+      noLookaheadCause);
 }
 
 bool nextColorOperationIsClear(const core::ChunkSlot& slot,
@@ -10312,10 +10949,14 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     RenderPassStoreProofActivePass activePass,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
     WMT::Buffer visibilityBuffer,
-    RenderPassActionSummary* actionSummary) {
+    RenderPassActionSummary* actionSummary,
+    LateRenderPassStoreState* lateStoreState) {
   const auto& hot = *drawState.hot;
   if (actionSummary) {
     *actionSummary = {};
+  }
+  if (lateStoreState) {
+    *lateStoreState = {};
   }
   auto* primarySurface = ctx.pool.findSurface(hot.colorAttachments[0].handle.value);
   // R-FORMAT-12: a D3DFMT_NULL render target is colorless and has no Metal
@@ -10364,12 +11005,16 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
                            : discardAttachment     ? WMTLoadActionDontCare
                            : firstUseAttachment    ? WMTLoadActionDontCare
                                                    : WMTLoadActionLoad;
+    perf::RenderPassNoLookaheadCause colorNoLookaheadCause =
+        perf::RenderPassNoLookaheadCause::Empty;
     auto colorStoreProof = !lookaheadSources.empty()
         ? colorStoreProofForLookahead(lookaheadSources,
                                       hot.colorAttachments[i].handle,
                                       nullptr,
                                       surface->aliasTexture,
-                                      activePass)
+                                      activePass,
+                                      static_cast<std::uint8_t>(i),
+                                      &colorNoLookaheadCause)
         : perf::RenderPassColorStoreProof::BlockNoLookahead;
     if (surface->resolveTexture &&
         (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
@@ -10377,11 +11022,24 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       colorStoreProof = perf::RenderPassColorStoreProof::BlockMsaaResolve;
     }
     perf::countRenderPassColorStoreProof(colorStoreProof);
+    if (colorStoreProof ==
+        perf::RenderPassColorStoreProof::BlockNoLookahead) {
+      perf::countRenderPassNoLookaheadCause(colorNoLookaheadCause);
+    }
     const bool colorDontCareStore =
         colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
         colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent;
-    attachment.store_action =
-        colorDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
+    const bool colorLateStoreEligible =
+        lateRenderPassStoreEligible(
+            colorStoreProof ==
+                perf::RenderPassColorStoreProof::BlockNoLookahead,
+            colorNoLookaheadCause, activePass.lookaheadMayHaveFutureSources,
+            static_cast<bool>(surface->resolveTexture),
+            hot.colorAttachments[i].handle == ctx.queue.currentBackBuffer_);
+    attachment.store_action = colorDontCareStore
+        ? WMTStoreActionDontCare
+        : colorLateStoreEligible ? WMTStoreActionUnknown
+                                 : WMTStoreActionStore;
     if (surface->resolveTexture) {
       attachment.resolve_texture = surface->resolveTexture.handle;
       attachment.store_action = WMTStoreActionMultisampleResolve;
@@ -10401,6 +11059,23 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       attachment.clear_color = WMTClearColor{clear->color.r, clear->color.g,
                                              clear->color.b, clear->color.a};
     }
+    if (lateStoreState) {
+      const std::uint64_t pixelBytes =
+          static_cast<std::uint64_t>(surface->desc.width) *
+          static_cast<std::uint64_t>(surface->desc.height) *
+          static_cast<std::uint64_t>(core::bytesPerPixel(surface->desc.format));
+      if (!lateStoreState->append({
+          .handle = hot.colorAttachments[i].handle,
+          .aliasTexture = surface->aliasTexture,
+          .pixelBytes = pixelBytes,
+          .action = attachment.store_action,
+          .aspect = LateRenderPassStoreAspect::Color,
+          .colorIndex = static_cast<std::uint8_t>(i),
+      })) {
+        DXMT_ASSERT(false && "late Store attachment ledger overflow");
+        return {};
+      }
+    }
   }
 
   if (auto* depthSurface = ctx.pool.findSurface(hot.depthStencil.handle.value);
@@ -10413,28 +11088,71 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     // immediately discarded, so we can DontCare-store. R-BACK-15.14:
     // never DontCare an MSAA depth target with an attached resolve.
     const bool hasResolveTarget = static_cast<bool>(depthSurface->resolveTexture);
-    auto depthStoreProof = !lookaheadSources.empty()
-        ? depthStoreProofForLookahead(lookaheadSources,
-            hot.depthStencil.handle,
-            nullptr,
-            depthSurface->aliasTexture,
-            activePass)
-        : perf::RenderPassDepthStoreProof::BlockNoLookahead;
-    if (hasResolveTarget &&
-        (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
-         depthStoreProof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent)) {
-      depthStoreProof = perf::RenderPassDepthStoreProof::BlockMsaaResolve;
+    perf::RenderPassNoLookaheadCause depthNoLookaheadCause =
+        perf::RenderPassNoLookaheadCause::Empty;
+    perf::RenderPassNoLookaheadCause stencilNoLookaheadCause =
+        perf::RenderPassNoLookaheadCause::Empty;
+    const auto proofForAspect = [&](LateRenderPassStoreAspect aspect,
+                                    perf::RenderPassNoLookaheadCause& cause) {
+      auto proof = !lookaheadSources.empty()
+          ? depthStoreProofForLookahead(
+                lookaheadSources, hot.depthStencil.handle, nullptr,
+                depthSurface->aliasTexture, activePass, aspect, &cause)
+          : perf::RenderPassDepthStoreProof::BlockNoLookahead;
+      if (hasResolveTarget &&
+          (proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+           proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent)) {
+        proof = perf::RenderPassDepthStoreProof::BlockMsaaResolve;
+      }
+      return proof;
+    };
+    const bool hasDepthAspect = formatHasDepthAspect(depthSurface->desc.format);
+    const bool hasStencilAspect =
+        formatHasStencilAspect(depthSurface->desc.format);
+    const auto depthStoreProof = hasDepthAspect
+        ? proofForAspect(LateRenderPassStoreAspect::Depth,
+                         depthNoLookaheadCause)
+        : perf::RenderPassDepthStoreProof::BlockNullDepth;
+    const auto stencilStoreProof = hasStencilAspect
+        ? proofForAspect(LateRenderPassStoreAspect::Stencil,
+                         stencilNoLookaheadCause)
+        : perf::RenderPassDepthStoreProof::BlockNullDepth;
+    // Preserve the historical denominator: render_pass_depth_proof_* is one
+    // observation per included depth/stencil pass, not one per DS aspect.
+    const auto legacyDepthStoreProof = legacyDepthProofForPass(
+        hasDepthAspect, depthStoreProof, stencilStoreProof);
+    const auto legacyNoLookaheadCause =
+        hasDepthAspect ? depthNoLookaheadCause : stencilNoLookaheadCause;
+    perf::countRenderPassDepthStoreProof(legacyDepthStoreProof);
+    if (legacyDepthStoreProof ==
+        perf::RenderPassDepthStoreProof::BlockNoLookahead) {
+      perf::countRenderPassNoLookaheadCause(legacyNoLookaheadCause);
     }
-    perf::countRenderPassDepthStoreProof(depthStoreProof);
-    const bool depthDontCareStore =
-        !hasResolveTarget &&
-        (depthStoreProof == perf::RenderPassDepthStoreProof::AllowNextClear ||
-         depthStoreProof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
-    if (formatHasDepthAspect(depthSurface->desc.format)) {
+    const auto allowsDontCare = [&](perf::RenderPassDepthStoreProof proof) {
+      return !hasResolveTarget &&
+          (proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
+           proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
+    };
+    const auto allowsLateStore = [&](perf::RenderPassDepthStoreProof proof,
+        perf::RenderPassNoLookaheadCause cause) {
+      return lateRenderPassStoreEligible(
+          proof == perf::RenderPassDepthStoreProof::BlockNoLookahead, cause,
+          activePass.lookaheadMayHaveFutureSources, hasResolveTarget,
+          /*presentSourceConstrained=*/false);
+    };
+    const std::uint64_t depthPixelBytes =
+        static_cast<std::uint64_t>(depthSurface->desc.width) *
+        static_cast<std::uint64_t>(depthSurface->desc.height) *
+        static_cast<std::uint64_t>(
+            core::bytesPerPixel(depthSurface->desc.format));
+    if (hasDepthAspect) {
       passInfo.depth.texture = depthSurface->texture.handle;
       passInfo.depth.load_action = clearDepth ? WMTLoadActionClear : WMTLoadActionLoad;
-      passInfo.depth.store_action =
-          depthDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
+      passInfo.depth.store_action = allowsDontCare(depthStoreProof)
+          ? WMTStoreActionDontCare
+          : allowsLateStore(depthStoreProof, depthNoLookaheadCause)
+              ? WMTStoreActionUnknown
+              : WMTStoreActionStore;
       if (actionSummary) {
         actionSummary->depthIncluded = 1;
         actionSummary->depthLoadAction =
@@ -10446,14 +11164,27 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       if (clearDepth) {
         passInfo.depth.clear_depth = clear->depth;
       }
+      if (lateStoreState) {
+        if (!lateStoreState->append({
+            .handle = hot.depthStencil.handle,
+            .aliasTexture = depthSurface->aliasTexture,
+            .pixelBytes = depthPixelBytes,
+            .action = passInfo.depth.store_action,
+            .aspect = LateRenderPassStoreAspect::Depth,
+        })) {
+          DXMT_ASSERT(false && "late Store attachment ledger overflow");
+          return {};
+        }
+      }
     }
-    if (formatHasStencilAspect(depthSurface->desc.format)) {
+    if (hasStencilAspect) {
       passInfo.stencil.texture = depthSurface->texture.handle;
       passInfo.stencil.load_action = clearStencil ? WMTLoadActionClear : WMTLoadActionLoad;
-      // The simple-form shortcut clears the entire depth/stencil surface
-      // on the next op, so stencil tile contents are equally discardable.
-      passInfo.stencil.store_action =
-          depthDontCareStore ? WMTStoreActionDontCare : WMTStoreActionStore;
+      passInfo.stencil.store_action = allowsDontCare(stencilStoreProof)
+          ? WMTStoreActionDontCare
+          : allowsLateStore(stencilStoreProof, stencilNoLookaheadCause)
+              ? WMTStoreActionUnknown
+              : WMTStoreActionStore;
       if (actionSummary) {
         actionSummary->stencilIncluded = 1;
         actionSummary->stencilLoadAction =
@@ -10464,6 +11195,18 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       }
       if (clearStencil) {
         passInfo.stencil.clear_stencil = clear->stencil;
+      }
+      if (lateStoreState) {
+        if (!lateStoreState->append({
+            .handle = hot.depthStencil.handle,
+            .aliasTexture = depthSurface->aliasTexture,
+            .pixelBytes = depthPixelBytes,
+            .action = passInfo.stencil.store_action,
+            .aspect = LateRenderPassStoreAspect::Stencil,
+        })) {
+          DXMT_ASSERT(false && "late Store attachment ledger overflow");
+          return {};
+        }
       }
     }
   }
@@ -10480,17 +11223,15 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       static_cast<std::uint8_t>(attachmentCount);
   passInfo.visibility_buffer = visibilityBuffer.handle;
 
-  // R-BACK-15.10/15.11/15.12: emit per-attachment load/store action
-  // histograms + tile-preservation byte estimates so scripts/
-  // assert_perf_counters.py and the SFIV smoke can see the policy
-  // outcome. Counted before encoder open so the counters land even when
-  // the encoder fails to open below.
+  // Load actions are immutable at encoder open and can be accounted here.
+  // Store actions and their tile-byte estimates are accounted exactly once
+  // by LifecycleRuntime immediately before endEncoding, after every Unknown
+  // action has been resolved.
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     auto* surface = ctx.pool.findSurface(hot.colorAttachments[i].handle.value);
     if (!surface || !surface->texture) continue;
     const auto& att = passInfo.colors[i];
     perf::countRenderPassLoadActionColor(static_cast<std::uint32_t>(att.load_action));
-    perf::countRenderPassStoreActionColor(static_cast<std::uint32_t>(att.store_action));
     const std::uint64_t pixelBytes =
         static_cast<std::uint64_t>(surface->desc.width) *
         static_cast<std::uint64_t>(surface->desc.height) *
@@ -10499,13 +11240,6 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
       perf::countRenderPassTilePreservationBytes(pixelBytes);
       if (actionSummary) {
         actionSummary->colorLoadBytes += pixelBytes;
-      }
-    }
-    if (att.store_action == WMTStoreActionStore ||
-        att.store_action == WMTStoreActionMultisampleResolve) {
-      perf::countRenderPassTilePreservationBytes(pixelBytes);
-      if (actionSummary) {
-        actionSummary->colorStoreBytes += pixelBytes;
       }
     }
   }
@@ -10518,41 +11252,27 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPassWithStoreProofLookahead
     if (formatHasDepthAspect(depthSurface->desc.format)) {
       perf::countRenderPassLoadActionDepth(
           static_cast<std::uint32_t>(passInfo.depth.load_action));
-      perf::countRenderPassStoreActionDepth(
-          static_cast<std::uint32_t>(passInfo.depth.store_action));
       if (passInfo.depth.load_action == WMTLoadActionLoad) {
         perf::countRenderPassTilePreservationBytes(depthPixelBytes);
         if (actionSummary) {
           actionSummary->depthLoadBytes += depthPixelBytes;
         }
       }
-      if (passInfo.depth.store_action == WMTStoreActionStore ||
-          passInfo.depth.store_action == WMTStoreActionMultisampleResolve) {
-        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
-        if (actionSummary) {
-          actionSummary->depthStoreBytes += depthPixelBytes;
-        }
-      }
     }
     if (formatHasStencilAspect(depthSurface->desc.format)) {
       perf::countRenderPassLoadActionStencil(
           static_cast<std::uint32_t>(passInfo.stencil.load_action));
-      perf::countRenderPassStoreActionStencil(
-          static_cast<std::uint32_t>(passInfo.stencil.store_action));
       if (passInfo.stencil.load_action == WMTLoadActionLoad) {
         perf::countRenderPassTilePreservationBytes(depthPixelBytes);
         if (actionSummary) {
           actionSummary->stencilLoadBytes += depthPixelBytes;
         }
       }
-      if (passInfo.stencil.store_action == WMTStoreActionStore ||
-          passInfo.stencil.store_action == WMTStoreActionMultisampleResolve) {
-        perf::countRenderPassTilePreservationBytes(depthPixelBytes);
-        if (actionSummary) {
-          actionSummary->stencilStoreBytes += depthPixelBytes;
-        }
-      }
     }
+  }
+
+  if (lateStoreState && actionSummary) {
+    lateStoreState->summary = *actionSummary;
   }
 
   auto encoder = commandBuffer.renderCommandEncoder(passInfo);
@@ -10653,7 +11373,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     std::size_t lookaheadStartIndex,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
     WMT::Buffer visibilityBuffer,
-    RenderPassActionSummary* actionSummary) {
+    RenderPassActionSummary* actionSummary,
+    LateRenderPassStoreState* lateStoreState) {
   RenderPassStoreProofLookaheadSource lookaheadSource{};
   std::span<const RenderPassStoreProofLookaheadSource> lookaheadSources{};
   if (lookaheadSlot) {
@@ -10672,7 +11393,7 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
   return beginRenderPassWithStoreProofLookahead(
       ctx, commandBuffer, drawState, clear, lookaheadSources,
       RenderPassStoreProofActivePass{}, sampleBufferAttachments,
-      visibilityBuffer, actionSummary);
+      visibilityBuffer, actionSummary, lateStoreState);
 }
 
 std::span<const u8> drawParamVertexBytes(const core::DrawParam& param,
@@ -14978,6 +15699,131 @@ bool encodeDraw(EncodeContext& ctx,
                     nullptr, nullptr);
 }
 
+bool preRegisteredFragmentMatchesSessionSource(
+    std::size_t slotIndex,
+    std::uint64_t sourceSeqId,
+    const EncodeChunkOptions& options) noexcept {
+  if (!options.preRegisteredFragment.has_value()) {
+    return true;
+  }
+  if (!options.session || options.sessionSource.has_value()) {
+    return false;
+  }
+
+  const auto& fragment = *options.preRegisteredFragment;
+  if (fragment.sourceFragmentCount == 0u ||
+      fragment.sourceFragmentOrdinal >= fragment.sourceFragmentCount ||
+      fragment.transactionFragmentCount == 0u ||
+      fragment.transactionFragmentOrdinal >=
+          fragment.transactionFragmentCount) {
+    return false;
+  }
+  std::size_t matchCount = 0;
+  for (const auto& source : encodeChunkSessionSources(*options.session)) {
+    if (source.source != options.partitionSource ||
+        source.slotIndex != slotIndex || source.seqId != sourceSeqId) {
+      continue;
+    }
+    ++matchCount;
+    if (fragment.commandBegin < source.commandBegin ||
+        fragment.commandBegin - source.commandBegin > source.commandCount ||
+        fragment.commandCount >
+            source.commandCount -
+                (fragment.commandBegin - source.commandBegin)) {
+      return false;
+    }
+  }
+  return matchCount == 1u;
+}
+
+bool encodeChunkAllowsRepeatedSourceFragments() noexcept {
+  return !argbufPayloadDeltaSourcePerfEnabled();
+}
+
+namespace {
+
+struct ActiveSeedMergeTicketAudit {
+  ActiveSeedMergeTargetResolver resolver{};
+  std::uint64_t mismatch = 0;
+  bool active = false;
+
+  ActiveSeedMergeTicketAudit(
+      std::span<const ActiveSeedMergeTargetWitness> targets,
+      bool attributionEnabled) noexcept
+      : resolver{attributionEnabled
+                     ? targets
+                     : std::span<const ActiveSeedMergeTargetWitness>{}},
+        active(attributionEnabled) {
+    if (active) {
+      perf::countActiveSeedMergeTicketIssued(targets.size());
+    }
+  }
+
+  ~ActiveSeedMergeTicketAudit() {
+    if (!active) {
+      return;
+    }
+    if (mismatch != 0u) {
+      perf::countActiveSeedMergeTicketMismatch(mismatch);
+    }
+    const std::uint64_t unconsumed = resolver.unconsumed();
+    if (unconsumed != 0u) {
+      perf::countActiveSeedMergeTicketUnconsumed(unconsumed);
+    }
+  }
+
+  void beginCommand(std::uint32_t sourceIndex,
+                    std::uint32_t commandIndex) noexcept {
+    if (!active) {
+      return;
+    }
+    DXMT_ASSERT(resolver.currentTarget() == nullptr);
+    if (resolver.currentTarget() != nullptr) {
+      ++mismatch;
+    }
+    resolver.beginCommand(sourceIndex, commandIndex);
+  }
+
+  const ActiveSeedMergeTargetWitness* currentTarget() const noexcept {
+    return active ? resolver.currentTarget() : nullptr;
+  }
+
+  void endCommand() noexcept {
+    if (active) {
+      resolver.endCommand();
+    }
+  }
+
+  void consume(ActiveSeedMergeJoinRelation relation) noexcept {
+    DXMT_ASSERT(active && resolver.currentTarget() != nullptr);
+    if (!active || !resolver.consumeCurrent()) {
+      ++mismatch;
+      return;
+    }
+    if (relation == ActiveSeedMergeJoinRelation::Matched) {
+      perf::countActiveSeedMergeTicketMatched();
+    } else {
+      ++mismatch;
+    }
+  }
+
+  void consumeContinuation(
+      ActiveSeedMergeContinuationRelation relation) noexcept {
+    DXMT_ASSERT(active && resolver.currentTarget() != nullptr);
+    if (!active || !resolver.consumeCurrent()) {
+      ++mismatch;
+      return;
+    }
+    if (relation == ActiveSeedMergeContinuationRelation::Continued) {
+      perf::countActiveSeedMergeTicketContinued();
+    } else {
+      ++mismatch;
+    }
+  }
+};
+
+}  // namespace
+
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     EncodeContext& ctx,
     std::size_t slotIndex,
@@ -14996,7 +15842,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       encodeChunkReplayRange(slotIndex, payload, sourceSeqId, options);
   if (!replayRange.valid || !options.partitionSource.valid() ||
       (options.sessionSource.has_value() &&
-       options.partitionSource != options.sessionSource->source)) {
+       options.partitionSource != options.sessionSource->source) ||
+      !preRegisteredFragmentMatchesSessionSource(
+          slotIndex, sourceSeqId, options)) {
     return std::nullopt;
   }
   std::vector<std::size_t> replayOrdinalByCommandIndex;
@@ -15079,6 +15927,12 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("begin");
 
   const bool injectedCommandBuffer = options.hasInjectedCommandBuffer();
+  const bool firstSourceFragment =
+      !options.preRegisteredFragment.has_value() ||
+      options.preRegisteredFragment->firstSourceFragment();
+  const bool firstTransactionFragment =
+      !options.preRegisteredFragment.has_value() ||
+      options.preRegisteredFragment->firstTransactionFragment();
   if (options.session) {
     if (!options.session->storage ||
         (options.session->storage->commandBufferChainTail !=
@@ -15101,8 +15955,15 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   encode_session::EncodeCallState call{};
   auto& captureAlreadyStartedAtChunkBegin =
       call.captureAlreadyStartedAtChunkBegin;
-  std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest =
-      ctx.queue.metalCaptureForChunkBegin(sourceSeqId);
+  std::optional<core::metalcapture::MetalCaptureRequest> earlyCaptureRequest;
+  if (firstSourceFragment) {
+    if (ctx.drawRecorder &&
+        ctx.drawRecorder->beginSourceFragmentPreamble) {
+      ctx.drawRecorder->beginSourceFragmentPreamble(
+          ctx.drawRecorder->userdata, sourceSeqId);
+    }
+    earlyCaptureRequest = ctx.queue.metalCaptureForChunkBegin(sourceSeqId);
+  }
   if (earlyCaptureRequest.has_value()) {
     traceEncodeStage("before-start-capture");
     captureAlreadyStartedAtChunkBegin =
@@ -15129,7 +15990,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   }
   traceEncodeStage(injectedCommandBuffer ? "after-use-injected-command-buffer"
                                          : "after-new-command-buffer");
-  auto& commandBufferHasWork = call.commandBufferHasWork;
   // One-shot storage for direct callers. The opt-in EncodeSession path below
   // supplies persistent storage so source boundaries can remain metadata-only.
   EncodeChunkSessionStorage localSession =
@@ -15143,6 +16003,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     DXMT_ASSERT(session.commandBufferChainTail == commandBuffer.handle);
   }
+  call.commandBufferHasWork = session.completion.tailCommandBufferHasWork;
+  auto& commandBufferHasWork = call.commandBufferHasWork;
   const bool deferSessionFinalization =
       options.deferSessionFinalization && options.session != nullptr;
   auto& encoderState = session.encoder;
@@ -15154,15 +16016,25 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                                              options.partitionSource,
                                              sourceSeqId,
                                              slotIndex);
+  const bool activeSeedMergeAttributionEnabled =
+      !options.activeSeedMergeTargets.empty() &&
+      activeSeedMergeTicketAttributionEnabled(
+          perf::enabled(), options.activeSeedMergeTicket,
+          options.activeSeedMergeTargets.size());
+  ActiveSeedMergeTicketAudit activeSeedMergeTicketAudit(
+      options.activeSeedMergeTargets,
+      activeSeedMergeAttributionEnabled);
 
   traceEncodeStage("before-gpu-sampling-setup");
-  initializeEncodeChunkSessionGpuSamplingStorage(
-      session, WMT::Device{ctx.device.handle},
-      options.sessionLookaheadSources.empty()
-          ? replayRange.commandCount()
-          : sessionGpuSamplingCommandCount(payload, sourceSeqId,
-                                           replayRange.commandCount(),
-                                           options.sessionLookaheadSources));
+  if (firstTransactionFragment) {
+    initializeEncodeChunkSessionGpuSamplingStorage(
+        session, WMT::Device{ctx.device.handle},
+        options.sessionLookaheadSources.empty()
+            ? replayRange.commandCount()
+            : sessionGpuSamplingCommandCount(payload, sourceSeqId,
+                                             replayRange.commandCount(),
+                                             options.sessionLookaheadSources));
+  }
   traceEncodeStage("after-gpu-sampling-setup");
 
   auto makeRenderEncoderGpuAttachment = [&](
@@ -15416,7 +16288,24 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   const bool argbufPayloadDeltaSourcePerf =
       argbufPayloadDeltaSourcePerfEnabled();
   ArgbufPayloadDeltaSourceAttribution argbufPayloadDeltaSourceAttribution;
-  static thread_local RenderPassFrameTracker renderPassFrameTracker;
+  RenderPassFrameTracker& renderPassFrameTracker =
+      encodeThreadRenderPassFrameTracker();
+  auto consumeActiveSeedMergeContinuation =
+      [&](std::size_t commandIndex) noexcept {
+        if (!activeSeedMergeAttributionEnabled) {
+          return;
+        }
+        const auto* target = activeSeedMergeTicketAudit.currentTarget();
+        if (!target) {
+          return;
+        }
+        activeSeedMergeTicketAudit.consumeContinuation(
+            classifyActiveSeedMergeContinuation(
+                options.activeSeedMergeTicket, *target,
+                options.replayWindow, options.replayWindow.sourceIndex,
+                static_cast<std::uint32_t>(commandIndex),
+                passState.activeInstance));
+      };
   auto traceRenderPassProgress = [&](const char* stage,
                                      std::size_t commandIndex,
                                      bool hasClear) {
@@ -15488,113 +16377,28 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
                               : NULL_OBJECT_HANDLE};
     traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
                             clear.has_value());
-    std::array<RenderPassStoreProofLookaheadSource,
-               core::metalqueue::kMaxEncodeSessionSources>
-        storeProofLookaheadStorage{};
-    std::size_t storeProofLookaheadCount = 0;
-    auto appendStoreProofLookahead = [&](core::SourcePayloadView sourcePayload,
-                                         std::size_t firstCommandIndex,
-                                         std::size_t commandEndIndex,
-                                         std::span<const std::uint32_t>
-                                             commandOrder = {}) {
-      if (!sourcePayload.valid() ||
-          storeProofLookaheadCount >= storeProofLookaheadStorage.size()) {
-        return;
-      }
-      const std::size_t traversalCount =
-          commandOrder.empty() ? sourcePayload.commandCount()
-                               : commandOrder.size();
-      const std::size_t clampedFirst =
-          std::min(firstCommandIndex, traversalCount);
-      const std::size_t clampedEnd =
-          std::min(commandEndIndex, traversalCount);
-      storeProofLookaheadStorage[storeProofLookaheadCount++] =
-          RenderPassStoreProofLookaheadSource{
-              .payload = sourcePayload,
-              .commandOrder = commandOrder,
-              .firstCommandIndex = clampedFirst,
-              .commandEndIndex = clampedEnd,
-          };
-    };
-    auto firstCommandAfter = [](core::SourcePayloadView sourcePayload,
-                                std::size_t commandIndex) {
-      return commandIndex < sourcePayload.commandCount()
-          ? commandIndex + 1u
-          : sourcePayload.commandCount();
-    };
-    const bool selectedSessionLookaheadStartsHere =
-        !options.replayCommandPlanActive &&
-        !options.sessionLookaheadSources.empty() &&
-        (options.sessionSource.has_value()
-             ? readySlotSnapshotMatchesCompletionSource(
-                   options.sessionLookaheadSources.front(),
-                   *options.sessionSource,
-                   slotIndex,
-                   payload,
-                   sourceSeqId)
-             : readySlotSnapshotMatchesReplayRange(
-                   options.sessionLookaheadSources.front(),
-                   options.partitionSource,
-                   slotIndex,
-                   payload,
-                   sourceSeqId,
-                   replayRange));
-    bool selectedSessionLookaheadValid = selectedSessionLookaheadStartsHere;
-    if (selectedSessionLookaheadValid) {
-      for (const auto& source : options.sessionLookaheadSources) {
-        if (!source.payload.valid() ||
-            source.commandBegin > source.payload.commandCount() ||
-            source.commandCount >
-                source.payload.commandCount() - source.commandBegin) {
-          selectedSessionLookaheadValid = false;
-          break;
-        }
-      }
-      if (selectedSessionLookaheadValid) {
-        const auto& firstSource = options.sessionLookaheadSources.front();
-        const std::size_t firstSourceEnd =
-            firstSource.commandBegin + firstSource.commandCount;
-        const std::size_t nextCommand =
-            firstCommandAfter(firstSource.payload, lookaheadStartIndex);
-        selectedSessionLookaheadValid =
-            lookaheadStartIndex >= firstSource.commandBegin &&
-            lookaheadStartIndex < firstSourceEnd &&
-            nextCommand <= firstSourceEnd;
-      }
+    const auto storeProofLookahead = makeRenderPassStoreProofLookaheadPlan({
+        .slotIndex = slotIndex,
+        .payload = payload,
+        .sourceSeqId = sourceSeqId,
+        .replayRange = replayRange,
+        .sessionSource = options.sessionSource
+            ? &*options.sessionSource
+            : nullptr,
+        .partitionSource = options.partitionSource,
+        .retainedSources = options.sessionLookaheadSources,
+        .replayCommandPlanActive = options.replayCommandPlanActive,
+        .replayCommandOrder = options.replayCommandOrder,
+        .replayOrdinalByCommandIndex = replayOrdinalByCommandIndex,
+        .lookaheadStartIndex = lookaheadStartIndex,
+    });
+    const auto storeProofLookaheadSources = storeProofLookahead.view();
+    if (ctx.drawRecorder &&
+        ctx.drawRecorder->observeRenderPassStoreProofLookahead) {
+      ctx.drawRecorder->observeRenderPassStoreProofLookahead(
+          ctx.drawRecorder->userdata, lookaheadStartIndex,
+          storeProofLookaheadSources.size());
     }
-    if (selectedSessionLookaheadValid) {
-      for (std::size_t i = 0; i < options.sessionLookaheadSources.size(); ++i) {
-        const auto& source = options.sessionLookaheadSources[i];
-        const std::size_t sourceEnd = source.commandBegin + source.commandCount;
-        appendStoreProofLookahead(
-            source.payload,
-            i == 0u ? firstCommandAfter(source.payload, lookaheadStartIndex)
-                    : source.commandBegin,
-            sourceEnd);
-      }
-    }
-    if (storeProofLookaheadCount == 0 &&
-        useSourceLocalStoreProofLookahead(options.session != nullptr,
-                                         deferSessionFinalization)) {
-      if (!options.replayCommandPlanActive) {
-        appendStoreProofLookahead(
-            payload, firstCommandAfter(payload, lookaheadStartIndex),
-            payload.commandCount());
-      } else if (lookaheadStartIndex >= replayRange.commandBegin &&
-                 lookaheadStartIndex < replayRange.commandEnd) {
-        const std::size_t relative =
-            lookaheadStartIndex - replayRange.commandBegin;
-        const std::size_t replayOrdinal =
-            replayOrdinalByCommandIndex[relative];
-        appendStoreProofLookahead(
-            payload, replayOrdinal + 1u,
-            options.replayCommandOrder.size(),
-            options.replayCommandOrder);
-      }
-    }
-    const std::span<const RenderPassStoreProofLookaheadSource>
-        storeProofLookaheadSources(storeProofLookaheadStorage.data(),
-                                   storeProofLookaheadCount);
     // Portable passes can extend across consecutive compatible DrawRun
     // records. Let the store proof skip that same-pass prefix so it reasons
     // about the first use after the encoder actually closes. Tile-FFP can
@@ -15608,9 +16412,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         .allowSameAttachmentContinuation =
             tileFfpSelection.decision !=
             dxmt9::pipeline::TileFfpDecision::Tile,
+        .lookaheadMayHaveFutureSources = deferSessionFinalization,
+        .lookaheadInvalid = storeProofLookahead.invalid,
+        .lookaheadStorageTruncated = storeProofLookahead.storageTruncated,
     };
     RenderPassActionSummary renderPassActions{};
     if (suppressRecordedMetalCalls(ctx)) {
+      passState.lateStore = {};
+      if (ctx.drawRecorder->prepareLateRenderPassStoreState) {
+        ctx.drawRecorder->prepareLateRenderPassStoreState(
+            ctx.drawRecorder->userdata, passState.lateStore);
+        renderPassActions = passState.lateStore.summary;
+      }
       encoderState.activeRenderEncoder =
           WMT::Reference<WMT::RenderCommandEncoder>(
               ctx.drawRecorder->renderCommandEncoder);
@@ -15618,7 +16431,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       encoderState.activeRenderEncoder = beginRenderPassWithStoreProofLookahead(
           ctx, commandBuffer, drawState, clear, storeProofLookaheadSources,
           storeProofActivePass, sampleAttachment.span(), visibilityBuffer,
-          &renderPassActions);
+          &renderPassActions, &passState.lateStore);
     }
     if (auto* recorder = ctx.drawRecorder;
         recorder && recorder->beginRenderPass) {
@@ -15631,17 +16444,59 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     encoderState.hasActiveRender = static_cast<bool>(encoderState.activeRenderEncoder);
     if (!encoderState.hasActiveRender) {
       diagnosticsState.activeVisibilityScout.reset();
+      // No Metal encoder owns these provisional actions. Discard the copied
+      // ledger before a later command can resolve/account stale Unknown state.
+      passState.lateStore = {};
+      renderPassActions = {};
     }
     if (encoderState.hasActiveRender) {
-      const auto storeProof = renderPassStoreProofSummaryForLookahead(
-          ctx, storeProofLookaheadSources, *drawState.hot,
-          storeProofActivePass);
-      renderPassFrameTracker.noteStart(
-          makeRenderPassFrameKey(*drawState.hot),
-          estimateRenderPassAttachmentFootprintBytes(ctx, *drawState.hot),
-          storeProof,
-          encodeChunkSeqId,
-          openedRenderEncoderIndex);
+      for (std::size_t i = 0; i < passState.lateStore.count; ++i) {
+        const auto& attachment = passState.lateStore.attachments[i];
+        if (!attachment.unresolved()) {
+          continue;
+        }
+        const auto aspect = attachment.aspect == LateRenderPassStoreAspect::Color
+            ? perf::RenderPassLateStoreAspect::Color
+            : attachment.aspect == LateRenderPassStoreAspect::Depth
+                ? perf::RenderPassLateStoreAspect::Depth
+                : perf::RenderPassLateStoreAspect::Stencil;
+        perf::countRenderPassLateStoreUnknown(aspect);
+      }
+      passState.activeInstance = RenderPassInstanceToken{
+          .seqId = encodeChunkSeqId,
+          .encoderIndex = openedRenderEncoderIndex,
+      };
+      const ActiveSeedMergeTargetWitness* activeSeedMergeTarget = nullptr;
+      auto activeSeedMergeJoin = ActiveSeedMergeJoinRelation::NotTarget;
+      if (perf::enabled()) {
+        const auto storeProof = renderPassStoreProofSummaryForLookahead(
+            ctx, storeProofLookaheadSources, *drawState.hot,
+            storeProofActivePass);
+        activeSeedMergeTarget = activeSeedMergeAttributionEnabled
+            ? activeSeedMergeTicketAudit.currentTarget()
+            : nullptr;
+        const bool openedWithClear = renderPassActions.color0Clear != 0u ||
+            renderPassActions.depthClear != 0u ||
+            renderPassActions.stencilClear != 0u;
+        const std::uint64_t currentLoadBytes =
+            renderPassActions.colorLoadBytes +
+            renderPassActions.depthLoadBytes +
+            renderPassActions.stencilLoadBytes;
+        activeSeedMergeJoin = renderPassFrameTracker.noteStart(
+            makeRenderPassFrameKey(*drawState.hot),
+            estimateRenderPassAttachmentFootprintBytes(ctx, *drawState.hot),
+            storeProof, openedWithClear, currentLoadBytes,
+            encodeChunkSeqId,
+            openedRenderEncoderIndex,
+            options.replayWindow,
+            options.replayWindow.sourceIndex,
+            static_cast<std::uint32_t>(lookaheadStartIndex),
+            options.activeSeedMergeTicket,
+            activeSeedMergeTarget);
+      }
+      if (activeSeedMergeTarget) {
+        activeSeedMergeTicketAudit.consume(activeSeedMergeJoin);
+      }
       diagnosticsState.activeEncoderBreakdown.begin(
           encodeChunkSeqId, openedRenderEncoderIndex,
           drawState.hot->colorAttachments[0].handle.value,
@@ -15649,7 +16504,6 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       bindingState.activeStreamIbStaging.begin(
           stageStreamIbProbeRowMatches(&diagnosticsState.activeEncoderBreakdown));
       diagnosticsState.activeEncoderBreakdown.recordAttachmentMetadata(ctx.pool, *drawState.hot);
-      diagnosticsState.activeEncoderBreakdown.recordRenderPassActions(renderPassActions);
       ++diagnosticsState.renderEncoderIndex;
       recordRenderEncoderGpuAttachment(sampleAttachment);
     } else {
@@ -15702,10 +16556,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     diagnosticsState.activeColorAttachmentDump = {};
     diagnosticsState.activeDepthAttachmentDump = {};
     diagnosticsState.activeDrawTextureDumps.clear();
-    diagnosticsState.activeRenderEncoderSeq = encodeChunkSeqId;
-    diagnosticsState.activeRenderEncoderIndex = openedRenderEncoderIndex;
-    if (drawTextureDumpPassMatches(diagnosticsState.activeRenderEncoderSeq,
-                                   diagnosticsState.activeRenderEncoderIndex)) {
+    if (drawTextureDumpPassMatches(passState.activeInstance.seqId,
+                                   passState.activeInstance.encoderIndex)) {
       diagnosticsState.activeDrawTextureDumps.reserve(
           drawTextureDumpConfig().handles.size());
     }
@@ -15939,21 +16791,31 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // from an earlier flush is not a new dependency for this command buffer;
   // waiting for it again would force-close a carried render encoder for no
   // resource-ordering benefit.
-  traceEncodeStage("before-initializer-flush");
-  const auto initializerFlush = ctx.queue.flushInitializerUploads();
-  traceEncodeStage("after-initializer-flush");
-  if (initializerFlush.didFlush &&
-      initializerFlush.event &&
-      initializerFlush.value > 0) {
-    if (encoderState.activeRenderEncoder || encoderState.activeBlitEncoder || passState.pendingClear.has_value()) {
-      traceEncodeStage("before-initializer-wait-finalize-session");
-      finalizeEncodeChunkSessionForReturn();
-      traceEncodeStage("after-initializer-wait-finalize-session");
+  // A pre-registered transaction has already proved that every represented
+  // source is initializer-independent and that no upload was pending at its
+  // queue preflight. Flush once before its first Metal effect. Uploads arriving
+  // later belong to younger work outside the immutable transaction and must not
+  // manufacture a pass boundary between its fragments.
+  if (firstTransactionFragment) {
+    if (ctx.drawRecorder && ctx.drawRecorder->beginTransactionPreamble) {
+      ctx.drawRecorder->beginTransactionPreamble(ctx.drawRecorder->userdata);
     }
-    traceEncodeStage("before-initializer-wait");
-    commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
-    traceEncodeStage("after-initializer-wait");
-    commandBufferHasWork = true;
+    traceEncodeStage("before-initializer-flush");
+    const auto initializerFlush = ctx.queue.flushInitializerUploads();
+    traceEncodeStage("after-initializer-flush");
+    if (initializerFlush.didFlush &&
+        initializerFlush.event &&
+        initializerFlush.value > 0) {
+      if (encoderState.activeRenderEncoder || encoderState.activeBlitEncoder || passState.pendingClear.has_value()) {
+        traceEncodeStage("before-initializer-wait-finalize-session");
+        finalizeEncodeChunkSessionForReturn();
+        traceEncodeStage("after-initializer-wait-finalize-session");
+      }
+      traceEncodeStage("before-initializer-wait");
+      commandBuffer.encodeWaitForEvent(initializerFlush.event, initializerFlush.value);
+      traceEncodeStage("after-initializer-wait");
+      commandBufferHasWork = true;
+    }
   }
 
   // R-BACK-2.29..2.32 — mid-chunk MTLCommandBuffer split: open the next
@@ -15980,10 +16842,18 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         !commandBufferHasWork) {
       return;
     }
-    auto next = ctx.queue.newCommandBuffer();
+    auto* recorder = ctx.drawRecorder;
+    const bool testSplit = recorder && recorder->splitCommandBufferForTest;
+    auto next = testSplit
+        ? recorder->splitCommandBufferForTest(recorder->userdata,
+                                              WMT::CommandBuffer{
+                                                  commandBuffer.handle})
+        : ctx.queue.newCommandBuffer();
     if (!next) return;
     const auto commitStarted = std::chrono::steady_clock::now();
-    commandBuffer.commit();
+    if (!testSplit) {
+      commandBuffer.commit();
+    }
     perf::countCommandBufferCommitCpuTime(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - commitStarted).count()));
@@ -16008,7 +16878,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           : midChunkCommitPolicy();
   const std::uint32_t splitNRecords = midChunkCommitNRecords();
   const std::uint32_t splitChainCap = midChunkCommitCapPerRenderPass();
-  std::uint32_t recordsSinceLastSplit = 0;
+  std::uint32_t recordsSinceLastSplit =
+      session.completion.recordsSinceLastSplit;
   // R-BACK-2.33 — splitMidChunkUnderCap wraps splitMidChunk so callers
   // do not need to repeat the cap check at every split site. cap=0
   // disables the cap (unbounded chain) for diagnostic comparison.
@@ -16058,6 +16929,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     }
     traceEncodeCommand("drawrun.after-command-uniform", commandIndex,
                        Kind::DrawRun, command);
+    if (activeSeedMergeAttributionEnabled) {
+      activeSeedMergeTicketAudit.beginCommand(
+          options.replayWindow.sourceIndex,
+          static_cast<std::uint32_t>(commandIndex));
+    }
     auto stateView = command.drawState;
     stateView.uniforms = commandUniformPayload;
     const auto& hot = *stateView.hot;
@@ -16138,6 +17014,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             hazardDetected,
             tileResplit);
         if (entryDecision != RenderPassEntryDecision::ContinueActive) {
+          if (encoderState.hasActiveRender) {
+            lifecycle.resolveLateStoreForDraw(stateView);
+          }
           if (entryDecision ==
               RenderPassEntryDecision::SplitRenderTargetChange) {
             // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
@@ -16165,6 +17044,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           DXMT_ASSERT(encoderState.hasActiveRender);
           DXMT_ASSERT(passState.activeKey == drawKey);
           DXMT_ASSERT(!passState.activeWriteHazard.exactOverlaps(drawReadHazard));
+          consumeActiveSeedMergeContinuation(commandIndex);
         }
       }
     } else {
@@ -16185,6 +17065,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           hazardDetected,
           tileResplit);
       if (entryDecision != RenderPassEntryDecision::ContinueActive) {
+        if (encoderState.hasActiveRender) {
+          lifecycle.resolveLateStoreForDraw(stateView);
+        }
         if (entryDecision ==
             RenderPassEntryDecision::SplitRenderTargetChange) {
           // TLA+: EncoderLifecycle / RenderTargetChange(newRT)
@@ -16211,9 +17094,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         DXMT_ASSERT(encoderState.hasActiveRender);
         DXMT_ASSERT(passState.activeKey == drawKey);
         DXMT_ASSERT(!passState.activeWriteHazard.exactOverlaps(drawReadHazard));
+        consumeActiveSeedMergeContinuation(commandIndex);
       }
     }
-    if (encoderState.hasActiveRender && passState.activeKey == drawKey) {
+    if (perf::enabled() && encoderState.hasActiveRender &&
+        passState.activeKey == drawKey) {
       renderPassFrameTracker.noteDrawRead(*stateView.hot);
     }
     // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
@@ -16599,8 +17484,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       maybeCollectDrawTextureDump(diagnosticsState.activeDrawTextureDumps,
                                   ctx.pool,
                                   drawStateView,
-                                  diagnosticsState.activeRenderEncoderSeq,
-                                  diagnosticsState.activeRenderEncoderIndex);
+                                  passState.activeInstance.seqId,
+                                  passState.activeInstance.encoderIndex);
       const u64 encoderDrawIndexBeforeEncode =
           diagnosticsState.activeEncoderBreakdown.stats.drawCalls;
       const u64 drawTexture0 = drawStateView.hot->textures[0]
@@ -16723,6 +17608,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           mergeTelemetry.otherRelaxationSetPairs);
     }
     traceEncodeCommand("drawrun.end", commandIndex, Kind::DrawRun, command);
+    if (activeSeedMergeAttributionEnabled) {
+      activeSeedMergeTicketAudit.endCommand();
+    }
     commandBufferHasWork = true;
   };
 
@@ -16767,6 +17655,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::Clear: {
         if (!source.clear.has_value()) break;
         const auto& clearView = *source.clear;
+        lifecycle.resolveLateStoreForClear(clearView);
         flushRender(perf::EncoderSplitReason::ClearBarrier);
         flushBlit();
         flushPendingClear();
@@ -16802,6 +17691,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::SurfaceCopy: {
         if (!command.surfaceCopy) break;
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Copy);
         flushRender(perf::EncoderSplitReason::SurfaceCopy);
         assertHelperEncoderPrecondition();
         // R-BACK-15.5: destination handle's contents are overwritten;
@@ -16824,6 +17715,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::StretchRect: {
         if (!command.stretchRect) break;
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Copy);
         flushRender(perf::EncoderSplitReason::StretchRect);
         assertHelperEncoderPrecondition();
         // R-BACK-15.5
@@ -16845,6 +17738,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::Readback: {
         if (!command.readback) break;
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Readback);
         flushRender(perf::EncoderSplitReason::Readback);
         assertHelperEncoderPrecondition();
         // R-BACK-15.5: destination receives content; source is unaffected
@@ -16857,6 +17752,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::DepthResolve: {
         if (!command.depthResolve) break;
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Resolve);
         // RESZ depth resolve is the DEPTH twin of the color StretchRect
         // resolve — reuse its split-reason bucket rather than expand the
         // perf-counter table for a rarely-hit op.
@@ -16885,6 +17782,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       case Kind::ColorFill: {
         if (!command.colorFill) break;
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Copy);
         flushRender(perf::EncoderSplitReason::ColorFill);
         // TLA+: EncoderLifecycle / BeginRender(rt)
         // ColorFill owns a short-lived helper render encoder and ends it before returning.
@@ -16925,6 +17824,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           }
         }
         flushPendingClear();
+        lifecycle.resolveLateStoreForStoreCause(
+            perf::RenderPassLateStoreResolutionCause::Present);
         flushRender(perf::EncoderSplitReason::Present);
         flushBlit();
         // Resolve the queue-local Presenter binding once per Present
@@ -16963,6 +17864,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             });
           }
         }
+        // Resolve the final physical close before the frame snapshot so the
+        // close-ledger conservation equation is frame-local.
+        if (perf::enabled()) {
+          renderPassFrameTracker.finishCloseLedgerAtPresent();
+        }
         // Per-frame snapshot mode (DXMT9_PERF_FRAME_SAMPLING=1). Fires
         // exactly once per Present packet on the encode thread, so it
         // does not make Present synchronous from the app side.
@@ -16974,7 +17880,9 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
           perf::emitFrameDelta(frameId++, prevSnapshot, curr);
           prevSnapshot = curr;
         }
-        renderPassFrameTracker.reset();
+        if (perf::enabled()) {
+          renderPassFrameTracker.reset();
+        }
         // M3 — Instruments "frame" interval. End the frame that just
         // got a Present commit, then immediately begin the next one so
         // any encode work on this thread before the next Present is
@@ -17076,19 +17984,42 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     finalizeEncodeChunkSessionForReturn();
   }
 
+  // A carried EncodeSession owns the tail chain across source and fragment
+  // calls. Preserve both split-policy inputs after finalization has flushed
+  // any deferred clear/render work.
+  session.completion.tailCommandBufferHasWork = commandBufferHasWork;
+  session.completion.recordsSinceLastSplit = recordsSinceLastSplit;
+
   traceEncodeStage("before-record-chunk-sub-cb-count");
   // R-BACK-2.29..2.32 — fold this encode call's sub-CB segment length into
   // chunkSubCBCountMax. A carried EncodeSession enforces the cap across
   // source boundaries with session.completion.committedSubCommandBuffers, but the record
   // still publishes only the segment length added by this call. Queue-side
   // merge then subtracts the shared tail CB once when joining segments.
-  if (commandBufferHasWork || perChunkSubCBCount > 0) {
-    perf::recordChunkSubCBCount(perChunkSubCBCount + 1);
+  std::uint64_t sourceCommittedSubCommandBuffers = perChunkSubCBCount;
+  const bool lastSourceFragment =
+      !options.preRegisteredFragment.has_value() ||
+      options.preRegisteredFragment->lastSourceFragment();
+  if (options.preRegisteredSourceAccumulator) {
+    options.preRegisteredSourceAccumulator->committedSubCommandBuffers +=
+        perChunkSubCBCount;
+    sourceCommittedSubCommandBuffers =
+        options.preRegisteredSourceAccumulator->committedSubCommandBuffers;
+  }
+  if (lastSourceFragment &&
+      (commandBufferHasWork || sourceCommittedSubCommandBuffers > 0)) {
+    perf::recordChunkSubCBCount(sourceCommittedSubCommandBuffers + 1);
+  }
+  if (lastSourceFragment && ctx.drawRecorder &&
+      ctx.drawRecorder->endSourceFragmentEpilogue) {
+    ctx.drawRecorder->endSourceFragmentEpilogue(
+        ctx.drawRecorder->userdata, sourceSeqId,
+        sourceCommittedSubCommandBuffers);
   }
   traceEncodeStage("after-record-chunk-sub-cb-count");
 
   const u64 seqId = sourceSeqId;
-  if (argbufPayloadDeltaSourcePerf) {
+  if (argbufPayloadDeltaSourcePerf && lastSourceFragment) {
     traceEncodeStage("before-argbuf-payload-delta-source-emit");
     argbufPayloadDeltaSourceAttribution.emit(seqId);
     traceEncodeStage("after-argbuf-payload-delta-source-emit");

@@ -13,8 +13,11 @@
 //     Arena/Legacy/Arena prefix through a single submission;
 //   * the production runCpuReadySessionEncodeLoop consumes multi-Arena and
 //     mixed prefixes, carries one pending session, and releases it at both a
-//     deterministic shutdown drain and a real compatibility-writer capacity
-//     fence.
+//     deterministic shutdown drain and a fixed session-cap fence while a live
+//     compatibility producer still has room to publish the cap candidate;
+//   * a standalone Clear+Present followed by a Direct draw leaves the
+//     production coordinator in the exact denied-lease wait, then resumes on
+//     both GPU reclaim and inline reclaim without writer pressure or shutdown.
 
 #include "device_c_common.hpp"
 #include "device_c_cpu_ready_plan.hpp"
@@ -28,11 +31,13 @@
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
 #include "../../../src/dxmt9/render/backend_interface.hpp"
+#include "../../../src/dxmt9/render/framegraph_backend.hpp"
 #include "../../../src/dxmt9/render/open_cb_carrier.hpp"
 
 #include <algorithm>
@@ -81,9 +86,58 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.cpuReadyTape_.residentCount();
   }
 
+  static core::CpuReadyTape::Stats tapeStats(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.stats();
+  }
+
+  static core::CpuReadyTape::LeaseAcquisitionCapacitySnapshot
+  leaseAcquisitionCapacitySnapshot(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
+  }
+
   static std::uint64_t completedSeqId(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.completedSeqId_;
+  }
+
+  static std::size_t capacityWaiterCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyCapacityWaiterCount_;
+  }
+
+  static std::uint64_t capacityProgressGeneration(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.queueLifecycle_.cpuReadyCapacityProgressGeneration();
+  }
+
+  static bool readySourceIsArena(
+      CommandQueue& queue,
+      const core::metalqueue::QueueCompletionSource& source) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.payloadKind(
+               source.source.id, source.source.storage,
+               core::CpuReadyTape::State::Ready) ==
+        core::CpuReadyTape::PayloadKind::Arena;
+  }
+
+  static bool sourceIsTentative(
+      CommandQueue& queue,
+      const core::metalqueue::QueueCompletionSource& source) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.cpuReadyTape_.state(source.source.id,
+                                     source.source.storage) ==
+        core::CpuReadyTape::State::TentativeRepresented;
+  }
+
+  static bool stopped(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.stop_;
+  }
+
+  static bool writerPressureActive(CommandQueue& queue) {
+    return queue.queueLifecycle_.producerWriterPressureActive();
   }
 
   static std::vector<core::metalqueue::QueueCompletionSource>
@@ -129,6 +183,12 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.backend_ = std::move(backend);
   }
 
+  static void installDrawRecorder(
+      CommandQueue& queue, encoders::EncodeDrawRecorder* recorder) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyDrawRecorder_ = recorder;
+  }
+
   static void stopAndRunCpuReadySessionEncodeLoop(CommandQueue& queue) {
     {
       std::lock_guard lock(queue.mutex_);
@@ -149,6 +209,35 @@ struct CommandQueueArenaLeaseTestAccess {
   static void restoreNextTentativePreflightAndReturn(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyRestoreNextCpuReadySessionPreflight_ = true;
+  }
+
+  static void pauseAfterStaleMultiSourcePlannerRestore(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = true;
+  }
+
+  static bool pausedAfterStaleMultiSourcePlannerRestore(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.testOnlyPausedAfterStaleMultiSourcePlannerRestore_;
+  }
+
+  static void resumeAfterStaleMultiSourcePlannerRestore(
+      CommandQueue& queue) {
+    {
+      std::lock_guard lock(queue.mutex_);
+      queue.testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
+    }
+    queue.sessionReleaseCv_.notify_all();
+  }
+
+  static void overrideLiveActiveRenderInstance(
+      CommandQueue& queue, std::uint64_t seqId,
+      std::uint64_t encoderIndex) {
+    std::lock_guard lock(queue.mutex_);
+    queue.testOnlyOverrideLiveActiveRenderInstance_ = true;
+    queue.testOnlyLiveActiveRenderSeqId_ = seqId;
+    queue.testOnlyLiveActiveRenderEncoderIndex_ = encoderIndex;
   }
 
   static void pauseAfterNextSessionReleaseAck(CommandQueue& queue) {
@@ -224,7 +313,10 @@ struct CommandQueueArenaLeaseTestAccess {
     for (const auto& source : sources) {
       if (queue.cpuReadyTape_.state(source.source.id,
                                     source.source.storage) !=
-          core::CpuReadyTape::State::GPU) {
+              core::CpuReadyTape::State::GPU &&
+          !queue.queueLifecycle_.postEncodeReceiptForTest(
+              source.seqId,
+              core::metalqueue::PostEncodeReceiptState::Submitted)) {
         return false;
       }
     }
@@ -233,15 +325,31 @@ struct CommandQueueArenaLeaseTestAccess {
 
   static std::size_t completeAndFinish(
       CommandQueue& queue,
-      std::span<const core::metalqueue::QueueCompletionSource> sources) {
+      std::span<const core::metalqueue::QueueCompletionSource> sources,
+      std::function<void()> completionCallback = {},
+      std::shared_ptr<void> retainedPayload = {}) {
     using namespace core::metalqueue;
-    QueueLifecycleController::PendingCompletion pending{};
-    pending.slotIndex = sources.back().slotIndex;
-    pending.seqId = sources.back().seqId;
-    for (const auto& source : sources) {
-      if (!pending.fixedCompletionSources.append(source)) {
-        return 0;
+    std::vector<QueueCompletionSource> completionSources(
+        sources.begin(), sources.end());
+    for (auto& source : completionSources) {
+      const auto receipt = queue.queueLifecycle_.postEncodeReceiptForTest(
+          source.seqId, PostEncodeReceiptState::Submitted);
+      if (receipt) {
+        source.source = {};
+        source.receipt = *receipt;
       }
+    }
+    QueueLifecycleController::PendingCompletion pending{};
+    pending.slotIndex = completionSources.back().slotIndex;
+    pending.seqId = completionSources.back().seqId;
+    if (!pending.assignFixedCompletionSources(completionSources)) {
+      return 0;
+    }
+    if (completionCallback) {
+      pending.completionCallbacks.push_back(std::move(completionCallback));
+    }
+    if (retainedPayload) {
+      pending.retainedPayloads.push_back(std::move(retainedPayload));
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
     bool completionStop = false;
@@ -264,6 +372,52 @@ struct CommandQueueArenaLeaseTestAccess {
   static bool publishLegacyWritingSlot(CommandQueue& queue) {
     std::unique_lock lock(queue.mutex_);
     return queue.queueLifecycle_.commitCurrentChunk(lock, kMaxQueuedChunks);
+  }
+
+  static bool publishLegacyWritingSlotWithAdmissionPressure(
+      CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    queue.arenaAdmissionWaiterCount_.store(1u, std::memory_order_release);
+    return queue.queueLifecycle_.commitCurrentChunk(lock, kMaxQueuedChunks);
+  }
+
+  static void clearSyntheticAdmissionPressure(CommandQueue& queue) {
+    queue.arenaAdmissionWaiterCount_.store(0u, std::memory_order_release);
+    queue.encodeCv_.notify_all();
+  }
+
+  static bool publishLegacyClearPresent(CommandQueue& queue) {
+    queue.submitClear(core::ClearDesc{});
+    {
+      std::unique_lock lock(queue.mutex_);
+      queue.queueLifecycle_.presentAndCommit(
+          lock, kMaxQueuedChunks, core::SwapDesc{}, core::Handle{0x92});
+    }
+    const auto ready = snapshotReadyCompletionSources(queue);
+    return !ready.empty() && ready.back().hasPresent;
+  }
+
+  static std::optional<core::metalqueue::ReadySlotSnapshot>
+  representReadyHead(CommandQueue& queue) {
+    core::metalqueue::ReadySlotSnapshot source{};
+    std::unique_lock lock(queue.mutex_);
+    if (!queue.queueLifecycle_.dequeueReadySlot(lock, source)) {
+      return std::nullopt;
+    }
+    return source;
+  }
+
+  static bool completeInline(
+      CommandQueue& queue,
+      const core::metalqueue::ReadySlotSnapshot& source) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.queueLifecycle_.completeInlineChunk(
+        lock, source.slotIndex, source.seqId);
+  }
+
+  static bool finishOne(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.queueLifecycle_.runFinishIteration(lock);
   }
 
   // Dequeues one maximal source-kind-neutral FIFO prefix, retains the whole
@@ -323,10 +477,10 @@ struct CommandQueueArenaLeaseTestAccess {
     core::metalqueue::QueueLifecycleController::PendingCompletion pending{};
     pending.slotIndex = retained[result.retained - 1].slotIndex;
     pending.seqId = retained[result.retained - 1].seqId;
-    for (std::size_t i = 0; i < result.retained; ++i) {
-      if (!pending.fixedCompletionSources.append(retained[i])) {
-        return result;
-      }
+    if (!pending.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(retained.data(),
+                                                    result.retained))) {
+      return result;
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
     bool completionStop = false;
@@ -360,6 +514,12 @@ using namespace dxmt9::core;
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
+
+template <typename WmtType>
+WMT::Reference<WmtType> retainedToken(const char* label) {
+  auto owner = WMT::MakeString(label, WMTUTF8StringEncoding);
+  return WMT::Reference<WmtType>(WmtType{owner.handle});
+}
 
 void check(bool condition, std::string_view message) {
   if (!condition) {
@@ -461,6 +621,16 @@ RecordSpec clearRecord() {
   };
 }
 
+RecordSpec stateOnlyRecord() {
+  D9CCommandChunkWireDrawHeaderV2 draw{};
+  draw.sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2);
+  draw.sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeaderV2);
+  return {
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = bytesOf(draw),
+  };
+}
+
 RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
                       std::uint32_t absoluteHandleIndex) {
   D9CCommandChunkWireDrawHeaderV2 draw{
@@ -542,7 +712,9 @@ dxmt9::d3d9::RawCommandChunk makeRaw(
 
 struct SessionJoinDevice final : dxmt9::Device {
   SessionJoinDevice()
-      : queue_(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_) {}
+      : queue_(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_,
+               retainedToken<WMT::CommandQueue>(
+                   "session-join-production-queue-token")) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return queue_; }
@@ -614,12 +786,227 @@ struct RuntimeFixture {
     check(hr == D3D_OK, "arena clear source must replay and publish");
   }
 
+  void publishArenaClearPages(std::uint64_t rawOrdinal,
+                              std::size_t pageCount) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1;
+    capacity.clearRecords = 1;
+    capacity.drawPayloadBytes = (pageCount - 1u) * 4096u;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value() && segment->pageCount == pageCount,
+          "sized arena clear segment must match its exact page claim");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value() && layout->pageCount == pageCount,
+          "sized arena clear source must match its exact page claim");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "sized arena clear admission must succeed");
+    auto lease = std::move(*begin.lease);
+    routing->queue_.submitClear(ClearDesc{});
+    check(lease.publish(), "sized arena clear source must publish directly");
+  }
+
+  void publishArenaDraw(std::uint64_t rawOrdinal) {
+    auto buffer = device->CreateBuffer(BufferDesc{
+        .size = 256u,
+        .pool = Pool::Default,
+        .usage = UsageVertexBuffer,
+    });
+    check(buffer != nullptr, "arena draw buffer must construct");
+    D9CBuffer wireBuffer(buffer, cDevice.get());
+    const std::array records{drawRecord(wireBuffer.wireIdentity, 0u)};
+    auto raw = makeRaw(makeWireFixture(records), rawOrdinal,
+                       cDevice->wireObjects);
+    const auto hr = dxmt9::d3d9::replayRawChunk(cDevice.get(), raw);
+    check(hr == D3D_OK, "arena Direct draw must replay and publish");
+  }
+
+  void replayStateOnly(std::uint64_t rawOrdinal) {
+    const std::array records{stateOnlyRecord()};
+    auto raw = makeRaw(makeWireFixture(records), rawOrdinal);
+    const auto hr = dxmt9::d3d9::replayRawChunk(cDevice.get(), raw);
+    check(hr == D3D_OK,
+          "StateOnly raw entry must replay without publishing a source");
+  }
+
   void publishLegacyClear() {
     routing->queue_.submitClear(ClearDesc{});
     check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
               routing->queue_),
           "legacy writing slot must publish through the compatibility lane");
   }
+
+  void publishLegacyTargetDraw(std::uint64_t target) {
+    publishTargetDraw(target);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
+              routing->queue_),
+          "legacy target draw must publish through the Tape lane");
+  }
+
+  void beginLegacyTargetDraw(std::uint64_t target) {
+    publishTargetDraw(target);
+  }
+
+  void publishArenaTargetDraw(std::uint64_t rawOrdinal,
+                              std::uint64_t target) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1;
+    capacity.drawHotStates = 1;
+    capacity.drawShaderLayouts = 1;
+    capacity.drawDebugSnapshots = 1;
+    capacity.drawPsoSubviews = 1;
+    capacity.drawUniformFixedPayloads = 1;
+    capacity.drawUniformVertexConstants = 1;
+    capacity.drawUniformVertexConstantBytes =
+        sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = 1;
+    capacity.drawUniformPixelConstantBytes = sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = 1;
+    capacity.drawParams = 1;
+    capacity.drawPayloadBytes = 4096;
+    capacity.drawRunRecords = 1;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "arena target segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "arena target source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "arena target source admission must succeed");
+    auto lease = std::move(*begin.lease);
+    publishTargetDraw(target);
+    check(lease.publish(), "arena target source must publish directly");
+  }
+
+  void publishArenaMovedHeadReturn(std::uint64_t rawOrdinal,
+                                   std::uint64_t targetA,
+                                   std::uint64_t targetB) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 3;
+    capacity.drawHotStates = 3;
+    capacity.drawShaderLayouts = 3;
+    capacity.drawDebugSnapshots = 3;
+    capacity.drawPsoSubviews = 3;
+    capacity.drawUniformFixedPayloads = 3;
+    capacity.drawUniformVertexConstants = 3;
+    capacity.drawUniformVertexConstantBytes =
+        3 * sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = 3;
+    capacity.drawUniformPixelConstantBytes =
+        3 * sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = 3;
+    capacity.drawParams = 3;
+    capacity.drawPayloadBytes = 3 * 4096;
+    capacity.drawRunRecords = 3;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "moved-head arena segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "moved-head arena source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "moved-head arena admission must succeed");
+    auto lease = std::move(*begin.lease);
+    publishTargetDraw(targetA);
+    publishTargetDraw(targetB);
+    publishTargetDraw(targetA, targetB);
+    check(lease.publish(), "moved-head arena source must publish directly");
+  }
+
+  void publishArenaTargetPair(std::uint64_t rawOrdinal,
+                              std::uint64_t firstTarget,
+                              std::uint64_t secondTarget) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 2;
+    capacity.drawHotStates = 2;
+    capacity.drawShaderLayouts = 2;
+    capacity.drawDebugSnapshots = 2;
+    capacity.drawPsoSubviews = 2;
+    capacity.drawUniformFixedPayloads = 2;
+    capacity.drawUniformVertexConstants = 2;
+    capacity.drawUniformVertexConstantBytes =
+        2 * sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = 2;
+    capacity.drawUniformPixelConstantBytes =
+        2 * sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = 2;
+    capacity.drawParams = 2;
+    capacity.drawPayloadBytes = 2 * 4096;
+    capacity.drawRunRecords = 2;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "arena pair segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "arena pair source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "arena pair admission must succeed");
+    auto lease = std::move(*begin.lease);
+    publishTargetDraw(firstTarget);
+    publishTargetDraw(secondTarget);
+    check(lease.publish(), "arena pair source must publish directly");
+  }
+
+  void publishArenaTargetSequence(
+      std::uint64_t rawOrdinal,
+      std::span<const std::uint64_t> targets) {
+    check(!targets.empty(), "arena target sequence must not be empty");
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = targets.size();
+    capacity.drawHotStates = targets.size();
+    capacity.drawShaderLayouts = targets.size();
+    capacity.drawDebugSnapshots = targets.size();
+    capacity.drawPsoSubviews = targets.size();
+    capacity.drawUniformFixedPayloads = targets.size();
+    capacity.drawUniformVertexConstants = targets.size();
+    capacity.drawUniformVertexConstantBytes =
+        targets.size() * sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = targets.size();
+    capacity.drawUniformPixelConstantBytes =
+        targets.size() * sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = targets.size();
+    capacity.drawParams = targets.size();
+    capacity.drawPayloadBytes = targets.size() * 4096u;
+    capacity.drawRunRecords = targets.size();
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "arena sequence segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "arena sequence source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "arena sequence source admission must succeed");
+    auto lease = std::move(*begin.lease);
+    for (const auto target : targets) {
+      publishTargetDraw(target);
+    }
+    check(lease.publish(), "arena sequence source must publish directly");
+  }
+
+ private:
+  void publishTargetDraw(std::uint64_t target,
+                         std::uint64_t sampledTarget = 0) {
+    CanonicalDrawState state{};
+    state.hot.colorAttachments[0].handle = Handle{target};
+    state.hot.colorAttachments[0].sampleCount = 1;
+    state.hot.renderTargetMask = 1u;
+    if (sampledTarget != 0) {
+      state.hot.textures[0] = Handle{sampledTarget};
+      state.hot.textureMask = 1u;
+    }
+    state.hot.streamStrides[0] = 4u;
+    state.shaderLayout.vertexDecl.streams[0].stride = 4u;
+    state.shaderLayout.vertexShader.kind =
+        ShaderRef::Kind::Bytecode;
+    state.shaderLayout.pixelShader.kind =
+        ShaderRef::Kind::Bytecode;
+    DrawParam draw{};
+    draw.primitiveType = PrimitiveType::TriangleList;
+    draw.primitiveCount = 1;
+    draw.instanceCount = 1;
+    const std::array draws{draw};
+    const std::array<DrawParamPayloadView, 1> payloads{};
+    routing->queue_.submitDrawRun(
+        std::move(state), DrawUniformPayload{}, draws, payloads);
+  }
+
+ public:
 
   SessionJoinDevice* routing = nullptr;
   dxmt9::com::IDirect3D9Ex* factory = nullptr;
@@ -638,7 +1025,40 @@ struct ProductionLoopBackendCall {
       sessionSource;
   dxmt9::core::CpuReadyTape::SourceRef partitionSource{};
   std::size_t lookaheadCount = 0;
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource>
+      lookaheadSources;
+  dxmt9::encoders::ReplayWindowProvenance replayWindow{};
+  dxmt9::encoders::ActiveSeedMergeTicketContext activeSeedMergeTicket{};
+  std::vector<dxmt9::encoders::ActiveSeedMergeTargetWitness>
+      activeSeedMergeTargets;
+  obj_handle_t commandBuffer = NULL_OBJECT_HANDLE;
+  bool createdCommandBuffer = false;
+  obj_handle_t returnedCommandBuffer = NULL_OBJECT_HANDLE;
+  std::uint64_t returnedCommandBufferChainLength = 0;
+  std::size_t renderPassBeginsAfter = 0;
+  std::size_t renderPassEndsAfter = 0;
+  std::optional<dxmt9::encoders::PreRegisteredEncodeChunkFragment> fragment;
+  bool skipBackendPlanning = false;
 };
+
+std::vector<dxmt9::core::metalqueue::QueueCompletionSource>
+snapshotLookaheadSources(
+    std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
+        sources) {
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> snapshots;
+  snapshots.reserve(sources.size());
+  for (const auto& source : sources) {
+    snapshots.push_back(dxmt9::core::metalqueue::QueueCompletionSource{
+        .source = source.source,
+        .slotIndex = source.slotIndex,
+        .seqId = source.seqId,
+        .hasPresent = source.hasPresent,
+        .commandBegin = source.commandBegin,
+        .commandCount = source.commandCount,
+    });
+  }
+  return snapshots;
+}
 
 struct ProductionLoopBackendState {
   std::vector<ProductionLoopBackendCall> calls;
@@ -692,6 +1112,17 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         .sessionSource = options.sessionSource,
         .partitionSource = options.partitionSource,
         .lookaheadCount = options.sessionLookaheadSources.size(),
+        .lookaheadSources =
+            snapshotLookaheadSources(options.sessionLookaheadSources),
+        .replayWindow = options.replayWindow,
+        .activeSeedMergeTicket = options.activeSeedMergeTicket,
+        .activeSeedMergeTargets = std::vector<
+            dxmt9::encoders::ActiveSeedMergeTargetWitness>(
+                options.activeSeedMergeTargets.begin(),
+                options.activeSeedMergeTargets.end()),
+        .commandBuffer = options.commandBuffer.handle,
+        .fragment = options.preRegisteredFragment,
+        .skipBackendPlanning = options.skipBackendPlanning,
     });
     state_->observedBackendCalls.store(state_->calls.size(),
                                        std::memory_order_release);
@@ -712,6 +1143,270 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
   }
 
   std::shared_ptr<ProductionLoopBackendState> state_;
+};
+
+struct PlannedProductionBackendState {
+  std::vector<ProductionLoopBackendCall> calls;
+  std::vector<std::uint64_t> encodedSeqIds;
+  std::vector<std::size_t> encodedCommandIndices;
+  std::vector<std::uint64_t> sourcePreambleSeqIds;
+  std::vector<std::uint64_t> sourceEpilogueSeqIds;
+  std::atomic<std::size_t> observedCalls{0};
+  std::atomic<bool> firstRecordPostCommitRan{false};
+  std::atomic<std::size_t> backendCallsAtFirstRecordSubmit{0};
+  std::uint64_t currentSeqId = 0;
+  std::size_t plannerCalls = 0;
+  std::vector<dxmt9::encoders::EncodeSessionReplayFrontierState>
+      plannerFrontierStates;
+  std::vector<std::size_t> plannerSourceCounts;
+  std::size_t compositeObserverCalls = 0;
+  std::vector<std::uint64_t> compositeObservedSeqIds;
+  std::size_t renderPassBegins = 0;
+  std::size_t renderPassEnds = 0;
+  std::vector<std::size_t> storeProofLookaheadCounts;
+  std::size_t transactionPreambles = 0;
+  std::size_t midChunkSplits = 0;
+  bool observeFirstRecordSubmit = false;
+  bool holdFirstReturn = false;
+  bool holdSecondReturn = false;
+  bool holdFirstPlanner = false;
+  bool holdFirstObserver = false;
+  bool disableMidChunkCommits = false;
+  std::optional<dxmt9::framegraph::MultiSourceReplayPlan> forcedPlan;
+  std::atomic<bool> firstCallEncoded{false};
+  std::atomic<bool> releaseFirstReturn{false};
+  std::atomic<bool> secondCallEncoded{false};
+  std::atomic<bool> releaseSecondReturn{false};
+  std::atomic<bool> firstPlannerEntered{false};
+  std::atomic<bool> releaseFirstPlanner{false};
+  std::atomic<bool> firstObserverEntered{false};
+  std::atomic<bool> releaseFirstObserver{false};
+  std::atomic<std::size_t> completedCalls{0};
+};
+
+void plannedBeginSourceFragmentPreamble(void* userdata,
+                                        std::uint64_t seqId) {
+  static_cast<PlannedProductionBackendState*>(userdata)
+      ->sourcePreambleSeqIds.push_back(seqId);
+}
+
+void plannedBeginTransactionPreamble(void* userdata) {
+  ++static_cast<PlannedProductionBackendState*>(userdata)
+        ->transactionPreambles;
+}
+
+void plannedEndSourceFragmentEpilogue(void* userdata,
+                                      std::uint64_t seqId,
+                                      std::uint64_t) {
+  static_cast<PlannedProductionBackendState*>(userdata)
+      ->sourceEpilogueSeqIds.push_back(seqId);
+}
+
+void plannedBeginDrawRun(void* userdata, std::size_t commandIndex,
+                         std::size_t) {
+  auto* state = static_cast<PlannedProductionBackendState*>(userdata);
+  state->encodedSeqIds.push_back(state->currentSeqId);
+  state->encodedCommandIndices.push_back(commandIndex);
+}
+
+void plannedBeginRenderPass(void* userdata, std::size_t) {
+  ++static_cast<PlannedProductionBackendState*>(userdata)->renderPassBegins;
+}
+
+void plannedObserveRenderPassStoreProofLookahead(void* userdata,
+                                                 std::size_t,
+                                                 std::size_t sourceCount) {
+  static_cast<PlannedProductionBackendState*>(userdata)
+      ->storeProofLookaheadCounts.push_back(sourceCount);
+}
+
+void plannedEndRenderPass(void* userdata) {
+  ++static_cast<PlannedProductionBackendState*>(userdata)->renderPassEnds;
+}
+
+void plannedDrawPrimitives(void*, WMTPrimitiveType, std::uint64_t,
+                           std::uint64_t, std::uint32_t, std::uint32_t) {}
+
+WMT::Reference<WMT::CommandBuffer> plannedSplitCommandBuffer(
+    void* userdata, WMT::CommandBuffer) {
+  auto* state = static_cast<PlannedProductionBackendState*>(userdata);
+  ++state->midChunkSplits;
+  return retainedToken<WMT::CommandBuffer>(
+      "multi-source-production-split-command-buffer-token");
+}
+
+class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
+ public:
+  explicit PlannedProductionBackend(
+      std::shared_ptr<PlannedProductionBackendState> state)
+      : state_(std::move(state)),
+        device_(retainedToken<WMT::Device>(
+            "multi-source-production-device-token")),
+        renderEncoderOwner_(retainedToken<WMT::RenderCommandEncoder>(
+            "multi-source-production-render-encoder-token")),
+        recorder_{
+            .userdata = state_.get(),
+            .suppressMetalCalls = true,
+            .suppressBaseStateLookup = true,
+            .renderPipelineState = WMT::RenderPipelineState{
+                0x730000000000001ull},
+            .depthStencilState = WMT::DepthStencilState{
+                0x730000000000002ull},
+            .renderCommandEncoder =
+                WMT::RenderCommandEncoder{renderEncoderOwner_.handle},
+            .beginSourceFragmentPreamble =
+                plannedBeginSourceFragmentPreamble,
+            .beginTransactionPreamble = plannedBeginTransactionPreamble,
+            .endSourceFragmentEpilogue =
+                plannedEndSourceFragmentEpilogue,
+            .beginDrawRunCommand = plannedBeginDrawRun,
+            .beginRenderPass = plannedBeginRenderPass,
+            .observeRenderPassStoreProofLookahead =
+                plannedObserveRenderPassStoreProofLookahead,
+            .endRenderPass = plannedEndRenderPass,
+            .splitCommandBufferForTest = plannedSplitCommandBuffer,
+            .drawPrimitives = plannedDrawPrimitives,
+        } {}
+
+  std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> onSourceReady(
+      dxmt9::encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      dxmt9::core::SourcePayloadView payload,
+      std::uint64_t seqId,
+      dxmt9::encoders::EncodeChunkOptions options) override {
+    const bool createdCommandBuffer = !options.commandBuffer;
+    if (createdCommandBuffer) {
+      options.commandBuffer = retainedToken<WMT::CommandBuffer>(
+          "multi-source-production-command-buffer-token");
+    }
+    state_->calls.push_back(ProductionLoopBackendCall{
+        .slotIndex = slotIndex,
+        .seqId = seqId,
+        .arena = payload.isArena(),
+        .session = reinterpret_cast<std::uintptr_t>(options.session),
+        .deferSessionFinalization = options.deferSessionFinalization,
+        .allowInjectedCommandBufferMidChunkCommits =
+            options.allowInjectedCommandBufferMidChunkCommits,
+        .sessionSource = options.sessionSource,
+        .partitionSource = options.partitionSource,
+        .lookaheadCount = options.sessionLookaheadSources.size(),
+        .lookaheadSources =
+            snapshotLookaheadSources(options.sessionLookaheadSources),
+        .replayWindow = options.replayWindow,
+        .activeSeedMergeTicket = options.activeSeedMergeTicket,
+        .activeSeedMergeTargets = std::vector<
+            dxmt9::encoders::ActiveSeedMergeTargetWitness>(
+                options.activeSeedMergeTargets.begin(),
+                options.activeSeedMergeTargets.end()),
+        .commandBuffer = options.commandBuffer.handle,
+        .createdCommandBuffer = createdCommandBuffer,
+        .fragment = options.preRegisteredFragment,
+        .skipBackendPlanning = options.skipBackendPlanning,
+    });
+    state_->currentSeqId = seqId;
+    state_->observedCalls.store(state_->calls.size(),
+                                std::memory_order_release);
+    ctx.device = device_;
+    ctx.drawRecorder = &recorder_;
+    options.disableMidChunkCommits = state_->disableMidChunkCommits;
+    auto submission = planner_.onSourceReady(ctx, slotIndex, payload, seqId,
+                                             std::move(options));
+    if (submission) {
+      state_->calls.back().returnedCommandBuffer =
+          submission->commandBuffer.handle;
+      state_->calls.back().returnedCommandBufferChainLength =
+          submission->commandBufferChainLength;
+      submission->testOnlyAllowNullCommandBuffer = true;
+      if (state_->observeFirstRecordSubmit && state_->calls.size() == 1) {
+        const auto state = state_;
+        submission->postCommitCallbacks.emplace_back([state] {
+          state->backendCallsAtFirstRecordSubmit.store(
+              state->calls.size(), std::memory_order_relaxed);
+          state->firstRecordPostCommitRan.store(true,
+                                                std::memory_order_release);
+        });
+      }
+    }
+    state_->calls.back().renderPassBeginsAfter = state_->renderPassBegins;
+    state_->calls.back().renderPassEndsAfter = state_->renderPassEnds;
+    state_->completedCalls.store(state_->calls.size(),
+                                 std::memory_order_release);
+    if (state_->calls.size() == 1 && state_->holdFirstReturn) {
+      state_->firstCallEncoded.store(true, std::memory_order_release);
+      while (!state_->releaseFirstReturn.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+    }
+    if (state_->calls.size() == 2 && state_->holdSecondReturn) {
+      state_->secondCallEncoded.store(true, std::memory_order_release);
+      while (!state_->releaseSecondReturn.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+    }
+    return submission;
+  }
+
+  std::optional<dxmt9::core::metalqueue::QueueSubmissionRecord> onChunkReady(
+      dxmt9::encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      const dxmt9::core::ChunkSlot& slot,
+      dxmt9::encoders::EncodeChunkOptions options) override {
+    return onSourceReady(ctx, slotIndex,
+                         dxmt9::core::SourcePayloadView(slot), slot.seqId,
+                         std::move(options));
+  }
+
+  dxmt9::framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
+      const dxmt9::resources::Pool& pool,
+      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
+          sources,
+      const dxmt9::render::MultiSourceSessionReplayFrontier& frontier) override {
+    ++state_->plannerCalls;
+    state_->plannerFrontierStates.push_back(frontier.state);
+    state_->plannerSourceCounts.push_back(sources.size());
+    if (state_->holdFirstPlanner && state_->plannerCalls == 1) {
+      state_->firstPlannerEntered.store(true, std::memory_order_release);
+      while (!state_->releaseFirstPlanner.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+    }
+    if (state_->forcedPlan.has_value()) {
+      return *state_->forcedPlan;
+    }
+    return planner_.planMultiSourceSessionReplay(pool, sources, frontier);
+  }
+
+  void observeMultiSourceSessionReplay(
+      const dxmt9::resources::Pool& pool,
+      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
+          sources) override {
+    ++state_->compositeObserverCalls;
+    for (const auto& source : sources) {
+      state_->compositeObservedSeqIds.push_back(source.seqId);
+    }
+    if (state_->holdFirstObserver && state_->compositeObserverCalls == 1) {
+      state_->firstObserverEntered.store(true, std::memory_order_release);
+      while (!state_->releaseFirstObserver.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+    }
+    planner_.observeMultiSourceSessionReplay(pool, sources);
+  }
+
+  dxmt9::render::BackendMode mode() const override {
+    return dxmt9::render::BackendMode::FrameGraph;
+  }
+
+  dxmt9::encoders::EncodeDrawRecorder* drawRecorder() {
+    return &recorder_;
+  }
+
+ private:
+  std::shared_ptr<PlannedProductionBackendState> state_;
+  WMT::Reference<WMT::Device> device_;
+  WMT::Reference<WMT::RenderCommandEncoder> renderEncoderOwner_;
+  dxmt9::encoders::EncodeDrawRecorder recorder_;
+  dxmt9::render::FrameGraphBackend planner_;
 };
 
 bool sameCompletionSource(
@@ -793,13 +1488,29 @@ void runProductionLoopStopDrainCase(std::vector<bool> expectedArenaKinds) {
         "production loop must consume the whole ready prefix");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
             queue, expectedSources),
-        "one shutdown-drain submit must transition every source to GPU");
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 3,
-        "submitted sources must remain resident until completion");
+        "one shutdown-drain submit must publish every completion identity");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
+        "eligible encoded sources retire before GPU completion");
 
+  auto retainedCompletionOwner = std::make_shared<int>(37);
+  std::weak_ptr<void> retainedCompletionWeak = retainedCompletionOwner;
+  bool completionCallbackRan = false;
+  bool callbackPrecededWaterline = false;
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
-            queue, expectedSources) == expectedSources.size(),
+            queue, expectedSources,
+            [&] {
+              completionCallbackRan = true;
+              callbackPrecededWaterline =
+                  !retainedCompletionWeak.expired() &&
+                  dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(
+                      queue) == 0u;
+            },
+            std::move(retainedCompletionOwner)) == expectedSources.size(),
         "test completion must expand and finish every merged source");
+  check(completionCallbackRan && callbackPrecededWaterline &&
+            retainedCompletionWeak.expired(),
+        "receipt completion retains owners through the callback and runs it "
+        "before publishing the completion waterline");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) == 3,
         "merged completion must advance the FIFO waterline to the tail");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
@@ -828,19 +1539,2384 @@ bool waitUntil(Predicate&& predicate,
   return true;
 }
 
+void productionLoopPlansSeparateBThenASourcesIntoOneCarrier() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA510u;
+  constexpr std::uint64_t kTargetB = 0xB510u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1 && headSource.front().seqId == 1,
+        "production planner fixture publishes head A alone");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "head A encodes before the deterministic suffix publication");
+    check(backendState->plannerCalls == 0,
+          "one Ready source starts naturally without waiting for a partner");
+
+    fixture.replayStateOnly(100u);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 0,
+          "StateOnly raw interposition publishes no CPU-ready source");
+    fixture.publishArenaTargetDraw(101u, kTargetB);
+    fixture.replayStateOnly(102u);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1,
+          "a second StateOnly raw gap leaves only B Ready");
+    fixture.publishArenaTargetDraw(103u, kTargetA);
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 2 && suffixSources[0].seqId == 2 &&
+              suffixSources[1].seqId == 3,
+          "B and A publish as one consecutive Ready window despite raw "
+          "interposition");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readySourceIsArena(
+              queue, suffixSources[0]) &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::readySourceIsArena(
+                  queue, suffixSources[1]),
+          "planned B and A suffix sources use direct Arena representation");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3;
+          }),
+          "multi-source planner encodes both selected fragments");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1,
+        "production loop invokes the bounded backend planning seam once");
+  check(backendState->calls.size() == 3 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 3 &&
+            backendState->calls[2].seqId == 2,
+        "active A replays separate A before B with exact source seqIds");
+  check(backendState->calls[1].fragment.has_value() &&
+            backendState->calls[2].fragment.has_value() &&
+            backendState->calls[1].fragment->commandBegin == 0 &&
+            backendState->calls[1].fragment->commandCount == 1 &&
+            backendState->calls[2].fragment->commandBegin == 0 &&
+            backendState->calls[2].fragment->commandCount == 1 &&
+            backendState->calls[1].skipBackendPlanning &&
+            backendState->calls[2].skipBackendPlanning &&
+            !backendState->calls[1].sessionSource.has_value() &&
+            !backendState->calls[2].sessionSource.has_value(),
+        "planned calls use whole-source pre-registered fragments exactly once");
+  const obj_handle_t carrier = backendState->calls[0].commandBuffer;
+  check(carrier != NULL_OBJECT_HANDLE &&
+            backendState->calls[1].commandBuffer == carrier &&
+            backendState->calls[2].commandBuffer == carrier,
+        "source/window/run edges preserve one command-buffer carrier");
+  check(backendState->renderPassBegins == 2 &&
+            backendState->renderPassEnds == 2,
+        "active A plus separate A|B uses two finalized passes, not three");
+  check(backendState->encodedSeqIds ==
+            std::vector<std::uint64_t>({1, 3, 2}),
+        "draw callbacks preserve the planned source-command attribution");
+
+  std::array expectedSources{
+      headSource.front(), suffixSources[0], suffixSources[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "one shutdown submission covers all planned sources");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "planned carrier completion expands in natural FIFO order");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) == 3,
+        "planned completion advances the FIFO waterline to source A");
+}
+
+void productionLoopCanonicalizesNaturalCarrierBeforeReorderedComposite() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->observeFirstRecordSubmit = true;
+  backendState->holdFirstReturn = true;
+  backendState->holdSecondReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA517u;
+  constexpr std::uint64_t kTargetB = 0xB517u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1u && headSource.front().seqId == 1u,
+        "canonical carrier fixture publishes its A head alone");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> naturalSource;
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> plannedSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "canonical carrier head reaches its first natural encode");
+    fixture.publishArenaTargetDraw(2u, kTargetA);
+    naturalSource = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(naturalSource.size() == 1u && naturalSource.front().seqId == 2u,
+          "second A is isolated as the natural source-local merge tail");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->secondCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "second A enters natural source-local encoding before the suffix");
+    check(backendState->plannerCalls == 0u,
+          "two individually published A sources use no composite planner");
+
+    fixture.publishArenaTargetDraw(3u, kTargetB);
+    fixture.publishArenaTargetDraw(4u, kTargetA);
+    plannedSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(plannedSources.size() == 2u &&
+              plannedSources[0].seqId == 3u &&
+              plannedSources[1].seqId == 4u,
+          "B,A suffix is Ready together behind the natural merge");
+    backendState->releaseSecondReturn.store(true,
+                                            std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 4u;
+          }),
+          "canonicalized carrier admits both reordered suffix fragments");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    backendState->releaseSecondReturn.store(true,
+                                            std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1u &&
+            backendState->compositeObserverCalls == 1u &&
+            backendState->compositeObservedSeqIds ==
+                std::vector<std::uint64_t>({3u, 4u}),
+        "post-natural suffix executes one qualified composite transaction");
+  check(backendState->calls.size() == 4u &&
+            backendState->calls[0].seqId == 1u &&
+            backendState->calls[1].seqId == 2u &&
+            backendState->calls[2].seqId == 4u &&
+            backendState->calls[3].seqId == 3u &&
+            !backendState->calls[0].fragment.has_value() &&
+            !backendState->calls[1].fragment.has_value() &&
+            backendState->calls[2].fragment.has_value() &&
+            backendState->calls[3].fragment.has_value() &&
+            backendState->calls[2].skipBackendPlanning &&
+            backendState->calls[3].skipBackendPlanning,
+        "exact duplicate does not force Carrier fallback before A,B replay");
+  const obj_handle_t carrier = backendState->calls.front().commandBuffer;
+  check(carrier != NULL_OBJECT_HANDLE &&
+            std::all_of(backendState->calls.begin(),
+                        backendState->calls.end(),
+                        [carrier](const auto& call) {
+                          return call.commandBuffer == carrier;
+                        }),
+        "natural merge and reordered fragments retain one carrier owner");
+
+  const std::array expectedSources{
+      headSource.front(), naturalSource.front(), plannedSources[0],
+      plannedSources[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "finalization republishes all four canonical completion sources");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire) &&
+            backendState->backendCallsAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 4u,
+        "initial carrier post-commit callback survives natural and fragment folds");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "republished completion sources finish once in natural FIFO order");
+}
+
+void productionLoopPlansFreshRepeatedSourceWindow() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA512u;
+  constexpr std::uint64_t kTargetB = 0xB512u;
+  fixture.publishArenaTargetPair(10u, kTargetA, kTargetB);
+  fixture.publishArenaTargetDraw(11u, kTargetA);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 2 && sources[0].seqId == 1 &&
+            sources[1].seqId == 2,
+        "fresh repeated-source window is fully Ready before encoding");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == 3;
+        }),
+        "fresh planner executes A(source0), A(source1), B(source0)");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->plannerCalls == 1 && backendState->calls.size() == 3,
+        "fresh Ready prefix invokes one no-seed planner transaction");
+  check(backendState->compositeObserverCalls == 1 &&
+            backendState->compositeObservedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u}),
+        "fresh composite observes its natural FIFO sources exactly once");
+  check(backendState->encodedSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u, 1u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 1u}),
+        "fresh no-seed replay executes the source-qualified repeated plan");
+  check(backendState->calls[0].createdCommandBuffer &&
+            !backendState->calls[1].createdCommandBuffer &&
+            !backendState->calls[2].createdCommandBuffer,
+        "first fresh fragment creates the carrier and later fragments inject it");
+  check(backendState->calls[0].session != 0 &&
+            backendState->calls[0].session == backendState->calls[1].session &&
+            backendState->calls[0].session == backendState->calls[2].session &&
+            backendState->calls[0].commandBuffer ==
+                backendState->calls[1].commandBuffer &&
+            backendState->calls[0].commandBuffer ==
+                backendState->calls[2].commandBuffer,
+        "fresh fragments share one new session and command buffer");
+  check(backendState->midChunkSplits == 1 &&
+            backendState->calls.back().returnedCommandBufferChainLength == 2,
+        "fragment edges preserve the active split policy and produce one "
+        "two-CB chain at the A-to-B pass edge");
+  check(backendState->sourcePreambleSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u}) &&
+            backendState->sourceEpilogueSeqIds ==
+                std::vector<std::uint64_t>({2u, 1u}) &&
+            backendState->transactionPreambles == 1,
+        "fresh transaction runs source-wide hooks once and setup once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "fresh planned carrier submits both natural completion identities");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "fresh planned completion expands in FIFO source order");
+}
+
+void productionLoopRetainsOneReadyHeadForExactWritingSuccessor() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D0u;
+  constexpr std::uint64_t kTargetB = 0xB5D0u;
+  fixture.publishArenaTargetPair(60u, kTargetA, kTargetB);
+  const auto older = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(older.size() == 1u && older.front().seqId == 1u,
+        "retained-head fixture publishes A|B as the sole Ready source");
+  fixture.beginLegacyTargetDraw(kTargetA);
+  const auto before = dxmt9::CommandQueueArenaLeaseTestAccess::
+      leaseAcquisitionCapacitySnapshot(queue);
+  check(before.valid && before.olderUnavailable ==
+            dxmt9::core::CpuReadyTape::LeaseCapacityClaim{} &&
+            before.orderedTailWritingSuccessor.has_value(),
+        "retained-head fixture exposes one exact ordered-tail writer");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  try {
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+                queue, older.front());
+          }),
+          "sole Ready head parks in pre-admission tentative state");
+    const auto held = dxmt9::CommandQueueArenaLeaseTestAccess::
+        leaseAcquisitionCapacitySnapshot(queue);
+    check(held.valid && held.olderUnavailable.sources == 1u &&
+              held.orderedTailWritingSuccessor.has_value() &&
+              backendState->observedCalls.load(std::memory_order_acquire) ==
+                  0u,
+          "retained head owns no Metal work while the exact writer remains");
+
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::
+              publishLegacyWritingSlotWithAdmissionPressure(queue),
+          "exact Writing successor publishes with simultaneous pressure");
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "Ready successor dominates pressure and executes one A,A,B plan");
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        clearSyntheticAdmissionPressure(queue);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        clearSyntheticAdmissionPressure(queue);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1u &&
+            backendState->compositeObserverCalls == 1u &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 1u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 1u}),
+        "whole-source retention exposes the cross-source A,A,B permutation");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, older),
+        "retained head submits through the planned carrier");
+}
+
+void productionLoopConsumesOneReadyHeadBehindActiveSession() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D1u;
+  constexpr std::uint64_t kTargetB = 0xB5D1u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(head.size() == 1u && head.front().seqId == 1u,
+        "active retained-head fixture publishes its initial A");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> retained;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "initial A enters the active session");
+    fixture.publishArenaTargetPair(61u, kTargetA, kTargetB);
+    retained = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(retained.size() == 1u && retained.front().seqId == 2u,
+          "A|B is the sole Ready source behind active A");
+    fixture.beginLegacyTargetDraw(kTargetA);
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 2u;
+          }),
+          "active session consumes the sole A|B head immediately");
+    check(!dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+              queue, retained.front()),
+          "active-session Ready head never enters the retained park state");
+
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
+              queue),
+          "later active-session Writing A publishes normally");
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "active carrier consumes the later A without retained lookahead");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 0u &&
+            backendState->plannerFrontierStates.empty() &&
+            backendState->plannerSourceCounts.empty() &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 2u, 3u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 1u, 0u}),
+        "active Ready work preserves natural source order without a retained "
+        "two-source planner window");
+  const obj_handle_t carrier = backendState->calls.front().commandBuffer;
+  check(carrier != NULL_OBJECT_HANDLE &&
+            backendState->calls[1].commandBuffer == carrier,
+        "immediate active head appends to the current command-buffer carrier");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, head) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, retained),
+        "immediate active replay preserves FIFO completion authority");
+}
+
+void productionLoopRestoresRetainedHeadBeforeStopDrain() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  fixture.publishArenaClear(70u);
+  const auto source = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(source.size() == 1u, "stop fallback fixture has one Ready head");
+  queue.submitClear(ClearDesc{});
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+              queue, source.front());
+        }),
+        "stop fallback fixture reaches retained tentative state");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->observedBackendCalls.load(std::memory_order_acquire) ==
+            1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, source),
+        "shutdown restores and exactly replays the held head before drain");
+}
+
+void productionLoopRestoresRetainedHeadBeforeOrderedRelease() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  fixture.publishArenaClear(75u);
+  const auto source = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(source.size() == 1u,
+        "release fallback fixture has one Ready head");
+  queue.submitClear(ClearDesc{});
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  try {
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::sourceIsTentative(
+                queue, source.front());
+          }),
+          "release fallback fixture reaches retained tentative state");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+              queue, 75u, source.front().seqId),
+          "ordered release posts against the exact held source");
+    check(waitUntil([&] {
+            return backendState->observedBackendCalls.load(
+                       std::memory_order_acquire) == 1u &&
+                dxmt9::CommandQueueArenaLeaseTestAccess::
+                        acknowledgedSessionReleaseOrdinal(queue) != 0u;
+          }),
+          "ordered release restores, replays, submits, and acknowledges head");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, source),
+        "ordered-release fallback preserves held-head completion authority");
+}
+
+void plannerUnlockRestoresExactPrefixBeforeOrderedRelease() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstPlanner = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      pauseAfterStaleMultiSourcePlannerRestore(queue);
+
+  constexpr std::uint64_t kTargetA = 0xA5C0u;
+  constexpr std::uint64_t kTargetB = 0xB5C0u;
+  fixture.publishArenaTargetPair(20u, kTargetA, kTargetB);
+  fixture.publishArenaTargetDraw(21u, kTargetA);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 2,
+        "stale-planner fixture publishes one exact two-source prefix");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::atomic<bool> postFinished{false};
+  bool postAccepted = false;
+  std::thread postThread;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstPlannerEntered.load(
+                std::memory_order_acquire);
+          }),
+          "planner barrier is reached with the prefix tentative");
+    check(backendState->calls.empty() &&
+              backendState->compositeObserverCalls == 0,
+          "tentative planning has no backend effect or observer side effect");
+
+    postThread = std::thread([&] {
+      postAccepted =
+          dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+              queue, 21u, sources.back().seqId);
+      postFinished.store(true, std::memory_order_release);
+    });
+    check(waitUntil([&] {
+            return postFinished.load(std::memory_order_acquire);
+          }),
+          "ordered release posts while the planner remains blocked");
+    check(postAccepted,
+          "ordered release is accepted during out-of-lock planning");
+
+    backendState->releaseFirstPlanner.store(true,
+                                            std::memory_order_release);
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::
+                pausedAfterStaleMultiSourcePlannerRestore(queue);
+          }),
+          "release mismatch restores the tentative prefix before restart");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2 &&
+              backendState->calls.empty() &&
+              backendState->compositeObserverCalls == 0 &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::
+                  hasPendingSessionRelease(queue),
+          "stale plan restores exact FIFO with zero effects and leaves the "
+          "release pending");
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        resumeAfterStaleMultiSourcePlannerRestore(queue);
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::
+                       acknowledgedSessionReleaseOrdinal(queue) != 0 &&
+                backendState->observedCalls.load(
+                    std::memory_order_acquire) == 2;
+          }),
+          "restored sources replay naturally before the ordered fence acks");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    postThread.join();
+  } catch (...) {
+    backendState->releaseFirstPlanner.store(true,
+                                            std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        resumeAfterStaleMultiSourcePlannerRestore(queue);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    if (encodeThread.joinable()) encodeThread.join();
+    if (postThread.joinable()) postThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1 &&
+            backendState->compositeObserverCalls == 0 &&
+            backendState->calls.size() == 2 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 2 &&
+            !backendState->calls[0].fragment.has_value() &&
+            !backendState->calls[1].fragment.has_value(),
+        "the stale transaction is discarded and exact FIFO replays once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "the ordered natural replay submits the restored prefix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "the restored prefix remains FIFO-completable");
+}
+
+void compositeObserverDoesNotOwnSchedulingMutex() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstObserver = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5D0u;
+  constexpr std::uint64_t kTargetB = 0xB5D0u;
+  fixture.publishArenaTargetPair(30u, kTargetA, kTargetB);
+  fixture.publishArenaTargetDraw(31u, kTargetA);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 2,
+        "observer-lock fixture publishes a planned two-source prefix");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::atomic<bool> postFinished{false};
+  bool postAccepted = false;
+  std::thread postThread;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstObserverEntered.load(
+                std::memory_order_acquire);
+          }),
+          "composite observer barrier is reached after fragment effects");
+    check(backendState->calls.size() == 3,
+          "all qualified fragment effects finish before observation");
+    postThread = std::thread([&] {
+      postAccepted =
+          dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+              queue, 31u, sources.back().seqId);
+      postFinished.store(true, std::memory_order_release);
+    });
+    check(waitUntil([&] {
+            return postFinished.load(std::memory_order_acquire);
+          }),
+          "ordered release posts while composite observation is blocked");
+    check(postAccepted,
+          "observer executes without owning the scheduling mutex");
+    backendState->releaseFirstObserver.store(true,
+                                             std::memory_order_release);
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::
+                acknowledgedSessionReleaseOrdinal(queue) != 0;
+          }),
+          "post-observer carrier installs before ordered release ack");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    postThread.join();
+  } catch (...) {
+    backendState->releaseFirstObserver.store(true,
+                                             std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    if (encodeThread.joinable()) encodeThread.join();
+    if (postThread.joinable()) postThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1 &&
+            backendState->compositeObserverCalls == 1 &&
+            backendState->encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u, 1u}),
+        "observer unlock preserves one planner, one observer, and one "
+        "qualified replay transaction");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "observer-unlocked transaction submits both sources once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "observer-unlocked transaction remains FIFO-completable");
+}
+
+void productionLoopNaturalSourceKeepsDefaultPassSplitBaseline() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5A0u;
+  constexpr std::uint64_t kTargetB = 0xB5A0u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(head.size() == 1, "natural split baseline publishes one head");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffix;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "natural split baseline opens the A session first");
+    fixture.publishArenaTargetPair(120u, kTargetA, kTargetB);
+    suffix = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffix.size() == 1,
+          "natural split baseline publishes one A-to-B source");
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 2;
+          }),
+          "natural A-to-B source encodes on the carried session");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 0 && backendState->calls.size() == 2,
+        "one natural successor does not enter multi-source planning");
+  check(backendState->midChunkSplits == 1 &&
+            backendState->calls.back().returnedCommandBufferChainLength == 2,
+        "default PerRenderPass naturally commits once and returns a two-CB "
+        "chain for A-to-B");
+
+  std::array sources{head.front(), suffix.front()};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "natural split baseline submits both completion sources");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "natural split baseline remains FIFO-completable");
+}
+
+void productionLoopAttributesNaturalFallbackAbaWithinOneWindow() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::NaturalAfterMerge;
+  forcedPlan.diagnostics.merge =
+      dxmt9::framegraph::MultiSourceMergeDiagnostic::NonSeedOnly;
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5E0u;
+  constexpr std::uint64_t kTargetB = 0xB5E0u;
+  fixture.publishArenaTargetDraw(140u, kTargetA);
+  fixture.publishArenaTargetDraw(141u, kTargetB);
+  fixture.publishArenaTargetDraw(142u, kTargetA);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 3u,
+        "natural attribution fixture publishes one complete A-B-A window");
+
+  const auto fallbackBefore = dxmt9::perf::test::
+      snapshotCpuReadyMultiSourceSourceLocalFallback();
+  const auto passBefore = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == 3u;
+        }),
+        "natural attribution fixture source-locally encodes every source");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  const auto fallbackAfter = dxmt9::perf::test::
+      snapshotCpuReadyMultiSourceSourceLocalFallback();
+  const auto passAfter = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(backendState->plannerCalls == 1u &&
+            backendState->compositeObserverCalls == 0u &&
+            backendState->calls.size() == 3u,
+        "NaturalAfterMerge remains on the source-local fallback path");
+  const std::uint64_t windowId =
+      backendState->calls.front().replayWindow.windowId;
+  check(windowId != 0u,
+        "natural fallback provenance uses the first source ordinal");
+  for (std::size_t i = 0; i < backendState->calls.size(); ++i) {
+    const auto& call = backendState->calls[i];
+    check(call.replayWindow.valid() &&
+              call.replayWindow.disposition == dxmt9::encoders::
+                  ReplayWindowDisposition::NaturalAfterMergeFallback &&
+              call.replayWindow.windowId == windowId &&
+              call.replayWindow.sourceIndex == i &&
+              call.replayWindow.sourceCount == 3u &&
+              !call.fragment.has_value() && !call.skipBackendPlanning,
+          "every natural fallback source carries one stable window identity");
+  }
+  check(fallbackAfter.naturalStarted - fallbackBefore.naturalStarted == 1u &&
+            fallbackAfter.naturalCompleted -
+                    fallbackBefore.naturalCompleted ==
+                1u &&
+            fallbackAfter.naturalSources - fallbackBefore.naturalSources ==
+                3u,
+        "natural fallback started/completed/source counters conserve one window");
+  check(passAfter.begins - passBefore.begins == 3u &&
+            passAfter.sameWindowDistance1 -
+                    passBefore.sameWindowDistance1 ==
+                1u &&
+            passAfter.sameWindowDistance2 == passBefore.sameWindowDistance2 &&
+            passAfter.sameWindowDistance3To4 ==
+                passBefore.sameWindowDistance3To4 &&
+            passAfter.crossWindowDistance1 ==
+                passBefore.crossWindowDistance1 &&
+            passAfter.crossWindowDistance2 ==
+                passBefore.crossWindowDistance2 &&
+            passAfter.crossWindowDistance3To4 ==
+                passBefore.crossWindowDistance3To4,
+        "physical A-B-A is attributed once to its natural fallback window");
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "natural attribution does not alter final session submission");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "natural attribution preserves FIFO completion");
+}
+
+void runProductionLoopAttributesExactActiveSeedBridge(bool exactTarget) {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::NaturalAfterMerge;
+  forcedPlan.diagnostics.merge =
+      dxmt9::framegraph::MultiSourceMergeDiagnostic::SeedMerged;
+  forcedPlan.diagnostics.activeSeedMergeCount = 1u;
+  forcedPlan.diagnostics.activeSeedMergeWitnesses.push_back(
+      dxmt9::encoders::ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = exactTarget ? 1u : 0u,
+          .commandIndex = 0u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      });
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5E2u;
+  constexpr std::uint64_t kTargetB = 0xB5E2u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(head.size() == 1u, "seed bridge fixture publishes active A first");
+  const auto before = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffix;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "active A is encoded before publishing the B,A suffix");
+    fixture.publishArenaTargetDraw(145u, kTargetB);
+    fixture.publishArenaTargetDraw(146u, kTargetA);
+    suffix = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffix.size() == 2u, "seed bridge fixture publishes B,A suffix");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "active seed fallback encodes A then B,A");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  const auto after = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(backendState->plannerCalls == 1u &&
+            backendState->calls.size() == 3u,
+        "active seed bridge uses one bounded suffix planner window");
+  const auto& ticketCall = backendState->calls[exactTarget ? 2u : 1u];
+  check(ticketCall.activeSeedMergeTicket.valid() &&
+            ticketCall.activeSeedMergeTargets.size() == 1u &&
+            ticketCall.activeSeedMergeTargets[0].retainedSourceIndex ==
+                (exactTarget ? 1u : 0u),
+        "queue hands the ticket only to its exact retained source");
+  check(after.seedTicketsIssued - before.seedTicketsIssued == 1u,
+        "one planner witness issues exactly one encode ticket");
+  if (exactTarget) {
+    check(after.seedTicketsMatched - before.seedTicketsMatched == 1u &&
+              after.seedTicketsContinued == before.seedTicketsContinued &&
+              after.seedTicketsMismatch == before.seedTicketsMismatch &&
+              after.seedTicketsUnconsumed == before.seedTicketsUnconsumed &&
+              after.seedBridgeDistance1 - before.seedBridgeDistance1 == 1u,
+          "exact A|B,A physical token joins one d1 seed bridge");
+  } else {
+    check(after.seedTicketsMatched == before.seedTicketsMatched &&
+              after.seedTicketsContinued == before.seedTicketsContinued &&
+              after.seedTicketsMismatch - before.seedTicketsMismatch == 1u &&
+              after.seedTicketsUnconsumed == before.seedTicketsUnconsumed &&
+              after.seedBridgeDistance1 == before.seedBridgeDistance1,
+          "wrong target pass fails closed as one consumed ticket mismatch");
+  }
+  std::array allSources{head.front(), suffix[0], suffix[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, allSources),
+        "seed attribution does not alter submission ownership");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "seed attribution preserves FIFO completion");
+}
+
+void productionLoopAttributesExactActiveSeedBridge() {
+  runProductionLoopAttributesExactActiveSeedBridge(true);
+}
+
+void productionLoopRejectsWrongActiveSeedBridgeTarget() {
+  runProductionLoopAttributesExactActiveSeedBridge(false);
+}
+
+void productionLoopAttributesExactActiveSeedContinuation() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::NaturalAfterMerge;
+  forcedPlan.diagnostics.merge =
+      dxmt9::framegraph::MultiSourceMergeDiagnostic::SeedMerged;
+  forcedPlan.diagnostics.activeSeedMergeCount = 1u;
+  forcedPlan.diagnostics.activeSeedMergeWitnesses.push_back(
+      dxmt9::encoders::ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 0u,
+          .commandIndex = 0u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      });
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5E3u;
+  constexpr std::uint64_t kTargetB = 0xB5E3u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  const auto before = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffix;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "continuation fixture encodes active A first");
+    fixture.publishArenaTargetDraw(147u, kTargetA);
+    fixture.publishArenaTargetDraw(148u, kTargetB);
+    suffix = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffix.size() == 2u,
+          "continuation fixture publishes immediate A then B");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "continuation fixture consumes both suffix sources");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+  const auto after = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(backendState->calls.size() == 3u &&
+            backendState->calls[1].activeSeedMergeTicket.valid() &&
+            backendState->calls[1].activeSeedMergeTargets.size() == 1u,
+        "queue hands the adjacent target to the immediate A source");
+  check(after.seedTicketsIssued - before.seedTicketsIssued == 1u &&
+            after.seedTicketsContinued - before.seedTicketsContinued == 1u &&
+            after.seedTicketsMatched == before.seedTicketsMatched &&
+            after.seedTicketsMismatch == before.seedTicketsMismatch &&
+            after.seedTicketsUnconsumed == before.seedTicketsUnconsumed &&
+            after.seedBridgeDistance1 == before.seedBridgeDistance1,
+        "active A plus immediate A conserves as one continued ticket");
+  std::array allSources{head.front(), suffix[0], suffix[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, allSources),
+        "continuation attribution preserves submission ownership");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "continuation attribution preserves FIFO completion");
+}
+
+void productionLoopDropsOnlyTicketWhenActiveSeedInstanceTurnsStale() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  backendState->holdFirstPlanner = true;
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::NaturalAfterMerge;
+  forcedPlan.diagnostics.merge =
+      dxmt9::framegraph::MultiSourceMergeDiagnostic::SeedMerged;
+  forcedPlan.diagnostics.activeSeedMergeCount = 1u;
+  forcedPlan.diagnostics.activeSeedMergeWitnesses.push_back(
+      dxmt9::encoders::ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 1u,
+          .commandIndex = 0u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      });
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5E4u;
+  constexpr std::uint64_t kTargetB = 0xB5E4u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  const auto before = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffix;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "stale token fixture encodes active A first");
+    fixture.publishArenaTargetDraw(149u, kTargetB);
+    fixture.publishArenaTargetDraw(150u, kTargetA);
+    suffix = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffix.size() == 2u,
+          "stale token fixture publishes one B,A suffix window");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->firstPlannerEntered.load(
+                std::memory_order_acquire);
+          }),
+          "stale token fixture pauses outside the scheduling lock");
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        overrideLiveActiveRenderInstance(queue, 999u, 777u);
+    backendState->releaseFirstPlanner.store(true,
+                                            std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "token-only mismatch preserves source-local replay progress");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    backendState->releaseFirstPlanner.store(true,
+                                            std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+  const auto after = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(backendState->plannerCalls == 1u &&
+            backendState->calls.size() == 3u &&
+            !backendState->calls[1].activeSeedMergeTicket.valid() &&
+            !backendState->calls[2].activeSeedMergeTicket.valid(),
+        "token-only mismatch keeps the accepted plan but publishes no ticket");
+  check(after.seedTicketsIssued == before.seedTicketsIssued &&
+            after.seedInstanceStale - before.seedInstanceStale == 1u &&
+            after.seedInstanceUnavailable == before.seedInstanceUnavailable,
+        "perf-on stale token is visible without issuing terminal ownership");
+  std::array allSources{head.front(), suffix[0], suffix[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, allSources),
+        "stale diagnostic token does not restore or lose the selected prefix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "stale diagnostic token preserves FIFO completion");
+}
+
+void productionLoopPerfOffKeepsSeedPlanWithoutTicketWork() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::NaturalAfterMerge;
+  forcedPlan.diagnostics.merge =
+      dxmt9::framegraph::MultiSourceMergeDiagnostic::SeedMerged;
+  forcedPlan.diagnostics.activeSeedMergeCount = 1u;
+  forcedPlan.diagnostics.activeSeedMergeWitnesses.push_back(
+      dxmt9::encoders::ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 1u,
+          .commandIndex = 0u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      });
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5E5u;
+  constexpr std::uint64_t kTargetB = 0xB5E5u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto head = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffix;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "perf-off fixture encodes active A first");
+    fixture.publishArenaTargetDraw(151u, kTargetB);
+    fixture.publishArenaTargetDraw(152u, kTargetA);
+    suffix = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffix.size() == 2u,
+          "perf-off fixture publishes one B,A suffix window");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3u;
+          }),
+          "perf-off fixture preserves source-local planner progress");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+  check(backendState->plannerCalls == 1u &&
+            backendState->calls.size() == 3u,
+        "perf-off keeps the same accepted NaturalAfterMerge plan");
+  for (const auto& call : backendState->calls) {
+    check(!call.activeSeedMergeTicket.valid() &&
+              call.activeSeedMergeTargets.empty(),
+          "perf-off publishes no ticket context or target span");
+  }
+  std::array allSources{head.front(), suffix[0], suffix[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, allSources),
+        "perf-off attribution leaves the selected prefix committed");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "perf-off attribution preserves FIFO completion");
+}
+
+void productionLoopAttributesPermutationRejectedFallbackWindow() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::NaturalFifo;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::PermutationRejected;
+  backendState->forcedPlan = forcedPlan;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  fixture.publishArenaTargetDraw(143u, 0xA5E1u);
+  fixture.publishArenaTargetDraw(144u, 0xB5E1u);
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 2u,
+        "permutation-rejected fixture publishes one complete window");
+
+  const auto before = dxmt9::perf::test::
+      snapshotCpuReadyMultiSourceSourceLocalFallback();
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == 2u;
+        }),
+        "permutation-rejected fallback encodes every source");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  const auto after = dxmt9::perf::test::
+      snapshotCpuReadyMultiSourceSourceLocalFallback();
+  check(backendState->plannerCalls == 1u &&
+            backendState->compositeObserverCalls == 0u &&
+            backendState->calls.size() == 2u,
+        "PermutationRejected remains on the source-local fallback path");
+  const std::uint64_t windowId =
+      backendState->calls.front().replayWindow.windowId;
+  for (std::size_t i = 0; i < backendState->calls.size(); ++i) {
+    const auto& provenance = backendState->calls[i].replayWindow;
+    check(provenance.valid() &&
+              provenance.disposition == dxmt9::encoders::
+                  ReplayWindowDisposition::PermutationRejectedFallback &&
+              provenance.windowId == windowId &&
+              provenance.sourceIndex == i && provenance.sourceCount == 2u,
+          "permutation-rejected sources carry one stable window identity");
+  }
+  check(windowId != 0u &&
+            after.permutationStarted - before.permutationStarted == 1u &&
+            after.permutationCompleted - before.permutationCompleted == 1u &&
+            after.permutationSources - before.permutationSources == 2u,
+        "permutation-rejected fallback counters conserve one window");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+                queue, sources) == sources.size(),
+        "permutation-rejected attribution preserves FIFO completion");
+}
+
+void productionLoopBoundsFreshNineReadySources() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA612u;
+  constexpr std::uint64_t kTargetB = 0xB612u;
+  fixture.publishArenaTargetDraw(1u, kTargetA);
+  fixture.publishArenaTargetDraw(2u, kTargetB);
+  fixture.publishArenaTargetDraw(3u, kTargetA);
+  for (std::uint64_t i = 4; i <= 9; ++i) {
+    fixture.publishArenaTargetDraw(i, 0xC612u + i);
+  }
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == 9,
+        "fresh bounded fixture publishes nine Ready sources");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == 9;
+        }),
+        "fresh bounded transaction and ninth suffix both encode");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->plannerCalls == 1 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 3 &&
+            backendState->calls[2].seqId == 2 &&
+            backendState->calls.back().seqId == 9,
+        "fresh planner reorders only the bounded first eight-source prefix");
+  for (std::size_t i = 0; i < 8; ++i) {
+    check(backendState->calls[i].fragment.has_value(),
+          "each source in the bounded fresh prefix uses a planned fragment");
+  }
+  check(!backendState->calls[8].fragment.has_value(),
+        "the ninth source remains outside the proof window and replays naturally");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "bounded fresh plan and suffix submit every source once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "bounded fresh completion remains natural FIFO");
+}
+
+void productionLoopRevisitsOneSourceWithoutRepeatingItsPreamble() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA515u;
+  constexpr std::uint64_t kTargetB = 0xB515u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1 && headSource.front().seqId == 1,
+        "repeated-source fixture publishes its active A head alone");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "repeated-source fixture opens the active A session");
+    fixture.publishArenaTargetPair(110u, kTargetA, kTargetB);
+    fixture.publishArenaTargetDraw(111u, kTargetA);
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 2 && suffixSources[0].seqId == 2 &&
+              suffixSources[1].seqId == 3,
+          "A,B and returning A publish as two Ready sources");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 4;
+          }),
+          "qualified A|A|B replay revisits the older source");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1,
+        "repeated-source window invokes one bounded planner transaction");
+  check(backendState->compositeObserverCalls == 1 &&
+            backendState->compositeObservedSeqIds ==
+                std::vector<std::uint64_t>({2u, 3u}),
+        "repeated-source composite observation runs once in natural order");
+  check(backendState->calls.size() == 4 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 2 &&
+            backendState->calls[2].seqId == 3 &&
+            backendState->calls[3].seqId == 2,
+        "planned replay is head A, older A, newer A, older B");
+  check(backendState->calls[1].fragment.has_value() &&
+            backendState->calls[2].fragment.has_value() &&
+            backendState->calls[3].fragment.has_value() &&
+            backendState->calls[1].fragment->firstSourceFragment() &&
+            !backendState->calls[1].fragment->lastSourceFragment() &&
+            backendState->calls[3].fragment->lastSourceFragment() &&
+            backendState->calls[1].fragment->firstTransactionFragment() &&
+            !backendState->calls[2].fragment->firstTransactionFragment(),
+        "fragment phases identify one repeated source transaction exactly");
+  check(backendState->calls[1].lookaheadCount == 3u &&
+            backendState->calls[2].lookaheadCount == 2u &&
+            backendState->calls[3].lookaheadCount == 1u,
+        "planned fragments receive the exact replay-order lookahead suffix");
+  const auto& firstLookahead = backendState->calls[1].lookaheadSources;
+  const auto& secondLookahead = backendState->calls[2].lookaheadSources;
+  const auto& thirdLookahead = backendState->calls[3].lookaheadSources;
+  check(firstLookahead.size() == 3u &&
+            firstLookahead[0].seqId == 2u &&
+            firstLookahead[0].commandBegin == 0u &&
+            firstLookahead[0].commandCount == 1u &&
+            firstLookahead[1].seqId == 3u &&
+            firstLookahead[1].commandBegin == 0u &&
+            firstLookahead[1].commandCount == 1u &&
+            firstLookahead[2].seqId == 2u &&
+            firstLookahead[2].commandBegin == 1u &&
+            firstLookahead[2].commandCount == 1u &&
+            secondLookahead.size() == 2u &&
+            secondLookahead[0].seqId == 3u &&
+            secondLookahead[1].seqId == 2u &&
+            secondLookahead[1].commandBegin == 1u &&
+            thirdLookahead.size() == 1u &&
+            thirdLookahead[0].seqId == 2u &&
+            thirdLookahead[0].commandBegin == 1u,
+        "lookahead ranges follow A0|A1|B0 replay rather than natural full "
+        "sources");
+  const auto lookaheadCommandCount = [](const auto& sources) {
+    std::size_t count = 0;
+    for (const auto& source : sources) {
+      count += source.commandCount;
+    }
+    return count;
+  };
+  check(lookaheadCommandCount(firstLookahead) == 3u &&
+            lookaheadCommandCount(secondLookahead) == 2u &&
+            lookaheadCommandCount(thirdLookahead) == 1u,
+        "GPU sampling sees each replay command exactly once in the suffix");
+  check(backendState->sourcePreambleSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u, 3u}),
+        "capture/source preamble executes once per source, not per fragment");
+  check(backendState->sourceEpilogueSeqIds ==
+            std::vector<std::uint64_t>({1u, 3u, 2u}),
+        "source epilogue emits once at each source's final fragment");
+  check(backendState->transactionPreambles == 2,
+        "ordinary head and one composite window each flush initializer setup once");
+  check(backendState->encodedSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u, 3u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 0u, 1u}),
+        "draw attribution preserves the source-qualified A,A,B permutation");
+  const obj_handle_t carrier = backendState->calls[0].commandBuffer;
+  check(carrier != NULL_OBJECT_HANDLE &&
+            backendState->calls[1].commandBuffer == carrier &&
+            backendState->calls[2].commandBuffer == carrier &&
+            backendState->calls[3].commandBuffer == carrier,
+        "repeated source runs retain one command-buffer carrier");
+
+  std::array expectedSources{headSource.front(), suffixSources[0],
+                             suffixSources[1]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "one final submission covers every repeated-window source once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "repeated replay still expands completion in natural FIFO order");
+}
+
+void productionLoopStoreProofLookaheadOverflowFailsClosed() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::Planned;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::Planned;
+  constexpr std::size_t kSourceCount = 8u;
+  constexpr std::size_t kCommandsPerSource = 5u;
+  constexpr std::size_t kTotalCommands =
+      kSourceCount * kCommandsPerSource;
+  forcedPlan.commands.reserve(kTotalCommands);
+  for (std::uint32_t command = 0; command < kCommandsPerSource; ++command) {
+    for (std::uint32_t source = 0; source < kSourceCount; ++source) {
+      forcedPlan.commands.push_back({.retainedSourceIndex = source,
+                                     .commandIndex = command});
+    }
+  }
+  backendState->forcedPlan = std::move(forcedPlan);
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  for (std::size_t source = 0; source < kSourceCount; ++source) {
+    std::array<std::uint64_t, kCommandsPerSource> targets{};
+    targets.fill(0xA516u + source);
+    fixture.publishArenaTargetSequence(130u + source, targets);
+  }
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == kSourceCount,
+        "overflow fixture publishes one complete bounded Ready window");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) ==
+              kTotalCommands;
+        }),
+        "overflow fixture executes every source-qualified fragment");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->calls.size() == kTotalCommands &&
+            backendState->calls[0].lookaheadCount == 40u &&
+            backendState->calls[1].lookaheadCount == 39u &&
+            backendState->calls[8].lookaheadCount == 32u &&
+            backendState->calls.back().lookaheadCount == 1u,
+        "fragment calls receive complete replay suffixes across the fixed "
+        "store-proof bound");
+  std::size_t firstSuffixCommands = 0;
+  for (const auto& source : backendState->calls[0].lookaheadSources) {
+    firstSuffixCommands += source.commandCount;
+  }
+  check(firstSuffixCommands == kTotalCommands,
+        "GPU sampling command sizing counts every fragmented command once");
+  check(backendState->storeProofLookaheadCounts.size() ==
+            kTotalCommands &&
+            backendState->storeProofLookaheadCounts[0] == 1u &&
+            backendState->storeProofLookaheadCounts[1] == 1u &&
+            backendState->storeProofLookaheadCounts[7] == 1u &&
+            backendState->storeProofLookaheadCounts[8] == 32u,
+        "store proof rejects an oversized cross-source suffix but preserves "
+        "the current-source next-touch proof");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "overflow fallback still submits both sources exactly once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "overflow fallback preserves FIFO completion");
+}
+
+void productionLoopOrderedReleaseFencesRawInterposition() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->observeFirstRecordSubmit = true;
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA520u;
+  constexpr std::uint64_t kTargetB = 0xB520u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1 && headSource.front().seqId == 1,
+        "ordered-release fixture publishes one Legacy head");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "ordered-release fixture encodes the Legacy head first");
+
+    fixture.replayStateOnly(200u);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+              queue, 200u, headSource.front().seqId),
+          "ordered SessionRelease posts at the StateOnly raw fence");
+    fixture.publishArenaTargetDraw(201u, kTargetB);
+    fixture.replayStateOnly(202u);
+    fixture.publishArenaTargetDraw(203u, kTargetA);
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 2 && suffixSources[0].seqId == 2 &&
+              suffixSources[1].seqId == 3,
+          "B and A remain Ready beyond the ordered release fence");
+
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire);
+          }),
+          "ordered release submits the head before admitting its suffix");
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+              queue, headSource) == headSource.size(),
+          "fenced head completion releases capacity for the younger suffix");
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 3;
+          }),
+          "fenced head and younger natural suffix both encode");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1,
+        "only the clean suffix plans after the ordered head fence is acknowledged");
+  check(backendState->calls.size() == 3 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 2 &&
+            backendState->calls[2].seqId == 3 &&
+            !backendState->calls[0].fragment.has_value() &&
+            !backendState->calls[1].fragment.has_value() &&
+            !backendState->calls[2].fragment.has_value(),
+        "ordered release excludes the head and an unmergeable clean B|A "
+        "suffix fails open in natural order");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire) &&
+            backendState->backendCallsAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 1,
+        "ordered release submits the head before encoding its suffix");
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, suffixSources),
+        "shutdown submits the younger post-fence suffix");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, suffixSources) == suffixSources.size(),
+        "post-fence suffix completion remains FIFO-reclaimable");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) == 3,
+        "ordered release plus suffix completion reaches the FIFO tail");
+}
+
+void productionLoopBoundsNineReadySourcesToFirstPlanningWindow() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA610u;
+  constexpr std::uint64_t kTargetB = 0xB610u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  check(waitUntil([&] {
+          return backendState->firstCallEncoded.load(
+              std::memory_order_acquire);
+        }),
+        "nine-source fixture encodes active head before releasing it");
+
+  fixture.publishArenaTargetDraw(1u, kTargetB);
+  fixture.publishArenaTargetDraw(2u, kTargetA);
+  for (std::uint64_t i = 3; i <= 9; ++i) {
+    fixture.publishArenaTargetDraw(i, 0xC610u + i);
+  }
+  const auto suffixSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(suffixSources.size() == 9,
+        "all nine compatible successors accumulate before selection");
+  for (const auto& source : suffixSources) {
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readySourceIsArena(
+              queue, source),
+          "nine-source bounded window keeps every successor Arena-backed");
+  }
+  backendState->releaseFirstReturn.store(true, std::memory_order_release);
+  check(waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == 10;
+        }),
+        "bounded first window and Ready suffix both encode");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+
+  check(backendState->plannerCalls == 1,
+        "nine Ready successors invoke one bounded eight-source plan");
+  check(backendState->calls.size() == 10 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 3 &&
+            backendState->calls[2].seqId == 2 &&
+            backendState->calls.back().seqId == 10,
+        "first bounded window reorders A before B and leaves source nine for "
+        "the next natural selection");
+  check(backendState->calls[1].fragment.has_value() &&
+            backendState->calls[8].fragment.has_value() &&
+            !backendState->calls[9].fragment.has_value(),
+        "exactly eight successors use planned fragments; the ninth remains "
+        "outside that proof window");
+
+  std::array<dxmt9::core::metalqueue::QueueCompletionSource, 10>
+      expectedSources{};
+  expectedSources[0] = headSource.front();
+  std::copy(suffixSources.begin(), suffixSources.end(),
+            expectedSources.begin() + 1);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "bounded planning plus natural suffix submits every source once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "ten-source carrier completion remains FIFO after bounded planning");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) == 10,
+        "bounded-window completion reaches the ninth successor");
+}
+
+void productionLoopCarriesActivePassAcrossBoundedWindowEdge() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  backendState->observeFirstRecordSubmit = true;
+  dxmt9::framegraph::MultiSourceReplayPlan forcedPlan{};
+  forcedPlan.disposition =
+      dxmt9::framegraph::MultiSourceReplayDisposition::Planned;
+  forcedPlan.validation =
+      dxmt9::framegraph::MultiSourceReplayValidation::Valid;
+  forcedPlan.diagnostics.outcome =
+      dxmt9::framegraph::MultiSourcePlannerOutcome::Planned;
+  for (std::uint32_t source = 0; source < 8u; ++source) {
+    forcedPlan.commands.push_back({.retainedSourceIndex = source,
+                                   .commandIndex = 0u});
+  }
+  backendState->forcedPlan = std::move(forcedPlan);
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA611u;
+  constexpr std::uint64_t kTargetB = 0xB611u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1u && headSource.front().seqId == 1u,
+        "bounded-edge fixture publishes its active head alone");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "bounded-edge fixture opens the initial A pass first");
+    for (std::uint64_t source = 1u; source <= 7u; ++source) {
+      fixture.publishArenaTargetDraw(source, kTargetB);
+    }
+    fixture.publishArenaTargetDraw(8u, kTargetA);
+    fixture.publishArenaTargetDraw(9u, kTargetA);
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 9u,
+          "bounded-edge fixture publishes one full window plus a successor");
+
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->completedCalls.load(
+                       std::memory_order_acquire) == 10u;
+          }),
+          "bounded window and its ninth successor both finish encoding");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1u &&
+            backendState->calls.size() == 10u,
+        "only the bounded eight-source prefix enters planning");
+  for (std::size_t i = 1u; i <= 8u; ++i) {
+    check(backendState->calls[i].fragment.has_value(),
+          "every source in the first bounded window uses its planned fragment");
+  }
+  check(!backendState->calls[9].fragment.has_value(),
+        "the ninth successor remains outside the first planning window");
+
+  const auto& windowTail = backendState->calls[8];
+  const auto& ninthSource = backendState->calls[9];
+  check(windowTail.seqId == 9u && ninthSource.seqId == 10u &&
+            windowTail.session != 0u &&
+            windowTail.session == ninthSource.session,
+        "the ninth source appends to the session left active by window zero");
+  check(windowTail.returnedCommandBuffer != NULL_OBJECT_HANDLE &&
+            ninthSource.commandBuffer == windowTail.returnedCommandBuffer &&
+            ninthSource.returnedCommandBuffer ==
+                windowTail.returnedCommandBuffer,
+        "the window tail passes its exact command-buffer carrier to source nine");
+  check(windowTail.renderPassBeginsAfter == 3u &&
+            windowTail.renderPassEndsAfter == 2u &&
+            ninthSource.renderPassBeginsAfter ==
+                windowTail.renderPassBeginsAfter &&
+            ninthSource.renderPassEndsAfter ==
+                windowTail.renderPassEndsAfter,
+        "matching A draws cross the planning-window edge without another "
+        "render-pass begin or end");
+  check(backendState->renderPassBegins ==
+                ninthSource.renderPassBeginsAfter &&
+            backendState->renderPassEnds ==
+                ninthSource.renderPassEndsAfter + 1u,
+        "the explicit stop drain closes the carried render pass exactly once");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire) &&
+            backendState->backendCallsAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 10u,
+        "the carried session submits only after all ten sources encode");
+
+  std::array<dxmt9::core::metalqueue::QueueCompletionSource, 10u>
+      expectedSources{};
+  expectedSources[0] = headSource.front();
+  std::copy(suffixSources.begin(), suffixSources.end(),
+            expectedSources.begin() + 1);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "one final submission covers both sides of the bounded window edge");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
+                10u,
+        "window-edge carry preserves natural FIFO completion through the tail");
+}
+
+void productionLoopPlansPrefixBeforePresentBoundary() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->observeFirstRecordSubmit = true;
+  backendState->holdFirstReturn = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA710u;
+  constexpr std::uint64_t kTargetB = 0xB710u;
+  fixture.publishLegacyTargetDraw(kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "Present-prefix fixture encodes active head before release");
+
+    fixture.publishArenaTargetDraw(1u, kTargetB);
+    fixture.publishArenaTargetDraw(2u, kTargetA);
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyClearPresent(
+              queue),
+          "Present-prefix fixture publishes the hard boundary source");
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 3 && suffixSources[0].seqId == 2 &&
+              suffixSources[1].seqId == 3 && suffixSources[2].seqId == 4 &&
+              suffixSources[2].hasPresent,
+          "B, A, Present accumulate as one Ready batch");
+
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 4;
+          }),
+          "planned pre-Present prefix and natural Present both encode");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true, std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->plannerCalls == 1,
+        "B and A invoke exactly one bounded planner window");
+  check(backendState->calls.size() == 4 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 3 &&
+            backendState->calls[2].seqId == 2 &&
+            backendState->calls[3].seqId == 4,
+        "Present remains outside the A-before-B replay permutation");
+  check(backendState->calls[1].fragment.has_value() &&
+            backendState->calls[2].fragment.has_value() &&
+            !backendState->calls[3].fragment.has_value(),
+        "only B and A use pre-registered planned fragments");
+  check(backendState->calls[3].session ==
+                backendState->calls[0].session &&
+            backendState->calls[3].commandBuffer ==
+                backendState->calls[2].returnedCommandBuffer &&
+            backendState->calls[2].returnedCommandBufferChainLength == 2 &&
+            backendState->calls[3].commandBuffer !=
+                backendState->calls[0].commandBuffer &&
+            !backendState->calls[3].deferSessionFinalization,
+        "the natural Present tail uses the same session and post-split tail "
+        "CB, then requests immediate finalization");
+  check(backendState->renderPassBegins == 2 &&
+            backendState->renderPassEnds == 2,
+        "the Present tail closes the active planned pass without opening a "
+        "third render pass");
+  check(backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire) &&
+            backendState->backendCallsAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 4,
+        "the natural Present boundary closes and submits the carried planned "
+        "prefix after its own non-planned encode");
+
+  std::array expectedSources{headSource.front(), suffixSources[0],
+                             suffixSources[1], suffixSources[2]};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "pre-Present and Present submissions cover every source once");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "split submissions still complete sources in natural FIFO order");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) == 4,
+        "Present completion advances the FIFO waterline after the prefix");
+}
+
+void productionLoopLeaseWaitResumesAfterGpuReclaim() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyClearPresent(
+            queue),
+        "GPU-reclaim fixture publishes one standalone Clear+Present");
+  const auto presentSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(presentSource.size() == 1 && presentSource.front().hasPresent,
+        "GPU-reclaim fixture snapshots the standalone Present source");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+
+  const bool presentSubmitted = waitUntil([&] {
+    return backendState->firstRecordPostCommitRan.load(
+        std::memory_order_acquire);
+  });
+  if (!presentSubmitted) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false, "standalone Clear+Present must submit before Direct replay");
+  }
+
+  fixture.publishArenaDraw(2);
+  const auto directSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(directSource.size() == 1 && !directSource.front().hasPresent,
+        "GPU-reclaim fixture leaves exactly one Direct draw Ready");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readySourceIsArena(
+            queue, directSource.front()),
+        "GPU-reclaim successor must use the production Direct Arena route");
+  const bool leaseWaitEntered = waitUntil([&] {
+    return dxmt9::CommandQueueArenaLeaseTestAccess::capacityWaiterCount(
+               queue) == 1;
+  });
+  if (!leaseWaitEntered) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false,
+          "submitted Present residency must reach the exact denied-lease "
+          "capacity wait");
+  }
+  check(backendState->observedBackendCalls.load(std::memory_order_acquire) ==
+            1,
+        "Direct draw stays unrepresented while the startup lease is denied");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(queue),
+        "GPU-reclaim denied-lease wait must not use the stop escape");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::writerPressureActive(queue),
+        "GPU-reclaim denied-lease wait must not use writer pressure");
+
+  const std::uint64_t generationBeforeReclaim =
+      dxmt9::CommandQueueArenaLeaseTestAccess::capacityProgressGeneration(
+          queue);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, presentSource) == 1,
+        "GPU completion and finish reclaim the standalone Present source");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+                         capacityProgressGeneration(queue) !=
+                     generationBeforeReclaim &&
+              backendState->observedBackendCalls.load(
+                  std::memory_order_acquire) == 2;
+        }),
+        "GPU reclaim advances capacity progress and starts the Direct draw");
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+            queue, 2, directSource.front().seqId),
+        "ordered Flush submits the Direct session after startup");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+              queue, directSource);
+        }),
+        "Direct draw submits without shutdown or writer-pressure release");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, directSource) == 1,
+        "GPU-reclaim Direct source completes and reclaims normally");
+}
+
+void productionLoopLeaseWaitResumesAfterInlineReclaim() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyClearPresent(
+            queue),
+        "inline-reclaim fixture publishes one standalone Clear+Present");
+  const auto presentSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::representReadyHead(queue);
+  check(presentSource.has_value() && presentSource->hasPresent,
+        "inline-reclaim fixture represents the standalone Present head");
+  fixture.publishArenaDraw(2);
+  const auto directSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(directSource.size() == 1 && !directSource.front().hasPresent,
+        "inline-reclaim fixture leaves exactly one Direct draw Ready");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readySourceIsArena(
+            queue, directSource.front()),
+        "inline-reclaim successor must use the production Direct Arena route");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  const bool leaseWaitEntered = waitUntil([&] {
+    return dxmt9::CommandQueueArenaLeaseTestAccess::capacityWaiterCount(
+               queue) == 1;
+  });
+  if (!leaseWaitEntered) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false,
+          "represented Present residency must reach the exact denied-lease "
+          "capacity wait");
+  }
+  check(backendState->observedBackendCalls.load(std::memory_order_acquire) ==
+            0,
+        "Direct draw stays unrepresented before inline capacity reclaim");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(queue),
+        "inline-reclaim denied-lease wait must not use the stop escape");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::writerPressureActive(queue),
+        "inline-reclaim denied-lease wait must not use writer pressure");
+
+  const std::uint64_t generationBeforeReclaim =
+      dxmt9::CommandQueueArenaLeaseTestAccess::capacityProgressGeneration(
+          queue);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeInline(
+            queue, *presentSource),
+        "production inline completion reclaims the standalone Present head");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+                         capacityProgressGeneration(queue) !=
+                     generationBeforeReclaim &&
+              backendState->observedBackendCalls.load(
+                  std::memory_order_acquire) == 1;
+        }),
+        "inline reclaim advances capacity progress and starts the Direct draw");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::finishOne(queue),
+        "finish consumes the already inline-reclaimed Present sequence");
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+            queue, 2, directSource.front().seqId),
+        "ordered Flush submits the Direct session after inline startup");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+              queue, directSource);
+        }),
+        "inline schedule submits Direct draw without shutdown or writer "
+        "pressure");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, directSource) == 1,
+        "inline-reclaim Direct source completes and reclaims normally");
+}
+
+void productionLoopCreditsExactReadyAndWritingSuccessor() {
+  RuntimeFixture fixture;
+  for (std::uint64_t rawOrdinal = 1; rawOrdinal <= 7; ++rawOrdinal) {
+    fixture.publishArenaClearPages(rawOrdinal, 64);
+  }
+  fixture.publishArenaClearPages(8, 40);
+  for (std::uint64_t rawOrdinal = 9; rawOrdinal <= 31; ++rawOrdinal) {
+    fixture.publishArenaClearPages(rawOrdinal, 1);
+  }
+
+  auto& queue = fixture.routing->queue_;
+  const auto readyBeforeWriter =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  const auto statsBeforeWriter =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(readyBeforeWriter.size() == 31u &&
+            statsBeforeWriter.residentSources == 31u &&
+            statsBeforeWriter.residentPages == 511u,
+        "production fixture constructs the failed 31 Ready / 511-page "
+        "prefix exactly");
+
+  queue.submitClear(ClearDesc{});
+  const auto writingSnapshot =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          leaseAcquisitionCapacitySnapshot(queue);
+  const auto statsWithWriter =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+  check(writingSnapshot.valid &&
+            writingSnapshot.olderUnavailable ==
+                dxmt9::core::CpuReadyTape::LeaseCapacityClaim{} &&
+            writingSnapshot.orderedTailWritingSuccessor.has_value() &&
+            writingSnapshot.orderedTailWritingSuccessor->claim.pages == 1u &&
+            writingSnapshot.orderedTailWritingSuccessor->claim.readyEntries ==
+                1u &&
+            statsWithWriter.residentSources == 32u &&
+            statsWithWriter.residentPages == 512u &&
+            statsWithWriter.readyFifoEntries == 31u &&
+            statsWithWriter.readyPublicationReservations == 32u,
+        "production fixture exposes exactly 31 Ready plus one eligible "
+        "ordered-tail Writing successor");
+
+  std::atomic<bool> writerReturned{false};
+  std::atomic<bool> writerPublished{false};
+  std::thread writerThread([&] {
+    writerPublished.store(
+        dxmt9::CommandQueueArenaLeaseTestAccess::
+            publishLegacyWritingSlot(queue),
+        std::memory_order_release);
+    writerReturned.store(true, std::memory_order_release);
+  });
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+              writerPressureActive(queue);
+        }) && !writerReturned.load(std::memory_order_acquire),
+        "compatibility writer blocks in commitCurrentChunk at the physical "
+        "31-source inflight limit");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  auto backend = std::make_unique<ProductionLoopBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(backend));
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  struct ThreadGuard {
+    dxmt9::CommandQueue& queue;
+    std::thread& writer;
+    std::thread& encode;
+    ~ThreadGuard() {
+      if (encode.joinable() || writer.joinable()) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      }
+      if (writer.joinable()) {
+        writer.join();
+      }
+      if (encode.joinable()) {
+        encode.join();
+      }
+    }
+  } guard{queue, writerThread, encodeThread};
+
+  check(waitUntil([&] {
+          return backendState->observedBackendCalls.load(
+                     std::memory_order_acquire) >= 1u &&
+              writerReturned.load(std::memory_order_acquire);
+        }) && writerPublished.load(std::memory_order_acquire),
+        "first lease acquisition and encode retire the credited head so the "
+        "blocked writer publishes");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(queue) &&
+            !backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire),
+        "Ready/Writing progress uses neither stop nor a pressure-created "
+        "session submission");
+  check(waitUntil([&] {
+          return backendState->observedBackendCalls.load(
+                     std::memory_order_acquire) == 32u;
+        }),
+        "all 31 Ready sources and the published Writing successor encode");
+
+  check(!backendState->calls.empty(),
+        "Ready/Writing regression records production encode calls");
+  const auto session = backendState->calls.front().session;
+  check(session != 0 &&
+            std::all_of(
+                backendState->calls.begin(), backendState->calls.end(),
+                [session](const ProductionLoopBackendCall& call) {
+                  return call.session == session &&
+                      call.deferSessionFinalization;
+                }),
+        "credited successor remains on one deferred EncodeSession without "
+        "an artificial command-buffer or pass boundary");
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> allSources;
+  allSources.reserve(backendState->calls.size());
+  for (const auto& call : backendState->calls) {
+    check(call.sessionSource.has_value(),
+          "credited regression retains every completion source");
+    allSources.push_back(*call.sessionSource);
+  }
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+            queue, 31, allSources.back().seqId),
+        "explicit ordered fence submits the progressed session");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+              queue, allSources);
+        }) &&
+            backendState->backendCallCountAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 32u,
+        "only the explicit fence submits the complete 32-source session");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  writerThread.join();
+  encodeThread.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, allSources) == allSources.size(),
+        "credited session completes every source in FIFO order");
+}
+
 void productionLoopReleasesAtDeterministicCapBeforeWriterPressure() {
   RuntimeFixture fixture;
   for (std::uint64_t rawOrdinal = 1;
-       rawOrdinal <= dxmt9::kCommandChunkCount; ++rawOrdinal) {
+       rawOrdinal < dxmt9::kMaxQueuedChunks; ++rawOrdinal) {
     fixture.publishArenaClear(rawOrdinal);
   }
 
   auto& queue = fixture.routing->queue_;
-  const auto expectedSources =
+  const auto predecessorSources =
       dxmt9::CommandQueueArenaLeaseTestAccess::
           snapshotReadyCompletionSources(queue);
-  check(expectedSources.size() == dxmt9::kCommandChunkCount,
-        "writer-pressure fixture must occupy every queue control shell");
+  check(predecessorSources.size() == dxmt9::kMaxQueuedChunks - 1u,
+        "fixed-cap fixture leaves one compatibility publication slot");
 
   auto backendState = std::make_shared<ProductionLoopBackendState>();
   dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
@@ -851,8 +3927,6 @@ void productionLoopReleasesAtDeterministicCapBeforeWriterPressure() {
         runCpuReadySessionEncodeLoop(queue);
   });
 
-  const auto predecessorSources = std::span(expectedSources).first(
-      dxmt9::kMaxQueuedChunks);
   const bool pendingParked = waitUntil([&] {
     return backendState->observedBackendCalls.load(std::memory_order_acquire) ==
            predecessorSources.size();
@@ -865,67 +3939,205 @@ void productionLoopReleasesAtDeterministicCapBeforeWriterPressure() {
           "parking the Ready suffix behind submitted residency");
   }
 
-  // The fixed 31-source cap submits before any writer is started. Live writer
-  // pressure therefore has no release identity and cannot change grouping.
-  const bool submittedAtFixedCap = waitUntil([&] {
-    return backendState->firstRecordPostCommitRan.load(
-        std::memory_order_acquire);
-  });
-  if (!submittedAtFixedCap) {
-    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
-    encodeThread.join();
-    check(false,
-          "the deterministic source cap must submit its predecessor prefix");
+  constexpr std::size_t kSuccessorCount = 10u;
+  for (std::size_t i = 0; i < kSuccessorCount; ++i) {
+    queue.submitClear(ClearDesc{});
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::publishLegacyWritingSlot(
+              queue),
+          "post-encode retirement must reopen compatibility publication");
+    check(waitUntil([&] {
+            return backendState->observedBackendCalls.load(
+                       std::memory_order_acquire) ==
+                predecessorSources.size() + i + 1u;
+          }),
+          "each successor must join the still-open encoded session");
   }
+  const std::size_t expectedCount =
+      predecessorSources.size() + kSuccessorCount;
+  check(expectedCount > 30u && backendState->calls.size() == expectedCount,
+        "one live session must encode more than the former 30-source cap");
+  check(!backendState->firstRecordPostCommitRan.load(
+            std::memory_order_acquire),
+        "physical residency release must not submit the open session");
+  const auto session = backendState->calls.front().session;
+  check(std::all_of(
+            backendState->calls.begin(), backendState->calls.end(),
+            [session](const ProductionLoopBackendCall& call) {
+              return call.session == session;
+            }),
+        "all post-retirement successors stay on one EncodeSession");
 
-  const std::size_t finishedSources =
-      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
-          queue, predecessorSources);
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
-            queue, dxmt9::kCommandChunkCount,
-            expectedSources.back().seqId),
-        "explicit ordered control submits the final cap suffix");
-  const auto suffix = std::span(expectedSources).last(1);
-  check(waitUntil([&] {
-          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
-              queue, suffix);
-        }),
-        "ordered reclaim releases the next fixed lease and the ordered "
-        "control submits the final cap suffix");
-
-  std::atomic<bool> writerFinished{false};
-  std::atomic<bool> writerAcquired{false};
-  std::thread writerThread([&] {
-    writerAcquired.store(
-        dxmt9::CommandQueueArenaLeaseTestAccess::ensureAndAbortEmptyWriter(
-            queue),
-        std::memory_order_release);
-    writerFinished.store(true, std::memory_order_release);
-  });
-  const bool writerProceeded = waitUntil([&] {
-    return writerFinished.load(std::memory_order_acquire);
-  });
-  writerThread.join();
   dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   encodeThread.join();
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> allSources;
+  allSources.reserve(backendState->calls.size());
+  for (const auto& call : backendState->calls) {
+    check(call.sessionSource.has_value(),
+          "every encoded source retains completion attribution");
+    allSources.push_back(*call.sessionSource);
+  }
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, allSources),
+        "shutdown submits the locator-free completion ledger");
+  const std::size_t finishedSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+          queue, allSources);
+  check(backendState->backendCallCountAtFirstRecordSubmit.load(
+            std::memory_order_relaxed) == expectedCount,
+        "the former residency cap no longer creates a submission boundary");
+  check(finishedSources == expectedCount,
+        "the expanded session completes every receipt in FIFO order");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
+        "post-encode retirement leaves no payload residency");
+}
 
+void productionLoopAttributesSessionCapCloseToSameKeyReopen(
+    bool expectAttribution) {
+  RuntimeFixture fixture;
+  constexpr std::uint64_t kTargetA = 0xCA900u;
+  for (std::uint64_t rawOrdinal = 1;
+       rawOrdinal < dxmt9::kMaxQueuedChunks; ++rawOrdinal) {
+    fixture.publishArenaTargetDraw(rawOrdinal, kTargetA);
+  }
+
+  auto& queue = fixture.routing->queue_;
+  const auto predecessorSources =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(predecessorSources.size() == dxmt9::kMaxQueuedChunks - 1u,
+        "close-attribution fixture fills the 30-source session prefix");
+
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->observeFirstRecordSubmit = true;
+  backendState->disableMidChunkCommits = true;
+  auto backend = std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, backend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(backend));
+  const auto before =
+      dxmt9::perf::test::snapshotRenderPassCloseAttribution();
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  struct EncodeThreadGuard {
+    dxmt9::CommandQueue& queue;
+    std::thread& thread;
+    ~EncodeThreadGuard() {
+      if (thread.joinable()) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+        thread.join();
+      }
+    }
+  } encodeThreadGuard{queue, encodeThread};
+  if (!waitUntil([&] {
+        return backendState->observedCalls.load(std::memory_order_acquire) ==
+            predecessorSources.size();
+      })) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false, "close-attribution prefix must park as one open pass");
+  }
+
+  constexpr std::size_t kWorkCap =
+      dxmt9::core::metalqueue::kMaxEncodeSessionSources;
+  for (std::size_t sourceCount = predecessorSources.size();
+       sourceCount < kWorkCap; ++sourceCount) {
+    try {
+      fixture.publishLegacyTargetDraw(kTargetA);
+    } catch (...) {
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      encodeThread.join();
+      check(false,
+            "post-encode credit must publish every source through work cap");
+    }
+    if (!waitUntil([&] {
+          return backendState->observedCalls.load(
+                     std::memory_order_acquire) == sourceCount + 1u;
+        })) {
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      encodeThread.join();
+      check(false, "eligible source must join through the fixed work cap");
+    }
+    check(!backendState->firstRecordPostCommitRan.load(
+              std::memory_order_acquire),
+          "residency reuse must not close below the encoded-work cap");
+  }
+
+  try {
+    fixture.publishLegacyTargetDraw(kTargetA);
+  } catch (...) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false, "work-cap successor must publish after receipt retirement");
+  }
+  if (!waitUntil([&] {
+        return backendState->observedCalls.load(std::memory_order_acquire) ==
+                   kWorkCap + 1u &&
+            backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire);
+      })) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    check(false, "the 129th source must close the deterministic work cap");
+  }
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> prefix;
+  prefix.reserve(kWorkCap);
+  for (std::size_t i = 0; i < kWorkCap; ++i) {
+    check(backendState->calls[i].sessionSource.has_value(),
+          "work-cap predecessor keeps completion attribution");
+    prefix.push_back(*backendState->calls[i].sessionSource);
+  }
+  check(backendState->calls.back().sessionSource.has_value(),
+        "work-cap successor keeps completion attribution");
+  const std::array suffix{*backendState->calls.back().sessionSource};
+  const auto predecessorSession = backendState->calls.front().session;
+  check(std::all_of(
+            backendState->calls.begin(),
+            backendState->calls.begin() + kWorkCap,
+            [predecessorSession](const ProductionLoopBackendCall& call) {
+              return call.session == predecessorSession;
+            }) &&
+            backendState->calls.front().createdCommandBuffer &&
+            backendState->calls.back().createdCommandBuffer,
+        "exactly 128 sources share the predecessor session before reopen");
+  check(backendState->backendCallsAtFirstRecordSubmit.load(
+            std::memory_order_relaxed) == kWorkCap,
+        "work-cap submission fences exactly the bounded predecessor");
+
+  const auto afterReopen =
+      dxmt9::perf::test::snapshotRenderPassCloseAttribution();
+  check(expectAttribution
+            ? afterReopen.finalSessionCap == before.finalSessionCap + 1u &&
+                  afterReopen.adjacentSessionCap ==
+                      before.adjacentSessionCap + 1u &&
+                  afterReopen.finalRecorded == before.finalRecorded + 1u
+            : afterReopen.finalSessionCap == before.finalSessionCap &&
+                  afterReopen.adjacentSessionCap ==
+                      before.adjacentSessionCap &&
+                  afterReopen.recorded == before.recorded &&
+                  afterReopen.finalRecorded == before.finalRecorded,
+        expectAttribution
+            ? "the work-cap close token owns the exact same-key reopen"
+            : "perf-off work-cap finalization performs no attribution work");
+  check(backendState->renderPassBegins == 2u,
+        "the deterministic cap creates exactly one same-key reopen");
+
+  const std::size_t finishedPrefix =
+      dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(queue, prefix);
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
   check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
             queue, suffix),
-        "ordered control submits the still-Ready cap suffix through its own "
-        "session");
+        "shutdown submits the one-source work-cap successor");
   const std::size_t finishedSuffix =
       dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(queue, suffix);
-
-  check(backendState->backendCallCountAtFirstRecordSubmit.load(
-            std::memory_order_relaxed) == predecessorSources.size(),
-        "fixed cap fences exactly the deterministic predecessor prefix");
-  check(finishedSources == predecessorSources.size() && finishedSuffix == 1,
-        "cap predecessor and Ready suffix complete through separate sessions");
-  check(writerProceeded && writerAcquired.load(std::memory_order_acquire),
-        "completion of the cap-released prefix must unblock the actual "
-        "compatibility writer");
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0,
-        "cap and suffix completion must leave no Arena residency");
+  check(finishedPrefix == kWorkCap && finishedSuffix == 1u &&
+            backendState->renderPassEnds == 2u,
+        "both work-cap pass instances complete once in FIFO order");
 }
 
 void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
@@ -1009,6 +4221,131 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
             queue, expectedSources) == expectedSources.size(),
         "ClosePass fixture completes every merged source after final submit");
+}
+
+void orderedClosePassEnablesYoungerMovedHeadOnSameSession() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      enableCpuReadySessionReleaseLane(queue);
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = true;
+  backendState->disableMidChunkCommits = true;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+  dxmt9::CommandQueueArenaLeaseTestAccess::
+      pauseAfterNextSessionReleaseAck(queue);
+
+  constexpr std::uint64_t kTargetA = 0xA540u;
+  constexpr std::uint64_t kTargetB = 0xB540u;
+  fixture.publishArenaTargetDraw(1u, kTargetA);
+  const auto headSource =
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+  check(headSource.size() == 1 && headSource.front().seqId == 1,
+        "closed-frontier queue fixture publishes head A alone");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  std::atomic<bool> releaseResult{false};
+  std::thread releaseThread;
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> suffixSources;
+  try {
+    check(waitUntil([&] {
+            return backendState->firstCallEncoded.load(
+                std::memory_order_acquire);
+          }),
+          "head A opens its real production session pass");
+
+    releaseThread = std::thread([&] {
+      releaseResult.store(
+          queue.releaseCpuReadySessionBeforeOrderedControl(
+              dxmt9::core::metalqueue::SessionReleaseReason::
+                  DirectObservation,
+              dxmt9::core::metalqueue::SessionReleaseAction::ClosePass, 1u),
+          std::memory_order_release);
+    });
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::
+                hasPendingSessionRelease(queue);
+          }),
+          "ordered ClosePass publishes the head fence");
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    check(waitUntil([&] {
+            return dxmt9::CommandQueueArenaLeaseTestAccess::
+                pausedAfterSessionReleaseAck(queue);
+          }),
+          "coordinator closes head A before admitting a younger source");
+    releaseThread.join();
+    check(releaseResult.load(std::memory_order_acquire),
+          "ordered ClosePass acknowledges its exact head fence");
+    check(backendState->observedCalls.load(std::memory_order_acquire) == 1,
+          "ClosePass itself does not create a backend replay call");
+
+    fixture.publishArenaMovedHeadReturn(2u, kTargetA, kTargetB);
+    suffixSources = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(suffixSources.size() == 1 && suffixSources.front().seqId == 2,
+          "younger source-local A-B-A stays Ready behind the close fence");
+    check(backendState->observedCalls.load(std::memory_order_acquire) == 1,
+          "paused acknowledgement prevents early younger replay");
+
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        resumeAfterSessionReleaseAck(queue);
+    check(waitUntil([&] {
+            return backendState->observedCalls.load(
+                       std::memory_order_acquire) == 2;
+          }),
+          "younger moved-head source appends after ordered close");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        resumeAfterSessionReleaseAck(queue);
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    if (releaseThread.joinable()) {
+      releaseThread.join();
+    }
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->calls.size() == 2 &&
+            backendState->calls[0].seqId == 1 &&
+            backendState->calls[1].seqId == 2,
+        "queue path encodes the natural source sequence exactly once");
+  check(backendState->calls[0].session != 0 &&
+            backendState->calls[0].session == backendState->calls[1].session,
+        "ordered ClosePass retains one EncodeSession");
+  check(backendState->calls[0].commandBuffer != NULL_OBJECT_HANDLE &&
+            backendState->calls[0].commandBuffer ==
+                backendState->calls[1].commandBuffer,
+        "closed frontier retains the same command-buffer carrier");
+  check(backendState->encodedSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u, 2u, 2u}) &&
+            backendState->encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 1u, 0u, 2u}),
+        "queue path replays prior A then younger B,A1,A2");
+  check(backendState->renderPassBegins == 3 &&
+            backendState->renderPassEnds == 3,
+        "queue path closes prior A and finalizes younger B,A without extras");
+
+  std::array expectedSources{headSource.front(), suffixSources.front()};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "one final session submission covers head and younger source");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size(),
+        "moved replay completion expands in natural FIFO order");
 }
 
 void orderedSubmitAcknowledgesAfterNonPresentPrefixSubmission() {
@@ -1626,12 +4963,6 @@ void neutralPrefixSelectorAdmitsMixedCandidates() {
 // ---------------------------------------------------------------------------
 // Encoder seam: two Arena sources share one session and one command buffer.
 
-template <typename WmtType>
-WMT::Reference<WmtType> retainedToken(const char* label) {
-  auto owner = WMT::MakeString(label, WMTUTF8StringEncoding);
-  return WMT::Reference<WmtType>(WmtType{owner.handle});
-}
-
 struct EncoderHarness {
   dxmt9::core::BackendLimits limits{};
   dxmt9::resources::Pool pool{};
@@ -1809,7 +5140,27 @@ void mixedLegacyAndArenaSourcesShareOneSubmission() {
 }  // namespace
 
 int main() {
+  const bool perfOffCase =
+      std::getenv("DXMT9_SESSION_JOIN_PERF_OFF_CASE") != nullptr;
+  if (perfOffCase) {
+    unsetenv("DXMT_PERF_COUNTERS");
+  } else {
+    setenv("DXMT_PERF_COUNTERS", "1", 1);
+  }
+  setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
   try {
+    if (perfOffCase) {
+      productionLoopPerfOffKeepsSeedPlanWithoutTicketWork();
+      productionLoopAttributesSessionCapCloseToSameKeyReopen(false);
+      return 0;
+    }
+    if (const char* splitCase =
+            std::getenv("DXMT9_SESSION_JOIN_SPLIT_POLICY_CASE");
+        splitCase && std::strcmp(splitCase, "per-n-records") == 0) {
+      productionLoopPlansFreshRepeatedSourceWindow();
+      return 0;
+    }
     payloadPredicatesAreSourceKindNeutral();
     neutralPrefixSelectorAdmitsMixedCandidates();
     arenaSessionCarryAcrossSourcesSharesOneCommandBuffer();
@@ -1817,8 +5168,36 @@ int main() {
     mixedLegacyAndArenaSourcesShareOneSubmission();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
+    productionLoopPlansSeparateBThenASourcesIntoOneCarrier();
+    productionLoopCanonicalizesNaturalCarrierBeforeReorderedComposite();
+    productionLoopPlansFreshRepeatedSourceWindow();
+    productionLoopRetainsOneReadyHeadForExactWritingSuccessor();
+    productionLoopConsumesOneReadyHeadBehindActiveSession();
+    productionLoopRestoresRetainedHeadBeforeStopDrain();
+    productionLoopRestoresRetainedHeadBeforeOrderedRelease();
+    plannerUnlockRestoresExactPrefixBeforeOrderedRelease();
+    compositeObserverDoesNotOwnSchedulingMutex();
+    productionLoopNaturalSourceKeepsDefaultPassSplitBaseline();
+    productionLoopAttributesNaturalFallbackAbaWithinOneWindow();
+    productionLoopAttributesExactActiveSeedBridge();
+    productionLoopRejectsWrongActiveSeedBridgeTarget();
+    productionLoopAttributesExactActiveSeedContinuation();
+    productionLoopDropsOnlyTicketWhenActiveSeedInstanceTurnsStale();
+    productionLoopAttributesPermutationRejectedFallbackWindow();
+    productionLoopBoundsFreshNineReadySources();
+    productionLoopRevisitsOneSourceWithoutRepeatingItsPreamble();
+    productionLoopStoreProofLookaheadOverflowFailsClosed();
+    productionLoopOrderedReleaseFencesRawInterposition();
+    productionLoopBoundsNineReadySourcesToFirstPlanningWindow();
+    productionLoopCarriesActivePassAcrossBoundedWindowEdge();
+    productionLoopPlansPrefixBeforePresentBoundary();
+    productionLoopLeaseWaitResumesAfterGpuReclaim();
+    productionLoopLeaseWaitResumesAfterInlineReclaim();
+    productionLoopCreditsExactReadyAndWritingSuccessor();
     productionLoopReleasesAtDeterministicCapBeforeWriterPressure();
+    productionLoopAttributesSessionCapCloseToSameKeyReopen(true);
     orderedClosePassKeepsFencedSuffixReadyAndPreservesSession();
+    orderedClosePassEnablesYoungerMovedHeadOnSameSession();
     orderedSubmitAcknowledgesAfterNonPresentPrefixSubmission();
     tentativeCoordinatorPreflightRestoresExactFifoOrder();
     productionReplayFencesQueryBetweenOlderAndYoungerDraws();

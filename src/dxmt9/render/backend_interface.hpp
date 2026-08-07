@@ -10,6 +10,7 @@
 //   - core::ChunkSlot (via dxmt9_backend_types.hpp)
 //   - core::metalqueue::QueueSubmissionRecord (via dxmt9_queue.hpp)
 #include "../dxmt9_draw_encoder.hpp"
+#include "../framegraph/fg_multi_source_planner.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +28,26 @@ struct BackendCaps {
   bool supports_icb = false;
   bool supports_argbuf_tier2 = false;
   std::uint32_t max_mesh_threadgroup = 0;
+};
+
+// Typed replay frontier for bounded cross-source planning. A clean frontier
+// carries no virtual predecessor; an active frontier must carry one complete
+// dependency snapshot. All other storage states are ineligible.
+struct MultiSourceSessionReplayFrontier {
+  encoders::EncodeSessionReplayFrontierState state =
+      encoders::EncodeSessionReplayFrontierState::InjectedUnknown;
+  std::optional<encoders::ActiveRenderDependencySnapshot> activeRender{};
+  bool collectActiveSeedMergeWitnesses = false;
+
+  bool valid() const noexcept {
+    if (state == encoders::EncodeSessionReplayFrontierState::
+                     CleanClosedEncoderNoPendingClear) {
+      return !activeRender.has_value();
+    }
+    return state == encoders::EncodeSessionReplayFrontierState::
+                        ActiveRenderComplete &&
+           activeRender.has_value() && activeRender->complete;
+  }
 };
 
 class IRenderBackend {
@@ -72,6 +93,25 @@ class IRenderBackend {
       const core::ChunkSlot& /*slot*/) {
     return {};
   }
+  // Bounded, side-effect-free planning seam for a FIFO window pinned by a
+  // TentativeRepresented reservation. The coordinator calls this with its
+  // scheduling mutex released, then revalidates the exact reservation before
+  // committing it. The default is InvalidInput so non-FrameGraph backends and
+  // unsupported feature profiles preserve the natural per-source loop.
+  virtual framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
+      const resources::Pool& /*pool*/,
+      std::span<const core::metalqueue::ResolvedPublishedSource> /*sources*/,
+      const MultiSourceSessionReplayFrontier& /*frontier*/) {
+    return {};
+  }
+  // Transaction-level observer seam for a qualified composite replay. After
+  // every fragment effect and carrier fold succeeds, the queue invokes it
+  // exactly once in natural FIFO source order with the scheduling mutex
+  // released. Fragment calls set skipBackendPlanning so per-source debug
+  // observation is neither lost nor duplicated.
+  virtual void observeMultiSourceSessionReplay(
+      const resources::Pool& /*pool*/,
+      std::span<const core::metalqueue::ResolvedPublishedSource> /*sources*/) {}
 };
 
 }  // namespace dxmt9::render

@@ -38,6 +38,7 @@
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/winemetal/winemetal.h"
 
@@ -150,6 +151,34 @@ void appendClearOnColor(ChunkSlot& slot, Handle colorHandle) {
   ClearDesc desc{};
   desc.colorAttachments[0].handle = colorHandle;
   desc.clearColor = true;
+  slot.appendClear(desc);
+}
+
+void appendClearOnDepthAspect(ChunkSlot& slot,
+                              Handle depthHandle,
+                              bool clearDepth,
+                              bool clearStencil,
+                              bool partial = false) {
+  ClearDesc desc{};
+  desc.depthStencil.handle = depthHandle;
+  desc.clearDepth = clearDepth;
+  desc.clearStencil = clearStencil;
+  if (partial) {
+    desc.rects.push_back({.left = 0, .top = 0, .right = 4, .bottom = 4});
+  }
+  slot.appendClear(desc);
+}
+
+void appendClearOnColorSlot(ChunkSlot& slot,
+                            std::size_t attachmentIndex,
+                            Handle colorHandle,
+                            bool partial = false) {
+  ClearDesc desc{};
+  desc.colorAttachments[attachmentIndex].handle = colorHandle;
+  desc.clearColor = true;
+  if (partial) {
+    desc.rects.push_back({.left = 0, .top = 0, .right = 4, .bottom = 4});
+  }
   slot.appendClear(desc);
 }
 
@@ -525,6 +554,244 @@ void testReorderedStoreProofFollowsReplayOrder() {
           "R-BACK-15.7 invalid replay index falls back to defensive Store");
 }
 
+dxmt9::core::CpuReadyTape::SourceRef makeLookaheadSourceRef(
+    std::uint32_t index,
+    std::uint32_t firstPage) {
+  return {
+      .id = {.index = index, .generation = 7u},
+      .storage = {
+          .firstPage = firstPage,
+          .pageCount = 1u,
+          .generation = 11u,
+      },
+  };
+}
+
+dxmt9::core::metalqueue::ResolvedPublishedSource makeResolvedLookaheadSource(
+    ChunkSlot& slot,
+    dxmt9::core::CpuReadyTape::SourceRef source,
+    std::size_t slotIndex,
+    std::uint64_t seqId) {
+  return {
+      .source = source,
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .payload = dxmt9::core::SourcePayloadView(slot),
+      .sourceId = source.id,
+      .storage = source.storage,
+      .slot = &slot,
+      .commandBegin = 0u,
+      .commandCount = slot.commandCount(),
+  };
+}
+
+void testReplayPlanComposesRetainedSourceSuffix() {
+  using Cause = dxmt9::perf::RenderPassNoLookaheadCause;
+  using Input = dxmt9::encoders::RenderPassStoreProofLookaheadInput;
+  using Plan = dxmt9::encoders::RenderPassStoreProofLookaheadPlan;
+
+  const Handle color{0xC019u};
+  ChunkSlot current;
+  appendDrawRunWithColor(current, Handle{0xC119u});
+  appendDrawRunWithColor(current, color);
+  ChunkSlot future;
+  appendClearOnColor(future, color);
+
+  const auto currentRef = makeLookaheadSourceRef(3u, 5u);
+  const auto futureRef = makeLookaheadSourceRef(4u, 6u);
+  constexpr std::size_t slotIndex = 2u;
+  constexpr std::uint64_t seqId = 41u;
+  const dxmt9::core::metalqueue::QueueCompletionSource completion{
+      .source = currentRef,
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .commandBegin = 0u,
+      .commandCount = current.commandCount(),
+  };
+  const std::array retained{
+      makeResolvedLookaheadSource(current, currentRef, slotIndex, seqId),
+      makeResolvedLookaheadSource(future, futureRef, slotIndex + 1u,
+                                  seqId + 1u),
+  };
+  // The pass-opening command is source command 1. Its reordered current-source
+  // tail is command 0; the future source then contributes the matching Clear.
+  const std::array<std::uint32_t, 2> replayOrder{{1u, 0u}};
+  const std::array<std::size_t, 2> replayOrdinals{{1u, 0u}};
+  const Input validInput{
+      .slotIndex = slotIndex,
+      .payload = dxmt9::core::SourcePayloadView(current),
+      .sourceSeqId = seqId,
+      .replayRange = {.commandBegin = 0u,
+                      .commandEnd = current.commandCount(),
+                      .valid = true},
+      .sessionSource = &completion,
+      .partitionSource = currentRef,
+      .retainedSources = retained,
+      .replayCommandPlanActive = true,
+      .replayCommandOrder = replayOrder,
+      .replayOrdinalByCommandIndex = replayOrdinals,
+      .lookaheadStartIndex = 1u,
+  };
+  const Plan valid =
+      dxmt9::encoders::makeRenderPassStoreProofLookaheadPlan(validInput);
+  check(!valid.invalid && !valid.storageTruncated && valid.count == 2u,
+        "replay Store proof composes current and retained suffixes once");
+  check(valid.sources[0].commandOrder.data() == replayOrder.data() &&
+            valid.sources[0].firstCommandIndex == 1u &&
+            valid.sources[1].commandOrder.empty() &&
+            valid.sources[1].firstCommandIndex == 0u,
+        "composite suffix keeps reordered current tail before future source");
+  std::uint32_t distance = 0;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              valid.view(), color, &distance),
+          ColorProof::AllowNextClear,
+          "reordered current tail reaches retained next-source clear");
+  checkEq(distance, 2u,
+          "current replay tail is not duplicated before retained clear");
+
+  // The opening draw may be the final replay ordinal. Keep the empty current
+  // descriptor so the already-retained next source remains visible to the
+  // proof walker, but do not manufacture a duplicate natural-order suffix.
+  ChunkSlot finalCurrent;
+  appendDrawRunWithColor(finalCurrent, color);
+  ChunkSlot finalFuture;
+  appendClearOnColor(finalFuture, color);
+  const auto finalCurrentRef = makeLookaheadSourceRef(8u, 9u);
+  const auto finalFutureRef = makeLookaheadSourceRef(9u, 10u);
+  constexpr std::size_t finalSlotIndex = 7u;
+  constexpr std::uint64_t finalSeqId = 91u;
+  const dxmt9::core::metalqueue::QueueCompletionSource finalCompletion{
+      .source = finalCurrentRef,
+      .slotIndex = finalSlotIndex,
+      .seqId = finalSeqId,
+      .commandBegin = 0u,
+      .commandCount = finalCurrent.commandCount(),
+  };
+  const std::array finalRetained{
+      makeResolvedLookaheadSource(finalCurrent, finalCurrentRef,
+                                  finalSlotIndex, finalSeqId),
+      makeResolvedLookaheadSource(finalFuture, finalFutureRef,
+                                  finalSlotIndex + 1u, finalSeqId + 1u),
+  };
+  const std::array<std::uint32_t, 1> finalReplayOrder{{0u}};
+  const std::array<std::size_t, 1> finalReplayOrdinals{{0u}};
+  const Input emptyCurrentSuffix{
+      .slotIndex = finalSlotIndex,
+      .payload = dxmt9::core::SourcePayloadView(finalCurrent),
+      .sourceSeqId = finalSeqId,
+      .replayRange = {.commandBegin = 0u,
+                      .commandEnd = finalCurrent.commandCount(),
+                      .valid = true},
+      .sessionSource = &finalCompletion,
+      .partitionSource = finalCurrentRef,
+      .retainedSources = finalRetained,
+      .replayCommandPlanActive = true,
+      .replayCommandOrder = finalReplayOrder,
+      .replayOrdinalByCommandIndex = finalReplayOrdinals,
+      .lookaheadStartIndex = 0u,
+  };
+  const Plan emptyThenFuture =
+      dxmt9::encoders::makeRenderPassStoreProofLookaheadPlan(
+          emptyCurrentSuffix);
+  check(!emptyThenFuture.invalid && !emptyThenFuture.storageTruncated &&
+            emptyThenFuture.count == 2u &&
+            emptyThenFuture.sources[0].firstCommandIndex == 1u &&
+            emptyThenFuture.sources[0].commandEndIndex == 1u,
+        "empty current replay suffix retains the next source");
+  distance = 0;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              emptyThenFuture.view(), color, &distance),
+          ColorProof::AllowNextClear,
+          "empty current replay suffix reaches retained next-source clear");
+  checkEq(distance, 1u,
+          "empty current replay suffix does not add a command distance");
+
+  auto emptyCurrentOnly = emptyCurrentSuffix;
+  emptyCurrentOnly.retainedSources =
+      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>(
+          finalRetained.data(), 1u);
+  const Plan emptyOnly =
+      dxmt9::encoders::makeRenderPassStoreProofLookaheadPlan(emptyCurrentOnly);
+  check(!emptyOnly.invalid && !emptyOnly.storageTruncated &&
+            emptyOnly.count == 1u &&
+            emptyOnly.sources[0].firstCommandIndex == 1u &&
+            emptyOnly.sources[0].commandEndIndex == 1u,
+        "empty final replay suffix remains a valid bounded view");
+  Cause emptyOnlyCause = Cause::Empty;
+  const dxmt9::encoders::RenderPassStoreProofActivePass deferredActive{
+      .lookaheadMayHaveFutureSources = true,
+  };
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              emptyOnly.view(), color, nullptr, {}, deferredActive, 0u,
+              &emptyOnlyCause),
+          ColorProof::BlockNoLookahead,
+          "empty final replay suffix cannot prove death before publication");
+  checkEq(emptyOnlyCause, Cause::SuffixExhausted,
+          "empty final replay suffix reports suffix exhaustion");
+
+  auto expectInvalid = [&](const Input& input, std::string_view message) {
+    const Plan plan =
+        dxmt9::encoders::makeRenderPassStoreProofLookaheadPlan(input);
+    check(plan.invalid && !plan.storageTruncated, message);
+    Cause cause = Cause::Empty;
+    const dxmt9::encoders::RenderPassStoreProofActivePass active{
+        .lookaheadMayHaveFutureSources = true,
+        .lookaheadInvalid = plan.invalid,
+        .lookaheadStorageTruncated = plan.storageTruncated,
+    };
+    checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+                plan.view(), color, nullptr, {}, active, 0u, &cause),
+            ColorProof::BlockNoLookahead,
+            "invalid composite suffix fails closed");
+    checkEq(cause, Cause::Invalid,
+            "invalid composite suffix reports Invalid");
+  };
+
+  auto mismatch = validInput;
+  mismatch.sourceSeqId += 1u;
+  expectInvalid(mismatch, "mismatched current source identity is invalid");
+
+  auto missingCurrent = validInput;
+  missingCurrent.retainedSources =
+      std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>(
+          retained.data() + 1u, 1u);
+  expectInvalid(missingCurrent,
+                "retained suffix without current identity is invalid");
+
+  const std::array<std::size_t, 2> invalidOrdinals{{0u, 9u}};
+  auto invalidReplayIndex = validInput;
+  invalidReplayIndex.replayOrdinalByCommandIndex = invalidOrdinals;
+  expectInvalid(invalidReplayIndex,
+                "out-of-range replay ordinal is invalid");
+
+  std::array<dxmt9::core::metalqueue::ResolvedPublishedSource,
+             dxmt9::core::metalqueue::kMaxReadyPrefixSources + 1u>
+      overflow{};
+  overflow[0] = retained[0];
+  for (std::size_t i = 1; i < overflow.size(); ++i) {
+    overflow[i] = retained[1];
+  }
+  auto overflowInput = validInput;
+  overflowInput.retainedSources = overflow;
+  expectInvalid(overflowInput,
+                "composite suffix capacity overflow is invalid");
+
+  std::array<dxmt9::core::metalqueue::ResolvedPublishedSource,
+             dxmt9::core::metalqueue::kMaxReadyPrefixSources>
+      atCapacity{};
+  atCapacity[0] = retained[0];
+  for (std::size_t i = 1; i < atCapacity.size(); ++i) {
+    atCapacity[i] = retained[1];
+  }
+  auto atCapacityInput = validInput;
+  atCapacityInput.retainedSources = atCapacity;
+  const Plan full =
+      dxmt9::encoders::makeRenderPassStoreProofLookaheadPlan(atCapacityInput);
+  check(!full.invalid && !full.storageTruncated &&
+            full.count == dxmt9::core::metalqueue::kMaxReadyPrefixSources,
+        "composite suffix accepts the exact fixed-capacity boundary");
+}
+
 void testDepthForcedStoreOnNextRead() {
   // R-BACK-15.15 / defensive Store: if the next record after our DrawRun
   // is itself a DrawRun that re-binds the same depth handle (live-out
@@ -743,6 +1010,15 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
           "R-BACK-2.48 selected suffix sees depth clear in next source");
   checkEq(distance, 1u,
           "R-BACK-2.48 first touch distance spans source boundary");
+  const dxmt9::encoders::RenderPassStoreProofActivePass continuingDepth{
+      .lookaheadMayHaveFutureSources = true,
+  };
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  depthClearSources.data(), depthClearSources.size()),
+              depth, nullptr, {}, continuingDepth),
+          DepthProof::AllowNextClear,
+          "R-BACK-2.48 future source cannot invalidate an observed depth clear");
 
   ChunkSlot depthDrawTail;
   appendDrawRunWithDepth(depthDrawTail, depth);
@@ -774,6 +1050,12 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
               depth),
           DepthProof::AllowDeadNoPresent,
           "R-BACK-2.48 selected suffix respects bounded depth source ranges");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  boundedDepthSources.data(), boundedDepthSources.size()),
+              depth, nullptr, {}, continuingDepth),
+          DepthProof::BlockNoLookahead,
+          "R-BACK-2.48 deferred session cannot infer depth dead at prefix end");
 
   Handle color{0xC242u};
   ChunkSlot colorHead;
@@ -790,6 +1072,15 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
               color),
           ColorProof::AllowNextClear,
           "R-BACK-2.48 selected suffix sees color clear in next source");
+  const dxmt9::encoders::RenderPassStoreProofActivePass continuingColor{
+      .lookaheadMayHaveFutureSources = true,
+  };
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  colorClearSources.data(), colorClearSources.size()),
+              color, nullptr, {}, continuingColor),
+          ColorProof::AllowNextClear,
+          "R-BACK-2.48 future source cannot invalidate an observed color clear");
 
   ChunkSlot colorPresentTail;
   appendPresent(colorPresentTail, color);
@@ -820,6 +1111,158 @@ void testEncodeSessionLookaheadAcrossSelectedSources() {
                 boundedColorSources.data(), boundedColorSources.size()),
             color) != ColorProof::BlockPresent,
         "R-BACK-2.48 selected suffix respects bounded color source ranges");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(
+                  boundedColorSources.data(), boundedColorSources.size()),
+              color, nullptr, {}, continuingColor),
+          ColorProof::BlockNoLookahead,
+          "R-BACK-2.48 deferred session cannot infer color dead at prefix end");
+}
+
+void testExactFullClearProofAndNoLookaheadCauses() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  using Cause = dxmt9::perf::RenderPassNoLookaheadCause;
+
+  const Handle depth{0xD25Au};
+  ChunkSlot stencilOnly;
+  appendDrawRunWithDepth(stencilOnly, depth);
+  appendClearOnDepthAspect(stencilOnly, depth, false, true);
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              stencilOnly, 0u, depth, nullptr, {}, {}, Aspect::Depth),
+          DepthProof::BlockClearMismatch,
+          "stencil-only clear cannot discard depth");
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              stencilOnly, 0u, depth, nullptr, {}, {}, Aspect::Stencil),
+          DepthProof::AllowNextClear,
+          "stencil-only full clear may discard stencil");
+
+  ChunkSlot partialDepth;
+  appendDrawRunWithDepth(partialDepth, depth);
+  appendClearOnDepthAspect(partialDepth, depth, true, false, true);
+  checkEq(dxmt9::encoders::depthStoreProofForLookahead(
+              partialDepth, 0u, depth, nullptr, {}, {}, Aspect::Depth),
+          DepthProof::BlockClearMismatch,
+          "partial depth clear cannot discard the full depth attachment");
+
+  const Handle color{0xC25Au};
+  ChunkSlot wrongColorSlot;
+  appendDrawRunWithColor(wrongColorSlot, color);
+  appendClearOnColorSlot(wrongColorSlot, 1u, color);
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              wrongColorSlot, 0u, color, nullptr, {}, {}, 0u),
+          ColorProof::BlockClearMismatch,
+          "color clear must match the attachment slot and handle");
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              wrongColorSlot, 0u, color, nullptr, {}, {}, 1u),
+          ColorProof::AllowNextClear,
+          "matching color slot and handle permits discard");
+
+  ChunkSlot partialColor;
+  appendDrawRunWithColor(partialColor, color);
+  appendClearOnColorSlot(partialColor, 0u, color, true);
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              partialColor, 0u, color),
+          ColorProof::BlockClearMismatch,
+          "partial color clear cannot discard the full color attachment");
+
+  Cause cause = Cause::StorageTruncated;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>{}, color, nullptr, {}, {}, 0u,
+              &cause),
+          ColorProof::BlockNoLookahead,
+          "empty lookahead stays defensive");
+  checkEq(cause, Cause::Empty, "empty lookahead cause is explicit");
+
+  const LookaheadSource invalid{};
+  cause = Cause::Empty;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(&invalid, 1u), color, nullptr,
+              {}, {}, 0u, &cause),
+          ColorProof::BlockNoLookahead,
+          "invalid lookahead stays defensive");
+  checkEq(cause, Cause::Invalid, "invalid lookahead cause is explicit");
+
+  ChunkSlot exhaustedSlot;
+  appendDrawRunWithColor(exhaustedSlot, Handle{0xC25Bu});
+  const LookaheadSource exhausted{
+      .slot = &exhaustedSlot,
+      .firstCommandIndex = exhaustedSlot.commandCount(),
+      .commandEndIndex = exhaustedSlot.commandCount(),
+  };
+  const dxmt9::encoders::RenderPassStoreProofActivePass futureSuffix{
+      .lookaheadMayHaveFutureSources = true,
+  };
+  cause = Cause::Empty;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(&exhausted, 1u), color,
+              nullptr, {}, futureSuffix, 0u, &cause),
+          ColorProof::BlockNoLookahead,
+          "exhausted retained suffix stays unresolved");
+  checkEq(cause, Cause::SuffixExhausted,
+          "suffix exhaustion cause is explicit");
+
+  auto truncatedSuffix = futureSuffix;
+  truncatedSuffix.lookaheadStorageTruncated = true;
+  cause = Cause::Empty;
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(
+              std::span<const LookaheadSource>(&exhausted, 1u), color,
+              nullptr, {}, truncatedSuffix, 0u, &cause),
+          ColorProof::BlockNoLookahead,
+          "truncated retained storage stays defensive");
+  checkEq(cause, Cause::StorageTruncated,
+          "storage truncation cause is explicit");
+}
+
+void testSelectedLookaheadBeyondEightSources() {
+  constexpr std::size_t sourceCount = 9u;
+  const Handle color{0xC290u};
+  std::array<ChunkSlot, sourceCount> slots{};
+  std::array<LookaheadSource, sourceCount> sources{};
+  for (std::size_t i = 0; i + 1u < sourceCount; ++i) {
+    appendDrawRunWithColor(slots[i], Handle{0xC300u + i});
+    sources[i] = LookaheadSource{.slot = &slots[i]};
+  }
+  appendClearOnColor(slots.back(), color);
+  sources.back() = LookaheadSource{.slot = &slots.back()};
+  checkEq(dxmt9::encoders::colorStoreProofForLookahead(sources, color),
+          ColorProof::AllowNextClear,
+          "selected lookahead scans a matching clear beyond eight sources");
+}
+
+void testLateStoreEligibilitySelector() {
+  using Cause = dxmt9::perf::RenderPassNoLookaheadCause;
+  using dxmt9::encoders::lateRenderPassStoreEligible;
+  check(lateRenderPassStoreEligible(true, Cause::SuffixExhausted, true,
+                                    false, false),
+        "represented suffix exhaustion is eligible for late resolution");
+  check(lateRenderPassStoreEligible(true, Cause::StorageTruncated, true,
+                                    false, false),
+        "fixed lookahead storage truncation is eligible for late resolution");
+  check(!lateRenderPassStoreEligible(true, Cause::Invalid, true,
+                                     false, false),
+        "invalid lookahead is never eligible for Unknown");
+  check(!lateRenderPassStoreEligible(true, Cause::Empty, true, false, false),
+        "unclassified empty lookahead is never eligible for Unknown");
+  check(!lateRenderPassStoreEligible(true, Cause::StorageTruncated, true,
+                                     true, false),
+        "MSAA resolve/store-and-resolve is never Unknown");
+  check(!lateRenderPassStoreEligible(true, Cause::StorageTruncated, true,
+                                     false, true),
+        "present-source constrained color is never Unknown");
+  check(!lateRenderPassStoreEligible(true, Cause::StorageTruncated, false,
+                                     false, false),
+        "final represented suffix resolves immediately instead of Unknown");
+
+  checkEq(dxmt9::encoders::legacyDepthProofForPass(
+              true, DepthProof::AllowNextClear,
+              DepthProof::BlockClearMismatch),
+          DepthProof::AllowNextClear,
+          "legacy proof denominator selects one depth result for D24S8");
+  checkEq(dxmt9::encoders::legacyDepthProofForPass(
+              false, DepthProof::BlockNullDepth,
+              DepthProof::AllowNextClear),
+          DepthProof::AllowNextClear,
+          "stencil-only passes still contribute one legacy DS proof result");
 }
 
 void testTouchedSet() {
@@ -918,6 +1361,33 @@ void testCounterEmission() {
   countRenderPassTilePreservationBytes(7'372'800u);  // 1280×720×4 (RGBA8)
   countRenderPassDepthStoreProof(RenderPassDepthStoreProof::AllowNextClear);
   countRenderPassDepthStoreProof(RenderPassDepthStoreProof::BlockPresent);
+  countRenderPassDepthStoreProof(RenderPassDepthStoreProof::BlockClearMismatch);
+  countRenderPassColorStoreProof(RenderPassColorStoreProof::BlockClearMismatch);
+  countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause::Empty);
+  countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause::Invalid);
+  countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause::SuffixExhausted);
+  countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause::StorageTruncated);
+  for (const auto aspect : {RenderPassLateStoreAspect::Color,
+                            RenderPassLateStoreAspect::Depth,
+                            RenderPassLateStoreAspect::Stencil}) {
+    countRenderPassLateStoreUnknown(aspect);
+    for (const auto cause : {
+             RenderPassLateStoreResolutionCause::Clear,
+             RenderPassLateStoreResolutionCause::ClearMismatch,
+             RenderPassLateStoreResolutionCause::Draw,
+             RenderPassLateStoreResolutionCause::Sample,
+             RenderPassLateStoreResolutionCause::Readback,
+             RenderPassLateStoreResolutionCause::Copy,
+             RenderPassLateStoreResolutionCause::Resolve,
+             RenderPassLateStoreResolutionCause::Present,
+             RenderPassLateStoreResolutionCause::IncompatibleClose,
+             RenderPassLateStoreResolutionCause::Drain,
+             RenderPassLateStoreResolutionCause::Finalize,
+             RenderPassLateStoreResolutionCause::Error,
+         }) {
+      countRenderPassLateStoreResolution(aspect, cause);
+    }
+  }
 }
 
 // H4 integration tests for the touched-set hooks introduced by H3.
@@ -1092,10 +1562,14 @@ int main() {
     testColorDontCareStoreOnNextClear();
     testSamePassDrawPrefixDoesNotBlockNextClear();
     testReorderedStoreProofFollowsReplayOrder();
+    testReplayPlanComposesRetainedSourceSuffix();
     testDepthForcedStoreOnNextRead();
     testDepthShadowMapSampleForcesStore();
     testNoCrossChunkLookahead();
     testEncodeSessionLookaheadAcrossSelectedSources();
+    testExactFullClearProofAndNoLookaheadCauses();
+    testSelectedLookaheadBeyondEightSources();
+    testLateStoreEligibilitySelector();
     testTouchedSet();
     testTouchedCrossChunkPersists();
     testTouchedClearAllResets();

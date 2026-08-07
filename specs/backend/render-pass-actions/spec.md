@@ -27,9 +27,10 @@ boundary.
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Default `LoadAction` / `StoreAction` selection | `src/dxmt9/dxmt9_draw_encoder.mm::beginRenderPass` | Existing function; new logic lives here. |
+| Default `LoadAction` / provisional Store selection | `src/dxmt9/dxmt9_draw_encoder.mm::beginRenderPass` | Loads are final at open; only recoverable bounded-suffix exhaustion may select `Unknown`. |
 | Touched-attachment-handle set (color RTs) | `CommandQueue` (per command buffer) | Reuses existing `currentBackBuffer_` / `backBufferDiscardAfterPresent_` precedent. |
-| Live-out proof for depth/stencil | Encode-thread look-ahead over imported chunk records | Stateless walk of remaining queue contents at `flushRender` time. |
+| Live-out proof for depth/stencil | Encode-thread look-ahead over imported chunk records | Stateless synchronous walk; depth and stencil classify full clears independently. |
+| Late Store resolution | `EncodeSession` pass state + `LifecycleRuntime::endRender` | Fixed copied ledger; no payload view/span retention; narrow WMT setters run before `endEncoding`. |
 | Counter emission | `src/dxmt9/dxmt9_perf_counters.{hpp,cpp}` | New `count*` helpers, same pattern as `R-BACK-15.10`–`15.12`. |
 | Logical-pass action state | Encode coordinator / `EncodeSession` | Owns first/last physical segment and publishes actions and sidecars once (`R-BACK-15.17`). |
 | Amendment to `R-BACK-2.6` | `specs/backend/requirements.md` | Edited in same PR. |
@@ -115,6 +116,14 @@ Order of precedence, first match wins:
 2. `R-BACK-15.13` / `R-BACK-15.15` safety invariants fail → `StoreActionStore`.
 3. `R-BACK-15.7` / `R-BACK-15.8` live-out proof holds → `StoreActionDontCare`.
 4. `R-BACK-15.2` default → `StoreActionStore`.
+
+For a deferred session, step 4 may provisionally select
+`WMTStoreActionUnknown` only when the proof is `BlockNoLookahead`, its cause is
+selected-suffix exhaustion or fixed-storage truncation, a future source may
+arrive, and neither resolve nor present-source constraints apply. Actual replay
+then resolves exactly once before `endEncoding`: an exact full Clear yields
+`DontCare`; every other physical close yields `Store`. Compatible draws that
+continue the same encoder do not resolve the pending action.
 
 When step 4 selects `Store` (or step 1 selects MSAA resolve), the
 attachment's handle is added to the touched set. When step 3 selects
@@ -241,6 +250,38 @@ This distinction prevents ordinary same-pass DrawRuns from hiding a following
 Clear and turning every pass into a false `BlockDrawTarget` /
 `BlockDrawDepth` result.
 
+For source-local optimized replay, the fixed proof view is composite: it starts
+after the pass-opening command in the current source's validated replay order,
+then appends retained source ranges beginning at retained source 1. Retained
+source 0 is used only to validate the exact current source/range identity; its
+natural-order range is never replayed again. The builder is synchronous and
+allocation-free, and no payload or command-order span enters session storage.
+Any identity/range/ordinal mismatch or descriptor-capacity overflow marks the
+whole composite proof `Invalid`, so it cannot resolve an attachment to
+`DontCare` or provisionally select `Unknown`.
+
+### 4.4 Session-owned late proof state
+
+The active pass owns a fixed array of copied facts per included attachment:
+surface handle, texture alias, color slot or depth/stencil aspect, estimated
+pixel bytes, provisional/concrete action, and an exactly-once accounting bit.
+It owns no `SourcePayloadView`, borrowed span, command pointer, or future
+payload owner. `ClearCommandView` is consumed synchronously before the
+ClearBarrier closes the pass.
+
+Depth and stencil decisions remain independent even when they share one Metal
+texture handle. A depth-only clear cannot discard stencil, a stencil-only clear
+cannot discard depth, and color must match the exact MRT slot and handle.
+Partial or same-attachment mismatched clears require `Store`. Static look-ahead
+may continue past a clear that does not carry the evaluated attachment; late
+runtime resolution is conservative once the active encoder actually closes.
+
+`LifecycleRuntime::endRender` is the single physical close point. Command paths
+with a known close cause resolve before calling it; `endRender` supplies the
+ordered/final/drain/error fallback, then emits resolved Store histograms, tile
+Store bytes, and the pass summary once. A null encoder-open result immediately
+clears its provisional ledger.
+
 ---
 
 ## 5. Mechanism — End-to-End
@@ -293,6 +334,7 @@ sequenceDiagram
 | `R-BACK-15.13`–`15.15` safety invariants | Same spec — present source / lock / MSAA resolve forces Store. |
 | `R-BACK-15.16` test coverage | Spec lands the test fixture above. |
 | `R-BACK-15.17` segmented logical pass | Extend the native spec with fake parallel children and Metal 4 segments: one load/clear, one final store/resolve, no duplicated touched/sidecar/counter publication; add Metal integration evidence when either lane exists. |
+| `R-BACK-15.18` late Store resolution | `render_pass_actions_spec.cpp` pins recoverable truncation/exhaustion eligibility, invalid/empty exclusion, exact aspect/slot/full-clear rules, MSAA/present exclusion, and >8-source pure look-ahead. `encode_session_lifecycle_spec.cpp` pins copied-state carry across ten FIFO sources, compatible continuation, exact Clear resolution, draw/sample controls, every finalize mapping, ordered close, and null-open cleanup. `wmt_store_action_dispatch_spec.cpp` pins all three narrow WMT setters. |
 
 GPU pixel correctness for the new policy is covered by the existing
 `tests/shader_runner/corpus/` runs; they must continue to pass with the

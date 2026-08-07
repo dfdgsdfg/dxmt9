@@ -68,6 +68,7 @@ struct AttachmentSet {
   std::array<TextureHandle, 8> color{};
   TextureHandle depth{};
   u32 color_count = 0;
+  u32 sample_count = 1;
 
   friend bool operator==(const AttachmentSet&, const AttachmentSet&) = default;
 };
@@ -143,6 +144,10 @@ struct PassFlags {
   bool contains_event_query = false;      // DCE-protected (§5.1)
   bool dead = false;                      // set by DCE; dropped from linear order
   bool debug_marker = false;              // SetMarker annotation; optimizer-ignored
+  // Non-emitting virtual predecessor used only while planning a current source
+  // against an EncodeSession's carried active render pass. It owns no source
+  // command and must never become an encoder or submission boundary.
+  bool active_render_seed = false;
 
   friend bool operator==(const PassFlags&, const PassFlags&) = default;
 };

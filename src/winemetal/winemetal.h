@@ -743,6 +743,13 @@ struct WMTRenderPassInfo {
 
 WINEMETAL_API obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbuf, struct WMTRenderPassInfo *info);
 
+WINEMETAL_API void MTLRenderCommandEncoder_setColorStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action, uint32_t color_attachment_index);
+WINEMETAL_API void MTLRenderCommandEncoder_setDepthStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action);
+WINEMETAL_API void MTLRenderCommandEncoder_setStencilStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action);
+
 WINEMETAL_API void MTLCommandEncoder_endEncoding(obj_handle_t encoder);
 
 enum WMTTessellationPartitionMode : uint8_t {

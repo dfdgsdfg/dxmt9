@@ -574,10 +574,12 @@ CommandQueue::CommandQueue(InertTestQueueTag,
       limits_(limits) {}
 
 CommandQueue::CommandQueue(ArenaLeaseTestQueueTag,
-                           core::BackendLimits limits)
+                           core::BackendLimits limits,
+                           WMT::Reference<WMT::CommandQueue> queue)
     : cpuReadyTape_(core::CpuReadyTapeConfig::queueSessionStreaming(
           kCommandChunkCount)),
-      cpuReadySessionLaneEnabled_(false), limits_(limits) {
+      cpuReadySessionLaneEnabled_(false), queue_(std::move(queue)),
+      queueView_(queue_.handle), limits_(limits) {
   bindSelfLifecycle([](core::Handle) -> std::uint32_t { return 0; });
   stop_ = false;
 }
@@ -606,6 +608,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
       consumePendingDirty(),
   };
   ctx.transientCompletedSeqId = transientCompletedSeqId;
+  ctx.drawRecorder = testOnlyDrawRecorder_;
   return ctx;
 }
 
@@ -4092,9 +4095,9 @@ bool CommandQueue::publishCpuReadyArenaSource(
   arenaBuildContext_.reset();
   arenaAdmissionActive_.store(false, std::memory_order_release);
   recordCpuReadyTapeStats(cpuReadyTape_);
+  queueLifecycle_.noteCpuReadyCapacityProgress();
   lock.unlock();
   writeCv_.notify_all();
-  encodeCv_.notify_one();
   if (hasPublishedPresent) {
     if (publishedPresentBoundaryPolicy ==
         BoundaryPolicy::DeferredPresentCompletion) {
@@ -4147,6 +4150,7 @@ void CommandQueue::abortCpuReadyArenaSource(
     if (owner && cpuReadyTape_.finishArenaAbort(ticket, std::move(*owner)) &&
         controlIndex < slots_.size()) {
       slots_[controlIndex] = {};
+      queueLifecycle_.noteCpuReadyCapacityProgress();
     }
     arenaAdmissionActive_.store(false, std::memory_order_release);
     recordCpuReadyTapeStats(cpuReadyTape_);
@@ -4646,6 +4650,10 @@ CommandQueue::metalCaptureForPresentChunk(std::uint64_t seqId) {
 std::optional<core::metalcapture::MetalCaptureRequest>
 CommandQueue::metalCaptureForChunkBegin(std::uint64_t seqId) {
   return metalCapture_.maybeCaptureAtChunkBegin(seqId);
+}
+
+bool CommandQueue::metalCaptureEnabled() const noexcept {
+  return metalCapture_.enabled();
 }
 
 std::optional<core::metalcapture::MetalCaptureRequest>

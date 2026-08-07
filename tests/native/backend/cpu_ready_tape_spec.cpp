@@ -304,13 +304,13 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   check(legacy.pageCount == 64u && legacy.highWaterPages == 64u &&
             legacy.lowWaterPages == 32u,
         "compatibility profile preserves the 256 KiB page arena");
-  check(session.pageCount == 512u && session.highWaterPages == 512u &&
-            session.lowWaterPages == 256u &&
+  check(session.pageCount == 640u && session.highWaterPages == 640u &&
+            session.lowWaterPages == 320u &&
             session.maxPagesPerSource == 64u,
         "session profile reserves one bounded ordinary Direct footprint");
   check(dxmt9::render::worstCaseNonWrappingReservationPages(
             session.maxPagesPerSource) == 127u &&
-            session.highWaterPages - 127u == 385u,
+            session.highWaterPages - 127u == 513u,
         "ordinary payload plus worst-case circular padding leaves a fixed "
         "session page budget");
   check(session.sourceSlotCount == legacy.sourceSlotCount &&
@@ -322,6 +322,14 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
             session.highWaterReady == legacy.highWaterReady &&
             session.lowWaterReady == legacy.lowWaterReady,
         "session streaming preserves non-page queue capacity policy");
+  check(session.sourceSlotCount == 64u &&
+            session.readyFifoCount == 32u &&
+            session.compatibilityPayloadCount == 64u &&
+            session.highWaterSources == 64u &&
+            session.lowWaterSources == 32u &&
+            session.highWaterReady == 32u &&
+            session.lowWaterReady == 16u,
+        "32-control streaming keeps source and Ready limits unchanged");
   check(legacy.maxPagesPerSource == 64u,
         "default-off compatibility profile preserves its 64-page source "
         "bound");
@@ -329,7 +337,7 @@ void productionProfilesSeparateSessionPageAndSourceHeadroom() {
   bool overflowRejected = false;
   try {
     (void)CpuReadyTapeConfig::queueSessionStreaming(
-        std::numeric_limits<std::size_t>::max() / 16u + 1u);
+        std::numeric_limits<std::size_t>::max() / 20u + 1u);
   } catch (const std::invalid_argument&) {
     overflowRejected = true;
   }
@@ -399,6 +407,102 @@ void sealAndPublishFailureLeavesWritingAndCursorsUnchanged() {
             tape.stats().readyPublicationReservations ==
                 before.readyPublicationReservations,
         "failed publication leaves Writing state and every reservation cursor unchanged");
+}
+
+void leaseSnapshotSeparatesOnlyUniqueOrderedTailWriting() {
+  CpuReadyTape tape{makeConfig(8, 4, 4, 2, 4, 0, 8, 0)};
+  const auto first = tape.reserve(2);
+  check(first.has_value(), "lease snapshot fixture reserves Writing tail");
+  const auto firstSnapshot = tape.leaseAcquisitionCapacitySnapshot();
+  check(firstSnapshot.valid &&
+            firstSnapshot.olderUnavailable ==
+                CpuReadyTape::LeaseCapacityClaim{} &&
+            firstSnapshot.orderedTailWritingSuccessor.has_value() &&
+            firstSnapshot.orderedTailWritingSuccessor->source ==
+                CpuReadyTape::SourceRef{
+                    .id = first->id,
+                    .storage = first->storage,
+                } &&
+            firstSnapshot.orderedTailWritingSuccessor->claim ==
+                CpuReadyTape::LeaseCapacityClaim{
+                    .sources = 1,
+                    .pages = 2,
+                    .bytes = 128,
+                    .payloadBlocks = 1,
+                    .readyEntries = 1,
+                    .retentionEntries = 1,
+                    .allocatorTickets = 1,
+                },
+        "one valid ordered-tail Writing ticket is separated with its exact "
+        "physical claim");
+
+  const auto second = tape.reserve(1);
+  check(second.has_value(), "lease snapshot fixture reserves a second writer");
+  const auto multiple = tape.leaseAcquisitionCapacitySnapshot();
+  check(!multiple.valid &&
+            !multiple.orderedTailWritingSuccessor.has_value() &&
+            multiple.olderUnavailable ==
+                CpuReadyTape::LeaseCapacityClaim{},
+        "multiple Writing tickets invalidate the structurally unique "
+        "successor snapshot");
+
+  check(tape.abort(second->ticket) && tape.abort(first->ticket),
+        "lease snapshot fixture aborts both writers newest first");
+  const auto replacement = tape.reserve(2);
+  check(replacement.has_value(), "lease snapshot fixture reuses tail storage");
+  const auto replacementSnapshot = tape.leaseAcquisitionCapacitySnapshot();
+  check(replacementSnapshot.valid &&
+            replacementSnapshot.orderedTailWritingSuccessor.has_value() &&
+            replacementSnapshot.orderedTailWritingSuccessor->source.id.index ==
+                first->id.index &&
+            replacementSnapshot.orderedTailWritingSuccessor->source.id.generation !=
+                first->id.generation,
+        "Writing successor observation carries the current source generation");
+}
+
+void leaseSnapshotKeepsNonWritingResidencyUnavailable() {
+  CpuReadyTape tape{makeConfig(4, 2, 2, 2, 2, 0, 4, 0)};
+  const auto reservation = tape.reserve(1);
+  check(reservation.has_value(), "state snapshot fixture reserves source");
+  reservation->payload->appendClear({});
+  check(tape.sealAndPublish(reservation->ticket, 1, 1, 0),
+        "state snapshot fixture publishes Ready source");
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(tape.copyReadyPrefix(ready) == 1u &&
+            tape.reserveReadyPrefixForRepresentation(ready),
+        "state snapshot fixture enters TentativeRepresented");
+
+  const auto tentative = tape.leaseAcquisitionCapacitySnapshot();
+  check(tentative.valid &&
+            !tentative.orderedTailWritingSuccessor.has_value() &&
+            tentative.olderUnavailable.sources == 1u &&
+            tentative.olderUnavailable.readyEntries == 1u,
+        "TentativeRepresented residency cannot receive Writing credit");
+  check(tape.commitReservedReadyPrefix(ready),
+        "state snapshot fixture enters Represented encoding state");
+  const auto represented = tape.leaseAcquisitionCapacitySnapshot();
+  check(represented.valid &&
+            !represented.orderedTailWritingSuccessor.has_value() &&
+            represented.olderUnavailable.sources == 1u &&
+            represented.olderUnavailable.readyEntries == 0u,
+        "Represented/Encoding residency remains older unavailable");
+  check(tape.transition(reservation->id, reservation->storage,
+                        CpuReadyTape::State::Represented,
+                        CpuReadyTape::State::Submitted),
+        "state snapshot fixture enters Submitted");
+  const auto submitted = tape.leaseAcquisitionCapacitySnapshot();
+  check(submitted.valid &&
+            !submitted.orderedTailWritingSuccessor.has_value() &&
+            submitted.olderUnavailable.sources == 1u,
+        "Submitted residency remains older unavailable");
+  check(tape.complete(reservation->id, reservation->storage) &&
+            tape.beginReclaim(reservation->id, reservation->storage),
+        "state snapshot fixture enters Reclaiming");
+  const auto reclaiming = tape.leaseAcquisitionCapacitySnapshot();
+  check(reclaiming.valid &&
+            !reclaiming.orderedTailWritingSuccessor.has_value() &&
+            reclaiming.olderUnavailable.sources == 1u,
+        "Reclaiming residency remains older unavailable");
 }
 
 void representPrefixIsAtomicAndPreservesReadySuffix() {
@@ -1032,6 +1136,44 @@ void arenaOwnerReclaimIsTwoPhaseAndGenerationScoped() {
   abortArena(tape, *second);
 }
 
+void postEncodeRetirementFinishesBeforeGpuCompletion() {
+  CpuReadyTape tape{makeConfig(1, 1, 1, 1, 1, 0, 1, 0)};
+  const auto first = tape.reserve();
+  check(first.has_value(), "post-encode fixture reserves one legacy source");
+  first->payload->appendClear({});
+  check(representPublished(tape, *first, 1),
+        "published source reaches Represented after synchronous encode");
+
+  const auto oldId = first->id;
+  const auto oldStorage = first->storage;
+  const auto oldSourceGeneration = tape.sourceGenerationAt(oldId.index);
+  auto* detached =
+      tape.beginPostEncodeLegacyRetire(oldId, oldStorage);
+  check(detached != nullptr &&
+            tape.state(oldId, oldStorage) == CpuReadyTape::State::Reclaiming &&
+            tape.sourceGenerationAt(oldId.index) == oldSourceGeneration &&
+            !tape.reserve().has_value(),
+        "locked detach makes payload inaccessible but pins generations/pages");
+
+  detached->clearCommands();
+  detached->seqId = 0;
+  check(tape.sourceGenerationAt(oldId.index) == oldSourceGeneration,
+        "out-of-lock owner destruction cannot advance generations");
+  check(tape.finishReclaim(oldId, oldStorage) &&
+            tape.residentCount() == 0u &&
+            tape.sourceGenerationAt(oldId.index) != oldSourceGeneration,
+        "finish returns residency and advances generation before GPU completion");
+
+  const auto reused = tape.reserve();
+  check(reused.has_value() && reused->id.index == oldId.index &&
+            reused->id.generation != oldId.generation &&
+            reused->storage.generation != oldStorage.generation &&
+            tape.resolve(oldId, oldStorage, CpuReadyTape::State::Represented) ==
+                nullptr,
+        "retired storage reuses safely while the old receipt awaits GPU");
+  check(tape.abort(reused->ticket), "reused post-encode fixture aborts cleanly");
+}
+
 void rawLegacyAndStrictAdmissionShareRawHighWater() {
   CpuReadyTape tape{makeSeparatedPayloadConfig(6, 6, 2)};
   const auto layout = makeMinimalArenaLayout();
@@ -1389,6 +1531,8 @@ int main() {
     productionProfilesSeparateSessionPageAndSourceHeadroom();
     readyAdmissionDistinguishesHardHighAndLowWater();
     sealAndPublishFailureLeavesWritingAndCursorsUnchanged();
+    leaseSnapshotSeparatesOnlyUniqueOrderedTailWriting();
+    leaseSnapshotKeepsNonWritingResidencyUnavailable();
     representPrefixIsAtomicAndPreservesReadySuffix();
     readyMetadataIsAdmissionOwnedAndGenerationChecked();
     legacyDefaultPublicationMeasuresLogicalExtent();
@@ -1403,6 +1547,7 @@ int main() {
     strictArenaDoesNotConsumeCompatibilityCapacity();
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
+    postEncodeRetirementFinishesBeforeGpuCompletion();
     rawLegacyAndStrictAdmissionShareRawHighWater();
     compatibilityAndStrictIdentityShareHighWater();
     reservationRejectsCorruptTargetPageWithoutMutation();
