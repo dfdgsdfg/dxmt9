@@ -1,11 +1,11 @@
 ---- MODULE SessionCapacityLease ----
 (***************************************************************************
  * R-BACK-2.65 bounded capacity refinement. One generation-stamped lease
- * reserves a fixed unsubmitted-session vector plus one complete ordinary
- * successor footprint. Completion is deliberately absent from admission and
- * grouping guards: it may reclaim submitted residency, but it cannot select a
- * session boundary. An over-cap Ready head stays in Ready until the exact
- * predecessor group is submitted.
+ * reserves a fixed physical-residency vector plus one complete ordinary
+ * successor footprint. Synchronously encoded sources may retire out of that
+ * vector while remaining charged to a separate bounded session-work list.
+ * Completion is deliberately absent from grouping guards: it may reclaim
+ * legacy submitted residency, but it cannot select a session boundary.
  *)
 
 EXTENDS Naturals, Sequences, TLC
@@ -26,25 +26,62 @@ RECURSIVE SeqPages(_)
 SeqPages(seq) == IF Len(seq) = 0 THEN 0
                  ELSE ReservationPages(Head(seq)) + SeqPages(Tail(seq))
 
-VARIABLES nextSource, ready, session, submitted, completed, reclaimed,
+VARIABLES nextSource, ready, writing, session, residentSession,
+          submitted, submittedResident, completed, completedResident, reclaimed,
           leaseActive, leaseGeneration, capPending, submittedGroups,
-          rollbackSources, boundaryCause, pressureWakeEpoch
+          rollbackSources, boundaryCause, pressureWakeEpoch,
+          capacityProgressGeneration, leaseWaitActive,
+          leaseWaitObservedGeneration, startupPhase
 
-vars == <<nextSource, ready, session, submitted, completed, reclaimed,
+vars == <<nextSource, ready, writing, session, residentSession,
+          submitted, submittedResident, completed, completedResident, reclaimed,
           leaseActive, leaseGeneration, capPending, submittedGroups,
-          rollbackSources, boundaryCause, pressureWakeEpoch>>
+          rollbackSources, boundaryCause, pressureWakeEpoch,
+          capacityProgressGeneration, leaseWaitActive,
+          leaseWaitObservedGeneration, startupPhase>>
 
-Resident == ready \o session \o submitted \o completed
+WritingResident == IF writing = 0 THEN <<>> ELSE <<writing>>
+Resident == ready \o WritingResident \o residentSession \o
+            submittedResident \o completedResident
 SessionCanCharge(source) ==
   /\ Len(session) < MaxSessionSources
-  /\ SeqPages(session) + ReservationPages(source) <= MaxSessionPages
+  /\ SeqPages(residentSession) + ReservationPages(source) <= MaxSessionPages
+
+LeaseCapacityAvailable ==
+  /\ Len(submittedResident \o completedResident) + MaxSessionSources +
+       SuccessorHeadroomSources <= HighWaterSources
+  /\ SeqPages(submittedResident \o completedResident) + MaxSessionPages +
+       SuccessorHeadroomPages <= HighWaterPages
 
 Init ==
-  /\ nextSource = 1
-  /\ ready = <<>>
+  \* Preserve the original empty-start state space and add non-vacuous startup
+  \* probes. In the denial probe, source 1 is a standalone submitted
+  \* Clear+Present and source 2 is the following Ready Direct draw. With the
+  \* production zero-slack lease policy, source 1 must reclaim before source 2
+  \* can acquire its first session lease. In the Writing probe, two Ready
+  \* sources plus their unique ordered-tail Writing successor fill physical
+  \* capacity. The Writing claim is already covered by successor headroom, so
+  \* it must not be counted again as older unavailable residency.
+  /\ \/ /\ nextSource = 1
+         /\ ready = <<>>
+         /\ writing = 0
+         /\ submitted = <<>>
+         /\ startupPhase = "Inactive"
+     \/ /\ nextSource = 3
+         /\ ready = <<2>>
+         /\ writing = 0
+         /\ submitted = <<1>>
+         /\ startupPhase = "NeedDenial"
+     \/ /\ nextSource = 4
+         /\ ready = <<1, 2>>
+         /\ writing = 3
+         /\ submitted = <<>>
+         /\ startupPhase = "WritingNeedLease"
   /\ session = <<>>
-  /\ submitted = <<>>
+  /\ residentSession = <<>>
+  /\ submittedResident = submitted
   /\ completed = <<>>
+  /\ completedResident = <<>>
   /\ reclaimed = 0
   /\ leaseActive = FALSE
   /\ leaseGeneration = 0
@@ -53,9 +90,13 @@ Init ==
   /\ rollbackSources = <<>>
   /\ boundaryCause = "None"
   /\ pressureWakeEpoch = 0
+  /\ capacityProgressGeneration = 0
+  /\ leaseWaitActive = FALSE
+  /\ leaseWaitObservedGeneration = 0
 
 PublishOrdinary ==
   /\ nextSource <= MaxSources
+  /\ writing = 0
   /\ PayloadPages(nextSource) <= OrdinaryMaxPages
   /\ Len(Resident) < HighWaterSources
   /\ SeqPages(Resident) + ReservationPages(nextSource) <= HighWaterPages
@@ -63,25 +104,49 @@ PublishOrdinary ==
   /\ (~leaseActive \/ Len(ready) < SuccessorHeadroomSources)
   /\ ready' = Append(ready, nextSource)
   /\ nextSource' = nextSource + 1
-  /\ UNCHANGED <<session, submitted, completed, reclaimed, leaseActive,
+  /\ UNCHANGED <<writing, session, residentSession, submitted, submittedResident,
+                  completed, completedResident, reclaimed, leaseActive,
                   leaseGeneration, capPending, submittedGroups,
-                  rollbackSources, boundaryCause, pressureWakeEpoch>>
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
+
+BeginLeaseWait ==
+  /\ startupPhase = "NeedDenial"
+  /\ ~leaseActive
+  /\ session = <<>>
+  /\ ready # <<>>
+  /\ ~LeaseCapacityAvailable
+  /\ leaseWaitActive' = TRUE
+  /\ leaseWaitObservedGeneration' = capacityProgressGeneration
+  /\ startupPhase' = "Waiting"
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession,
+                  submitted, submittedResident, completed, completedResident,
+                  reclaimed, leaseActive, leaseGeneration, capPending,
+                  submittedGroups, rollbackSources, boundaryCause,
+                  pressureWakeEpoch, capacityProgressGeneration>>
 
 AcquireLease ==
   /\ ~leaseActive
+  /\ ~leaseWaitActive
+  /\ startupPhase # "NeedDenial"
   /\ session = <<>>
   /\ ready # <<>>
   /\ PayloadPages(Head(ready)) <= OrdinaryMaxPages
   /\ leaseGeneration < MaxLeaseGeneration
-  /\ Len(submitted \o completed) + MaxSessionSources +
-       SuccessorHeadroomSources <= HighWaterSources
-  /\ SeqPages(submitted \o completed) + MaxSessionPages +
-       SuccessorHeadroomPages <= HighWaterPages
+  /\ LeaseCapacityAvailable
   /\ leaseActive' = TRUE
   /\ leaseGeneration' = leaseGeneration + 1
-  /\ UNCHANGED <<nextSource, ready, session, submitted, completed,
+  /\ startupPhase' = IF startupPhase = "Woken"
+                        THEN "Acquired"
+                      ELSE IF startupPhase = "WritingNeedLease"
+                        THEN "WritingLeaseAcquired" ELSE startupPhase
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession,
+                  submitted, submittedResident, completed, completedResident,
                   reclaimed, capPending, submittedGroups, rollbackSources,
-                  boundaryCause, pressureWakeEpoch>>
+                  boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
 
 AdmitReadyHead ==
   /\ leaseActive
@@ -89,10 +154,46 @@ AdmitReadyHead ==
   /\ ready # <<>>
   /\ SessionCanCharge(Head(ready))
   /\ session' = Append(session, Head(ready))
+  /\ residentSession' = Append(residentSession, Head(ready))
   /\ ready' = Tail(ready)
-  /\ UNCHANGED <<nextSource, submitted, completed, reclaimed, leaseActive,
+  /\ startupPhase' = IF startupPhase = "WritingLeaseAcquired"
+                        THEN "WritingHeadAdmitted" ELSE startupPhase
+  /\ UNCHANGED <<nextSource, writing, submitted, submittedResident, completed,
+                  completedResident, reclaimed, leaseActive,
                   leaseGeneration, capPending, submittedGroups,
-                  rollbackSources, boundaryCause, pressureWakeEpoch>>
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
+
+RetireEncodedHead ==
+  /\ leaseActive
+  /\ ~capPending
+  /\ residentSession # <<>>
+  /\ Head(residentSession) \in {session[i] : i \in DOMAIN session}
+  /\ residentSession' = Tail(residentSession)
+  /\ startupPhase' = IF startupPhase = "WritingHeadAdmitted"
+                        THEN "WritingHeadRetired" ELSE startupPhase
+  /\ UNCHANGED <<nextSource, ready, writing, session, submitted,
+                  submittedResident, completed, completedResident, reclaimed,
+                  leaseActive, leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
+
+PublishWritingSuccessor ==
+  /\ writing # 0
+  /\ leaseActive
+  /\ startupPhase = "WritingHeadRetired"
+  /\ Len(ready) < MaxReady
+  /\ ready' = Append(ready, writing)
+  /\ writing' = 0
+  /\ startupPhase' = "WritingPublished"
+  /\ UNCHANGED <<nextSource, session, residentSession, submitted,
+                  submittedResident, completed, completedResident, reclaimed,
+                  leaseActive, leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
 
 PostSessionCap ==
   /\ leaseActive
@@ -102,9 +203,12 @@ PostSessionCap ==
   /\ ~SessionCanCharge(Head(ready))
   /\ capPending' = TRUE
   /\ boundaryCause' = "Cap"
-  /\ UNCHANGED <<nextSource, ready, session, submitted, completed,
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, completed, completedResident,
                   reclaimed, leaseActive, leaseGeneration, submittedGroups,
-                  rollbackSources, pressureWakeEpoch>>
+                  rollbackSources, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
 
 PostSemanticRelease ==
   /\ leaseActive
@@ -112,71 +216,138 @@ PostSemanticRelease ==
   /\ session # <<>>
   /\ capPending' = TRUE
   /\ boundaryCause' = "Semantic"
-  /\ UNCHANGED <<nextSource, ready, session, submitted, completed,
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, completed, completedResident,
                   reclaimed, leaseActive, leaseGeneration, submittedGroups,
-                  rollbackSources, pressureWakeEpoch>>
+                  rollbackSources, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
 
 PressureWake ==
   /\ pressureWakeEpoch < MaxSources
   /\ pressureWakeEpoch' = pressureWakeEpoch + 1
-  /\ UNCHANGED <<nextSource, ready, session, submitted, completed,
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, completed, completedResident,
                   reclaimed, leaseActive, leaseGeneration, capPending,
-                  submittedGroups, rollbackSources, boundaryCause>>
+                  submittedGroups, rollbackSources, boundaryCause,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
 
 SubmitPredecessor ==
   /\ capPending
   /\ session # <<>>
   /\ submitted' = submitted \o session
+  /\ submittedResident' = submittedResident \o residentSession
   /\ submittedGroups' = Append(submittedGroups, session)
   /\ session' = <<>>
+  /\ residentSession' = <<>>
   /\ leaseActive' = FALSE
   /\ capPending' = FALSE
   /\ boundaryCause' = "None"
-  /\ UNCHANGED <<nextSource, ready, completed, reclaimed, leaseGeneration,
-                  rollbackSources, pressureWakeEpoch>>
+  /\ UNCHANGED <<nextSource, ready, writing, completed, completedResident, reclaimed,
+                  leaseGeneration,
+                  rollbackSources, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
 
 CompleteSubmitted ==
   /\ submitted # <<>>
   /\ completed' = Append(completed, Head(submitted))
+  /\ completedResident' =
+       IF submittedResident # <<>> /\
+          Head(submittedResident) = Head(submitted)
+       THEN Append(completedResident, Head(submittedResident))
+       ELSE completedResident
+  /\ submittedResident' =
+       IF submittedResident # <<>> /\
+          Head(submittedResident) = Head(submitted)
+       THEN Tail(submittedResident)
+       ELSE submittedResident
   /\ submitted' = Tail(submitted)
-  /\ UNCHANGED <<nextSource, ready, session, reclaimed, leaseActive,
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, reclaimed,
+                  leaseActive,
                   leaseGeneration, capPending, submittedGroups,
-                  rollbackSources, boundaryCause, pressureWakeEpoch>>
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
 
 ReclaimCompleted ==
   /\ completed # <<>>
   /\ Head(completed) = reclaimed + 1
   /\ reclaimed' = Head(completed)
   /\ completed' = Tail(completed)
-  /\ UNCHANGED <<nextSource, ready, session, submitted, leaseActive,
+  /\ completedResident' =
+       IF completedResident # <<>> /\
+          Head(completedResident) = Head(completed)
+       THEN Tail(completedResident)
+       ELSE completedResident
+  /\ capacityProgressGeneration' = capacityProgressGeneration + 1
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, leaseActive,
                   leaseGeneration, capPending, submittedGroups,
-                  rollbackSources, boundaryCause, pressureWakeEpoch>>
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  leaseWaitActive, leaseWaitObservedGeneration,
+                  startupPhase>>
+
+WakeLeaseWait ==
+  /\ leaseWaitActive
+  /\ capacityProgressGeneration # leaseWaitObservedGeneration
+  /\ leaseWaitActive' = FALSE
+  /\ startupPhase' = IF startupPhase = "Waiting"
+                        THEN "Woken" ELSE startupPhase
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, completed, completedResident,
+                  reclaimed, leaseActive, leaseGeneration, capPending,
+                  submittedGroups, rollbackSources, boundaryCause,
+                  pressureWakeEpoch, capacityProgressGeneration,
+                  leaseWaitObservedGeneration>>
 
 Next ==
-  \/ PublishOrdinary
-  \/ AcquireLease
-  \/ AdmitReadyHead
-  \/ PostSessionCap
-  \/ PostSemanticRelease
-  \/ PressureWake
-  \/ SubmitPredecessor
-  \/ CompleteSubmitted
-  \/ ReclaimCompleted
+  IF startupPhase = "NeedDenial"
+  THEN BeginLeaseWait
+  ELSE IF startupPhase = "WritingNeedLease"
+  THEN AcquireLease
+  ELSE IF startupPhase = "WritingLeaseAcquired"
+  THEN AdmitReadyHead
+  ELSE IF startupPhase = "WritingHeadAdmitted"
+  THEN RetireEncodedHead
+  ELSE IF startupPhase = "WritingHeadRetired"
+  THEN PublishWritingSuccessor
+  ELSE \/ PublishOrdinary
+       \/ AcquireLease
+       \/ AdmitReadyHead
+       \/ RetireEncodedHead
+       \/ PublishWritingSuccessor
+       \/ PostSessionCap
+       \/ PostSemanticRelease
+       \/ PressureWake
+       \/ SubmitPredecessor
+       \/ CompleteSubmitted
+       \/ ReclaimCompleted
+       \/ WakeLeaseWait
 
 Spec == Init /\ [][Next]_vars
   /\ WF_vars(AcquireLease)
   /\ WF_vars(AdmitReadyHead)
+  /\ WF_vars(RetireEncodedHead)
+  /\ WF_vars(PublishWritingSuccessor)
   /\ WF_vars(PostSessionCap)
   /\ WF_vars(SubmitPredecessor)
   /\ WF_vars(CompleteSubmitted)
   /\ WF_vars(ReclaimCompleted)
+  /\ WF_vars(BeginLeaseWait)
+  /\ WF_vars(WakeLeaseWait)
 
 TypeOK ==
   /\ nextSource \in 1 .. (MaxSources + 1)
   /\ ready \in Seq(SourceIds)
+  /\ writing \in SourceIds0
   /\ session \in Seq(SourceIds)
+  /\ residentSession \in Seq(SourceIds)
   /\ submitted \in Seq(SourceIds)
+  /\ submittedResident \in Seq(SourceIds)
   /\ completed \in Seq(SourceIds)
+  /\ completedResident \in Seq(SourceIds)
   /\ reclaimed \in SourceIds0
   /\ leaseActive \in BOOLEAN
   /\ leaseGeneration \in 0 .. MaxLeaseGeneration
@@ -185,13 +356,21 @@ TypeOK ==
   /\ rollbackSources \in Seq(SourceIds)
   /\ boundaryCause \in {"None", "Cap", "Semantic", "Pressure"}
   /\ pressureWakeEpoch \in 0 .. MaxSources
+  /\ capacityProgressGeneration \in 0 .. MaxSources
+  /\ leaseWaitActive \in BOOLEAN
+  /\ leaseWaitObservedGeneration \in 0 .. MaxSources
+  /\ startupPhase \in
+       {"Inactive", "NeedDenial", "Waiting", "Woken", "Acquired",
+        "WritingNeedLease", "WritingLeaseAcquired", "WritingHeadAdmitted",
+        "WritingHeadRetired", "WritingPublished"}
 
 BoundedCapacity ==
   /\ Len(ready) <= MaxReady
   /\ Len(Resident) <= HighWaterSources
   /\ SeqPages(Resident) <= HighWaterPages
   /\ Len(session) <= MaxSessionSources
-  /\ SeqPages(session) <= MaxSessionPages
+  /\ Len(residentSession) <= Len(session)
+  /\ SeqPages(residentSession) <= MaxSessionPages
 
 LeaseOwnsCompleteHeadroom ==
   /\ MaxSessionSources + SuccessorHeadroomSources <= HighWaterSources
@@ -200,9 +379,22 @@ LeaseOwnsCompleteHeadroom ==
   /\ SuccessorHeadroomPages >= 2 * OrdinaryMaxPages - 1
   /\ (leaseActive => leaseGeneration > 0)
   /\ (leaseActive =>
-        Len(ready) <= MaxSessionSources + SuccessorHeadroomSources)
+        Len(ready) + (IF writing = 0 THEN 0 ELSE 1)
+          <= MaxSessionSources + SuccessorHeadroomSources)
   /\ (leaseActive =>
-        SeqPages(ready) <= MaxSessionPages + SuccessorHeadroomPages)
+        SeqPages(ready \o WritingResident)
+          <= MaxSessionPages + SuccessorHeadroomPages)
+
+WritingSuccessorIsUnique ==
+  /\ (writing = 0 \/ writing \in SourceIds)
+  /\ (writing # 0 =>
+        writing \notin {ready[i] : i \in DOMAIN ready})
+  /\ (writing # 0 =>
+        writing \notin {session[i] : i \in DOMAIN session})
+  /\ (startupPhase \in
+        {"WritingNeedLease", "WritingLeaseAcquired", "WritingHeadAdmitted",
+         "WritingHeadRetired"} => writing # 0)
+  /\ (startupPhase = "WritingPublished" => writing = 0)
 
 CapCandidateStaysReady ==
   capPending /\ boundaryCause = "Cap" /\ ready # <<>> /\
@@ -213,19 +405,41 @@ NoPressureCreatedRelease ==
   /\ (capPending <=> boundaryCause # "None")
   /\ boundaryCause # "Pressure"
 
+CapacityWakeMatchesProgress ==
+  /\ leaseWaitObservedGeneration <= capacityProgressGeneration
+  /\ (startupPhase = "Waiting" => leaseWaitActive)
+  /\ (startupPhase \in {"Woken", "Acquired"} => ~leaseWaitActive)
+
 SubmittedGroupsRespectCap ==
   \A group \in {submittedGroups[i] : i \in DOMAIN submittedGroups} :
-    /\ Len(group) <= MaxSessionSources
-    /\ SeqPages(group) <= MaxSessionPages
+    Len(group) <= MaxSessionSources
+
+ResidencyIsSeparateFromWork ==
+  /\ Len(residentSession) <= Len(session)
+  /\ \A s \in {residentSession[i] : i \in DOMAIN residentSession} :
+       s \in {session[i] : i \in DOMAIN session}
 
 Safety ==
   /\ TypeOK
   /\ BoundedCapacity
   /\ LeaseOwnsCompleteHeadroom
+  /\ WritingSuccessorIsUnique
   /\ CapCandidateStaysReady
   /\ NoPressureCreatedRelease
+  /\ CapacityWakeMatchesProgress
   /\ SubmittedGroupsRespectCap
+  /\ ResidencyIsSeparateFromWork
 
 CapProgress == capPending ~> ~capPending
+
+StartupCapacityWakeProgress ==
+  (startupPhase = "Waiting") ~> (startupPhase \in {"Woken", "Acquired"})
+
+StartupDirectLeaseProgress ==
+  (startupPhase = "Woken") ~> (startupPhase = "Acquired")
+
+WritingSuccessorStartupProgress ==
+  (startupPhase = "WritingNeedLease") ~>
+    (startupPhase = "WritingPublished")
 
 ====

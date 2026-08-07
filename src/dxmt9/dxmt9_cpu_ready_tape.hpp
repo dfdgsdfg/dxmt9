@@ -187,7 +187,7 @@ class CpuReadyTapeConfig {
 
   static CpuReadyTapeConfig queueSessionStreaming(
       std::size_t controlCapacity) {
-    constexpr std::size_t kPageCapacityMultiplier = 16;
+    constexpr std::size_t kPageCapacityMultiplier = 20;
     constexpr std::size_t kOrdinaryDirectPages = 64;
     if (controlCapacity >
         std::numeric_limits<std::size_t>::max() /
@@ -373,11 +373,11 @@ struct ChunkSlotControl {
   SourcePayloadBlock* payload = nullptr;
 
   bool commandsEmpty() const noexcept {
-    return !payload || payload->commandsEmpty();
+    return state == State::Retiring || !payload || payload->commandsEmpty();
   }
 
   std::size_t commandCount() const noexcept {
-    return payload ? payload->commandCount() : 0;
+    return state == State::Retiring || !payload ? 0 : payload->commandCount();
   }
 };
 
@@ -531,15 +531,38 @@ class CpuReadyTape {
     bool admissionClosed = false;
   };
 
-  // Physical residency that cannot be incorporated into a new session lease.
-  // Ready sources are excluded because the lease charges them once as they
-  // become the deterministic session prefix or its immediate Ready successor.
-  struct UnleasedCapacity {
-    std::size_t sources = 0;
-    std::size_t pages = 0;
-    std::size_t payloadBlocks = 0;
-    std::size_t retentionEntries = 0;
-    std::size_t allocatorTickets = 0;
+  struct LeaseCapacityClaim {
+    std::uint64_t sources = 0;
+    std::uint64_t pages = 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t payloadBlocks = 0;
+    std::uint64_t readyEntries = 0;
+    std::uint64_t retentionEntries = 0;
+    std::uint64_t allocatorTickets = 0;
+
+    friend constexpr bool operator==(const LeaseCapacityClaim&,
+                                     const LeaseCapacityClaim&) = default;
+  };
+
+  struct OrderedTailWritingCapacity {
+    SourceRef source{};
+    LeaseCapacityClaim claim{};
+
+    constexpr bool valid() const noexcept { return source.valid(); }
+  };
+
+  // Physical residency observed before the first session lease acquisition.
+  // Ready sources are excluded because the lease charges them as they join.
+  // Exactly one structurally valid ordered-tail Writing publication may be
+  // separated so the session coordinator can prove it is already covered by
+  // successorHeadroom. A malformed or non-unique Writing observation makes
+  // the snapshot invalid; every non-Writing, non-Ready state remains
+  // olderUnavailable.
+  struct LeaseAcquisitionCapacitySnapshot {
+    LeaseCapacityClaim olderUnavailable{};
+    std::optional<OrderedTailWritingCapacity>
+        orderedTailWritingSuccessor{};
+    bool valid = true;
   };
 
   explicit CpuReadyTape(std::size_t capacity)
@@ -589,18 +612,53 @@ class CpuReadyTape {
   bool readyEmpty() const noexcept { return readyCount_ == 0; }
   const Stats& stats() const noexcept { return stats_; }
 
-  UnleasedCapacity unleasedCapacity() const noexcept {
-    UnleasedCapacity result{};
+  LeaseAcquisitionCapacitySnapshot leaseAcquisitionCapacitySnapshot()
+      const noexcept {
+    LeaseAcquisitionCapacitySnapshot result{};
+    std::size_t writingCount = 0;
+    std::size_t writingIndex = kInvalidIndex;
+    LeaseCapacityClaim writingClaim{};
     for (std::size_t i = 0; i < capacity(); ++i) {
       const auto& entry = entries_[i];
       if (entry.state == State::Free || entry.state == State::Ready) {
         continue;
       }
-      ++result.sources;
-      result.pages += entry.paddingBefore + entry.storage.pageCount;
-      result.payloadBlocks += std::max<std::size_t>(1, entry.arenaPayloadCount);
-      ++result.retentionEntries;
-      ++result.allocatorTickets;
+      LeaseCapacityClaim claim{};
+      if (!leaseCapacityClaimFor(entry, claim)) {
+        result.valid = false;
+        return result;
+      }
+      if (entry.state == State::Writing) {
+        ++writingCount;
+        if (writingCount != 1) {
+          result.valid = false;
+          return result;
+        }
+        writingIndex = i;
+        writingClaim = claim;
+        continue;
+      }
+      if (!addLeaseCapacityClaim(result.olderUnavailable, claim)) {
+        result.valid = false;
+        return result;
+      }
+    }
+    if (writingCount == 1) {
+      const auto& entry = entries_[writingIndex];
+      if (!orderedTailWritingEntryValid(writingIndex, entry)) {
+        result.valid = false;
+        return result;
+      }
+      result.orderedTailWritingSuccessor = OrderedTailWritingCapacity{
+          .source = SourceRef{
+              .id = CpuReadySourceId{
+                  .index = static_cast<std::uint32_t>(writingIndex),
+                  .generation = entry.generation,
+              },
+              .storage = entry.storage,
+          },
+          .claim = writingClaim,
+      };
     }
     return result;
   }
@@ -1028,9 +1086,10 @@ class CpuReadyTape {
       }
     } else {
       // Legacy compatibility payloads live in their ChunkSlot vectors rather
-      // than the page arena. Give production publication a deterministic
-      // logical byte extent so session caps cannot treat non-empty work as
-      // free. Arena publication retains its exact planned storage extent.
+      // than the page arena. Preserve their deterministic logical replay
+      // extent for validation and telemetry; session admission derives its
+      // distinct bounded residency charge from representation metadata.
+      // Arena publication retains its exact planned storage extent.
       usedBytes = measureSourcePayloadLogicalExtent(SourcePayloadView(*payload));
     }
     const auto semantic = makeSealedSemanticSummary(
@@ -1376,6 +1435,47 @@ class CpuReadyTape {
     return true;
   }
 
+  bool canBeginPostEncodeRetire(CpuReadySourceId id,
+                                CpuReadyStorageRef storage) const noexcept {
+    const auto* entry = resolveEntry(id, storage);
+    return entry && id.index == sourceHead_ &&
+           entry->state == State::Represented &&
+           !entry->readyPublicationReserved && !entry->arenaOwnerDetached;
+  }
+
+  // Post-encode retirement is completion-neutral: it releases only payload,
+  // page, and source-control residency after a queue receipt has become the
+  // completion authority. The caller clears this detached Legacy payload
+  // outside the queue lock and finishes through finishReclaim().
+  SourcePayloadBlock* beginPostEncodeLegacyRetire(
+      CpuReadySourceId id, CpuReadyStorageRef storage) noexcept {
+    auto* entry = resolveEntry(id, storage);
+    if (!canBeginPostEncodeRetire(id, storage) ||
+        entry->payloadKind != PayloadKind::Legacy) {
+      noteStaleReject();
+      return nullptr;
+    }
+    auto* payload = compatibilityPayload(*entry);
+    if (!payload) {
+      noteStaleReject();
+      return nullptr;
+    }
+    entry->state = State::Reclaiming;
+    return payload;
+  }
+
+  std::optional<DetachedArenaOwner> beginPostEncodeArenaRetire(
+      CpuReadySourceId id, CpuReadyStorageRef storage) noexcept {
+    auto* entry = resolveEntry(id, storage);
+    if (!canBeginPostEncodeRetire(id, storage) ||
+        entry->payloadKind != PayloadKind::Arena) {
+      noteStaleReject();
+      return std::nullopt;
+    }
+    entry->state = State::Reclaiming;
+    return detachReclaimingArenaOwner(id, storage);
+  }
+
   bool beginReclaim(CpuReadySourceId id,
                     CpuReadyStorageRef storage) noexcept {
     auto* entry = resolveEntry(id, storage);
@@ -1545,6 +1645,97 @@ class CpuReadyTape {
   static std::uint64_t nextGeneration(std::uint64_t current) noexcept {
     ++current;
     return current == 0 ? 1 : current;
+  }
+
+  static bool addLeaseCapacityClaim(
+      LeaseCapacityClaim& total,
+      const LeaseCapacityClaim& claim) noexcept {
+    const auto add = [](std::uint64_t& value,
+                        std::uint64_t increment) noexcept {
+      if (increment > std::numeric_limits<std::uint64_t>::max() - value) {
+        return false;
+      }
+      value += increment;
+      return true;
+    };
+    return add(total.sources, claim.sources) &&
+           add(total.pages, claim.pages) &&
+           add(total.bytes, claim.bytes) &&
+           add(total.payloadBlocks, claim.payloadBlocks) &&
+           add(total.readyEntries, claim.readyEntries) &&
+           add(total.retentionEntries, claim.retentionEntries) &&
+           add(total.allocatorTickets, claim.allocatorTickets);
+  }
+
+  bool leaseCapacityClaimFor(const Entry& entry,
+                             LeaseCapacityClaim& claim) const noexcept {
+    const std::uint64_t padding = entry.paddingBefore;
+    const std::uint64_t pages = entry.storage.pageCount;
+    if (!entry.storage.valid() ||
+        pages > std::numeric_limits<std::uint64_t>::max() - padding) {
+      return false;
+    }
+    std::uint64_t bytes = entry.plannedBytes;
+    if (entry.payloadKind == PayloadKind::Legacy) {
+      if (pages != 0 && config_.values().pageSize >
+                            std::numeric_limits<std::uint64_t>::max() / pages) {
+        return false;
+      }
+      bytes = pages * config_.values().pageSize;
+    }
+    if (bytes == 0) {
+      return false;
+    }
+    claim = {
+        .sources = 1,
+        .pages = padding + pages,
+        .bytes = bytes,
+        .payloadBlocks =
+            std::max<std::uint64_t>(1, entry.arenaPayloadCount),
+        .readyEntries = entry.readyPublicationReserved ? 1u : 0u,
+        .retentionEntries = 1,
+        .allocatorTickets = 1,
+    };
+    return true;
+  }
+
+  bool orderedTailWritingEntryValid(std::size_t index,
+                                    const Entry& entry) const noexcept {
+    if (residentCount_ == 0 || index != previousSourceIndex(sourceTail_) ||
+        !entry.readyPublicationReserved ||
+        readyPublicationReservations_ == 0 || entry.arenaOwnerDetached) {
+      return false;
+    }
+    const CpuReadySourceId id{
+        .index = static_cast<std::uint32_t>(index),
+        .generation = entry.generation,
+    };
+    CpuReadyPublicationTicket ticket{
+        .id = id,
+        .storage = entry.storage,
+    };
+    if (entry.strictAdmission) {
+      ticket.rawOrdinal = entry.rawOrdinal;
+      ticket.sourceOrdinal = entry.sourceOrdinal;
+      ticket.seqId = entry.seqId;
+      ticket.buildGeneration = entry.buildGeneration;
+    }
+    if (resolveEntry(id, entry.storage) != &entry ||
+        !ticketMatchesEntry(ticket, entry)) {
+      return false;
+    }
+    if (entry.payloadKind == PayloadKind::Legacy) {
+      return compatibilityPayload(entry) != nullptr;
+    }
+    if (entry.arenaPayloadCount == 0) {
+      return false;
+    }
+    for (std::size_t i = 0; i < entry.arenaPayloadCount; ++i) {
+      if (!arenaOwner(index, i).constructed) {
+        return false;
+      }
+    }
+    return true;
   }
 
   static constexpr bool validTransition(State before, State after) noexcept {

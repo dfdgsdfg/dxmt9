@@ -30,6 +30,8 @@ using dxmt9::core::metalqueue::kMaxEncodeSessionSources;
 using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
 using dxmt9::core::metalqueue::committedSequenceWaitTarget;
+using dxmt9::core::metalqueue::foldEncodedSessionFragmentCarrier;
+using dxmt9::core::metalqueue::hasExactRedundantFixedCompletionSources;
 using dxmt9::core::metalqueue::mergeEncodedPendingTailSubmission;
 using dxmt9::core::metalqueue::mergeCommandBufferDiagnostics;
 using dxmt9::core::metalqueue::summarizeNoEnqueueFirstPublishSlotShape;
@@ -525,6 +527,69 @@ void encodeChunkSessionOwnsOrderedSourceList() {
         "reset clears encode session source list");
 }
 
+void encodeChunkSessionBatchAppendIsTransactional() {
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  const QueueCompletionSource head{
+      .source = testSource(3, 10),
+      .slotIndex = 3,
+      .seqId = 10,
+      .commandCount = 2,
+  };
+  check(dxmt9::encoders::appendEncodeChunkSessionSource(*session, head),
+        "batch fixture appends its head source");
+
+  const std::array rejectedBatch{
+      QueueCompletionSource{
+          .source = testSource(4, 11),
+          .slotIndex = 4,
+          .seqId = 11,
+          .commandCount = 3,
+      },
+      QueueCompletionSource{
+          .source = testSource(5, 13),
+          .slotIndex = 5,
+          .seqId = 13,
+          .commandCount = 1,
+      },
+  };
+  check(!dxmt9::encoders::appendEncodeChunkSessionSources(
+            *session, rejectedBatch),
+        "sequence gap rejects the whole source batch");
+  auto sources = dxmt9::encoders::encodeChunkSessionSources(*session);
+  checkEq(sources.size(), std::size_t{1},
+          "rejected batch does not retain its valid prefix");
+  checkEq(sources.front().seqId, 10ull,
+          "rollback preserves the original session head");
+
+  const std::array acceptedBatch{
+      rejectedBatch[0],
+      QueueCompletionSource{
+          .source = testSource(5, 12),
+          .slotIndex = 5,
+          .seqId = 12,
+          .commandCount = 1,
+      },
+  };
+  check(dxmt9::encoders::appendEncodeChunkSessionSources(
+            *session, acceptedBatch),
+        "strict FIFO source batch appends transactionally");
+  sources = dxmt9::encoders::encodeChunkSessionSources(*session);
+  checkEq(sources.size(), std::size_t{3},
+          "successful batch publishes its full source list");
+  checkEq(sources[1].seqId, 11ull,
+          "successful batch preserves its first source");
+  checkEq(sources[2].seqId, 12ull,
+          "successful batch preserves its second source");
+
+  const std::array duplicate{acceptedBatch[1]};
+  check(!dxmt9::encoders::appendEncodeChunkSessionSources(
+            *session, duplicate),
+        "duplicate source sequence is rejected");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{3},
+          "duplicate rejection leaves the session unchanged");
+}
+
 void retainEncodeChunkSessionStoresOwnerInSubmissionRecord() {
   auto session = dxmt9::encoders::makeEncodeChunkSession();
   check(static_cast<bool>(session), "test setup creates encode session owner");
@@ -782,6 +847,45 @@ void runEncodeIterationPassesLiveSlotStorage() {
           "finish retires inline Tape residency accounting");
   check(!fixture.stop,
         "finish does not poison after an inline source was already reclaimed");
+}
+
+void postEncodeRetiringControlRepresentsUnlockedReclaim() {
+  QueueFixture fixture;
+  fixture.addReadySlot(0, 1, true);
+
+  ReadySlotSnapshot source{};
+  std::unique_lock lock(fixture.mutex);
+  check(fixture.controller.dequeueReadySlot(lock, source),
+        "retiring fixture represents its Ready source");
+  auto* payload = fixture.cpuReadyTape.beginPostEncodeLegacyRetire(
+      source.sourceId, source.storage);
+  check(payload != nullptr,
+        "retiring fixture begins the two-phase Tape reclaim");
+  fixture.slots[0].state = ChunkSlot::State::Retiring;
+
+  fixture.controller.waitForSequence(lock, 0);
+  check(fixture.slots[0].commandsEmpty() &&
+            fixture.slots[0].commandCount() == 0,
+        "retiring control does not expose payload storage to trace or "
+        "transition consumers while destruction may run unlocked");
+  payload->clearCommands();
+  payload->seqId = 0;
+  fixture.controller.waitForSequence(lock, 0);
+  check(fixture.slots[0].state == ChunkSlot::State::Retiring &&
+            fixture.cpuReadyTape.state(source.sourceId, source.storage) ==
+                CpuReadyTape::State::Reclaiming,
+        "concurrent lifecycle observations accept the explicit unlocked "
+        "retirement state before and after payload destruction");
+
+  check(fixture.cpuReadyTape.finishReclaim(source.sourceId, source.storage),
+        "retiring fixture finishes its Tape reclaim");
+  fixture.slots[0].state = ChunkSlot::State::Free;
+  fixture.slots[0].seqId = 0;
+  fixture.slots[0].sourceId = {};
+  fixture.slots[0].storage = {};
+  fixture.slots[0].payload = nullptr;
+  --fixture.inflightCount;
+  fixture.controller.waitForSequence(lock, 0);
 }
 
 void failedEncodeSubmissionDoesNotRunPostCommitCallbacks() {
@@ -1808,6 +1912,7 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
   pending.diagnostics.hasPresent = true;
   pending.contextValue = "queue-completion-sources-spec";
   pending.fixedCompletionSources = record.fixedCompletionSources;
+  pending.completionSpanShadow = record.completionSpanShadow;
   pending.completionCallbacks.push_back(
       [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
@@ -2010,6 +2115,7 @@ void multiSourceCompletionRejectsStaleTailAtomically() {
   pending.slotIndex = record.slotIndex;
   pending.seqId = record.seqId;
   pending.fixedCompletionSources = record.fixedCompletionSources;
+  pending.completionSpanShadow = record.completionSpanShadow;
   ++pending.fixedCompletionSources.entries[1].source.storage.generation;
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
@@ -2068,6 +2174,7 @@ void recycledControlIsNeverCompletionOrReclaimIdentity() {
   completionA.slotIndex = recordA.slotIndex;
   completionA.seqId = recordA.seqId;
   completionA.fixedCompletionSources = recordA.fixedCompletionSources;
+  completionA.completionSpanShadow = recordA.completionSpanShadow;
   fixture.controller.enqueuePendingCompletionForTest(std::move(completionA));
   bool completionStop = false;
   check(fixture.controller.processOnePendingCompletion(completionStop),
@@ -2094,6 +2201,7 @@ void recycledControlIsNeverCompletionOrReclaimIdentity() {
   duplicateA.slotIndex = recordA.slotIndex;
   duplicateA.seqId = recordA.seqId;
   duplicateA.fixedCompletionSources = recordA.fixedCompletionSources;
+  duplicateA.completionSpanShadow = recordA.completionSpanShadow;
   fixture.controller.enqueuePendingCompletionForTest(std::move(duplicateA));
   check(!fixture.controller.processOnePendingCompletion(completionStop),
         "duplicate source A callback is stale after ordered reclaim");
@@ -2104,7 +2212,63 @@ void recycledControlIsNeverCompletionOrReclaimIdentity() {
         "duplicate callback cannot mutate the reused source");
 }
 
-void corruptedCompletionSeqRejectsBeforeTapeMutation() {
+void completionProjectionCorruptionRejectsBeforeCallbacks() {
+  const auto run = [](std::string_view label, auto corrupt) {
+    QueueFixture fixture;
+    fixture.addReadySlot(0, 1);
+    ReadySlotSnapshot source{};
+    QueueSubmissionRecord record;
+    record.testOnlyAllowNullCommandBuffer = true;
+    {
+      std::unique_lock lock(fixture.mutex);
+      check(fixture.controller.dequeueReadySlot(lock, source),
+            "projection-corruption fixture represents source");
+      record.slotIndex = source.slotIndex;
+      record.seqId = source.seqId;
+      const std::array completionSources{
+          completionSourceForReadySlot(source),
+      };
+      check(record.assignFixedCompletionSources(completionSources),
+            "projection-corruption fixture stores source locator");
+      check(fixture.controller.submitEncodedSubmission(lock, record),
+            "projection-corruption fixture submits its valid source");
+    }
+
+    QueueLifecycleController::PendingCompletion pending;
+    pending.slotIndex = record.slotIndex;
+    pending.seqId = record.seqId;
+    pending.fixedCompletionSources = record.fixedCompletionSources;
+    pending.completionSpanShadow = record.completionSpanShadow;
+    corrupt(pending);
+    bool completionCallbackRan = false;
+    pending.completionCallbacks.push_back(
+        [&completionCallbackRan] { completionCallbackRan = true; });
+    fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
+
+    bool completionStop = false;
+    check(!fixture.controller.processOnePendingCompletion(completionStop),
+          label);
+    check(!completionCallbackRan,
+          "projection mismatch rejects before completion callbacks run");
+    check(fixture.stop &&
+              fixture.cpuReadyTape.state(source.sourceId, source.storage) ==
+              CpuReadyTape::State::Submitted &&
+              fixture.completedSeqQueue.empty(),
+          "projection mismatch fail-stops before Tape or queue mutation");
+  };
+
+  run("seq projection corruption is rejected", [](auto& pending) {
+    ++pending.fixedCompletionSources.entries[0].seqId;
+  });
+  run("count projection corruption is rejected", [](auto& pending) {
+    pending.fixedCompletionSources.count = 0;
+  });
+  run("Present projection corruption is rejected", [](auto& pending) {
+    pending.fixedCompletionSources.entries[0].hasPresent = true;
+  });
+}
+
+void invalidCompletionLocatorRetainsLegacyCallbackBeforeTapeFailure() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
   ReadySlotSnapshot source{};
@@ -2113,34 +2277,73 @@ void corruptedCompletionSeqRejectsBeforeTapeMutation() {
   {
     std::unique_lock lock(fixture.mutex);
     check(fixture.controller.dequeueReadySlot(lock, source),
-          "corrupt-seq fixture represents source");
+          "invalid-locator fixture represents source");
     record.slotIndex = source.slotIndex;
     record.seqId = source.seqId;
     const std::array completionSources{
         completionSourceForReadySlot(source),
     };
     check(record.assignFixedCompletionSources(completionSources),
-          "corrupt-seq fixture stores source locator");
+          "invalid-locator fixture seals a valid old list");
     check(fixture.controller.submitEncodedSubmission(lock, record),
-          "corrupt-seq fixture first submits its valid source");
+          "invalid-locator fixture submits its valid source");
   }
 
   QueueLifecycleController::PendingCompletion pending;
   pending.slotIndex = record.slotIndex;
-  pending.seqId = 2;
+  pending.seqId = record.seqId;
   pending.fixedCompletionSources = record.fixedCompletionSources;
-  pending.fixedCompletionSources.entries[0].seqId = 2;
-  fixture.completedSeqId = 1;
-  fixture.lastCommittedSeqId = 2;
+  pending.completionSpanShadow = record.completionSpanShadow;
+  pending.fixedCompletionSources.entries[0].source = {};
+  check(pending.completionSpanShadowMatchesSources(),
+        "syntactically invalid locator is not a projection mismatch");
+  bool completionCallbackRan = false;
+  pending.completionCallbacks.push_back(
+      [&completionCallbackRan] { completionCallbackRan = true; });
   fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
 
   bool completionStop = false;
   check(!fixture.controller.processOnePendingCompletion(completionStop),
-        "callback seqId that disagrees with Tape metadata is rejected");
-  check(fixture.cpuReadyTape.state(source.sourceId, source.storage) ==
-            CpuReadyTape::State::Submitted &&
+        "old-list validation rejects the invalid locator");
+  check(completionCallbackRan,
+        "legacy completion callback runs before old-list locator validation");
+  check(fixture.stop &&
+            fixture.cpuReadyTape.state(source.sourceId, source.storage) ==
+                CpuReadyTape::State::Submitted &&
             fixture.completedSeqQueue.empty(),
-        "corrupted seq rejection occurs before completion mutation");
+        "old-list locator failure poisons without completing Tape or queue");
+}
+
+void staleReceiptRejectsBeforeCallbacksAndWaterlines() {
+  QueueFixture fixture;
+  const QueueCompletionSource staleReceiptSource{
+      .receipt = {
+          .seqId = 1u,
+          .generation = 1u,
+          .slot = 0u,
+      },
+      .slotIndex = 0u,
+      .seqId = 1u,
+      .hasPresent = false,
+  };
+  QueueLifecycleController::PendingCompletion pending;
+  pending.slotIndex = 0u;
+  pending.seqId = 1u;
+  check(pending.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(&staleReceiptSource, 1u)),
+        "stale-receipt fixture seals a structurally valid receipt identity");
+  bool completionCallbackRan = false;
+  pending.completionCallbacks.push_back(
+      [&completionCallbackRan] { completionCallbackRan = true; });
+  fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
+
+  bool completionStop = false;
+  check(!fixture.controller.processOnePendingCompletion(completionStop),
+        "unowned receipt generation is rejected as stale");
+  check(!completionCallbackRan && fixture.stop &&
+            fixture.completedSeqQueue.empty() &&
+            fixture.completedPresentSeqQueue.empty(),
+        "stale receipt fails before callbacks and completion waterlines");
 }
 
 void emptyCompletionSourcesAndNullCommandBufferFailBeforeMutation() {
@@ -2199,12 +2402,128 @@ QueueSubmissionRecord::RenderEncoderGpuSample makeGpuSample(
       .slotIndex = commandIndex,
       .commandIndex = commandIndex,
       .sourceCommand = {
-          .source = testSource(commandIndex, seqId),
           .seqId = seqId,
-          .slotIndex = commandIndex,
           .commandIndex = commandIndex,
       },
   };
+}
+
+void redundantFixedCompletionSourcePredicateIsExact() {
+  const std::array<QueueCompletionSource, 3> sources{{
+      QueueCompletionSource{
+          .source = testSource(3, 31),
+          .slotIndex = 3,
+          .seqId = 31,
+          .hasPresent = false,
+          .commandBegin = 0,
+          .commandCount = 2,
+      },
+      QueueCompletionSource{
+          .source = testSource(4, 32),
+          .slotIndex = 4,
+          .seqId = 32,
+          .hasPresent = false,
+          .commandBegin = 1,
+          .commandCount = 3,
+      },
+      QueueCompletionSource{
+          .source = testSource(5, 33),
+          .slotIndex = 5,
+          .seqId = 33,
+          .hasPresent = false,
+          .commandBegin = 0,
+          .commandCount = 1,
+      },
+  }};
+  const auto makeList = [&](std::size_t count) {
+    EncodeSessionSourceList list;
+    check(list.assign(std::span<const QueueCompletionSource>(
+              sources.data(), count)),
+          "exact-list fixture builds a valid FIFO list");
+    return list;
+  };
+  QueueSubmissionRecord exactRecord;
+  check(exactRecord.assignFixedCompletionSources(
+            std::span<const QueueCompletionSource>(sources.data(), 2u)),
+        "exact-list fixture publishes two record sources");
+  const EncodeSessionSourceList exactPending = makeList(2u);
+  const EncodeSessionSourceList exactSession = makeList(2u);
+  check(hasExactRedundantFixedCompletionSources(
+            exactRecord, exactPending.span(), exactSession.span()),
+        "three complete exact lists qualify as redundant");
+
+  enum class Mismatch {
+    Prefix,
+    Superset,
+    Reordered,
+    SourceGeneration,
+    StorageGeneration,
+    Slot,
+    Sequence,
+    Present,
+    CommandBegin,
+    CommandCount,
+    SessionOwner,
+  };
+  constexpr std::array mismatches{
+      Mismatch::Prefix,
+      Mismatch::Superset,
+      Mismatch::Reordered,
+      Mismatch::SourceGeneration,
+      Mismatch::StorageGeneration,
+      Mismatch::Slot,
+      Mismatch::Sequence,
+      Mismatch::Present,
+      Mismatch::CommandBegin,
+      Mismatch::CommandCount,
+      Mismatch::SessionOwner,
+  };
+  for (const auto mismatch : mismatches) {
+    QueueSubmissionRecord record = exactRecord;
+    EncodeSessionSourceList pending = exactPending;
+    EncodeSessionSourceList session = exactSession;
+    switch (mismatch) {
+    case Mismatch::Prefix:
+      record.fixedCompletionSources.count = 1u;
+      break;
+    case Mismatch::Superset:
+      check(record.fixedCompletionSources.append(sources[2]),
+            "superset fixture appends a valid third source");
+      break;
+    case Mismatch::Reordered:
+      std::swap(record.fixedCompletionSources.entries[0],
+                record.fixedCompletionSources.entries[1]);
+      break;
+    case Mismatch::SourceGeneration:
+      ++record.fixedCompletionSources.entries[0].source.id.generation;
+      break;
+    case Mismatch::StorageGeneration:
+      ++record.fixedCompletionSources.entries[0].source.storage.generation;
+      break;
+    case Mismatch::Slot:
+      ++record.fixedCompletionSources.entries[0].slotIndex;
+      break;
+    case Mismatch::Sequence:
+      ++record.fixedCompletionSources.entries[0].seqId;
+      break;
+    case Mismatch::Present:
+      record.fixedCompletionSources.entries[0].hasPresent = true;
+      break;
+    case Mismatch::CommandBegin:
+      ++record.fixedCompletionSources.entries[0].commandBegin;
+      break;
+    case Mismatch::CommandCount:
+      ++record.fixedCompletionSources.entries[0].commandCount;
+      break;
+    case Mismatch::SessionOwner:
+      ++session.entries[1].commandCount;
+      break;
+    }
+    check(!hasExactRedundantFixedCompletionSources(
+              record, pending.span(), session.span()),
+          "every prefix/superset/order/identity/range/owner mismatch stays "
+          "non-canonical");
+  }
 }
 
 void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
@@ -2301,12 +2620,10 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
           "head render sample stays before tail sample");
   checkEq(tail.renderEncoderGpuSamples[1].seqId, 2ull,
           "tail render sample stays after head sample");
-  check(tail.renderEncoderGpuSamples[0].sourceCommand.source ==
-            testSource(1, 1),
-        "head render sample keeps generation-bearing source identity");
-  check(tail.renderEncoderGpuSamples[1].sourceCommand.source ==
-            testSource(2, 2),
-        "tail render sample keeps generation-bearing source identity");
+  check(tail.renderEncoderGpuSamples[0].sourceCommand.valid(),
+        "head render sample keeps locator-free encoded identity");
+  check(tail.renderEncoderGpuSamples[1].sourceCommand.valid(),
+        "tail render sample keeps locator-free encoded identity");
   checkEq(tail.renderEncoderGpuSamples[0].sourceCommand.seqId,
           tail.renderEncoderGpuSamples[0].seqId,
           "head sample scalar and qualified sequence stay consistent");
@@ -2323,6 +2640,179 @@ void mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder() {
         "head retained payload stays before tail payload");
   check(tail.retainedPayloads[1] == tailRetained,
         "tail retained payload remains after head payload");
+}
+
+void fragmentCarrierFoldIgnoresEncodeSequenceAndPreservesCompletionOrder() {
+  QueueSubmissionRecord encodedSeq2;
+  encodedSeq2.slotIndex = 2;
+  encodedSeq2.seqId = 2;
+  encodedSeq2.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+      static_cast<obj_handle_t>(0x120));
+  encodedSeq2.diagnostics.hasDraw = true;
+  encodedSeq2.completionCallbacks.push_back([] {});
+
+  QueueSubmissionRecord encodedSeq1Tail;
+  encodedSeq1Tail.slotIndex = 1;
+  encodedSeq1Tail.seqId = 1;
+  encodedSeq1Tail.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+      static_cast<obj_handle_t>(0x120));
+  encodedSeq1Tail.diagnostics.hasPresent = true;
+  encodedSeq1Tail.completionCallbacks.push_back([] {});
+  const std::array completionSources{
+      QueueCompletionSource{
+          .source = testSource(1, 1),
+          .slotIndex = 1,
+          .seqId = 1,
+          .commandCount = 1,
+      },
+      QueueCompletionSource{
+          .source = testSource(2, 2),
+          .slotIndex = 2,
+          .seqId = 2,
+          .commandCount = 1,
+      },
+  };
+  check(encodedSeq1Tail.assignFixedCompletionSources(completionSources),
+        "fragment fold fixture stores FIFO completion sources");
+
+  check(foldEncodedSessionFragmentCarrier(encodedSeq1Tail, encodedSeq2),
+        "seq2 carrier folds into a later encoded seq1 tail");
+  checkEq(encodedSeq1Tail.seqId, 1ull,
+          "fold keeps the newest carrier record identity");
+  checkEq(encodedSeq1Tail.slotIndex, std::size_t{1},
+          "fold keeps the newest carrier slot identity");
+  check(encodedSeq1Tail.diagnostics.hasDraw &&
+            encodedSeq1Tail.diagnostics.hasPresent,
+        "fold aggregates fragment diagnostics");
+  checkEq(encodedSeq1Tail.completionCallbacks.size(), std::size_t{2},
+          "fold carries both fragment callback sets");
+  const auto published = encodedSeq1Tail.explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{2},
+          "fold does not replace pre-arranged completion metadata");
+  checkEq(published[0].seqId, 1ull,
+          "completion metadata stays in source FIFO order");
+  checkEq(published[1].seqId, 2ull,
+          "completion metadata remains independent of encode order");
+
+  encodedSeq1Tail.commandBuffer.handle = NULL_OBJECT_HANDLE;
+  encodedSeq2.commandBuffer.handle = NULL_OBJECT_HANDLE;
+}
+
+void fragmentCarrierFoldPreflightRejectsWithoutMutation() {
+  QueueSubmissionRecord oldCarrier;
+  oldCarrier.seqId = 1;
+  oldCarrier.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+      static_cast<obj_handle_t>(0x121));
+  oldCarrier.retainedPayloads.push_back(std::make_shared<int>(5));
+
+  QueueSubmissionRecord newTail;
+  newTail.seqId = 2;
+  newTail.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+      static_cast<obj_handle_t>(0x122));
+  newTail.commandBufferChainLength = 1;
+  check(!foldEncodedSessionFragmentCarrier(newTail, oldCarrier),
+        "unproved different live command buffers reject the fold");
+  checkEq(newTail.commandBuffer.handle, static_cast<obj_handle_t>(0x122),
+          "rejected fold keeps the new tail command buffer");
+  checkEq(newTail.commandBufferChainLength, 1ull,
+          "rejected fold keeps the new tail chain length");
+  checkEq(oldCarrier.retainedPayloads.size(), std::size_t{1},
+          "rejected fold does not move old retained ownership");
+
+  oldCarrier.commandBuffer.handle = NULL_OBJECT_HANDLE;
+  newTail.commandBuffer.handle = NULL_OBJECT_HANDLE;
+}
+
+void fragmentCarrierFoldRejectsShadowMismatchWithoutMutation() {
+  QueueSubmissionRecord oldCarrier;
+  oldCarrier.retainedPayloads.push_back(std::make_shared<int>(9));
+
+  QueueSubmissionRecord newTail;
+  const std::array completionSources{QueueCompletionSource{
+      .source = testSource(2, 2),
+      .slotIndex = 2,
+      .seqId = 2,
+      .commandCount = 1,
+  }};
+  check(newTail.assignFixedCompletionSources(completionSources),
+        "shadow-mismatch fold fixture stores a sealed source");
+  newTail.fixedCompletionSources.entries[0].seqId = 3;
+
+  check(!foldEncodedSessionFragmentCarrier(newTail, oldCarrier),
+        "fragment fold rejects a list that disagrees with its shadow");
+  checkEq(newTail.fixedCompletionSources.entries[0].seqId, 3ull,
+          "shadow-mismatch fold rejection preserves the new record");
+  checkEq(oldCarrier.retainedPayloads.size(), std::size_t{1},
+          "shadow-mismatch fold rejection preserves old ownership");
+}
+
+void fragmentCarrierFoldValidatesMovedProductionIdentity() {
+  constexpr obj_handle_t injectedHandle =
+      static_cast<obj_handle_t>(0x131);
+
+  {
+    QueueSubmissionRecord oldCarrier;
+    oldCarrier.commandBuffer =
+        WMT::Reference<WMT::CommandBuffer>(injectedHandle);
+    oldCarrier.retainedPayloads.push_back(std::make_shared<int>(7));
+    auto injectedOwner = std::move(oldCarrier.commandBuffer);
+    check(!oldCarrier.commandBuffer,
+          "production move shape empties the old carrier CB field");
+
+    QueueSubmissionRecord unrelatedTail;
+    unrelatedTail.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+        static_cast<obj_handle_t>(0x132));
+    unrelatedTail.commandBufferChainLength = 1;
+    check(!foldEncodedSessionFragmentCarrier(
+              unrelatedTail, oldCarrier, injectedHandle),
+          "moved carrier rejects an unrelated uncommitted return tail");
+    checkEq(oldCarrier.retainedPayloads.size(), std::size_t{1},
+            "moved-identity rejection preserves carrier metadata");
+    injectedOwner.handle = NULL_OBJECT_HANDLE;
+    unrelatedTail.commandBuffer.handle = NULL_OBJECT_HANDLE;
+  }
+
+  {
+    QueueSubmissionRecord oldCarrier;
+    oldCarrier.commandBuffer =
+        WMT::Reference<WMT::CommandBuffer>(injectedHandle);
+    auto injectedOwner = std::move(oldCarrier.commandBuffer);
+    QueueSubmissionRecord nullTail;
+    check(!foldEncodedSessionFragmentCarrier(
+              nullTail, oldCarrier, injectedHandle),
+          "moved carrier rejects a null returned tail");
+    injectedOwner.handle = NULL_OBJECT_HANDLE;
+  }
+
+  {
+    QueueSubmissionRecord oldCarrier;
+    oldCarrier.commandBuffer =
+        WMT::Reference<WMT::CommandBuffer>(injectedHandle);
+    QueueSubmissionRecord sameTail;
+    sameTail.commandBuffer = std::move(oldCarrier.commandBuffer);
+    check(foldEncodedSessionFragmentCarrier(
+              sameTail, oldCarrier, injectedHandle),
+          "moved carrier accepts the same returned command buffer");
+    sameTail.commandBuffer.handle = NULL_OBJECT_HANDLE;
+  }
+
+  {
+    QueueSubmissionRecord oldCarrier;
+    oldCarrier.commandBuffer =
+        WMT::Reference<WMT::CommandBuffer>(injectedHandle);
+    auto injectedOwner = std::move(oldCarrier.commandBuffer);
+    QueueSubmissionRecord committedSuccessor;
+    committedSuccessor.commandBuffer = WMT::Reference<WMT::CommandBuffer>(
+        static_cast<obj_handle_t>(0x133));
+    committedSuccessor.commandBufferChainLength = 2;
+    check(foldEncodedSessionFragmentCarrier(
+              committedSuccessor, oldCarrier, injectedHandle),
+          "moved carrier accepts a proven committed successor tail");
+    checkEq(committedSuccessor.commandBufferChainLength, 2ull,
+            "committed successor retains the encoded chain proof");
+    injectedOwner.handle = NULL_OBJECT_HANDLE;
+    committedSuccessor.commandBuffer.handle = NULL_OBJECT_HANDLE;
+  }
 }
 
 void mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources() {
@@ -2443,6 +2933,45 @@ void mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch() {
         "metadata mismatch leaves merged source output empty");
   checkEq(tail.explicitCompletionSourceSpan()[0].commandBegin, 1u,
           "metadata mismatch leaves existing fixed sources untouched");
+}
+
+void mergeEncodedPendingTailSubmissionRejectsShadowMismatch() {
+  QueueSubmissionRecord head;
+  head.slotIndex = 0;
+  head.seqId = 1;
+  head.retainedPayloads.push_back(std::make_shared<int>(23));
+
+  QueueSubmissionRecord tail;
+  tail.slotIndex = 1;
+  tail.seqId = 2;
+  const std::array headSources{QueueCompletionSource{
+      .source = testSource(0, 1),
+      .slotIndex = 0,
+      .seqId = 1,
+      .commandCount = 1,
+  }};
+  const QueueCompletionSource tailSource{
+      .source = testSource(1, 2),
+      .slotIndex = 1,
+      .seqId = 2,
+      .hasPresent = true,
+      .commandCount = 1,
+  };
+  const std::array allSources{headSources[0], tailSource};
+  check(tail.assignFixedCompletionSources(allSources),
+        "shadow-mismatch merge fixture stores a sealed FIFO list");
+  tail.fixedCompletionSources.entries[1].hasPresent = false;
+
+  EncodeSessionSourceList mergedSources;
+  check(!mergeEncodedPendingTailSubmission(
+            tail, head, headSources, tailSource,
+            /*encodedHeadTailAlreadyCommitted=*/false, &mergedSources),
+        "pending-tail merge rejects a tail projection mismatch");
+  check(!tail.fixedCompletionSources.entries[1].hasPresent &&
+            mergedSources.empty(),
+        "shadow-mismatch merge rejection leaves completion metadata intact");
+  checkEq(head.retainedPayloads.size(), std::size_t{1},
+          "shadow-mismatch merge rejection preserves head ownership");
 }
 
 void mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch() {
@@ -2643,11 +3172,13 @@ int main() {
     diagnosticsMergeKeepsTailIdentityAndAggregatesSourceShape();
     encodeChunkSessionFactoryStartsWithoutActiveRender();
     encodeChunkSessionOwnsOrderedSourceList();
+    encodeChunkSessionBatchAppendIsTransactional();
     retainEncodeChunkSessionStoresOwnerInSubmissionRecord();
     firstPublishSlotShapeClassifiesTailPresentPrefix();
     firstPublishSlotShapeRejectsPostPresentWorkAsTail();
     firstPublishSlotShapeKeepsNoPresentSlotUnclassified();
     runEncodeIterationPassesLiveSlotStorage();
+    postEncodeRetiringControlRepresentsUnlockedReclaim();
     failedEncodeSubmissionDoesNotRunPostCommitCallbacks();
     compatibilityPublicationRetainsLegacyInflightLimit();
     commitStaleWritingStorageFailStopsWithoutMutation();
@@ -2676,11 +3207,19 @@ int main() {
     appendPresentRejectsStaleWriterBeforeDereference();
     multiSourceCompletionRejectsStaleTailAtomically();
     recycledControlIsNeverCompletionOrReclaimIdentity();
-    corruptedCompletionSeqRejectsBeforeTapeMutation();
+    completionProjectionCorruptionRejectsBeforeCallbacks();
+    invalidCompletionLocatorRetainsLegacyCallbackBeforeTapeFailure();
+    staleReceiptRejectsBeforeCallbacksAndWaterlines();
     emptyCompletionSourcesAndNullCommandBufferFailBeforeMutation();
+    fragmentCarrierFoldIgnoresEncodeSequenceAndPreservesCompletionOrder();
+    fragmentCarrierFoldPreflightRejectsWithoutMutation();
+    fragmentCarrierFoldRejectsShadowMismatchWithoutMutation();
+    fragmentCarrierFoldValidatesMovedProductionIdentity();
+    redundantFixedCompletionSourcePredicateIsExact();
     mergeEncodedPendingTailSubmissionPreservesHeadThenTailOrder();
     mergeEncodedPendingTailSubmissionAcceptsSessionOwnedSources();
     mergeEncodedPendingTailSubmissionRejectsSourceMetadataMismatch();
+    mergeEncodedPendingTailSubmissionRejectsShadowMismatch();
     mergeEncodedPendingTailSubmissionAcceptsCommittedHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsUnprovenHeadTailMismatch();
     mergeEncodedPendingTailSubmissionRejectsSequenceGaps();

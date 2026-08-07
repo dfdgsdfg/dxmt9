@@ -96,6 +96,18 @@ wmt_setbytes_dispatch_spec = executable(
 
 test('dxmt9-wmt-setbytes-dispatch-spec', wmt_setbytes_dispatch_spec)
 
+wmt_store_action_dispatch_spec = executable(
+  'dxmt9-wmt-store-action-dispatch-spec',
+  'wmt_store_action_dispatch_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-wmt-store-action-dispatch-spec', wmt_store_action_dispatch_spec)
+
 # R-FORMAT-11 — winemetal depth-resolve ABI surface. Header-only: pins the
 # WMTDepthAttachmentInfo resolve_texture / resolve_filter fields and the
 # WMTMultisampleDepthResolveFilter enum added for the RESZ depth resolve.

@@ -47,6 +47,31 @@ bool encodeChunkSessionHasActiveRender(
          encode_session::storageHasActiveRender(*session.storage);
 }
 
+std::optional<ActiveRenderDependencySnapshot>
+encodeChunkSessionActiveRenderDependencySnapshot(
+    const EncodeChunkSessionState& session) noexcept {
+  return session.storage
+             ? encode_session::storageActiveRenderDependencySnapshot(
+                   *session.storage)
+             : std::nullopt;
+}
+
+std::optional<RenderPassInstanceToken>
+encodeChunkSessionActiveRenderInstanceToken(
+    const EncodeChunkSessionState& session) noexcept {
+  return session.storage
+             ? encode_session::storageActiveRenderInstanceToken(
+                   *session.storage)
+             : std::nullopt;
+}
+
+EncodeSessionReplayFrontierState encodeChunkSessionReplayFrontierState(
+    const EncodeChunkSessionState& session) noexcept {
+  return session.storage
+             ? encode_session::storageReplayFrontierState(*session.storage)
+             : EncodeSessionReplayFrontierState::ActiveRenderUnproved;
+}
+
 bool encodeChunkSessionHasDeferredSubmissionPayload(
     const EncodeChunkSessionState& session) noexcept {
   return session.storage &&
@@ -63,6 +88,26 @@ bool appendEncodeChunkSessionSource(
     EncodeChunkSessionState& session,
     core::metalqueue::QueueCompletionSource source) noexcept {
   return session.sources.append(source);
+}
+
+bool appendEncodeChunkSessionSources(
+    EncodeChunkSessionState& session,
+    std::span<const core::metalqueue::QueueCompletionSource> sources) noexcept {
+  core::metalqueue::EncodeSessionSourceList staged = session.sources;
+  for (const auto& source : sources) {
+    if (!staged.append(source)) {
+      return false;
+    }
+  }
+  session.sources = staged;
+  return true;
+}
+
+bool replaceEncodeChunkSessionSourceIdentity(
+    EncodeChunkSessionState& session,
+    const core::metalqueue::QueueCompletionSource& expected,
+    const core::metalqueue::QueueCompletionSource& replacement) noexcept {
+  return session.sources.replaceIdentity(expected, replacement);
 }
 
 std::span<const core::metalqueue::QueueCompletionSource>

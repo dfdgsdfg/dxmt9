@@ -1,7 +1,11 @@
 #pragma once
 
+#include "dxmt9_encode_attribution.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_session_finalize_cause.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,6 +16,46 @@ namespace dxmt9::encoders {
 
 struct EncodeContext;
 struct EncodeChunkSessionState;
+
+inline constexpr std::size_t kActiveRenderDependencyCapacity =
+    core::kMaxRenderTargets + 1u;
+
+// Immutable value snapshot of the render pass currently owned by an
+// EncodeSession. The dependency list is the complete deduplicated set of
+// attachment writes made by that active encoder. It is bounded so FrameGraph
+// planning can consume it synchronously without retaining session storage or
+// Metal objects. `dependencyCount` greater than the fixed capacity and
+// `complete == false` are explicit conservative-fallback states.
+struct ActiveRenderDependencySnapshot {
+  std::array<core::Handle, core::kMaxRenderTargets> colorAttachments{};
+  core::Handle depthStencil{};
+  std::array<core::Handle, kActiveRenderDependencyCapacity>
+      writeDependencies{};
+  std::uint32_t dependencyCount = 0;
+  std::uint32_t sampleCount = 1;
+  bool complete = false;
+
+  friend constexpr bool operator==(const ActiveRenderDependencySnapshot&,
+                                   const ActiveRenderDependencySnapshot&) =
+      default;
+};
+
+static_assert(std::is_trivially_copyable_v<ActiveRenderDependencySnapshot>);
+static_assert(std::is_standard_layout_v<ActiveRenderDependencySnapshot>);
+
+// Typed proof state at the replay frontier. CleanClosedEncoderNoPendingClear
+// means that no Metal encoder or deferred clear is live; it does not assert
+// that the retained command buffer contains no earlier work. InjectedUnknown
+// is selected by FrameGraphBackend for an injected command buffer that has no
+// EncodeSession storage to prove its encoder lifecycle.
+enum class EncodeSessionReplayFrontierState : std::uint8_t {
+  CleanClosedEncoderNoPendingClear,
+  PendingClear,
+  ActiveRenderComplete,
+  ActiveRenderUnproved,
+  ActiveBlitUnsupported,
+  InjectedUnknown,
+};
 
 // Stable identity for one source retained by an encode session. The index
 // selects the source within the retained table; Tape source/storage generations
@@ -102,6 +146,14 @@ bool retainEncodeChunkSessionUntilSubmissionComplete(
     core::metalqueue::QueueSubmissionRecord& record);
 bool encodeChunkSessionHasActiveRender(
     const EncodeChunkSessionState& session) noexcept;
+std::optional<ActiveRenderDependencySnapshot>
+encodeChunkSessionActiveRenderDependencySnapshot(
+    const EncodeChunkSessionState& session) noexcept;
+std::optional<RenderPassInstanceToken>
+encodeChunkSessionActiveRenderInstanceToken(
+    const EncodeChunkSessionState& session) noexcept;
+EncodeSessionReplayFrontierState encodeChunkSessionReplayFrontierState(
+    const EncodeChunkSessionState& session) noexcept;
 bool encodeChunkSessionHasDeferredSubmissionPayload(
     const EncodeChunkSessionState& session) noexcept;
 bool canAppendEncodeChunkSessionSource(
@@ -110,6 +162,13 @@ bool canAppendEncodeChunkSessionSource(
 bool appendEncodeChunkSessionSource(
     EncodeChunkSessionState& session,
     core::metalqueue::QueueCompletionSource source) noexcept;
+bool appendEncodeChunkSessionSources(
+    EncodeChunkSessionState& session,
+    std::span<const core::metalqueue::QueueCompletionSource> sources) noexcept;
+bool replaceEncodeChunkSessionSourceIdentity(
+    EncodeChunkSessionState& session,
+    const core::metalqueue::QueueCompletionSource& expected,
+    const core::metalqueue::QueueCompletionSource& replacement) noexcept;
 std::span<const core::metalqueue::QueueCompletionSource>
 encodeChunkSessionSources(const EncodeChunkSessionState& session) noexcept;
 std::optional<core::metalqueue::PublishedCommandRef>
@@ -143,6 +202,7 @@ EncodeChunkSessionPassCloseResult closeEncodeChunkSessionRenderPass(
 bool finalizeEncodeChunkSessionIntoSubmission(
     EncodeContext& ctx,
     EncodeChunkSessionState& session,
-    core::metalqueue::QueueSubmissionRecord& record);
+    core::metalqueue::QueueSubmissionRecord& record,
+    SessionFinalizeCause cause = SessionFinalizeCause::FailOrOther);
 
 }  // namespace dxmt9::encoders

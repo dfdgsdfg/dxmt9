@@ -607,9 +607,13 @@ chain of one source. Each source-ready invocation builds a fresh `FrameGraph`
 over exactly that view. Segment boundaries do not finalize the graph or create
 additional completion sources. The opt-in R-BACK-32.10 scheduler may retain one
 source and inspect an immutable summary for its already-ready immediate FIFO
-successor. R-BACK-32.11 permits a future bounded ready-prefix summary. In both
-cases records, passes, edges, and completion sources never merge across logical
-sources, and the queue remains the only ready-prefix owner. The source's
+successor. R-BACK-32.11 permits a future bounded ready-prefix summary. Those DCE
+summary paths do not merge records, passes, or edges across logical sources.
+Separately, the `R-BACK-2.43` EncodeSession planner may build one bounded call-
+local composite graph from complete retained source DAGs, with every command
+kept source-qualified; only its planning graph and replay order combine, never
+payload ownership or completion identity. The queue remains the only ready-
+prefix owner. The source's
 `completedSeqId` advances exactly once after its session tail completes;
 FrameGraph replay and diagnostics retain `(retainedSourceIndex, commandIndex)`
 attribution without turning command or block boundaries into completion

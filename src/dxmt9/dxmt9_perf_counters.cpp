@@ -171,6 +171,51 @@ struct Counters {
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionTailSubmitted{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadAttempts{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadHeld{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadLive{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadPeak{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadSuccessorReady{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackRelease{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackProducerWait{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackInitializer{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackStop{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackWriterGone{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadFallbackPressure{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadRestoreFailure{0};
+  std::atomic<std::uint64_t> cpuReadyRetainedHeadWaitNs{0};
+  std::atomic<std::uint64_t> completionSpanShadowBuilt{0};
+  std::atomic<std::uint64_t> completionSpanShadowValidated{0};
+  std::atomic<std::uint64_t> completionSpanShadowMismatch{0};
+  std::atomic<std::uint64_t> completionSpanShadowSourceCount{0};
+  std::atomic<std::uint64_t> postEncodeRetireAttempts{0};
+  std::atomic<std::uint64_t> postEncodeRetireSuccess{0};
+  std::atomic<std::uint64_t> postEncodeRetireSuccessArena{0};
+  std::atomic<std::uint64_t> postEncodeRetireSuccessLegacy{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleNone{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligiblePendingClear{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligiblePresent{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleReadback{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleUpdateSurface{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleOrderedControl{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligiblePayloadBorrow{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleNotOldest{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleReceiptCapacity{0};
+  std::atomic<std::uint64_t> postEncodeRetireIneligibleInvalid{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureInvalid{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureDuplicate{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureCapacity{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureStale{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureWrongState{0};
+  std::atomic<std::uint64_t> postEncodeReceiptFailureOther{0};
+  std::atomic<std::uint64_t> postEncodeReceiptDepth{0};
+  std::atomic<std::uint64_t> postEncodeReceiptPeak{0};
+  std::atomic<std::uint64_t> postEncodeResidencySourcesReleased{0};
+  std::atomic<std::uint64_t> postEncodeResidencyPagesReleased{0};
+  std::atomic<std::uint64_t> postEncodeResidencyBytesReleased{0};
+  std::atomic<std::uint64_t> postEncodeWorkCapCloses{0};
+  std::atomic<std::uint64_t> gpuOutstandingCompletionSources{0};
+  std::atomic<std::uint64_t> gpuOutstandingCompletionSourcesPeak{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedProducerWait{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedNonAppendable{0};
   std::atomic<std::uint64_t> cpuReadySessionReleasedInitializerWait{0};
@@ -198,9 +243,97 @@ struct Counters {
   std::atomic<std::uint64_t> cpuReadySessionCapBytes{0};
   std::atomic<std::uint64_t> cpuReadySessionCapDraws{0};
   std::atomic<std::uint64_t> cpuReadySessionCapCommandBuffers{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapRequirementSourcesOnly{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapRequirementPagesOnly{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapRequirementSourcesAndPages{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapPredecessorSourcesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapPredecessorPagesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapCandidatePayloadPagesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapCandidateWrapPaddingPagesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapCandidateRequiredPagesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapRequiredTotalSourcesPeak{0};
+  std::atomic<std::uint64_t> cpuReadySessionCapRequiredTotalPagesPeak{0};
   std::atomic<std::uint64_t> cpuReadySessionIsolated{0};
+  std::atomic<std::uint64_t> cpuReadySessionIsolatedPresent{0};
+  std::atomic<std::uint64_t> cpuReadySessionIsolatedCapacityBytes{0};
+  std::atomic<std::uint64_t> cpuReadySessionIsolatedOther{0};
   std::atomic<std::uint64_t> cpuReadySessionLegacyRollback{0};
   std::atomic<std::uint64_t> cpuReadySessionInvalidDisposition{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceWindowsAttempted{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceWindowsPlanned{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceWindowSources{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceWindowCommands{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceWindowRuns{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackEligibility{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackNaturalPlan{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackInvalidPlan{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackRepeatedSource{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackResolvedSource{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackCompletionSource{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackAdmission{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackFragmentRange{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFallbackCarrier{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourceNaturalFallbackWindowsStarted{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourceNaturalFallbackWindowsCompleted{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceNaturalFallbackSources{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePermutationFallbackWindowsStarted{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePermutationFallbackWindowsCompleted{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePermutationFallbackSources{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourceEligibilityActiveIncomplete{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceEligibilityPresent{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourceEligibilityNonConsecutiveIdentity{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceEligibilityOtherBoundary{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerInvalidInput{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerSeedRejected{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerNoActiveTargetMatch{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerNoMerge{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerNaturalAfterMerge{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerPermutationRejected{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerMovedHeadUnproved{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerPlanned{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerMergeSeed{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerMergeNonSeedOnly{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMatchDistance1{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceGt1{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceMissing{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMergeOperations{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceTotal{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceMax{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalCommandBefore{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalCommandAfter{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalEmptyIntervening{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalShapeAdjacent{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalShapeDependencyKept{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalShapeCommandless{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalShapeMultiMerge{0};
+  std::atomic<std::uint64_t>
+      cpuReadyMultiSourcePlannerSeedNaturalShapeMissing{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerSeedSecondNonDraw{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourcePlannerSeedBlockedCycle{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFatalEncodeNull{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceFatalCarrierFold{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceCompletionSources{0};
+  std::atomic<std::uint64_t> cpuReadyMultiSourceCompletionFifoFailures{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencySamples{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyNs{0};
   std::atomic<std::uint64_t> chunkPublishSlotResidencyMaxNs{0};
@@ -1378,6 +1511,121 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassSameKeyReentryPreservationBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentryColorPreservationBytes{0};
   std::atomic<std::uint64_t> renderPassSameKeyReentryDepthPreservationBytes{0};
+  std::atomic<std::uint64_t> renderPassNaturalFallbackBegin{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackSameWindowReentryDistance1{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackSameWindowReentryDistance2{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackSameWindowReentryDistance3To4{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackCrossWindowReentryDistance1{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackCrossWindowReentryDistance2{0};
+  std::atomic<std::uint64_t>
+      renderPassNaturalFallbackCrossWindowReentryDistance3To4{0};
+  std::atomic<std::uint64_t> activeSeedMergeTicketIssued{0};
+  std::atomic<std::uint64_t> activeSeedMergeTicketMatched{0};
+  std::atomic<std::uint64_t> activeSeedMergeTicketContinued{0};
+  std::atomic<std::uint64_t> activeSeedMergeTicketMismatch{0};
+  std::atomic<std::uint64_t> activeSeedMergeTicketUnconsumed{0};
+  std::atomic<std::uint64_t> activeSeedMergeWitnessOverflow{0};
+  std::atomic<std::uint64_t> activeSeedMergeWitnessMismatch{0};
+  std::atomic<std::uint64_t> activeSeedInstanceUnavailable{0};
+  std::atomic<std::uint64_t> activeSeedInstanceStale{0};
+  std::atomic<std::uint64_t> renderPassActiveSeedBridgeReentryDistance1{0};
+  std::atomic<std::uint64_t> renderPassActiveSeedBridgeReentryDistance2{0};
+  std::atomic<std::uint64_t> renderPassActiveSeedBridgeReentryDistance3To4{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseSessionCap{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseIndependent{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseInitializer{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseProducerWait{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseDrain{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseFailOther{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentSessionCap{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentIndependent{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentInitializer{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentProducerWait{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentDrain{0};
+  std::atomic<std::uint64_t> renderPassCloseAdjacentFailOther{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseFinal{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseRtChange{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseHazard{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseClear{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseSurfaceCopy{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseStretchRect{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseReadback{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseColorFill{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossClosePresent{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossClosePresentAcquire{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseTile{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseOrdered{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseMatched{0};
+  std::atomic<std::uint64_t> renderPassNaturalShortCrossCloseMissing{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1Ordinary{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1NaturalSame{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1NaturalCross{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1Planned{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1EligibilityPresent{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1EligibilityOther{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1PermutationRejected{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1MixedInvalid{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2Ordinary{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2NaturalSame{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2NaturalCross{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2Planned{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2EligibilityPresent{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2EligibilityOther{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2PermutationRejected{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2MixedInvalid{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1SourceAllSame{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryD1SourcePriorInterveningSameCurrentNewer{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryD1SourcePriorOlderInterveningCurrentSame{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD1SourceMixedInvalid{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2SourceAllSame{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryD2SourcePriorInterveningSameCurrentNewer{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryD2SourcePriorOlderInterveningCurrentSame{0};
+  std::atomic<std::uint64_t> renderPassShortReentryD2SourceMixedInvalid{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseFinal{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseRtChange{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseHazard{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseClear{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseSurfaceCopy{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseStretchRect{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseReadback{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseColorFill{0};
+  std::atomic<std::uint64_t> renderPassShortReentryClosePresent{0};
+  std::atomic<std::uint64_t> renderPassShortReentryClosePresentAcquire{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseTile{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseOrdered{0};
+  std::atomic<std::uint64_t> renderPassShortReentryCloseMissing{0};
+  std::atomic<std::uint64_t> renderPassShortReentryClearOpenTargetCount{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryClearOpenTargetPriorStoreBytes{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryClearOpenTargetCurrentLoadBytes{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryClearOpenNaturalCrossCount{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryClearOpenNaturalCrossPriorStoreBytes{0};
+  std::atomic<std::uint64_t>
+      renderPassShortReentryClearOpenNaturalCrossCurrentLoadBytes{0};
+  std::atomic<std::uint64_t> renderPassCloseLedgerRecorded{0};
+  std::atomic<std::uint64_t> renderPassCloseLedgerMissing{0};
+  std::atomic<std::uint64_t> renderPassCloseLedgerTerminalAdjacent{0};
+  std::atomic<std::uint64_t> renderPassCloseLedgerTerminalNonAdjacent{0};
+  std::atomic<std::uint64_t>
+      renderPassCloseLedgerTerminalNotReopenedBeforePresent{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseLedgerRecorded{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseLedgerMissing{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseLedgerTerminalAdjacent{0};
+  std::atomic<std::uint64_t> renderPassFinalCloseLedgerTerminalNonAdjacent{0};
+  std::atomic<std::uint64_t>
+      renderPassFinalCloseLedgerTerminalNotReopenedBeforePresent{0};
   std::atomic<std::uint64_t> renderPassTransitionRtChangeSameDepth{0};
   std::atomic<std::uint64_t> renderPassTransitionSameRtDepthChange{0};
   std::atomic<std::uint64_t> renderPassTransitionRtDepthChange{0};
@@ -1394,6 +1642,7 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassColorProofBlockMsaaResolve{0};
   std::atomic<std::uint64_t> renderPassColorProofBlockPresent{0};
   std::atomic<std::uint64_t> renderPassColorProofBlockDeadNoPresentDisabled{0};
+  std::atomic<std::uint64_t> renderPassColorProofBlockClearMismatch{0};
   std::atomic<std::uint64_t> renderPassDepthProofAllowNextClear{0};
   std::atomic<std::uint64_t> renderPassDepthProofAllowDeadNoPresent{0};
   std::atomic<std::uint64_t> renderPassDepthProofBlockNullDepth{0};
@@ -1407,6 +1656,28 @@ struct Counters {
   std::atomic<std::uint64_t> renderPassDepthProofBlockColorFill{0};
   std::atomic<std::uint64_t> renderPassDepthProofBlockDepthResolve{0};
   std::atomic<std::uint64_t> renderPassDepthProofBlockPresent{0};
+  std::atomic<std::uint64_t> renderPassDepthProofBlockClearMismatch{0};
+  std::atomic<std::uint64_t> renderPassNoLookaheadEmpty{0};
+  std::atomic<std::uint64_t> renderPassNoLookaheadInvalid{0};
+  std::atomic<std::uint64_t> renderPassNoLookaheadSuffixExhausted{0};
+  std::atomic<std::uint64_t> renderPassNoLookaheadStorageTruncated{0};
+  std::atomic<std::uint64_t> renderPassLateStoreUnknownColor{0};
+  std::atomic<std::uint64_t> renderPassLateStoreUnknownDepth{0};
+  std::atomic<std::uint64_t> renderPassLateStoreUnknownStencil{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveClearColor{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveClearDepth{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveClearStencil{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreClearMismatch{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreDraw{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreSample{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreReadback{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreCopy{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreResolve{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStorePresent{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreIncompatibleClose{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreDrain{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreFinalize{0};
+  std::atomic<std::uint64_t> renderPassLateStoreResolveStoreError{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuNs{0};
   std::atomic<std::uint64_t> commandBufferCreateCpuMaxNs{0};
   std::atomic<std::uint64_t> commandBufferCommitCpuNs{0};
@@ -1754,6 +2025,63 @@ struct Counters {
   std::atomic<std::uint64_t> framegraphDceLookaheadPrefixCommands{0};
   std::atomic<std::uint64_t> framegraphDceLookaheadSelected{0};
   std::atomic<std::uint64_t> framegraphDceLookaheadFailOpen{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnBlockedCycle{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnSecondNonDraw{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnNonRenderIntervener{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnMissingInvariant{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnDependencyKept{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnMoveBefore{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnMoveAfter{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnNonDrawIntervener{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnSemanticIntervener{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnCommandlessIntervener{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnCommandless{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnLegacyCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnArenaCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnUnknownCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnIdentityKnownCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnIdentityMissingCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackInvalidPlanSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackInvalidPlanCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackInvalidPlanMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackDuplicateCommandSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackDuplicateCommandCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackDuplicateCommandMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalInvalidSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalInvalidCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalInvalidMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalNaturalOrderSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalNaturalOrderCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalNaturalOrderMerged{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalReorderedActivatedSources{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalReorderedActivatedCandidates{0};
+  std::atomic<std::uint64_t> framegraphSourceLocalReturnFinalReorderedActivatedMerged{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSnapshotAbsent{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSnapshotIncomplete{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedApplyApplied{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedApplyInvalid{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedApplyIncomplete{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedApplyOverflow{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedAppliedButUnmerged{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedPassCoalesceBlockedCycle{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedPassCoalesceSecondNonDraw{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedMovedHeadProved{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedFallbackMovedHeadUnproved{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedFallbackInvalidPlan{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedFallbackLiveSetMismatch{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedFallbackDuplicateCommand{0};
+  std::atomic<std::uint64_t> framegraphActiveRenderSeedReplayActivated{0};
   // Sliding rings (R-BENCH-1.2): 64-sample percentile windows paired with the
   // *_max_ms counters above. Used to emit P50/P95/P99 in the shutdown report
   // so regression detection isn't outlier-driven by a single GC pause.
@@ -2187,6 +2515,51 @@ constexpr CounterEntry kCounterTable[] = {
     {"cpu_ready_session_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionHeadAppended, nullptr, nullptr, 0.0},
     {"cpu_ready_session_arena_head_appended", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionArenaHeadAppended, nullptr, nullptr, 0.0},
     {"cpu_ready_session_tail_submitted", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionTailSubmitted, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_attempts", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadAttempts, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_held", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadHeld, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_live", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadLive, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_successor_ready", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadSuccessorReady, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_release", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackRelease, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackProducerWait, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_initializer", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackInitializer, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_stop", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackStop, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_writer_gone", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackWriterGone, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_fallback_pressure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadFallbackPressure, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_restore_failure", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyRetainedHeadRestoreFailure, nullptr, nullptr, 0.0},
+    {"cpu_ready_retained_head_wait_ms", CounterEntry::Kind::Milliseconds, &Counters::cpuReadyRetainedHeadWaitNs, nullptr, nullptr, 0.0},
+    {"completion_span_shadow_built", CounterEntry::Kind::UnsignedCount, &Counters::completionSpanShadowBuilt, nullptr, nullptr, 0.0},
+    {"completion_span_shadow_validated", CounterEntry::Kind::UnsignedCount, &Counters::completionSpanShadowValidated, nullptr, nullptr, 0.0},
+    {"completion_span_shadow_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::completionSpanShadowMismatch, nullptr, nullptr, 0.0},
+    {"completion_span_shadow_source_count", CounterEntry::Kind::UnsignedCount, &Counters::completionSpanShadowSourceCount, nullptr, nullptr, 0.0},
+    {"post_encode_retire_attempts", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireAttempts, nullptr, nullptr, 0.0},
+    {"post_encode_retire_success", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireSuccess, nullptr, nullptr, 0.0},
+    {"post_encode_retire_success_arena", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireSuccessArena, nullptr, nullptr, 0.0},
+    {"post_encode_retire_success_legacy", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireSuccessLegacy, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_none", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleNone, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_pending_clear", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligiblePendingClear, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_present", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligiblePresent, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_readback", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleReadback, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_update_surface", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleUpdateSurface, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_ordered_control", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleOrderedControl, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_payload_borrow", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligiblePayloadBorrow, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_not_oldest", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleNotOldest, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_receipt_capacity", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleReceiptCapacity, nullptr, nullptr, 0.0},
+    {"post_encode_retire_ineligible_invalid", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeRetireIneligibleInvalid, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_invalid", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureInvalid, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_duplicate", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureDuplicate, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_capacity", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureCapacity, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_stale", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureStale, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_wrong_state", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureWrongState, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_failure_other", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptFailureOther, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_depth", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptDepth, nullptr, nullptr, 0.0},
+    {"post_encode_receipt_peak", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeReceiptPeak, nullptr, nullptr, 0.0},
+    {"post_encode_residency_sources_released", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeResidencySourcesReleased, nullptr, nullptr, 0.0},
+    {"post_encode_residency_pages_released", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeResidencyPagesReleased, nullptr, nullptr, 0.0},
+    {"post_encode_residency_bytes_released", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeResidencyBytesReleased, nullptr, nullptr, 0.0},
+    {"post_encode_work_cap_closes", CounterEntry::Kind::UnsignedCount, &Counters::postEncodeWorkCapCloses, nullptr, nullptr, 0.0},
+    {"gpu_outstanding_completion_sources", CounterEntry::Kind::UnsignedCount, &Counters::gpuOutstandingCompletionSources, nullptr, nullptr, 0.0},
+    {"gpu_outstanding_completion_sources_peak", CounterEntry::Kind::UnsignedCount, &Counters::gpuOutstandingCompletionSourcesPeak, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedProducerWait, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_non_appendable", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedNonAppendable, nullptr, nullptr, 0.0},
     {"cpu_ready_session_released_initializer_wait", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionReleasedInitializerWait, nullptr, nullptr, 0.0},
@@ -2214,9 +2587,76 @@ constexpr CounterEntry kCounterTable[] = {
     {"cpu_ready_session_cap_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapBytes, nullptr, nullptr, 0.0},
     {"cpu_ready_session_cap_draws", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapDraws, nullptr, nullptr, 0.0},
     {"cpu_ready_session_cap_command_buffers", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapCommandBuffers, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_requirement_sources_only", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapRequirementSourcesOnly, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_requirement_pages_only", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapRequirementPagesOnly, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_requirement_sources_and_pages", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapRequirementSourcesAndPages, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_predecessor_sources_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapPredecessorSourcesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_predecessor_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapPredecessorPagesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_candidate_payload_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapCandidatePayloadPagesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_candidate_wrap_padding_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapCandidateWrapPaddingPagesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_candidate_required_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapCandidateRequiredPagesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_required_total_sources_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapRequiredTotalSourcesPeak, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_cap_required_total_pages_peak", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionCapRequiredTotalPagesPeak, nullptr, nullptr, 0.0},
     {"cpu_ready_session_isolated", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionIsolated, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_isolated_present", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionIsolatedPresent, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_isolated_capacity_bytes", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionIsolatedCapacityBytes, nullptr, nullptr, 0.0},
+    {"cpu_ready_session_isolated_other", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionIsolatedOther, nullptr, nullptr, 0.0},
     {"cpu_ready_session_legacy_rollback", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionLegacyRollback, nullptr, nullptr, 0.0},
     {"cpu_ready_session_invalid_disposition", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadySessionInvalidDisposition, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_windows_attempted", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceWindowsAttempted, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_windows_planned", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceWindowsPlanned, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_window_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceWindowSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_window_commands", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceWindowCommands, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_window_runs", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceWindowRuns, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_eligibility", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackEligibility, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_natural_plan", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackNaturalPlan, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_invalid_plan", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackInvalidPlan, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_repeated_source", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackRepeatedSource, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_resolved_source", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackResolvedSource, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_completion_source", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackCompletionSource, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_admission", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackAdmission, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_fragment_range", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackFragmentRange, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fallback_carrier", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFallbackCarrier, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_natural_fallback_windows_started", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceNaturalFallbackWindowsStarted, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_natural_fallback_windows_completed", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceNaturalFallbackWindowsCompleted, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_natural_fallback_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceNaturalFallbackSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_permutation_fallback_windows_started", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePermutationFallbackWindowsStarted, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_permutation_fallback_windows_completed", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePermutationFallbackWindowsCompleted, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_permutation_fallback_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePermutationFallbackSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_eligibility_active_incomplete", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceEligibilityActiveIncomplete, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_eligibility_present", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceEligibilityPresent, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_eligibility_nonconsecutive_identity", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceEligibilityNonConsecutiveIdentity, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_eligibility_other_boundary", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceEligibilityOtherBoundary, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_invalid_input", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerInvalidInput, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_rejected", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedRejected, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_no_active_target_match", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerNoActiveTargetMatch, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_no_merge", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerNoMerge, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_natural_after_merge", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerNaturalAfterMerge, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_permutation_rejected", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerPermutationRejected, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_moved_head_unproved", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerMovedHeadUnproved, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_planned", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerPlanned, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_merge_seed", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerMergeSeed, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_merge_nonseed_only", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerMergeNonSeedOnly, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_match_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMatchDistance1, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_match_distance_gt1", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceGt1, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_match_distance_missing", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceMissing, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_merge_operations", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMergeOperations, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_merge_distance_total", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceTotal, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_merge_distance_max", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceMax, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_command_before", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalCommandBefore, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_command_after", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalCommandAfter, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_empty_intervening", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalEmptyIntervening, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_shape_adjacent", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalShapeAdjacent, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_shape_dependency_kept", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalShapeDependencyKept, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_shape_commandless", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalShapeCommandless, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_shape_multi_merge", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalShapeMultiMerge, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_natural_shape_missing", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedNaturalShapeMissing, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_second_non_draw", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedSecondNonDraw, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_planner_seed_blocked_cycle", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourcePlannerSeedBlockedCycle, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fatal_encode_null", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFatalEncodeNull, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_fatal_carrier_fold", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceFatalCarrierFold, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_completion_sources", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceCompletionSources, nullptr, nullptr, 0.0},
+    {"cpu_ready_multi_source_completion_fifo_failures", CounterEntry::Kind::UnsignedCount, &Counters::cpuReadyMultiSourceCompletionFifoFailures, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_samples", CounterEntry::Kind::UnsignedCount, &Counters::chunkPublishSlotResidencySamples, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyNs, nullptr, nullptr, 0.0},
     {"chunk_publish_slot_residency_max_ms", CounterEntry::Kind::Milliseconds, &Counters::chunkPublishSlotResidencyMaxNs, nullptr, nullptr, 0.0},
@@ -3457,6 +3897,104 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_same_key_reentry_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryPreservationBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry_color_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryColorPreservationBytes, nullptr, nullptr, 0.0},
     {"render_pass_same_key_reentry_depth_preservation_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassSameKeyReentryDepthPreservationBytes, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_begin", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackBegin, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_same_window_reentry_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackSameWindowReentryDistance1, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_same_window_reentry_distance_2", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackSameWindowReentryDistance2, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_same_window_reentry_distance_3_4", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackSameWindowReentryDistance3To4, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_cross_window_reentry_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackCrossWindowReentryDistance1, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_cross_window_reentry_distance_2", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackCrossWindowReentryDistance2, nullptr, nullptr, 0.0},
+    {"render_pass_natural_fallback_cross_window_reentry_distance_3_4", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalFallbackCrossWindowReentryDistance3To4, nullptr, nullptr, 0.0},
+    {"active_seed_merge_ticket_issued", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeTicketIssued, nullptr, nullptr, 0.0},
+    {"active_seed_merge_ticket_matched", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeTicketMatched, nullptr, nullptr, 0.0},
+    {"active_seed_merge_ticket_continued", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeTicketContinued, nullptr, nullptr, 0.0},
+    {"active_seed_merge_ticket_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeTicketMismatch, nullptr, nullptr, 0.0},
+    {"active_seed_merge_ticket_unconsumed", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeTicketUnconsumed, nullptr, nullptr, 0.0},
+    {"active_seed_merge_witness_overflow", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeWitnessOverflow, nullptr, nullptr, 0.0},
+    {"active_seed_merge_witness_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedMergeWitnessMismatch, nullptr, nullptr, 0.0},
+    {"active_seed_instance_unavailable", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedInstanceUnavailable, nullptr, nullptr, 0.0},
+    {"active_seed_instance_stale", CounterEntry::Kind::UnsignedCount, &Counters::activeSeedInstanceStale, nullptr, nullptr, 0.0},
+    {"render_pass_active_seed_bridge_reentry_distance_1", CounterEntry::Kind::UnsignedCount, &Counters::renderPassActiveSeedBridgeReentryDistance1, nullptr, nullptr, 0.0},
+    {"render_pass_active_seed_bridge_reentry_distance_2", CounterEntry::Kind::UnsignedCount, &Counters::renderPassActiveSeedBridgeReentryDistance2, nullptr, nullptr, 0.0},
+    {"render_pass_active_seed_bridge_reentry_distance_3_4", CounterEntry::Kind::UnsignedCount, &Counters::renderPassActiveSeedBridgeReentryDistance3To4, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_session_cap", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseSessionCap, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_independent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseIndependent, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_initializer", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseInitializer, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseProducerWait, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_drain", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseDrain, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_fail_other", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseFailOther, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_session_cap", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentSessionCap, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_independent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentIndependent, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_initializer", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentInitializer, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_producer_wait", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentProducerWait, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_drain", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentDrain, nullptr, nullptr, 0.0},
+    {"render_pass_close_adjacent_fail_other", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseAdjacentFailOther, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_final", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseFinal, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_rt_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseRtChange, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_hazard", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseHazard, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseClear, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseSurfaceCopy, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseStretchRect, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseReadback, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseColorFill, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossClosePresent, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossClosePresentAcquire, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_tile", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseTile, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_ordered", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseOrdered, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_matched", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseMatched, nullptr, nullptr, 0.0},
+    {"render_pass_natural_short_cross_close_missing", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNaturalShortCrossCloseMissing, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_ordinary", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1Ordinary, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_natural_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1NaturalSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_natural_cross", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1NaturalCross, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_planned", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1Planned, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_eligibility_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1EligibilityPresent, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_eligibility_other", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1EligibilityOther, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_permutation_rejected", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1PermutationRejected, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_mixed_invalid", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1MixedInvalid, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_ordinary", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2Ordinary, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_natural_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2NaturalSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_natural_cross", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2NaturalCross, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_planned", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2Planned, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_eligibility_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2EligibilityPresent, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_eligibility_other", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2EligibilityOther, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_permutation_rejected", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2PermutationRejected, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_mixed_invalid", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2MixedInvalid, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_source_all_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1SourceAllSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_source_prior_intervening_same_current_newer", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1SourcePriorInterveningSameCurrentNewer, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_source_prior_older_intervening_current_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1SourcePriorOlderInterveningCurrentSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d1_source_mixed_invalid", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD1SourceMixedInvalid, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_source_all_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2SourceAllSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_source_prior_intervening_same_current_newer", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2SourcePriorInterveningSameCurrentNewer, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_source_prior_older_intervening_current_same", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2SourcePriorOlderInterveningCurrentSame, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_d2_source_mixed_invalid", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryD2SourceMixedInvalid, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_final", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseFinal, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_rt_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseRtChange, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_hazard", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseHazard, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseClear, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_surface_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseSurfaceCopy, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_stretch_rect", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseStretchRect, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseReadback, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseColorFill, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClosePresent, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_present_acquire", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClosePresentAcquire, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_tile", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseTile, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_ordered", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseOrdered, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_close_missing", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryCloseMissing, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_target_count", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenTargetCount, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_target_prior_store_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenTargetPriorStoreBytes, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_target_current_load_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenTargetCurrentLoadBytes, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_natural_cross_count", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenNaturalCrossCount, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_natural_cross_prior_store_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenNaturalCrossPriorStoreBytes, nullptr, nullptr, 0.0},
+    {"render_pass_short_reentry_clear_open_natural_cross_current_load_bytes", CounterEntry::Kind::UnsignedCount, &Counters::renderPassShortReentryClearOpenNaturalCrossCurrentLoadBytes, nullptr, nullptr, 0.0},
+    {"render_pass_close_ledger_recorded", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseLedgerRecorded, nullptr, nullptr, 0.0},
+    {"render_pass_close_ledger_missing", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseLedgerMissing, nullptr, nullptr, 0.0},
+    {"render_pass_close_ledger_terminal_adjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseLedgerTerminalAdjacent, nullptr, nullptr, 0.0},
+    {"render_pass_close_ledger_terminal_nonadjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseLedgerTerminalNonAdjacent, nullptr, nullptr, 0.0},
+    {"render_pass_close_ledger_terminal_not_reopened_before_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassCloseLedgerTerminalNotReopenedBeforePresent, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_ledger_recorded", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseLedgerRecorded, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_ledger_missing", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseLedgerMissing, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_ledger_terminal_adjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseLedgerTerminalAdjacent, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_ledger_terminal_nonadjacent", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseLedgerTerminalNonAdjacent, nullptr, nullptr, 0.0},
+    {"render_pass_final_close_ledger_terminal_not_reopened_before_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassFinalCloseLedgerTerminalNotReopenedBeforePresent, nullptr, nullptr, 0.0},
     {"render_pass_transition_rt_change_same_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionRtChangeSameDepth, nullptr, nullptr, 0.0},
     {"render_pass_transition_same_rt_depth_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionSameRtDepthChange, nullptr, nullptr, 0.0},
     {"render_pass_transition_rt_depth_change", CounterEntry::Kind::UnsignedCount, &Counters::renderPassTransitionRtDepthChange, nullptr, nullptr, 0.0},
@@ -3473,6 +4011,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_color_proof_block_msaa_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockMsaaResolve, nullptr, nullptr, 0.0},
     {"render_pass_color_proof_block_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockPresent, nullptr, nullptr, 0.0},
     {"render_pass_color_proof_block_dead_no_present_disabled", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockDeadNoPresentDisabled, nullptr, nullptr, 0.0},
+    {"render_pass_color_proof_block_clear_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::renderPassColorProofBlockClearMismatch, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_allow_next_clear", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowNextClear, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_allow_dead_no_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofAllowDeadNoPresent, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_block_null_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockNullDepth, nullptr, nullptr, 0.0},
@@ -3486,6 +4025,28 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_pass_depth_proof_block_color_fill", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockColorFill, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_block_depth_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockDepthResolve, nullptr, nullptr, 0.0},
     {"render_pass_depth_proof_block_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockPresent, nullptr, nullptr, 0.0},
+    {"render_pass_depth_proof_block_clear_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::renderPassDepthProofBlockClearMismatch, nullptr, nullptr, 0.0},
+    {"render_pass_no_lookahead_empty", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNoLookaheadEmpty, nullptr, nullptr, 0.0},
+    {"render_pass_no_lookahead_invalid", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNoLookaheadInvalid, nullptr, nullptr, 0.0},
+    {"render_pass_no_lookahead_suffix_exhausted", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNoLookaheadSuffixExhausted, nullptr, nullptr, 0.0},
+    {"render_pass_no_lookahead_storage_truncated", CounterEntry::Kind::UnsignedCount, &Counters::renderPassNoLookaheadStorageTruncated, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_unknown_color", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreUnknownColor, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_unknown_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreUnknownDepth, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_unknown_stencil", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreUnknownStencil, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_clear_color", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveClearColor, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_clear_depth", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveClearDepth, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_clear_stencil", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveClearStencil, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_clear_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreClearMismatch, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_draw", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreDraw, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_sample", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreSample, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_readback", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreReadback, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_copy", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreCopy, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_resolve", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreResolve, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_present", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStorePresent, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_incompatible_close", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreIncompatibleClose, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_drain", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreDrain, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_finalize", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreFinalize, nullptr, nullptr, 0.0},
+    {"render_pass_late_store_resolve_store_error", CounterEntry::Kind::UnsignedCount, &Counters::renderPassLateStoreResolveStoreError, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuNs, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_max_ms", CounterEntry::Kind::Milliseconds, &Counters::commandBufferCreateCpuMaxNs, nullptr, nullptr, 0.0},
     {"command_buffer_create_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCreateCpuRing, 0.5},
@@ -3989,6 +4550,63 @@ constexpr CounterEntry kCounterTable[] = {
     {"framegraph_dce_lookahead_prefix_commands", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadPrefixCommands, nullptr, nullptr, 0.0},
     {"framegraph_dce_lookahead_selected", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadSelected, nullptr, nullptr, 0.0},
     {"framegraph_dce_lookahead_fail_open", CounterEntry::Kind::UnsignedCount, &Counters::framegraphDceLookaheadFailOpen, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_blocked_cycle", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnBlockedCycle, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_second_non_draw", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnSecondNonDraw, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_non_render_intervener", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnNonRenderIntervener, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_missing_invariant", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnMissingInvariant, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_dependency_kept", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnDependencyKept, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_move_before", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnMoveBefore, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_move_after", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnMoveAfter, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_non_draw_intervener", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnNonDrawIntervener, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_semantic_intervener", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnSemanticIntervener, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_commandless_intervener", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnCommandlessIntervener, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_commandless", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnCommandless, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_legacy_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnLegacyCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_arena_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnArenaCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_unknown_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnUnknownCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_identity_known_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnIdentityKnownCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_identity_missing_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnIdentityMissingCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_invalid_plan_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackInvalidPlanSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_invalid_plan_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackInvalidPlanCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_invalid_plan_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackInvalidPlanMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_live_set_mismatch_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_live_set_mismatch_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_live_set_mismatch_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_duplicate_command_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackDuplicateCommandSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_duplicate_command_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackDuplicateCommandCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_duplicate_command_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackDuplicateCommandMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_moved_head_unproved_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_moved_head_unproved_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_frontier_rollback_moved_head_unproved_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_invalid_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalInvalidSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_invalid_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalInvalidCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_invalid_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalInvalidMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_natural_order_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalNaturalOrderSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_natural_order_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalNaturalOrderCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_natural_order_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalNaturalOrderMerged, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_reordered_activated_sources", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalReorderedActivatedSources, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_reordered_activated_candidates", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalReorderedActivatedCandidates, nullptr, nullptr, 0.0},
+    {"framegraph_source_local_return_final_reordered_activated_merged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphSourceLocalReturnFinalReorderedActivatedMerged, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_snapshot_absent", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSnapshotAbsent, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_snapshot_incomplete", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSnapshotIncomplete, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_apply_applied", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedApplyApplied, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_apply_invalid", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedApplyInvalid, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_apply_incomplete", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedApplyIncomplete, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_apply_overflow", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedApplyOverflow, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_applied_but_unmerged", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedAppliedButUnmerged, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_pass_coalesce_blocked_cycle", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedPassCoalesceBlockedCycle, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_pass_coalesce_second_non_draw", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedPassCoalesceSecondNonDraw, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_moved_head_proved", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedMovedHeadProved, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_fallback_moved_head_unproved", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackMovedHeadUnproved, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_fallback_invalid_plan", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackInvalidPlan, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_fallback_live_set_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackLiveSetMismatch, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_fallback_duplicate_command", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackDuplicateCommand, nullptr, nullptr, 0.0},
+    {"framegraph_active_render_seed_replay_activated", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedReplayActivated, nullptr, nullptr, 0.0},
 };
 
 void report() {
@@ -4053,6 +4671,15 @@ void add(std::atomic<std::uint64_t>& counter, std::uint64_t value = 1) {
     return;
   }
   counter.fetch_add(value, std::memory_order_relaxed);
+}
+
+// Call only after one outer enabled() decision. Diagnostic batch recorders use
+// this to avoid repeating the runtime gate and issuing zero-valued atomics.
+void addEnabledNonZero(std::atomic<std::uint64_t>& counter,
+                       std::uint64_t value) {
+  if (value != 0) {
+    counter.fetch_add(value, std::memory_order_relaxed);
+  }
 }
 
 void addBatchMissUniformBuild(std::atomic<std::uint64_t>& counter,
@@ -4412,6 +5039,146 @@ void countCpuReadySessionTailSubmitted() {
   add(counters().cpuReadySessionTailSubmitted);
 }
 
+void countCpuReadyRetainedHeadAttempt() {
+  add(counters().cpuReadyRetainedHeadAttempts);
+}
+
+void countCpuReadyRetainedHeadHeld() {
+  auto& c = counters();
+  add(c.cpuReadyRetainedHeadHeld);
+  std::uint64_t live = 0;
+  if (enabled()) {
+    live = c.cpuReadyRetainedHeadLive.fetch_add(
+               1, std::memory_order_relaxed) +
+        1;
+  }
+  updateMax(c.cpuReadyRetainedHeadPeak, live);
+}
+
+void countCpuReadyRetainedHeadSuccessorReady() {
+  add(counters().cpuReadyRetainedHeadSuccessorReady);
+}
+
+void countCpuReadyRetainedHeadFallback(
+    CpuReadyRetainedHeadFallbackReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyRetainedHeadFallbackReason::Release:
+    add(c.cpuReadyRetainedHeadFallbackRelease);
+    break;
+  case CpuReadyRetainedHeadFallbackReason::ProducerWait:
+    add(c.cpuReadyRetainedHeadFallbackProducerWait);
+    break;
+  case CpuReadyRetainedHeadFallbackReason::Initializer:
+    add(c.cpuReadyRetainedHeadFallbackInitializer);
+    break;
+  case CpuReadyRetainedHeadFallbackReason::Stop:
+    add(c.cpuReadyRetainedHeadFallbackStop);
+    break;
+  case CpuReadyRetainedHeadFallbackReason::WriterGone:
+    add(c.cpuReadyRetainedHeadFallbackWriterGone);
+    break;
+  case CpuReadyRetainedHeadFallbackReason::Pressure:
+    add(c.cpuReadyRetainedHeadFallbackPressure);
+    break;
+  }
+}
+
+void countCpuReadyRetainedHeadRestoreFailure() {
+  add(counters().cpuReadyRetainedHeadRestoreFailure);
+}
+
+void recordCpuReadyRetainedHeadWait(std::uint64_t nanoseconds) {
+  auto& c = counters();
+  add(c.cpuReadyRetainedHeadWaitNs, nanoseconds);
+  if (!enabled()) {
+    return;
+  }
+  auto live = c.cpuReadyRetainedHeadLive.load(std::memory_order_relaxed);
+  while (live != 0 &&
+         !c.cpuReadyRetainedHeadLive.compare_exchange_weak(
+             live, live - 1, std::memory_order_relaxed)) {
+  }
+}
+
+void countCompletionSpanShadowBuilt(std::uint64_t sourceCount) {
+  auto& c = counters();
+  add(c.completionSpanShadowBuilt);
+  add(c.completionSpanShadowSourceCount, sourceCount);
+}
+
+void countCompletionSpanShadowValidated() {
+  add(counters().completionSpanShadowValidated);
+}
+
+void countCompletionSpanShadowMismatch() {
+  add(counters().completionSpanShadowMismatch);
+}
+
+void countPostEncodeRetireAttempt() {
+  add(counters().postEncodeRetireAttempts);
+}
+
+void countPostEncodeRetireSuccess(bool arena) {
+  auto& c = counters();
+  add(c.postEncodeRetireSuccess);
+  add(arena ? c.postEncodeRetireSuccessArena
+            : c.postEncodeRetireSuccessLegacy);
+}
+
+void countPostEncodeRetireIneligible(std::uint32_t reason) {
+  auto& c = counters();
+  switch (reason) {
+  case 0: add(c.postEncodeRetireIneligibleNone); break;
+  case 1: add(c.postEncodeRetireIneligiblePendingClear); break;
+  case 2: add(c.postEncodeRetireIneligiblePresent); break;
+  case 3: add(c.postEncodeRetireIneligibleReadback); break;
+  case 4: add(c.postEncodeRetireIneligibleUpdateSurface); break;
+  case 5: add(c.postEncodeRetireIneligibleOrderedControl); break;
+  case 6: add(c.postEncodeRetireIneligiblePayloadBorrow); break;
+  case 7: add(c.postEncodeRetireIneligibleNotOldest); break;
+  case 8: add(c.postEncodeRetireIneligibleReceiptCapacity); break;
+  default: add(c.postEncodeRetireIneligibleInvalid); break;
+  }
+}
+
+void countPostEncodeReceiptFailure(std::uint32_t result) {
+  auto& c = counters();
+  switch (result) {
+  case 1: add(c.postEncodeReceiptFailureInvalid); break;
+  case 2: add(c.postEncodeReceiptFailureDuplicate); break;
+  case 3: add(c.postEncodeReceiptFailureCapacity); break;
+  case 4: add(c.postEncodeReceiptFailureStale); break;
+  case 5: add(c.postEncodeReceiptFailureWrongState); break;
+  default: add(c.postEncodeReceiptFailureOther); break;
+  }
+}
+
+void recordPostEncodeReceiptDepth(std::uint64_t depth,
+                                  std::uint64_t peak) {
+  auto& c = counters();
+  store(c.postEncodeReceiptDepth, depth);
+  updateMax(c.postEncodeReceiptPeak, peak);
+}
+
+void countPostEncodeResidencyCreditReleased(std::uint64_t pages,
+                                            std::uint64_t bytes) {
+  auto& c = counters();
+  add(c.postEncodeResidencySourcesReleased);
+  add(c.postEncodeResidencyPagesReleased, pages);
+  add(c.postEncodeResidencyBytesReleased, bytes);
+}
+
+void countPostEncodeWorkCapClose() {
+  add(counters().postEncodeWorkCapCloses);
+}
+
+void recordGpuOutstandingCompletionSources(std::uint64_t count) {
+  auto& c = counters();
+  store(c.gpuOutstandingCompletionSources, count);
+  updateMax(c.gpuOutstandingCompletionSourcesPeak, count);
+}
+
 void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason) {
   auto& c = counters();
   switch (reason) {
@@ -4524,6 +5291,54 @@ void countCpuReadySessionCapRelease(CpuReadySessionCapDimension dimension) {
   }
 }
 
+void recordCpuReadySessionCapRequirement(
+    CpuReadySessionCapRequirementAxes axes,
+    std::uint64_t predecessorSources,
+    std::uint64_t predecessorPages,
+    std::uint64_t candidatePayloadPages,
+    std::uint64_t candidateWrapPaddingPages,
+    std::uint64_t candidateRequiredPages,
+    std::uint64_t requiredTotalSources,
+    std::uint64_t requiredTotalPages) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  switch (axes) {
+  case CpuReadySessionCapRequirementAxes::SourcesOnly:
+    addEnabledNonZero(c.cpuReadySessionCapRequirementSourcesOnly, 1);
+    break;
+  case CpuReadySessionCapRequirementAxes::PagesOnly:
+    addEnabledNonZero(c.cpuReadySessionCapRequirementPagesOnly, 1);
+    break;
+  case CpuReadySessionCapRequirementAxes::SourcesAndPages:
+    addEnabledNonZero(c.cpuReadySessionCapRequirementSourcesAndPages, 1);
+    break;
+  }
+  const auto updatePeakEnabled = [](std::atomic<std::uint64_t>& counter,
+                                    std::uint64_t value) {
+    auto current = counter.load(std::memory_order_relaxed);
+    while (current < value &&
+           !counter.compare_exchange_weak(current, value,
+                                          std::memory_order_relaxed)) {
+    }
+  };
+  updatePeakEnabled(c.cpuReadySessionCapPredecessorSourcesPeak,
+                    predecessorSources);
+  updatePeakEnabled(c.cpuReadySessionCapPredecessorPagesPeak,
+                    predecessorPages);
+  updatePeakEnabled(c.cpuReadySessionCapCandidatePayloadPagesPeak,
+                    candidatePayloadPages);
+  updatePeakEnabled(c.cpuReadySessionCapCandidateWrapPaddingPagesPeak,
+                    candidateWrapPaddingPages);
+  updatePeakEnabled(c.cpuReadySessionCapCandidateRequiredPagesPeak,
+                    candidateRequiredPages);
+  updatePeakEnabled(c.cpuReadySessionCapRequiredTotalSourcesPeak,
+                    requiredTotalSources);
+  updatePeakEnabled(c.cpuReadySessionCapRequiredTotalPagesPeak,
+                    requiredTotalPages);
+}
+
 void countCpuReadySessionDisposition(
     CpuReadySessionDisposition disposition) {
   auto& c = counters();
@@ -4537,6 +5352,250 @@ void countCpuReadySessionDisposition(
   case CpuReadySessionDisposition::Invalid:
     add(c.cpuReadySessionInvalidDisposition);
     break;
+  }
+}
+
+void countCpuReadySessionIsolation(
+    CpuReadySessionIsolationReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadySessionIsolationReason::Present:
+    add(c.cpuReadySessionIsolatedPresent);
+    break;
+  case CpuReadySessionIsolationReason::CapacityBytes:
+    add(c.cpuReadySessionIsolatedCapacityBytes);
+    break;
+  case CpuReadySessionIsolationReason::Other:
+    add(c.cpuReadySessionIsolatedOther);
+    break;
+  }
+}
+
+void countCpuReadyMultiSourceWindowAttempted() {
+  add(counters().cpuReadyMultiSourceWindowsAttempted);
+}
+
+void countCpuReadyMultiSourceWindowPlanned(std::uint64_t sources,
+                                           std::uint64_t commands,
+                                           std::uint64_t runs) {
+  auto& c = counters();
+  add(c.cpuReadyMultiSourceWindowsPlanned);
+  add(c.cpuReadyMultiSourceWindowSources, sources);
+  add(c.cpuReadyMultiSourceWindowCommands, commands);
+  add(c.cpuReadyMultiSourceWindowRuns, runs);
+}
+
+void countCpuReadyMultiSourceWindowFallback(
+    CpuReadyMultiSourceFallbackReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyMultiSourceFallbackReason::Eligibility:
+    add(c.cpuReadyMultiSourceFallbackEligibility);
+    break;
+  case CpuReadyMultiSourceFallbackReason::NaturalPlan:
+    add(c.cpuReadyMultiSourceFallbackNaturalPlan);
+    break;
+  case CpuReadyMultiSourceFallbackReason::InvalidPlan:
+    add(c.cpuReadyMultiSourceFallbackInvalidPlan);
+    break;
+  case CpuReadyMultiSourceFallbackReason::RepeatedSource:
+    add(c.cpuReadyMultiSourceFallbackRepeatedSource);
+    break;
+  case CpuReadyMultiSourceFallbackReason::ResolvedSource:
+    add(c.cpuReadyMultiSourceFallbackResolvedSource);
+    break;
+  case CpuReadyMultiSourceFallbackReason::CompletionSource:
+    add(c.cpuReadyMultiSourceFallbackCompletionSource);
+    break;
+  case CpuReadyMultiSourceFallbackReason::Admission:
+    add(c.cpuReadyMultiSourceFallbackAdmission);
+    break;
+  case CpuReadyMultiSourceFallbackReason::FragmentRange:
+    add(c.cpuReadyMultiSourceFallbackFragmentRange);
+    break;
+  case CpuReadyMultiSourceFallbackReason::Carrier:
+    add(c.cpuReadyMultiSourceFallbackCarrier);
+    break;
+  }
+}
+
+void countCpuReadyMultiSourceSourceLocalFallbackStarted(
+    CpuReadyMultiSourceSourceLocalFallback disposition,
+    std::uint64_t sources) {
+  auto& c = counters();
+  switch (disposition) {
+  case CpuReadyMultiSourceSourceLocalFallback::NaturalAfterMerge:
+    add(c.cpuReadyMultiSourceNaturalFallbackWindowsStarted);
+    add(c.cpuReadyMultiSourceNaturalFallbackSources, sources);
+    break;
+  case CpuReadyMultiSourceSourceLocalFallback::PermutationRejected:
+    add(c.cpuReadyMultiSourcePermutationFallbackWindowsStarted);
+    add(c.cpuReadyMultiSourcePermutationFallbackSources, sources);
+    break;
+  }
+}
+
+void countCpuReadyMultiSourceSourceLocalFallbackCompleted(
+    CpuReadyMultiSourceSourceLocalFallback disposition) {
+  auto& c = counters();
+  switch (disposition) {
+  case CpuReadyMultiSourceSourceLocalFallback::NaturalAfterMerge:
+    add(c.cpuReadyMultiSourceNaturalFallbackWindowsCompleted);
+    break;
+  case CpuReadyMultiSourceSourceLocalFallback::PermutationRejected:
+    add(c.cpuReadyMultiSourcePermutationFallbackWindowsCompleted);
+    break;
+  }
+}
+
+void countCpuReadyMultiSourcePostEffectFatal(
+    CpuReadyMultiSourceFatalReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyMultiSourceFatalReason::EncodeReturnedNull:
+    add(c.cpuReadyMultiSourceFatalEncodeNull);
+    break;
+  case CpuReadyMultiSourceFatalReason::CarrierFold:
+    add(c.cpuReadyMultiSourceFatalCarrierFold);
+    break;
+  }
+}
+
+void countCpuReadyMultiSourceEligibilityFallback(
+    CpuReadyMultiSourceEligibilityReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyMultiSourceEligibilityReason::ActiveRenderIncomplete:
+    add(c.cpuReadyMultiSourceEligibilityActiveIncomplete);
+    break;
+  case CpuReadyMultiSourceEligibilityReason::PresentBoundary:
+    add(c.cpuReadyMultiSourceEligibilityPresent);
+    break;
+  case CpuReadyMultiSourceEligibilityReason::NonConsecutiveIdentity:
+    add(c.cpuReadyMultiSourceEligibilityNonConsecutiveIdentity);
+    break;
+  case CpuReadyMultiSourceEligibilityReason::OtherBoundary:
+    add(c.cpuReadyMultiSourceEligibilityOtherBoundary);
+    break;
+  }
+}
+
+void recordCpuReadyMultiSourcePlannerOutcome(
+    CpuReadyMultiSourcePlannerOutcome outcome,
+    CpuReadyMultiSourcePlannerMerge merge,
+    std::uint32_t firstMatchingPassDistance,
+    CpuReadyMultiSourceSeedMergeAttribution seedAttribution,
+    bool seedSecondNonDraw,
+    bool seedBlockedCycle) {
+  auto& c = counters();
+  switch (outcome) {
+  case CpuReadyMultiSourcePlannerOutcome::InvalidInput:
+    add(c.cpuReadyMultiSourcePlannerInvalidInput);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::SeedRejected:
+    add(c.cpuReadyMultiSourcePlannerSeedRejected);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::NoActiveTargetMatch:
+    add(c.cpuReadyMultiSourcePlannerNoActiveTargetMatch);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::NoMerge:
+    add(c.cpuReadyMultiSourcePlannerNoMerge);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::NaturalAfterMerge:
+    add(c.cpuReadyMultiSourcePlannerNaturalAfterMerge);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::PermutationRejected:
+    add(c.cpuReadyMultiSourcePlannerPermutationRejected);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::MovedHeadUnproved:
+    add(c.cpuReadyMultiSourcePlannerMovedHeadUnproved);
+    break;
+  case CpuReadyMultiSourcePlannerOutcome::Planned:
+    add(c.cpuReadyMultiSourcePlannerPlanned);
+    break;
+  }
+  switch (merge) {
+  case CpuReadyMultiSourcePlannerMerge::None:
+    break;
+  case CpuReadyMultiSourcePlannerMerge::Seed:
+    add(c.cpuReadyMultiSourcePlannerMergeSeed);
+    break;
+  case CpuReadyMultiSourcePlannerMerge::NonSeedOnly:
+    add(c.cpuReadyMultiSourcePlannerMergeNonSeedOnly);
+    break;
+  }
+  if (outcome == CpuReadyMultiSourcePlannerOutcome::NaturalAfterMerge &&
+      merge == CpuReadyMultiSourcePlannerMerge::Seed) {
+    if (firstMatchingPassDistance == 0u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceMissing);
+    } else if (firstMatchingPassDistance == 1u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistance1);
+    } else {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceGt1);
+    }
+
+    add(c.cpuReadyMultiSourcePlannerSeedNaturalMergeOperations,
+        seedAttribution.seedMergeCount);
+    add(c.cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceTotal,
+        seedAttribution.seedMergeDistanceTotal);
+    updateMax(c.cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceMax,
+              seedAttribution.seedMergeDistanceMax);
+    add(c.cpuReadyMultiSourcePlannerSeedNaturalCommandBefore,
+        seedAttribution.commandBefore);
+    add(c.cpuReadyMultiSourcePlannerSeedNaturalCommandAfter,
+        seedAttribution.commandAfter);
+    add(c.cpuReadyMultiSourcePlannerSeedNaturalEmptyIntervening,
+        seedAttribution.emptyIntervening);
+
+    const std::uint64_t classifiedIntervening =
+        seedAttribution.commandBefore + seedAttribution.commandAfter +
+        seedAttribution.emptyIntervening;
+    const bool valid = !seedAttribution.missing &&
+        seedAttribution.optimizerMergeCount >= seedAttribution.seedMergeCount &&
+        seedAttribution.seedMergeCount != 0u &&
+        seedAttribution.seedMergeDistanceMax != 0u &&
+        seedAttribution.seedMergeDistanceTotal >=
+            seedAttribution.seedMergeCount &&
+        seedAttribution.seedMergeDistanceMax <=
+            seedAttribution.seedMergeDistanceTotal &&
+        classifiedIntervening ==
+            seedAttribution.seedMergeDistanceTotal -
+                seedAttribution.seedMergeCount;
+    // These buckets are exclusive per NaturalAfterMerge+Seed window. Multiple
+    // optimizer merges take precedence because later merges can restore FIFO;
+    // a command-bearing After in a single-merge natural result is impossible.
+    if (!valid) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeMissing);
+    } else if (seedAttribution.optimizerMergeCount > 1u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeMultiMerge);
+    } else if (seedAttribution.seedMergeDistanceTotal == 1u &&
+               classifiedIntervening == 0u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeAdjacent);
+    } else if (seedAttribution.commandBefore != 0u &&
+               seedAttribution.commandAfter == 0u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeDependencyKept);
+    } else if (seedAttribution.commandBefore == 0u &&
+               seedAttribution.commandAfter == 0u &&
+               seedAttribution.emptyIntervening != 0u) {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeCommandless);
+    } else {
+      add(c.cpuReadyMultiSourcePlannerSeedNaturalShapeMissing);
+    }
+  }
+  if (seedSecondNonDraw) {
+    add(c.cpuReadyMultiSourcePlannerSeedSecondNonDraw);
+  }
+  if (seedBlockedCycle) {
+    add(c.cpuReadyMultiSourcePlannerSeedBlockedCycle);
+  }
+}
+
+void recordCpuReadyMultiSourceCompletionRegistration(
+    std::uint64_t sources, bool fifoValid) {
+  auto& c = counters();
+  add(c.cpuReadyMultiSourceCompletionSources, sources);
+  if (!fifoValid) {
+    add(c.cpuReadyMultiSourceCompletionFifoFailures);
   }
 }
 
@@ -4986,6 +6045,204 @@ void countFramegraphDceLookaheadSelected() {
 
 void countFramegraphDceLookaheadFailOpen() {
   add(counters().framegraphDceLookaheadFailOpen);
+}
+
+void recordFramegraphSourceLocalPassCoalesce(
+    FramegraphSourceProvenance provenance, bool sourceIdentityKnown,
+    FramegraphSourceLocalPassCoalesceDiagnostic diagnostic) {
+  if (diagnostic.candidates == 0 || !enabled()) {
+    return;
+  }
+  auto& c = counters();
+  addEnabledNonZero(c.framegraphSourceLocalReturnCandidates,
+                    diagnostic.candidates);
+  addEnabledNonZero(c.framegraphSourceLocalReturnMerged, diagnostic.merged);
+  addEnabledNonZero(c.framegraphSourceLocalReturnBlockedCycle,
+                    diagnostic.blockedCycle);
+  addEnabledNonZero(c.framegraphSourceLocalReturnSecondNonDraw,
+                    diagnostic.secondNonDraw);
+  addEnabledNonZero(c.framegraphSourceLocalReturnNonRenderIntervener,
+                    diagnostic.nonRenderIntervener);
+  addEnabledNonZero(c.framegraphSourceLocalReturnMissingInvariant,
+                    diagnostic.missingInvariant);
+  addEnabledNonZero(c.framegraphSourceLocalReturnDependencyKept,
+                    diagnostic.dependencyKept);
+  addEnabledNonZero(c.framegraphSourceLocalReturnMoveBefore,
+                    diagnostic.moveBefore);
+  addEnabledNonZero(c.framegraphSourceLocalReturnMoveAfter,
+                    diagnostic.moveAfter);
+  addEnabledNonZero(c.framegraphSourceLocalReturnNonDrawIntervener,
+                    diagnostic.nonDrawIntervener);
+  addEnabledNonZero(c.framegraphSourceLocalReturnSemanticIntervener,
+                    diagnostic.semanticIntervener);
+  addEnabledNonZero(c.framegraphSourceLocalReturnCommandlessIntervener,
+                    diagnostic.commandlessIntervener);
+  addEnabledNonZero(c.framegraphSourceLocalReturnCommandless,
+                    diagnostic.commandlessReturn);
+  switch (provenance) {
+  case FramegraphSourceProvenance::Legacy:
+    addEnabledNonZero(c.framegraphSourceLocalReturnLegacyCandidates,
+                      diagnostic.candidates);
+    break;
+  case FramegraphSourceProvenance::Arena:
+    addEnabledNonZero(c.framegraphSourceLocalReturnArenaCandidates,
+                      diagnostic.candidates);
+    break;
+  case FramegraphSourceProvenance::Unknown:
+    addEnabledNonZero(c.framegraphSourceLocalReturnUnknownCandidates,
+                      diagnostic.candidates);
+    break;
+  }
+  addEnabledNonZero(
+      sourceIdentityKnown
+          ? c.framegraphSourceLocalReturnIdentityKnownCandidates
+          : c.framegraphSourceLocalReturnIdentityMissingCandidates,
+      diagnostic.candidates);
+}
+
+void recordFramegraphSourceLocalReplayOutcome(
+    FramegraphSourceLocalReplayOutcome outcome,
+    std::uint64_t candidates, std::uint64_t merged) {
+  if (candidates == 0 || !enabled()) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* sourcesCounter = nullptr;
+  std::atomic<std::uint64_t>* candidatesCounter = nullptr;
+  std::atomic<std::uint64_t>* mergedCounter = nullptr;
+  switch (outcome) {
+  case FramegraphSourceLocalReplayOutcome::FinalInvalid:
+    sourcesCounter = &c.framegraphSourceLocalReturnFinalInvalidSources;
+    candidatesCounter = &c.framegraphSourceLocalReturnFinalInvalidCandidates;
+    mergedCounter = &c.framegraphSourceLocalReturnFinalInvalidMerged;
+    break;
+  case FramegraphSourceLocalReplayOutcome::FinalNaturalOrder:
+    sourcesCounter = &c.framegraphSourceLocalReturnFinalNaturalOrderSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFinalNaturalOrderCandidates;
+    mergedCounter = &c.framegraphSourceLocalReturnFinalNaturalOrderMerged;
+    break;
+  case FramegraphSourceLocalReplayOutcome::FinalReorderedActivated:
+    sourcesCounter =
+        &c.framegraphSourceLocalReturnFinalReorderedActivatedSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFinalReorderedActivatedCandidates;
+    mergedCounter =
+        &c.framegraphSourceLocalReturnFinalReorderedActivatedMerged;
+    break;
+  }
+  addEnabledNonZero(*sourcesCounter, 1);
+  addEnabledNonZero(*candidatesCounter, candidates);
+  addEnabledNonZero(*mergedCounter, merged);
+}
+
+void recordFramegraphSourceLocalFrontierRollback(
+    FramegraphSourceLocalFrontierRollbackReason reason,
+    std::uint64_t candidates, std::uint64_t merged) {
+  if (candidates == 0 || !enabled()) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* sourcesCounter = nullptr;
+  std::atomic<std::uint64_t>* candidatesCounter = nullptr;
+  std::atomic<std::uint64_t>* mergedCounter = nullptr;
+  switch (reason) {
+  case FramegraphSourceLocalFrontierRollbackReason::InvalidPlan:
+    sourcesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanCandidates;
+    mergedCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanMerged;
+    break;
+  case FramegraphSourceLocalFrontierRollbackReason::LiveSetMismatch:
+    sourcesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchCandidates;
+    mergedCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchMerged;
+    break;
+  case FramegraphSourceLocalFrontierRollbackReason::DuplicateCommand:
+    sourcesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandCandidates;
+    mergedCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandMerged;
+    break;
+  case FramegraphSourceLocalFrontierRollbackReason::MovedHeadUnproved:
+    sourcesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedSources;
+    candidatesCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedCandidates;
+    mergedCounter =
+        &c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedMerged;
+    break;
+  }
+  addEnabledNonZero(c.framegraphSourceLocalReturnFrontierRollbackSources, 1);
+  addEnabledNonZero(c.framegraphSourceLocalReturnFrontierRollbackCandidates,
+                    candidates);
+  addEnabledNonZero(c.framegraphSourceLocalReturnFrontierRollbackMerged,
+                    merged);
+  addEnabledNonZero(*sourcesCounter, 1);
+  addEnabledNonZero(*candidatesCounter, candidates);
+  addEnabledNonZero(*mergedCounter, merged);
+}
+
+void countFramegraphActiveRenderSeedOutcome(
+    FramegraphActiveRenderSeedOutcome outcome, std::uint64_t count) {
+  if (count == 0) {
+    return;
+  }
+  auto& c = counters();
+  switch (outcome) {
+  case FramegraphActiveRenderSeedOutcome::SnapshotAbsent:
+    add(c.framegraphActiveRenderSnapshotAbsent, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::SnapshotIncomplete:
+    add(c.framegraphActiveRenderSnapshotIncomplete, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::ApplyApplied:
+    add(c.framegraphActiveRenderSeedApplyApplied, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::ApplyInvalid:
+    add(c.framegraphActiveRenderSeedApplyInvalid, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::ApplyIncomplete:
+    add(c.framegraphActiveRenderSeedApplyIncomplete, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::ApplyOverflow:
+    add(c.framegraphActiveRenderSeedApplyOverflow, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::AppliedButUnmerged:
+    add(c.framegraphActiveRenderSeedAppliedButUnmerged, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::PassCoalesceBlockedCycle:
+    add(c.framegraphActiveRenderSeedPassCoalesceBlockedCycle, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::PassCoalesceSecondNonDraw:
+    add(c.framegraphActiveRenderSeedPassCoalesceSecondNonDraw, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::MovedHeadProved:
+    add(c.framegraphActiveRenderSeedMovedHeadProved, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::FallbackMovedHeadUnproved:
+    add(c.framegraphActiveRenderSeedFallbackMovedHeadUnproved, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::FallbackInvalidPlan:
+    add(c.framegraphActiveRenderSeedFallbackInvalidPlan, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::FallbackLiveSetMismatch:
+    add(c.framegraphActiveRenderSeedFallbackLiveSetMismatch, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::FallbackDuplicateCommand:
+    add(c.framegraphActiveRenderSeedFallbackDuplicateCommand, count);
+    break;
+  case FramegraphActiveRenderSeedOutcome::ReplayActivated:
+    add(c.framegraphActiveRenderSeedReplayActivated, count);
+    break;
+  }
 }
 
 void countPipelineBuild() {
@@ -8166,6 +9423,275 @@ FramegraphObserveSnapshot snapshotFramegraphObserve() {
       load(c.framegraphDagDumpsWritten),
   };
 }
+
+FramegraphActiveRenderSeedSnapshot snapshotFramegraphActiveRenderSeed() {
+  const Counters& c = counters();
+  return FramegraphActiveRenderSeedSnapshot{
+      load(c.framegraphActiveRenderSnapshotAbsent),
+      load(c.framegraphActiveRenderSnapshotIncomplete),
+      load(c.framegraphActiveRenderSeedApplyApplied),
+      load(c.framegraphActiveRenderSeedApplyInvalid),
+      load(c.framegraphActiveRenderSeedApplyIncomplete),
+      load(c.framegraphActiveRenderSeedApplyOverflow),
+      load(c.framegraphActiveRenderSeedAppliedButUnmerged),
+      load(c.framegraphActiveRenderSeedPassCoalesceBlockedCycle),
+      load(c.framegraphActiveRenderSeedPassCoalesceSecondNonDraw),
+      load(c.framegraphActiveRenderSeedMovedHeadProved),
+      load(c.framegraphActiveRenderSeedFallbackMovedHeadUnproved),
+      load(c.framegraphActiveRenderSeedFallbackInvalidPlan),
+      load(c.framegraphActiveRenderSeedFallbackLiveSetMismatch),
+      load(c.framegraphActiveRenderSeedFallbackDuplicateCommand),
+      load(c.framegraphActiveRenderSeedReplayActivated),
+  };
+}
+
+FramegraphSourceLocalPassCoalesceSnapshot
+snapshotFramegraphSourceLocalPassCoalesce() {
+  const Counters& c = counters();
+  return FramegraphSourceLocalPassCoalesceSnapshot{
+      load(c.framegraphSourceLocalReturnCandidates),
+      load(c.framegraphSourceLocalReturnMerged),
+      load(c.framegraphSourceLocalReturnBlockedCycle),
+      load(c.framegraphSourceLocalReturnSecondNonDraw),
+      load(c.framegraphSourceLocalReturnNonRenderIntervener),
+      load(c.framegraphSourceLocalReturnMissingInvariant),
+      load(c.framegraphSourceLocalReturnDependencyKept),
+      load(c.framegraphSourceLocalReturnMoveBefore),
+      load(c.framegraphSourceLocalReturnMoveAfter),
+      load(c.framegraphSourceLocalReturnNonDrawIntervener),
+      load(c.framegraphSourceLocalReturnSemanticIntervener),
+      load(c.framegraphSourceLocalReturnCommandlessIntervener),
+      load(c.framegraphSourceLocalReturnCommandless),
+      load(c.framegraphSourceLocalReturnLegacyCandidates),
+      load(c.framegraphSourceLocalReturnArenaCandidates),
+      load(c.framegraphSourceLocalReturnUnknownCandidates),
+      load(c.framegraphSourceLocalReturnIdentityKnownCandidates),
+      load(c.framegraphSourceLocalReturnIdentityMissingCandidates),
+  };
+}
+
+FramegraphSourceLocalReplayOutcomeSnapshot
+snapshotFramegraphSourceLocalReplayOutcome() {
+  const Counters& c = counters();
+  return FramegraphSourceLocalReplayOutcomeSnapshot{
+      .frontierRollback = {
+          load(c.framegraphSourceLocalReturnFrontierRollbackSources),
+          load(c.framegraphSourceLocalReturnFrontierRollbackCandidates),
+          load(c.framegraphSourceLocalReturnFrontierRollbackMerged),
+      },
+      .frontierRollbackInvalidPlan = {
+          load(c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanSources),
+          load(c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanCandidates),
+          load(c.framegraphSourceLocalReturnFrontierRollbackInvalidPlanMerged),
+      },
+      .frontierRollbackLiveSetMismatch = {
+          load(c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchSources),
+          load(c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchCandidates),
+          load(c.framegraphSourceLocalReturnFrontierRollbackLiveSetMismatchMerged),
+      },
+      .frontierRollbackDuplicateCommand = {
+          load(c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandSources),
+          load(c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandCandidates),
+          load(c.framegraphSourceLocalReturnFrontierRollbackDuplicateCommandMerged),
+      },
+      .frontierRollbackMovedHeadUnproved = {
+          load(c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedSources),
+          load(c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedCandidates),
+          load(c.framegraphSourceLocalReturnFrontierRollbackMovedHeadUnprovedMerged),
+      },
+      .finalInvalid = {
+          load(c.framegraphSourceLocalReturnFinalInvalidSources),
+          load(c.framegraphSourceLocalReturnFinalInvalidCandidates),
+          load(c.framegraphSourceLocalReturnFinalInvalidMerged),
+      },
+      .finalNaturalOrder = {
+          load(c.framegraphSourceLocalReturnFinalNaturalOrderSources),
+          load(c.framegraphSourceLocalReturnFinalNaturalOrderCandidates),
+          load(c.framegraphSourceLocalReturnFinalNaturalOrderMerged),
+      },
+      .finalReorderedActivated = {
+          load(c.framegraphSourceLocalReturnFinalReorderedActivatedSources),
+          load(c.framegraphSourceLocalReturnFinalReorderedActivatedCandidates),
+          load(c.framegraphSourceLocalReturnFinalReorderedActivatedMerged),
+      },
+  };
+}
+
+CpuReadyMultiSourceSeedNaturalDistanceSnapshot
+snapshotCpuReadyMultiSourceSeedNaturalDistance() {
+  const Counters& c = counters();
+  return CpuReadyMultiSourceSeedNaturalDistanceSnapshot{
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceMissing),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistance1),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMatchDistanceGt1),
+  };
+}
+
+CpuReadyMultiSourceSeedNaturalAttributionSnapshot
+snapshotCpuReadyMultiSourceSeedNaturalAttribution() {
+  const Counters& c = counters();
+  return CpuReadyMultiSourceSeedNaturalAttributionSnapshot{
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMergeOperations),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceTotal),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalMergeDistanceMax),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalCommandBefore),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalCommandAfter),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalEmptyIntervening),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalShapeAdjacent),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalShapeDependencyKept),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalShapeCommandless),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalShapeMultiMerge),
+      load(c.cpuReadyMultiSourcePlannerSeedNaturalShapeMissing),
+  };
+}
+
+CpuReadyMultiSourceSourceLocalFallbackSnapshot
+snapshotCpuReadyMultiSourceSourceLocalFallback() {
+  const Counters& c = counters();
+  return CpuReadyMultiSourceSourceLocalFallbackSnapshot{
+      load(c.cpuReadyMultiSourceNaturalFallbackWindowsStarted),
+      load(c.cpuReadyMultiSourceNaturalFallbackWindowsCompleted),
+      load(c.cpuReadyMultiSourceNaturalFallbackSources),
+      load(c.cpuReadyMultiSourcePermutationFallbackWindowsStarted),
+      load(c.cpuReadyMultiSourcePermutationFallbackWindowsCompleted),
+      load(c.cpuReadyMultiSourcePermutationFallbackSources),
+  };
+}
+
+RenderPassNaturalFallbackAttributionSnapshot
+snapshotRenderPassNaturalFallbackAttribution() {
+  const Counters& c = counters();
+  return RenderPassNaturalFallbackAttributionSnapshot{
+      load(c.renderPassNaturalFallbackBegin),
+      load(c.renderPassNaturalFallbackSameWindowReentryDistance1),
+      load(c.renderPassNaturalFallbackSameWindowReentryDistance2),
+      load(c.renderPassNaturalFallbackSameWindowReentryDistance3To4),
+      load(c.renderPassNaturalFallbackCrossWindowReentryDistance1),
+      load(c.renderPassNaturalFallbackCrossWindowReentryDistance2),
+      load(c.renderPassNaturalFallbackCrossWindowReentryDistance3To4),
+      load(c.activeSeedMergeTicketIssued),
+      load(c.activeSeedMergeTicketMatched),
+      load(c.activeSeedMergeTicketContinued),
+      load(c.activeSeedMergeTicketMismatch),
+      load(c.activeSeedMergeTicketUnconsumed),
+      load(c.activeSeedMergeWitnessOverflow),
+      load(c.activeSeedMergeWitnessMismatch),
+      load(c.activeSeedInstanceUnavailable),
+      load(c.activeSeedInstanceStale),
+      load(c.renderPassActiveSeedBridgeReentryDistance1),
+      load(c.renderPassActiveSeedBridgeReentryDistance2),
+      load(c.renderPassActiveSeedBridgeReentryDistance3To4),
+  };
+}
+
+RenderPassCloseAttributionSnapshot snapshotRenderPassCloseAttribution() {
+  const Counters& c = counters();
+  return RenderPassCloseAttributionSnapshot{
+      load(c.renderPassFinalCloseSessionCap),
+      load(c.renderPassFinalCloseIndependent),
+      load(c.renderPassFinalCloseInitializer),
+      load(c.renderPassFinalCloseProducerWait),
+      load(c.renderPassFinalCloseDrain),
+      load(c.renderPassFinalCloseFailOther),
+      load(c.renderPassCloseAdjacentSessionCap),
+      load(c.renderPassCloseAdjacentIndependent),
+      load(c.renderPassCloseAdjacentInitializer),
+      load(c.renderPassCloseAdjacentProducerWait),
+      load(c.renderPassCloseAdjacentDrain),
+      load(c.renderPassCloseAdjacentFailOther),
+      load(c.renderPassCloseLedgerRecorded),
+      load(c.renderPassCloseLedgerMissing),
+      load(c.renderPassCloseLedgerTerminalAdjacent),
+      load(c.renderPassCloseLedgerTerminalNonAdjacent),
+      load(c.renderPassCloseLedgerTerminalNotReopenedBeforePresent),
+      load(c.renderPassNaturalShortCrossCloseMatched),
+      load(c.renderPassNaturalShortCrossCloseMissing),
+      load(c.renderPassFinalCloseLedgerRecorded),
+      load(c.renderPassFinalCloseLedgerMissing),
+      load(c.renderPassFinalCloseLedgerTerminalAdjacent),
+      load(c.renderPassFinalCloseLedgerTerminalNonAdjacent),
+      load(c.renderPassFinalCloseLedgerTerminalNotReopenedBeforePresent),
+  };
+}
+
+RenderPassShortReentryAttributionSnapshot
+snapshotRenderPassShortReentryAttribution() {
+  const Counters& c = counters();
+  return RenderPassShortReentryAttributionSnapshot{
+      .distance1Disposition = {
+          load(c.renderPassShortReentryD1Ordinary),
+          load(c.renderPassShortReentryD1NaturalSame),
+          load(c.renderPassShortReentryD1NaturalCross),
+          load(c.renderPassShortReentryD1Planned),
+          load(c.renderPassShortReentryD1EligibilityPresent),
+          load(c.renderPassShortReentryD1EligibilityOther),
+          load(c.renderPassShortReentryD1PermutationRejected),
+          load(c.renderPassShortReentryD1MixedInvalid),
+      },
+      .distance2Disposition = {
+          load(c.renderPassShortReentryD2Ordinary),
+          load(c.renderPassShortReentryD2NaturalSame),
+          load(c.renderPassShortReentryD2NaturalCross),
+          load(c.renderPassShortReentryD2Planned),
+          load(c.renderPassShortReentryD2EligibilityPresent),
+          load(c.renderPassShortReentryD2EligibilityOther),
+          load(c.renderPassShortReentryD2PermutationRejected),
+          load(c.renderPassShortReentryD2MixedInvalid),
+      },
+      .distance1SourceShape = {
+          load(c.renderPassShortReentryD1SourceAllSame),
+          load(c.renderPassShortReentryD1SourcePriorInterveningSameCurrentNewer),
+          load(c.renderPassShortReentryD1SourcePriorOlderInterveningCurrentSame),
+          load(c.renderPassShortReentryD1SourceMixedInvalid),
+      },
+      .distance2SourceShape = {
+          load(c.renderPassShortReentryD2SourceAllSame),
+          load(c.renderPassShortReentryD2SourcePriorInterveningSameCurrentNewer),
+          load(c.renderPassShortReentryD2SourcePriorOlderInterveningCurrentSame),
+          load(c.renderPassShortReentryD2SourceMixedInvalid),
+      },
+      .priorCloseReason = {
+          load(c.renderPassShortReentryCloseFinal),
+          load(c.renderPassShortReentryCloseRtChange),
+          load(c.renderPassShortReentryCloseHazard),
+          load(c.renderPassShortReentryCloseClear),
+          load(c.renderPassShortReentryCloseSurfaceCopy),
+          load(c.renderPassShortReentryCloseStretchRect),
+          load(c.renderPassShortReentryCloseReadback),
+          load(c.renderPassShortReentryCloseColorFill),
+          load(c.renderPassShortReentryClosePresent),
+          load(c.renderPassShortReentryClosePresentAcquire),
+          load(c.renderPassShortReentryCloseTile),
+          load(c.renderPassShortReentryCloseOrdered),
+      },
+      .priorCloseMissing = load(c.renderPassShortReentryCloseMissing),
+      .clearOpenTargetCount =
+          load(c.renderPassShortReentryClearOpenTargetCount),
+      .clearOpenTargetPriorStoreBytes =
+          load(c.renderPassShortReentryClearOpenTargetPriorStoreBytes),
+      .clearOpenTargetCurrentLoadBytes =
+          load(c.renderPassShortReentryClearOpenTargetCurrentLoadBytes),
+      .clearOpenNaturalCrossCount =
+          load(c.renderPassShortReentryClearOpenNaturalCrossCount),
+      .clearOpenNaturalCrossPriorStoreBytes =
+          load(c.renderPassShortReentryClearOpenNaturalCrossPriorStoreBytes),
+      .clearOpenNaturalCrossCurrentLoadBytes =
+          load(c.renderPassShortReentryClearOpenNaturalCrossCurrentLoadBytes),
+  };
+}
+
+RenderPassStoreAccountingSnapshot snapshotRenderPassStoreAccounting() {
+  const Counters& c = counters();
+  return RenderPassStoreAccountingSnapshot{
+      load(c.renderPassStoreActionStore),
+      load(c.renderPassStoreActionDontCare),
+      load(c.renderPassStoreActionDepthStore),
+      load(c.renderPassStoreActionDepthDontCare),
+      load(c.renderPassStoreActionStencilStore),
+      load(c.renderPassStoreActionStencilDontCare),
+      load(c.renderPassTilePreservationBytes),
+  };
+}
 }  // namespace test
 
 // WMTLoadAction: DontCare=0, Load=1, Clear=2 (winemetal.h).
@@ -8295,6 +9821,355 @@ void countRenderPassSameKeyReentryDepthPreservationBytes(std::uint64_t bytes) {
   add(counters().renderPassSameKeyReentryDepthPreservationBytes, bytes);
 }
 
+void countRenderPassNaturalFallbackBegin() {
+  add(counters().renderPassNaturalFallbackBegin);
+}
+
+void countRenderPassNaturalFallbackReentryDistance(
+    std::uint32_t interveningPasses, bool sameWindow) {
+  if (interveningPasses < 1u || interveningPasses > 4u) {
+    return;
+  }
+  auto& c = counters();
+  if (sameWindow) {
+    if (interveningPasses == 1u) {
+      add(c.renderPassNaturalFallbackSameWindowReentryDistance1);
+    } else if (interveningPasses == 2u) {
+      add(c.renderPassNaturalFallbackSameWindowReentryDistance2);
+    } else if (interveningPasses <= 4u) {
+      add(c.renderPassNaturalFallbackSameWindowReentryDistance3To4);
+    }
+    return;
+  }
+  if (interveningPasses == 1u) {
+    add(c.renderPassNaturalFallbackCrossWindowReentryDistance1);
+  } else if (interveningPasses == 2u) {
+    add(c.renderPassNaturalFallbackCrossWindowReentryDistance2);
+  } else if (interveningPasses <= 4u) {
+    add(c.renderPassNaturalFallbackCrossWindowReentryDistance3To4);
+  }
+}
+
+void countActiveSeedMergeTicketIssued(std::uint64_t count) {
+  add(counters().activeSeedMergeTicketIssued, count);
+}
+
+void countActiveSeedMergeTicketMatched(std::uint64_t count) {
+  add(counters().activeSeedMergeTicketMatched, count);
+}
+
+void countActiveSeedMergeTicketContinued(std::uint64_t count) {
+  add(counters().activeSeedMergeTicketContinued, count);
+}
+
+void countActiveSeedMergeTicketMismatch(std::uint64_t count) {
+  add(counters().activeSeedMergeTicketMismatch, count);
+}
+
+void countActiveSeedMergeTicketUnconsumed(std::uint64_t count) {
+  add(counters().activeSeedMergeTicketUnconsumed, count);
+}
+
+void countActiveSeedMergeWitnessOverflow(std::uint64_t count) {
+  add(counters().activeSeedMergeWitnessOverflow, count);
+}
+
+void countActiveSeedMergeWitnessMismatch(std::uint64_t count) {
+  add(counters().activeSeedMergeWitnessMismatch, count);
+}
+
+void countActiveSeedInstanceUnavailable(std::uint64_t count) {
+  add(counters().activeSeedInstanceUnavailable, count);
+}
+
+void countActiveSeedInstanceStale(std::uint64_t count) {
+  add(counters().activeSeedInstanceStale, count);
+}
+
+void countRenderPassActiveSeedBridgeReentryDistance(
+    std::uint32_t interveningPasses) {
+  auto& c = counters();
+  if (interveningPasses == 1u) {
+    add(c.renderPassActiveSeedBridgeReentryDistance1);
+  } else if (interveningPasses == 2u) {
+    add(c.renderPassActiveSeedBridgeReentryDistance2);
+  } else if (interveningPasses >= 3u && interveningPasses <= 4u) {
+    add(c.renderPassActiveSeedBridgeReentryDistance3To4);
+  }
+}
+
+void countRenderPassFinalCloseCause(
+    encoders::SessionFinalizeCause cause) {
+  auto& c = counters();
+  switch (cause) {
+  case encoders::SessionFinalizeCause::SessionCap:
+    add(c.renderPassFinalCloseSessionCap);
+    break;
+  case encoders::SessionFinalizeCause::Independent:
+    add(c.renderPassFinalCloseIndependent);
+    break;
+  case encoders::SessionFinalizeCause::Initializer:
+    add(c.renderPassFinalCloseInitializer);
+    break;
+  case encoders::SessionFinalizeCause::ProducerWait:
+    add(c.renderPassFinalCloseProducerWait);
+    break;
+  case encoders::SessionFinalizeCause::Drain:
+    add(c.renderPassFinalCloseDrain);
+    break;
+  case encoders::SessionFinalizeCause::FailOrOther:
+    add(c.renderPassFinalCloseFailOther);
+    break;
+  }
+}
+
+void countRenderPassCloseLedgerAdjacentCause(
+    encoders::SessionFinalizeCause cause) {
+  auto& c = counters();
+  switch (cause) {
+  case encoders::SessionFinalizeCause::SessionCap:
+    add(c.renderPassCloseAdjacentSessionCap);
+    break;
+  case encoders::SessionFinalizeCause::Independent:
+    add(c.renderPassCloseAdjacentIndependent);
+    break;
+  case encoders::SessionFinalizeCause::Initializer:
+    add(c.renderPassCloseAdjacentInitializer);
+    break;
+  case encoders::SessionFinalizeCause::ProducerWait:
+    add(c.renderPassCloseAdjacentProducerWait);
+    break;
+  case encoders::SessionFinalizeCause::Drain:
+    add(c.renderPassCloseAdjacentDrain);
+    break;
+  case encoders::SessionFinalizeCause::FailOrOther:
+    add(c.renderPassCloseAdjacentFailOther);
+    break;
+  }
+}
+
+void countRenderPassNaturalShortCrossPriorClose(
+    EncoderSplitReason reason) {
+  auto& c = counters();
+  add(c.renderPassNaturalShortCrossCloseMatched);
+  switch (reason) {
+  case EncoderSplitReason::Final:
+    add(c.renderPassNaturalShortCrossCloseFinal);
+    break;
+  case EncoderSplitReason::RenderTargetChange:
+    add(c.renderPassNaturalShortCrossCloseRtChange);
+    break;
+  case EncoderSplitReason::Hazard:
+    add(c.renderPassNaturalShortCrossCloseHazard);
+    break;
+  case EncoderSplitReason::ClearBarrier:
+    add(c.renderPassNaturalShortCrossCloseClear);
+    break;
+  case EncoderSplitReason::SurfaceCopy:
+    add(c.renderPassNaturalShortCrossCloseSurfaceCopy);
+    break;
+  case EncoderSplitReason::StretchRect:
+    add(c.renderPassNaturalShortCrossCloseStretchRect);
+    break;
+  case EncoderSplitReason::Readback:
+    add(c.renderPassNaturalShortCrossCloseReadback);
+    break;
+  case EncoderSplitReason::ColorFill:
+    add(c.renderPassNaturalShortCrossCloseColorFill);
+    break;
+  case EncoderSplitReason::Present:
+    add(c.renderPassNaturalShortCrossClosePresent);
+    break;
+  case EncoderSplitReason::PresentAcquire:
+    add(c.renderPassNaturalShortCrossClosePresentAcquire);
+    break;
+  case EncoderSplitReason::TileMidPassIneligible:
+    add(c.renderPassNaturalShortCrossCloseTile);
+    break;
+  case EncoderSplitReason::OrderedControl:
+    add(c.renderPassNaturalShortCrossCloseOrdered);
+    break;
+  }
+}
+
+void countRenderPassNaturalShortCrossPriorCloseMissing(
+    std::uint64_t count) {
+  add(counters().renderPassNaturalShortCrossCloseMissing, count);
+}
+
+void countRenderPassShortReentryDisposition(
+    std::uint32_t interveningPasses,
+    std::uint8_t disposition) {
+  if (interveningPasses < 1u || interveningPasses > 2u || disposition > 7u) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* bucket = nullptr;
+  if (interveningPasses == 1u) {
+    switch (disposition) {
+    case 0: bucket = &c.renderPassShortReentryD1Ordinary; break;
+    case 1: bucket = &c.renderPassShortReentryD1NaturalSame; break;
+    case 2: bucket = &c.renderPassShortReentryD1NaturalCross; break;
+    case 3: bucket = &c.renderPassShortReentryD1Planned; break;
+    case 4: bucket = &c.renderPassShortReentryD1EligibilityPresent; break;
+    case 5: bucket = &c.renderPassShortReentryD1EligibilityOther; break;
+    case 6: bucket = &c.renderPassShortReentryD1PermutationRejected; break;
+    case 7: bucket = &c.renderPassShortReentryD1MixedInvalid; break;
+    }
+  } else {
+    switch (disposition) {
+    case 0: bucket = &c.renderPassShortReentryD2Ordinary; break;
+    case 1: bucket = &c.renderPassShortReentryD2NaturalSame; break;
+    case 2: bucket = &c.renderPassShortReentryD2NaturalCross; break;
+    case 3: bucket = &c.renderPassShortReentryD2Planned; break;
+    case 4: bucket = &c.renderPassShortReentryD2EligibilityPresent; break;
+    case 5: bucket = &c.renderPassShortReentryD2EligibilityOther; break;
+    case 6: bucket = &c.renderPassShortReentryD2PermutationRejected; break;
+    case 7: bucket = &c.renderPassShortReentryD2MixedInvalid; break;
+    }
+  }
+  if (bucket) {
+    add(*bucket);
+  }
+}
+
+void countRenderPassShortReentrySourceShape(
+    std::uint32_t interveningPasses,
+    std::uint8_t sourceShape) {
+  if (interveningPasses < 1u || interveningPasses > 2u || sourceShape > 3u) {
+    return;
+  }
+  auto& c = counters();
+  std::atomic<std::uint64_t>* bucket = nullptr;
+  if (interveningPasses == 1u) {
+    switch (sourceShape) {
+    case 0: bucket = &c.renderPassShortReentryD1SourceAllSame; break;
+    case 1:
+      bucket =
+          &c.renderPassShortReentryD1SourcePriorInterveningSameCurrentNewer;
+      break;
+    case 2:
+      bucket =
+          &c.renderPassShortReentryD1SourcePriorOlderInterveningCurrentSame;
+      break;
+    case 3: bucket = &c.renderPassShortReentryD1SourceMixedInvalid; break;
+    }
+  } else {
+    switch (sourceShape) {
+    case 0: bucket = &c.renderPassShortReentryD2SourceAllSame; break;
+    case 1:
+      bucket =
+          &c.renderPassShortReentryD2SourcePriorInterveningSameCurrentNewer;
+      break;
+    case 2:
+      bucket =
+          &c.renderPassShortReentryD2SourcePriorOlderInterveningCurrentSame;
+      break;
+    case 3: bucket = &c.renderPassShortReentryD2SourceMixedInvalid; break;
+    }
+  }
+  if (bucket) {
+    add(*bucket);
+  }
+}
+
+void countRenderPassShortReentryPriorClose(EncoderSplitReason reason) {
+  auto& c = counters();
+  switch (reason) {
+  case EncoderSplitReason::Final: add(c.renderPassShortReentryCloseFinal); break;
+  case EncoderSplitReason::RenderTargetChange:
+    add(c.renderPassShortReentryCloseRtChange); break;
+  case EncoderSplitReason::Hazard: add(c.renderPassShortReentryCloseHazard); break;
+  case EncoderSplitReason::ClearBarrier:
+    add(c.renderPassShortReentryCloseClear); break;
+  case EncoderSplitReason::SurfaceCopy:
+    add(c.renderPassShortReentryCloseSurfaceCopy); break;
+  case EncoderSplitReason::StretchRect:
+    add(c.renderPassShortReentryCloseStretchRect); break;
+  case EncoderSplitReason::Readback:
+    add(c.renderPassShortReentryCloseReadback); break;
+  case EncoderSplitReason::ColorFill:
+    add(c.renderPassShortReentryCloseColorFill); break;
+  case EncoderSplitReason::Present:
+    add(c.renderPassShortReentryClosePresent); break;
+  case EncoderSplitReason::PresentAcquire:
+    add(c.renderPassShortReentryClosePresentAcquire); break;
+  case EncoderSplitReason::TileMidPassIneligible:
+    add(c.renderPassShortReentryCloseTile); break;
+  case EncoderSplitReason::OrderedControl:
+    add(c.renderPassShortReentryCloseOrdered); break;
+  }
+}
+
+void countRenderPassShortReentryPriorCloseMissing() {
+  add(counters().renderPassShortReentryCloseMissing);
+}
+
+void countRenderPassShortReentryClearOpenTarget(
+    bool naturalCross,
+    std::uint64_t priorStoreBytes,
+    std::uint64_t currentLoadBytes) {
+  auto& c = counters();
+  add(c.renderPassShortReentryClearOpenTargetCount);
+  add(c.renderPassShortReentryClearOpenTargetPriorStoreBytes,
+      priorStoreBytes);
+  add(c.renderPassShortReentryClearOpenTargetCurrentLoadBytes,
+      currentLoadBytes);
+  if (!naturalCross) {
+    return;
+  }
+  add(c.renderPassShortReentryClearOpenNaturalCrossCount);
+  add(c.renderPassShortReentryClearOpenNaturalCrossPriorStoreBytes,
+      priorStoreBytes);
+  add(c.renderPassShortReentryClearOpenNaturalCrossCurrentLoadBytes,
+      currentLoadBytes);
+}
+
+void countRenderPassCloseLedgerRecorded(std::uint64_t count) {
+  add(counters().renderPassCloseLedgerRecorded, count);
+}
+
+void countRenderPassCloseLedgerMissing(std::uint64_t count) {
+  add(counters().renderPassCloseLedgerMissing, count);
+}
+
+void countRenderPassCloseLedgerTerminalAdjacent(std::uint64_t count) {
+  add(counters().renderPassCloseLedgerTerminalAdjacent, count);
+}
+
+void countRenderPassCloseLedgerTerminalNonAdjacent(std::uint64_t count) {
+  add(counters().renderPassCloseLedgerTerminalNonAdjacent, count);
+}
+
+void countRenderPassCloseLedgerTerminalNotReopenedBeforePresent(
+    std::uint64_t count) {
+  add(counters().renderPassCloseLedgerTerminalNotReopenedBeforePresent,
+      count);
+}
+
+void countRenderPassFinalCloseLedgerRecorded(std::uint64_t count) {
+  add(counters().renderPassFinalCloseLedgerRecorded, count);
+}
+
+void countRenderPassFinalCloseLedgerMissing(std::uint64_t count) {
+  add(counters().renderPassFinalCloseLedgerMissing, count);
+}
+
+void countRenderPassFinalCloseLedgerTerminalAdjacent(std::uint64_t count) {
+  add(counters().renderPassFinalCloseLedgerTerminalAdjacent, count);
+}
+
+void countRenderPassFinalCloseLedgerTerminalNonAdjacent(
+    std::uint64_t count) {
+  add(counters().renderPassFinalCloseLedgerTerminalNonAdjacent, count);
+}
+
+void countRenderPassFinalCloseLedgerTerminalNotReopenedBeforePresent(
+    std::uint64_t count) {
+  add(counters().renderPassFinalCloseLedgerTerminalNotReopenedBeforePresent,
+      count);
+}
+
 void countRenderPassTransitionRtChangeSameDepth() {
   add(counters().renderPassTransitionRtChangeSameDepth);
 }
@@ -8349,6 +10224,9 @@ void countRenderPassColorStoreProof(RenderPassColorStoreProof proof) {
   case RenderPassColorStoreProof::BlockDeadNoPresentDisabled:
     add(c.renderPassColorProofBlockDeadNoPresentDisabled);
     break;
+  case RenderPassColorStoreProof::BlockClearMismatch:
+    add(c.renderPassColorProofBlockClearMismatch);
+    break;
   }
 }
 
@@ -8393,6 +10271,96 @@ void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof) {
     break;
   case RenderPassDepthStoreProof::BlockPresent:
     add(c.renderPassDepthProofBlockPresent);
+    break;
+  case RenderPassDepthStoreProof::BlockClearMismatch:
+    add(c.renderPassDepthProofBlockClearMismatch);
+    break;
+  }
+}
+
+void countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause cause) {
+  auto& c = counters();
+  switch (cause) {
+  case RenderPassNoLookaheadCause::Empty:
+    add(c.renderPassNoLookaheadEmpty);
+    break;
+  case RenderPassNoLookaheadCause::Invalid:
+    add(c.renderPassNoLookaheadInvalid);
+    break;
+  case RenderPassNoLookaheadCause::SuffixExhausted:
+    add(c.renderPassNoLookaheadSuffixExhausted);
+    break;
+  case RenderPassNoLookaheadCause::StorageTruncated:
+    add(c.renderPassNoLookaheadStorageTruncated);
+    break;
+  }
+}
+
+void countRenderPassLateStoreUnknown(RenderPassLateStoreAspect aspect) {
+  auto& c = counters();
+  switch (aspect) {
+  case RenderPassLateStoreAspect::Color:
+    add(c.renderPassLateStoreUnknownColor);
+    break;
+  case RenderPassLateStoreAspect::Depth:
+    add(c.renderPassLateStoreUnknownDepth);
+    break;
+  case RenderPassLateStoreAspect::Stencil:
+    add(c.renderPassLateStoreUnknownStencil);
+    break;
+  }
+}
+
+void countRenderPassLateStoreResolution(
+    RenderPassLateStoreAspect aspect,
+    RenderPassLateStoreResolutionCause cause) {
+  auto& c = counters();
+  switch (cause) {
+  case RenderPassLateStoreResolutionCause::Clear:
+    switch (aspect) {
+    case RenderPassLateStoreAspect::Color:
+      add(c.renderPassLateStoreResolveClearColor);
+      break;
+    case RenderPassLateStoreAspect::Depth:
+      add(c.renderPassLateStoreResolveClearDepth);
+      break;
+    case RenderPassLateStoreAspect::Stencil:
+      add(c.renderPassLateStoreResolveClearStencil);
+      break;
+    }
+    break;
+  case RenderPassLateStoreResolutionCause::ClearMismatch:
+    add(c.renderPassLateStoreResolveStoreClearMismatch);
+    break;
+  case RenderPassLateStoreResolutionCause::Draw:
+    add(c.renderPassLateStoreResolveStoreDraw);
+    break;
+  case RenderPassLateStoreResolutionCause::Sample:
+    add(c.renderPassLateStoreResolveStoreSample);
+    break;
+  case RenderPassLateStoreResolutionCause::Readback:
+    add(c.renderPassLateStoreResolveStoreReadback);
+    break;
+  case RenderPassLateStoreResolutionCause::Copy:
+    add(c.renderPassLateStoreResolveStoreCopy);
+    break;
+  case RenderPassLateStoreResolutionCause::Resolve:
+    add(c.renderPassLateStoreResolveStoreResolve);
+    break;
+  case RenderPassLateStoreResolutionCause::Present:
+    add(c.renderPassLateStoreResolveStorePresent);
+    break;
+  case RenderPassLateStoreResolutionCause::IncompatibleClose:
+    add(c.renderPassLateStoreResolveStoreIncompatibleClose);
+    break;
+  case RenderPassLateStoreResolutionCause::Drain:
+    add(c.renderPassLateStoreResolveStoreDrain);
+    break;
+  case RenderPassLateStoreResolutionCause::Finalize:
+    add(c.renderPassLateStoreResolveStoreFinalize);
+    break;
+  case RenderPassLateStoreResolutionCause::Error:
+    add(c.renderPassLateStoreResolveStoreError);
     break;
   }
 }

@@ -16,7 +16,7 @@ These requirements describe the contract owned by the backend encode path
 per-command-buffer tracking state. The design that satisfies them lives in
 `spec.md`.
 
-Traceability: `R-BACK-15.1` through `R-BACK-15.17`. Cross-references:
+Traceability: `R-BACK-15.1` through `R-BACK-15.18`. Cross-references:
 `specs/backend/requirements.md` `R-BACK-2.5` (clear-as-load-action),
 `R-BACK-2.6` (RT-change encoder split — amended below), `R-BACK-6.3`
 (post-present back-buffer DontCare-load), and
@@ -143,8 +143,12 @@ chunk, "next operation" means the next operation in that actual replay order,
 not the next source-record index. The proof may skip a prefix of compatible
 DrawRun records that remain in the active Metal render pass, but it must then
 classify every later clear, read, sample, helper operation, and present in
-replay order. Missing or invalid replay-order evidence requires the defensive
-`Store` fallback.
+replay order. If retained later sources are already represented, the proof must
+concatenate the current source's replay-order suffix with those later source
+ranges in FIFO order; it must not append the current source's natural range a
+second time. The retained front must exactly identify the current source and
+range. Missing identity, invalid replay ordinals or ranges, and fixed-capacity
+overflow require the defensive `Store` fallback with `Invalid` evidence.
 
 When a chunk ends without a definitive next-operation signal, the
 attachment is treated as live-out and uses `Store`. The next chunk may
@@ -154,7 +158,11 @@ overwrite (per `R-BACK-15.4`).
 This current-chunk rule is the fallback for an unsealed session. Once an
 EncodeSession seals a bounded logical pass under `R-BACK-2.48`, action selection
 may inspect only the immutable sources already admitted into that sealed pass;
-unknown future sources remain defensive `Store`.
+it must not retain `SourcePayloadView` or payload spans after synchronous
+encode. When a deferred session's valid suffix is exhausted or exceeds fixed
+look-ahead storage, an eligible non-present, non-resolve attachment may open
+with `WMTStoreActionUnknown` and resolve from actual later replay. Invalid or
+empty evidence remains defensive `Store`.
 
 ---
 
@@ -189,8 +197,10 @@ Plus depth/stencil suffixes as in `R-BACK-15.10`.
 
 The `[dxmt9-perf]` line must report `render_pass_tile_preservation_bytes`,
 an estimate of bytes that would have been read or written for tile
-preservation under the legacy "always Load + always Store" policy. This is
-computed at `beginRenderPass` time as `sum_over_attachments(width * height *
+preservation under the legacy "always Load + always Store" policy. Load bytes
+are computed at `beginRenderPass`; Store bytes are deferred until the action is
+concrete immediately before `endEncoding`. The estimate is
+`sum_over_attachments(width * height *
 bytes_per_pixel * (load_was_load ? 1 : 0)) +
 sum_over_attachments(width * height * bytes_per_pixel * (store_was_store ? 1
 : 0))`. The counter is informational; success is a steady decrease of this
@@ -242,6 +252,32 @@ proofs. Touched-attachment publication, visibility results, capture or
 diagnostic sidecars, and tile-preservation counters occur once at logical-pass
 close. The serial fallback and the segmented lane must produce the same action
 and sidecar sequence.
+
+### 5.6 Late Store-action resolution (`R-BACK-15.18`)
+
+Every provisional `WMTStoreActionUnknown` must become concrete exactly once
+before the corresponding render encoder calls `endEncoding`. A matching full
+Clear may resolve to `DontCare` only when color matches the exact attachment
+slot and handle, depth has `clearDepth`, or stencil has `clearStencil`.
+Partial clears and same-attachment aspect/slot mismatches resolve to `Store`.
+Compatible same-pass draws leave the action pending; a draw that forces the
+pass to close, sampling, readback, copy, resolve, Present, ordered close,
+drain, finalization, or error resolves to `Store`.
+
+Exhausting a fixed planner window, selecting the next bounded window, or
+parking and waking an otherwise open serial session is not a close or
+resolution cause while the same active render encoder and uncommitted command
+buffer remain owned by that session. Such a window edge must preserve every
+provisional action and must not publish Store histograms, tile bytes,
+touched-attachment updates, pass-end sidecars, or completion. The next actual
+replay command or a normative semantic close resolves the action. Carry across
+an already-ended encoder or committed command buffer is outside this serial
+contract and requires the Metal 4 segmented lane in `R-BACK-2.64`.
+
+MSAA resolve/store-and-resolve and present-source constrained attachments must
+never use `Unknown`. Encoder-open failure discards provisional state. Store
+histograms and Store tile bytes are emitted once after resolution; the legacy
+depth-proof histogram remains one observation per depth/stencil pass.
 
 ---
 

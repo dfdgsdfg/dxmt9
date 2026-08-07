@@ -1393,6 +1393,32 @@ extern "C" obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbu
   return (obj_handle_t)enc;
 }
 
+extern "C" void MTLRenderCommandEncoder_setColorStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action,
+    uint32_t color_attachment_index) {
+  if (encoder && color_attachment_index < 8) {
+    [(id<MTLRenderCommandEncoder>)encoder
+        setColorStoreAction:(MTLStoreAction)action
+                    atIndex:(NSUInteger)color_attachment_index];
+  }
+}
+
+extern "C" void MTLRenderCommandEncoder_setDepthStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action) {
+  if (encoder) {
+    [(id<MTLRenderCommandEncoder>)encoder
+        setDepthStoreAction:(MTLStoreAction)action];
+  }
+}
+
+extern "C" void MTLRenderCommandEncoder_setStencilStoreAction(
+    obj_handle_t encoder, enum WMTStoreAction action) {
+  if (encoder) {
+    [(id<MTLRenderCommandEncoder>)encoder
+        setStencilStoreAction:(MTLStoreAction)action];
+  }
+}
+
 extern "C" void MTLCommandEncoder_endEncoding(obj_handle_t encoder) {
   if (encoder) [(id<MTLCommandEncoder>)encoder endEncoding];
 }

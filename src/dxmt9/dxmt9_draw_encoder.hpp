@@ -14,6 +14,7 @@
 // nested type by value, requiring the complete definition.
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_render_pass_store_policy.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 #include "dxmt9/core.hpp"
 
@@ -24,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace dxmt9 {
@@ -33,6 +35,7 @@ class Device;
 namespace perf {
 enum class RenderPassDepthStoreProof : std::uint8_t;
 enum class RenderPassColorStoreProof : std::uint8_t;
+enum class RenderPassNoLookaheadCause : std::uint8_t;
 }
 
 namespace resources { struct Pool; }
@@ -40,6 +43,8 @@ namespace pipeline { class Cache; }
 namespace scratch { struct FrameAllocators; }
 
 namespace encoders {
+
+struct LateRenderPassStoreState;
 
 // Optional recorder seam for tests that need to observe the final draw-issue
 // commands after encodeDraw has selected UP vs bound resources and built the
@@ -61,6 +66,13 @@ struct EncodeDrawRecorder {
 
   // Command-level integration hooks. Production leaves the recorder null;
   // these callbacks must not retain any call-local source span.
+  void (*beginSourceFragmentPreamble)(void* userdata,
+                                      std::uint64_t seqId) = nullptr;
+  void (*beginTransactionPreamble)(void* userdata) = nullptr;
+  void (*endSourceFragmentEpilogue)(void* userdata,
+                                    std::uint64_t seqId,
+                                    std::uint64_t committedSubCommandBuffers) =
+      nullptr;
   void (*beginDrawRunCommand)(void* userdata,
                               std::size_t commandIndex,
                               std::size_t drawCount) = nullptr;
@@ -70,9 +82,27 @@ struct EncodeDrawRecorder {
                             std::size_t drawCount) = nullptr;
   void (*beginRenderPass)(void* userdata,
                           std::size_t commandIndex) = nullptr;
+  void (*observeRenderPassStoreProofLookahead)(
+      void* userdata,
+      std::size_t commandIndex,
+      std::size_t sourceCount) = nullptr;
+  void (*prepareLateRenderPassStoreState)(
+      void* userdata,
+      LateRenderPassStoreState& state) = nullptr;
+  void (*resolveLateRenderPassStoreAction)(
+      void* userdata,
+      std::uint8_t aspect,
+      std::uint8_t colorIndex,
+      std::uint32_t action,
+      std::uint8_t cause) = nullptr;
   void (*endRenderPass)(void* userdata) = nullptr;
   void (*applyPerRecordSplitPolicy)(void* userdata,
                                     bool presentRecord) = nullptr;
+  // Test-only command-buffer split seam. Returning a non-null next tail means
+  // the callback has modeled committing `current`; production leaves this
+  // null and uses CommandQueue::newCommandBuffer + WMT commit directly.
+  WMT::Reference<WMT::CommandBuffer> (*splitCommandBufferForTest)(
+      void* userdata, WMT::CommandBuffer current) = nullptr;
   std::vector<CommandQueue::TransientBufferSlice>
       (*uploadTransientBufferBatch)(
           void* userdata,
@@ -220,6 +250,60 @@ struct RenderPassActionSummary {
   std::uint64_t stencilStoreBytes = 0;
 };
 
+enum class LateRenderPassStoreAspect : std::uint8_t {
+  Color,
+  Depth,
+  Stencil,
+};
+
+struct LateRenderPassStoreAttachment {
+  core::Handle handle{};
+  core::Handle aliasTexture{};
+  std::uint64_t pixelBytes = 0;
+  WMTStoreAction action = WMTStoreActionStore;
+  LateRenderPassStoreAspect aspect = LateRenderPassStoreAspect::Color;
+  std::uint8_t colorIndex = 0;
+  bool accounted = false;
+
+  bool unresolved() const noexcept {
+    return action == WMTStoreActionUnknown;
+  }
+};
+
+inline constexpr std::size_t kMaxLateRenderPassStoreAttachments =
+    core::kMaxRenderTargets + 2u;
+
+// EncodeSession-owned copy of every active attachment's store-accounting
+// facts. It deliberately contains no SourcePayloadView or borrowed span.
+struct LateRenderPassStoreState {
+  std::array<LateRenderPassStoreAttachment,
+             kMaxLateRenderPassStoreAttachments> attachments{};
+  std::size_t count = 0;
+  RenderPassActionSummary summary{};
+
+  bool append(LateRenderPassStoreAttachment attachment) noexcept {
+    if (count >= attachments.size()) {
+      return false;
+    }
+    attachments[count++] = attachment;
+    return true;
+  }
+
+  bool hasUnknown() const noexcept {
+    for (std::size_t i = 0; i < count; ++i) {
+      if (attachments[i].unresolved()) {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+static_assert(std::is_standard_layout_v<LateRenderPassStoreAttachment>);
+static_assert(std::is_trivially_copyable_v<LateRenderPassStoreAttachment>);
+static_assert(std::is_standard_layout_v<LateRenderPassStoreState>);
+static_assert(std::is_trivially_copyable_v<LateRenderPassStoreState>);
+
 struct RenderPassStoreProofLookaheadSource {
   core::SourcePayloadView payload{};
   // Compatibility locator for existing pure tests and legacy callers. New
@@ -248,6 +332,13 @@ struct RenderPassStoreProofLookaheadSource {
 struct RenderPassStoreProofActivePass {
   const core::FlatDrawStateRecord* hot = nullptr;
   bool allowSameAttachmentContinuation = false;
+  // The supplied lookahead is a retained prefix, but a deferred external
+  // EncodeSession may append another FIFO source after that prefix. An exact
+  // later touch (notably Clear) is still authoritative; only the fall-through
+  // "dead at the end of lookahead" proof is incomplete in that case.
+  bool lookaheadMayHaveFutureSources = false;
+  bool lookaheadInvalid = false;
+  bool lookaheadStorageTruncated = false;
 };
 
 WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
@@ -259,7 +350,8 @@ WMT::Reference<WMT::RenderCommandEncoder> beginRenderPass(
     std::size_t lookaheadStartIndex = 0,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {},
     WMT::Buffer visibilityBuffer = {},
-    RenderPassActionSummary* actionSummary = nullptr);
+    RenderPassActionSummary* actionSummary = nullptr,
+    LateRenderPassStoreState* lateStoreState = nullptr);
 
 // Depth/stencil DontCare-store look-ahead (R-BACK-15.7,
 // specs/backend/render-pass-actions/spec.md section 4.2). Returns the
@@ -282,13 +374,17 @@ dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
     core::Handle attachmentAliasTexture = {},
-    RenderPassStoreProofActivePass activePass = {});
+    RenderPassStoreProofActivePass activePass = {},
+    LateRenderPassStoreAspect aspect = LateRenderPassStoreAspect::Depth,
+    dxmt9::perf::RenderPassNoLookaheadCause* noLookaheadCause = nullptr);
 dxmt9::perf::RenderPassDepthStoreProof depthStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle depthHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
     core::Handle attachmentAliasTexture = {},
-    RenderPassStoreProofActivePass activePass = {});
+    RenderPassStoreProofActivePass activePass = {},
+    LateRenderPassStoreAspect aspect = LateRenderPassStoreAspect::Depth,
+    dxmt9::perf::RenderPassNoLookaheadCause* noLookaheadCause = nullptr);
 
 // Compatibility bool used by existing callers/tests.
 bool nextDepthOperationIsClear(const core::ChunkSlot& slot,
@@ -310,13 +406,17 @@ dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
     core::Handle attachmentAliasTexture = {},
-    RenderPassStoreProofActivePass activePass = {});
+    RenderPassStoreProofActivePass activePass = {},
+    std::uint8_t colorAttachmentIndex = 0,
+    dxmt9::perf::RenderPassNoLookaheadCause* noLookaheadCause = nullptr);
 dxmt9::perf::RenderPassColorStoreProof colorStoreProofForLookahead(
     std::span<const RenderPassStoreProofLookaheadSource> sources,
     core::Handle colorHandle,
     std::uint32_t* firstTouchCommandDistance = nullptr,
     core::Handle attachmentAliasTexture = {},
-    RenderPassStoreProofActivePass activePass = {});
+    RenderPassStoreProofActivePass activePass = {},
+    std::uint8_t colorAttachmentIndex = 0,
+    dxmt9::perf::RenderPassNoLookaheadCause* noLookaheadCause = nullptr);
 
 // R-FORMAT-12 — colorless (D3DFMT_NULL) render-pass attachment decisions,
 // extracted as pure value transforms so the depth-only-pass policy is
@@ -518,6 +618,77 @@ bool encodeDraw(EncodeContext& ctx,
                  // drawState's flat render state.
                  const core::DrawBindingOverride* paramBindingOverride = nullptr);
 
+// A call-local command fragment whose completion source was registered on the
+// EncodeSession before any fragment is encoded. This keeps replay coverage
+// independent from completion publication: slot/seq/source attribution still
+// comes from the encodeChunk call and partitionSource, while this value selects
+// only the command subrange consumed by the call.
+struct PreRegisteredEncodeChunkFragment {
+  std::size_t commandBegin = 0;
+  std::size_t commandCount = 0;
+  std::uint32_t sourceFragmentOrdinal = 0;
+  std::uint32_t sourceFragmentCount = 1;
+  std::uint32_t transactionFragmentOrdinal = 0;
+  std::uint32_t transactionFragmentCount = 1;
+
+  constexpr bool firstSourceFragment() const noexcept {
+    return sourceFragmentOrdinal == 0u;
+  }
+
+  constexpr bool lastSourceFragment() const noexcept {
+    return sourceFragmentCount != 0u &&
+           sourceFragmentOrdinal + 1u == sourceFragmentCount;
+  }
+
+
+  constexpr bool firstTransactionFragment() const noexcept {
+    return transactionFragmentOrdinal == 0u;
+  }
+};
+
+// Call-local source accumulator owned by the qualified replay transaction.
+// Multiple fragments of one retained source share one instance; encodeChunk
+// emits source-wide diagnostics only from the last fragment.
+struct PreRegisteredEncodeSourceFragmentAccumulator {
+  std::uint64_t committedSubCommandBuffers = 0;
+};
+
+// Heavy source-attribution diagnostics own call-local aggregation today. When
+// enabled they conservatively disable repeated-source replay rather than emit
+// multiple partial rows for one seqId.
+bool encodeChunkAllowsRepeatedSourceFragments() noexcept;
+
+// Call-local diagnostic provenance for a bounded multi-source planning
+// window. It never authorizes replay or pass continuation: the queue assigns
+// it only after the existing planner/preflight decision, and encodeChunk uses
+// it solely to attribute physical render-pass starts and re-entry history.
+enum class ReplayWindowDisposition : std::uint8_t {
+  Ordinary,
+  NaturalAfterMergeFallback,
+  PermutationRejectedFallback,
+  PlannedComposite,
+  EligibilityPresent,
+  EligibilityOther,
+};
+
+struct ReplayWindowProvenance {
+  ReplayWindowDisposition disposition = ReplayWindowDisposition::Ordinary;
+  std::uint64_t windowId = 0;
+  std::uint32_t sourceIndex = 0;
+  std::uint32_t sourceCount = 0;
+
+  constexpr bool valid() const noexcept {
+    return disposition != ReplayWindowDisposition::Ordinary &&
+        windowId != 0u && sourceCount >= 2u && sourceIndex < sourceCount;
+  }
+
+  friend constexpr bool operator==(const ReplayWindowProvenance&,
+                                   const ReplayWindowProvenance&) = default;
+};
+
+static_assert(std::is_trivially_copyable_v<ReplayWindowProvenance>);
+static_assert(std::is_standard_layout_v<ReplayWindowProvenance>);
+
 struct EncodeChunkOptions {
   // Optional open command buffer supplied by an encoded-pending-tail carrier.
   // When present, encodeChunk appends work into this command buffer. Internal
@@ -554,12 +725,30 @@ struct EncodeChunkOptions {
   // session is active. The session publishes the ordered list during final
   // submission so one Metal tail can expand to per-source seqId completion.
   std::optional<core::metalqueue::QueueCompletionSource> sessionSource{};
+  // Explicit fragment mode for a source already registered transactionally on
+  // the session. It is mutually exclusive with sessionSource: the latter both
+  // selects its range and appends completion metadata after replay, whereas a
+  // pre-registered fragment must never append the source again. The optional
+  // type makes this ownership mode impossible to confuse with an ordinary
+  // partial sessionSource range.
+  std::optional<PreRegisteredEncodeChunkFragment> preRegisteredFragment{};
+  PreRegisteredEncodeSourceFragmentAccumulator*
+      preRegisteredSourceAccumulator = nullptr;
   // Call-local selected FIFO source suffix used for load/store and FrameGraph
   // lookahead proofs, and as partitionRanges' retained source table. The span
   // points at synchronously resolved, Represented-pinned sources and must not
   // be retained by encodeChunk or EncodeSession.
   std::span<const core::metalqueue::ResolvedPublishedSource>
       sessionLookaheadSources{};
+  // Observability-only identity of the bounded planner/fallback window that
+  // owns this synchronous call. The value is copied into render-pass history;
+  // it must not influence replay, encoder lifetime, or completion ownership.
+  ReplayWindowProvenance replayWindow{};
+  // Observation-only exact active-seed merge tickets. The queue installs
+  // these only for a revalidated NaturalAfterMerge + SeedMerged fallback.
+  // The span borrows planner storage for this synchronous encode call.
+  ActiveSeedMergeTicketContext activeSeedMergeTicket{};
+  std::span<const ActiveSeedMergeTargetWitness> activeSeedMergeTargets{};
   // Optional validated source-command replay plan produced by the Frame Graph.
   // Passcoalesce supplies a complete permutation; DCE may supply an ordered
   // subset, including an empty subset when every command belongs to a proven

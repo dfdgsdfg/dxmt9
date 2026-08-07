@@ -27,7 +27,10 @@
 
 #include "fg_builder.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace dxmt9::framegraph {
@@ -41,8 +44,10 @@ AttachmentSet attachmentSetFromHot(const core::FlatDrawStateRecord& hot) {
   AttachmentSet set{};
   u32 count = 0;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    const auto handle = hot.colorAttachments[i].handle;
+    const auto& attachment = hot.colorAttachments[i];
+    const auto handle = attachment.handle;
     set.color[i] = TextureHandle{handle.value};
+    set.sample_count = std::max(set.sample_count, attachment.sampleCount);
     if (handle.value != 0) {
       // color_count = highest bound slot + 1 (matches the 8-wide spec field;
       // unbound interior slots keep their zero handle).
@@ -51,6 +56,8 @@ AttachmentSet attachmentSetFromHot(const core::FlatDrawStateRecord& hot) {
   }
   set.color_count = count;
   set.depth = TextureHandle{hot.depthStencil.handle.value};
+  set.sample_count =
+      std::max(set.sample_count, hot.depthStencil.sampleCount);
   return set;
 }
 
@@ -59,8 +66,10 @@ AttachmentSet attachmentSetFromClear(const core::ClearCommandView& clear) {
   u32 count = 0;
   if (clear.clearColor) {
     for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-      const auto handle = clear.colorAttachments[i].handle;
+      const auto& attachment = clear.colorAttachments[i];
+      const auto handle = attachment.handle;
       set.color[i] = TextureHandle{handle.value};
+      set.sample_count = std::max(set.sample_count, attachment.sampleCount);
       if (handle.value != 0) {
         count = static_cast<u32>(i) + 1u;
       }
@@ -69,6 +78,8 @@ AttachmentSet attachmentSetFromClear(const core::ClearCommandView& clear) {
   set.color_count = count;
   if (clear.clearDepth || clear.clearStencil) {
     set.depth = TextureHandle{clear.depthStencil.handle.value};
+    set.sample_count =
+        std::max(set.sample_count, clear.depthStencil.sampleCount);
   }
   return set;
 }
@@ -475,6 +486,158 @@ private:
 };
 
 }  // namespace
+
+ActiveRenderPlanningSeedResult applyActiveRenderPlanningSeed(
+    FrameGraph& graph, const ActiveRenderPlanningSeed& seed,
+    ResourceAliasResolver alias_resolver) {
+  if (!seed.complete) {
+    return ActiveRenderPlanningSeedResult::Incomplete;
+  }
+  if (seed.dependency_count > seed.write_dependencies.size()) {
+    return ActiveRenderPlanningSeedResult::Overflow;
+  }
+  if (seed.targets.color_count > seed.targets.color.size() ||
+      seed.targets.sample_count == 0 || seed.dependency_count == 0 ||
+      (seed.targets.color_count == 0 && seed.targets.depth.value == 0)) {
+    return ActiveRenderPlanningSeedResult::Invalid;
+  }
+
+  std::array<ResourceHandle, kActiveRenderPlanningDependencyCapacity>
+      dependencies{};
+  std::size_t dependency_count = 0;
+  for (std::size_t i = 0; i < seed.dependency_count; ++i) {
+    ResourceHandle handle = alias_resolver(seed.write_dependencies[i]);
+    if (handle.value == 0) {
+      return ActiveRenderPlanningSeedResult::Incomplete;
+    }
+    bool duplicate = false;
+    for (std::size_t j = 0; j < dependency_count; ++j) {
+      duplicate = duplicate || dependencies[j] == handle;
+    }
+    if (!duplicate) {
+      dependencies[dependency_count++] = handle;
+    }
+  }
+
+  auto containsDependency = [&](ResourceHandle raw_handle) {
+    if (raw_handle.value == 0) {
+      return true;
+    }
+    const ResourceHandle handle = alias_resolver(raw_handle);
+    return std::find(dependencies.begin(),
+                     dependencies.begin() + dependency_count,
+                     handle) != dependencies.begin() + dependency_count;
+  };
+  for (u32 i = 0; i < seed.targets.color_count; ++i) {
+    if (!containsDependency(seed.targets.color[i])) {
+      return ActiveRenderPlanningSeedResult::Incomplete;
+    }
+  }
+  if (!containsDependency(seed.targets.depth)) {
+    return ActiveRenderPlanningSeedResult::Incomplete;
+  }
+
+  if (graph.passes.size() >= std::numeric_limits<u32>::max()) {
+    return ActiveRenderPlanningSeedResult::Overflow;
+  }
+  for (const ResourceNode& resource : graph.resources) {
+    for (const AccessLog& access : resource.accesses) {
+      if (access.pass_index == std::numeric_limits<u32>::max()) {
+        return ActiveRenderPlanningSeedResult::Overflow;
+      }
+    }
+  }
+  for (const Edge& edge : graph.edges) {
+    if (edge.src_pass == std::numeric_limits<u32>::max() ||
+        edge.dst_pass == std::numeric_limits<u32>::max()) {
+      return ActiveRenderPlanningSeedResult::Overflow;
+    }
+  }
+
+  for (ResourceNode& resource : graph.resources) {
+    for (AccessLog& access : resource.accesses) {
+      ++access.pass_index;
+    }
+  }
+  for (Edge& edge : graph.edges) {
+    ++edge.src_pass;
+    ++edge.dst_pass;
+  }
+
+  PassNode virtual_pass{};
+  virtual_pass.kind = PassKind::Render;
+  virtual_pass.targets = seed.targets;
+  virtual_pass.flags.active_render_seed = true;
+  graph.passes.insert(graph.passes.begin(), virtual_pass);
+
+  auto addSeedEdgeOnce = [&](u32 dst, ResourceHandle handle) {
+    if (dst == 0) {
+      return;
+    }
+    for (const Edge& edge : graph.edges) {
+      if (edge.src_pass == 0 && edge.dst_pass == dst &&
+          edge.resource == handle) {
+        return;
+      }
+    }
+    graph.edges.push_back(Edge{
+        .src_pass = 0,
+        .dst_pass = dst,
+        .resource = handle,
+    });
+  };
+
+  for (std::size_t i = 0; i < dependency_count; ++i) {
+    const ResourceHandle handle = dependencies[i];
+    std::size_t resource_index = findResourceIndex(graph, handle);
+    if (resource_index == graph.resources.size()) {
+      ResourceNode resource{};
+      resource.handle = handle;
+      graph.resources.push_back(std::move(resource));
+      resource_index = graph.resources.size() - 1u;
+    }
+    ResourceNode& resource = graph.resources[resource_index];
+    bool reached_current_write = false;
+    for (const AccessLog& access : resource.accesses) {
+      if (reached_current_write) {
+        break;
+      }
+      const auto kind = static_cast<AccessKind>(access.access_kind);
+      const bool reads = kind == AccessKind::Read ||
+                         kind == AccessKind::ReadWrite;
+      const bool writes = kind == AccessKind::Write ||
+                          kind == AccessKind::Clear ||
+                          kind == AccessKind::ReadWrite;
+      if (reads || writes) {
+        addSeedEdgeOnce(access.pass_index, handle);
+      }
+      reached_current_write = writes;
+    }
+    resource.accesses.insert(
+        resource.accesses.begin(),
+        AccessLog{
+            .pass_index = 0,
+            .access_kind = static_cast<u8>(AccessKind::Write),
+            .stage = static_cast<u8>(AccessStage::Fragment),
+        });
+  }
+  return ActiveRenderPlanningSeedResult::Applied;
+}
+
+bool activeRenderPlanningSeedProvesReplayHead(
+    const FrameGraph& graph, u32 replay_head_command) noexcept {
+  for (const PassNode& pass : graph.passes) {
+    if (!pass.flags.active_render_seed || pass.flags.dead ||
+        pass.kind != PassKind::Render || pass.commands.count == 0 ||
+        pass.commands.first >= graph.commands.size() ||
+        pass.commands.count > graph.commands.size() - pass.commands.first) {
+      continue;
+    }
+    return graph.commands[pass.commands.first].command_index ==
+           replay_head_command;
+  }
+  return false;
+}
 
 void buildFrameGraph(core::SourcePayloadView payload, u64 frame_id,
                      FrameGraph& out) {

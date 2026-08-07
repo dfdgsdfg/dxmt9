@@ -1,3 +1,4 @@
+#include "../../../src/dxmt9/dxmt9_cpu_ready_tape.hpp"
 #include "../../../src/dxmt9/dxmt9_source_semantics.hpp"
 #include "../../../src/dxmt9/render/encode_session_admission.hpp"
 
@@ -15,6 +16,7 @@ namespace {
 
 using dxmt9::core::CanonicalDrawState;
 using dxmt9::core::ChunkSlot;
+using dxmt9::core::CpuReadyTapeConfig;
 using dxmt9::core::DrawParam;
 using dxmt9::core::Handle;
 using dxmt9::core::RenderRoute;
@@ -35,6 +37,8 @@ using dxmt9::render::SessionCapacityDimension;
 using dxmt9::render::SessionCapacityLeaseState;
 using dxmt9::render::SessionCapacityPolicy;
 using dxmt9::render::SessionCapacityVector;
+using dxmt9::render::SessionResidencyByteCharge;
+using dxmt9::render::sessionTapeByteCharge;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -95,6 +99,7 @@ SessionAdmissionCandidate candidate(
     SourceSemanticSummary semantic) {
   return SessionAdmissionCandidate{
       .semantic = semantic,
+      .residencyBytes = {.value = semantic.byteCount},
       .rawOrdinal = ordinal,
       .sourceOrdinal = ordinal,
       .seqId = seqId,
@@ -107,6 +112,8 @@ void sourceSummaryIsFlatAndClassifiesBoundaries() {
   static_assert(std::is_standard_layout_v<SourceSemanticSummary>);
   static_assert(std::is_trivially_copyable_v<SessionAdmissionCandidate>);
   static_assert(std::is_standard_layout_v<SessionAdmissionCandidate>);
+  static_assert(std::is_trivially_copyable_v<SessionResidencyByteCharge>);
+  static_assert(std::is_standard_layout_v<SessionResidencyByteCharge>);
   static_assert(sizeof(SourceSemanticSummary) <= 256);
 
   ChunkSlot draws{};
@@ -167,18 +174,84 @@ void sourceSummaryIsFlatAndClassifiesBoundaries() {
   check(logicalBytes != 0,
         "non-empty common payload view has a logical byte extent");
   SourceSemanticSummary logicalSummary = summarize(clear);
-  logicalSummary.byteCount = logicalBytes;
+  logicalSummary.byteCount = logicalBytes * 1024u;
   const EncodeSessionLimits byteLimited{
-      .maxSources = 1,
-      .maxPages = 2,
-      .maxBytes = logicalBytes - 1u,
-      .maxDraws = 1,
-      .maxCommandBuffers = 1,
+      .maxSources = 2,
+      .maxPages = 4,
+      .maxBytes = 8192,
+      .maxDraws = 2,
+      .maxCommandBuffers = 2,
   };
+  check(logicalSummary.byteCount > byteLimited.maxBytes,
+        "Legacy logical extent exceeds the Arena-derived byte cap");
+  auto boundedLegacy = candidate(1, 1, logicalSummary);
+  boundedLegacy.residencyBytes = SessionResidencyByteCharge{.value = 4096};
   checkEq(dxmt9::render::classifySessionAdmission(
-              {}, candidate(1, 1, logicalSummary), byteLimited),
+              {}, boundedLegacy, byteLimited),
+          SessionAdmissionDecision::Admit,
+          "large logical Legacy extent does not consume Arena byte credit");
+  checkEq(dxmt9::render::sessionCapacityFor(boundedLegacy).bytes,
+          std::uint64_t{4096},
+          "session capacity retains the typed compatibility residency charge");
+  checkEq(sessionTapeByteCharge(false, logicalSummary.byteCount, 1, 4096),
+          SessionResidencyByteCharge{.value = 4096},
+          "production Legacy mapping charges its reserved Tape page");
+  checkEq(sessionTapeByteCharge(true, 6145, 2, 4096),
+          SessionResidencyByteCharge{.value = 6145},
+          "production Arena mapping charges exact constructed Tape bytes");
+
+  EncodeSessionAdmissionState compatibilitySession{};
+  check(dxmt9::render::appendSessionAdmission(
+            compatibilitySession, boundedLegacy, byteLimited),
+        "bounded compatibility source starts a session");
+  auto secondLegacy = boundedLegacy;
+  secondLegacy.rawOrdinal = 2;
+  secondLegacy.sourceOrdinal = 2;
+  secondLegacy.seqId = 2;
+  checkEq(dxmt9::render::classifySessionAdmission(
+              compatibilitySession, secondLegacy, byteLimited),
+          SessionAdmissionDecision::Admit,
+          "logical Legacy extents do not fragment a bounded session");
+  check(dxmt9::render::appendSessionAdmission(
+            compatibilitySession, secondLegacy, byteLimited),
+        "second bounded compatibility source appends cumulatively");
+  checkEq(compatibilitySession.residencyBytes,
+          SessionResidencyByteCharge{.value = 8192},
+          "two Legacy Tape-page charges exactly fill the session byte cap");
+
+  auto thirdLegacy = secondLegacy;
+  thirdLegacy.rawOrdinal = 3;
+  thirdLegacy.sourceOrdinal = 3;
+  thirdLegacy.seqId = 3;
+  const EncodeSessionLimits cumulativeByteLimits{
+      .maxSources = 3,
+      .maxPages = 6,
+      .maxBytes = 8192,
+      .maxDraws = 2,
+      .maxCommandBuffers = 3,
+  };
+  const auto cumulativeResult =
+      dxmt9::render::classifySessionAdmissionDetailed(
+          compatibilitySession, thirdLegacy, cumulativeByteLimits);
+  checkEq(cumulativeResult.decision,
+          SessionAdmissionDecision::SubmitPrefixBeforeCandidate,
+          "next Legacy Tape page deterministically caps a full session");
+  checkEq(cumulativeResult.limitingDimension,
+          SessionCapacityDimension::Bytes,
+          "next Legacy Tape page reports the exhausted byte credit");
+
+  auto physicallyOversize = boundedLegacy;
+  physicallyOversize.residencyBytes =
+      SessionResidencyByteCharge{.value = 8193};
+  const auto physicalResult =
+      dxmt9::render::classifySessionAdmissionDetailed(
+          {}, physicallyOversize, byteLimited);
+  checkEq(physicalResult.decision,
           SessionAdmissionDecision::ProcessCandidateIsolated,
-          "logical Legacy bytes participate in the session byte cap");
+          "physical residency over the byte cap isolates deterministically");
+  checkEq(physicalResult.limitingDimension,
+          SessionCapacityDimension::Bytes,
+          "physical byte isolation reports the capacity dimension");
 }
 
 void admissionSeparatesOrderingCapsAndIsolation() {
@@ -316,6 +389,59 @@ void leaseHeadroomAndCapGroupingAreDeterministic() {
 
   SessionCapacityLeaseState leases;
   const SessionCapacityVector firstCharge{1, 4, 400, 10, 1, 1, 1, 1, 1};
+  const SessionCapacityVector writingClaim{1, 4, 400, 0, 1, 1, 1, 1, 0};
+  const dxmt9::render::SessionCapacityLeaseAcquisitionSnapshot credited{
+      .olderUnavailable = {},
+      .orderedTailWritingSuccessor = writingClaim,
+  };
+  const auto creditedUnavailable =
+      dxmt9::render::sessionCapacityUnavailableForFirstLease(
+          credited, policy.successorHeadroom);
+  check(creditedUnavailable.has_value() &&
+            *creditedUnavailable == SessionCapacityVector{},
+        "an ordinary ordered-tail Writing claim is credited once against "
+        "successor headroom");
+  SessionCapacityLeaseState creditedLease;
+  check(creditedLease.acquire(policy, *creditedUnavailable, firstCharge) &&
+            creditedLease.lease().reserved == policy.highWater &&
+            creditedLease.lease().successorRemaining ==
+                policy.successorHeadroom,
+        "Writing credit does not shrink the fixed acquired lease");
+  check(creditedLease.release(1) &&
+            creditedLease.acquire(policy, {}, firstCharge) &&
+            creditedLease.lease().generation == 2,
+        "credited acquisition and release preserve monotonic lease generations");
+
+  auto oversizedWriting = credited;
+  oversizedWriting.orderedTailWritingSuccessor->pages =
+      policy.successorHeadroom.pages + 1u;
+  const auto oversizedUnavailable =
+      dxmt9::render::sessionCapacityUnavailableForFirstLease(
+          oversizedWriting, policy.successorHeadroom);
+  check(oversizedUnavailable.has_value() &&
+            oversizedUnavailable->sources == 1u &&
+            oversizedUnavailable->pages ==
+                policy.successorHeadroom.pages + 1u,
+        "a Writing claim beyond successor headroom remains unavailable");
+  SessionCapacityLeaseState oversizedLease;
+  check(!oversizedLease.acquire(policy, *oversizedUnavailable, firstCharge) &&
+            !oversizedLease.lease().valid(),
+        "an oversized Writing claim cannot acquire the fixed lease");
+
+  auto overflowingWriting = oversizedWriting;
+  overflowingWriting.olderUnavailable.sources =
+      std::numeric_limits<std::uint64_t>::max();
+  overflowingWriting.orderedTailWritingSuccessor->sources = 1;
+  check(!dxmt9::render::sessionCapacityUnavailableForFirstLease(
+             overflowingWriting, policy.successorHeadroom).has_value(),
+        "overflow while retaining an ineligible Writing claim rejects the "
+        "acquisition snapshot");
+  auto invalidSnapshot = credited;
+  invalidSnapshot.valid = false;
+  check(!dxmt9::render::sessionCapacityUnavailableForFirstLease(
+             invalidSnapshot, policy.successorHeadroom).has_value(),
+        "invalid Tape snapshot arithmetic cannot be credited");
+
   auto unavailable = SessionCapacityVector{};
   unavailable.pages = 1;
   check(!leases.acquire(policy, unavailable, firstCharge),
@@ -391,6 +517,123 @@ void leaseHeadroomAndCapGroupingAreDeterministic() {
             wrappedResult.limitingDimension ==
                 SessionCapacityDimension::Pages,
         "admission charges actual payload-plus-wrap pages, not payload alone");
+}
+
+void productionPageCapacityLeavesExactSuccessorHeadroom() {
+  const auto config = CpuReadyTapeConfig::queueSessionStreaming(32);
+  const auto& values = config.values();
+  const std::uint64_t successorPages =
+      dxmt9::render::worstCaseNonWrappingReservationPages(
+          values.maxPagesPerSource);
+  const std::uint64_t sessionPages =
+      values.highWaterPages - successorPages;
+
+  check(values.pageCount == 640u && values.highWaterPages == 640u &&
+            values.lowWaterPages == 320u &&
+            values.maxPagesPerSource == 64u,
+        "32-control streaming profile exposes the bounded page policy");
+  check(successorPages == 127u && sessionPages == 513u,
+        "one non-wrapping successor leaves the exact session page cap");
+
+  const SessionCapacityPolicy policy{
+      .highWater = {2, values.highWaterPages, 2, 2, 2, 2, 2, 2, 2},
+      .maxSession = {1, sessionPages, 1, 1, 1, 1, 1, 1, 1},
+      .successorHeadroom = {1, successorPages, 1, 1, 1, 1, 1, 1, 1},
+      .ordinaryDirect = {
+          1, values.maxPagesPerSource, 1, 1, 1, 1, 1, 1, 1},
+  };
+  check(policy.valid(),
+        "session cap plus exact successor headroom fills page high-water");
+}
+
+void capacityRejectionObservationDistinguishesAxesAndWrapPadding() {
+  ChunkSlot slot{};
+  appendDraw(slot, 0x18);
+  const SourceSemanticSummary semantic = summarize(slot);
+  const EncodeSessionLimits roomy{
+      .maxSources = 4,
+      .maxPages = 16,
+      .maxBytes = 65536,
+      .maxDraws = 4,
+      .maxCommandBuffers = 4,
+  };
+  EncodeSessionAdmissionState predecessor{};
+  check(dxmt9::render::appendSessionAdmission(
+            predecessor, candidate(1, 1, semantic), roomy),
+        "capacity observation fixture starts one predecessor source");
+
+  const auto next = candidate(2, 2, semantic);
+  const EncodeSessionLimits sourceOnlyLimits{
+      .maxSources = 1,
+      .maxPages = 8,
+      .maxBytes = 65536,
+      .maxDraws = 4,
+      .maxCommandBuffers = 4,
+  };
+  const auto sourceOnly =
+      dxmt9::render::classifySessionAdmissionDetailed(
+          predecessor, next, sourceOnlyLimits);
+  check(sourceOnly.decision ==
+            SessionAdmissionDecision::SubmitPrefixBeforeCandidate &&
+            sourceOnly.limitingDimension ==
+                SessionCapacityDimension::Sources &&
+            sourceOnly.capacityRejection.sourcesExceeded() &&
+            !sourceOnly.capacityRejection.pagesExceeded(),
+        "source-only cap rejection has exclusive axis attribution");
+  check(sourceOnly.capacityRejection.predecessorSources == 1u &&
+            sourceOnly.capacityRejection.predecessorPages == 2u &&
+            sourceOnly.capacityRejection.candidatePayloadPages == 2u &&
+            sourceOnly.capacityRejection.candidateWrapPaddingPages == 0u &&
+            sourceOnly.capacityRejection.candidateRequiredPages == 2u &&
+            sourceOnly.capacityRejection.requiredTotalSources == 2u &&
+            sourceOnly.capacityRejection.requiredTotalPages == 4u,
+        "source-only observation retains exact predecessor and payload demand");
+
+  auto wrapped = next;
+  wrapped.reservationPages = 5;
+  const EncodeSessionLimits pageOnlyLimits{
+      .maxSources = 4,
+      .maxPages = 6,
+      .maxBytes = 65536,
+      .maxDraws = 4,
+      .maxCommandBuffers = 4,
+  };
+  const auto pageOnly =
+      dxmt9::render::classifySessionAdmissionDetailed(
+          predecessor, wrapped, pageOnlyLimits);
+  check(pageOnly.decision ==
+            SessionAdmissionDecision::SubmitPrefixBeforeCandidate &&
+            pageOnly.limitingDimension == SessionCapacityDimension::Pages &&
+            !pageOnly.capacityRejection.sourcesExceeded() &&
+            pageOnly.capacityRejection.pagesExceeded(),
+        "page-only cap rejection has exclusive axis attribution");
+  check(pageOnly.capacityRejection.predecessorSources == 1u &&
+            pageOnly.capacityRejection.predecessorPages == 2u &&
+            pageOnly.capacityRejection.candidatePayloadPages == 2u &&
+            pageOnly.capacityRejection.candidateWrapPaddingPages == 3u &&
+            pageOnly.capacityRejection.candidateRequiredPages == 5u &&
+            pageOnly.capacityRejection.requiredTotalSources == 2u &&
+            pageOnly.capacityRejection.requiredTotalPages == 7u,
+        "page observation separates payload, wrap padding, and required total");
+
+  const EncodeSessionLimits bothLimits{
+      .maxSources = 1,
+      .maxPages = 6,
+      .maxBytes = 65536,
+      .maxDraws = 4,
+      .maxCommandBuffers = 4,
+  };
+  const auto both = dxmt9::render::classifySessionAdmissionDetailed(
+      predecessor, wrapped, bothLimits);
+  check(both.decision ==
+            SessionAdmissionDecision::SubmitPrefixBeforeCandidate &&
+            both.limitingDimension == SessionCapacityDimension::Sources &&
+            both.capacityRejection.sourcesExceeded() &&
+            both.capacityRejection.pagesExceeded() &&
+            both.capacityRejection.requiredTotalSources == 2u &&
+            both.capacityRejection.requiredTotalPages == 7u,
+        "combined source/page rejection preserves both axes despite first-axis "
+        "compatibility attribution");
 }
 
 ActiveRenderContinuationState activeFor(
@@ -501,14 +744,227 @@ void continuationIsConservativeAndRouteAsymmetric() {
           "resource overflow can never authorize optimistic continuation");
 }
 
+void multiSourceWindowPreflightIsStrictAndTransactional() {
+  ChunkSlot slot{};
+  appendDraw(slot, 0x10);
+  const SourceSemanticSummary semantic = summarize(slot);
+  const EncodeSessionLimits limits{
+      .maxSources = 8,
+      .maxPages = 64,
+      .maxBytes = 64u * 4096u,
+      .maxDraws = 64,
+      .maxCommandBuffers = 8,
+  };
+  EncodeSessionAdmissionState pending{};
+  auto head = candidate(1, 1, semantic);
+  head.reservationPages = 1;
+  check(dxmt9::render::appendSessionAdmission(pending, head, limits),
+        "multi-source preflight fixture starts one pending session");
+  const EncodeSessionAdmissionState unchanged = pending;
+
+  std::array candidates{
+      candidate(2, 2, semantic),
+      candidate(3, 3, semantic),
+  };
+  candidates[0].reservationPages = 1;
+  candidates[1].reservationPages = 1;
+  const auto eligible = dxmt9::render::preflightMultiSourceSessionWindow(
+      pending, candidates, limits,
+      dxmt9::render::MultiSourceSessionWindowFrontier::ActiveRenderComplete,
+      false, false, false);
+  check(eligible.eligible() && eligible.stagedAdmission.sources == 3 &&
+            eligible.stagedAdmission.lastSeqId == 3,
+        "complete consecutive B|A window stages both sources");
+  checkEq(pending, unchanged,
+          "successful preflight does not mutate the pending admission");
+
+  auto freshCandidates = candidates;
+  freshCandidates[0].sourceOrdinal = 40;
+  freshCandidates[0].seqId = 50;
+  freshCandidates[0].rawOrdinal = 60;
+  freshCandidates[1].sourceOrdinal = 41;
+  freshCandidates[1].seqId = 51;
+  freshCandidates[1].rawOrdinal = 61;
+  const auto fresh = dxmt9::render::preflightMultiSourceSessionWindow(
+      {}, freshCandidates, limits,
+      dxmt9::render::MultiSourceSessionWindowFrontier::FreshClean,
+      false, false, false);
+  check(fresh.eligible() && fresh.stagedAdmission.sources == 2 &&
+            fresh.stagedAdmission.lastSourceOrdinal == 41 &&
+            fresh.stagedAdmission.lastSeqId == 51,
+        "fresh clean preflight admits any valid head then exact successors");
+  const auto mismatchedFresh =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, freshCandidates, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::FreshClean,
+          false, false, false);
+  check(!mismatchedFresh.eligible(),
+        "fresh frontier rejects a non-empty carried admission base");
+  const auto unsupported =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          {}, freshCandidates, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::Unsupported,
+          false, false, false);
+  check(!unsupported.eligible(),
+        "unsafe replay frontiers cannot stage a fresh window");
+
+  auto forwardRawGap = candidates;
+  forwardRawGap[0].rawOrdinal = 10;
+  forwardRawGap[1].rawOrdinal = 12;
+  const auto forwardRawGapEligible =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, forwardRawGap, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  check(forwardRawGapEligible.eligible(),
+        "forward raw gaps do not imply missing CPU-ready sources");
+
+  auto missingRaw = candidates;
+  missingRaw[0].rawOrdinal = 0;
+  missingRaw[1].rawOrdinal = 0;
+  const auto missingRawEligible =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, missingRaw, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  check(missingRawEligible.eligible() &&
+            missingRawEligible.stagedAdmission.lastRawOrdinal == 1,
+        "missing raw identity remains an optional diagnostic coordinate");
+
+  auto sourceGap = candidates;
+  sourceGap[1].sourceOrdinal = 4;
+  const auto nonConsecutiveSource =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, sourceGap, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  checkEq(nonConsecutiveSource.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              NonConsecutiveIdentity,
+          "an independent source-ordinal gap rejects the window");
+
+  auto seqGap = candidates;
+  seqGap[1].seqId = 4;
+  const auto nonConsecutiveSeq =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, seqGap, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  checkEq(nonConsecutiveSeq.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              NonConsecutiveIdentity,
+          "an independent sequence-ID gap rejects the window");
+
+  auto nonMonotonicRaw = candidates;
+  nonMonotonicRaw[0].rawOrdinal = 10;
+  nonMonotonicRaw[1].rawOrdinal = 9;
+  const auto nonMonotonicRawIdentity =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, nonMonotonicRaw, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  checkEq(nonMonotonicRawIdentity.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              NonConsecutiveIdentity,
+          "comparable nonzero raw identities must remain monotonic");
+
+  auto missingBetweenObservedRaw = candidates;
+  missingBetweenObservedRaw[0].rawOrdinal = 0;
+  missingBetweenObservedRaw[1].rawOrdinal = 1;
+  const auto staleAfterMissingRaw =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, missingBetweenObservedRaw, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  checkEq(staleAfterMissingRaw.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              NonConsecutiveIdentity,
+          "missing raw identity does not erase the last observed coordinate");
+  checkEq(pending, unchanged,
+          "identity rejection leaves the pending admission unchanged");
+
+  auto present = candidates;
+  present[1].semantic.flags |= dxmt9::core::SourceSemanticHasPresent;
+  const auto presentBoundary =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, present, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, false);
+  checkEq(presentBoundary.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              PresentBoundary,
+          "Present never enters the replay window");
+
+  const auto orderedBoundary =
+      dxmt9::render::preflightMultiSourceSessionWindow(
+          pending, candidates, limits,
+          dxmt9::render::MultiSourceSessionWindowFrontier::
+              ActiveRenderComplete,
+          false, false, true);
+  checkEq(orderedBoundary.reason,
+          dxmt9::render::MultiSourceSessionWindowPreflightReason::
+              OrderedReleaseBoundary,
+          "ordered control fences exclude the whole replay window");
+}
+
+void retirementSplitsResidencyCreditFromEncodedWorkCap() {
+  ChunkSlot clear{};
+  clear.appendClear({});
+  const SourceSemanticSummary semantic = summarize(clear);
+  const EncodeSessionLimits limits{
+      .maxSources = 128u,
+      .maxPages = semantic.pageCount,
+      .maxBytes = semantic.byteCount,
+      .maxDraws = std::numeric_limits<std::uint32_t>::max(),
+      .maxCommandBuffers = 128u,
+  };
+  EncodeSessionAdmissionState session{};
+  for (std::uint64_t seqId = 1u; seqId <= limits.maxSources; ++seqId) {
+    const auto source = candidate(seqId, seqId, semantic);
+    check(dxmt9::render::appendSessionAdmission(session, source, limits),
+          "retired physical credit must admit work through the fixed cap");
+    check(dxmt9::render::retireSessionAdmissionResidency(session, source),
+          "post-encode retirement releases physical admission credit");
+    checkEq(session.sources, static_cast<std::uint32_t>(seqId),
+            "encoded-unsubmitted work remains charged after retirement");
+    check(session.residentSources == 0u && session.pages == 0u &&
+              session.residencyBytes.value == 0u,
+          "publication/Tape residency credit returns independently");
+    checkEq(session.commandBuffers, static_cast<std::uint32_t>(seqId),
+            "bounded command-buffer work credit remains charged");
+  }
+
+  const auto successor = candidate(129u, 129u, semantic);
+  const auto capped = dxmt9::render::classifySessionAdmissionDetailed(
+      session, successor, limits);
+  checkEq(capped.decision,
+          SessionAdmissionDecision::SubmitPrefixBeforeCandidate,
+          "the deterministic work cap closes before source 129");
+  check(capped.limitingDimension == SessionCapacityDimension::Sources ||
+            capped.limitingDimension ==
+                SessionCapacityDimension::CommandBuffers,
+        "work-cap attribution names a logical, not residency, dimension");
+}
+
 }  // namespace
 
 int main() {
   try {
     sourceSummaryIsFlatAndClassifiesBoundaries();
     admissionSeparatesOrderingCapsAndIsolation();
+    capacityRejectionObservationDistinguishesAxesAndWrapPadding();
     leaseHeadroomAndCapGroupingAreDeterministic();
+    productionPageCapacityLeavesExactSuccessorHeadroom();
     continuationIsConservativeAndRouteAsymmetric();
+    multiSourceWindowPreflightIsStrictAndTransactional();
+    retirementSplitsResidencyCreditFromEncodedWorkCap();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_admission_spec failed: "
               << error.what() << '\n';

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9_session_finalize_cause.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +46,7 @@ enum class RenderPassDepthStoreProof : std::uint8_t {
   BlockColorFill,
   BlockDepthResolve,
   BlockPresent,
+  BlockClearMismatch,
 };
 
 enum class RenderPassColorStoreProof : std::uint8_t {
@@ -60,6 +63,35 @@ enum class RenderPassColorStoreProof : std::uint8_t {
   BlockMsaaResolve,
   BlockPresent,
   BlockDeadNoPresentDisabled,
+  BlockClearMismatch,
+};
+
+enum class RenderPassNoLookaheadCause : std::uint8_t {
+  Empty,
+  Invalid,
+  SuffixExhausted,
+  StorageTruncated,
+};
+
+enum class RenderPassLateStoreAspect : std::uint8_t {
+  Color,
+  Depth,
+  Stencil,
+};
+
+enum class RenderPassLateStoreResolutionCause : std::uint8_t {
+  Clear,
+  ClearMismatch,
+  Draw,
+  Sample,
+  Readback,
+  Copy,
+  Resolve,
+  Present,
+  IncompatibleClose,
+  Drain,
+  Finalize,
+  Error,
 };
 
 // Frame-allocator arena identity for ring_arena_heap_fallback_*
@@ -190,14 +222,45 @@ enum class CpuReadySessionCapDimension : std::uint8_t {
   Draws,
   CommandBuffers,
 };
+enum class CpuReadySessionCapRequirementAxes : std::uint8_t {
+  SourcesOnly,
+  PagesOnly,
+  SourcesAndPages,
+};
 enum class CpuReadySessionDisposition : std::uint8_t {
   Isolated,
   LegacyRollback,
   Invalid,
 };
+enum class CpuReadySessionIsolationReason : std::uint8_t {
+  Present,
+  CapacityBytes,
+  Other,
+};
+enum class CpuReadyRetainedHeadFallbackReason : std::uint8_t {
+  Release,
+  ProducerWait,
+  Initializer,
+  Stop,
+  WriterGone,
+  Pressure,
+};
 void countCpuReadySessionPendingStarted();
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
+void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);
+void countCompletionSpanShadowValidated();
+void countCompletionSpanShadowMismatch();
+void countPostEncodeRetireAttempt();
+void countPostEncodeRetireSuccess(bool arena);
+void countPostEncodeRetireIneligible(std::uint32_t reason);
+void countPostEncodeReceiptFailure(std::uint32_t result);
+void recordPostEncodeReceiptDepth(std::uint64_t depth,
+                                  std::uint64_t peak);
+void countPostEncodeResidencyCreditReleased(std::uint64_t pages,
+                                            std::uint64_t bytes);
+void countPostEncodeWorkCapClose();
+void recordGpuOutstandingCompletionSources(std::uint64_t count);
 void countCpuReadySessionReleased(CpuReadySessionReleaseReason reason);
 void countCpuReadySessionLeaseAcquired(
     std::uint64_t reservedSources,
@@ -216,7 +279,134 @@ void recordCpuReadySessionLeaseUsed(std::uint64_t usedSources,
                                     std::uint64_t slackDraws);
 void countCpuReadySessionLeaseReleased();
 void countCpuReadySessionCapRelease(CpuReadySessionCapDimension dimension);
+void recordCpuReadySessionCapRequirement(
+    CpuReadySessionCapRequirementAxes axes,
+    std::uint64_t predecessorSources,
+    std::uint64_t predecessorPages,
+    std::uint64_t candidatePayloadPages,
+    std::uint64_t candidateWrapPaddingPages,
+    std::uint64_t candidateRequiredPages,
+    std::uint64_t requiredTotalSources,
+    std::uint64_t requiredTotalPages);
 void countCpuReadySessionDisposition(CpuReadySessionDisposition disposition);
+void countCpuReadySessionIsolation(
+    CpuReadySessionIsolationReason reason);
+void countCpuReadyRetainedHeadAttempt();
+void countCpuReadyRetainedHeadHeld();
+void countCpuReadyRetainedHeadSuccessorReady();
+void countCpuReadyRetainedHeadFallback(
+    CpuReadyRetainedHeadFallbackReason reason);
+void countCpuReadyRetainedHeadRestoreFailure();
+void recordCpuReadyRetainedHeadWait(std::uint64_t nanoseconds);
+enum class CpuReadyMultiSourceFallbackReason : std::uint8_t {
+  Eligibility,
+  NaturalPlan,
+  InvalidPlan,
+  RepeatedSource,
+  ResolvedSource,
+  CompletionSource,
+  Admission,
+  FragmentRange,
+  Carrier,
+};
+enum class CpuReadyMultiSourceFatalReason : std::uint8_t {
+  EncodeReturnedNull,
+  CarrierFold,
+};
+enum class CpuReadyMultiSourceEligibilityReason : std::uint8_t {
+  ActiveRenderIncomplete,
+  PresentBoundary,
+  NonConsecutiveIdentity,
+  OtherBoundary,
+};
+enum class CpuReadyMultiSourcePlannerOutcome : std::uint8_t {
+  InvalidInput,
+  SeedRejected,
+  NoActiveTargetMatch,
+  NoMerge,
+  NaturalAfterMerge,
+  PermutationRejected,
+  MovedHeadUnproved,
+  Planned,
+};
+enum class CpuReadyMultiSourcePlannerMerge : std::uint8_t {
+  None,
+  Seed,
+  NonSeedOnly,
+};
+enum class CpuReadyMultiSourceSourceLocalFallback : std::uint8_t {
+  NaturalAfterMerge,
+  PermutationRejected,
+};
+struct CpuReadyMultiSourceSeedMergeAttribution {
+  std::uint32_t optimizerMergeCount = 0;
+  std::uint32_t seedMergeCount = 0;
+  std::uint64_t seedMergeDistanceTotal = 0;
+  std::uint32_t seedMergeDistanceMax = 0;
+  std::uint64_t commandBefore = 0;
+  std::uint64_t commandAfter = 0;
+  std::uint64_t emptyIntervening = 0;
+  bool missing = false;
+};
+void countCpuReadyMultiSourceWindowAttempted();
+void countCpuReadyMultiSourceWindowPlanned(std::uint64_t sources,
+                                           std::uint64_t commands,
+                                           std::uint64_t runs);
+void countCpuReadyMultiSourceWindowFallback(
+    CpuReadyMultiSourceFallbackReason reason);
+void countCpuReadyMultiSourceSourceLocalFallbackStarted(
+    CpuReadyMultiSourceSourceLocalFallback disposition,
+    std::uint64_t sources);
+void countCpuReadyMultiSourceSourceLocalFallbackCompleted(
+    CpuReadyMultiSourceSourceLocalFallback disposition);
+void countCpuReadyMultiSourceEligibilityFallback(
+    CpuReadyMultiSourceEligibilityReason reason);
+void recordCpuReadyMultiSourcePlannerOutcome(
+    CpuReadyMultiSourcePlannerOutcome outcome,
+    CpuReadyMultiSourcePlannerMerge merge,
+    std::uint32_t firstMatchingPassDistance,
+    CpuReadyMultiSourceSeedMergeAttribution seedAttribution,
+    bool seedSecondNonDraw,
+    bool seedBlockedCycle);
+void countCpuReadyMultiSourcePostEffectFatal(
+    CpuReadyMultiSourceFatalReason reason);
+void recordCpuReadyMultiSourceCompletionRegistration(
+    std::uint64_t sources, bool fifoValid);
+void countRenderPassNaturalFallbackBegin();
+void countRenderPassNaturalFallbackReentryDistance(
+    std::uint32_t interveningPasses, bool sameWindow);
+void countActiveSeedMergeTicketIssued(std::uint64_t count = 1);
+void countActiveSeedMergeTicketMatched(std::uint64_t count = 1);
+void countActiveSeedMergeTicketContinued(std::uint64_t count = 1);
+void countActiveSeedMergeTicketMismatch(std::uint64_t count = 1);
+void countActiveSeedMergeTicketUnconsumed(std::uint64_t count = 1);
+void countActiveSeedMergeWitnessOverflow(std::uint64_t count = 1);
+void countActiveSeedMergeWitnessMismatch(std::uint64_t count = 1);
+void countActiveSeedInstanceUnavailable(std::uint64_t count = 1);
+void countActiveSeedInstanceStale(std::uint64_t count = 1);
+void countRenderPassActiveSeedBridgeReentryDistance(
+    std::uint32_t interveningPasses);
+void countRenderPassFinalCloseCause(
+    encoders::SessionFinalizeCause cause);
+void countRenderPassCloseLedgerAdjacentCause(
+    encoders::SessionFinalizeCause cause);
+void countRenderPassNaturalShortCrossPriorClose(EncoderSplitReason reason);
+void countRenderPassNaturalShortCrossPriorCloseMissing(
+    std::uint64_t count = 1);
+void countRenderPassCloseLedgerRecorded(std::uint64_t count = 1);
+void countRenderPassCloseLedgerMissing(std::uint64_t count = 1);
+void countRenderPassCloseLedgerTerminalAdjacent(std::uint64_t count = 1);
+void countRenderPassCloseLedgerTerminalNonAdjacent(std::uint64_t count = 1);
+void countRenderPassCloseLedgerTerminalNotReopenedBeforePresent(
+    std::uint64_t count = 1);
+void countRenderPassFinalCloseLedgerRecorded(std::uint64_t count = 1);
+void countRenderPassFinalCloseLedgerMissing(std::uint64_t count = 1);
+void countRenderPassFinalCloseLedgerTerminalAdjacent(
+    std::uint64_t count = 1);
+void countRenderPassFinalCloseLedgerTerminalNonAdjacent(
+    std::uint64_t count = 1);
+void countRenderPassFinalCloseLedgerTerminalNotReopenedBeforePresent(
+    std::uint64_t count = 1);
 void countChunkPublishPresentPrePresentOpportunityTail(
     ChunkPublishTailCommandKind kind, bool drawOnly);
 void countChunkPublishSlotResidency(ChunkPublishReason reason,
@@ -332,6 +522,74 @@ void countFramegraphDceReplayCommandsOmitted(std::uint64_t commands);
 void countFramegraphDceLookaheadPrefix(std::uint64_t commands);
 void countFramegraphDceLookaheadSelected();
 void countFramegraphDceLookaheadFailOpen();
+enum class FramegraphSourceProvenance : std::uint8_t {
+  Unknown,
+  Legacy,
+  Arena,
+};
+struct FramegraphSourceLocalPassCoalesceDiagnostic {
+  std::uint64_t candidates = 0;
+  std::uint64_t merged = 0;
+  std::uint64_t blockedCycle = 0;
+  std::uint64_t secondNonDraw = 0;
+  std::uint64_t nonRenderIntervener = 0;
+  std::uint64_t missingInvariant = 0;
+  std::uint64_t dependencyKept = 0;
+  std::uint64_t moveBefore = 0;
+  std::uint64_t moveAfter = 0;
+  std::uint64_t nonDrawIntervener = 0;
+  std::uint64_t semanticIntervener = 0;
+  std::uint64_t commandlessIntervener = 0;
+  std::uint64_t commandlessReturn = 0;
+};
+void recordFramegraphSourceLocalPassCoalesce(
+    FramegraphSourceProvenance provenance, bool sourceIdentityKnown,
+    FramegraphSourceLocalPassCoalesceDiagnostic diagnostic);
+enum class FramegraphSourceLocalReplayOutcome : std::uint8_t {
+  FinalInvalid,
+  // The final source-local command order is natural. A DCE-only drop may still
+  // activate a replay plan without changing that order.
+  FinalNaturalOrder,
+  // A reordered plan was installed in EncodeChunkOptions and passed to encode.
+  FinalReorderedActivated,
+};
+void recordFramegraphSourceLocalReplayOutcome(
+    FramegraphSourceLocalReplayOutcome outcome,
+    std::uint64_t candidates, std::uint64_t merged);
+enum class FramegraphSourceLocalFrontierRollbackReason : std::uint8_t {
+  InvalidPlan,
+  LiveSetMismatch,
+  DuplicateCommand,
+  MovedHeadUnproved,
+};
+// A single typed recorder updates both the broad FrontierRollback outcome and
+// its mutually exclusive reason, preserving all three conservation axes by
+// construction.
+void recordFramegraphSourceLocalFrontierRollback(
+    FramegraphSourceLocalFrontierRollbackReason reason,
+    std::uint64_t candidates, std::uint64_t merged);
+// Production active-render planning diagnostics. One typed call keeps the
+// encode hot path free of strings and maps each conservative decision to a
+// stable report key.
+enum class FramegraphActiveRenderSeedOutcome : std::uint8_t {
+  SnapshotAbsent,
+  SnapshotIncomplete,
+  ApplyApplied,
+  ApplyInvalid,
+  ApplyIncomplete,
+  ApplyOverflow,
+  AppliedButUnmerged,
+  PassCoalesceBlockedCycle,
+  PassCoalesceSecondNonDraw,
+  MovedHeadProved,
+  FallbackMovedHeadUnproved,
+  FallbackInvalidPlan,
+  FallbackLiveSetMismatch,
+  FallbackDuplicateCommand,
+  ReplayActivated,
+};
+void countFramegraphActiveRenderSeedOutcome(
+    FramegraphActiveRenderSeedOutcome outcome, std::uint64_t count = 1);
 void countPipelineBuild();
 void countPipelineCacheHit(PipelineKind kind);
 void countPipelineCacheMiss(PipelineKind kind);
@@ -1050,6 +1308,181 @@ struct FramegraphObserveSnapshot {
   std::uint64_t dagDumpsWritten = 0;
 };
 FramegraphObserveSnapshot snapshotFramegraphObserve();
+
+struct FramegraphActiveRenderSeedSnapshot {
+  std::uint64_t snapshotAbsent = 0;
+  std::uint64_t snapshotIncomplete = 0;
+  std::uint64_t applyApplied = 0;
+  std::uint64_t applyInvalid = 0;
+  std::uint64_t applyIncomplete = 0;
+  std::uint64_t applyOverflow = 0;
+  std::uint64_t appliedButUnmerged = 0;
+  std::uint64_t passCoalesceBlockedCycle = 0;
+  std::uint64_t passCoalesceSecondNonDraw = 0;
+  std::uint64_t movedHeadProved = 0;
+  std::uint64_t fallbackMovedHeadUnproved = 0;
+  std::uint64_t fallbackInvalidPlan = 0;
+  std::uint64_t fallbackLiveSetMismatch = 0;
+  std::uint64_t fallbackDuplicateCommand = 0;
+  std::uint64_t replayActivated = 0;
+};
+FramegraphActiveRenderSeedSnapshot snapshotFramegraphActiveRenderSeed();
+
+struct FramegraphSourceLocalPassCoalesceSnapshot {
+  std::uint64_t candidates = 0;
+  std::uint64_t merged = 0;
+  std::uint64_t blockedCycle = 0;
+  std::uint64_t secondNonDraw = 0;
+  std::uint64_t nonRenderIntervener = 0;
+  std::uint64_t missingInvariant = 0;
+  std::uint64_t dependencyKept = 0;
+  std::uint64_t moveBefore = 0;
+  std::uint64_t moveAfter = 0;
+  std::uint64_t nonDrawIntervener = 0;
+  std::uint64_t semanticIntervener = 0;
+  std::uint64_t commandlessIntervener = 0;
+  std::uint64_t commandlessReturn = 0;
+  std::uint64_t legacyCandidates = 0;
+  std::uint64_t arenaCandidates = 0;
+  std::uint64_t unknownCandidates = 0;
+  std::uint64_t identityKnownCandidates = 0;
+  std::uint64_t identityMissingCandidates = 0;
+};
+FramegraphSourceLocalPassCoalesceSnapshot
+snapshotFramegraphSourceLocalPassCoalesce();
+
+struct FramegraphSourceLocalReplayOutcomeCount {
+  std::uint64_t sources = 0;
+  std::uint64_t candidates = 0;
+  std::uint64_t merged = 0;
+};
+struct FramegraphSourceLocalReplayOutcomeSnapshot {
+  FramegraphSourceLocalReplayOutcomeCount frontierRollback{};
+  FramegraphSourceLocalReplayOutcomeCount frontierRollbackInvalidPlan{};
+  FramegraphSourceLocalReplayOutcomeCount frontierRollbackLiveSetMismatch{};
+  FramegraphSourceLocalReplayOutcomeCount frontierRollbackDuplicateCommand{};
+  FramegraphSourceLocalReplayOutcomeCount frontierRollbackMovedHeadUnproved{};
+  FramegraphSourceLocalReplayOutcomeCount finalInvalid{};
+  FramegraphSourceLocalReplayOutcomeCount finalNaturalOrder{};
+  FramegraphSourceLocalReplayOutcomeCount finalReorderedActivated{};
+};
+FramegraphSourceLocalReplayOutcomeSnapshot
+snapshotFramegraphSourceLocalReplayOutcome();
+
+struct CpuReadyMultiSourceSeedNaturalDistanceSnapshot {
+  std::uint64_t missing = 0;
+  std::uint64_t adjacent = 0;
+  std::uint64_t intervening = 0;
+};
+CpuReadyMultiSourceSeedNaturalDistanceSnapshot
+snapshotCpuReadyMultiSourceSeedNaturalDistance();
+
+struct CpuReadyMultiSourceSeedNaturalAttributionSnapshot {
+  std::uint64_t mergeOperations = 0;
+  std::uint64_t mergeDistanceTotal = 0;
+  std::uint64_t mergeDistanceMax = 0;
+  std::uint64_t commandBefore = 0;
+  std::uint64_t commandAfter = 0;
+  std::uint64_t emptyIntervening = 0;
+  std::uint64_t adjacent = 0;
+  std::uint64_t dependencyKept = 0;
+  std::uint64_t commandless = 0;
+  std::uint64_t multiMerge = 0;
+  std::uint64_t missing = 0;
+};
+CpuReadyMultiSourceSeedNaturalAttributionSnapshot
+snapshotCpuReadyMultiSourceSeedNaturalAttribution();
+
+struct CpuReadyMultiSourceSourceLocalFallbackSnapshot {
+  std::uint64_t naturalStarted = 0;
+  std::uint64_t naturalCompleted = 0;
+  std::uint64_t naturalSources = 0;
+  std::uint64_t permutationStarted = 0;
+  std::uint64_t permutationCompleted = 0;
+  std::uint64_t permutationSources = 0;
+};
+CpuReadyMultiSourceSourceLocalFallbackSnapshot
+snapshotCpuReadyMultiSourceSourceLocalFallback();
+
+struct RenderPassNaturalFallbackAttributionSnapshot {
+  std::uint64_t begins = 0;
+  std::uint64_t sameWindowDistance1 = 0;
+  std::uint64_t sameWindowDistance2 = 0;
+  std::uint64_t sameWindowDistance3To4 = 0;
+  std::uint64_t crossWindowDistance1 = 0;
+  std::uint64_t crossWindowDistance2 = 0;
+  std::uint64_t crossWindowDistance3To4 = 0;
+  std::uint64_t seedTicketsIssued = 0;
+  std::uint64_t seedTicketsMatched = 0;
+  std::uint64_t seedTicketsContinued = 0;
+  std::uint64_t seedTicketsMismatch = 0;
+  std::uint64_t seedTicketsUnconsumed = 0;
+  std::uint64_t seedWitnessOverflow = 0;
+  std::uint64_t seedWitnessMismatch = 0;
+  std::uint64_t seedInstanceUnavailable = 0;
+  std::uint64_t seedInstanceStale = 0;
+  std::uint64_t seedBridgeDistance1 = 0;
+  std::uint64_t seedBridgeDistance2 = 0;
+  std::uint64_t seedBridgeDistance3To4 = 0;
+};
+RenderPassNaturalFallbackAttributionSnapshot
+snapshotRenderPassNaturalFallbackAttribution();
+
+struct RenderPassCloseAttributionSnapshot {
+  std::uint64_t finalSessionCap = 0;
+  std::uint64_t finalIndependent = 0;
+  std::uint64_t finalInitializer = 0;
+  std::uint64_t finalProducerWait = 0;
+  std::uint64_t finalDrain = 0;
+  std::uint64_t finalFailOther = 0;
+  std::uint64_t adjacentSessionCap = 0;
+  std::uint64_t adjacentIndependent = 0;
+  std::uint64_t adjacentInitializer = 0;
+  std::uint64_t adjacentProducerWait = 0;
+  std::uint64_t adjacentDrain = 0;
+  std::uint64_t adjacentFailOther = 0;
+  std::uint64_t recorded = 0;
+  std::uint64_t missing = 0;
+  std::uint64_t terminalAdjacent = 0;
+  std::uint64_t terminalNonAdjacent = 0;
+  std::uint64_t terminalNotReopenedBeforePresent = 0;
+  std::uint64_t shortCrossMatched = 0;
+  std::uint64_t shortCrossMissing = 0;
+  std::uint64_t finalRecorded = 0;
+  std::uint64_t finalMissing = 0;
+  std::uint64_t finalTerminalAdjacent = 0;
+  std::uint64_t finalTerminalNonAdjacent = 0;
+  std::uint64_t finalTerminalNotReopenedBeforePresent = 0;
+};
+RenderPassCloseAttributionSnapshot snapshotRenderPassCloseAttribution();
+
+struct RenderPassShortReentryAttributionSnapshot {
+  std::array<std::uint64_t, 8> distance1Disposition{};
+  std::array<std::uint64_t, 8> distance2Disposition{};
+  std::array<std::uint64_t, 4> distance1SourceShape{};
+  std::array<std::uint64_t, 4> distance2SourceShape{};
+  std::array<std::uint64_t, 12> priorCloseReason{};
+  std::uint64_t priorCloseMissing = 0;
+  std::uint64_t clearOpenTargetCount = 0;
+  std::uint64_t clearOpenTargetPriorStoreBytes = 0;
+  std::uint64_t clearOpenTargetCurrentLoadBytes = 0;
+  std::uint64_t clearOpenNaturalCrossCount = 0;
+  std::uint64_t clearOpenNaturalCrossPriorStoreBytes = 0;
+  std::uint64_t clearOpenNaturalCrossCurrentLoadBytes = 0;
+};
+RenderPassShortReentryAttributionSnapshot
+snapshotRenderPassShortReentryAttribution();
+
+struct RenderPassStoreAccountingSnapshot {
+  std::uint64_t colorStore = 0;
+  std::uint64_t colorDontCare = 0;
+  std::uint64_t depthStore = 0;
+  std::uint64_t depthDontCare = 0;
+  std::uint64_t stencilStore = 0;
+  std::uint64_t stencilDontCare = 0;
+  std::uint64_t tilePreservationBytes = 0;
+};
+RenderPassStoreAccountingSnapshot snapshotRenderPassStoreAccounting();
 }  // namespace test
 
 // R-BACK-3.7 / 3.8 / 4.8 — MTLBinaryArchive prewarming counters.
@@ -1094,11 +1527,26 @@ void countRenderPassSameKeyReentryDistance1Shape(bool sameColor,
 void countRenderPassSameKeyReentryPreservationBytes(std::uint64_t bytes);
 void countRenderPassSameKeyReentryColorPreservationBytes(std::uint64_t bytes);
 void countRenderPassSameKeyReentryDepthPreservationBytes(std::uint64_t bytes);
+void countRenderPassShortReentryDisposition(std::uint32_t interveningPasses,
+                                            std::uint8_t disposition);
+void countRenderPassShortReentrySourceShape(std::uint32_t interveningPasses,
+                                            std::uint8_t sourceShape);
+void countRenderPassShortReentryPriorClose(EncoderSplitReason reason);
+void countRenderPassShortReentryPriorCloseMissing();
+void countRenderPassShortReentryClearOpenTarget(
+    bool naturalCross,
+    std::uint64_t priorStoreBytes,
+    std::uint64_t currentLoadBytes);
 void countRenderPassTransitionRtChangeSameDepth();
 void countRenderPassTransitionSameRtDepthChange();
 void countRenderPassTransitionRtDepthChange();
 void countRenderPassColorStoreProof(RenderPassColorStoreProof proof);
 void countRenderPassDepthStoreProof(RenderPassDepthStoreProof proof);
+void countRenderPassNoLookaheadCause(RenderPassNoLookaheadCause cause);
+void countRenderPassLateStoreUnknown(RenderPassLateStoreAspect aspect);
+void countRenderPassLateStoreResolution(
+    RenderPassLateStoreAspect aspect,
+    RenderPassLateStoreResolutionCause cause);
 void countCommandBufferCreateCpuTime(std::uint64_t nanoseconds);
 void countCommandBufferCommitCpuTime(std::uint64_t nanoseconds);
 // R-VERIF / command-chunk boundary B2 — wall-clock latency of one

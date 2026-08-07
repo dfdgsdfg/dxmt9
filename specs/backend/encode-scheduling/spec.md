@@ -265,11 +265,13 @@ The protocol is:
    changing ownership, then moves only its maximal compatible prefix from
    `Ready` to `Represented` in one transaction. The suffix never leaves
    `Ready`, and the coordinator retains no pointers while the lock is released.
-7. Submission records store the represented source IDs. Metal completion moves
-   them to `Completed`; the finish thread marks and detaches only the completed
-   FIFO prefix as `Reclaiming`, releases the scheduling lock, destroys owners
-   and retention and releases allocator tickets, then reacquires the lock to
-   return pages and advance generations atomically.
+7. After the final synchronous encode borrow, an eligible source installs a
+   bounded generation-stamped completion receipt. The coordinator marks and
+   detaches its payload as `Reclaiming` under the scheduling lock, destroys
+   re-entrant owners outside the lock, then relocks to return physical credits
+   and advance page/source generations. Submission records retain the receipt,
+   callbacks/resources, and encoded-work identity. Ineligible or legacy
+   identities retain the same two-phase operation after Metal completion.
 
 ### 3.3 Capacity and Back-Pressure
 
@@ -287,17 +289,48 @@ independent of timing and worker scheduling.
 
 Before the first source of a streaming session becomes `Represented`, the
 coordinator acquires one generation-stamped `SessionCapacityLease`. The lease
-reserves a fixed capacity vector for the maximum unsubmitted session working set
-and a separate `successorHeadroom` vector large enough for one worst-case
-ordinary Direct candidate. Submitted older sources remain charged to physical
-residency, so their presence may delay lease acquisition until reclaim; it may
-not shrink a lease or force an already-open session to submit. Acquisition
-atomically incorporates the already-resident Ready head into the lease account;
-those pages and descriptors are not double-reserved. Actual session sources
-charge the fixed source/page/byte/draw credits. Unused credits remain reserved
-until deterministic session finalization releases the admission lease; each
-submitted source's physical residency charge remains until its normal ordered
-completion and reclaim.
+reserves a fixed physical-residency vector and a separate `successorHeadroom`
+vector large enough for one worst-case ordinary Direct candidate. Submitted
+older payload residency may delay lease acquisition until retirement or legacy
+reclaim; it may not shrink a lease or force an already-open session to submit.
+Acquisition atomically incorporates the already-resident Ready head into the
+lease account; those pages and descriptors are not double-reserved. Actual
+session sources separately charge encoded-unsubmitted source, draw, and
+command-buffer work until submission. The deterministic source-work cap is
+128; physical retirement cannot reduce it or choose a session boundary.
+
+The first-acquisition observation is state-aware. `CpuReadyTape` returns a
+typed snapshot with `olderUnavailable` separate from at most one unique,
+generation-valid ordered-tail `Writing` publication reservation. The
+coordinator credits that Writing source only when every source/page/byte/block/
+Ready/retention/ticket field in its exact physical claim is no greater than the
+corresponding `successorHeadroom` field. The unchanged
+`SessionCapacityLeaseState::acquire` then sees only `olderUnavailable`, while
+the resulting lease continues to own the complete fixed successor vector.
+Abort or seal after acquisition is therefore safe: neither transition changes
+the lease size or transfers lease ownership back to the writer.
+
+All tentative representation, encoding, submitted, completed, and reclaiming
+states remain in `olderUnavailable`; so does a structurally valid writer whose
+claim exceeds headroom. Multiple writers or a writer without the exact
+tail/publication identity invalidate the snapshot. That structural failure or
+checked-add overflow poisons the queue before the capacity-generation wait.
+Only a valid unavailable-capacity denial may wait for a later
+capacity-releasing generation.
+
+The physical byte credit is a typed
+scheduler-owned Tape charge, not a universal physical-memory measure and not
+`SourceSemanticSummary::byteCount`: Arena charges its exact constructed Tape
+byte extent, while Legacy charges its reserved Tape pages because its
+publication extent describes compatibility payload traversal. Legacy
+`ChunkSlot` vector heap bytes are outside this byte axis and are bounded only
+indirectly by compatibility source and slot limits. The independent source,
+page, payload-block, retention, ticket, Ready, and command-buffer credits
+continue to bound the Legacy lane. Eligible sources return these physical
+credits only after receipt activation and two-phase payload finish; encoded
+work remains charged until deterministic submission. Present, pending clear,
+query/readback/update, ordered control, and any remaining borrow are ineligible
+and retain Tape ownership until normal ordered completion and reclaim.
 
 The planner computes each candidate's complete reservation footprint before
 construction, including non-wrapping segment runs, circular-wrap padding,
@@ -394,6 +427,20 @@ The generalized design permits a bounded `N+1 ... N+k` prefix that was ready at
 snapshot creation. Lack of proof is immediate conservative failure, never a
 producer wait.
 
+The serial session planner has one narrower fresh-frontier forward-look
+exception. If no session, admission, or capacity lease exists, and the frontier
+contains exactly one compatible present-free Ready source plus exactly one
+current-generation ordered-tail Writing successor, it may reserve that whole
+Ready source as the sole `TentativeRepresented` prefix and park. The park does
+not acquire or mutate admission or lease state. Successor publication first
+restores the older prefix, producing the ordinary two-source Ready window
+consumed by the existing bounded planner. Every semantic, progress, pressure,
+initializer, writer-identity, or shutdown exit also restores first and re-
+enters exact single-source replay; an exact Ready successor wins over a
+simultaneous pressure observation. The retained head is never committed
+directly. Once a session is active, a sole Ready head is consumed immediately;
+active-session retention is not a scheduling option.
+
 ## 5. EncodeSession State Machine
 
 ### 5.1 Separate Compatibility Predicates
@@ -438,8 +485,82 @@ pass but does not by itself end the session.
 Each sealed source carries a compact `SourceSemanticSummary`: entry encoder
 kind and attachment key, first access/hazard sets, first semantic-boundary
 ordinal and kind, Present/global-observation flags, draw/byte/page counts, and
-capture/initializer requirements. The summary rejects quickly; replay
-revalidates the exact command before Metal side effects.
+capture/initializer requirements. Its byte count is a representation-specific
+publication extent for validation and telemetry: logical replay extent for
+Legacy, exact constructed Tape extent for Arena. It is not a universal session
+Tape-byte charge. The summary rejects quickly; replay revalidates the exact
+command before Metal side effects.
+
+An active render encoder also exposes a call-local
+`ActiveRenderDependencySnapshot` by value. It contains the full attachment key
+including sample count and a fixed-capacity deduplicated list of attachment
+writes; it owns no Metal reference, session pointer, or borrowed span. The
+coordinator may combine a bounded FIFO source window into one call-local
+planning graph without waiting for a successor. Every graph
+command carries its retained-source index as well as its source-local command
+index. Planning maps a complete active snapshot through the resource-alias
+resolver and prepends one commandless virtual predecessor to the combined
+graph. Pass coalescing may then turn carried `A` plus source window `B | A`
+into qualified replay `A[1], B[0]` only when reachability can relocate `B`. A
+seed-to-`B` dependency plus a `B`-to-returning-`A` dependency wedges the pair
+and retains natural FIFO replay.
+
+The first cross-source lane is passcoalesce-only. The optimized plan must
+contain exactly the complete no-coalesce live command set, and any command that
+moves across a source edge must be a `DrawRun`. Session storage classifies its
+frontier as `CleanClosedEncoderNoPendingClear`, `PendingClear`,
+`ActiveRenderComplete`, `ActiveRenderUnproved`, or `ActiveBlitUnsupported`; a
+sessionless injected command buffer is `InjectedUnknown`. Clean closed means no
+live encoder, active-render flag, deferred-clear payload, or deferred-clear
+command sidecar, not an empty command buffer. It may accept a valid same-live-
+set, duplicate-free moved head without a virtual seed because no older encoder
+or deferred command can constrain the current source's first command. An active
+render accepts a moved head only when it belongs to the pass into which its
+complete virtual predecessor was merged. Every other state retains the natural
+head. Missing attachment coverage, invalid sample or target identity, capacity
+overflow, incomplete snapshots, duplicate or missing qualified commands, stale
+locators, cross-source non-draw movement, and unmerged seeds use the head-stable
+natural FIFO plan. The complete window is validated before the first Metal
+effect; there is no partial planned replay followed by fallback.
+The virtual pass and its dependency edges never linearize because they own no
+source command. Source/run edges do not close or open an encoder or submit a
+command buffer. Completion sources are transactionally registered once in
+natural FIFO order, independently of replay order, so one tail completion still
+expands to the original source sequence. The normal `encodeChunk()` attachment-
+key, exact-hazard, initializer, and tile-FFP checks remain authoritative after
+planning.
+
+When perf counters explicitly enable collection, source-local passcoalesce also
+emits bounded diagnostic counters for every unique non-adjacent source-owned
+matching render-pass window it considers. Adjacent `A-A` and a pure virtual
+active seed are excluded; once a seed-lineage pass absorbs any source-owned
+pass, later returns from that mixed lineage are included. A call-local stable
+pass-incarnation sidecar deduplicates an unchanged window across fixpoint
+rescans. A merge inside that window creates a new incarnation and therefore a
+new candidate shape. Terminal counts conserve candidate attempts across merged,
+dependency-wedged, returning-non-draw, non-render-intervener, and malformed-
+invariant outcomes. Orthogonal counts describe only the interveners inspected
+through the terminal blocker and retain before/after moves, dependency-kept and
+commandless passes, and semantic flags.
+
+The production seam splits Legacy and Arena source provenance when the call-
+local payload supplies it and separately records whether a generation-bearing
+Tape identity was available. It then assigns every candidate-bearing source to
+exactly one final replay outcome: frontier rollback, final-plan invalid,
+final-natural-order, or final-reordered-activated. `FinalNaturalOrder` includes
+a DCE-only drop whose replay plan activates without reordering; reordered is
+counted only after the plan is installed in `EncodeChunkOptions` and passed to
+the encoder. Frontier rollback is further assigned to exactly one typed reason:
+invalid plan, live-set mismatch, duplicate command, or an unproved moved head.
+One recorder updates the broad rollback bucket and its reason bucket together,
+so reason sources, candidates, and merged counts each conserve the broad
+rollback population. The older active-render-seed fallback counters remain an
+orthogonal seed-applied population and must not be used as that decomposition.
+Outcome source, candidate, and merged totals each conserve the corresponding
+evaluated population. On valid FrameGraphs collection cannot alter dependency
+classification, replay order, encoder state, or fallback and is not a
+scheduling proof. Invalid command/draw ranges are separately hardened to a
+conservative no-merge missing-invariant terminal.
 
 ### 5.2 Selection and Session States
 
@@ -468,19 +589,160 @@ unknown. It may encode incrementally only through the serial lane. Parallel or
 Metal 4 selection requires `PassSealed`: the finite pass content, actions,
 side effects, query status, and terminal boundary are known.
 
-At each encode iteration the coordinator locks scheduling once and copies at
-most `kMaxReadyPrefixSources` consecutive IDs and compact summaries without
-changing source state. The snapshot begins at the session's head-stable frontier
-and cannot skip an unready or control-disposition head in favor of a younger
-Ready source. DCE copies summary-only proof data and never borrows page pointers.
-The coordinator then moves only the maximal
-`SessionAdmissionCompatible` prefix atomically from `Ready` to `Represented`.
-The suffix remains in the ready FIFO throughout; there is no snapshot-owned
-suffix state to restore. Before emitting any Metal command from this newly
-represented batch, the coordinator resolves every locator and preflights the
-complete batch's exact admission order, range coverage, entry state, and first
-semantic boundary. This batch-level no-effect window is the only rollback
-window; commands already emitted by older session sources are not rewindable.
+A bounded cross-source serial plan is selected transactionally. While holding
+the scheduling mutex, the queue reserves the complete chosen Ready prefix as
+`TentativeRepresented`, resolves its sealed payload views, and snapshots the
+exact source locators and generations, ordered-release fence, capacity-lease
+generation, capture and initializer boundaries, and replay frontier. It then
+releases the scheduling mutex before combined FrameGraph construction,
+resource-alias resolution, and plan validation. After planning it reacquires
+the mutex and revalidates that complete snapshot and the exact FIFO prefix.
+Only a successful revalidation may commit the batch to `Represented` or
+`Encoding`. A stale snapshot discards the plan and restores the exact prefix to
+its original Ready positions without consuming a command, advancing a release,
+registering a completion source, or invoking the transaction observer.
+Borrowed payload views remain valid only while the tentative reservation pins
+the sealed sources and during the synchronous represented-prefix encode; they
+are never retained by the graph, session, submission, or callback.
+
+Replay range identity and completion identity are separate values. A qualified
+plan is lowered to maximal contiguous same-source command runs; every run uses
+the source's true locator, slot, and `seqId` for resource lifetime, diagnostics,
+and command attribution. The session transactionally pre-registers the complete
+source list once in original FIFO order, and fragment replay does not append it
+again. The fragment carrier fold combines command-buffer-chain metadata,
+samples, callbacks, capture ownership, and retained payloads without assuming
+that fragment `seqId`s are monotonic. It neither reads nor mutates completion
+sources. Session finalization publishes the pre-registered FIFO list and then
+normalizes submission-level diagnostic identity to its natural tail.
+
+Only a validated reordered plan enters the exact fragment transaction.
+`NaturalAfterMerge`, `NoMerge`, `NoActiveTargetMatch`, rejected permutations,
+and unproved moved heads stay on the pre-effect source-local fallback. A
+combined merge whose locators remain natural may therefore be lost to
+source-local backend replanning; executing that result is an open scheduling
+and progress gap rather than part of the current contract.
+
+When perf counters explicitly enable collection, every bounded replay window
+carries call-local, trivially copyable diagnostic provenance after its existing
+preflight/planner decision. The disposition is one of ordinary,
+`NaturalAfterMerge` fallback, rejected-permutation fallback, planned composite,
+Present eligibility fallback, or other eligibility fallback; the stable window
+identifier is the first selected `sourceOrdinal`, accompanied by source index
+and source count. This provenance does not authorize replay, pass continuation,
+completion ownership, or policy.
+The render-pass tracker may attribute a short `A-B-A` re-entry to one natural
+fallback window only when the prior `A`, every intervening physical pass, and
+the current `A` carry the same valid natural-window identity. An interval that
+touches natural fallback but fails that complete identity proof is cross-window.
+Natural and rejected-permutation source-local fallbacks also expose
+started/completed/source conservation counters. `NaturalAfterMerge` remains
+non-executable through the composite transaction.
+
+R19 refines that observation without changing execution policy. `PassState`
+owns the authoritative physical render-pass instance token `(seqId,
+encoderIndex)` and exposes it through a separate diagnostic accessor. It is
+not a member of the semantic active-render dependency snapshot and therefore
+cannot alter snapshot completeness, equality, planner acceptance, or stale
+restore. Perf-enabled attribution separately captures and revalidates the
+token; unavailable or changed tokens drop only ticket adoption and increment a
+typed counter. At each successful active-seed passcoalesce mutation, the
+planner writes the exact
+return-pass first-command locator, merge ordinal, and merge distance into a
+pre-sized bounded sink. It maps the flattened locator to `(retained source,
+local command)`, sorts the complete set by source and command for synchronous
+source-local handoff, and fails closed on overflow, an invalid mapping, a count
+mismatch, or duplicate target. Aggregate merge totals never synthesize a
+ticket.
+
+Only a revalidated `NaturalAfterMerge + SeedMerged` source-local fallback with
+a valid active instance and a complete nonempty witness set may receive a
+call-local ticket. Planned composites and every other disposition receive
+none. At the exact witnessed render-pass start, the tracker counts a seed
+bridge only when the prior same-key physical token equals the ticket seed and
+all one-through-four intervening physical passes carry the current Natural
+window provenance. An exact witnessed command that continues the still-active
+physical seed is consumed separately as `continued`, without manufacturing a
+pass start. It does not relabel the seed or any earlier pass. Issued tickets
+partition into reopened matched, continued, consumed mismatch, and
+unconsumed/no-pass-start outcomes; witness overflow and witness inconsistency
+are separate fail-closed counters. Issuance begins only when a validated
+encode call has acquired its command buffer and installs the RAII terminal
+owner, so pre-admission failures remain unissued and every issued call
+conserves. Perf-disabled or empty-target execution skips witness collection,
+lookup, pass-start classification, and ticket work.
+These counters are attribution evidence only: `NaturalAfterMerge` remains
+non-executable and R-BACK-2.50 promotion still requires wild locality and
+correctness evidence.
+
+R20 observes the physical close that precedes a later same-key pass without
+changing replay or pass lifetime. The encode-thread lifecycle records the
+authoritative pass token and attachment key before clearing them at
+`endRender`, together with `EncoderSplitReason`, the queue-supplied typed
+session-finalize cause. The fixed-capacity ledger allocates nothing and is inactive when
+perf counters are disabled. A next-pass relation is terminal only when its
+immediately prior `(seqId, encoderIndex)` matches an exact close record. A
+Natural short-cross lookup likewise requires the exact last-seen same-key
+token; matched split-reason buckets plus a typed missing bucket conserve that
+population.
+
+Every successfully recorded close is terminalized exactly once as immediate
+same-key adjacency, immediate different-key succession, or not reopened before
+the next Present. At a Present boundary the bounded ledger resolves every
+remaining unterminated record and clears deterministically. Per completed
+frame, therefore, `recorded = terminal_adjacent + terminal_nonadjacent +
+terminal_not_reopened_before_present`; rejected invalid/full records are
+reported separately as `missing`. The same equation is emitted independently
+for the `EncoderSplitReason::Final` subset. Final close and adjacent same-key counters
+are partitioned by `SessionCap`, independent submission, initializer wait,
+producer wait, drain, and fail/other. Existing SessionCap source/page/both
+demand counters remain the axis evidence; R20 does not change the ordered
+event ABI. These observations select no execution policy, and R20 requires a
+wild collection before naming the dominant close cause.
+
+All run construction, exact-plan validation, source resolution, completion-list
+capacity, admission accounting, and carrier-fold deterministic preconditions
+must succeed before the first fragment replay. This is the last fail-open point.
+After the first replay call is entered, a null encoder result, carrier mismatch,
+attribution mismatch, fold failure, or finalization failure is a fatal fail-stop
+condition because an internal command-buffer prefix may already have committed.
+The coordinator must not restore the represented sources, inline-complete them,
+or submit only the prefix of a reordered window. After every qualified fragment
+and carrier fold succeeds, the coordinator releases the scheduling mutex and
+invokes the transaction observer exactly once in natural FIFO source order.
+Fragment calls suppress per-source backend planning and observation. The
+observer therefore runs neither for a stale tentative retry nor before a
+fragment-side effect that may fail.
+
+At each composite-planning encode iteration the coordinator locks scheduling
+and reserves at most `framegraph::kMaxMultiSourcePlanningSources` (currently
+eight) exactly consecutive `sourceOrdinal` and `seqId` identities as
+`TentativeRepresented`. The snapshot begins at the session's head-stable
+frontier and cannot skip an unready or control-disposition head in favor of a
+younger Ready source. DCE copies summary-only proof data and never borrows page
+pointers.
+`rawOrdinal` is an optional diagnostic/bookkeeping coordinate rather than a
+Ready-source identity: zero is absent, and observed nonzero values must advance
+monotonically but may have forward gaps for StateOnly or Legacy raw
+interposition. Preflight retains the last observed nonzero raw coordinate across
+missing values. Raw absence or a forward gap alone neither skips Ready/control
+work nor weakens capture, initializer, ordered-release, semantic, admission,
+replay, or dependency fences. The suffix remains in the ready FIFO throughout;
+there is no snapshot-owned suffix state to restore.
+
+Before planning, the coordinator resolves every tentative locator and
+preflights the complete batch's exact admission order, range coverage, entry
+state, completion capacity, and first semantic boundary. It snapshots the
+ordered-release fence, capacity-lease generation, capture boundary, initializer
+boundary, and replay frontier, releases scheduling, and performs the combined
+planner and resource-alias work. After reacquiring scheduling it must resolve
+the tentative prefix again and prove exact source identity and generation,
+unchanged FIFO order, and unchanged fence, lease, capture, initializer, and
+frontier conditions. Success commits only the maximal
+`SessionAdmissionCompatible` prefix to `Represented`; failure discards the
+side-effect-free plan and restores precisely that tentative prefix to Ready.
+This batch-level no-effect window is the only rollback window; commands already
+emitted by older session sources are not rewindable.
 
 The session owns:
 
@@ -591,7 +853,7 @@ belongs only to a represented present tail.
 | Lock/domain | Owner and permitted work | Forbidden nesting/work |
 |---|---|---|
 | Raw replay mutex | app-thread push; replay-worker pop | never nested with scheduling, resource, or completion locks |
-| Scheduling mutex | tape metadata, Ready FIFO, state transitions, occupancy and watermarks | no payload construction/destruction, resource retain/mark, Metal call, callback, or wait |
+| Scheduling mutex | tape metadata, Ready FIFO, state transitions, occupancy and watermarks | no payload construction/destruction, combined FrameGraph planning, resource-alias resolution, DAG observer/export or file I/O, resource retain/mark, Metal call, callback, or wait |
 | Reserved page run | replay worker has exclusive write ownership while `Writing` | ticket control may be visible, but payload resolution is forbidden before seal |
 | `EncodeSession` state | encode coordinator, thread-confined after `Represented` | partition workers and finish thread do not mutate it |
 | Completion queue mutex | Metal callback enqueue; finish-thread dequeue | released before scheduling lock or resource reclaim |
@@ -603,6 +865,13 @@ generation-stamped ticket, releases the first lock, performs the second-domain
 operation, then validates the ticket before publication. Metal object creation,
 encoder calls, command-buffer commit, and Presenter calls occur with every
 tape, raw-queue, and completion lock released.
+
+Combined planning follows the same ticket rule: reserve the exact prefix as
+`TentativeRepresented`, snapshot its generations and boundary state, release
+scheduling for planner/resource work, reacquire and revalidate, then commit or
+restore the exact prefix. Transaction observation is an after-effect operation;
+it runs exactly once in natural FIFO source order only after all qualified
+fragment effects and carrier folds succeed, with scheduling released.
 
 The finish thread dequeues a completion record, releases the completion lock,
 then takes the scheduling lock to mark consecutive sources Completed and detach
@@ -731,6 +1000,9 @@ Required scheduling counters include:
 - session-lease current/peak/denial and wait, reserved/used/slack credits by
   dimension, successor-headroom current/minimum, isolated-source reason, and
   deterministic session-cap releases by limiting dimension;
+- accepted source/page session-cap demand: source-only, page-only, and combined
+  event counts plus peak predecessor sources/pages, candidate payload/wrap/
+  required pages, and required total sources/pages;
 - state-transition counts for Writing, Sealed, Aborted, Ready, Represented,
   restored, Submitted, Completed, Reclaiming, and Reclaimed;
 - unsubmitted session current/peak occupancy, admitted sources/bytes/draws,
@@ -761,7 +1033,7 @@ or deleting rollback is a promotion decision, not a storage-only refactor.
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
 | CPU-ready admission and session progress | missing `CpuReadySessionProgress` model plus fake actors covering high/low hysteresis, replay-only admission wait, fixed session-lease acquisition, successor reserve, deterministic cap selection, completion-schedule-independent grouping, finish wake, shutdown, and no progress cycle |
-| Pass streaming | extend the existing lifecycle spec for admission-vs-render predicates, head-stable frontier, cross-source active-pass continuation, suffix-stays-Ready selection, ordered control dispositions, event-driven non-present release, producer-quiescent parking, and Arena Present-tail ownership |
+| Pass streaming | active-render seed planner specs cover legal `A + B,A -> A,B`, invalid/incomplete/overflow and dependency-wedged natural fallback; the production lifecycle spec covers mixed Legacy/Arena DrawRun carry, pass shape, one carrier, and ordered completion. Admission-vs-render predicates, suffix-stays-Ready selection, ordered control dispositions, event-driven non-present release, producer-quiescent parking, Arena Present-tail ownership, and wild GT2 locality remain broader evidence. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |
 | Parallel order and join | missing fake-child executor spec and formal/refinement evidence |

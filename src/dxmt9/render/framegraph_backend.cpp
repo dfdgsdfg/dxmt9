@@ -4,6 +4,7 @@
 #include "../dxmt9_perf_counters.hpp"
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_linearizer.hpp"
+#include "../framegraph/fg_multi_source_planner.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -40,7 +41,169 @@ bool isFeatureSeparator(unsigned char ch) {
   return std::isspace(ch) || ch == ',' || ch == ';';
 }
 
+bool activeRenderSeedMerged(const framegraph::FrameGraph& graph) noexcept {
+  return std::any_of(graph.passes.begin(), graph.passes.end(),
+                     [](const framegraph::PassNode& pass) {
+                       return pass.flags.active_render_seed &&
+                              pass.commands.count != 0;
+                     });
+}
+
+framegraph::ActiveRenderPlanningSeed makeActiveRenderPlanningSeed(
+    const encoders::ActiveRenderDependencySnapshot& active) noexcept {
+  framegraph::ActiveRenderPlanningSeed seed{};
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    seed.targets.color[i] =
+        framegraph::TextureHandle{active.colorAttachments[i].value};
+    if (active.colorAttachments[i].value != 0) {
+      seed.targets.color_count = static_cast<framegraph::u32>(i) + 1u;
+    }
+  }
+  seed.targets.depth = framegraph::TextureHandle{active.depthStencil.value};
+  seed.targets.sample_count = active.sampleCount;
+  seed.dependency_count = active.dependencyCount;
+  seed.complete = active.complete;
+  const std::size_t copyCount = std::min<std::size_t>(
+      active.dependencyCount, seed.write_dependencies.size());
+  for (std::size_t i = 0; i < copyCount; ++i) {
+    seed.write_dependencies[i] =
+        framegraph::ResourceHandle{active.writeDependencies[i].value};
+  }
+  return seed;
+}
+
+void countReplayFrontierDecision(ReplayFrontierDecision decision) {
+  using Outcome = perf::FramegraphActiveRenderSeedOutcome;
+  switch (decision) {
+    case ReplayFrontierDecision::AcceptedNaturalHead:
+      return;
+    case ReplayFrontierDecision::AcceptedMovedHead:
+      perf::countFramegraphActiveRenderSeedOutcome(Outcome::MovedHeadProved);
+      return;
+    case ReplayFrontierDecision::FallbackInvalidPlan:
+      perf::countFramegraphActiveRenderSeedOutcome(
+          Outcome::FallbackInvalidPlan);
+      return;
+    case ReplayFrontierDecision::FallbackLiveSetMismatch:
+      perf::countFramegraphActiveRenderSeedOutcome(
+          Outcome::FallbackLiveSetMismatch);
+      return;
+    case ReplayFrontierDecision::FallbackDuplicateCommand:
+      perf::countFramegraphActiveRenderSeedOutcome(
+          Outcome::FallbackDuplicateCommand);
+      return;
+    case ReplayFrontierDecision::FallbackMovedHeadUnproved:
+      perf::countFramegraphActiveRenderSeedOutcome(
+          Outcome::FallbackMovedHeadUnproved);
+      return;
+  }
+}
+
+std::optional<perf::FramegraphSourceLocalFrontierRollbackReason>
+sourceLocalFrontierRollbackReason(ReplayFrontierDecision decision) noexcept {
+  using Reason = perf::FramegraphSourceLocalFrontierRollbackReason;
+  switch (decision) {
+    case ReplayFrontierDecision::FallbackInvalidPlan:
+      return Reason::InvalidPlan;
+    case ReplayFrontierDecision::FallbackLiveSetMismatch:
+      return Reason::LiveSetMismatch;
+    case ReplayFrontierDecision::FallbackDuplicateCommand:
+      return Reason::DuplicateCommand;
+    case ReplayFrontierDecision::FallbackMovedHeadUnproved:
+      return Reason::MovedHeadUnproved;
+    case ReplayFrontierDecision::AcceptedNaturalHead:
+    case ReplayFrontierDecision::AcceptedMovedHead:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
+
+ReplayFrontierDecision classifyReplayFrontier(
+    const framegraph::ReplayCommandPlan& optimized,
+    const framegraph::ReplayCommandPlan& natural,
+    encoders::EncodeSessionReplayFrontierState state,
+    bool activeRenderSeedProvesMovedHead) noexcept {
+  if (!optimized.valid || !natural.valid) {
+    return ReplayFrontierDecision::FallbackInvalidPlan;
+  }
+  if (optimized.command_indices.size() != natural.command_indices.size()) {
+    return ReplayFrontierDecision::FallbackLiveSetMismatch;
+  }
+  for (std::size_t i = 0; i < optimized.command_indices.size(); ++i) {
+    const framegraph::u32 optimizedCommand = optimized.command_indices[i];
+    const framegraph::u32 naturalCommand = natural.command_indices[i];
+    if (std::find(optimized.command_indices.begin(),
+                  optimized.command_indices.begin() + i,
+                  optimizedCommand) != optimized.command_indices.begin() + i ||
+        std::find(natural.command_indices.begin(),
+                  natural.command_indices.begin() + i,
+                  naturalCommand) != natural.command_indices.begin() + i) {
+      return ReplayFrontierDecision::FallbackDuplicateCommand;
+    }
+    if (std::find(natural.command_indices.begin(),
+                  natural.command_indices.end(), optimizedCommand) ==
+        natural.command_indices.end()) {
+      return ReplayFrontierDecision::FallbackLiveSetMismatch;
+    }
+  }
+  if (optimized.command_indices.empty() ||
+      optimized.command_indices.front() == natural.command_indices.front()) {
+    return ReplayFrontierDecision::AcceptedNaturalHead;
+  }
+  if (state == encoders::EncodeSessionReplayFrontierState::
+                   CleanClosedEncoderNoPendingClear ||
+      (state == encoders::EncodeSessionReplayFrontierState::
+                    ActiveRenderComplete &&
+       activeRenderSeedProvesMovedHead)) {
+    return ReplayFrontierDecision::AcceptedMovedHead;
+  }
+  return ReplayFrontierDecision::FallbackMovedHeadUnproved;
+}
+
+framegraph::MultiSourceReplayPlan
+FrameGraphBackend::planMultiSourceSessionReplay(
+    const resources::Pool& pool,
+    std::span<const core::metalqueue::ResolvedPublishedSource> sources,
+    const MultiSourceSessionReplayFrontier& frontier) {
+  if (profile_ != RendererCompatProfile::Progressive ||
+      !features_.passcoalesce || features_.dce || !frontier.valid() ||
+      sources.size() < 2u ||
+      sources.size() > framegraph::kMaxMultiSourcePlanningSources) {
+    return {};
+  }
+
+  std::array<framegraph::MultiSourcePlanningSource,
+             framegraph::kMaxMultiSourcePlanningSources>
+      planningSources{};
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    if (!sources[i].valid() || sources[i].commandBegin != 0u ||
+        sources[i].commandCount != sources[i].payload.commandCount()) {
+      return {};
+    }
+    planningSources[i].payload = sources[i].payload;
+  }
+  std::optional<framegraph::ActiveRenderPlanningSeed> seed;
+  if (frontier.activeRender.has_value()) {
+    seed = makeActiveRenderPlanningSeed(*frontier.activeRender);
+  }
+  return framegraph::planMultiSourcePassCoalesceReplay(
+      std::span<const framegraph::MultiSourcePlanningSource>(
+          planningSources.data(), sources.size()),
+      seed ? &*seed : nullptr, makeResourceAliasResolver(pool),
+      frontier.collectActiveSeedMergeWitnesses);
+}
+
+void FrameGraphBackend::observeMultiSourceSessionReplay(
+    const resources::Pool& pool,
+    std::span<const core::metalqueue::ResolvedPublishedSource> sources) {
+  const framegraph::ResourceAliasResolver aliasResolver =
+      makeResourceAliasResolver(pool);
+  for (const auto& source : sources) {
+    observer_.observeAndExport(source.payload, source.seqId, aliasResolver);
+  }
+}
 
 bool resolvedSourceMatchesFrameGraphInput(
     const core::metalqueue::ResolvedPublishedSource& source,
@@ -80,25 +243,13 @@ const core::metalqueue::ResolvedPublishedSource* selectFrameGraphLookahead(
 
 bool replayPlanPreservesHeadStableFrontier(
     const framegraph::ReplayCommandPlan& optimized,
-    const framegraph::ReplayCommandPlan& natural) noexcept {
-  if (!optimized.valid || !natural.valid ||
-      optimized.command_indices.size() != natural.command_indices.size()) {
-    return false;
-  }
-  if (natural.command_indices.empty()) {
-    return true;
-  }
-  if (optimized.command_indices.front() != natural.command_indices.front()) {
-    return false;
-  }
-  for (const framegraph::u32 command : optimized.command_indices) {
-    if (std::find(natural.command_indices.begin(),
-                  natural.command_indices.end(), command) ==
-        natural.command_indices.end()) {
-      return false;
-    }
-  }
-  return true;
+    const framegraph::ReplayCommandPlan& natural,
+    encoders::EncodeSessionReplayFrontierState state,
+    bool activeRenderSeedProvesMovedHead) noexcept {
+  const ReplayFrontierDecision decision = classifyReplayFrontier(
+      optimized, natural, state, activeRenderSeedProvesMovedHead);
+  return decision == ReplayFrontierDecision::AcceptedNaturalHead ||
+         decision == ReplayFrontierDecision::AcceptedMovedHead;
 }
 
 RendererCompatProfile resolveRendererCompatProfile(const char* env) {
@@ -243,6 +394,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
     framegraph::FrameGraph graph =
         framegraph::buildFrameGraph(payload, seqId, aliasResolver);
     framegraph::OptimizerOptions activeOptions = options_;
+    activeOptions.collect_passcoalesce_return_diagnostics =
+        activeOptions.passcoalesce && perf::enabled();
 
     std::vector<framegraph::ResourceHandle> overwriteProof;
     if (features_.dce) {
@@ -264,6 +417,7 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
     framegraph::FrameGraph naturalGraph;
     framegraph::OptimizerStats naturalStats{};
     framegraph::ReplayCommandPlan naturalPlan{};
+    bool activeRenderSeedApplied = false;
     if (requiresHeadStableFrontier) {
       naturalGraph =
           framegraph::buildFrameGraph(payload, seqId, aliasResolver);
@@ -273,12 +427,141 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
           naturalGraph, naturalOptions, /*observations=*/nullptr,
           &naturalStats, framegraph::DceLookaheadProof{overwriteProof});
       naturalPlan = framegraph::planReplayCommands(naturalGraph, payload);
+
+      if (options.session) {
+        const auto active =
+            encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+                *options.session);
+        if (active) {
+          if (!active->complete) {
+            perf::countFramegraphActiveRenderSeedOutcome(
+                perf::FramegraphActiveRenderSeedOutcome::SnapshotIncomplete);
+          }
+          framegraph::ActiveRenderPlanningSeed seed{};
+          for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+            seed.targets.color[i] =
+                framegraph::TextureHandle{active->colorAttachments[i].value};
+            if (active->colorAttachments[i].value != 0) {
+              seed.targets.color_count =
+                  static_cast<framegraph::u32>(i) + 1u;
+            }
+          }
+          seed.targets.depth =
+              framegraph::TextureHandle{active->depthStencil.value};
+          seed.targets.sample_count = active->sampleCount;
+          seed.dependency_count = active->dependencyCount;
+          seed.complete = active->complete;
+          const std::size_t copyCount = std::min<std::size_t>(
+              active->dependencyCount, seed.write_dependencies.size());
+          for (std::size_t i = 0; i < copyCount; ++i) {
+            seed.write_dependencies[i] = framegraph::ResourceHandle{
+                active->writeDependencies[i].value};
+          }
+          const auto applyResult = framegraph::applyActiveRenderPlanningSeed(
+              graph, seed, aliasResolver);
+          using Outcome = perf::FramegraphActiveRenderSeedOutcome;
+          switch (applyResult) {
+            case framegraph::ActiveRenderPlanningSeedResult::Applied:
+              activeRenderSeedApplied = true;
+              perf::countFramegraphActiveRenderSeedOutcome(
+                  Outcome::ApplyApplied);
+              break;
+            case framegraph::ActiveRenderPlanningSeedResult::Invalid:
+              perf::countFramegraphActiveRenderSeedOutcome(
+                  Outcome::ApplyInvalid);
+              break;
+            case framegraph::ActiveRenderPlanningSeedResult::Incomplete:
+              perf::countFramegraphActiveRenderSeedOutcome(
+                  Outcome::ApplyIncomplete);
+              break;
+            case framegraph::ActiveRenderPlanningSeedResult::Overflow:
+              perf::countFramegraphActiveRenderSeedOutcome(
+                  Outcome::ApplyOverflow);
+              break;
+          }
+        } else {
+          perf::countFramegraphActiveRenderSeedOutcome(
+              perf::FramegraphActiveRenderSeedOutcome::SnapshotAbsent);
+        }
+      } else {
+        perf::countFramegraphActiveRenderSeedOutcome(
+            perf::FramegraphActiveRenderSeedOutcome::SnapshotAbsent);
+      }
     }
 
     framegraph::OptimizerStats stats{};
     framegraph::runOptimizer(
         graph, activeOptions, /*observations=*/nullptr, &stats,
         framegraph::DceLookaheadProof{overwriteProof});
+    const perf::FramegraphSourceLocalPassCoalesceDiagnostic
+        sourceLocalReturnDiagnostic{
+            .candidates = stats.pass_coalesce_return_candidates,
+            .merged = stats.pass_coalesce_return_merged,
+            .blockedCycle = stats.pass_coalesce_return_blocked_cycle,
+            .secondNonDraw = stats.pass_coalesce_return_second_non_draw,
+            .nonRenderIntervener =
+                stats.pass_coalesce_return_non_render_intervener,
+            .missingInvariant =
+                stats.pass_coalesce_return_missing_invariant,
+            .dependencyKept = stats.pass_coalesce_return_dependency_kept,
+            .moveBefore = stats.pass_coalesce_return_move_before,
+            .moveAfter = stats.pass_coalesce_return_move_after,
+            .nonDrawIntervener =
+                stats.pass_coalesce_return_non_draw_intervener,
+            .semanticIntervener =
+                stats.pass_coalesce_return_semantic_intervener,
+            .commandlessIntervener =
+                stats.pass_coalesce_return_commandless_intervener,
+            .commandlessReturn = stats.pass_coalesce_return_commandless,
+        };
+    const perf::FramegraphSourceProvenance sourceLocalProvenance =
+        payload.isArena()
+        ? perf::FramegraphSourceProvenance::Arena
+        : payload.isLegacy()
+            ? perf::FramegraphSourceProvenance::Legacy
+            : perf::FramegraphSourceProvenance::Unknown;
+    bool sourceLocalReturnOutcomeRecorded = false;
+    const auto recordSourceLocalReturnDiagnostic = [&]() {
+      if (sourceLocalReturnOutcomeRecorded ||
+          sourceLocalReturnDiagnostic.candidates == 0) {
+        return false;
+      }
+      perf::recordFramegraphSourceLocalPassCoalesce(
+          sourceLocalProvenance, options.partitionSource.valid(),
+          sourceLocalReturnDiagnostic);
+      sourceLocalReturnOutcomeRecorded = true;
+      return true;
+    };
+    const auto recordSourceLocalReturnOutcome =
+        [&](perf::FramegraphSourceLocalReplayOutcome outcome) {
+          if (!recordSourceLocalReturnDiagnostic()) {
+            return;
+          }
+          perf::recordFramegraphSourceLocalReplayOutcome(
+              outcome, sourceLocalReturnDiagnostic.candidates,
+              sourceLocalReturnDiagnostic.merged);
+        };
+    const auto recordSourceLocalFrontierRollback =
+        [&](perf::FramegraphSourceLocalFrontierRollbackReason reason) {
+          if (!recordSourceLocalReturnDiagnostic()) {
+            return;
+          }
+          perf::recordFramegraphSourceLocalFrontierRollback(
+              reason, sourceLocalReturnDiagnostic.candidates,
+              sourceLocalReturnDiagnostic.merged);
+        };
+    if (activeRenderSeedApplied) {
+      perf::countFramegraphActiveRenderSeedOutcome(
+          perf::FramegraphActiveRenderSeedOutcome::PassCoalesceBlockedCycle,
+          stats.pass_coalesce_blocked_cycle);
+      perf::countFramegraphActiveRenderSeedOutcome(
+          perf::FramegraphActiveRenderSeedOutcome::PassCoalesceSecondNonDraw,
+          stats.pass_coalesce_second_non_draw);
+      if (!activeRenderSeedMerged(graph)) {
+        perf::countFramegraphActiveRenderSeedOutcome(
+            perf::FramegraphActiveRenderSeedOutcome::AppliedButUnmerged);
+      }
+    }
 
     std::vector<bool> alreadyEncoded(payload.commandCount(), false);
     bool alreadyEncodedValid = true;
@@ -292,6 +575,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
       alreadyEncoded[commandIndex] = true;
     }
     if (!alreadyEncodedValid) {
+      recordSourceLocalReturnOutcome(
+          perf::FramegraphSourceLocalReplayOutcome::FinalInvalid);
       util::logf(util::LogLevel::Error, "dxmt9-renderer",
                  "DCE lookahead supplied an invalid encoded replay prefix");
       return std::nullopt;
@@ -327,11 +612,36 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
         }
       }
     }
+    bool activeRenderSeedReplayAccepted = false;
     if (requiresHeadStableFrontier) {
+      const encoders::EncodeSessionReplayFrontierState replayFrontierState =
+          options.session
+              ? encoders::encodeChunkSessionReplayFrontierState(
+                    *options.session)
+              : encoders::EncodeSessionReplayFrontierState::InjectedUnknown;
       const framegraph::ReplayCommandPlan optimizedPlan =
           framegraph::planReplayCommands(graph, payload);
-      if (!replayPlanPreservesHeadStableFrontier(optimizedPlan,
-                                                 naturalPlan)) {
+      const bool activeRenderSeedProvesMovedHead =
+          activeRenderSeedApplied && optimizedPlan.valid &&
+          !optimizedPlan.command_indices.empty() &&
+          framegraph::activeRenderPlanningSeedProvesReplayHead(
+              graph, optimizedPlan.command_indices.front());
+      const ReplayFrontierDecision frontierDecision = classifyReplayFrontier(
+          optimizedPlan, naturalPlan, replayFrontierState,
+          activeRenderSeedProvesMovedHead);
+      if (activeRenderSeedApplied) {
+        countReplayFrontierDecision(frontierDecision);
+      }
+      activeRenderSeedReplayAccepted =
+          activeRenderSeedApplied && activeRenderSeedMerged(graph) &&
+          frontierDecision == ReplayFrontierDecision::AcceptedMovedHead;
+      if (frontierDecision != ReplayFrontierDecision::AcceptedNaturalHead &&
+          frontierDecision != ReplayFrontierDecision::AcceptedMovedHead) {
+        const auto rollbackReason =
+            sourceLocalFrontierRollbackReason(frontierDecision);
+        if (rollbackReason) {
+          recordSourceLocalFrontierRollback(*rollbackReason);
+        }
         graph = std::move(naturalGraph);
         stats = naturalStats;
       }
@@ -363,6 +673,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
               std::equal(encoded.begin(), encoded.end(),
                          plan.command_indices.begin());
           if (!exactPrefix) {
+            recordSourceLocalReturnOutcome(
+                perf::FramegraphSourceLocalReplayOutcome::FinalInvalid);
             util::logf(util::LogLevel::Error, "dxmt9-renderer",
                        "fresh DCE proof changed the already encoded optimized "
                        "prefix");
@@ -373,11 +685,26 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
 
         if (plan.reordered || plan.dropped ||
             !options.replayCommandsAlreadyEncoded.empty()) {
+          if (activeRenderSeedReplayAccepted) {
+            perf::countFramegraphActiveRenderSeedOutcome(
+                perf::FramegraphActiveRenderSeedOutcome::ReplayActivated);
+          }
           options.replayCommandPlanActive = true;
           options.replayCommandOrder = replayPlan;
+          recordSourceLocalReturnOutcome(
+              plan.reordered
+                  ? perf::FramegraphSourceLocalReplayOutcome::
+                        FinalReorderedActivated
+                  : perf::FramegraphSourceLocalReplayOutcome::
+                        FinalNaturalOrder);
           return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                        std::move(options));
         }
+        recordSourceLocalReturnOutcome(
+            perf::FramegraphSourceLocalReplayOutcome::FinalNaturalOrder);
+      } else {
+        recordSourceLocalReturnOutcome(
+            perf::FramegraphSourceLocalReplayOutcome::FinalInvalid);
       }
       if (!options.replayCommandsAlreadyEncoded.empty()) {
         util::logf(util::LogLevel::Error, "dxmt9-renderer",
@@ -392,6 +719,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
                    "source-order v2 replay");
       });
     }
+    recordSourceLocalReturnOutcome(
+        perf::FramegraphSourceLocalReplayOutcome::FinalNaturalOrder);
   }
   return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                std::move(options));

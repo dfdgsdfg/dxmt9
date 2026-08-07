@@ -62,6 +62,7 @@ class PresentDrawableToken;
 namespace encoders {
 struct EncodeChunkOptions;
 struct EncodeContext;
+struct EncodeDrawRecorder;
 }
 namespace resources { class Initializer; }
 // R-BACK-31.7 — the queue owns the render backend via a unique_ptr to this
@@ -358,7 +359,8 @@ class CommandQueue {
   // Native contract fixture for the queue-owned arena transaction. It binds
   // the lifecycle controller but starts no Metal objects or worker threads.
   struct ArenaLeaseTestQueueTag {};
-  CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits);
+  CommandQueue(ArenaLeaseTestQueueTag, core::BackendLimits limits,
+               WMT::Reference<WMT::CommandQueue> queue = {});
 
   // Joins worker threads (if started). Archive persistence is not a
   // queue responsibility — it runs from shaders::Archive's dtor.
@@ -791,6 +793,7 @@ class CommandQueue {
   // at commit time. See `dxmt9_capture.hpp` for the controller-side model.
   std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureForChunkBegin(
       std::uint64_t seqId);
+  bool metalCaptureEnabled() const noexcept;
   std::optional<core::metalcapture::MetalCaptureRequest> notePresentChunkForCapture(
       std::uint64_t seqId);
   using ResolveSurfaceFlagsFn = std::function<std::uint32_t(core::Handle)>;
@@ -887,6 +890,7 @@ class CommandQueue {
   core::metalqueue::SessionReleaseState sessionReleaseState_{};
   std::uint64_t sessionReleaseCoveredRawOrdinal_ = 0;
   std::uint64_t sessionReleaseCoveredSeqId_ = 0;
+  std::size_t cpuReadyCapacityWaiterCount_ = 0;
   bool stop_ = true;
 
  private:
@@ -1037,8 +1041,16 @@ class CommandQueue {
   // preflight, restore the exact tentative prefix, then return from the
   // manually-driven encode loop. Never set by production.
   bool testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+  bool testOnlyPauseAfterStaleMultiSourcePlannerRestore_ = false;
+  bool testOnlyPausedAfterStaleMultiSourcePlannerRestore_ = false;
+  bool testOnlyOverrideLiveActiveRenderInstance_ = false;
+  std::uint64_t testOnlyLiveActiveRenderSeqId_ = 0;
+  std::uint64_t testOnlyLiveActiveRenderEncoderIndex_ = 0;
   bool testOnlyPauseAfterNextSessionReleaseAck_ = false;
   bool testOnlyPausedAfterSessionReleaseAck_ = false;
+  // Native lifecycle specs may keep recorder-suppressed fake encoder handles
+  // alive across coordinator-created EncodeContexts, including finalization.
+  encoders::EncodeDrawRecorder* testOnlyDrawRecorder_ = nullptr;
 
   // Assemble the EncodeContext handed to encoders::encodeChunk. Uses
   // queue-owned state only (device_, limits_, allocators_, pool_,

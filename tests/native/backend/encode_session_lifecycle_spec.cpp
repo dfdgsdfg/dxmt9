@@ -13,9 +13,13 @@
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_partition.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
+#include "../../../src/dxmt9/dxmt9_encode_session_internal.hpp"
+#include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
+#include "../../../src/dxmt9/render/framegraph_backend.hpp"
+#include "../framegraph/arena_payload_fixture.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -64,22 +68,49 @@ WMT::Reference<WmtType> retainedToken(const char* label) {
 }
 
 struct DrawRunCapture {
+  struct LateStoreResolution {
+    std::uint8_t aspect = 0;
+    std::uint8_t colorIndex = 0;
+    std::uint32_t action = 0;
+    std::uint8_t cause = 0;
+  };
+
   std::size_t drawRunBegins = 0;
   std::size_t renderPassBegins = 0;
   std::size_t renderPassEnds = 0;
   std::size_t splitPolicyCalls = 0;
+  std::size_t midChunkSplits = 0;
   std::size_t uploadBatchCalls = 0;
   std::size_t unexpectedNonIndexedDraws = 0;
+  std::vector<std::size_t> drawRunCommands;
+  std::vector<std::size_t> renderPassBeginCommands;
   std::vector<std::pair<std::size_t, std::size_t>> subranges;
   std::vector<std::uint64_t> vertexOffsets;
   std::vector<std::uint64_t> indexOffsets;
   std::vector<std::uint64_t> indexCounts;
+  dxmt9::encoders::EncodeChunkSessionState* observeSessionAtDrawRun = nullptr;
+  bool observedPendingClearAtDrawRun = false;
+  std::optional<dxmt9::core::metalqueue::PublishedCommandRef>
+      pendingClearAtDrawRun;
+  dxmt9::encoders::LateRenderPassStoreState lateStoreSeed{};
+  std::size_t lateStorePrepareCalls = 0;
+  bool prepareLateStoreOnce = false;
+  std::vector<LateStoreResolution> lateStoreResolutions;
 };
 
 void recordDrawRunBegin(void* userdata,
-                        std::size_t,
+                        std::size_t commandIndex,
                         std::size_t) {
-  ++static_cast<DrawRunCapture*>(userdata)->drawRunBegins;
+  auto* capture = static_cast<DrawRunCapture*>(userdata);
+  ++capture->drawRunBegins;
+  capture->drawRunCommands.push_back(commandIndex);
+  if (capture->observeSessionAtDrawRun &&
+      !capture->observedPendingClearAtDrawRun) {
+    capture->pendingClearAtDrawRun =
+        dxmt9::encoders::encodeChunkSessionPendingClearCommand(
+            *capture->observeSessionAtDrawRun);
+    capture->observedPendingClearAtDrawRun = true;
+  }
 }
 
 void recordDrawSubrange(void* userdata,
@@ -90,16 +121,47 @@ void recordDrawSubrange(void* userdata,
       {absoluteDrawParamBegin, drawCount});
 }
 
-void recordRenderPassBegin(void* userdata, std::size_t) {
-  ++static_cast<DrawRunCapture*>(userdata)->renderPassBegins;
+void recordRenderPassBegin(void* userdata, std::size_t commandIndex) {
+  auto* capture = static_cast<DrawRunCapture*>(userdata);
+  ++capture->renderPassBegins;
+  capture->renderPassBeginCommands.push_back(commandIndex);
 }
 
 void recordRenderPassEnd(void* userdata) {
   ++static_cast<DrawRunCapture*>(userdata)->renderPassEnds;
 }
 
+void prepareLateStore(void* userdata,
+                      dxmt9::encoders::LateRenderPassStoreState& state) {
+  auto* capture = static_cast<DrawRunCapture*>(userdata);
+  ++capture->lateStorePrepareCalls;
+  if (!capture->prepareLateStoreOnce || capture->lateStorePrepareCalls == 1u) {
+    state = capture->lateStoreSeed;
+  }
+}
+
+void recordLateStoreResolution(void* userdata,
+                               std::uint8_t aspect,
+                               std::uint8_t colorIndex,
+                               std::uint32_t action,
+                               std::uint8_t cause) {
+  static_cast<DrawRunCapture*>(userdata)->lateStoreResolutions.push_back({
+      .aspect = aspect,
+      .colorIndex = colorIndex,
+      .action = action,
+      .cause = cause,
+  });
+}
+
 void recordSplitPolicy(void* userdata, bool) {
   ++static_cast<DrawRunCapture*>(userdata)->splitPolicyCalls;
+}
+
+WMT::Reference<WMT::CommandBuffer> recordCommandBufferSplit(
+    void* userdata, WMT::CommandBuffer) {
+  ++static_cast<DrawRunCapture*>(userdata)->midChunkSplits;
+  return retainedToken<WMT::CommandBuffer>(
+      "encode-session-split-command-buffer-token");
 }
 
 std::vector<dxmt9::CommandQueue::TransientBufferSlice> recordUploadBatch(
@@ -165,8 +227,11 @@ dxmt9::encoders::EncodeDrawRecorder makeDrawRunRecorder(
       .beginDrawRunCommand = recordDrawRunBegin,
       .beginDrawSubrange = recordDrawSubrange,
       .beginRenderPass = recordRenderPassBegin,
+      .prepareLateRenderPassStoreState = prepareLateStore,
+      .resolveLateRenderPassStoreAction = recordLateStoreResolution,
       .endRenderPass = recordRenderPassEnd,
       .applyPerRecordSplitPolicy = recordSplitPolicy,
+      .splitCommandBufferForTest = recordCommandBufferSplit,
       .uploadTransientBufferBatch = recordUploadBatch,
       .setVertexBuffer = recordVertexBuffer,
       .drawPrimitives = recordDrawPrimitives,
@@ -260,6 +325,18 @@ dxmt9::core::metalqueue::QueueCompletionSource partitionSource(
   };
 }
 
+dxmt9::core::metalqueue::QueueCompletionSource fullSource(
+    std::size_t slotIndex, std::uint64_t seqId, std::size_t commandCount) {
+  return dxmt9::core::metalqueue::QueueCompletionSource{
+      .source = sourceRefFor(slotIndex, seqId),
+      .slotIndex = slotIndex,
+      .seqId = seqId,
+      .hasPresent = false,
+      .commandBegin = 0,
+      .commandCount = commandCount,
+  };
+}
+
 dxmt9::core::CanonicalDrawState makeDrawRunState() {
   dxmt9::core::CanonicalDrawState state{};
   state.hot.streamStrides[0] = 4u;
@@ -305,6 +382,77 @@ dxmt9::core::ChunkSlot makeDrawRunSlot(std::uint64_t seqId) {
   checkEq(slot.commandAt(kPartitionCommandIndex).drawRunRecord->firstParam,
           kPartitionFirstParam,
           "selected DrawRun starts at a nonzero absolute DrawParam index");
+  return slot;
+}
+
+dxmt9::core::ChunkSlot makeTargetDrawSlot(
+    std::uint64_t seqId, std::span<const std::uint64_t> colorHandles) {
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  for (const std::uint64_t colorHandle : colorHandles) {
+    auto state = makeDrawRunState();
+    state.hot.colorAttachments[0].handle =
+        dxmt9::core::Handle{colorHandle};
+    state.hot.colorAttachments[0].sampleCount = 1;
+    state.hot.renderTargetMask = 1u;
+    dxmt9::core::DrawParam draw{};
+    draw.primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+    draw.primitiveCount = 1;
+    draw.instanceCount = 1;
+    const std::array draws{draw};
+    const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+    slot.appendDrawRun(state, dxmt9::core::DrawUniformPayload{}, draws,
+                       payloads);
+  }
+  return slot;
+}
+
+void appendTargetDraw(dxmt9::core::ChunkSlot& slot,
+                      std::uint64_t colorHandle,
+                      std::uint64_t sampledHandle = 0) {
+  auto state = makeDrawRunState();
+  state.hot.colorAttachments[0].handle =
+      dxmt9::core::Handle{colorHandle};
+  state.hot.colorAttachments[0].sampleCount = 1;
+  state.hot.renderTargetMask = 1u;
+  if (sampledHandle != 0) {
+    state.hot.textures[0] = dxmt9::core::Handle{sampledHandle};
+    state.hot.textureMask = 1u;
+  }
+  dxmt9::core::DrawParam draw{};
+  draw.primitiveType = dxmt9::core::PrimitiveType::TriangleList;
+  draw.primitiveCount = 1;
+  draw.instanceCount = 1;
+  const std::array draws{draw};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  slot.appendDrawRun(state, dxmt9::core::DrawUniformPayload{}, draws,
+                     payloads);
+}
+
+dxmt9::core::ChunkSlot makeActiveSeedOutcomeSlot(
+    std::uint64_t seqId, std::uint64_t targetA, std::uint64_t targetB,
+    bool bSamplesA, bool aSamplesB) {
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  clear.colorAttachments[0].handle = dxmt9::core::Handle{targetB};
+  clear.colorAttachments[0].sampleCount = 1;
+  slot.appendClear(clear);
+  appendTargetDraw(slot, targetB, bSamplesA ? targetA : 0);
+  appendTargetDraw(slot, targetA, aSamplesB ? targetB : 0);
+  return slot;
+}
+
+dxmt9::core::ChunkSlot makeMovedHeadReturnSlot(
+    std::uint64_t seqId, std::uint64_t targetA, std::uint64_t targetB) {
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = seqId;
+  appendTargetDraw(slot, targetA);
+  appendTargetDraw(slot, targetB);
+  // B produces data sampled by the returning A, so passcoalesce must move B
+  // before the A-A merge. The complete optimized order is B,A1,A2.
+  appendTargetDraw(slot, targetA, targetB);
   return slot;
 }
 
@@ -616,7 +764,15 @@ void finalizerValidationFailureIsNoMutationAndRetryable() {
             *session),
         "rejected finalization leaves the pending clear in session storage");
 
-  tail->fixedCompletionSources.clear();
+  tail->fixedCompletionSources.entries[0] = sessionSources[0];
+  check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "record-list mutation rejects a stale completion shadow");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{2},
+          "shadow mismatch rejection remains retryable and preserves session");
+
+  tail->clearFixedCompletionSources();
   check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
             ctx, *session, *tail),
         "corrected record retries finalization successfully");
@@ -678,7 +834,7 @@ void finalizerRejectsSourceAndStorageGenerationMismatches() {
   mismatched = source;
   ++mismatched.source.storage.generation;
   const std::array storageGenerationMismatch{mismatched};
-  submission->fixedCompletionSources.clear();
+  submission->clearFixedCompletionSources();
   check(submission->assignFixedCompletionSources(storageGenerationMismatch),
         "fixture installs storage-generation mismatch");
   check(!dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
@@ -688,7 +844,7 @@ void finalizerRejectsSourceAndStorageGenerationMismatches() {
           std::size_t{1},
           "storage-generation rejection preserves session ownership");
 
-  submission->fixedCompletionSources.clear();
+  submission->clearFixedCompletionSources();
   check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
             ctx, *session, *submission),
         "clearing the mismatched record permits locator-correct publication");
@@ -867,7 +1023,6 @@ void explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer() {
   auto ctx = harness.makeContext();
   ctx.drawRecorder = &recorder;
   auto session = dxmt9::encoders::makeEncodeChunkSession();
-
   constexpr std::size_t slotIndex = 10u;
   auto slot = makeDrawRunSlot(74u);
   const std::array<std::pair<std::uint32_t, std::uint32_t>, 2> subranges{
@@ -999,6 +1154,1061 @@ void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
           "finalizer preserves first source order");
   checkEq(published[1].seqId, secondSource.seqId,
           "finalizer preserves second source order");
+}
+
+void closedEncoderFrontierAllowsMovedHeadOnSameCommandBuffer() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "closed-frontier-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  using FrontierState =
+      dxmt9::encoders::EncodeSessionReplayFrontierState;
+
+  check(dxmt9::encoders::encodeChunkSessionReplayFrontierState(*session) ==
+            FrontierState::CleanClosedEncoderNoPendingClear,
+        "fresh session starts at the clean closed-encoder frontier");
+
+  constexpr std::uint64_t kTargetA = 0xA410u;
+  constexpr std::uint64_t kTargetB = 0xB410u;
+  auto headSlot = makeTargetDrawSlot(191u, std::array{kTargetA});
+  const auto headSource =
+      fullSource(31u, headSlot.seqId, headSlot.commandCount());
+  auto head = dxmt9::encoders::encodeChunk(
+      ctx, headSource.slotIndex, headSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("closed-frontier-command-buffer"),
+          headSource));
+  check(head.has_value(), "prior A source opens the deferred session");
+  const obj_handle_t commandBufferHandle = head->commandBuffer.handle;
+  check(dxmt9::encoders::encodeChunkSessionReplayFrontierState(*session) ==
+            FrontierState::ActiveRenderComplete,
+        "prior A exposes a complete active-render frontier");
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *head) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed,
+        "ordered close ends prior A without finalizing its carrier");
+  check(dxmt9::encoders::encodeChunkSessionReplayFrontierState(*session) ==
+            FrontierState::CleanClosedEncoderNoPendingClear,
+        "closed prior pass exposes a clean frontier with earlier CB work");
+
+  auto currentSlot = makeMovedHeadReturnSlot(
+      192u, kTargetA, kTargetB);
+  dxmt9::tests::framegraph::ArenaPayloadFixture current(currentSlot);
+  check(current.valid(), "moved-head Arena source publishes");
+  const auto currentSource = fullSource(
+      32u, currentSlot.seqId, currentSlot.commandCount());
+  auto options = deferredOptions(
+      *session, std::move(head->commandBuffer), currentSource);
+  const auto outcomeBefore =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalReplayOutcome();
+  dxmt9::render::FrameGraphBackend backend;
+  auto tail = backend.onSourceReady(ctx, currentSource.slotIndex,
+                                    current.view(), currentSlot.seqId,
+                                    std::move(options));
+  check(tail.has_value(), "clean closed frontier appends moved-head replay");
+  const auto outcomeAfter =
+      dxmt9::perf::test::snapshotFramegraphSourceLocalReplayOutcome();
+  check(capture.drawRunCommands ==
+            std::vector<std::size_t>({0u, 1u, 0u, 2u}),
+        "prior A then current B,A1,A2 executes the proved moved-head order");
+  checkEq(tail->commandBuffer.handle, commandBufferHandle,
+          "moved-head replay remains on the prior command buffer");
+  checkEq(capture.renderPassBegins, std::size_t{3},
+          "prior A, current B, and merged current A open three passes total");
+  checkEq(capture.renderPassEnds, std::size_t{2},
+          "ordered close and current B-to-A transition end two passes");
+  checkEq(outcomeAfter.finalReorderedActivated.sources -
+              outcomeBefore.finalReorderedActivated.sources,
+          std::uint64_t{1},
+          "clean frontier activates one source-local reordered plan");
+  checkEq(outcomeAfter.frontierRollbackMovedHeadUnproved.sources -
+              outcomeBefore.frontierRollbackMovedHeadUnproved.sources,
+          std::uint64_t{0},
+          "clean frontier does not report an unproved moved head");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "closed-frontier session finalizes once");
+  checkEq(capture.renderPassEnds, std::size_t{3},
+          "finalizer closes the merged current A pass");
+  const auto published = tail->explicitCompletionSourceSpan();
+  check(published.size() == 2 && published[0].seqId == headSource.seqId &&
+            published[1].seqId == currentSource.seqId,
+        "moved replay preserves FIFO source completion");
+}
+
+void pendingClearSidecarAloneCannotProveCleanFrontier() {
+  using dxmt9::encoders::EncodeSessionReplayFrontierState;
+  using dxmt9::encoders::encode_session::ReplayFrontierFacts;
+  using dxmt9::encoders::encode_session::replayFrontierStateForFacts;
+
+  check(replayFrontierStateForFacts(ReplayFrontierFacts{
+            .hasPendingClearCommand = true,
+        }) == EncodeSessionReplayFrontierState::PendingClear,
+        "a sidecar-only partial pending clear remains conservative");
+  check(replayFrontierStateForFacts(ReplayFrontierFacts{}) ==
+            EncodeSessionReplayFrontierState::
+                CleanClosedEncoderNoPendingClear,
+        "only an encoder-free state without either pending-clear half is clean");
+}
+
+void freshCleanFrontierAllowsMovedHead() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "fresh-clean-frontier-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::uint64_t kTargetA = 0xA420u;
+  constexpr std::uint64_t kTargetB = 0xB420u;
+  auto slot = makeMovedHeadReturnSlot(193u, kTargetA, kTargetB);
+  dxmt9::tests::framegraph::ArenaPayloadFixture payload(slot);
+  check(payload.valid(), "fresh clean moved-head source publishes");
+  const auto source = fullSource(33u, slot.seqId, slot.commandCount());
+  auto options = deferredOptions(
+      *session,
+      retainedToken<WMT::CommandBuffer>("fresh-clean-frontier-command-buffer"),
+      source);
+  dxmt9::render::FrameGraphBackend backend;
+  auto tail = backend.onSourceReady(ctx, source.slotIndex, payload.view(),
+                                    slot.seqId, std::move(options));
+  check(tail.has_value(), "fresh clean session accepts moved-head replay");
+  check(capture.drawRunCommands ==
+            std::vector<std::size_t>({1u, 0u, 2u}),
+        "fresh clean session executes B,A1,A2");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "fresh clean moved-head session finalizes");
+  checkEq(tail->explicitCompletionSourceSpan().size(), std::size_t{1},
+          "fresh clean finalizer publishes one source");
+}
+
+void pendingClearAndInjectedFrontiersKeepNaturalMovedHeadOrder() {
+  constexpr std::uint64_t kTargetA = 0xA430u;
+  constexpr std::uint64_t kTargetB = 0xB430u;
+
+  {
+    Harness harness;
+    DrawRunCapture capture;
+    auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        "pending-clear-frontier-render-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+    dxmt9::core::ChunkSlot clearSlot{};
+    clearSlot.seqId = 194u;
+    dxmt9::core::ClearDesc clear{};
+    clear.clearColor = true;
+    clearSlot.appendClear(clear);
+    const auto clearSource =
+        fullSource(34u, clearSlot.seqId, clearSlot.commandCount());
+    auto clearCarrier = dxmt9::encoders::encodeChunk(
+        ctx, clearSource.slotIndex, clearSlot,
+        deferredOptions(
+            *session,
+            retainedToken<WMT::CommandBuffer>(
+                "pending-clear-frontier-command-buffer"),
+            clearSource));
+    check(clearCarrier.has_value(), "targetless clear creates a carrier");
+    check(dxmt9::encoders::encodeChunkSessionReplayFrontierState(*session) ==
+              dxmt9::encoders::EncodeSessionReplayFrontierState::PendingClear,
+          "targetless clear exposes the pending-clear frontier");
+    const auto pending =
+        dxmt9::encoders::encodeChunkSessionPendingClearCommand(*session);
+    check(pending.has_value() && pending->valid(),
+          "pending-clear frontier retains a published command identity");
+    capture.observeSessionAtDrawRun = session.get();
+
+    auto currentSlot = makeMovedHeadReturnSlot(
+        195u, kTargetA, kTargetB);
+    dxmt9::tests::framegraph::ArenaPayloadFixture current(currentSlot);
+    check(current.valid(), "pending-clear moved-head source publishes");
+    const auto currentSource = fullSource(
+        35u, currentSlot.seqId, currentSlot.commandCount());
+    auto options = deferredOptions(
+        *session, std::move(clearCarrier->commandBuffer), currentSource);
+    dxmt9::render::FrameGraphBackend backend;
+    auto tail = backend.onSourceReady(ctx, currentSource.slotIndex,
+                                      current.view(), currentSlot.seqId,
+                                      std::move(options));
+    check(tail.has_value(), "pending-clear source falls back and encodes");
+    check(capture.drawRunCommands ==
+              std::vector<std::size_t>({0u, 1u, 2u}),
+          "pending-clear frontier retains natural A1,B,A2 order");
+    check(capture.observedPendingClearAtDrawRun &&
+              capture.pendingClearAtDrawRun == pending,
+          "planning preserves PublishedCommandRef until natural replay consumes clear");
+    check(!dxmt9::encoders::encodeChunkSessionPendingClearCommand(*session),
+          "natural draw replay consumes the preserved pending clear");
+    check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+              ctx, *session, *tail),
+          "pending-clear fallback session finalizes");
+    const auto published = tail->explicitCompletionSourceSpan();
+    check(published.size() == 2 &&
+              published[0].seqId == clearSource.seqId &&
+              published[1].seqId == currentSource.seqId,
+          "pending-clear fallback preserves FIFO source completion");
+  }
+
+  {
+    Harness harness;
+    DrawRunCapture capture;
+    auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        "injected-frontier-render-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    auto slot = makeMovedHeadReturnSlot(196u, kTargetA, kTargetB);
+    dxmt9::tests::framegraph::ArenaPayloadFixture payload(slot);
+    check(payload.valid(), "injected moved-head source publishes");
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer = retainedToken<WMT::CommandBuffer>(
+        "injected-frontier-command-buffer");
+    options.partitionSource = sourceRefFor(36u, slot.seqId);
+    dxmt9::render::FrameGraphBackend backend;
+    auto submission = backend.onSourceReady(
+        ctx, 36u, payload.view(), slot.seqId, std::move(options));
+    check(submission.has_value(), "injected moved-head source encodes");
+    check(capture.drawRunCommands ==
+              std::vector<std::size_t>({0u, 1u, 2u}),
+          "injected unknown frontier keeps natural A1,B,A2 order");
+  }
+}
+
+void activeRenderSeedCarriesAcrossLegacyAndArenaSources() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "active-seed-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::uint64_t kTargetA = 0xA100u;
+  constexpr std::uint64_t kTargetB = 0xB100u;
+  constexpr std::size_t kLegacySlotIndex = 15u;
+  const std::array legacyTargets{kTargetA};
+  auto legacy = makeTargetDrawSlot(81u, legacyTargets);
+  const auto legacySource = fullSource(
+      kLegacySlotIndex, legacy.seqId, legacy.commandCount());
+  auto head = dxmt9::encoders::encodeChunk(
+      ctx, kLegacySlotIndex, legacy,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("active-seed-command-buffer"),
+          legacySource));
+  check(head.has_value(), "Legacy A source opens a deferred session");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "Legacy A source leaves its pass active");
+  const auto active =
+      dxmt9::encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+          *session);
+  check(active.has_value() && active->complete,
+        "active Legacy pass exposes a complete immutable dependency seed");
+  checkEq(active->colorAttachments[0].value, kTargetA,
+          "active seed retains attachment A");
+  checkEq(active->dependencyCount, std::uint32_t{1},
+          "active seed retains one bounded attachment dependency");
+
+  constexpr std::size_t kArenaSlotIndex = 16u;
+  const std::array arenaTargets{kTargetB, kTargetA};
+  auto arenaSourceSlot = makeTargetDrawSlot(82u, arenaTargets);
+  dxmt9::tests::framegraph::ArenaPayloadFixture arena(arenaSourceSlot);
+  check(arena.valid(), "Arena B,A source publishes for mixed lifecycle");
+  const auto arenaSource = fullSource(
+      kArenaSlotIndex, arenaSourceSlot.seqId,
+      arenaSourceSlot.commandCount());
+  auto options = deferredOptions(*session, std::move(head->commandBuffer),
+                                 arenaSource);
+  dxmt9::render::FrameGraphBackend backend;
+  auto tail = backend.onSourceReady(ctx, kArenaSlotIndex, arena.view(),
+                                    arenaSourceSlot.seqId,
+                                    std::move(options));
+  check(tail.has_value(), "Arena B,A source appends through FrameGraph");
+  checkEq(capture.renderPassBegins, std::size_t{2},
+          "active A plus planned A,B uses two total render passes");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "source-edge planning closes only on the real A-to-B transition");
+  checkEq(capture.renderPassBeginCommands.size(), std::size_t{2},
+          "only Legacy A and Arena B open render passes");
+  checkEq(capture.renderPassBeginCommands[0], std::size_t{0},
+          "Legacy A opens from its source head");
+  checkEq(capture.renderPassBeginCommands[1], std::size_t{0},
+          "Arena B opens after the reordered Arena A continuation");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "Arena B remains active without a source-created boundary");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "mixed Legacy/Arena session finalizes into one carrier");
+  checkEq(capture.renderPassEnds, std::size_t{2},
+          "finalizer closes the only remaining Arena B pass");
+  const auto published = tail->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{2},
+          "mixed session publishes both ordered completion sources");
+  checkEq(published[0].seqId, legacySource.seqId,
+          "Legacy completion remains first");
+  checkEq(published[1].seqId, arenaSource.seqId,
+          "Arena completion remains second despite command reordering");
+}
+
+void multiSourceFragmentsCarryActivePassAcrossSeparateSources() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "multi-source-fragment-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::uint64_t kTargetA = 0xA180u;
+  constexpr std::uint64_t kTargetB = 0xB180u;
+  const std::array headTargets{kTargetA};
+  auto headSlot = makeTargetDrawSlot(181u, headTargets);
+  const auto headSource =
+      fullSource(21u, headSlot.seqId, headSlot.commandCount());
+  auto carrier = dxmt9::encoders::encodeChunk(
+      ctx, headSource.slotIndex, headSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>(
+              "multi-source-fragment-command-buffer"),
+          headSource));
+  check(carrier.has_value() &&
+            dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "head A opens the multi-source fragment session");
+  const auto active =
+      dxmt9::encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+          *session);
+  check(active.has_value() && active->complete,
+        "multi-source fragment planner receives a complete active A seed");
+
+  const std::array bTargets{kTargetB};
+  const std::array aTargets{kTargetA};
+  auto bSlot = makeTargetDrawSlot(182u, bTargets);
+  auto aSlot = makeTargetDrawSlot(183u, aTargets);
+  dxmt9::tests::framegraph::ArenaPayloadFixture bPayload(bSlot);
+  dxmt9::tests::framegraph::ArenaPayloadFixture aPayload(aSlot);
+  check(bPayload.valid() && aPayload.valid(),
+        "separate B and A payloads publish for replay planning");
+  const std::array completionSources{
+      fullSource(22u, bSlot.seqId, bSlot.commandCount()),
+      fullSource(23u, aSlot.seqId, aSlot.commandCount()),
+  };
+  check(dxmt9::encoders::appendEncodeChunkSessionSources(
+            *session, completionSources),
+        "B then A completion sources pre-register once in FIFO order");
+
+  dxmt9::framegraph::ActiveRenderPlanningSeed seed{};
+  seed.targets.color[0] =
+      dxmt9::framegraph::TextureHandle{active->colorAttachments[0].value};
+  seed.targets.color_count = 1;
+  seed.targets.sample_count = active->sampleCount;
+  seed.dependency_count = active->dependencyCount;
+  seed.complete = active->complete;
+  for (std::size_t i = 0; i < active->dependencyCount; ++i) {
+    seed.write_dependencies[i] = dxmt9::framegraph::ResourceHandle{
+        active->writeDependencies[i].value};
+  }
+  const std::array planningSources{
+      dxmt9::framegraph::MultiSourcePlanningSource{bPayload.view()},
+      dxmt9::framegraph::MultiSourcePlanningSource{aPayload.view()},
+  };
+  const auto plan = dxmt9::framegraph::planMultiSourcePassCoalesceReplay(
+      planningSources, &seed);
+  const auto runs = dxmt9::framegraph::buildMultiSourceReplayRuns(
+      planningSources, plan);
+  check(plan.reordered() && runs.valid() && runs.runs.size() == 2 &&
+            runs.runs[0].retainedSourceIndex == 1u &&
+            runs.runs[1].retainedSourceIndex == 0u,
+        "active A plans separate source A before B as whole-source runs");
+
+  const std::array payloads{bPayload.view(), aPayload.view()};
+  const std::array slotIndices{std::size_t{22}, std::size_t{23}};
+  const std::array seqIds{bSlot.seqId, aSlot.seqId};
+  std::vector<std::uint64_t> encodedSeqIds;
+  for (const auto& run : runs.runs) {
+    const std::size_t sourceIndex = run.retainedSourceIndex;
+    dxmt9::encoders::EncodeChunkOptions options{};
+    const obj_handle_t injectedCommandBuffer =
+        carrier->commandBuffer.handle;
+    options.commandBuffer = std::move(carrier->commandBuffer);
+    options.allowInjectedCommandBufferMidChunkCommits = true;
+    options.session = session.get();
+    options.deferSessionFinalization = true;
+    options.partitionSource = completionSources[sourceIndex].source;
+    options.preRegisteredFragment =
+        dxmt9::encoders::PreRegisteredEncodeChunkFragment{
+            .commandBegin = run.commandBegin,
+            .commandCount = run.commandCount,
+        };
+    options.skipBackendPlanning = true;
+    auto fragment = dxmt9::encoders::encodeChunk(
+        ctx, slotIndices[sourceIndex], payloads[sourceIndex],
+        seqIds[sourceIndex], std::move(options));
+    check(fragment.has_value(),
+          "each planned whole-source fragment encodes into the session");
+    check(dxmt9::core::metalqueue::foldEncodedSessionFragmentCarrier(
+              *fragment, *carrier, injectedCommandBuffer),
+          "each fragment folds into one command-buffer carrier");
+    carrier = std::move(fragment);
+    encodedSeqIds.push_back(seqIds[sourceIndex]);
+  }
+  check(encodedSeqIds == std::vector<std::uint64_t>({183u, 182u}),
+        "fragment replay retains exact A-then-B source attribution");
+  checkEq(capture.renderPassBegins, std::size_t{2},
+          "active A plus separate A then B uses two passes, not three");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "only the real A-to-B transition closes the carried pass");
+
+  carrier->seqId = completionSources.back().seqId;
+  carrier->slotIndex = completionSources.back().slotIndex;
+  carrier->diagnostics.seqId = completionSources.back().seqId;
+  carrier->diagnostics.slotIndex = completionSources.back().slotIndex;
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *carrier),
+        "multi-source fragment carrier finalizes once");
+  const auto published = carrier->explicitCompletionSourceSpan();
+  check(published.size() == 3 && published[0].seqId == 181u &&
+            published[1].seqId == 182u && published[2].seqId == 183u,
+        "completion stays FIFO although fragment replay order differs");
+  check(carrier->seqId == 183u && carrier->slotIndex == 23u,
+        "carrier identity names the natural FIFO completion tail");
+}
+
+struct ActiveSeedOutcomeRun {
+  dxmt9::perf::test::FramegraphActiveRenderSeedSnapshot before{};
+  dxmt9::perf::test::FramegraphActiveRenderSeedSnapshot after{};
+  std::vector<std::size_t> drawRunCommands;
+  std::size_t renderPassBegins = 0;
+  std::size_t renderPassEndsBeforeFinalize = 0;
+};
+
+void seedUnknownStore(DrawRunCapture& capture,
+                      dxmt9::encoders::LateRenderPassStoreAspect aspect,
+                      std::uint64_t handle,
+                      std::uint8_t colorIndex = 0u) {
+  check(capture.lateStoreSeed.append({
+            .handle = dxmt9::core::Handle{handle},
+            .pixelBytes = 64u,
+            .action = WMTStoreActionUnknown,
+            .aspect = aspect,
+            .colorIndex = colorIndex,
+        }),
+        "late Store fixture fits the copied session ledger");
+}
+
+void lateStoreResolutionCarriesAcrossSessionSources() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  using Cause = dxmt9::perf::RenderPassLateStoreResolutionCause;
+
+  Harness harness;
+  DrawRunCapture capture;
+  capture.prepareLateStoreOnce = true;
+  constexpr std::uint64_t colorA = 0xA400u;
+  constexpr std::uint64_t colorWrongSlot = 0xC400u;
+  constexpr std::uint64_t depth = 0xD400u;
+  seedUnknownStore(capture, Aspect::Color, colorA, 0u);
+  seedUnknownStore(capture, Aspect::Color, colorWrongSlot, 1u);
+  seedUnknownStore(capture, Aspect::Depth, depth);
+  seedUnknownStore(capture, Aspect::Stencil, depth);
+  auto encoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "late-store-carried-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{encoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  const auto accountingBefore =
+      dxmt9::perf::test::snapshotRenderPassStoreAccounting();
+
+  auto headSlot = makeTargetDrawSlot(300u, std::array{colorA});
+  auto headSource = fullSource(30u, headSlot.seqId, headSlot.commandCount());
+  auto carrier = dxmt9::encoders::encodeChunk(
+      ctx, headSource.slotIndex, headSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("late-store-carried-cb"),
+          headSource));
+  check(carrier.has_value(), "late Store head source opens a carried pass");
+
+  // Carry through more than eight separately injected session sources.
+  // This pins copied-state lifetime and ContinueActive behavior; the pure
+  // render-pass-actions selector test separately pins StorageTruncated
+  // production eligibility.
+  for (std::size_t i = 1; i <= 8u; ++i) {
+    auto slot = makeTargetDrawSlot(300u + i, std::array{colorA});
+    const auto source = fullSource(30u + i, slot.seqId, slot.commandCount());
+    auto next = dxmt9::encoders::encodeChunk(
+        ctx, source.slotIndex, slot,
+        deferredOptions(*session, std::move(carrier->commandBuffer), source));
+    check(next.has_value(), "compatible source continues the carried pass");
+    carrier = std::move(next);
+    check(capture.lateStoreResolutions.empty(),
+          "compatible same-pass draw leaves Unknown unresolved");
+  }
+  checkEq(capture.renderPassBegins, std::size_t{1},
+          "nine compatible sources retain one Metal render encoder");
+
+  dxmt9::core::ChunkSlot clearSlot{};
+  clearSlot.seqId = 309u;
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  clear.clearDepth = true;
+  clear.clearStencil = false;
+  clear.colorAttachments[0].handle = dxmt9::core::Handle{colorA};
+  // Same handle in the wrong MRT slot must not authorize slot-1 discard.
+  clear.colorAttachments[2].handle =
+      dxmt9::core::Handle{colorWrongSlot};
+  clear.depthStencil.handle = dxmt9::core::Handle{depth};
+  clearSlot.appendClear(clear);
+  const auto clearSource =
+      fullSource(39u, clearSlot.seqId, clearSlot.commandCount());
+  auto tail = dxmt9::encoders::encodeChunk(
+      ctx, clearSource.slotIndex, clearSlot,
+      deferredOptions(*session, std::move(carrier->commandBuffer), clearSource));
+  check(tail.has_value(), "matching full clear closes the carried pass");
+  checkEq(capture.renderPassEnds, std::size_t{1},
+          "clear performs the one physical carried-pass close");
+  checkEq(capture.lateStoreResolutions.size(), std::size_t{4},
+          "each copied attachment resolves exactly once");
+  check(capture.lateStoreResolutions[0].action == WMTStoreActionDontCare &&
+            capture.lateStoreResolutions[0].cause ==
+                static_cast<std::uint8_t>(Cause::Clear),
+        "matching full color clear resolves DontCare");
+  check(capture.lateStoreResolutions[1].action == WMTStoreActionStore &&
+            capture.lateStoreResolutions[1].cause ==
+                static_cast<std::uint8_t>(Cause::ClearMismatch),
+        "wrong MRT slot resolves Store");
+  check(capture.lateStoreResolutions[2].action == WMTStoreActionDontCare &&
+            capture.lateStoreResolutions[2].cause ==
+                static_cast<std::uint8_t>(Cause::Clear),
+        "matching full depth clear resolves DontCare");
+  check(capture.lateStoreResolutions[3].action == WMTStoreActionStore &&
+            capture.lateStoreResolutions[3].cause ==
+                static_cast<std::uint8_t>(Cause::ClearMismatch),
+        "depth-only clear cannot discard stencil");
+  const auto accountingAfterResolution =
+      dxmt9::perf::test::snapshotRenderPassStoreAccounting();
+  check(accountingAfterResolution.colorStore - accountingBefore.colorStore ==
+            1u &&
+            accountingAfterResolution.colorDontCare -
+                    accountingBefore.colorDontCare ==
+                1u &&
+            accountingAfterResolution.depthStore - accountingBefore.depthStore ==
+                0u &&
+            accountingAfterResolution.depthDontCare -
+                    accountingBefore.depthDontCare ==
+                1u &&
+            accountingAfterResolution.stencilStore -
+                    accountingBefore.stencilStore ==
+                1u &&
+            accountingAfterResolution.stencilDontCare -
+                    accountingBefore.stencilDontCare ==
+                0u,
+        "resolved Store histograms conserve one action per included aspect");
+  checkEq(accountingAfterResolution.tilePreservationBytes -
+              accountingBefore.tilePreservationBytes,
+          std::uint64_t{128u},
+          "only the two Store attachments contribute tile Store bytes");
+
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail, dxmt9::encoders::SessionFinalizeCause::Drain),
+        "late Store multi-source session finalizes");
+  const auto published = tail->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{10},
+          "all sources remain FIFO-owned through late resolution");
+  for (std::size_t i = 0; i < published.size(); ++i) {
+    checkEq(published[i].seqId, std::uint64_t{300u + i},
+            "late Store resolution preserves FIFO completion order");
+  }
+  const auto accountingAfterFinalize =
+      dxmt9::perf::test::snapshotRenderPassStoreAccounting();
+  check(accountingAfterFinalize.colorStore ==
+            accountingAfterResolution.colorStore &&
+            accountingAfterFinalize.colorDontCare ==
+                accountingAfterResolution.colorDontCare &&
+            accountingAfterFinalize.depthStore ==
+                accountingAfterResolution.depthStore &&
+            accountingAfterFinalize.depthDontCare ==
+                accountingAfterResolution.depthDontCare &&
+            accountingAfterFinalize.stencilStore ==
+                accountingAfterResolution.stencilStore &&
+            accountingAfterFinalize.stencilDontCare ==
+                accountingAfterResolution.stencilDontCare &&
+            accountingAfterFinalize.tilePreservationBytes ==
+                accountingAfterResolution.tilePreservationBytes,
+        "post-close finalization cannot double-account actions or tile bytes");
+}
+
+void lateStoreDrawAndSampleControls() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  using Cause = dxmt9::perf::RenderPassLateStoreResolutionCause;
+  constexpr std::uint64_t colorA = 0xA410u;
+  constexpr std::uint64_t colorB = 0xB410u;
+
+  for (const bool sampleA : {false, true}) {
+    Harness harness;
+    DrawRunCapture capture;
+    capture.prepareLateStoreOnce = true;
+    seedUnknownStore(capture, Aspect::Color, colorA);
+    auto encoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        sampleA ? "late-store-sample-encoder" : "late-store-draw-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{encoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    auto session = dxmt9::encoders::makeEncodeChunkSession();
+    auto headSlot = makeTargetDrawSlot(320u, std::array{colorA});
+    const auto headSource =
+        fullSource(50u, headSlot.seqId, headSlot.commandCount());
+    auto carrier = dxmt9::encoders::encodeChunk(
+        ctx, headSource.slotIndex, headSlot,
+        deferredOptions(
+            *session,
+            retainedToken<WMT::CommandBuffer>("late-store-control-cb"),
+            headSource));
+    check(carrier.has_value(), "draw/sample control opens its A pass");
+
+    dxmt9::core::ChunkSlot tailSlot{};
+    tailSlot.seqId = 321u;
+    appendTargetDraw(tailSlot, colorB, sampleA ? colorA : 0u);
+    const auto tailSource =
+        fullSource(51u, tailSlot.seqId, tailSlot.commandCount());
+    auto tail = dxmt9::encoders::encodeChunk(
+        ctx, tailSource.slotIndex, tailSlot,
+        deferredOptions(*session, std::move(carrier->commandBuffer),
+                        tailSource));
+    check(tail.has_value(), "incompatible control source encodes");
+    checkEq(capture.lateStoreResolutions.size(), std::size_t{1},
+            "incompatible draw resolves the old pass once");
+    check(capture.lateStoreResolutions[0].action == WMTStoreActionStore,
+          "incompatible draw preserves the old attachment");
+    const auto expectedCause = sampleA ? Cause::Sample : Cause::Draw;
+    check(capture.lateStoreResolutions[0].cause ==
+              static_cast<std::uint8_t>(expectedCause),
+          "draw/sample cause attribution is exact");
+    check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+              ctx, *session, *tail),
+          "draw/sample control finalizes");
+  }
+}
+
+void lateStoreBarrierCommandControls() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  using Cause = dxmt9::perf::RenderPassLateStoreResolutionCause;
+  enum class Barrier { PartialClear, Readback, Copy, Resolve, Present };
+  const std::array cases{
+      std::pair{Barrier::PartialClear, Cause::ClearMismatch},
+      std::pair{Barrier::Readback, Cause::Readback},
+      std::pair{Barrier::Copy, Cause::Copy},
+      std::pair{Barrier::Resolve, Cause::Resolve},
+      std::pair{Barrier::Present, Cause::Present},
+  };
+  constexpr std::uint64_t colorA = 0xA418u;
+
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    Harness harness;
+    DrawRunCapture capture;
+    capture.prepareLateStoreOnce = true;
+    seedUnknownStore(capture, Aspect::Color, colorA);
+    auto encoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        "late-store-barrier-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{encoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    auto session = dxmt9::encoders::makeEncodeChunkSession();
+    auto headSlot = makeTargetDrawSlot(325u + i, std::array{colorA});
+    const auto headSource =
+        fullSource(55u + i, headSlot.seqId, headSlot.commandCount());
+    auto carrier = dxmt9::encoders::encodeChunk(
+        ctx, headSource.slotIndex, headSlot,
+        deferredOptions(
+            *session,
+            retainedToken<WMT::CommandBuffer>("late-store-barrier-cb"),
+            headSource));
+    check(carrier.has_value(), "barrier control opens its A pass");
+
+    dxmt9::core::ChunkSlot tailSlot{};
+    tailSlot.seqId = 326u + i;
+    switch (cases[i].first) {
+    case Barrier::PartialClear: {
+      dxmt9::core::ClearDesc clear{};
+      clear.clearColor = true;
+      clear.colorAttachments[0].handle = dxmt9::core::Handle{colorA};
+      clear.rects.push_back({.left = 0, .top = 0, .right = 4, .bottom = 4});
+      tailSlot.appendClear(clear);
+      break;
+    }
+    case Barrier::Readback:
+      tailSlot.appendReadback({
+          .source = dxmt9::core::Handle{colorA},
+          .destination = dxmt9::core::Handle{0xB418u},
+      });
+      break;
+    case Barrier::Copy:
+      tailSlot.appendSurfaceCopy({
+          .source = dxmt9::core::Handle{colorA},
+          .destination = dxmt9::core::Handle{0xB418u},
+      });
+      break;
+    case Barrier::Resolve:
+      tailSlot.appendDepthResolve({
+          .msaaDepth = dxmt9::core::Handle{0xD418u},
+          .intzDest = dxmt9::core::Handle{0xD419u},
+      });
+      break;
+    case Barrier::Present:
+      tailSlot.appendPresent({}, dxmt9::core::Handle{colorA});
+      break;
+    }
+    auto tailSource =
+        fullSource(56u + i, tailSlot.seqId, tailSlot.commandCount());
+    tailSource.hasPresent = cases[i].first == Barrier::Present;
+    auto tail = dxmt9::encoders::encodeChunk(
+        ctx, tailSource.slotIndex, tailSlot,
+        deferredOptions(*session, std::move(carrier->commandBuffer),
+                        tailSource));
+    check(tail.has_value(), "barrier control source encodes");
+    checkEq(capture.lateStoreResolutions.size(), std::size_t{1},
+            "barrier resolves the old attachment exactly once");
+    check(capture.lateStoreResolutions[0].action == WMTStoreActionStore &&
+              capture.lateStoreResolutions[0].cause ==
+                  static_cast<std::uint8_t>(cases[i].second),
+          "barrier uses its cause-specific conservative Store bucket");
+    check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+              ctx, *session, *tail),
+          "barrier control finalizes");
+  }
+}
+
+void lateStoreCloseAndFinalizeCauses() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  using Cause = dxmt9::perf::RenderPassLateStoreResolutionCause;
+  using Finalize = dxmt9::encoders::SessionFinalizeCause;
+  constexpr std::uint64_t colorA = 0xA420u;
+  const std::array cases{
+      std::pair{Finalize::Drain, Cause::Drain},
+      std::pair{Finalize::SessionCap, Cause::Finalize},
+      std::pair{Finalize::Independent, Cause::Finalize},
+      std::pair{Finalize::Initializer, Cause::Finalize},
+      std::pair{Finalize::ProducerWait, Cause::Finalize},
+      std::pair{Finalize::FailOrOther, Cause::Error},
+  };
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    Harness harness;
+    DrawRunCapture capture;
+    capture.prepareLateStoreOnce = true;
+    seedUnknownStore(capture, Aspect::Color, colorA);
+    auto encoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+        "late-store-finalize-encoder");
+    auto recorder = makeDrawRunRecorder(
+        capture, WMT::RenderCommandEncoder{encoderOwner.handle});
+    auto ctx = harness.makeContext();
+    ctx.drawRecorder = &recorder;
+    auto session = dxmt9::encoders::makeEncodeChunkSession();
+    auto slot = makeTargetDrawSlot(340u + i, std::array{colorA});
+    const auto source = fullSource(60u + i, slot.seqId, slot.commandCount());
+    auto carrier = dxmt9::encoders::encodeChunk(
+        ctx, source.slotIndex, slot,
+        deferredOptions(
+            *session,
+            retainedToken<WMT::CommandBuffer>("late-store-finalize-cb"),
+            source));
+    check(carrier.has_value(), "finalize-cause fixture opens a pass");
+    check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+              ctx, *session, *carrier, cases[i].first),
+          "finalize-cause fixture finalizes");
+    checkEq(capture.lateStoreResolutions.size(), std::size_t{1},
+            "finalizer resolves Unknown exactly once");
+    check(capture.lateStoreResolutions[0].action == WMTStoreActionStore &&
+              capture.lateStoreResolutions[0].cause ==
+                  static_cast<std::uint8_t>(cases[i].second),
+          "finalizer uses its cause-specific conservative Store bucket");
+  }
+
+  Harness harness;
+  DrawRunCapture capture;
+  capture.prepareLateStoreOnce = true;
+  seedUnknownStore(capture, Aspect::Color, colorA);
+  auto encoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "late-store-close-pass-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{encoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  auto slot = makeTargetDrawSlot(350u, std::array{colorA});
+  const auto source = fullSource(70u, slot.seqId, slot.commandCount());
+  auto carrier = dxmt9::encoders::encodeChunk(
+      ctx, source.slotIndex, slot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("late-store-close-pass-cb"),
+          source));
+  check(carrier.has_value(), "ClosePass fixture opens a pass");
+  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+            ctx, *session, *carrier) ==
+            dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed,
+        "ordered ClosePass closes the active encoder");
+  checkEq(capture.lateStoreResolutions.size(), std::size_t{1},
+          "ordered ClosePass resolves Unknown once");
+  check(capture.lateStoreResolutions[0].cause ==
+            static_cast<std::uint8_t>(Cause::IncompatibleClose),
+        "ordered ClosePass uses incompatible-close attribution");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *carrier),
+        "closed session finalizes without a second resolution");
+  checkEq(capture.lateStoreResolutions.size(), std::size_t{1},
+          "post-close finalization cannot double-resolve or double-account");
+}
+
+void lateStoreEncoderOpenFailureDropsPendingState() {
+  using Aspect = dxmt9::encoders::LateRenderPassStoreAspect;
+  Harness harness;
+  DrawRunCapture capture;
+  seedUnknownStore(capture, Aspect::Color, 0xA430u);
+  auto recorder = makeDrawRunRecorder(capture, WMT::RenderCommandEncoder{});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  auto slot = makeTargetDrawSlot(360u, std::array{std::uint64_t{0xA430u}});
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  clear.colorAttachments[0].handle = dxmt9::core::Handle{0xA430u};
+  slot.appendClear(clear);
+  const auto source = fullSource(80u, slot.seqId, slot.commandCount());
+  auto carrier = dxmt9::encoders::encodeChunk(
+      ctx, source.slotIndex, slot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>("late-store-null-encoder-cb"),
+          source));
+  check(carrier.has_value(),
+        "null encoder fixture still returns its deferred carrier");
+  check(capture.lateStorePrepareCalls > 0u,
+        "null encoder fixture attempted to seed Unknown state");
+  check(capture.lateStoreResolutions.empty(),
+        "later clear cannot resolve stale state from a failed encoder open");
+  checkEq(capture.renderPassEnds, std::size_t{0},
+          "failed encoder open emits no pass-end effect");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *carrier),
+        "null encoder fixture finalizes without a resolution leak");
+  check(capture.lateStoreResolutions.empty(),
+        "finalization cannot account discarded null-encoder state");
+}
+
+ActiveSeedOutcomeRun runActiveSeedOutcomeCase(bool bSamplesA,
+                                               bool aSamplesB,
+                                               std::uint64_t seqBase) {
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      bSamplesA || aSamplesB ? "active-seed-blocked-render-encoder"
+                             : "active-seed-control-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  constexpr std::uint64_t kTargetA = 0xA200u;
+  constexpr std::uint64_t kTargetB = 0xB200u;
+  const std::array headTargets{kTargetA};
+  auto headSlot = makeTargetDrawSlot(seqBase, headTargets);
+  const std::size_t headSlotIndex = static_cast<std::size_t>(seqBase);
+  const auto headSource =
+      fullSource(headSlotIndex, headSlot.seqId, headSlot.commandCount());
+  auto head = dxmt9::encoders::encodeChunk(
+      ctx, headSlotIndex, headSlot,
+      deferredOptions(
+          *session,
+          retainedToken<WMT::CommandBuffer>(
+              bSamplesA || aSamplesB
+                  ? "active-seed-blocked-command-buffer"
+                  : "active-seed-control-command-buffer"),
+          headSource));
+  check(head.has_value(), "active A source opens the outcome-test session");
+  check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
+        "outcome-test head leaves active A open");
+
+  auto currentSlot = makeActiveSeedOutcomeSlot(
+      seqBase + 1u, kTargetA, kTargetB, bSamplesA, aSamplesB);
+  dxmt9::tests::framegraph::ArenaPayloadFixture current(currentSlot);
+  check(current.valid(), "active-seed outcome Arena source publishes");
+  const std::size_t currentSlotIndex = headSlotIndex + 1u;
+  const auto currentSource = fullSource(
+      currentSlotIndex, currentSlot.seqId, currentSlot.commandCount());
+  auto options = deferredOptions(*session, std::move(head->commandBuffer),
+                                 currentSource);
+  const auto before =
+      dxmt9::perf::test::snapshotFramegraphActiveRenderSeed();
+  dxmt9::render::FrameGraphBackend backend;
+  auto tail = backend.onSourceReady(ctx, currentSlotIndex, current.view(),
+                                    currentSlot.seqId, std::move(options));
+  check(tail.has_value(), "active-seed outcome source encodes");
+  const auto after =
+      dxmt9::perf::test::snapshotFramegraphActiveRenderSeed();
+  const std::size_t endsBeforeFinalize = capture.renderPassEnds;
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "active-seed outcome session finalizes");
+  checkEq(tail->explicitCompletionSourceSpan().size(), std::size_t{2},
+          "outcome session retains source completion order");
+
+  return ActiveSeedOutcomeRun{
+      .before = before,
+      .after = after,
+      .drawRunCommands = std::move(capture.drawRunCommands),
+      .renderPassBegins = capture.renderPassBegins,
+      .renderPassEndsBeforeFinalize = endsBeforeFinalize,
+  };
+}
+
+void activeRenderSeedOutcomeTracksCycleAndActivation() {
+  auto checkCommandOrder = [](std::span<const std::size_t> actual,
+                              std::initializer_list<std::size_t> expected,
+                              std::string_view message) {
+    if (std::equal(actual.begin(), actual.end(), expected.begin(),
+                   expected.end())) {
+      return;
+    }
+    std::ostringstream out;
+    out << message << " (actual:";
+    for (const std::size_t command : actual) {
+      out << ' ' << command;
+    }
+    out << ')';
+    fail(out.str());
+  };
+  const auto cyclic = runActiveSeedOutcomeCase(true, true, 90u);
+  checkCommandOrder(cyclic.drawRunCommands, {0u, 1u, 2u},
+                    "A then cyclic B,A stays in source draw order");
+  checkEq(cyclic.renderPassBegins, std::size_t{3},
+          "cyclic B,A opens both source-local passes after active A");
+  checkEq(cyclic.renderPassEndsBeforeFinalize, std::size_t{2},
+          "cyclic source closes A then B only at semantic transitions");
+  checkEq(cyclic.after.applyApplied - cyclic.before.applyApplied,
+          std::uint64_t{1}, "cyclic source records an applied seed");
+  checkEq(cyclic.after.passCoalesceBlockedCycle -
+              cyclic.before.passCoalesceBlockedCycle,
+          std::uint64_t{1}, "cyclic source records the dependency wedge");
+  checkEq(cyclic.after.appliedButUnmerged -
+              cyclic.before.appliedButUnmerged,
+          std::uint64_t{1}, "cyclic source records applied-but-unmerged");
+  checkEq(cyclic.after.replayActivated - cyclic.before.replayActivated,
+          std::uint64_t{0}, "cyclic source does not activate replay");
+
+  const auto warOnly = runActiveSeedOutcomeCase(true, false, 100u);
+  checkCommandOrder(warOnly.drawRunCommands, {0u, 1u, 2u},
+                    "B reading A before returning A stays source ordered");
+  checkEq(warOnly.after.passCoalesceBlockedCycle -
+              warOnly.before.passCoalesceBlockedCycle,
+          std::uint64_t{1},
+          "B read followed by A attachment write records the WAR wedge");
+  checkEq(warOnly.after.appliedButUnmerged -
+              warOnly.before.appliedButUnmerged,
+          std::uint64_t{1}, "WAR-only source leaves the seed unmerged");
+  checkEq(warOnly.after.replayActivated - warOnly.before.replayActivated,
+          std::uint64_t{0}, "WAR-only source does not activate replay");
+
+  const auto independent = runActiveSeedOutcomeCase(false, false, 110u);
+  checkCommandOrder(independent.drawRunCommands, {0u, 2u, 1u},
+                    "independent B,A replays current A before B");
+  checkEq(independent.renderPassBegins, std::size_t{2},
+          "independent source continues active A before opening B");
+  checkEq(independent.renderPassEndsBeforeFinalize, std::size_t{1},
+          "independent replay closes only the real A-to-B transition");
+  checkEq(independent.after.applyApplied - independent.before.applyApplied,
+          std::uint64_t{1}, "independent source records an applied seed");
+  checkEq(independent.after.passCoalesceBlockedCycle -
+              independent.before.passCoalesceBlockedCycle,
+          std::uint64_t{0}, "independent source has no dependency wedge");
+  checkEq(independent.after.appliedButUnmerged -
+              independent.before.appliedButUnmerged,
+          std::uint64_t{0}, "independent source merges its applied seed");
+  checkEq(independent.after.movedHeadProved -
+              independent.before.movedHeadProved,
+          std::uint64_t{1}, "independent source proves its moved head");
+  checkEq(independent.after.replayActivated -
+              independent.before.replayActivated,
+          std::uint64_t{1}, "independent source activates replay");
+
+  Harness harness;
+  DrawRunCapture capture;
+  auto renderEncoderOwner = retainedToken<WMT::RenderCommandEncoder>(
+      "active-seed-absent-render-encoder");
+  auto recorder = makeDrawRunRecorder(
+      capture, WMT::RenderCommandEncoder{renderEncoderOwner.handle});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+  constexpr std::uint64_t kTargetA = 0xA300u;
+  constexpr std::uint64_t kTargetB = 0xB300u;
+  const std::array targets{kTargetA, kTargetB, kTargetA};
+  auto sourceSlot = makeTargetDrawSlot(121u, targets);
+  dxmt9::tests::framegraph::ArenaPayloadFixture source(sourceSlot);
+  check(source.valid(), "snapshot-absent Arena source publishes");
+  const auto completion =
+      fullSource(110u, sourceSlot.seqId, sourceSlot.commandCount());
+  auto options = deferredOptions(
+      *session,
+      retainedToken<WMT::CommandBuffer>(
+          "active-seed-absent-command-buffer"),
+      completion);
+  const auto absentBefore =
+      dxmt9::perf::test::snapshotFramegraphActiveRenderSeed();
+  dxmt9::render::FrameGraphBackend backend;
+  auto tail = backend.onSourceReady(ctx, completion.slotIndex, source.view(),
+                                    sourceSlot.seqId, std::move(options));
+  check(tail.has_value(), "snapshot-absent source encodes");
+  const auto absentAfter =
+      dxmt9::perf::test::snapshotFramegraphActiveRenderSeed();
+  checkCommandOrder(capture.drawRunCommands, {0u, 2u, 1u},
+                    "snapshot-absent source still activates ordinary pass "
+                    "coalescing");
+  checkEq(absentAfter.snapshotAbsent - absentBefore.snapshotAbsent,
+          std::uint64_t{1}, "empty session records snapshot absent");
+  checkEq(absentAfter.applyApplied - absentBefore.applyApplied,
+          std::uint64_t{0}, "snapshot-absent replay is not seed-applied");
+  checkEq(absentAfter.movedHeadProved - absentBefore.movedHeadProved,
+          std::uint64_t{0}, "ordinary replay is not seed head proof");
+  checkEq(absentAfter.replayActivated - absentBefore.replayActivated,
+          std::uint64_t{0}, "ordinary replay is not seed activation");
+  checkEq(absentAfter.passCoalesceBlockedCycle -
+              absentBefore.passCoalesceBlockedCycle,
+          std::uint64_t{0}, "snapshot-absent planning emits no seed cycle");
+  checkEq(absentAfter.passCoalesceSecondNonDraw -
+              absentBefore.passCoalesceSecondNonDraw,
+          std::uint64_t{0},
+          "snapshot-absent planning emits no seed non-draw rejection");
+  checkEq(absentAfter.fallbackMovedHeadUnproved -
+              absentBefore.fallbackMovedHeadUnproved,
+          std::uint64_t{0}, "snapshot-absent planning emits no seed fallback");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *tail),
+        "snapshot-absent scope session finalizes");
 }
 
 void closePassRejectsMissingCarrierWithoutMutation() {
@@ -1151,11 +2361,200 @@ void partialCommandSegmentSessionFinalizesWithoutTargets() {
         "partial finalization clears targetless deferred payload");
 }
 
+void preRegisteredFragmentsKeepReplayAndCompletionOrderIndependent() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto recorder = makeDrawRunRecorder(capture, {});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  dxmt9::core::ChunkSlot first{};
+  first.seqId = 1;
+  dxmt9::core::ClearDesc firstClear{};
+  firstClear.clearColor = true;
+  first.appendClear(firstClear);
+  dxmt9::core::ChunkSlot second{};
+  second.seqId = 2;
+  dxmt9::core::ClearDesc secondClear{};
+  secondClear.clearColor = true;
+  second.appendClear(secondClear);
+  const std::array sources{
+      fullSource(1, first.seqId, first.commandCount()),
+      fullSource(2, second.seqId, second.commandCount()),
+  };
+  check(dxmt9::encoders::appendEncodeChunkSessionSources(*session, sources),
+        "fragment fixture pre-registers FIFO completion sources");
+
+  auto fragmentOptions = [&](const auto& source,
+                             WMT::Reference<WMT::CommandBuffer> carrier) {
+    dxmt9::encoders::EncodeChunkOptions options{};
+    options.commandBuffer = std::move(carrier);
+    options.session = session.get();
+    options.deferSessionFinalization = true;
+    options.partitionSource = source.source;
+    options.preRegisteredFragment =
+        dxmt9::encoders::PreRegisteredEncodeChunkFragment{
+            .commandBegin = 0,
+            .commandCount = 1,
+        };
+    return options;
+  };
+
+  auto encodedSecond = dxmt9::encoders::encodeChunk(
+      ctx, sources[1].slotIndex, second,
+      fragmentOptions(
+          sources[1],
+          retainedToken<WMT::CommandBuffer>("fragment-order-cb-token")));
+  check(encodedSecond.has_value(),
+        "source seq2 encodes first as a pre-registered fragment");
+  checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
+          std::size_t{2},
+          "fragment replay does not append completion metadata again");
+
+  const obj_handle_t injectedCommandBuffer =
+      encodedSecond->commandBuffer.handle;
+  auto encodedFirst = dxmt9::encoders::encodeChunk(
+      ctx, sources[0].slotIndex, first,
+      fragmentOptions(sources[0], std::move(encodedSecond->commandBuffer)));
+  check(encodedFirst.has_value(),
+        "source seq1 encodes second into the same session carrier");
+  check(dxmt9::core::metalqueue::foldEncodedSessionFragmentCarrier(
+            *encodedFirst, *encodedSecond,
+            injectedCommandBuffer),
+        "out-of-sequence fragment metadata folds into the final carrier");
+  check(dxmt9::encoders::finalizeEncodeChunkSessionIntoSubmission(
+            ctx, *session, *encodedFirst),
+        "fragment session finalizes after carrier folding");
+  const auto published = encodedFirst->explicitCompletionSourceSpan();
+  checkEq(published.size(), std::size_t{2},
+          "finalization publishes each pre-registered source once");
+  checkEq(published[0].seqId, 1ull,
+          "completion remains FIFO despite seq2 encoding first");
+  checkEq(published[1].seqId, 2ull,
+          "completion order is independent from fragment replay order");
+  checkEq(capture.splitPolicyCalls, std::size_t{2},
+          "each selected command fragment executes exactly once");
+}
+
+void malformedPreRegisteredFragmentsRejectBeforeRecorderEffects() {
+  Harness harness;
+  DrawRunCapture capture;
+  auto recorder = makeDrawRunRecorder(capture, {});
+  auto ctx = harness.makeContext();
+  ctx.drawRecorder = &recorder;
+  auto session = dxmt9::encoders::makeEncodeChunkSession();
+
+  dxmt9::core::ChunkSlot slot{};
+  slot.seqId = 7;
+  dxmt9::core::ClearDesc clear{};
+  clear.clearColor = true;
+  slot.appendClear(clear);
+  const auto source = fullSource(7, slot.seqId, slot.commandCount());
+
+  dxmt9::encoders::EncodeChunkOptions unregistered{};
+  unregistered.commandBuffer =
+      retainedToken<WMT::CommandBuffer>("unregistered-fragment-token");
+  unregistered.session = session.get();
+  unregistered.deferSessionFinalization = true;
+  unregistered.partitionSource = source.source;
+  unregistered.preRegisteredFragment =
+      dxmt9::encoders::PreRegisteredEncodeChunkFragment{0, 1};
+  check(!dxmt9::encoders::encodeChunk(
+             ctx, source.slotIndex, slot, std::move(unregistered))
+             .has_value(),
+        "unregistered fragment source is rejected");
+  checkEq(capture.splitPolicyCalls, std::size_t{0},
+          "unregistered rejection precedes recorder effects");
+
+  check(dxmt9::encoders::appendEncodeChunkSessionSource(*session, source),
+        "malformed fixture registers its exact source");
+  auto conflicting = deferredOptions(
+      *session, retainedToken<WMT::CommandBuffer>("conflict-fragment-token"),
+      source);
+  conflicting.preRegisteredFragment =
+      dxmt9::encoders::PreRegisteredEncodeChunkFragment{0, 1};
+  check(!dxmt9::encoders::encodeChunk(
+             ctx, source.slotIndex, slot, std::move(conflicting))
+             .has_value(),
+        "sessionSource plus pre-registered fragment is rejected");
+  checkEq(capture.splitPolicyCalls, std::size_t{0},
+          "ambiguous range mode rejects before recorder effects");
+
+  dxmt9::encoders::EncodeChunkOptions finalizingFragment{};
+  finalizingFragment.commandBuffer =
+      retainedToken<WMT::CommandBuffer>("finalizing-fragment-token");
+  finalizingFragment.session = session.get();
+  finalizingFragment.partitionSource = source.source;
+  finalizingFragment.preRegisteredFragment =
+      dxmt9::encoders::PreRegisteredEncodeChunkFragment{0, 1};
+  check(!dxmt9::encoders::encodeChunk(
+             ctx, source.slotIndex, slot, std::move(finalizingFragment))
+             .has_value(),
+        "pre-registered fragment cannot finalize the session early");
+  checkEq(capture.splitPolicyCalls, std::size_t{0},
+          "early-finalization rejection precedes recorder effects");
+
+  dxmt9::encoders::EncodeChunkOptions outsideRange{};
+  outsideRange.commandBuffer =
+      retainedToken<WMT::CommandBuffer>("outside-fragment-token");
+  outsideRange.session = session.get();
+  outsideRange.deferSessionFinalization = true;
+  outsideRange.partitionSource = source.source;
+  outsideRange.preRegisteredFragment =
+      dxmt9::encoders::PreRegisteredEncodeChunkFragment{1, 1};
+  check(!dxmt9::encoders::encodeChunk(
+             ctx, source.slotIndex, slot, std::move(outsideRange))
+             .has_value(),
+        "fragment outside registered command coverage is rejected");
+  checkEq(capture.splitPolicyCalls, std::size_t{0},
+          "range rejection precedes recorder effects");
+}
+
+void ticketBeforeEncodeAdmissionFailureRemainsUnissued() {
+  Harness harness;
+  auto invalidContext = harness.makeContext();
+  invalidContext.device = {};
+  dxmt9::core::ChunkSlot emptySlot{};
+  const std::array targets{
+      dxmt9::encoders::ActiveSeedMergeTargetWitness{
+          .retainedSourceIndex = 0u,
+          .commandIndex = 0u,
+          .mergeOrdinal = 0u,
+          .mergeDistance = 1u,
+      }};
+  dxmt9::encoders::EncodeChunkOptions options{};
+  options.activeSeedMergeTicket =
+      dxmt9::encoders::ActiveSeedMergeTicketContext{
+          .seed = {.seqId = 9u, .encoderIndex = 3u},
+          .windowId = 4u,
+          .sourceCount = 2u,
+      };
+  options.activeSeedMergeTargets = targets;
+  const auto before = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(!dxmt9::encoders::encodeChunk(
+             invalidContext, 0u, emptySlot, std::move(options))
+             .has_value(),
+        "invalid device/queue rejects before encode admission");
+  const auto after = dxmt9::perf::test::
+      snapshotRenderPassNaturalFallbackAttribution();
+  check(after.seedTicketsIssued == before.seedTicketsIssued &&
+            after.seedTicketsMatched == before.seedTicketsMatched &&
+            after.seedTicketsContinued == before.seedTicketsContinued &&
+            after.seedTicketsMismatch == before.seedTicketsMismatch &&
+            after.seedTicketsUnconsumed == before.seedTicketsUnconsumed,
+        "pre-admission failure owns neither issued nor terminal ticket state");
+}
+
 }  // namespace
 
 int main() {
+  setenv("DXMT_PERF_COUNTERS", "1", 1);
   setenv("DXMT9_PERF_ENCODER_GPU_TIME", "0", 1);
   setenv("DXMT_METAL_CAPTURE_FRAME", "0", 1);
+  setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
   try {
     encodeChunkThenFinalizerPublishesAndResetsOneSession();
     finalizerValidationFailureIsNoMutationAndRetryable();
@@ -1166,8 +2565,23 @@ int main() {
     invalidDrawRunPlanFallsBackBeforeEncodeChunkSideEffects();
     explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer();
     closePassIsIdempotentAndSessionResumesOnSameCommandBuffer();
+    closedEncoderFrontierAllowsMovedHeadOnSameCommandBuffer();
+    pendingClearSidecarAloneCannotProveCleanFrontier();
+    freshCleanFrontierAllowsMovedHead();
+    pendingClearAndInjectedFrontiersKeepNaturalMovedHeadOrder();
+    activeRenderSeedCarriesAcrossLegacyAndArenaSources();
+    multiSourceFragmentsCarryActivePassAcrossSeparateSources();
+    activeRenderSeedOutcomeTracksCycleAndActivation();
+    lateStoreResolutionCarriesAcrossSessionSources();
+    lateStoreDrawAndSampleControls();
+    lateStoreBarrierCommandControls();
+    lateStoreCloseAndFinalizeCauses();
+    lateStoreEncoderOpenFailureDropsPendingState();
     closePassRejectsMissingCarrierWithoutMutation();
     partialCommandSegmentSessionFinalizesWithoutTargets();
+    preRegisteredFragmentsKeepReplayAndCompletionOrderIndependent();
+    malformedPreRegisteredFragmentsRejectBeforeRecorderEffects();
+    ticketBeforeEncodeAdmissionFailureRemainsUnissued();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_lifecycle_spec failed: " << error.what()
               << '\n';

@@ -238,19 +238,26 @@ this key extension together with the renderer factory; see spec.md
 **R-BACK-32.1** When the modern path is active, the source consumer must build
 one Frame Graph DAG **per logical `SourcePayloadView`**. A legacy
 `CommandChunk` is adapted as one such view; an Arena source exposes one view
-over its complete ordered payload-block chain. The DAG window covers exactly
-that logical source. Payload blocks and segments must not create separate DAGs,
-and multiple logical sources must not merge into one DAG even when no `Present`
-separates them. A source that spans a `Present` boundary keeps its `Present`
-record as one node inside the DAG. Nodes represent passes (render, compute,
+over its complete ordered payload-block chain. The baseline DAG covers exactly
+that logical source. Payload blocks and segments must not create separate DAGs.
+A source that spans a `Present` boundary keeps its `Present` record as one node
+inside the DAG. Nodes represent passes (render, compute,
 blit, present, sync). Edges represent resource read/write dependencies internal
-to the source. FrameGraph command references are source-qualified stable
-locators; the graph must not retain Arena page pointers. Query-, Readback-, and
+to the source. Baseline graph command references are source-local stable
+indices; a composite session plan qualifies them with its retained-source
+index. Neither form may retain Arena page pointers. Query-, Readback-, and
 `UpdateTexture`-dependent work remains an ordered non-payload control or
 compatibility disposition until its canonical Arena sizing is specified.
 The opt-in DCE lookahead in R-BACK-32.10 may build a second, independent DAG
 for an already-selected FIFO successor and pass only its full-overwrite summary
 to the current DAG. It must not merge the DAGs or create a cross-source edge.
+An open `EncodeSession` may separately build the bounded composite planning
+window defined by `R-BACK-2.43` from already-Represented consecutive source
+DAGs, then augment it with one commandless active-render seed. The composite is
+call-local scheduling scratch: every command remains source-qualified, source
+payload/completion ownership stays distinct, and source/window edges must not
+become pass or command-buffer boundaries. It is not available to DCE; the DCE
+successor rule above remains an independent-summary proof with no merged DAG.
 
 **R-BACK-32.8** Per-source fence semantics from
 `specs/backend/requirements.md` (`completedSeqId`, deferred resource reclaim,
@@ -258,9 +265,14 @@ query and readback wait) must hold under the modern path unchanged. The
 linearizer must submit each source's optimized DAG as one ordered replay stream
 inside its selected EncodeSession whose source completion advances the same
 `completedSeqId` the traditional path would advance for that logical source.
-Cross-source reordering is forbidden, and sources must be processed in
-submission order. Payload blocks, graph nodes, and `(source, commandIndex)`
-diagnostic locators must not create, split, defer, or coalesce source completion.
+Outside the bounded composite session planner in `R-BACK-2.43`, cross-source
+reordering is forbidden and sources are processed in submission order. That
+planner may replay only its qualified `DrawRun` permutation across an already-
+Represented retained prefix after complete dependency and transaction
+preflight. It does not reorder source completion: completion remains exactly
+once in natural FIFO submission order. Payload blocks, graph nodes, and
+`(source, commandIndex)` diagnostic locators must not create, split, defer, or
+coalesce source completion.
 
 **R-BACK-32.2** Frame Graph construction must be deterministic: the same source
 view and retained resource-alias mapping must always produce the same DAG, the
@@ -302,9 +314,12 @@ of these boundaries occur inside the source: an in-source `Lock`/`Unlock`
 record, a `GetRenderTargetData` record, a `StretchRect` that crosses
 CPU-visible memory, a `Present` record, or an explicit
 `DXMT9_RENDERER_FLUSH_PRESENT_INTERVAL=N` debug override. End-of-source is
-always a finalize boundary by `R-BACK-32.1`. Finalize serializes the DAG up
-to that boundary; remaining records in the same source start a fresh sub-DAG
-that submits before the next source.
+always a source-local DAG finalize boundary by `R-BACK-32.1`. Finalize
+serializes the DAG up to that boundary; remaining records in the same source
+start a fresh sub-DAG. Ordinarily that sub-DAG submits before the next source.
+The bounded `R-BACK-2.43` composite planner may instead qualify complete
+finalized source DAGs in one call-local graph and select a dependency-safe
+`DrawRun` replay order while retaining natural FIFO completion.
 
 **R-BACK-32.5** The Frame Graph optimizer must run a fixed pipeline of passes
 in this order:

@@ -110,7 +110,10 @@ struct CommandQueueArenaLeaseTestAccess {
     core::metalqueue::QueueLifecycleController::PendingCompletion pending{};
     pending.slotIndex = completion.slotIndex;
     pending.seqId = completion.seqId;
-    (void)pending.fixedCompletionSources.append(completion);
+    const std::array pendingSources{completion};
+    if (!pending.assignFixedCompletionSources(pendingSources)) {
+      return result;
+    }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
     bool completionStop = false;
     result.completed =

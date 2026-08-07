@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <span>
 #include <type_traits>
 
 namespace dxmt9::render {
@@ -55,6 +57,30 @@ struct EncodeSessionLimits {
            maxDraws != 0 && maxCommandBuffers != 0;
   }
 };
+
+// Scheduler-owned Tape bytes charged to the bounded session lease. This is
+// deliberately distinct from SourceSemanticSummary::byteCount, whose
+// publication extent has representation-specific meaning.
+struct SessionResidencyByteCharge {
+  std::uint64_t value = 0;
+
+  constexpr bool valid() const noexcept { return value != 0; }
+
+  friend constexpr bool operator==(const SessionResidencyByteCharge&,
+                                   const SessionResidencyByteCharge&) = default;
+};
+
+constexpr SessionResidencyByteCharge sessionTapeByteCharge(
+    bool arenaPayload,
+    std::uint64_t usedBytes,
+    std::uint32_t pageCount,
+    std::uint32_t pageSize) noexcept {
+  return {
+      .value = arenaPayload
+          ? usedBytes
+          : static_cast<std::uint64_t>(pageCount) * pageSize,
+  };
+}
 
 enum class SessionCapacityDimension : std::uint8_t {
   None,
@@ -113,6 +139,21 @@ struct SessionCapacityLeaseStats {
   SessionCapacityVector successorMinimum{};
 };
 
+// Typed observation used only before the first lease acquisition. A unique
+// ordered-tail Writing source may already occupy the physical capacity that
+// successorHeadroom reserves. Qualification credits that exact claim once;
+// the acquired lease still owns the complete fixed successor vector.
+struct SessionCapacityLeaseAcquisitionSnapshot {
+  SessionCapacityVector olderUnavailable{};
+  std::optional<SessionCapacityVector> orderedTailWritingSuccessor{};
+  bool valid = true;
+};
+
+std::optional<SessionCapacityVector>
+sessionCapacityUnavailableForFirstLease(
+    const SessionCapacityLeaseAcquisitionSnapshot& snapshot,
+    const SessionCapacityVector& successorHeadroom) noexcept;
+
 constexpr std::uint64_t worstCaseNonWrappingReservationPages(
     std::uint64_t payloadPages) noexcept {
   return payloadPages == 0 ||
@@ -152,8 +193,12 @@ struct EncodeSessionAdmissionState {
   std::uint64_t lastRawOrdinal = 0;
   std::uint64_t lastSourceOrdinal = 0;
   std::uint64_t lastSeqId = 0;
-  std::uint64_t bytes = 0;
+  SessionResidencyByteCharge residencyBytes{};
+  // `sources` is encoded-unsubmitted work. `residentSources`, `pages`, and
+  // residencyBytes are physical publication/Tape credit and may fall while
+  // the same session remains open after post-encode retirement.
   std::uint32_t sources = 0;
+  std::uint32_t residentSources = 0;
   std::uint32_t pages = 0;
   std::uint32_t draws = 0;
   std::uint32_t commandBuffers = 0;
@@ -175,6 +220,7 @@ struct EncodeSessionAdmissionState {
 struct SessionAdmissionCandidate {
   SessionAdmissionKey key{};
   core::SourceSemanticSummary semantic{};
+  SessionResidencyByteCharge residencyBytes{};
   std::uint64_t rawOrdinal = 0;
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
@@ -194,13 +240,49 @@ enum class SessionAdmissionDecision : std::uint8_t {
   RejectInvalid,
 };
 
+enum SessionCapacityExceededAxis : std::uint8_t {
+  SessionCapacityExceededNone = 0,
+  SessionCapacityExceededSources = 1u << 0,
+  SessionCapacityExceededPages = 1u << 1,
+};
+
+// Exact source/page demand at a capacity rejection. Payload pages exclude
+// circular wrap padding; required pages include it. The totals are computed
+// from the predecessor session plus the rejected candidate.
+struct SessionCapacityRejectionObservation {
+  std::uint64_t predecessorSources = 0;
+  std::uint64_t predecessorPages = 0;
+  std::uint64_t candidatePayloadPages = 0;
+  std::uint64_t candidateWrapPaddingPages = 0;
+  std::uint64_t candidateRequiredPages = 0;
+  std::uint64_t requiredTotalSources = 0;
+  std::uint64_t requiredTotalPages = 0;
+  std::uint8_t exceededAxes = SessionCapacityExceededNone;
+
+  constexpr bool valid() const noexcept {
+    return exceededAxes != SessionCapacityExceededNone;
+  }
+  constexpr bool sourcesExceeded() const noexcept {
+    return (exceededAxes & SessionCapacityExceededSources) != 0;
+  }
+  constexpr bool pagesExceeded() const noexcept {
+    return (exceededAxes & SessionCapacityExceededPages) != 0;
+  }
+};
+
 struct SessionAdmissionResult {
   SessionAdmissionDecision decision = SessionAdmissionDecision::RejectInvalid;
   SessionCapacityDimension limitingDimension =
       SessionCapacityDimension::None;
+  SessionCapacityRejectionObservation capacityRejection{};
 };
 
 SessionCapacityVector sessionCapacityFor(
+    const SessionAdmissionCandidate& candidate) noexcept;
+SessionCapacityVector sessionPhysicalResidencyCapacityFor(
+    const SessionAdmissionCandidate& candidate) noexcept;
+bool retireSessionAdmissionResidency(
+    EncodeSessionAdmissionState& session,
     const SessionAdmissionCandidate& candidate) noexcept;
 
 SessionAdmissionResult classifySessionAdmissionDetailed(
@@ -217,6 +299,57 @@ bool appendSessionAdmission(
     EncodeSessionAdmissionState& session,
     const SessionAdmissionCandidate& candidate,
     const EncodeSessionLimits& limits) noexcept;
+
+enum class MultiSourceSessionWindowPreflightReason : std::uint8_t {
+  Eligible,
+  NoPendingSession,
+  SourceCount,
+  ActiveRenderIncomplete,
+  CaptureBoundary,
+  InitializerBoundary,
+  OrderedReleaseBoundary,
+  InvalidCandidate,
+  PresentBoundary,
+  IsolationBoundary,
+  InitializerSemanticBoundary,
+  NonConsecutiveIdentity,
+  AdmissionRejected,
+};
+
+enum class MultiSourceSessionWindowFrontier : std::uint8_t {
+  FreshClean,
+  CleanClosed,
+  ActiveRenderComplete,
+  Unsupported,
+};
+
+inline constexpr std::size_t kMaxMultiSourceSessionWindowSources = 8u;
+
+struct MultiSourceSessionWindowPreflight {
+  EncodeSessionAdmissionState stagedAdmission{};
+  MultiSourceSessionWindowPreflightReason reason =
+      MultiSourceSessionWindowPreflightReason::NoPendingSession;
+
+  constexpr bool eligible() const noexcept {
+    return reason == MultiSourceSessionWindowPreflightReason::Eligible;
+  }
+};
+
+// Queue-independent preflight for the bounded CPU-ready Tape multi-source
+// planning window. This does not retain sources, mutate the session, or run the
+// FrameGraph planner. A successful result carries the admission state that can
+// be installed atomically after every fragment has encoded successfully.
+// sourceOrdinal and seqId must be exact successors. rawOrdinal is optional
+// when zero and otherwise only has to advance monotonically between observed
+// values because raw entries need not each publish a CPU-ready source.
+MultiSourceSessionWindowPreflight preflightMultiSourceSessionWindow(
+    const EncodeSessionAdmissionState& pending,
+    std::span<const SessionAdmissionCandidate> candidates,
+    const EncodeSessionLimits& limits,
+    MultiSourceSessionWindowFrontier frontier,
+    bool captureBoundary,
+    bool initializerBoundary,
+    bool orderedReleaseBoundary) noexcept;
 
 enum ActiveRenderContinuationFlags : std::uint32_t {
   ActiveRenderContinuationActive = 1u << 0,
@@ -255,8 +388,13 @@ static_assert(std::is_trivially_copyable_v<EncodeSessionAdmissionState>);
 static_assert(std::is_standard_layout_v<EncodeSessionAdmissionState>);
 static_assert(std::is_trivially_copyable_v<SessionAdmissionCandidate>);
 static_assert(std::is_standard_layout_v<SessionAdmissionCandidate>);
+static_assert(std::is_trivially_copyable_v<SessionResidencyByteCharge>);
+static_assert(std::is_standard_layout_v<SessionResidencyByteCharge>);
 static_assert(std::is_trivially_copyable_v<SessionCapacityVector>);
 static_assert(std::is_standard_layout_v<SessionCapacityVector>);
+static_assert(
+    std::is_trivially_copyable_v<SessionCapacityRejectionObservation>);
+static_assert(std::is_standard_layout_v<SessionCapacityRejectionObservation>);
 static_assert(std::is_trivially_copyable_v<SessionCapacityLease>);
 static_assert(std::is_standard_layout_v<SessionCapacityLease>);
 static_assert(std::is_trivially_copyable_v<ActiveRenderContinuationState>);

@@ -67,9 +67,26 @@ const core::metalqueue::ResolvedPublishedSource* selectFrameGraphLookahead(
 
 // Open/injected sessions may consume a coalesced plan only when it preserves
 // both the no-coalesce DCE live subset and that subset's natural first command.
+// The typed decision is also the permanent diagnostic seam for conservative
+// source-local frontier rollback attribution.
+enum class ReplayFrontierDecision : std::uint8_t {
+  AcceptedNaturalHead,
+  AcceptedMovedHead,
+  FallbackInvalidPlan,
+  FallbackLiveSetMismatch,
+  FallbackDuplicateCommand,
+  FallbackMovedHeadUnproved,
+};
+ReplayFrontierDecision classifyReplayFrontier(
+    const framegraph::ReplayCommandPlan& optimized,
+    const framegraph::ReplayCommandPlan& natural,
+    encoders::EncodeSessionReplayFrontierState state,
+    bool activeRenderSeedProvesMovedHead = false) noexcept;
 bool replayPlanPreservesHeadStableFrontier(
     const framegraph::ReplayCommandPlan& optimized,
-    const framegraph::ReplayCommandPlan& natural) noexcept;
+    const framegraph::ReplayCommandPlan& natural,
+    encoders::EncodeSessionReplayFrontierState state,
+    bool activeRenderSeedProvesMovedHead = false) noexcept;
 
 class FrameGraphBackend final : public IRenderBackend {
  public:
@@ -99,6 +116,14 @@ class FrameGraphBackend final : public IRenderBackend {
       encoders::EncodeContext& ctx,
       std::size_t slotIndex,
       const core::ChunkSlot& slot) override;
+  framegraph::MultiSourceReplayPlan planMultiSourceSessionReplay(
+      const resources::Pool& pool,
+      std::span<const core::metalqueue::ResolvedPublishedSource> sources,
+      const MultiSourceSessionReplayFrontier& frontier) override;
+  void observeMultiSourceSessionReplay(
+      const resources::Pool& pool,
+      std::span<const core::metalqueue::ResolvedPublishedSource> sources)
+      override;
 
   // Resolved optimizer options for this backend. Strict keeps every option
   // false (parity baseline). Exposed for unit testing the option resolution.

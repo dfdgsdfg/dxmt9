@@ -15,13 +15,16 @@ namespace dxmt9::framegraph {
 void runOptimizer(FrameGraph& graph, const OptimizerOptions& options,
                   std::vector<MemorylessObservation>* observations,
                   OptimizerStats* stats,
-                  DceLookaheadProof dce_lookahead) {
+                  DceLookaheadProof dce_lookahead,
+                  ActiveSeedMergeWitnessSink* activeSeedWitnesses) {
   // 1. lifetime — always (input to memoryless/reorder; cheap and order-neutral).
   runLifetime(graph);
 
   // 2. passcoalesce — gated. Merges matching-attachment pass pairs.
   if (options.passcoalesce) {
-    runPassCoalesce(graph, stats);
+    runPassCoalesce(graph, stats,
+                    options.collect_passcoalesce_return_diagnostics,
+                    activeSeedWitnesses);
   }
 
   // 3. memoryless — gated. Classifier + residency decision only (the alias

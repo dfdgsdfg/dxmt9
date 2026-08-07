@@ -15,10 +15,48 @@ struct EncodeCallState {
   bool captureAlreadyStartedAtChunkBegin = false;
 };
 
+// Pure projection of the mutable storage fields that determine whether a
+// source-local replay plan may cross the current session frontier. Keeping the
+// pending-clear payload and command sidecar as separate facts makes a partial
+// or malformed carry state conservative instead of accidentally proving a
+// clean frontier.
+struct ReplayFrontierFacts {
+  bool hasPendingClearPayload = false;
+  bool hasPendingClearCommand = false;
+  bool hasActiveRenderEncoder = false;
+  bool hasActiveBlitEncoder = false;
+  bool hasActiveRender = false;
+  bool activeRenderSnapshotComplete = false;
+};
+
+constexpr EncodeSessionReplayFrontierState replayFrontierStateForFacts(
+    ReplayFrontierFacts facts) noexcept {
+  using State = EncodeSessionReplayFrontierState;
+  if (facts.hasPendingClearPayload || facts.hasPendingClearCommand) {
+    return State::PendingClear;
+  }
+  if (facts.hasActiveBlitEncoder) {
+    return State::ActiveBlitUnsupported;
+  }
+  if (facts.hasActiveRenderEncoder || facts.hasActiveRender) {
+    return facts.activeRenderSnapshotComplete
+               ? State::ActiveRenderComplete
+               : State::ActiveRenderUnproved;
+  }
+  return State::CleanClosedEncoderNoPendingClear;
+}
+
 EncodeChunkSessionStorage* createStorage();
 void destroyStorage(EncodeChunkSessionStorage* storage) noexcept;
 void resetStorage(EncodeChunkSessionStorage& storage);
 bool storageHasActiveRender(
+    const EncodeChunkSessionStorage& storage) noexcept;
+std::optional<ActiveRenderDependencySnapshot>
+storageActiveRenderDependencySnapshot(
+    const EncodeChunkSessionStorage& storage) noexcept;
+std::optional<RenderPassInstanceToken> storageActiveRenderInstanceToken(
+    const EncodeChunkSessionStorage& storage) noexcept;
+EncodeSessionReplayFrontierState storageReplayFrontierState(
     const EncodeChunkSessionStorage& storage) noexcept;
 bool storageHasDeferredSubmissionPayload(
     const EncodeChunkSessionStorage& storage) noexcept;

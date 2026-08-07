@@ -165,6 +165,12 @@ void runDce(FrameGraph& graph, OptimizerStats* stats,
         pass.flags.debug_marker || pass.flags.dead) {
       continue;
     }
+    // An unmerged active-render seed is planning-only: its synthetic access
+    // must not become either a DCE decision or a reported pass. Once
+    // passcoalesce folds real source commands into it, normal DCE applies.
+    if (pass.flags.active_render_seed && pass.commands.count == 0) {
+      continue;
+    }
     // Only render/blit passes write resources; a pass with no writes has no
     // dead output to eliminate (and a Sync pass is structurally load-bearing).
     if (pass.kind == PassKind::Present || pass.kind == PassKind::Sync) {

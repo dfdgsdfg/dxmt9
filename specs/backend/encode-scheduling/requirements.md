@@ -96,7 +96,11 @@ finishes its current ready snapshot. Later publication, worker timing, or a
 younger ready source must not replace or bypass that frontier. The coordinator
 may append the frontier only after its complete payload-block chain is Ready,
 or must process its ordered control/compatibility disposition before examining
-any younger source.
+any younger source. A sessionless fresh frontier may tentatively retain one
+Ready source for one exact ordered-tail Writing successor under the bounded
+contract in the specification. An active session must consume its current
+Ready head immediately and must not park that source to manufacture a future
+multi-source planning window.
 
 ## 2. EncodeSession
 
@@ -125,6 +129,87 @@ attachment reads, blit/resolve/readback/query operations, non-render waits,
 `commitChunk()`, CPU-ready publication, `seqId`, partition, and helper-call
 boundaries are non-boundaries.
 
+Fixed planner-window exhaustion, selection of the next bounded window, and a
+producer-quiescent park/wake while the same open session retains the same
+uncommitted command buffer are also non-boundaries. None may end the active
+render encoder, replace or commit its command buffer, resolve a provisional
+Store action, publish logical-pass actions or sidecars, or create a source
+completion entry. This cross-window continuity contract is limited to the
+legacy serial lane inside that one open session and command buffer. After
+`endEncoding` or command-buffer commit, the legacy lane cannot resume the pass;
+continuity across physical command buffers is exclusively the bounded Metal 4
+segmented contract in `R-BACK-2.64`.
+
+When the session owns an active render pass, the coordinator may plan one
+bounded FIFO source window without waiting for another source. The session
+exposes one immutable bounded snapshot of that pass's
+attachment identity, sample count, and complete deduplicated attachment-write
+dependencies. A commandless virtual predecessor seeds the combined window DAG.
+Every planned command is identified by `(retainedSourceIndex, commandIndex)` or
+an equivalent generation-checked source locator. The initial cross-source lane
+may move only `DrawRun` commands and must retain the exact complete natural live
+command set; DCE remains source-local until it has a separate proof contract.
+A moved same-pass command is accepted only when the combined DAG plus seed
+proves the intervening work relocatable. Invalid, incomplete, overflowed,
+duplicate, missing, stale, non-draw-moving, unmerged, or dependency-wedged
+plans preserve natural FIFO source/command order before any Metal side effect.
+The seed, source-window edges, and source/run boundaries are not Metal commands
+and must not create a render-pass, command-buffer, source-completion, or reclaim
+boundary. Replay registers completion sources exactly once in natural FIFO
+order independently of command replay order, and still applies the exact
+attachment, hazard, initializer, and tile-route checks required above before
+continuing the active encoder.
+
+The coordinator must reserve the exact selected Ready prefix as
+`TentativeRepresented` while holding the scheduling mutex and snapshot every
+identity needed to validate the transaction, including source locators and
+generations, the ordered-release fence, the capacity-lease generation, capture
+and initializer boundary state, and the replay frontier. It must then release
+the scheduling mutex before combined FrameGraph planning, resource-alias
+resolution, or any observer/export work. After planning, it must reacquire the
+mutex and revalidate the complete snapshot and exact FIFO prefix before
+committing the sources to `Represented` or `Encoding`. A stale snapshot must
+discard the plan and restore that exact prefix to its original Ready positions
+without a Metal effect, completion registration, release advance, or observer
+call.
+
+Once a reordered fragment replay crosses the first-effect boundary, the
+transaction observer may run exactly once and only after every fragment replay
+and carrier fold succeeds. It must observe sources in natural FIFO order with
+the scheduling mutex released. Fragment-local backend planning remains
+suppressed so that neither a stale tentative retry nor an individual fragment
+duplicates transaction observation. Natural plans, rejected permutations, and
+unproved moved heads retain the source-local natural fallback.
+
+For source-local planning, session storage must expose one typed replay-frontier
+state. A session with no active render or blit encoder, no active-render flag,
+and neither a deferred clear nor its command-identity sidecar is a clean closed-
+encoder frontier; this does not mean that its command buffer contains no older
+work. At that frontier a valid, complete, duplicate-free permutation with the
+same live command set may move its first source command without an active-render
+seed. An active render frontier may move the head only through the complete
+snapshot and exact seed-head proof above. Pending-clear, active-blit,
+active-render-unproved, malformed storage, and sessionless injected-command-
+buffer frontiers must preserve the natural head.
+
+Bounded multi-source preflight requires exact successor `sourceOrdinal` and
+`seqId` identities. `rawOrdinal` is an optional bookkeeping coordinate: zero
+means absent, and comparable nonzero values must increase but need not be
+adjacent because StateOnly or Legacy raw work may interpose without publishing
+a CPU-ready source. A missing or forward-gapped raw identity is not itself a
+semantic boundary and does not relax any capture, initializer, ordered-release,
+semantic, admission, replay, or dependency fence.
+
+The coordinator must preflight the complete qualified permutation, its
+maximal same-source replay runs, FIFO completion registration, admission state,
+and command-buffer carrier capacity before entering the first reordered replay
+call. Before that call, rejection may discard the plan and execute natural FIFO
+order with no visible effect. Entering the first replay call is the post-effect
+boundary because the encoder may commit an internal command-buffer segment
+before returning. Any later replay, carrier-fold, attribution, finalization, or
+publication failure is fail-stop; it must not restore Ready state, inline-
+complete, or submit a partial reordered prefix.
+
 **R-BACK-2.44** A session that encoded visible work may remain open across
 producer quiescence, but must submit its represented prefix when an ordered
 event creates a D3D-visible or queue-progress obligation: a Present tail,
@@ -145,12 +230,21 @@ represented prefix rolled back before any Metal side effect from that newly
 represented batch must return ahead of every younger source; an older
 already-emitted session prefix is never rewound.
 
+Physical payload retirement after synchronous encode is not a release event and
+must not submit or close the session. The fixed session boundary is charged by
+encoded-unsubmitted work (source, draw, and command-buffer credits), while
+source/page/byte/block/Ready/retention/allocator credits describe payload
+residency and may return before submission. GPU outstanding work and device-loss
+settlement are separate completion credits and may not influence grouping.
+
 **R-BACK-2.45** Session storage must remain data-oriented: fixed-size values,
 small inline arrays, queue-owned arenas, and bounded spans or views. It must not
 deep-copy source slots, concatenate payload arenas, allocate one object per draw,
 or retain PE, COM, Objective-C, or unowned process-local pointers. Session
-source lists contain generation-checked source and storage locators plus compact
-completion metadata, never direct page pointers or allocator-owned containers.
+source lists contain either generation-checked source/storage locators or
+queue-owned generation-stamped completion receipts plus compact metadata, never
+direct page pointers or allocator-owned containers. Receipt storage is bounded,
+flat, source-kind-neutral, and cannot resolve Tape pages.
 A source-table locator index is named `retainedSourceIndex`; the name
 `sourceOrdinal` is reserved for the global monotonic publication identity.
 Replay, FrameGraph, and diagnostic locators qualify each command as
@@ -208,13 +302,21 @@ observe their existing per-source timelines. Payload blocks, payload segments,
 FrameGraph nodes, partitions, and command indices must never create independent
 completion signals. Source-qualified `(source, commandIndex)` attribution may
 identify replay and diagnostics, but completion and reclaim remain exactly once
-per logical source `seqId`. Source metadata, tape pages,
-retained handles, and allocator tickets may be reclaimed only after that source
-is completed, no synchronous snapshot borrows it, and every older source has
-reached the same reclaim point. Reclaim first makes the source inaccessible in
-`Reclaiming`, destroys re-entrant owners and releases retained resources outside
-the scheduling lock while its pages remain pinned, then atomically returns the
-pages and advances source/page generations.
+per logical source `seqId`. Eligible source payload storage may retire after its
+final synchronous encode borrow ends, before submission or GPU completion, only
+after a queue receipt has become the completion authority. This releases
+payload pages, publication controls, and physical lease credit but not Metal
+work, callbacks, diagnostic/resource owners, query/frame tokens, resource
+last-use watermarks, or GPU completion credit. Present, pending clear,
+query/readback/update or ordered control, and any remaining payload borrow are
+ineligible. Both early retirement and legacy post-completion reclaim first make
+the source inaccessible in `Reclaiming`, detach ownership while locked, destroy
+re-entrant owners outside the scheduling lock while pages remain pinned, then
+relock to return pages, advance source/page generations, release control credit,
+and notify producers. After receipt activation or any Metal effect, failure is
+fail-stop; rollback is permitted only before both. Completion consumes mixed
+receipt and legacy identities once in strict `seqId` order and does not change
+resource waterlines.
 
 **R-BACK-2.50** A scheduling lane may be promoted only after, in order: native
 or fake-backend proof of source order, boundaries, fail-open behavior, and
@@ -226,6 +328,9 @@ and locality evidence; and no-gputrace overlap evidence. A fall in
 Promotion also fails when bounded source/session/partition occupancy remains
 pinned at capacity, or command-buffer, logical-pass, load/store, or tile shape
 regresses. FPS and Xcode counters are considered only after these gates pass.
+Promotion evidence must separately conserve payload residency/publication
+credit, encoded-unsubmitted work, receipt depth, and GPU-outstanding completion
+credit; moving occupancy from one axis to another is not a locality win.
 Until all gates pass for the unified Arena lane, `DXMT9_CPU_READY_TAPE` remains
 default off and the legacy payload-owning path remains a supported rollback
 path. Making Arena allocation unconditional, deleting legacy rollback, or
@@ -251,12 +356,17 @@ the parallel lane it may delimit child encoders while preserving one logical
 pass. Resolution remains call-local and must not escape to any asynchronous
 owner.
 
-**R-BACK-2.59** Published source storage is immutable until reclaim after GPU
-completion. Imported headers, records, params, payload arenas, uniforms,
-bindings, and retained-handle tables admit no consume-side mutation. Existing
-queue lifecycle fields, the encode-worker-only pipeline-prefetch memo, and
-storage clearing at reclaim are the only carve-outs. Encode interfaces take
-published storage by const reference; new mutation requires an explicit
+**R-BACK-2.59** Published source storage is immutable while it is resolvable.
+Imported headers, records, params, payload arenas, uniforms, bindings, and
+retained-handle tables admit no consume-side mutation. Existing queue lifecycle
+fields, the encode-worker-only pipeline-prefetch memo, and storage clearing
+after an exclusive `Reclaiming` transition are the only carve-outs. Ordinarily
+that transition follows GPU completion; an eligible source may instead enter it
+after synchronous encode installs a generation-stamped queue receipt and proves
+that no payload locator or borrow escapes. Encode interfaces take published
+storage by const reference. Receipt-backed completion cannot dereference the
+retired source, and stale/duplicate/ABA receipt use must fail before callbacks,
+waterlines, or release. New mutation or eligibility requires an explicit
 amendment to this carve-out list.
 
 ## 4. Scheduling and Execution Lanes
@@ -367,16 +477,68 @@ second time. Older submitted residency may delay lease acquisition or source
 publication until reclaim, but GPU completion timing must not change which
 sources share a session.
 
-Each admitted source is charged against fixed `maxSessionSources`,
-`maxSessionPages`, `maxSessionBytes`, and `maxSessionDraws` credits. If the next
-Ready source would cross any credit, the coordinator posts one ordered
-`SessionCap` event at the predecessor fence, leaves the candidate `Ready`, and
-submits exactly the deterministic predecessor prefix. A candidate larger than
-the ordinary Direct reservation footprint is classified before construction as
-an isolated bounded Arena session, ordered legacy rollback, or invalid input; it
-must not consume successor headroom or split an already-open session in response
-to current occupancy. Raw-writer or Arena admission pressure may block and wake
-progress, but is not a release reason. Promotion requires zero pressure-created
-session releases and observable lease current/peak/denial, reserved/used/slack
-credits, successor-headroom minimum, fixed-cap release reason, and isolated or
-rollback reason.
+At first acquisition, the coordinator may credit exactly one already-resident
+`Writing` source against, and never beyond, `successorHeadroom` only when the
+Tape observation proves it is the unique ordered tail, owns a valid publication
+reservation and current source/storage generations, and its complete physical
+claim fits the successor vector. The credit is only a no-double-count proof:
+the acquired lease must still reserve the full fixed session footprint and full
+`successorHeadroom`. `TentativeRepresented`, `Represented`/encoding,
+`Submitted`, `Completed`, and `Reclaiming` residency remains older unavailable
+capacity. A structurally valid Writing claim beyond headroom is also ordinary
+unavailable capacity. Multiple/non-tail writers, invalid publication identity,
+or checked capacity arithmetic make the snapshot invalid and must fail-stop
+rather than wait for a generation that cannot repair structural corruption.
+
+At either a fresh frontier before first acquisition or a coherent active
+session frontier with a live lease, the serial coordinator may speculatively
+reserve exactly one compatible, present-free Ready head as
+`TentativeRepresented` only when the capacity snapshot proves exactly one
+generation-stamped ordered-tail Writing successor. The active case must also
+prove admission against the pending session and prove the candidate charge on
+a copy of the live lease. This is a pre-admission lookahead hold, not session
+representation: it acquires or mutates no capacity lease, admission charge,
+completion entry, or Metal effect, and it must restore the exact snapshot to
+the FIFO front before either the successor joins normal bounded selection or
+any fallback executes. Ordered release, producer sequence wait, initializer
+work, shutdown, writer identity loss, Arena admission pressure, or
+compatibility-writer pressure forces restore followed by exact single-source
+progress. A simultaneously Ready exact successor takes precedence over a live
+pressure observation because the required forward source already exists. The
+coordinator acquires or charges the normal lease only after restore, before the
+selected source becomes final `Represented`/encoding state. Restore failure is
+structural corruption and fail-stops the Tape.
+
+Each admitted source is charged against a fixed encoded-work cap and a physical
+residency vector. Encoded work retains `maxSessionSources`, `maxSessionDraws`,
+and `maxSessionCommandBuffers` until submission; the bounded implementation cap
+is 128 sources. Physical `residentSources`, pages, bytes, blocks, Ready entries,
+retention entries, and allocator tickets may be uncharged only after successful
+post-encode payload retirement.
+`SourceSemanticSummary::byteCount` is a representation-specific publication
+extent used by validation and telemetry: Legacy records its logical replay
+extent, while Arena records its exact constructed Tape extent. It must not be
+reused directly as a universal session byte charge. The byte credit uses a
+distinct typed scheduler-owned Tape charge: an Arena source charges its exact
+constructed Tape byte extent, while a Legacy compatibility source charges its
+reserved Tape pages. Legacy `ChunkSlot` vector heap bytes are outside this byte
+axis and remain bounded only indirectly by compatibility source and slot limits;
+promotion must not describe this credit as a complete physical-memory bound.
+The source-work and command-buffer-work dimensions remain active after physical
+retirement. If the next Ready source would cross a work credit, or a still-
+resident source would cross a physical credit, the coordinator
+posts one ordered `SessionCap` event at the predecessor fence, leaves the
+candidate `Ready`, and submits exactly the deterministic predecessor prefix. A
+candidate larger than the ordinary Direct reservation footprint is classified
+before construction as an isolated bounded Arena session, ordered legacy
+rollback, or invalid input; it must not consume successor headroom or split an
+already-open session in response to current occupancy. Raw-writer or Arena
+admission pressure may block and wake progress, but is not a release reason.
+Promotion requires zero pressure-created session releases and observable lease
+current/peak/denial, reserved/used/slack credits, successor-headroom minimum,
+fixed-cap release reason, and isolated or rollback reason. Every accepted
+source/page `SessionCap` event must also expose the predecessor source/page
+usage, candidate payload pages, candidate wrap-padding pages, candidate total
+required pages, required total sources/pages, and whether sources, pages, or
+both exceeded their limits. This observation must not affect classification,
+the selected predecessor fence, or session grouping.
