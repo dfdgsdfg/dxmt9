@@ -491,7 +491,7 @@ std::string opcodeName(u32 opcode) {
   }
 }
 
-u32 fixedOperandCount(u32 opcode) {
+std::optional<u32> fixedOperandCountIfKnown(u32 opcode) noexcept {
   switch (opcode) {
     case kD3DSIO_NOP:
     case kD3DSIO_PHASE:
@@ -567,8 +567,16 @@ u32 fixedOperandCount(u32 opcode) {
     case kD3DSIO_END:
       return 0;
     default:
-      throw std::runtime_error("unsupported SM1.x opcode");
+      return std::nullopt;
   }
+}
+
+u32 fixedOperandCount(u32 opcode) {
+  const auto count = fixedOperandCountIfKnown(opcode);
+  if (!count.has_value()) {
+    throw std::runtime_error("unsupported SM1.x opcode");
+  }
+  return *count;
 }
 
 bool opcodeWritesFirstOperand(u32 opcode) {
@@ -1411,9 +1419,9 @@ SpirvModule translateD3DBytecodeToSpirv(const ShaderRef& shader,
     u32 operandCount = 0;
     if (const auto legacyCount = legacyPixelOperandCount(opcode, module.major, module.minor, module.stage)) {
       operandCount = *legacyCount;
-    } else try {
-      operandCount = fixedOperandCount(opcode);
-    } catch (const std::runtime_error&) {
+    } else if (const auto fixedCount = fixedOperandCountIfKnown(opcode)) {
+      operandCount = *fixedCount;
+    } else {
       operandCount = (token >> 24) & 0xfu;
       if (operandCount == 0) {
         switch (opcode) {

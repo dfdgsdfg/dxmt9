@@ -154,6 +154,22 @@ int fixedOperandCountOrUnsupported(u32 opcode) {
   }
 }
 
+void testNoThrowOperandCountProbeMatchesThrowingCompatibilitySeam() {
+  static_assert(noexcept(detail::fixedOperandCountIfKnown(0u)));
+  for (const auto& entry : kOpcodeAudit) {
+    const auto count = detail::fixedOperandCountIfKnown(entry.opcode);
+    if (entry.fixedOperandCount == kUnsupportedFixedOperandCount) {
+      check(!count.has_value(),
+            "unsupported opcode stays absent on the no-throw decode path");
+    } else {
+      check(count.has_value() &&
+                static_cast<int>(*count) == entry.fixedOperandCount,
+            "known opcode preserves its fixed operand count on the no-throw "
+            "decode path");
+    }
+  }
+}
+
 void testKnownD3DSIOOpcodesHaveStableClassification() {
   for (size_t i = 0; i < kOpcodeAudit.size(); ++i) {
     const auto& entry = kOpcodeAudit[i];
@@ -230,6 +246,7 @@ void testReservedTexm3x3DiffKeepsInvalidSm1Classification() {
 
 int main() {
   try {
+    testNoThrowOperandCountProbeMatchesThrowingCompatibilitySeam();
     testKnownD3DSIOOpcodesHaveStableClassification();
     testLegacyTextureOpcodesKeepSpecialDecodeClassification();
     testReservedTexm3x3DiffKeepsInvalidSm1Classification();

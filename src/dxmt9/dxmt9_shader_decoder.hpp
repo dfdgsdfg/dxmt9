@@ -51,6 +51,10 @@ u32 decodeLabelIndex(u32 token);
 // --- Opcode classification --------------------------------------------------
 
 std::string opcodeName(u32 opcode);
+// The decoder hot path uses the no-throw probe because an absent fixed count
+// is ordinary for SM2/3 instructions whose token carries the dynamic length.
+std::optional<u32> fixedOperandCountIfKnown(u32 opcode) noexcept;
+// Compatibility seam for opcode-audit callers that require rejection.
 u32 fixedOperandCount(u32 opcode);
 bool opcodeWritesFirstOperand(u32 opcode);
 bool isConstantRegisterKind(D3DRegisterKind kind);
