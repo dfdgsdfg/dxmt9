@@ -9,7 +9,7 @@
 #include "render/deferred_terminal_suffix.hpp"
 #include "render/encode_session_admission.hpp"
 #include "render/framegraph_backend.hpp"
-#include "render/open_cb_carrier.hpp"
+#include "render/session_source_policy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -207,12 +207,11 @@ encoders::SessionFinalizeCause sessionFinalizeCauseForRelease(
 }  // namespace
 
 void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
-  // Tape-gated session join lane (DXMT9_CPU_READY_TAPE). Reuses the H229
-  // carrier mechanics — one pending QueueSubmissionRecord owning the open
-  // Metal command buffer plus the retained per-source completion list, an
-  // EncodeChunkSession carried across source boundaries, and one submitted
-  // tail expanding to per-source seqId completion — but with two deliberate
-  // differences (see runCpuReadySessionEncodeLoop declaration):
+  // Tape-gated session join lane (DXMT9_CPU_READY_TAPE). One pending
+  // QueueSubmissionRecord owns the open Metal command buffer plus the retained
+  // per-source completion list, an EncodeChunkSession crosses source
+  // boundaries, and one submitted tail expands to per-source seqId completion.
+  // The lane has two defining policies (see the declaration):
   //   * source-kind-neutral admission: compatible FIFO prefixes accept both
   //     Legacy ChunkSlot and Arena Tape sources, so an Arena source appends
   //     to the pending session instead of forcing a standalone submission;
@@ -666,7 +665,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 }
                 const auto admission = admissionCandidateFor(candidate);
                 if (candidate.semantic.hasPresent() ||
-                    !render::openCbCarrierSourceCanBeSessionHead(
+                    !render::sessionSourceCanBeHead(
                         candidate.payload) ||
                     render::classifySessionAdmission(
                         render::EncodeSessionAdmissionState{},
@@ -841,9 +840,9 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 const auto decision = result.decision;
                 const bool hasPlannedSession = planned.valid();
                 const bool exactCompatible = hasPlannedSession
-                    ? render::openCbCarrierSourceCanAppendToPending(
+                    ? render::sessionSourceCanAppendToPending(
                           candidate.payload, true)
-                    : render::openCbCarrierSourceCanBeSessionHead(
+                    : render::sessionSourceCanBeHead(
                           candidate.payload);
                 const bool initializerBoundary =
                     hasPlannedSession && pendingSession &&
@@ -1182,7 +1181,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       if (planningWindowValid) {
         selectedPrefixStartsSession =
             (pendingRecord.has_value() && pendingSession) ||
-            render::openCbCarrierSourceCanBeSessionHead(
+            render::sessionSourceCanBeHead(
                 resolvedWindow[0].payload);
         selectedCompletionSourcesValid = selectedPrefixStartsSession;
       }
@@ -1511,7 +1510,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       }
       selectedPrefixStartsSession =
           (pendingRecord.has_value() && pendingSession) ||
-          render::openCbCarrierSourceCanBeSessionHead(first.payload);
+          render::sessionSourceCanBeHead(first.payload);
     }
     if (selectedPrefixStartsSession) {
       const std::size_t retainedCount =
@@ -2717,11 +2716,11 @@ multi_source_window_complete:
       }
       const bool sourceIsArena = commonSource.payload.isArena();
       const bool sourceHasFinalPresentTail =
-          render::openCbCarrierSourceHasFinalPresentTail(commonSource.payload);
+          render::sessionSourceHasFinalPresentTail(commonSource.payload);
       const bool sourceCanStartSession =
-          render::openCbCarrierSourceCanBeSessionHead(commonSource.payload);
+          render::sessionSourceCanBeHead(commonSource.payload);
       bool sourceCanAppendToPending =
-          render::openCbCarrierSourceCanAppendToPending(
+          render::sessionSourceCanAppendToPending(
               commonSource.payload, static_cast<bool>(pendingSession));
 
       if (pendingRecord.has_value() && !sourceCanAppendToPending) {
@@ -2736,7 +2735,7 @@ multi_source_window_complete:
         }
       }
       if (pendingRecord.has_value() &&
-          render::openCbCarrierShouldSubmitBeforeInitializerWait(
+          render::sessionShouldSubmitBeforeInitializerWait(
               sourceCanAppendToPending,
               pendingSession &&
                   encoders::encodeChunkSessionHasActiveRender(

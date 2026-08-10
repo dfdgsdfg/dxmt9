@@ -73,8 +73,8 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `--require-render-passes-per-present-not-increase`, and
   `--require-tile-preservation-not-increase` reject candidates that
   create enqueue overlap only by fragmenting Metal command buffers, render
-  passes, or tile-preservation traffic. Open-CB/pass-carrier candidates must
-  also use `--require-encoder-final-end-reason-not-increase`,
+  passes, or tile-preservation traffic. EncodeSession/pass-streaming candidates
+  must also use `--require-encoder-final-end-reason-not-increase`,
   `--require-encoder-final-same-key-reopen-not-increase`,
   `--require-encoder-color-load-not-increase`, and
   `--require-encoder-depth-load-not-increase` so chunk-final render-pass

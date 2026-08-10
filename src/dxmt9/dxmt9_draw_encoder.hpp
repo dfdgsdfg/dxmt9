@@ -715,11 +715,11 @@ struct EncodeChunkOptions {
   // QueueSubmissionRecord via retainEncodeChunkSessionUntilSubmissionComplete()
   // so session-owned Metal references live until command-buffer completion.
   EncodeChunkSessionState* session = nullptr;
-  // Opt-in open-CB render-session carry path. When true and `session` is
-  // non-null, encodeChunk returns after appending commands without ending the
-  // active session or publishing session-owned callbacks / GPU samples into the
-  // returned record. A later encodeChunk call on the same session must finalize
-  // it before the shared command buffer is submitted.
+  // Deferred render-session path. When true and `session` is non-null,
+  // encodeChunk returns after appending commands without ending the active
+  // session or publishing session-owned callbacks / GPU samples into the
+  // returned record. A later encodeChunk call on the same session must
+  // finalize it before the shared command buffer is submitted.
   bool deferSessionFinalization = false;
   // Compact source metadata represented by this encodeChunk call when a
   // session is active. The session publishes the ordered list during final

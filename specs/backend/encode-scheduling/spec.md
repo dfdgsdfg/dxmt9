@@ -1002,28 +1002,6 @@ are preallocated. Re-entrant payload owners use their reserved source arena. A
 new heap allocation during steady-state source construction violates the DOD
 storage contract.
 
-### 5.6 H229 Refinement Mapping
-
-The current opt-in `DXMT9_OPEN_CB_CARRIER` is a partial refinement, not the
-CPU-ready-tape implementation:
-
-| Concrete H229 element | Target transition/owner | Disposition |
-|---|---|---|
-| ready `ChunkSlot` FIFO | `Ready -> Represented` | reuse ordering and dequeue semantics; replace payload-owning slot with control shell plus block ID |
-| `EncodeChunkSessionState` | `OpenStreaming` coordinator state | reuse and extend with source IDs, compatibility summaries, and caps |
-| session-aware `encodeChunk` and serial partition cursor | source-edge continuation procedure | reuse; preserve no-final-flush behavior |
-| `finalizeEncodeChunkSessionIntoSubmission` | `Finalized -> Submitted` | reuse as the single finalization seam |
-| fixed completion-source expansion | `Submitted -> Completed` | reuse and extend evidence to tape generations and reclaim |
-| final Present-tail split | Present-tail finalization | reuse Presenter and frame-token ownership |
-| slot residency until GPU completion | tape block/source lifetime | replace; slots become shells and pages reclaim by completion prefix |
-| parked carrier wait seam | `OpenStreaming` producer-quiescent state | reuse without completion-wait or timeout-based release |
-| reactive completion-wait release decisions | ordered `SessionReleaseEvent` fence | replace with D3D-visible/queue-progress events and fixed caps |
-
-The existing carrier and end-to-end lifecycle specs remain evidence for session
-carry, finalization, Present ownership, and ordered completion. They do not prove
-page admission, generation/ABA safety, pressure progress, direct construction,
-or the two new compatibility predicates.
-
 ## 6. Production Partition Planning
 
 Planning consumes the final effective replay stream after backend selection,

@@ -206,14 +206,14 @@ candidates in the dxmt9 specification.
 
 ## Comparison with dxmt9 `EncodeSession`
 
-At the repository state reviewed for this note, dxmt9 has an opt-in
-open-command-buffer carrier and an `EncodeChunkSessionState`. The session
-retains ordered source identities and carries native encoder state across
-`encodeChunk()` calls.
+At the repository state reviewed for this note, dxmt9 has a Tape-gated
+`EncodeSession`. The session retains ordered source identities and carries
+native encoder state across `encodeChunk()` calls. The older standalone
+open-command-buffer experiment is retired.
 Relevant implementation points are:
 
-- [`open_cb_carrier.hpp`](../../src/dxmt9/render/open_cb_carrier.hpp) for source
-  classification, release, and fail-open decisions;
+- [`session_source_policy.hpp`](../../src/dxmt9/render/session_source_policy.hpp)
+  for source classification and initializer-wait policy;
 - [`dxmt9_draw_encoder.mm`](../../src/dxmt9/dxmt9_draw_encoder.mm) for carried
   encode state and session finalization; and
 - [`dxmt9_queue.hpp`](../../src/dxmt9/dxmt9_queue.hpp) for bounded, consecutive
@@ -226,7 +226,7 @@ are in [Encode Scheduling](../../specs/backend/encode-scheduling/spec.md).
 |---|---|---|---|---|
 | Long-lived semantic-state owner | Yes | No | No | Yes |
 | Reuses a live compatible encoder | Yes | Children share one parent pass | No; creates pass segments | Yes |
-| Spans native command buffers | No | No | Yes, in one commit array | No in the current legacy-Metal carrier |
+| Spans native command buffers | No | No | Yes, in one commit array | No in the current legacy Metal lane |
 | CPU-parallel recording | No intrinsic requirement | Yes | Yes, by separate command buffers | No |
 | Knows D3D9 source/`seqId` identity | No | No | No | Yes |
 | Expands one native completion to sources | No | No | No | Yes |

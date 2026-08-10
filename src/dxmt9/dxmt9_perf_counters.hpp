@@ -188,23 +188,6 @@ void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds);
 void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount);
-// H229 open-CB overlap carrier (DXMT9_OPEN_CB_CARRIER) mechanism-proof set.
-enum class OpenCbCarrierReleaseReason : std::uint8_t {
-  SemanticWait,
-  ProducerWait,
-  NonAppendable,
-  InitializerWait,
-  Drain,
-  FailPath,
-};
-void countOpenCbCarrierWaitStartPublished();
-void countOpenCbCarrierActiveWaitPublished();
-void countOpenCbCarrierProducerWaitPublished();
-void countOpenCbCarrierAttachmentBoundaryPublished();
-void countOpenCbCarrierPendingStarted(bool duringCompletionWait);
-void countOpenCbCarrierHeadAppended();
-void countOpenCbCarrierTailSubmitted();
-void countOpenCbCarrierReleased(OpenCbCarrierReleaseReason reason);
 // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE). Release
 // reasons are the ordered producer/queue-progress fences only — this lane
 // deliberately has no completion-wait or producer-quiescence release.

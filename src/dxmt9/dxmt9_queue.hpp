@@ -826,9 +826,9 @@ class QueueLifecycleController {
   // Fail-stop a structurally inconsistent Tape/source resolution. This is an
   // owner-only surface used by CommandQueue's synchronous encode loops.
   void poisonTapeFailure() noexcept;
-  // Encoded-head carrier for open-CB / pending-tail experiments. Sources must
-  // already be dequeued into Encoding state; this records their completion
-  // identity without making them ready-visible or GPU-complete.
+  // Encoded-head retention for pending session tails. Sources must already be
+  // dequeued into Encoding state; this records their completion identity
+  // without making them ready-visible or GPU-complete.
   size_t retainEncodedSourcesForPendingTail(std::unique_lock<std::mutex>& lock,
                                             std::span<const ReadySlotSnapshot> sources,
                                             std::span<QueueCompletionSource> out);
@@ -863,13 +863,13 @@ class QueueLifecycleController {
   bool reclaimCompletedTapeHead(std::unique_lock<std::mutex>& lock, u64 seqId);
   // TLA+: BeginWaitForSequence / EndWaitForSequence.
   void waitForSequence(std::unique_lock<std::mutex>& lock, u64 targetSeqId);
-  // Queue-local observation used by experimental open-CB carriers to decide
-  // whether a prefix submit would actually overlap the completion thread's
-  // wait. This does not participate in ordering or lifetime decisions.
+  // Queue-local observation used by scheduling diagnostics to determine
+  // whether the completion thread is waiting. This does not participate in
+  // ordering or lifetime decisions.
   bool completionWaitActive();
   // Queue-local observation for producer-side waits such as resource Lock/Map.
-  // A pending open-CB carrier must be allowed to submit without the final
-  // Present tail when the producer is blocked on a sequence it owns.
+  // A pending session must be allowed to submit without the final Present tail
+  // when the producer is blocked on a sequence it owns.
   bool producerSequenceWaitActive();
   // Queue-local observation for a compatibility writer blocked either on a
   // free control/Tape reservation or on the GPU-inflight publication cap.

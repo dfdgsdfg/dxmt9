@@ -763,17 +763,11 @@ class CommandQueue {
   // one dequeued source, never moves commands across chunks, and immediately
   // releases without proof when no successor is ready after prefix encode.
   void runDceChunkLookaheadEncodeLoop(OnSubmittedFn onSubmitted);
-  // H229 open-CB overlap carrier encode lane (DXMT9_OPEN_CB_CARRIER).
-  // Keeps the current Metal command buffer open across appendable chunk
-  // boundaries, accepts semantically-published ready work into it, and
-  // releases pending work during completion AND producer waits. See
-  // render/open_cb_carrier.hpp for the baked H183 policy shape.
-  void runOpenCbCarrierEncodeLoop(OnSubmittedFn onSubmitted);
   // Tape-gated session join lane (DXMT9_CPU_READY_TAPE). Source-kind-neutral
   // FIFO session: compatible prefixes admit both Legacy ChunkSlot and Arena
   // Tape sources into one pending EncodeSession/open command buffer. Unlike
-  // the H229 carrier, a parked pending session has no completion-wait or
-  // producer-quiescence release; it finalizes only on ordered fences —
+  // A parked pending session has no completion-wait or producer-quiescence
+  // release; it finalizes only on ordered fences —
   // Present tail, non-appendable/semantic source, session-source cap or
   // preflight failure, producer sequence wait, initializer-wait boundary, and
   // shutdown drain. Admission and writer pressure only wake deterministic

@@ -1,9 +1,7 @@
 // Tape-gated session join (DXMT9_CPU_READY_TAPE) — deterministic coverage
 // for source-kind-neutral EncodeSession integration:
-//   * payload-view carrier predicates classify Legacy and Arena sources
-//     identically to the ChunkSlot predicates;
-//   * the neutral batch prefix selector admits multi-Arena and mixed
-//     Legacy/Arena FIFO prefixes that the H229 legacy-only selector rejects;
+//   * the pure session-source policy classifies Legacy and Arena sources;
+//   * those predicates admit multi-Arena and mixed Legacy/Arena FIFO prefixes;
 //   * the production encodeChunk payload overload carries one EncodeSession
 //     and one injected command buffer across consecutive Arena sources with
 //     no artificial submission/session boundary at the source edge;
@@ -39,7 +37,7 @@
 #include "../../../src/dxmt9/render/backend_interface.hpp"
 #include "../../../src/dxmt9/render/deferred_terminal_suffix.hpp"
 #include "../../../src/dxmt9/render/framegraph_backend.hpp"
-#include "../../../src/dxmt9/render/open_cb_carrier.hpp"
+#include "../../../src/dxmt9/render/session_source_policy.hpp"
 
 #include <algorithm>
 #include <array>
@@ -65,6 +63,25 @@ extern "C" void dxmt9_test_set_ordered_control_replay_observer(
     void* userdata, OrderedControlReplayObserver observer);
 
 namespace dxmt9 {
+
+std::size_t selectSessionSourceBatchPrefix(
+    std::span<const core::metalqueue::ResolvedPublishedSource> candidates) {
+  std::size_t sessionHeadPrefix = 0;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    const core::SourcePayloadView payload = candidates[i].payload;
+    if (!payload.valid()) {
+      return sessionHeadPrefix;
+    }
+    if (render::sessionSourceHasFinalPresentTail(payload)) {
+      return i == 0u ? 0u : i + 1u;
+    }
+    if (!render::sessionSourceCanBeHead(payload)) {
+      return sessionHeadPrefix;
+    }
+    ++sessionHeadPrefix;
+  }
+  return sessionHeadPrefix;
+}
 
 struct CommandQueueArenaLeaseTestAccess {
   struct BatchResult {
@@ -446,7 +463,7 @@ struct CommandQueueArenaLeaseTestAccess {
           std::span<ReadySlotSnapshot>(scratch.data(),
                                        std::min(maxSources, scratch.size())),
           [](std::span<const ResolvedPublishedSource> candidates) noexcept {
-            return render::selectCpuReadySessionBatchPrefix(candidates);
+            return selectSessionSourceBatchPrefix(candidates);
           });
       result.dequeued = count;
       if (count == 0) {
@@ -5300,9 +5317,8 @@ struct ArenaClearBlockFixture {
   SourcePayloadView view() const { return SourcePayloadView(block); }
 };
 
-void payloadPredicatesAreSourceKindNeutral() {
-  // Legacy shapes: the payload-view predicates must agree with the ChunkSlot
-  // predicates the H229 carrier uses.
+void sessionSourcePolicyClassifiesLegacyAndArena() {
+  // Legacy shapes exercise the same pure policy used by the Tape coordinator.
   ChunkSlot head{};
   head.appendClear({});
   ChunkSlot presentTail{};
@@ -5311,26 +5327,26 @@ void payloadPredicatesAreSourceKindNeutral() {
   midPresent.appendPresent({}, Handle{0x22});
   midPresent.appendClear({});
 
-  const auto agree = [](const ChunkSlot& slot, std::string_view what) {
+  const auto checkShape = [](const ChunkSlot& slot,
+                             bool finalPresentTail,
+                             bool sessionHead,
+                             std::string_view what) {
     const SourcePayloadView view(slot);
-    check(dxmt9::render::openCbCarrierSourceHasFinalPresentTail(view) ==
-              dxmt9::render::openCbCarrierSlotHasFinalPresentTail(slot),
-          std::string("present-tail predicate must agree: ") + std::string(what));
-    check(dxmt9::render::openCbCarrierSourceCanBeSessionHead(view) ==
-              dxmt9::render::openCbCarrierSlotCanBeSessionHead(slot),
-          std::string("session-head predicate must agree: ") + std::string(what));
+    check(dxmt9::render::sessionSourceHasFinalPresentTail(view) ==
+              finalPresentTail,
+          std::string("present-tail classification: ") + std::string(what));
+    check(dxmt9::render::sessionSourceCanBeHead(view) == sessionHead,
+          std::string("session-head classification: ") + std::string(what));
     for (const bool pending : {false, true}) {
-      check(dxmt9::render::openCbCarrierSourceCanAppendToPending(view,
-                                                                pending) ==
-                dxmt9::render::openCbCarrierSlotCanAppendToPending(slot,
-                                                                  pending),
-            std::string("append predicate must agree: ") + std::string(what));
+      check(dxmt9::render::sessionSourceCanAppendToPending(view, pending) ==
+                (finalPresentTail || (pending && sessionHead)),
+            std::string("append classification: ") + std::string(what));
     }
   };
-  agree(head, "clear head");
-  agree(presentTail, "present tail");
-  agree(midPresent, "mid present");
-  agree(ChunkSlot{}, "empty");
+  checkShape(head, false, true, "clear head");
+  checkShape(presentTail, true, false, "present tail");
+  checkShape(midPresent, false, false, "mid present");
+  checkShape(ChunkSlot{}, false, false, "empty");
 
   // Arena shapes: a published clear block is a session head; a present-only
   // block is a final present tail.
@@ -5338,25 +5354,36 @@ void payloadPredicatesAreSourceKindNeutral() {
   const auto arenaClearView = arenaClear.view();
   check(arenaClearView.isArena() && arenaClearView.commandCount() == 1,
         "arena clear fixture must expose one arena command");
-  check(dxmt9::render::openCbCarrierSourceCanBeSessionHead(arenaClearView),
+  check(dxmt9::render::sessionSourceCanBeHead(arenaClearView),
         "arena clear source must be a session head");
-  check(!dxmt9::render::openCbCarrierSourceHasFinalPresentTail(arenaClearView),
+  check(!dxmt9::render::sessionSourceHasFinalPresentTail(arenaClearView),
         "arena clear source is not a present tail");
-  check(dxmt9::render::openCbCarrierSourceCanAppendToPending(arenaClearView,
-                                                             true),
+  check(dxmt9::render::sessionSourceCanAppendToPending(arenaClearView, true),
         "arena clear source must append to an active session");
-  check(!dxmt9::render::openCbCarrierSourceCanAppendToPending(arenaClearView,
-                                                              false),
+  check(!dxmt9::render::sessionSourceCanAppendToPending(arenaClearView, false),
         "arena clear source must not append without a session");
 
   ArenaClearBlockFixture arenaPresent(/*presentTail=*/true);
   const auto arenaPresentView = arenaPresent.view();
   check(arenaPresentView.presentRecordCount() == 1,
         "arena present fixture must expose one present record");
-  check(dxmt9::render::openCbCarrierSourceHasFinalPresentTail(arenaPresentView),
+  check(dxmt9::render::sessionSourceHasFinalPresentTail(arenaPresentView),
         "arena present-only source is a final present tail");
-  check(!dxmt9::render::openCbCarrierSourceCanBeSessionHead(arenaPresentView),
+  check(!dxmt9::render::sessionSourceCanBeHead(arenaPresentView),
         "arena present tail cannot open a session");
+
+  check(dxmt9::render::sessionShouldSubmitBeforeInitializerWait(
+            true, true, true),
+        "initializer wait must submit an appendable active-render session");
+  check(!dxmt9::render::sessionShouldSubmitBeforeInitializerWait(
+            false, true, true),
+        "non-appendable source is handled before initializer policy");
+  check(!dxmt9::render::sessionShouldSubmitBeforeInitializerWait(
+            true, false, true),
+        "closed render session does not block initializer uploads");
+  check(!dxmt9::render::sessionShouldSubmitBeforeInitializerWait(
+            true, true, false),
+        "no pending upload means no initializer submission boundary");
 }
 
 void neutralPrefixSelectorAdmitsMixedCandidates() {
@@ -5383,23 +5410,21 @@ void neutralPrefixSelectorAdmitsMixedCandidates() {
       candidate(SourcePayloadView(legacyHead), 2),
       candidate(SourcePayloadView(legacyPresentTail), 3),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(mixed) == 3,
+  check(dxmt9::selectSessionSourceBatchPrefix(mixed) == 3,
         "neutral selector must admit arena+legacy heads through the tail");
-  check(dxmt9::render::selectOpenCbCarrierBatchPrefix(mixed) == 0,
-        "legacy-only H229 selector must still reject an arena-first prefix");
 
   const std::array arenaOnly{
       candidate(arenaClear.view(), 1),
       candidate(arenaClear.view(), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(arenaOnly) == 2,
+  check(dxmt9::selectSessionSourceBatchPrefix(arenaOnly) == 2,
         "neutral selector must admit a multi-arena head run");
 
   const std::array tailFirst{
       candidate(SourcePayloadView(legacyPresentTail), 1),
       candidate(arenaClear.view(), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(tailFirst) == 0,
+  check(dxmt9::selectSessionSourceBatchPrefix(tailFirst) == 0,
         "a leading present tail still falls back to single-source dequeue");
 
   const std::array invalidAfterHeads{
@@ -5407,7 +5432,7 @@ void neutralPrefixSelectorAdmitsMixedCandidates() {
       candidate(SourcePayloadView(legacyHead), 2),
       candidate(SourcePayloadView{}, 3),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(invalidAfterHeads) ==
+  check(dxmt9::selectSessionSourceBatchPrefix(invalidAfterHeads) ==
             2,
         "a later invalid source must preserve the maximal valid head prefix");
 
@@ -5416,35 +5441,35 @@ void neutralPrefixSelectorAdmitsMixedCandidates() {
       candidate(SourcePayloadView(legacyHead), 2),
       candidate(SourcePayloadView(legacyEmpty), 3),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(emptyAfterHeads) == 2,
+  check(dxmt9::selectSessionSourceBatchPrefix(emptyAfterHeads) == 2,
         "a later empty source must preserve the maximal valid head prefix");
 
   const std::array nonHeadAfterHead{
       candidate(arenaClear.view(), 1),
       candidate(SourcePayloadView(legacyNonHead), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(nonHeadAfterHead) == 1,
+  check(dxmt9::selectSessionSourceBatchPrefix(nonHeadAfterHead) == 1,
         "a later non-head source must preserve the maximal valid head prefix");
 
   const std::array leadingInvalid{
       candidate(SourcePayloadView{}, 1),
       candidate(arenaClear.view(), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(leadingInvalid) == 0,
+  check(dxmt9::selectSessionSourceBatchPrefix(leadingInvalid) == 0,
         "a leading invalid source must still reject the batch prefix");
 
   const std::array leadingEmpty{
       candidate(SourcePayloadView(legacyEmpty), 1),
       candidate(arenaClear.view(), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(leadingEmpty) == 0,
+  check(dxmt9::selectSessionSourceBatchPrefix(leadingEmpty) == 0,
         "a leading empty source must still reject the batch prefix");
 
   const std::array leadingNonHead{
       candidate(SourcePayloadView(legacyNonHead), 1),
       candidate(arenaClear.view(), 2),
   };
-  check(dxmt9::render::selectCpuReadySessionBatchPrefix(leadingNonHead) == 0,
+  check(dxmt9::selectSessionSourceBatchPrefix(leadingNonHead) == 0,
         "a leading non-head source must still reject the batch prefix");
 }
 
@@ -5649,7 +5674,7 @@ int main() {
       productionLoopPlansFreshRepeatedSourceWindow();
       return 0;
     }
-    payloadPredicatesAreSourceKindNeutral();
+    sessionSourcePolicyClassifiesLegacyAndArena();
     neutralPrefixSelectorAdmitsMixedCandidates();
     arenaSessionCarryAcrossSourcesSharesOneCommandBuffer();
     multipleArenaSourcesCompleteFifoThroughOneSubmission();
