@@ -71,7 +71,7 @@ bool isFullscreenStretch(const resources::SurfaceRecord& dst,
 
 // R-BACK-14.3 — issue `useHeap` once per heap instance that actually
 // backs a resource referenced by this blit. Mirrors the render-encoder
-// pattern (see beginRenderPass in dxmt9_draw_encoder.mm): walk the small
+// pattern (see beginRenderPass in dxmt9_render_pass_encoder.mm): walk the small
 // set of resources the blit will touch, consult each record's
 // `isHeapBacked` flag, and dedup heap handles through a fixed-size
 // array so the encoder-open path stays allocation-free. Surfaces don't

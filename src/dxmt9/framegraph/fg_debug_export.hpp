@@ -66,7 +66,8 @@ struct SnapshotAccess {
 //   texture_mask — core::FlatDrawStateRecord::textureMask (drawState.hot)
 //   alpha_blend/z_enable/z_write/z_func/alpha_test/cull — core::flatStateOr on
 //                     the hot FlatStateSet renderStates (RS_* ids, matching the
-//                     encoder's DrawDebugRecord defaults in dxmt9_draw_encoder.mm)
+//                     encoder's DrawDebugRecord defaults in
+//                     dxmt9_draw_encoder_draw.mm)
 //   stream0_stride — core::FlatDrawStateRecord::streamStrides[0]
 struct SnapshotDraw {
   u32 command_index = 0;

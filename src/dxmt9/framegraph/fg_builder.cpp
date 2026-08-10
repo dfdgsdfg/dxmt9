@@ -38,7 +38,8 @@ namespace dxmt9::framegraph {
 namespace {
 
 // The attachment-set identity the encoder splits render passes on
-// (dxmt9_draw_encoder.mm makeAttachmentKey): color0..kMaxRenderTargets + depth.
+// (dxmt9_render_pass_internal.hpp makeAttachmentKey):
+// color0..kMaxRenderTargets + depth.
 // Two draws share a render pass iff their AttachmentSet compares equal.
 AttachmentSet attachmentSetFromHot(const core::FlatDrawStateRecord& hot) {
   AttachmentSet set{};

@@ -6,8 +6,8 @@
 //
 // Mapping to the REAL code (verified against the free-function encoder):
 //   - emitDraw            forwards to encoders::encodeDraw
-//                         (decl src/dxmt9/dxmt9_draw_encoder.hpp:360,
-//                          def src/dxmt9/dxmt9_draw_encoder.mm:13271).
+//                         (decl src/dxmt9/dxmt9_draw_encoder.hpp,
+//                          def src/dxmt9/dxmt9_draw_encoder_draw.mm).
 //                         The interface exposes only the STABLE leading subset
 //                         of that signature; the many trailing encodeDraw knobs
 //                         (skipBaseStateBind, preUploaded, paramPayloadArena,

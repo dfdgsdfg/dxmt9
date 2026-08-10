@@ -2691,7 +2691,7 @@ bool splitStretchChunk() {
 // DXMT9_PRESENT_BOUNDARY_COMPLETION / DXMT9_DISABLE_PRESENT_BOUNDARY)
 // into a single switch — see resolveBoundaryPolicy() doc-comment for
 // the priority ordering. AfterAcquire is observationally a no-op on
-// the wait branch here; its effect lives in dxmt9_draw_encoder.mm,
+// the wait branch here; its effect lives in dxmt9_draw_encoder_chunk.mm,
 // which also reads through resolveBoundaryPolicyFromEnv().
 //
 // capFrameLatencyToBackBuffers() / backBufferLatencyCap() /

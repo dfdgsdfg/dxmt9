@@ -13,9 +13,9 @@
 // DEVICE FEASIBILITY (investigated 2026-06-08)
 //   The native test host is a `nowine` host with NO Metal device, so the full
 //   encode path cannot run headless:
-//     * encoders::encodeChunk lives in dxmt9_draw_encoder.mm and immediately
+//     * encoders::encodeChunk lives in dxmt9_draw_encoder_chunk.mm and immediately
 //       short-circuits to std::nullopt when `!ctx.device || !ctx.queue.valid()`
-//       (dxmt9_draw_encoder.mm:13304). A default-constructed WMT::Device{} has
+//       at entry. A default-constructed WMT::Device{} has
 //       handle 0, so the body never runs.
 //     * Even with a faked nonzero device handle it then calls
 //       ctx.queue.newCommandBuffer() and WMT::Device{...}.supportsCounterSampling

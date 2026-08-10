@@ -12220,7 +12220,7 @@ public:
      * texture. It is validated in device_c_record_validate.cpp, classified as
      * a SurfaceOp ordering barrier in device_c_record_replay.cpp, and
      * dispatched to dxmt9::encoders::encodeDepthResolve via
-     * dxmt9_draw_encoder.mm's surface-op Kind switch. The record is emitted
+     * dxmt9_draw_encoder_chunk.mm's surface-op Kind switch. The record is emitted
      * exactly like StretchRect/ColorFill (chunkBarrierFlush, then append with
      * source/dest retained), so it orders atomically with the surrounding
      * draws/clears in the same chunk. */

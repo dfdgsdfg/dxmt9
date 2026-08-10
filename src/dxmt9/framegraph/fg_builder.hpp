@@ -14,7 +14,7 @@
 //   geometry/binding payload is copied (deferred to the L2 DrawDescriptor).
 //
 //   The builder mirrors the grouping `encoders::encodeChunk`
-//   (dxmt9_draw_encoder.mm) performs over the SAME payload so the eventual
+//   (dxmt9_draw_encoder_chunk.mm) performs over the SAME payload so the eventual
 //   linearizer (B9) can re-emit draws in the original order through the
 //   traditional path. Pass boundaries are decided on the attachment set
 //   (color0..N + depth handles) — the same `AttachmentKey` the encoder splits

@@ -2,7 +2,7 @@
 
 // Env-gated debug knobs shared by encoder translation units. Previously
 // file-local to backend_metal.mm's anonymous namespace; exposed here so
-// dxmt9_draw_encoder.mm can reach them without duplication.
+// the encoder translation units can reach them without duplication.
 
 #include "dxmt9/core.hpp"
 

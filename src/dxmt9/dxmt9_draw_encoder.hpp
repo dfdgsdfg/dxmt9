@@ -440,7 +440,8 @@ struct ColorlessRenderPassRt0 {
 // A NULL render target has a surface record but deliberately no color
 // texture, so it admits a depth/stencil-only pass; a genuinely missing RT0
 // or a normal color RT whose texture failed to allocate aborts the pass.
-// One-to-one with the guard at dxmt9_draw_encoder.mm beginRenderPass entry.
+// One-to-one with the guard at dxmt9_render_pass_encoder.mm beginRenderPass
+// entry.
 inline constexpr bool renderPassAdmitsRt0(const ColorlessRenderPassRt0& rt0) {
   return rt0.surfaceExists && (rt0.hasTexture || rt0.isNullRt);
 }

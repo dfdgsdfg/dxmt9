@@ -6,7 +6,7 @@
 //   - encoders::renderPassAdmitsRt0      (begin-pass admission for a NULL RT0)
 //   - encoders::colorAttachmentIncluded  (per-slot color-attachment filter)
 // Both are pure value transforms extracted from beginRenderPass
-// (src/dxmt9/dxmt9_draw_encoder.mm) so the depth-only-pass policy is
+// (src/dxmt9/dxmt9_render_pass_encoder.mm) so the depth-only-pass policy is
 // unit-testable without a Metal device / ObjC++ encoder. The live encoder
 // calls these at the begin guard and inside the color-attachment loop; this
 // spec drives them directly, modeled on the applyColorLoadPolicy

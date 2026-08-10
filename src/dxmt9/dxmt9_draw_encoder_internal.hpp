@@ -1,9 +1,9 @@
 #pragma once
 
-// Private header shared between the dxmt9_draw_encoder.mm core and the
-// hazard / diagnostics sibling translation units (T7 split). Keeps the
-// public dxmt9_draw_encoder.hpp surface frozen while letting encodeChunk
-// reach hazard helpers and encodeDraw reach the geometry-trace recorder.
+// Private header shared by the draw, chunk, hazard, and diagnostics encoder
+// translation units. Keeps the public dxmt9_draw_encoder.hpp surface frozen
+// while letting encodeChunk reach hazard helpers and encodeDraw reach the
+// geometry-trace recorder.
 
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_draw_shader.hpp"

@@ -4,7 +4,7 @@
 //
 // Pure value-transform helpers shared between the encoder hot path and
 // the native test fixture. The actual per-encoder bind / sub-region
-// write logic lives inline in dxmt9_draw_encoder.mm; this header
+// write logic lives inline in dxmt9_draw_encoder_draw.mm; this header
 // owns the bits a CPU-only test can exercise without a Metal device:
 //
 //   - The argbuf MTLArgumentDescriptor layout build (R-BACK-12.23).

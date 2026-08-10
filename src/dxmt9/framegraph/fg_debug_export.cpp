@@ -183,7 +183,8 @@ void resolvePassDrawDetail(const FrameGraph& fg,
     const u32 stream0_stride = hot ? hot->streamStrides[0] : 0u;
 
     // Render states via flatStateOr on the hot FlatStateSet, with the same
-    // defaults the encoder's DrawDebugRecord uses (dxmt9_draw_encoder.mm).
+    // defaults the encoder's DrawDebugRecord uses
+    // (dxmt9_draw_encoder_draw.mm).
     u32 alpha_blend = 0, z_enable = 0, z_write = 0, alpha_test = 0, cull = 0;
     u32 z_func = static_cast<u32>(core::CompareFunc::LessEqual);
     if (hot) {

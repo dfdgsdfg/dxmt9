@@ -12,7 +12,7 @@
 ; plumbing this fails: the strict-less test rejects 0.5 vs 0.5 and the cleared red shows.
 ;
 ; Backend wire-up: setRasterizerCullMode and the prologue setRasterizerState in
-; dxmt9_draw_encoder.mm read RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS from
+; dxmt9_draw_encoder_draw.mm read RS_DEPTH_BIAS / RS_SLOPE_SCALE_DEPTH_BIAS from
 ; FlatStateSet via bit_cast<float>(...) and forward them to
 ; MTLRenderCommandEncoder.setDepthBias:slopeScale:clamp:.
 
