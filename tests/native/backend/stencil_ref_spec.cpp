@@ -1,6 +1,6 @@
 // P0-3 — D3DRS_STENCILREF / D3DRS_TWOSIDEDSTENCILMODE pass-through coverage.
 //
-// Before the fix, `dxmt9_draw_encoder.mm:1341` invoked
+// Before the fix, the caller now owned by `dxmt9_draw_encoder_draw.mm` invoked
 // `recordedSetDepthStencilState(ctx, encoder, depthState)` with no
 // explicit stencilRef, so the default-argument zero silently applied
 // and Metal saw stencil ref = 0 regardless of what D3D9 set.

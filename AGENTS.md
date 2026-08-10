@@ -51,7 +51,7 @@ Key boundaries, all enforced (see `codebase_conventions.rules.md`):
   concurrent subsystems are formally verified in TLA+ (`specs/verification/`).
 
 `src/dxmt9/` runtime internals: `dxmt9_command_queue` / `dxmt9_queue` (submission
-+ completion waterline), `dxmt9_draw_encoder.mm` (per-draw encode),
++ completion waterline), `dxmt9_draw_encoder_draw.mm` (per-draw encode),
 `dxmt9_pipeline_cache` (PSO cache + FFP/tile-FFP selection), `dxmt9_presenter.mm`
 (owns `CAMetalLayer` + drawable + acquire/boundary policy),
 `dxmt9_blit_encoders`, `dxmt9_capture` / `dxmt9_signposts` / `dxmt9_perf_counters`

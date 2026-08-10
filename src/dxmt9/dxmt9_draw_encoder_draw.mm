@@ -2904,6 +2904,10 @@ bool encodeDraw(EncodeContext& ctx,
                  bool argbufDirectCbufMode,
                  bool reopenArgbufHybrid,
                  DrawNativeShadowView native) {
+  // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
+  // is permitted on this path; the guard is debug-only and asserts this when
+  // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
+  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   auto* dirty = native.uniformDirty;
   auto* textureSamplerShadow = native.textureSampler;
   auto* encoderBreakdown = native.encoderBreakdown;
@@ -2922,10 +2926,6 @@ bool encodeDraw(EncodeContext& ctx,
       native.argbufPsPayloadSourceChanged;
   const bool bindingOverridePrefetchedPsoCompatible =
       native.bindingOverridePrefetchedPsoCompatible;
-  // Hot per-draw entry. Per codebase_conventions.rules.md, no heap allocation
-  // is permitted on this path; the guard is debug-only and asserts this when
-  // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 is set in env. See dxmt9_debug_alloc_guard.
-  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("encodeDraw");
   PerfScope scope(perf::countEncodeDrawCpuTime);
   EncodeDrawPhaseTimer drawPhase;
   emitEncodeProgressDrawStage(seqId, commandIndex, commandDrawIndex,

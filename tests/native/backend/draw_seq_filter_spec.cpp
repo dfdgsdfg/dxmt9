@@ -165,6 +165,37 @@ void testRenderEncoderSelectorListParsesHotRows() {
         "render encoder selector list rejects missing row");
 }
 
+void testSelectorlessStageStreamIbProbeAllowsEveryEncoder() {
+  const dxmt9::debug::RenderEncoderSelector selector{};
+  const dxmt9::debug::RenderEncoderSelectorList selectors{};
+  check(dxmt9::debug::renderEncoderSelectionMatches(
+            selector, selectors, false, 0u, 0u),
+        "selectorless stream/IB staging probe does not require encoder identity");
+  check(dxmt9::debug::renderEncoderSelectionMatches(
+            selector, selectors, true, 60u, 3u),
+        "selectorless stream/IB staging probe allows any identified encoder");
+
+  const auto selected = dxmt9::debug::makeRenderEncoderSelector("60/3");
+  check(!dxmt9::debug::renderEncoderSelectionMatches(
+            selected, selectors, false, 0u, 0u),
+        "explicit stream/IB staging selector requires encoder identity");
+  check(dxmt9::debug::renderEncoderSelectionMatches(
+            selected, selectors, true, 60u, 3u),
+        "explicit stream/IB staging selector allows its encoder");
+  check(!dxmt9::debug::renderEncoderSelectionMatches(
+            selected, selectors, true, 60u, 4u),
+        "explicit stream/IB staging selector rejects another encoder");
+
+  const auto listed =
+      dxmt9::debug::makeRenderEncoderSelectorList("60/3,60/4");
+  check(dxmt9::debug::renderEncoderSelectionMatches(
+            selector, listed, true, 60u, 4u),
+        "explicit stream/IB staging selector list allows a listed encoder");
+  check(!dxmt9::debug::renderEncoderSelectionMatches(
+            selector, listed, true, 60u, 5u),
+        "explicit stream/IB staging selector list rejects an unlisted encoder");
+}
+
 void testIndexedTriangleClassFilterParsesProbeBuckets() {
   using dxmt9::debug::IndexedTriangleClassFilter;
   using dxmt9::debug::makeIndexedTriangleClassFilter;
@@ -318,6 +349,7 @@ int main() {
     testDrawOrdinalListParsesExcludedDraws();
     testRenderEncoderSelectorParsesSingleRow();
     testRenderEncoderSelectorListParsesHotRows();
+    testSelectorlessStageStreamIbProbeAllowsEveryEncoder();
     testIndexedTriangleClassFilterParsesProbeBuckets();
     testIndexedTriangleClassFilterListParsesAndBuckets();
     testScissorRectOverrideParsesOrderedRect();

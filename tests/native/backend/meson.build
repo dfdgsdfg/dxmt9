@@ -410,7 +410,7 @@ test('dxmt9-encode-draw-recorder-spec', encode_draw_recorder_spec,
      env: dxmt9_native_test_env)
 
 # P0-3 (specs/d3d9.plan.md §2) — D3DRS_STENCILREF pass-through.
-# Before the fix, the encoder caller at dxmt9_draw_encoder.mm:1341
+# Before the fix, the encoder caller now in dxmt9_draw_encoder_draw.mm
 # invoked recordedSetDepthStencilState without a stencilRef and the
 # default-argument zero silently applied. This spec locks both the
 # pure-value transform (state::computeStencilRef) and the

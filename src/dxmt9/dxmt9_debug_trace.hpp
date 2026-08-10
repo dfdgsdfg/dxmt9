@@ -113,6 +113,24 @@ bool renderEncoderSelectorListMatches(const RenderEncoderSelectorList& selectors
                                       u64 seqId,
                                       u64 encoderIndex) noexcept;
 
+// Row selectors are optional filters: no selector means every encoder is
+// eligible, including diagnostic paths that do not collect encoder identity.
+inline bool renderEncoderSelectionMatches(
+    RenderEncoderSelector selector,
+    const RenderEncoderSelectorList& selectors,
+    bool hasEncoderIdentity,
+    u64 seqId,
+    u64 encoderIndex) noexcept {
+  if (!selector.enabled && !selectors.enabled) {
+    return true;
+  }
+  if (!hasEncoderIdentity) {
+    return false;
+  }
+  return renderEncoderSelectorMatches(selector, seqId, encoderIndex) ||
+         renderEncoderSelectorListMatches(selectors, seqId, encoderIndex);
+}
+
 // Force blend-disable + writeMask=0xf to make all draws visible, for
 // rendering-bisect work. Env: DXMT_DEBUG_FORCE_VISIBLE.
 bool forceVisibleDraw();

@@ -263,15 +263,11 @@ bool stageStreamIbProbeRowMatches(const ActiveEncoderBreakdown* encoderBreakdown
   if (!debug::probeStageStreamIb()) {
     return false;
   }
-  if (!encoderBreakdown) {
-    return false;
-  }
-  const auto seqId = encoderBreakdown->stats.seqId;
-  const auto encoderIndex = encoderBreakdown->stats.encoderIndex;
-  return debug::renderEncoderSelectorMatches(
-             debug::probeStageStreamIbRow(), seqId, encoderIndex) ||
-         debug::renderEncoderSelectorListMatches(
-             debug::probeStageStreamIbRows(), seqId, encoderIndex);
+  return debug::renderEncoderSelectionMatches(
+      debug::probeStageStreamIbRow(), debug::probeStageStreamIbRows(),
+      encoderBreakdown != nullptr,
+      encoderBreakdown ? encoderBreakdown->stats.seqId : 0,
+      encoderBreakdown ? encoderBreakdown->stats.encoderIndex : 0);
 }
 
 

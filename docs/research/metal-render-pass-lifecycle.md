@@ -214,8 +214,10 @@ Relevant implementation points are:
 
 - [`session_source_policy.hpp`](../../src/dxmt9/render/session_source_policy.hpp)
   for source classification and initializer-wait policy;
-- [`dxmt9_draw_encoder.mm`](../../src/dxmt9/dxmt9_draw_encoder.mm) for carried
-  encode state and session finalization; and
+- [`dxmt9_encode_session_storage_internal.hpp`](../../src/dxmt9/dxmt9_encode_session_storage_internal.hpp)
+  for carried encode state and
+  [`dxmt9_render_pass_lifecycle.mm`](../../src/dxmt9/dxmt9_render_pass_lifecycle.mm)
+  for session finalization; and
 - [`dxmt9_queue.hpp`](../../src/dxmt9/dxmt9_queue.hpp) for bounded, consecutive
   completion-source aggregation.
 
