@@ -976,15 +976,6 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectScored{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectSkipped{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateSelectCandidatesMax{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateFrontierDropped{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyHeapPops{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyRefreshes{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyStaleDrops{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateLazyAccepted{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketVertexVisits{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketMoves{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateBucketSelected{0};
-  std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateUpperBoundRejected{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheCandidateMeasureCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheGateCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawIndexCacheApplyCpuNs{0};
@@ -3357,15 +3348,6 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_index_cache_candidate_select_scored", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectScored, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_candidate_select_skipped", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectSkipped, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_candidate_select_candidates_max", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateSelectCandidatesMax, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_frontier_dropped", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateFrontierDropped, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_lazy_heap_pops", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyHeapPops, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_lazy_refreshes", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyRefreshes, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_lazy_stale_drops", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyStaleDrops, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_lazy_accepted", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateLazyAccepted, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_bucket_vertex_visits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketVertexVisits, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_bucket_moves", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketMoves, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_bucket_selected", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateBucketSelected, nullptr, nullptr, 0.0},
-    {"encode_draw_index_cache_candidate_upper_bound_rejected", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawIndexCacheCandidateUpperBoundRejected, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_candidate_measure_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheCandidateMeasureCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_gate_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheGateCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_index_cache_apply_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawIndexCacheApplyCpuNs, nullptr, nullptr, 0.0},
@@ -7900,35 +7882,6 @@ void countEncodeDrawIndexCacheCandidateSelectVolume(std::uint64_t calls,
   add(c.encodeDrawIndexCacheCandidateSelectScored, scored);
   add(c.encodeDrawIndexCacheCandidateSelectSkipped, skipped);
   updateMax(c.encodeDrawIndexCacheCandidateSelectCandidatesMax, maxCandidates);
-}
-
-void countEncodeDrawIndexCacheCandidateFrontierDropped(std::uint64_t dropped) {
-  add(counters().encodeDrawIndexCacheCandidateFrontierDropped, dropped);
-}
-
-void countEncodeDrawIndexCacheCandidateLazyFrontier(std::uint64_t heapPops,
-                                                    std::uint64_t refreshes,
-                                                    std::uint64_t staleDrops,
-                                                    std::uint64_t accepted) {
-  auto& c = counters();
-  add(c.encodeDrawIndexCacheCandidateLazyHeapPops, heapPops);
-  add(c.encodeDrawIndexCacheCandidateLazyRefreshes, refreshes);
-  add(c.encodeDrawIndexCacheCandidateLazyStaleDrops, staleDrops);
-  add(c.encodeDrawIndexCacheCandidateLazyAccepted, accepted);
-}
-
-void countEncodeDrawIndexCacheCandidateBucketedSelect(
-    std::uint64_t vertexVisits,
-    std::uint64_t bucketMoves,
-    std::uint64_t selected) {
-  auto& c = counters();
-  add(c.encodeDrawIndexCacheCandidateBucketVertexVisits, vertexVisits);
-  add(c.encodeDrawIndexCacheCandidateBucketMoves, bucketMoves);
-  add(c.encodeDrawIndexCacheCandidateBucketSelected, selected);
-}
-
-void countEncodeDrawIndexCacheCandidateUpperBoundRejected(std::uint64_t rejected) {
-  add(counters().encodeDrawIndexCacheCandidateUpperBoundRejected, rejected);
 }
 
 void countEncodeDrawIndexCacheCandidateMeasureCpuTime(std::uint64_t nanoseconds) {

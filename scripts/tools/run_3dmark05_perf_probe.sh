@@ -89,11 +89,6 @@ probe_sort_indexed_triangles_by_min_index=0
 probe_optimize_indexed_triangles_vertex_cache=0
 optimize_opaque_depth_index_cache=0
 optimize_opaque_depth_index_cache_min_gain_pct=
-index_cache_candidate_frontier_cap=
-index_cache_candidate_lazy_frontier=0
-index_cache_candidate_bucketed_select=0
-index_cache_candidate_strict_lru=0
-index_cache_candidate_upper_bound_gate=0
 probe_apply_index_cache_opt_candidate=0
 probe_apply_index_cache_opt_candidate_unsafe_nonopaque=0
 probe_apply_index_cache_opt_candidate_min_gain_pct=
@@ -811,33 +806,6 @@ Options:
   --optimize-screen-blend-index-cache-min-gain-pct PCT
                       Set DXMT9_OPTIMIZE_SCREEN_BLEND_INDEX_CACHE_MIN_GAIN_PCT
                       (default in dxmt9: 10)
-  --index-cache-candidate-frontier-cap N
-                      Diagnostic-only: set
-                      DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP to limit the
-                      LRU32 candidate frontier width during index-cache
-                      reorder construction. 0 disables the cap.
-  --index-cache-candidate-lazy-frontier
-                      Diagnostic-only: set
-                      DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER=1 to use a
-                      lazily refreshed priority frontier instead of full
-                      candidate-vector rescans. Can change primitive order.
-  --index-cache-candidate-bucketed-select
-                      Diagnostic-only: set
-                      DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1 to keep
-                      active candidates in cached-vertex-count buckets and
-                      update only touched-vertex neighbors. Can change
-                      primitive order.
-  --index-cache-candidate-strict-lru
-                      Diagnostic-only: set
-                      DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU=1 to update the
-                      candidate builder's simulated LRU cache with the same
-                      no-duplicate miss path as the LRU32 measurement helper.
-                      Can change primitive order/candidate quality.
-  --index-cache-candidate-upper-bound-gate
-                      Diagnostic-only: set
-                      DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1 to skip
-                      candidate construction when original unique index count
-                      proves the configured min-gain gate cannot be reached.
   --split-large-indexed-draws N
                       Set DXMT9_SPLIT_LARGE_INDEXED_DRAWS=N to split indexed
                       triangle-list draws above N primitives
@@ -1968,26 +1936,6 @@ while (($#)); do
     --optimize-opaque-depth-index-cache-min-gain-pct)
       optimize_opaque_depth_index_cache_min_gain_pct=${2:?missing value for --optimize-opaque-depth-index-cache-min-gain-pct}
       shift 2
-      ;;
-    --index-cache-candidate-frontier-cap)
-      index_cache_candidate_frontier_cap=${2:?missing value for --index-cache-candidate-frontier-cap}
-      shift 2
-      ;;
-    --index-cache-candidate-lazy-frontier)
-      index_cache_candidate_lazy_frontier=1
-      shift
-      ;;
-    --index-cache-candidate-bucketed-select)
-      index_cache_candidate_bucketed_select=1
-      shift
-      ;;
-    --index-cache-candidate-strict-lru)
-      index_cache_candidate_strict_lru=1
-      shift
-      ;;
-    --index-cache-candidate-upper-bound-gate)
-      index_cache_candidate_upper_bound_gate=1
-      shift
       ;;
     --probe-apply-index-cache-opt-candidate)
       probe_apply_index_cache_opt_candidate=1
@@ -3362,11 +3310,6 @@ if [[ -n "$probe_apply_index_cache_opt_candidate_min_gain_pct" &&
   exit 2
 fi
 
-if [[ -n "$index_cache_candidate_frontier_cap" &&
-      ! "$index_cache_candidate_frontier_cap" =~ ^[0-9]+$ ]]; then
-  echo "--index-cache-candidate-frontier-cap must be a non-negative integer" >&2
-  exit 2
-fi
 if [[ -n "$dump_indexed_geometry_texture0_width" &&
       ! "$dump_indexed_geometry_texture0_width" =~ ^[0-9]+$ ]]; then
   echo "--dump-indexed-geometry-texture0-width must be a non-negative integer" >&2
@@ -3540,10 +3483,6 @@ fi
 if [[ -n "$effect_draw_trace_geometry_max_refs" &&
       ! "$effect_draw_trace_geometry_max_refs" =~ ^[0-9]+$ ]]; then
   echo "--effect-draw-trace-geometry-max-refs must be a non-negative integer" >&2
-  exit 2
-fi
-if (( index_cache_candidate_lazy_frontier && index_cache_candidate_bucketed_select )); then
-  echo "--index-cache-candidate-lazy-frontier and --index-cache-candidate-bucketed-select are mutually exclusive" >&2
   exit 2
 fi
 if [[ -n "$dump_depth_attachment_handle" &&
@@ -4480,26 +4419,6 @@ env_args+=(
 
 if [[ -n "$optimize_opaque_depth_index_cache_min_gain_pct" ]]; then
   env_args+=("DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE_MIN_GAIN_PCT=$optimize_opaque_depth_index_cache_min_gain_pct")
-fi
-
-if [[ -n "$index_cache_candidate_frontier_cap" ]]; then
-  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_FRONTIER_CAP=$index_cache_candidate_frontier_cap")
-fi
-
-if (( index_cache_candidate_lazy_frontier )); then
-  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_LAZY_FRONTIER=1")
-fi
-
-if (( index_cache_candidate_bucketed_select )); then
-  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_BUCKETED_SELECT=1")
-fi
-
-if (( index_cache_candidate_strict_lru )); then
-  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_STRICT_LRU=1")
-fi
-
-if (( index_cache_candidate_upper_bound_gate )); then
-  env_args+=("DXMT9_INDEX_CACHE_CANDIDATE_UPPER_BOUND_GATE=1")
 fi
 
 if (( optimize_screen_blend_index_cache )); then

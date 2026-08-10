@@ -49,7 +49,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
 #include <sstream>
 #include <span>
 #include <string>
@@ -6872,98 +6871,6 @@ IndexReuseMeasure measureIndexCacheMiss32ForDraw(std::span<const u8> indexBytes,
   return out;
 }
 
-IndexReuseMeasure measureIndexCacheMiss32AndUniqueForDraw(
-    std::span<const u8> indexBytes,
-    IndexType indexType,
-    u32 startIndex,
-    u64 indexCount) {
-  IndexReuseMeasure out{.references = indexCount};
-  if (indexBytes.empty() || indexCount == 0u) {
-    return out;
-  }
-  const std::size_t elementSize = indexElementSize(indexType);
-  const std::size_t startByte = static_cast<std::size_t>(startIndex) * elementSize;
-  if (startByte > indexBytes.size()) {
-    return out;
-  }
-  const std::size_t maxReadable =
-      (indexBytes.size() - startByte) / elementSize;
-  if (indexCount > static_cast<u64>(maxReadable)) {
-    return out;
-  }
-
-  std::array<u32, 32> cache{};
-  std::size_t cacheSize = 0;
-  u64 misses = 0;
-  bool first = true;
-  std::array<u8, 65536u> seen16{};
-  std::unordered_set<u32> seen32;
-  if (indexType == IndexType::UInt32) {
-    seen32.reserve(static_cast<std::size_t>(
-        std::min<u64>(indexCount, 1024u * 1024u)));
-  }
-
-  for (u64 i = 0; i < indexCount; ++i) {
-    const std::size_t offset = startByte + static_cast<std::size_t>(i) * elementSize;
-    u32 index = 0;
-    if (indexType == IndexType::UInt16) {
-      u16 value = 0;
-      std::memcpy(&value, indexBytes.data() + offset, sizeof(value));
-      index = value;
-      if (seen16[index] == 0u) {
-        seen16[index] = 1u;
-        ++out.unique;
-      }
-    } else {
-      std::memcpy(&index, indexBytes.data() + offset, sizeof(index));
-      if (seen32.insert(index).second) {
-        ++out.unique;
-      }
-    }
-
-    if (first) {
-      out.firstIndex = index;
-      out.minIndex = index;
-      out.maxIndex = index;
-      first = false;
-    } else {
-      const u32 prev = out.lastIndex;
-      const u32 delta = index > prev ? index - prev : prev - index;
-      out.adjacentDeltaAbsSum += delta;
-      out.adjacentDeltaMax = std::max(out.adjacentDeltaMax, delta);
-      if (index < prev) {
-        ++out.backwardJumps;
-      }
-      out.minIndex = std::min(out.minIndex, index);
-      out.maxIndex = std::max(out.maxIndex, index);
-    }
-    out.lastIndex = index;
-
-    std::size_t hit = cacheSize;
-    for (std::size_t j = 0; j < cacheSize; ++j) {
-      if (cache[j] == index) {
-        hit = j;
-        break;
-      }
-    }
-    if (hit == cacheSize) {
-      ++misses;
-      if (cacheSize < cache.size()) {
-        ++cacheSize;
-      }
-      hit = cacheSize - 1u;
-    }
-    for (std::size_t j = hit; j > 0u; --j) {
-      cache[j] = cache[j - 1u];
-    }
-    cache[0] = index;
-  }
-
-  out.cacheMiss32 = misses;
-  out.available = true;
-  return out;
-}
-
 u64 stream0ByteSpanForIndexMeasure(const IndexReuseMeasure& measure,
                                    u64 stream0Stride) {
   if (!measure.available || stream0Stride == 0u) {
@@ -6982,19 +6889,6 @@ bool indexCacheCandidateMeetsGainGate(const IndexReuseMeasure& original,
   }
   const u64 delta = original.cacheMiss32 - candidate.cacheMiss32;
   return (delta * 100u) / original.cacheMiss32 >= minGainPct;
-}
-
-bool indexCacheCandidateCanMeetGainUpperBound(
-    const IndexReuseMeasure& original,
-    std::uint32_t minGainPct) {
-  if (!original.available || original.cacheMiss32 == 0u || original.unique == 0u) {
-    return true;
-  }
-  if (original.unique >= original.cacheMiss32) {
-    return false;
-  }
-  const u64 maxDelta = original.cacheMiss32 - original.unique;
-  return (maxDelta * 100u) / original.cacheMiss32 >= minGainPct;
 }
 
 bool writeBinaryFile(const std::filesystem::path& path,
@@ -8311,17 +8205,15 @@ void writeIndexValue(std::vector<u8>& out,
   }
 }
 
+// The uncapped vector-rescan selector and its cache warm-up order define the
+// accepted LRU candidate bytes; keep this ordering stable.
 bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     std::span<const u8> indexBytes,
     IndexType indexType,
     u32 startIndex,
     u64 indexCount,
     std::vector<u8>& out,
-    std::size_t probeCacheSize = 64u,
-    std::size_t candidateFrontierCap = 0u,
-    bool candidateLazyFrontier = false,
-    bool candidateBucketedSelect = false,
-    bool candidateStrictLru = false) {
+    std::size_t probeCacheSize = 64u) {
   if (indexBytes.empty() || indexCount == 0u || (indexCount % 3u) != 0u ||
       probeCacheSize == 0u) {
     return false;
@@ -8426,9 +8318,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
   std::vector<u32> order;
   order.reserve(triangleCount);
   std::size_t nextOriginal = 0;
-  const bool useBucketedSelect =
-      candidateBucketedSelect && !candidateLazyFrontier;
-
   {
     PerfScope scope(perf::countEncodeDrawIndexCacheCandidateSelectCpuTime);
     std::uint64_t selectCalls = 0;
@@ -8436,14 +8325,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     std::uint64_t selectScored = 0;
     std::uint64_t selectSkipped = 0;
     std::uint64_t selectCandidatesMax = 0;
-    std::uint64_t frontierDropped = 0;
-    std::uint64_t lazyHeapPops = 0;
-    std::uint64_t lazyRefreshes = 0;
-    std::uint64_t lazyStaleDrops = 0;
-    std::uint64_t lazyAccepted = 0;
-    std::uint64_t bucketVertexVisits = 0;
-    std::uint64_t bucketMoves = 0;
-    std::uint64_t bucketSelected = 0;
     constexpr std::size_t kNoCachePosition = std::numeric_limits<std::size_t>::max();
     std::vector<std::size_t> denseCachePositions;
     std::unordered_map<u32, std::size_t> sparseCachePositions;
@@ -8541,169 +8422,9 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
              static_cast<std::int64_t>(tri.minIndex) / 256ll;
     };
 
-    struct CandidateHeapEntry {
-      std::int64_t score = 0;
-      std::size_t original = 0;
-      u32 triangle = 0;
-      u32 generation = 0;
-      std::uint64_t epoch = 0;
-    };
-
-    struct CandidateHeapLess {
-      bool operator()(const CandidateHeapEntry& lhs,
-                      const CandidateHeapEntry& rhs) const noexcept {
-        if (lhs.score != rhs.score) {
-          return lhs.score < rhs.score;
-        }
-        return lhs.original > rhs.original;
-      }
-    };
-
-    std::priority_queue<CandidateHeapEntry,
-                        std::vector<CandidateHeapEntry>,
-                        CandidateHeapLess> candidateHeap;
-    std::vector<u32> candidateGenerations(
-        candidateLazyFrontier ? triangleCount : 0u, 0u);
-    std::uint64_t candidateScoreEpoch = 0;
-    std::size_t activeCandidateCount = 0;
-    constexpr u8 kNoCandidateBucket = 0xffu;
-    std::array<std::vector<u32>, 4> candidateBuckets;
-    std::vector<u8> candidateCachedVertices(
-        useBucketedSelect ? triangleCount : 0u, 0u);
-    std::vector<u8> candidateBucket(
-        useBucketedSelect ? triangleCount : 0u, kNoCandidateBucket);
-    std::vector<std::size_t> candidateBucketSlot(
-        useBucketedSelect ? triangleCount : 0u, 0u);
-
-    auto cachedVertexCountFor = [&](const Triangle& tri) -> u8 {
-      u8 cachedVertices = 0u;
-      for (const u32 index : tri.indices) {
-        if (cachePosition(index).has_value()) {
-          ++cachedVertices;
-        }
-      }
-      return cachedVertices;
-    };
-
-    auto eraseBucketedCandidate = [&](u32 triangle) {
-      if (!useBucketedSelect) {
-        return;
-      }
-      const std::size_t t = static_cast<std::size_t>(triangle);
-      if (t >= triangleCount) {
-        return;
-      }
-      const u8 bucket = candidateBucket[t];
-      if (bucket >= candidateBuckets.size()) {
-        return;
-      }
-      auto& bucketVec = candidateBuckets[bucket];
-      const std::size_t slot = candidateBucketSlot[t];
-      if (slot >= bucketVec.size() || bucketVec[slot] != triangle) {
-        const auto it = std::find(bucketVec.begin(), bucketVec.end(), triangle);
-        if (it == bucketVec.end()) {
-          candidateBucket[t] = kNoCandidateBucket;
-          return;
-        }
-        const std::size_t found =
-            static_cast<std::size_t>(std::distance(bucketVec.begin(), it));
-        const u32 replacement = bucketVec.back();
-        bucketVec[found] = replacement;
-        candidateBucketSlot[static_cast<std::size_t>(replacement)] = found;
-        bucketVec.pop_back();
-        candidateBucket[t] = kNoCandidateBucket;
-        return;
-      }
-      const u32 replacement = bucketVec.back();
-      bucketVec[slot] = replacement;
-      candidateBucketSlot[static_cast<std::size_t>(replacement)] = slot;
-      bucketVec.pop_back();
-      candidateBucket[t] = kNoCandidateBucket;
-    };
-
-    auto placeBucketedCandidate = [&](u32 triangle, u8 bucket) {
-      if (!useBucketedSelect) {
-        return;
-      }
-      const std::size_t t = static_cast<std::size_t>(triangle);
-      if (t >= triangleCount) {
-        return;
-      }
-      bucket = std::min<u8>(bucket, 3u);
-      auto& bucketVec = candidateBuckets[bucket];
-      candidateBucket[t] = bucket;
-      candidateBucketSlot[t] = bucketVec.size();
-      candidateCachedVertices[t] = bucket;
-      bucketVec.push_back(triangle);
-    };
-
-    auto moveBucketedCandidate = [&](u32 triangle, u8 bucket) {
-      const std::size_t t = static_cast<std::size_t>(triangle);
-      if (!useBucketedSelect || t >= triangleCount) {
-        return;
-      }
-      bucket = std::min<u8>(bucket, 3u);
-      if (candidateBucket[t] == bucket) {
-        candidateCachedVertices[t] = bucket;
-        return;
-      }
-      eraseBucketedCandidate(triangle);
-      placeBucketedCandidate(triangle, bucket);
-      ++bucketMoves;
-    };
-
-    auto addBucketedCandidate = [&](u32 triangle) {
-      const std::size_t t = static_cast<std::size_t>(triangle);
-      if (t >= triangleCount) {
-        return;
-      }
-      inCandidates[t] = 1u;
-      ++activeCandidateCount;
-      selectCandidatesMax = std::max<std::uint64_t>(
-          selectCandidatesMax, static_cast<std::uint64_t>(activeCandidateCount));
-      placeBucketedCandidate(triangle, cachedVertexCountFor(triangles[t]));
-    };
-
-    auto pushLazyCandidate = [&](u32 triangle) {
-      const std::size_t t = static_cast<std::size_t>(triangle);
-      if (t >= triangleCount) {
-        return;
-      }
-      auto& generation = candidateGenerations[t];
-      ++generation;
-      const auto& tri = triangles[t];
-      candidateHeap.push(CandidateHeapEntry{
-          .score = scoreTriangle(tri),
-          .original = tri.original,
-          .triangle = triangle,
-          .generation = generation,
-          .epoch = candidateScoreEpoch,
-      });
-    };
-
     auto addCandidate = [&](u32 triangle) {
       const std::size_t t = static_cast<std::size_t>(triangle);
       if (t >= triangleCount || emitted[t] || inCandidates[t]) {
-        return;
-      }
-      if (candidateFrontierCap != 0u &&
-          ((candidateLazyFrontier || useBucketedSelect)
-               ? activeCandidateCount
-               : candidates.size()) >=
-              candidateFrontierCap) {
-        ++frontierDropped;
-        return;
-      }
-      if (useBucketedSelect) {
-        addBucketedCandidate(triangle);
-        return;
-      }
-      if (candidateLazyFrontier) {
-        inCandidates[t] = 1u;
-        ++activeCandidateCount;
-        selectCandidatesMax = std::max<std::uint64_t>(
-            selectCandidatesMax, static_cast<std::uint64_t>(activeCandidateCount));
-        pushLazyCandidate(triangle);
         return;
       }
       candidates.push_back(triangle);
@@ -8745,138 +8466,7 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       }
     };
 
-    auto updateBucketedVertexResidency = [&](u32 index, int delta) {
-      if (!useBucketedSelect) {
-        return;
-      }
-      auto visitTriangle = [&](u32 triangle) {
-        const std::size_t t = static_cast<std::size_t>(triangle);
-        if (t >= triangleCount || emitted[t] || !inCandidates[t]) {
-          return;
-        }
-        ++bucketVertexVisits;
-        const int oldCount = candidateCachedVertices[t];
-        const int nextCount = std::clamp(oldCount + delta, 0, 3);
-        if (nextCount != oldCount) {
-          moveBucketedCandidate(triangle, static_cast<u8>(nextCount));
-        }
-      };
-      if (useDenseAdjacency) {
-        if (index < minReferencedIndex) {
-          return;
-        }
-        const auto local = static_cast<std::size_t>(index - minReferencedIndex);
-        if (local >= denseVertexTriangles.size()) {
-          return;
-        }
-        for (const u32 triangle : denseVertexTriangles[local]) {
-          visitTriangle(triangle);
-        }
-        return;
-      }
-      auto it = sparseVertexTriangles.find(index);
-      if (it == sparseVertexTriangles.end()) {
-        return;
-      }
-      for (const u32 triangle : it->second) {
-        visitTriangle(triangle);
-      }
-    };
-
-    auto chooseBestCandidateLazy = [&]() -> std::optional<u32> {
-      ++selectCalls;
-      while (!candidateHeap.empty()) {
-        const CandidateHeapEntry entry = candidateHeap.top();
-        candidateHeap.pop();
-        ++lazyHeapPops;
-        ++selectSlots;
-        const std::size_t triangleIndex =
-            static_cast<std::size_t>(entry.triangle);
-        if (triangleIndex >= triangleCount ||
-            emitted[triangleIndex] ||
-            !inCandidates[triangleIndex] ||
-            entry.generation != candidateGenerations[triangleIndex]) {
-          ++selectSkipped;
-          ++lazyStaleDrops;
-          continue;
-        }
-        if (entry.epoch == candidateScoreEpoch) {
-          inCandidates[triangleIndex] = 0u;
-          if (activeCandidateCount != 0u) {
-            --activeCandidateCount;
-          }
-          ++lazyAccepted;
-          return entry.triangle;
-        }
-        const auto& tri = triangles[triangleIndex];
-        const std::int64_t currentScore = scoreTriangle(tri);
-        auto& generation = candidateGenerations[triangleIndex];
-        ++generation;
-        candidateHeap.push(CandidateHeapEntry{
-            .score = currentScore,
-            .original = tri.original,
-            .triangle = entry.triangle,
-            .generation = generation,
-            .epoch = candidateScoreEpoch,
-        });
-        ++lazyRefreshes;
-      }
-      return std::nullopt;
-    };
-
-    auto chooseBestCandidateBucketed = [&]() -> std::optional<u32> {
-      ++selectCalls;
-      selectCandidatesMax = std::max<std::uint64_t>(
-          selectCandidatesMax, static_cast<std::uint64_t>(activeCandidateCount));
-      for (int bucket = 3; bucket >= 0; --bucket) {
-        auto& bucketVec = candidateBuckets[static_cast<std::size_t>(bucket)];
-        if (bucketVec.empty()) {
-          continue;
-        }
-        std::optional<std::size_t> bestSlot;
-        std::int64_t bestScore = std::numeric_limits<std::int64_t>::min();
-        selectSlots += static_cast<std::uint64_t>(bucketVec.size());
-        for (std::size_t slot = 0; slot < bucketVec.size(); ++slot) {
-          const u32 candidate = bucketVec[slot];
-          const std::size_t triangleIndex = static_cast<std::size_t>(candidate);
-          if (triangleIndex >= triangleCount ||
-              emitted[triangleIndex] ||
-              !inCandidates[triangleIndex]) {
-            ++selectSkipped;
-            continue;
-          }
-          const auto& tri = triangles[triangleIndex];
-          const std::int64_t score = scoreTriangle(tri);
-          if (score > bestScore ||
-              (score == bestScore &&
-               (!bestSlot.has_value() ||
-                tri.original < triangles[bucketVec[*bestSlot]].original))) {
-            bestScore = score;
-            bestSlot = slot;
-          }
-        }
-        if (!bestSlot.has_value()) {
-          continue;
-        }
-        const u32 chosen = bucketVec[*bestSlot];
-        eraseBucketedCandidate(chosen);
-        inCandidates[static_cast<std::size_t>(chosen)] = 0u;
-        if (activeCandidateCount != 0u) {
-          --activeCandidateCount;
-        }
-        ++bucketSelected;
-        return chosen;
-      }
-      return std::nullopt;
-    };
-
     auto chooseBestCandidate = [&]() -> std::optional<u32> {
-      if (candidateLazyFrontier) {
-        return chooseBestCandidateLazy();
-      }
-      if (useBucketedSelect) {
-        return chooseBestCandidateBucketed();
-      }
       std::optional<std::size_t> bestSlot;
       std::int64_t bestScore = std::numeric_limits<std::int64_t>::min();
       ++selectCalls;
@@ -8930,35 +8520,16 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
         rebuildCachePositions();
         return;
       }
-      std::optional<u32> evicted;
       clearCachePositions();
-      if (candidateStrictLru) {
-        if (cache.size() < probeCacheSize) {
-          cache.push_back(0u);
-        } else if (!cache.empty()) {
-          evicted = cache.back();
-        }
-        for (std::size_t i = cache.size(); i > 1u; --i) {
-          cache[i - 1u] = cache[i - 2u];
-        }
+      if (cache.size() < probeCacheSize) {
+        cache.push_back(index);
       } else {
-        if (cache.size() < probeCacheSize) {
-          cache.push_back(index);
-        } else {
-          if (!cache.empty()) {
-            evicted = cache.back();
-          }
-          for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
-            cache[i] = cache[i - 1u];
-          }
+        for (std::size_t i = cache.size() - 1u; i > 0u; --i) {
+          cache[i] = cache[i - 1u];
         }
       }
       cache[0] = index;
       rebuildCachePositions();
-      if (evicted.has_value()) {
-        updateBucketedVertexResidency(*evicted, -1);
-      }
-      updateBucketedVertexResidency(index, 1);
     };
 
     while (order.size() < triangleCount) {
@@ -8976,15 +8547,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
       emitted[triangleIndex] = 1u;
       if (inCandidates[triangleIndex]) {
         inCandidates[triangleIndex] = 0u;
-        if (candidateLazyFrontier && activeCandidateCount != 0u) {
-          --activeCandidateCount;
-        }
-        if (useBucketedSelect) {
-          eraseBucketedCandidate(chosen);
-          if (activeCandidateCount != 0u) {
-            --activeCandidateCount;
-          }
-        }
       }
       order.push_back(chosen);
       const auto& tri = triangles[triangleIndex];
@@ -8992,7 +8554,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
         decrementRemainingUse(index);
         touchCacheVertex(index);
       }
-      ++candidateScoreEpoch;
       for (const u32 index : tri.indices) {
         addVertexNeighbors(index);
       }
@@ -9001,11 +8562,6 @@ bool buildVertexCacheOptimizedTriangleOrderIndexBytes(
     perf::countEncodeDrawIndexCacheCandidateSelectVolume(
         selectCalls, selectSlots, selectScored, selectSkipped,
         selectCandidatesMax);
-    perf::countEncodeDrawIndexCacheCandidateFrontierDropped(frontierDropped);
-    perf::countEncodeDrawIndexCacheCandidateLazyFrontier(
-        lazyHeapPops, lazyRefreshes, lazyStaleDrops, lazyAccepted);
-    perf::countEncodeDrawIndexCacheCandidateBucketedSelect(
-        bucketVertexVisits, bucketMoves, bucketSelected);
   }
 
   if (order.size() != triangleCount) {
@@ -14799,25 +14355,15 @@ bool encodeDraw(EncodeContext& ctx,
               perf::countEncodeDrawIndexCacheCandidateCpuTime);
           PerfScope indexCacheOriginalMeasureScope(
               perf::countEncodeDrawIndexCacheOriginalMeasureCpuTime);
-          if (cacheOptFastLru32Measure &&
-              debug::indexCacheCandidateUpperBoundGate()) {
-            originalIndexReuseForProbe =
-                measureIndexCacheMiss32AndUniqueForDraw(
-                    originalIndexBytesForReuse,
-                    pv.indexType,
-                    originalIndexReuseStartIndex,
-                    vertexCount);
-          } else {
-            originalIndexReuseForProbe = cacheOptFastLru32Measure
-                ? measureIndexCacheMiss32ForDraw(originalIndexBytesForReuse,
-                                                 pv.indexType,
-                                                 originalIndexReuseStartIndex,
-                                                 vertexCount)
-                : measureIndexReuseForDraw(originalIndexBytesForReuse,
-                                           pv.indexType,
-                                           originalIndexReuseStartIndex,
-                                           vertexCount);
-          }
+          originalIndexReuseForProbe = cacheOptFastLru32Measure
+              ? measureIndexCacheMiss32ForDraw(originalIndexBytesForReuse,
+                                               pv.indexType,
+                                               originalIndexReuseStartIndex,
+                                               vertexCount)
+              : measureIndexReuseForDraw(originalIndexBytesForReuse,
+                                         pv.indexType,
+                                         originalIndexReuseStartIndex,
+                                         vertexCount);
         } else {
           originalIndexReuseForProbe =
               measureIndexReuseForDraw(originalIndexBytesForReuse,
@@ -14863,29 +14409,16 @@ bool encodeDraw(EncodeContext& ctx,
         PerfScope indexCacheCandidateScope(
             perf::countEncodeDrawIndexCacheCandidateCpuTime);
         if (originalIndexReuseForProbe.available) {
-          const bool upperBoundRejected =
-              debug::indexCacheCandidateUpperBoundGate() &&
-              !indexCacheCandidateCanMeetGainUpperBound(
-                  originalIndexReuseForProbe,
-                  cacheOptMinGainPct);
-          if (upperBoundRejected) {
-            perf::countEncodeDrawIndexCacheCandidateUpperBoundRejected(1u);
-          } else {
-            PerfScope indexCacheCandidateBuildScope(
-                perf::countEncodeDrawIndexCacheCandidateBuildCpuTime);
-            cacheOptCandidateBuilt =
-                buildVertexCacheOptimizedTriangleOrderIndexBytes(
-                    originalIndexBytesForReuse,
-                    pv.indexType,
-                    originalIndexReuseStartIndex,
-                    vertexCount,
-                    cacheOptCandidateIndexBytes,
-                    32u,
-                    debug::indexCacheCandidateFrontierCap(),
-                    debug::indexCacheCandidateLazyFrontier(),
-                    debug::indexCacheCandidateBucketedSelect(),
-                    debug::indexCacheCandidateStrictLru());
-          }
+          PerfScope indexCacheCandidateBuildScope(
+              perf::countEncodeDrawIndexCacheCandidateBuildCpuTime);
+          cacheOptCandidateBuilt =
+              buildVertexCacheOptimizedTriangleOrderIndexBytes(
+                  originalIndexBytesForReuse,
+                  pv.indexType,
+                  originalIndexReuseStartIndex,
+                  vertexCount,
+                  cacheOptCandidateIndexBytes,
+                  32u);
         }
         if (cacheOptCandidateBuilt) {
           PerfScope indexCacheCandidateMeasureScope(

@@ -342,17 +342,6 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `dxmt9.log` but no `result.json`, pass `--allow-partial-stable-frame-proof`
   with stable-frame proof presets; keep `--require-result-json` for clean
   catalogue-result gates and run-level comparisons.
-  Diagnostic index-cache candidate variants include
-  `--index-cache-candidate-frontier-cap`,
-  `--index-cache-candidate-lazy-frontier`,
-  `--index-cache-candidate-bucketed-select`,
-  `--index-cache-candidate-strict-lru`, and
-  `--index-cache-candidate-upper-bound-gate`; treat all candidate-order
-  changes as hypotheses until no-gputrace counters and a `v0.0.3` visual-safe
-  anchor check agree. Use the diff image against `v0.0.3` to catch
-  black/translucent vertices, broken UVs, texture/color drift, and
-  cbuf-identity artifacts, while reserving raw pixel percentages from
-  time-based screenshots for triage only.
   `--probe-fragmentless-depth-only-row SEQ/ENC` is a diagnostic-only
   backend-shape route smoke for depth-only rows; it still requires equality and
   Xcode counter proof before any promotion. Run

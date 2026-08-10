@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Index-Cache Locality — the only accepted production GPU win - Historical Log"
 type: domain-log
 status: historical
-updated: 2026-07-08
+updated: 2026-08-10
 source: docs/perfomance/index-cache-locality/index.md
 related: docs/perfomance/index-cache-locality/index.md; docs/perfomance/index-cache-locality/overview.md
 ---
@@ -103,15 +103,14 @@ bottleneck triage. The mechanism behind why this works is proven separately by
 - **No-mutate identity scout** — `DXMT9_MEASURE_INDEX_REUSE=1` +
   `--measure-index-cache-opt-candidate` emit per-draw identity / candidate ceiling
   without mutating order, feeding candidate selection.
-- **Diagnostic candidate-builder variants** —
+- **Retired diagnostic candidate-builder variants** —
   `--index-cache-candidate-frontier-cap`,
   `--index-cache-candidate-lazy-frontier`,
   `--index-cache-candidate-bucketed-select`,
   `--index-cache-candidate-strict-lru`, and
-  `--index-cache-candidate-upper-bound-gate` are hypotheses, not default
-  changes. Judge them first with no-gputrace CPU/miss32 counters, then require
-  same-input image proof or a stable visual gate; `v0.0.3` PNG diffs are useful
-  for broad corruption triage but not raw pixel-percent correctness gates.
+  `--index-cache-candidate-upper-bound-gate` were rejected by H9-H12/H15 and
+  removed on 2026-08-10. The verdict rows above remain historical evidence;
+  the flags are no longer accepted by the runner or honored by the runtime.
 
 ## Experiment dependency graph
 

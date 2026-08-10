@@ -1090,16 +1090,6 @@ void countEncodeDrawIndexCacheCandidateSelectVolume(std::uint64_t calls,
                                                     std::uint64_t scored,
                                                     std::uint64_t skipped,
                                                     std::uint64_t maxCandidates);
-void countEncodeDrawIndexCacheCandidateFrontierDropped(std::uint64_t dropped);
-void countEncodeDrawIndexCacheCandidateLazyFrontier(std::uint64_t heapPops,
-                                                    std::uint64_t refreshes,
-                                                    std::uint64_t staleDrops,
-                                                    std::uint64_t accepted);
-void countEncodeDrawIndexCacheCandidateBucketedSelect(
-    std::uint64_t vertexVisits,
-    std::uint64_t bucketMoves,
-    std::uint64_t selected);
-void countEncodeDrawIndexCacheCandidateUpperBoundRejected(std::uint64_t rejected);
 void countEncodeDrawIndexCacheCandidateMeasureCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIndexCacheGateCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawIndexCacheApplyCpuTime(std::uint64_t nanoseconds);
