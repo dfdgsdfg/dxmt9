@@ -28,6 +28,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_debug_trace.cpp',
   'dxmt9_device.cpp',
   'dxmt9_draw_encoder.mm',
+  'dxmt9_draw_encoder_draw.mm',
   'dxmt9_draw_encoder_diagnostics.mm',
   'dxmt9_draw_encoder_hazard.mm',
   'dxmt9_render_pass_encoder.mm',
