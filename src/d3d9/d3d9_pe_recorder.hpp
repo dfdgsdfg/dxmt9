@@ -67,7 +67,6 @@ enum class PeInterAppendCallFamily : std::uint32_t {
     Shader,
     VsConst,
     PsConst,
-    OtherConst,
     Draw,
     Barrier,
     ScenePresent,

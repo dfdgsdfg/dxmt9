@@ -71,18 +71,10 @@ struct D3D9PeRecorderFlush {
       const dxmt9::d3d9::pe::PeWireObjectRef &query) = 0;
   virtual HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) = 0;
   virtual D3D9PePresentCallToken NotifyPeFirstCallAfterPresentForChild(
-      const char *callName, const void *callerPc = nullptr) noexcept {
-    (void)callName;
-    (void)callerPc;
-    return {};
-  }
+      const char *callName, const void *callerPc = nullptr) noexcept = 0;
   virtual void NotifyPeCallReturnAfterPresentForChild(
       const D3D9PePresentCallToken &token,
-      const char *callName, HRESULT hr) noexcept {
-    (void)token;
-    (void)callName;
-    (void)hr;
-  }
+      const char *callName, HRESULT hr) noexcept = 0;
 
   // PE-shadow stateblock support. Captures the device's current transform /
   // shader-constant / vdecl shadow into `out`, AddRef'ing any held COM

@@ -54,6 +54,9 @@ smoke = executable(
 
 test('dxmt9-smoke', smoke)
 
+test('dxmt9-d3d9-pe-process-vertices-split-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_d3d9_pe_process_vertices_split.py')])
+
 subdir('native/core')
 subdir('native/shader')
 subdir('native/backend')
