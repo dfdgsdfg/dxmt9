@@ -413,12 +413,12 @@ structure. Draw-run parameters, binding overrides, payload views, pending
 submissions, and resolved core-handle lists must not allocate fresh containers
 for each replayed record or run after warm-up.
 
-**Encode scheduling requirements `R-BACK-2.57`–`R-BACK-2.65` are owned by
+**Encode scheduling requirements `R-BACK-2.57`–`R-BACK-2.66` are owned by
 [`encode-scheduling/requirements.md`](encode-scheduling/requirements.md).**
 They define immutable published storage, serial partition consumption,
 CPU-ready residency, scoped FIFO drains, production planning, parallel render
-encoding, Metal 4 segmented logical passes, and deterministic admission
-headroom/session caps.
+encoding, Metal 4 segmented logical passes, deterministic admission
+headroom/session caps, and stable render scheduling provider modes.
 
 ---
 

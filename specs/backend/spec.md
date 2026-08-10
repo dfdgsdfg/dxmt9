@@ -317,7 +317,7 @@ CPU-ready publication, ready-prefix ownership, EncodeSession pass streaming,
 partition planning, and the serial, parallel, and Metal 4 execution lanes are
 owned by [Encode Scheduling](encode-scheduling/spec.md). Its
 [requirements](encode-scheduling/requirements.md) are authoritative for
-`R-BACK-2.35`–`R-BACK-2.50` and `R-BACK-2.57`–`R-BACK-2.65`.
+`R-BACK-2.35`–`R-BACK-2.50` and `R-BACK-2.57`–`R-BACK-2.66`.
 
 The parent command-queue design preserves three integration rules:
 

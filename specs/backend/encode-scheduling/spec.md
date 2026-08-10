@@ -65,6 +65,52 @@ each synchronous `encodeChunk()` call borrows it. Finalization moves that same
 ownership into submitted queue storage, so neither the source nor a transient
 encode stack frame can drop an open command buffer.
 
+### 2.1 Render Scheduling Provider Configuration
+
+Scheduling policy resolves into one queue-immutable value rather than a set of
+hot-path environment checks:
+
+```text
+RenderSchedulingProviderConfig {
+  SourceDeliveryMode sourceDelivery       // Compatibility | Streaming
+  PartitionExecutionMode partition        // IdentitySerial | ExplicitSerial | ExplicitParallel
+  SegmentExecutionMode segmentation       // Disabled | Metal4
+}
+```
+
+The axes compose without hidden implications:
+
+| Axis | Stable modes | Ownership change | Does not change |
+|---|---|---|---|
+| Source delivery | `compatibility`, `streaming` | Payload-owning compatibility source versus bounded Tape publication and multi-source session admission | Effective replay semantics, partition policy, Presenter, or completion order |
+| Partition execution | `identity`, `serial`, `parallel` | Identity cursor, explicit ranges on the coordinator, or explicit ranges on ordered parallel children | Source representation, logical-pass actions, command-buffer count, or semantic optimization |
+| Segmentation | `off`, `metal4` | One serial/parallel command-buffer envelope versus a bounded jointly committed Metal 4 group | Logical-pass boundary, source order, or partition eligibility |
+
+This produces deliberate comparison lanes. For example,
+`compatibility + serial + off` isolates the production planner from Tape
+storage, and `streaming + identity + off` isolates source streaming from
+partition subdivision. `compatibility + parallel + off` remains a valid target:
+workers consume immutable source-qualified locators and must not depend on
+Arena page ownership. A parallel request still falls back per pass when the
+pass is unsealed, too small, hazardous, or otherwise ineligible. A Metal 4
+request falls back at queue creation when capability is absent and per group
+when bounded validation rejects the candidate.
+
+`DXMT9_RENDER_SOURCE_MODE`, `DXMT9_RENDER_PARTITION_MODE`, and
+`DXMT9_RENDER_SEGMENT_MODE` are the canonical configuration surface. The
+existing `DXMT9_CPU_READY_TAPE` spelling is only a migration alias for source
+delivery. Resolution occurs once before queue-owned storage or workers are
+created. The startup log and perf snapshot record both requested and resolved
+values plus a typed fallback reason; no draw, source, or partition rereads the
+process environment.
+
+Provider selection is below FrameGraph semantic selection. It neither selects
+`passcoalesce`/DCE nor changes `DXMT9_RENDER_MODE` or the compatibility profile.
+This separation keeps a rendering-provider A/B from silently changing command
+meaning. It also makes promotion monotonic: a new default may use a more capable
+provider, while every earlier supported mode remains a first-class rollback and
+regression lane.
+
 ## 3. CPU-Ready Tape
 
 ### 3.1 Physical Layout
@@ -1074,6 +1120,9 @@ select pass actions or publish pass-end sidecars.
 
 Required scheduling counters include:
 
+- requested and resolved source-delivery, partition-execution, and segment-
+  execution provider modes, including default, legacy-alias, parse-rejection,
+  capability-fallback, and per-pass lane-selection reasons;
 - CPU-ready source/page/byte/retention/ticket current and peak occupancy,
   per-dimension high-water closes and low-water reopen/reclaim wakeups;
 - admission wait time/count, head candidate dimensions, wrap padding,
@@ -1103,9 +1152,10 @@ Promotion uses the ordered gates in `R-BACK-2.50`. Moving a wait between
 counters or saturating a new bounded queue is not overlap progress.
 `admissionPressureRelease` and `rawWriterPressureRelease` are forbidden steady-
 state release reasons; any nonzero pressure-created release fails promotion.
-`DXMT9_CPU_READY_TAPE` remains default off and the payload-owning legacy lane
-remains available until those gates pass. Treating the Arena as unconditional
-or deleting rollback is a promotion decision, not a storage-only refactor.
+The current provider default remains `compatibility + identity + off` until
+those gates pass. Promoting another default must not make an already supported
+provider mode unreachable. Treating the Arena as unconditional or deleting a
+fallback is a provider-lifecycle decision, not a storage-only refactor.
 
 ## 10. Verification Mapping
 
@@ -1118,6 +1168,7 @@ or deleting rollback is a promotion decision, not a storage-only refactor.
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |
+| Stable provider configuration | missing pure resolver and mode-matrix native specs, process-separated selector precedence/default/fallback evidence, and requested/resolved startup plus perf-observability audits |
 | Parallel order and join | missing fake-child executor spec and formal/refinement evidence |
 | Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
 | Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |

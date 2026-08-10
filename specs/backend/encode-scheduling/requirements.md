@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50` and `R-BACK-2.57`
-through `R-BACK-2.65` are authoritative here.
+through `R-BACK-2.66` are authoritative here.
 
 ## 1. Producer / Encode Overlap
 
@@ -608,3 +608,47 @@ usage, candidate payload pages, candidate wrap-padding pages, candidate total
 required pages, required total sources/pages, and whether sources, pages, or
 both exceeded their limits. This observation must not affect classification,
 the selected predecessor fence, or session grouping.
+
+**R-BACK-2.66** Render scheduling must expose stable provider configuration as
+three typed, independently resolved axes:
+
+- source delivery is `Compatibility` or `Streaming`;
+- partition execution is `IdentitySerial`, `ExplicitSerial`, or
+  `ExplicitParallel`; and
+- command-buffer segmentation is `Disabled` or `Metal4`.
+
+The runtime must resolve the complete configuration once at device or command-
+queue creation and keep it immutable for that queue. `Compatibility` uses the
+payload-owning source path, while `Streaming` selects bounded CPU-ready Tape
+publication and `EncodeSession` source streaming; ordered Legacy, Inline, and
+control dispositions remain valid fallbacks inside the streaming mode.
+`IdentitySerial` uses the allocation-free identity cursor,
+`ExplicitSerial` runs the deterministic production partition planner on the
+single encode coordinator, and `ExplicitParallel` runs the same validated plan
+through eligible parallel children with mandatory per-pass serial fallback.
+`Metal4` is orthogonal to partition parallelism and must retain the capability-
+selected fallback in `R-BACK-2.64`.
+
+The source and partition axes must not imply one another. In particular,
+explicit serial planning and eligible parallel execution must remain usable
+with either source-delivery mode; parallel execution must not require promotion
+of the Tape. Selecting a provider mode must not implicitly enable FrameGraph
+semantic optimizers such as pass coalescing or DCE, alter Presenter policy, or
+weaken any order, lifetime, load/store, completion, or locality contract.
+
+The canonical process selectors are `DXMT9_RENDER_SOURCE_MODE` with values
+`compatibility|streaming`, `DXMT9_RENDER_PARTITION_MODE` with values
+`identity|serial|parallel`, and `DXMT9_RENDER_SEGMENT_MODE` with values
+`off|metal4`. The current default is
+`compatibility + identity + off`. Until migration is complete,
+`DXMT9_CPU_READY_TAPE=0|1` is a compatibility alias for only the source-delivery
+axis when the canonical source selector is unset; it is not a separate provider
+mode. An unknown value must fail closed to that axis's default and emit one
+bounded warning. Requested and resolved axes, capability fallback, per-pass
+lane fallback, and mode-specific work counts must be observable.
+
+These selectors describe supported rendering-provider modes, not temporary
+experiment probes. Promotion under `R-BACK-2.50` may change a default but must
+not make the previous mode unreachable. Removing a supported mode requires an
+explicit requirement amendment, migration evidence, and replacement regression
+coverage; ordinary hot-path cleanup must preserve every supported selector.
