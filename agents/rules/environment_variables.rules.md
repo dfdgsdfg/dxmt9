@@ -36,4 +36,7 @@ documented otherwise.
 - A zero string (`""`) and `"0"` mean "off" for boolean flags.
 - For tunable numerics, an unparseable value falls back to the default.
 - These files are **descriptive**, not a behavioral spec — for that, see
-  `specs/`.
+  `specs/`. Runtime-mutating selectors are classified by
+  `specs/backend/render-provider/spec.md` as stable providers, experimental
+  candidates, diagnostics, or retired surfaces; an environment variable's
+  existence alone does not make it a supported renderer mode.

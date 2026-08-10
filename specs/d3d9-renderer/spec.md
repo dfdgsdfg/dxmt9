@@ -195,6 +195,12 @@ and feature list resolve to `progressive + passcoalesce`. Explicit
 `traditional`, `strict`, or an empty/`0` feature list preserve the rollback
 paths from R-BACK-30.1.
 
+The backend, profile, and feature names are registered as stable provider
+surfaces in [`specs/backend/render-provider/spec.md`](../backend/render-provider/spec.md).
+That registry records availability and default state separately, so planned
+tokens are never mistaken for active runtime lanes and diagnostic probes never
+enter the feature list implicitly.
+
 `TraditionalBackend` is a thin adapter over the existing `CommandQueue`
 encoding flow; its implementation is a forwarding shim that does not change
 any existing call sites.

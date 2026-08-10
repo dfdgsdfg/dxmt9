@@ -99,6 +99,12 @@ interface.
 
 ## 2. Dual-Path Coexistence
 
+Renderer backend, compatibility-profile, and feature-token names in this
+section are stable provider surfaces classified by `R-BACK-42.*`. Their
+implementation and default activation may differ, but experimental probes must
+not be added to `DXMT9_RENDERER_FEATURES` without becoming an explicit
+requirement here.
+
 **R-BACK-31.1** The renderer must be selected by a single process-level
 environment variable `DXMT9_RENDER_MODE` with values:
 

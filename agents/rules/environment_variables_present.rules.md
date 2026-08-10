@@ -7,6 +7,14 @@ the index for global notes.
 
 ## Present policy
 
+Acquire policy and the non-deferred boundary alternatives are stable Presenter
+policy modes under `specs/backend/render-provider/spec.md`. The current multiple
+boolean spellings are a legacy configuration surface resolved into one typed
+value. `DeferredPresentCompletion` remains an experimental candidate;
+the disabled-boundary and synchronous-flush overrides remain diagnostic rather
+than provider promotion targets. The explicit vsync override is a user policy,
+not part of this classification.
+
 | Var | Purpose | Default |
 |---|---|---|
 | `DXMT9_PRESENT_ASYNC_ACQUIRE` | Request drawable on the encode thread async | `0` |
@@ -28,10 +36,10 @@ others are ignored. See `dxmt9::resolveAcquirePolicy` in
 | `DXMT9_PRESENT_BOUNDARY_DEFERRED` | Experimental frame-latency run-ahead policy. The final Present tail is committed immediately, and the present-completion frame-latency wait is deferred until the next `Present` tail is about to be submitted. This differs from `DXMT9_DISABLE_PRESENT_BOUNDARY`: it still enforces configured frame-latency backpressure before another present tail, but gives the producer a chance to record and publish the next frame's offscreen work while the previous present tail is completing. Default off; do not promote until R-BACK-2.43 pass-streaming, ordered completion, visual, P4, and locality gates pass. | `0` |
 | `DXMT9_PRESENT_BOUNDARY_PRESENT_COMPLETION` | Wait on `presentCompletedSeqId_` (selects `BoundaryPolicy::PresentCompletion`) — default on; explicit `0` opts out | `1` |
 | `DXMT9_PRESENT_REFRESH_HZ` | Override refresh rate (numeric Hz) | derived |
-| `DXMT9_LAYER_DISPLAY_SYNC` | CAMetalLayer display sync opt-in; when set non-zero, the presenter sets `CAMetalLayer.displaySyncEnabled` from the D3D9 PresentationInterval. Default is **off** in code (`dxmt9_presenter.mm::layerDisplaySyncEnabled`), and the runtime instead enforces the per-present minimum duration via `MTLCommandBuffer::presentDrawableAfterMinimumDuration` | `0` (off — code default; the docs row historically said `1`, the code path defaults to off) |
+| `DXMT9_LAYER_DISPLAY_SYNC` | Experimental CAMetalLayer display-sync candidate. When enabled, Presenter sets `displaySyncEnabled` from the D3D9 PresentationInterval; the stable default keeps it off and enforces per-present minimum duration through `presentDrawableAfterMinimumDuration`. | `0` |
 | `DXMT9_DISABLE_VSYNC` | Runtime "vsync off" override. When set non-zero, the presenter forces both `CAMetalLayer.displaySyncEnabled = NO` and the software `minimumPresentDuration = 0` regardless of the D3D9 PresentationInterval the app requested. Production-side counterpart to per-swapchain `D3DPRESENT_INTERVAL_IMMEDIATE`. Useful for perf triage and user-controlled "vsync off" without modifying the D3D9 app. If the app already requests Immediate, this is expected to be a no-op; verify with `present_schedule_requested_immediate`, `present_schedule_after_minimum_duration`, and `present_schedule_immediate` before claiming a perf delta. Resolver: `resolveDisableVsync()` in `dxmt9_presenter.hpp`. Tested by `dxmt9-present-disable-vsync-spec` | `0` |
 | `DXMT9_DISABLE_PRESENT_BOUNDARY` | Skip the present-boundary wait entirely (selects `BoundaryPolicy::Disabled`) | `0` |
-| `DXMT9_SPLIT_STRETCH_CHUNK` | Split stretch-rect chunks | `0` |
+| `DXMT9_SPLIT_STRETCH_CHUNK` | Experimental candidate that splits StretchRect chunks; default remains the ordered unsplit path pending surface-op ordering and submission-locality evidence. | `0` |
 | `DXMT9_DRAW_CHUNK_COMMAND_LIMIT` | Max commands per chunk (numeric) | derived |
 | `DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES` | Cap (numeric bytes) on the per-chunk draw-payload arena; `0`/unset/unparseable disables the cap | `0` |
 | `DXMT9_CAP_FRAME_LATENCY_TO_BACKBUFFERS` | Limit max frame latency to backbuffer count | `0` |

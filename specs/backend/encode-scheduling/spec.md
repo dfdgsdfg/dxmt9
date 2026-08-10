@@ -78,6 +78,11 @@ RenderSchedulingProviderConfig {
 }
 ```
 
+These are stable provider modes under
+[`R-BACK-42.*`](../render-provider/requirements.md), including modes whose
+implementation is still partial or planned. Default promotion and feature
+availability are therefore separate from selector lifetime.
+
 The axes compose without hidden implications:
 
 | Axis | Stable modes | Ownership change | Does not change |

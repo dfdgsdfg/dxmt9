@@ -52,6 +52,7 @@ status, and [log](log.md) for spec-tree maintenance history.
 
 - archicture: [requirements](archicture/requirements.md), [spec](archicture/spec.md) - project architecture and DOD contracts.
 - backend: [requirements](backend/requirements.md), [spec](backend/spec.md) - shared Metal backend contracts.
+- backend/render-provider: [requirements](backend/render-provider/requirements.md), [spec](backend/render-provider/spec.md), [gap](backend/render-provider/gap.md) - selectable rendering-mode lifecycle and composition registry.
 - benchmarks: [requirements](benchmarks/requirements.md), [spec](benchmarks/spec.md) - benchmark and regression policy.
 - d3d7: [requirements](d3d7/requirements.md), [spec](d3d7/spec.md) - D3D7 / DirectDraw shim contracts.
 - d3d8: [requirements](d3d8/requirements.md), [spec](d3d8/spec.md) - D3D8 shim contracts.

@@ -7,6 +7,12 @@ string that is not `0`, unless documented otherwise.
 
 ## Backend selection
 
+`DXMT9_RENDER_MODE`, the compatibility profile, and the feature-token names are
+stable provider contracts under `specs/backend/render-provider/spec.md`.
+Activation state is separate: `passcoalesce` is default, `dce` is implemented
+opt-in, and the remaining named feature tokens are planned/unavailable. Debug
+export and divergence flags below are diagnostic surfaces, not provider modes.
+
 | Var | Purpose | Default |
 |---|---|---|
 | `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset and `framegraph` resolve to `FrameGraphBackend`. Empty, `0`, `traditional`, and unknown values resolve to the conservative `TraditionalBackend` rollback. `scripts/run_apps/run_experiment.py` maps an omitted catalogue `render_mode` to `framegraph` unless the process environment explicitly overrides it for a diagnostic run. | framegraph |

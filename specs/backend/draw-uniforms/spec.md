@@ -401,15 +401,16 @@ covered by `dxmt9-verify-tla`.
 
 Stage 2 layers an Apple-Silicon-only argument-buffer path on top of the
 Stage 1 per-frequency UBO contract above. It is described by
-`R-BACK-12.22` through `R-BACK-12.26`. Stage 1 must remain the default and
-the conformance reference; Stage 2 is opt-in based on capability and
-benchmark.
+`R-BACK-12.22` through `R-BACK-12.26`. Stage 1 remains the universal fallback
+and conformance reference. On Apple3+/Tier2 devices Stage 2 is selected by
+default unless the explicit rollback disables it; the resource-array sub-mode
+remains opt-in.
 
 ### 11.1 Layout transition
 
 ```mermaid
 flowchart LR
-    subgraph S1["Stage 1 — direct slot binding (default, all devices)"]
+    subgraph S1["Stage 1 — direct slot binding (reference + fallback)"]
         S1V0["slot 0 vert: VsConsts"]
         S1V3["slot 3 vert: FfpVsConsts"]
         S1V5["slot 5 vert: DrawVolatile (setVertexBytes)"]
@@ -458,6 +459,12 @@ Tier-2 argument buffers store sampler/texture handles directly as
 and only updates them when a binding changes; this matches the dirty mask
 already maintained in Stage 1.
 
+That diagram is the full-table/resource-array shape. The production-default
+Stage 2b constants-only shape retains the Stage 2 shader/PSO family but binds
+constant buffers directly at slots `0`/`3`; it does not reopen a slot-30 table
+merely to change cbuf pointers. Explicit resource-array selection dominates
+Stage 2b and restores the table shape above.
+
 ### 11.3 Selection sequence
 
 ```mermaid
@@ -468,20 +475,25 @@ sequenceDiagram
     participant Enc as Metal encoder
 
     Be->>Cap: argbufTier2 + Apple3+ + pass-compatible?
-    alt all yes
-        Cap-->>Be: enable Stage 2
-        Be->>Argbuf: allocate from per-encoder ring
-        Be->>Argbuf: write all dirty stable regions + tex/sampler descriptors
-        Be->>Enc: setVertexBuffer(slot=30, offset)
-        Be->>Enc: setFragmentBuffer(slot=30, offset)
+    alt capability fails
+        Cap-->>Be: Stage 1 fallback
+        Note over Be,Enc: direct binding at slots 0/3/5
+    else resource-array requested
+        Cap-->>Be: Stage 2 resource-array
+        Be->>Argbuf: allocate and populate constants + resources
+        Be->>Enc: bind slot 30 for vertex + fragment
         loop per draw
-            Be->>Argbuf: rewrite only dirty sub-regions
+            Be->>Argbuf: patch dirty table entries
             Be->>Enc: setVertexBytes(slot=5, DrawVolatile)
             Be->>Enc: drawIndexed(...)
         end
-    else any no
-        Cap-->>Be: Stage 1 fallback
-        Note over Be,Enc: per-encoder Stage 1 binding (slot 0/3/5)
+    else direct-cbuf default
+        Cap-->>Be: Stage 2b direct-cbuf
+        Note over Be,Enc: Stage 2 PSO family; cbufs direct at slots 0/3
+    else direct-cbuf rollback disabled
+        Cap-->>Be: Stage 2 constants table
+        Be->>Argbuf: allocate and populate constant entries
+        Be->>Enc: bind slot 30 for vertex + fragment
     end
 ```
 
@@ -547,10 +559,14 @@ Where Stage 2 wins is **the GPU-side command processor**. Each Stage 1 dirty
 slot becomes one binding entry in the AGX command stream; argbuf collapses
 those into one indirect pointer load. On extreme draw rates (≥ 10k draws/
 frame), the command processor can saturate, and Stage 2 measurably helps.
-D3D9 workloads rarely reach that range, which is why Stage 1 is the floor
-and Stage 2 is opt-in.
+D3D9 workloads rarely reach that range, which is why Stage 1 remains the
+conformance floor. The current Stage 2b default keeps the Stage 2-capable PSO
+family while binding frequently changing constant buffers directly; the full
+texture/sampler resource-array table remains opt-in until its workload gate
+passes.
 
-Implication: the Stage 1 → Stage 2 upgrade is a **GPU-side win on heavy
-frames**, not a CPU API call-count win. Profile against
-`encoder.commandProcessorBoundHint` / `encoderCpuNs` rather than
-`encoderApiCallCount` when judging Stage 2 adoption.
+Implication: Stage 2 is not one performance claim. The full table can reduce
+GPU command-processor binding traffic, while Stage 2b exists specifically to
+avoid CPU-side constant-table reopen work. Promotion or demotion must compare
+encoder CPU, command-processor pressure, residency calls, and GPU time rather
+than relying on API-call count alone.

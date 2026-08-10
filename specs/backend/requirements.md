@@ -14,6 +14,11 @@ equivalents) and `ClearDesc` / `SwapDesc` payloads into correct Metal commands.
 It knows nothing about D3D9 COM objects. `fixture::DrawDesc` is a tests/offline
 helper only; it is not a production backend input contract.
 
+**Render-provider policy requirements `R-BACK-42.1`–`R-BACK-42.7` are owned by
+[`render-provider/requirements.md`](render-provider/requirements.md).** They
+classify stable provider modes, experimental candidates, diagnostics, and
+retired selectors independently from implementation and default state.
+
 ---
 
 ## 1. Correctness of Translation
@@ -349,8 +354,9 @@ resolved, the engine default
 flipped to ON on 2026-07-10 (`d45af067`) — see the `specs/backend/gap.md`
 "Commit-replay offload" row.
 
-**R-BACK-2.52** *(Inline const delta contract.)* The opt-in inline-const-delta
-wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first use) must
+**R-BACK-2.52** *(Inline const delta contract.)* The experimental-candidate
+inline-const-delta wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first
+use) must
 (a) when the flag is unset, keep replay behavior identical, keep every
 pre-existing packet field at its pre-change offset, and append zero
 const-payload bytes (the fixed per-section `{valid,start,count}` header block
@@ -665,6 +671,22 @@ authoritative. The inline queue-sequence boundary and commit-replay
 present-ordinal boundary must resolve the same effective latency for the same
 present.
 
+**R-BACK-6.11** Presenter drawable acquisition must resolve once into one typed
+policy: `Sync`, `PreAcquire`, `SyncOnSubmit`, or `Async`. `Sync` is the default.
+Every alternative must preserve Presenter ownership, the frame-token timeline,
+and identical Present source selection. Multiple legacy boolean selectors must
+resolve deterministically with `Async > SyncOnSubmit > PreAcquire > Sync` until
+a canonical single selector replaces them.
+
+**R-BACK-6.12** Present-boundary timing must resolve once into one typed policy.
+`PresentCompletion` is the production default; `Default`, `AfterAcquire`, and
+`Completion` are stable alternatives. `DeferredPresentCompletion` remains an
+experimental candidate, and `Disabled` remains a diagnostic override. Multiple
+legacy selectors must use the documented deterministic precedence. No boundary
+policy may move drawable ownership out of Presenter, signal completion before
+the owning Metal command buffer completes, or weaken explicit resource/query
+drains.
+
 ---
 
 ## 7. Thread Safety
@@ -779,9 +801,10 @@ the single-sample texture first, then read back from the resolve texture.
 ## 13. Tile-Shader FFP (Apple Silicon Fast Path)
 
 These requirements define an Apple-Silicon-specific accelerated path for D3D9
-fixed-function fragment effects. They never replace the portable FFP fragment
-path; they are an opt-in fast path selected per-frame based on GPU capability
-and render-pass shape.
+fixed-function fragment effects. Portable and tile-auto are stable FFP provider
+modes. Tile-auto remains default off pending workload evidence and never removes
+the portable fallback; selection occurs per render pass from queue-cached GPU
+capability and render-pass shape.
 
 **R-BACK-13.1** On GPU families that support programmable blending and tile
 shaders (`MTLGPUFamilyApple3` and later), the backend may emit FFP fog,

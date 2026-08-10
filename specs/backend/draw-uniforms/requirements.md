@@ -242,9 +242,11 @@ do not change inside a `DrawRun`) move into a per-encoder argument buffer
 addressable by GPU pointer, while `DrawVolatile` and frequently-dirty
 slots remain on direct slot bindings.
 
-This is opt-in and never replaces Stage 1. Devices without GPU family
-support, or workloads where the hybrid loses, must continue running the
-Stage 1 contract.
+Stage 2 is the capability-selected production default when Tier-2 argument
+buffers and Apple3+ are available and `DXMT9_DISABLE_ARGBUF_HYBRID` does not
+request the rollback. It never removes Stage 1: unsupported devices, an
+ineligible pass, or the explicit rollback must continue running the Stage 1
+contract. The texture/sampler resource-array sub-mode remains explicit opt-in.
 
 ### 7.1 Capability gate (`R-BACK-12.22`)
 
@@ -273,10 +275,20 @@ active:
 | `DrawVolatile` (slot 5 vertex) | **unchanged**, `setVertexBytes` | per-draw, push-constant-shaped |
 | Vertex stream (slot 1) | **unchanged**, direct buffer bind | per-draw, large |
 
-Argbuf binding is once per encoder via `setVertexBuffer:offset:atIndex:` and
-`setFragmentBuffer:offset:atIndex:` at slot N (slot reserved for argbuf,
-e.g., 30 mirroring DXMT). Per-draw work updates only the offsets of dirty
-sub-regions, not full re-encodes.
+The stable Stage 2b sub-mode may keep the Stage 2-capable shader/PSO namespace
+while binding constant buffers directly at Stage 1 slots `0`/`3`. Stage 2b is
+the default constants-only choice because it avoids reopening the mutable
+slot-30 table for pointer turnover. When the resource-array sub-mode is active,
+it takes precedence and the slot-30 table owns its declared texture/sampler and
+constant entries. The PSO/shader key must distinguish Stage 1, Stage 2 table,
+Stage 2b direct-cbuf, and resource-array layouts.
+
+In the Stage 2 table and resource-array modes, argbuf binding is once per
+encoder via `setVertexBuffer:offset:atIndex:` and
+`setFragmentBuffer:offset:atIndex:` at slot N (slot reserved for argbuf, e.g.,
+30 mirroring DXMT). Per-draw work updates only dirty sub-regions. Stage 2b
+instead uses the existing direct cbuf bindings and must not allocate or bind a
+constants-only slot-30 table.
 
 The argument buffer storage itself is sub-allocated from the same per-frame
 transient ring used for Stage 1 UBOs (`CommandQueue::reserveTransientBuffer`,
@@ -306,14 +318,16 @@ selected:
   per-pass commit rule).
 - `argbufHybridBytesPerEncoder` / `stage1BytesPerEncoder` — uploaded byte
   totals so a regression in Stage 2's expected savings is observable.
+- Stage 2b and resource-array selections, fallbacks, table reopens, direct-cbuf
+  binds, and residency calls must be separately observable.
 
 ### 7.5 Conformance and regressions (`R-BACK-12.26`)
 
-Stage 2 must produce results bit-identical to Stage 1 for every draw on
-the same input state. The shader-runner readback corpus is the oracle and
-must be re-run with Stage 2 enabled and disabled. A pass-level regression
-disables Stage 2 for the failing variant, never weakens the conformance
-target.
+Stage 2 table, Stage 2b direct-cbuf, and resource-array modes must produce
+results bit-identical to Stage 1 for every draw on the same input state. The
+shader-runner readback corpus is the oracle and must cover every available mode
+and its fallback. A pass-level regression disables the failing mode for that
+variant, never weakens the conformance target.
 
 ---
 

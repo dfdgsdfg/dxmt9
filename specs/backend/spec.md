@@ -331,6 +331,16 @@ Historical carrier and partition evidence is retained in
 [the encode-scheduling gap](encode-scheduling/gap.md) and linked performance
 notes rather than duplicated here.
 
+### 2.2.3 Render Provider Policy
+
+The cross-domain lifecycle and composition registry for renderer, producer,
+scheduling, submission, binding, FFP, and Present choices is owned by
+[Render Provider Policy](render-provider/spec.md). Its
+[requirements](render-provider/requirements.md) are authoritative for
+`R-BACK-42.1`–`R-BACK-42.7`. Domain requirements continue to own the semantics
+of each mode; the registry prevents experimental and diagnostic selectors from
+silently becoming compatibility promises.
+
 
 #### Commit-Replay Offload (engine default ON)
 
@@ -481,7 +491,7 @@ sequenceDiagram
   end
 ```
 
-#### Inline Const Delta (opt-in)
+#### Inline Const Delta (experimental candidate)
 
 `DXMT9_PE_INLINE_CONST_DELTA=1` folds the shader-constant deltas a draw
 consumes into that draw's packet instead of emitting standalone
@@ -1420,6 +1430,23 @@ request-to-completion `274.788 -> 125.048ms`, app-present-to-display
 frame-sampled GT2 and GT1 throughput remained within `1%`. The invariant is
 therefore completion-owned run-ahead control; drawable acquisition location or
 the early CoreAnimation presented handler must not substitute for it.
+
+### 8.2 Typed Presenter Policies
+
+Presenter resolves drawable acquisition to `AcquirePolicy` once at
+construction. `Sync` is the default; the legacy boolean selectors resolve with
+`Async > SyncOnSubmit > PreAcquire > Sync`. All four are stable policy modes,
+but changing the default requires drawable-wait, latency, visual, and completion
+evidence.
+
+The queue and Presenter share one process-cached `BoundaryPolicy` resolution.
+Precedence is `Disabled > DeferredPresentCompletion > PresentCompletion >
+Completion > AfterAcquire > Default`. `PresentCompletion` is the stable default;
+the other non-deferred wait targets are stable rollback or app-class modes.
+`DeferredPresentCompletion` is an experimental candidate, while `Disabled` is a
+diagnostic override and cannot be promoted without a new completion contract.
+The multiple environment booleans are legacy spellings for these typed values,
+not independent features.
 
 ---
 

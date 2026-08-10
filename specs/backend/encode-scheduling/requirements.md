@@ -617,6 +617,9 @@ three typed, independently resolved axes:
   `ExplicitParallel`; and
 - command-buffer segmentation is `Disabled` or `Metal4`.
 
+Every named mode is a `StableProvider` under `R-BACK-42.1`; implementation and
+default state remain tracked separately in the render-provider registry.
+
 The runtime must resolve the complete configuration once at device or command-
 queue creation and keep it immutable for that queue. `Compatibility` uses the
 payload-owning source path, while `Streaming` selects bounded CPU-ready Tape
