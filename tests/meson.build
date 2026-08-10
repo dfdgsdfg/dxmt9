@@ -150,8 +150,14 @@ test('dxmt9-drift-report', bash, args: [join_paths(meson.project_source_root(), 
 test('dxmt9-perf-counter-table-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_counter_table.py')],
      is_parallel: false)
+test('dxmt9-perf-counter-table-audit-unit', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_audit_perf_counter_table.py')],
+     is_parallel: false)
 test('dxmt9-perf-counter-callsite-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_counter_callsites.py')],
+     is_parallel: false)
+test('dxmt9-perf-counter-schema-audit', python3,
+     args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_counter_schema.py')],
      is_parallel: false)
 test('dxmt9-perf-docs-source-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_perf_docs_sources.py')],

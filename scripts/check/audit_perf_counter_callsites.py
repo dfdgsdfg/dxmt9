@@ -11,7 +11,7 @@ Dual to scripts/check/audit_perf_counter_table.py:
 
   table audit     — every Counters field MUST appear in kCounterTable
   callsite audit  — every count*() declaration MUST have >=1 callsite
-                    in src/ outside the perf_counters TU itself
+                    in src/ outside every perf implementation surface
 
 Parsing is text-based for the same reason as the table audit (no clang
 dependency, deterministic Meson test).
@@ -34,13 +34,17 @@ DECL_RE = re.compile(
     re.MULTILINE,
 )
 
-# Files where count*() functions are *defined*, not *called*. References
-# to a count name from inside its own TU don't prove it is reachable from
-# real workloads.
-SELF_TU = {
-    REPO_ROOT / "src" / "dxmt9" / "dxmt9_perf_counters.hpp",
-    REPO_ROOT / "src" / "dxmt9" / "dxmt9_perf_counters.cpp",
-}
+# Perf implementation TUs and their public/private headers are definitions,
+# report plumbing, cold output, or test snapshots. None is production callsite
+# evidence for the public count* surface.
+PERF_DIR = REPO_ROOT / "src" / "dxmt9"
+
+
+def is_perf_implementation_surface(path: Path) -> bool:
+    return path.parent == PERF_DIR and (
+        path.name.startswith("dxmt9_perf_counters")
+        and path.suffix in {".cpp", ".hpp", ".h"}
+    )
 
 # Source extensions to scan for callsites. dxmt9 uses .cpp, .mm (ObjC++),
 # and .hpp/.h. We include headers so an inline call from a header counts.
@@ -70,7 +74,7 @@ def collect_source_files() -> list[Path]:
     files: list[Path] = []
     for glob in SOURCE_GLOBS:
         for path in SRC_ROOT.glob(glob):
-            if path in SELF_TU:
+            if is_perf_implementation_surface(path):
                 continue
             files.append(path)
     return files
@@ -128,7 +132,7 @@ def main() -> int:
     if unwired:
         print(
             "audit: the following count*() functions are declared but have\n"
-            "       no call site under src/ (outside the perf_counters TU):",
+            "       no call site under src/ (outside perf implementation files):",
             file=sys.stderr,
         )
         for name in unwired:
