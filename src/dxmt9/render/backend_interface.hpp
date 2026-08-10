@@ -5,11 +5,8 @@
 // onSourceReady mirrors the source-neutral encoders::encodeChunk entry point;
 // onChunkReady remains the legacy ChunkSlot compatibility wrapper.
 
-// dxmt9_draw_encoder.hpp transitively provides everything this seam needs:
-//   - encoders::EncodeContext + the encoders::encodeChunk declaration
-//   - core::ChunkSlot (via dxmt9_backend_types.hpp)
-//   - core::metalqueue::QueueSubmissionRecord (via dxmt9_queue.hpp)
-#include "../dxmt9_draw_encoder.hpp"
+#include "../dxmt9_backend_types.hpp"
+#include "../dxmt9_encode_chunk_types.hpp"
 #include "../framegraph/fg_multi_source_planner.hpp"
 
 #include <cstddef>
@@ -18,6 +15,8 @@
 #include <span>
 #include <utility>
 #include <vector>
+
+namespace dxmt9::resources { struct Pool; }
 
 namespace dxmt9::render {
 

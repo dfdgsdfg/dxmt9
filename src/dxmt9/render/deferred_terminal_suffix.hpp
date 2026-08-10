@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../dxmt9_draw_encoder.hpp"
+#include "../dxmt9_encode_chunk_types.hpp"
 #include "../dxmt9_queue.hpp"
 #include "../dxmt9_cpu_ready_tape.hpp"
 #include "../dxmt9_session_release.hpp"
