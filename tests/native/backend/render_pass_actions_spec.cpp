@@ -1265,6 +1265,95 @@ void testLateStoreEligibilitySelector() {
           "stencil-only passes still contribute one legacy DS proof result");
 }
 
+enum class DeferredSuffixTerminalPath : std::uint8_t {
+  NaturalDrain,
+  Join,
+};
+
+struct DeferredSuffixActionModel {
+  dxmt9::encoders::LateRenderPassStoreState lateStore{};
+  std::uint32_t storeResolutions = 0;
+  std::uint32_t actionPublications = 0;
+  std::uint32_t sidecarPublications = 0;
+  std::uint32_t completionPublications = 0;
+  bool suffixEffectsComplete = false;
+  bool finalized = false;
+
+  bool consumeTerminalSuffix(DeferredSuffixTerminalPath) noexcept {
+    if (suffixEffectsComplete || lateStore.count != 1u ||
+        !lateStore.attachments[0].unresolved()) {
+      return false;
+    }
+    lateStore.attachments[0].action = WMTStoreActionDontCare;
+    ++storeResolutions;
+    suffixEffectsComplete = true;
+    return true;
+  }
+
+  bool finalize() noexcept {
+    if (!suffixEffectsComplete || finalized) {
+      return false;
+    }
+    ++actionPublications;
+    ++sidecarPublications;
+    ++completionPublications;
+    finalized = true;
+    return true;
+  }
+};
+
+void testDeferredSuffixActionPublicationConservation() {
+  constexpr std::array paths{
+      DeferredSuffixTerminalPath::NaturalDrain,
+      DeferredSuffixTerminalPath::Join,
+  };
+  for (const auto path : paths) {
+    DeferredSuffixActionModel model{};
+    check(model.lateStore.append({
+              .handle = Handle{0xA500u},
+              .pixelBytes = 4096u,
+              .action = WMTStoreActionUnknown,
+              .aspect =
+                  dxmt9::encoders::LateRenderPassStoreAspect::Color,
+              .colorIndex = 0u,
+            }),
+          "deferred suffix fixture records one provisional A Store");
+
+    check(model.lateStore.hasUnknown() &&
+              model.storeResolutions == 0u &&
+              model.actionPublications == 0u &&
+              model.sidecarPublications == 0u &&
+              model.completionPublications == 0u,
+          "held prefix publishes no action, sidecar, completion, or Store "
+          "resolution");
+    check(!model.finalize(),
+          "held prefix cannot publish terminal effects early");
+
+    check(model.consumeTerminalSuffix(path) &&
+              !model.lateStore.hasUnknown() &&
+              model.lateStore.attachments[0].action ==
+                  WMTStoreActionDontCare &&
+              model.storeResolutions == 1u,
+          "terminal Clear resolves the provisional A Store once");
+    check(!model.consumeTerminalSuffix(path) &&
+              model.storeResolutions == 1u,
+          "natural drain or join cannot resolve the Store twice");
+    check(model.actionPublications == 0u &&
+              model.sidecarPublications == 0u &&
+              model.completionPublications == 0u,
+          "suffix consumption does not manufacture an edge publication");
+
+    check(model.finalize() && model.actionPublications == 1u &&
+              model.sidecarPublications == 1u &&
+              model.completionPublications == 1u,
+          "completed suffix publishes each terminal effect once");
+    check(!model.finalize() && model.actionPublications == 1u &&
+              model.sidecarPublications == 1u &&
+              model.completionPublications == 1u,
+          "terminal publication is idempotent after drain or join");
+  }
+}
+
 void testTouchedSet() {
   // R-BACK-15.4 / 15.5 / 15.6: minimal CommandQueue API exercise.
   // Inert queue (null WMT::Device) — no threads, no Metal — but the
@@ -1570,6 +1659,7 @@ int main() {
     testExactFullClearProofAndNoLookaheadCauses();
     testSelectedLookaheadBeyondEightSources();
     testLateStoreEligibilitySelector();
+    testDeferredSuffixActionPublicationConservation();
     testTouchedSet();
     testTouchedCrossChunkPersists();
     testTouchedClearAllResets();

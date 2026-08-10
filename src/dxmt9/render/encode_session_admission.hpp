@@ -106,6 +106,16 @@ struct SessionCapacityVector {
                                    const SessionCapacityVector&) = default;
 };
 
+bool sessionCapacityFitsWithin(
+    const SessionCapacityVector& value,
+    const SessionCapacityVector& limit) noexcept;
+std::optional<SessionCapacityVector> addSessionCapacity(
+    const SessionCapacityVector& left,
+    const SessionCapacityVector& right) noexcept;
+std::optional<SessionCapacityVector> subtractSessionCapacity(
+    const SessionCapacityVector& value,
+    const SessionCapacityVector& deduction) noexcept;
+
 // Fixed queue-creation policy for R-BACK-2.65. Page headroom includes the
 // payload run plus the maximum circular tail discarded before a non-wrapping
 // run. The other fields name physical source/Ready/block ownership through the
@@ -127,6 +137,9 @@ struct SessionCapacityLease {
 
   constexpr bool valid() const noexcept { return generation != 0; }
 };
+
+std::optional<SessionCapacityVector> sessionCapacityLeaseUsableBound(
+    const SessionCapacityLease& lease) noexcept;
 
 struct SessionCapacityLeaseStats {
   std::uint64_t acquisitions = 0;
@@ -231,7 +244,14 @@ struct SessionAdmissionCandidate {
   std::uint32_t payloadBlocks = 1;
   std::uint32_t retentionEntries = 1;
   std::uint32_t allocatorTickets = 1;
+
+  friend constexpr bool operator==(const SessionAdmissionCandidate&,
+                                   const SessionAdmissionCandidate&) =
+      default;
 };
+
+bool sessionAdmissionCandidateIdentityValid(
+    const SessionAdmissionCandidate& candidate) noexcept;
 
 enum class SessionAdmissionDecision : std::uint8_t {
   Admit,

@@ -5,9 +5,13 @@
 // retains only compact indices into the caller-owned retained-source array.
 
 #include "fg_builder.hpp"
+#include "../dxmt9_cpu_ready_tape.hpp"
 #include "../dxmt9_encode_attribution.hpp"
 
+#include <array>
+#include <limits>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace dxmt9::framegraph {
@@ -18,6 +22,33 @@ struct MultiSourcePlanningSource {
   core::SourcePayloadView payload{};
 };
 
+// Borrowed call-local input for the exact deferred terminal-suffix lane. The
+// payload must never be copied into the returned proof; source identity and
+// command ranges below are the only values that may survive planning.
+struct DeferredTerminalSuffixPlanningSourceView {
+  core::SourcePayloadView payload{};
+  core::CpuReadyTape::SourceRef source{};
+  u64 sourceOrdinal = 0;
+  u64 seqId = 0;
+};
+
+struct SourceCommandRange {
+  core::CpuReadyTape::SourceRef source{};
+  u64 sourceOrdinal = 0;
+  u64 seqId = 0;
+  u32 commandBegin = 0;
+  u32 commandCount = 0;
+
+  constexpr bool valid() const noexcept {
+    return source.valid() && sourceOrdinal != 0 && seqId != 0 &&
+           commandCount != 0 &&
+           commandBegin <= std::numeric_limits<u32>::max() - commandCount;
+  }
+
+  friend constexpr bool operator==(const SourceCommandRange&,
+                                   const SourceCommandRange&) = default;
+};
+
 struct RetainedSourceCommandLocator {
   u32 retainedSourceIndex = 0;
   u32 commandIndex = 0;
@@ -25,6 +56,70 @@ struct RetainedSourceCommandLocator {
   friend bool operator==(const RetainedSourceCommandLocator&,
                          const RetainedSourceCommandLocator&) = default;
 };
+
+inline constexpr std::size_t kDeferredTerminalSuffixSourceCount = 2u;
+inline constexpr std::size_t kDeferredTerminalSuffixCommandCount = 4u;
+
+// Pointer-free proof for exactly A,Clear(B),DrawRun(B) | DrawRun(A). The
+// joined order moves only the younger returning-A DrawRun ahead of the older
+// terminal suffix; currentPrefix has already encoded when the coordinator
+// consumes this proof.
+struct DeferredTerminalSuffixProof {
+  SourceCommandRange currentPrefix{};
+  SourceCommandRange currentSuffix{};
+  SourceCommandRange successorHead{};
+  ActiveRenderPlanningSeed activeRender{};
+  AttachmentSet currentAttachmentA{};
+  AttachmentSet clearAttachmentB{};
+  std::array<RetainedSourceCommandLocator,
+             kDeferredTerminalSuffixCommandCount>
+      naturalReplay{};
+  std::array<RetainedSourceCommandLocator,
+             kDeferredTerminalSuffixCommandCount>
+      joinedReplay{};
+};
+
+enum class DeferredTerminalSuffixDisposition : u8 {
+  InvalidInput,
+  StaleIdentity,
+  UnsupportedShape,
+  UnsupportedBoundary,
+  MalformedRange,
+  AttachmentMismatch,
+  DependencyWedged,
+  IncompleteCoverage,
+  Qualified,
+};
+
+struct DeferredTerminalSuffixPlan {
+  DeferredTerminalSuffixProof proof{};
+  DeferredTerminalSuffixDisposition disposition =
+      DeferredTerminalSuffixDisposition::InvalidInput;
+
+  constexpr bool qualified() const noexcept {
+    return disposition == DeferredTerminalSuffixDisposition::Qualified;
+  }
+};
+
+enum class DeferredTerminalSuffixReplayValidation : u8 {
+  Valid,
+  InvalidProof,
+  StaleIdentity,
+  InvalidSource,
+  InvalidCommand,
+  Duplicate,
+  Missing,
+  UnsupportedMovement,
+};
+
+static_assert(std::is_trivially_copyable_v<SourceCommandRange>);
+static_assert(std::is_standard_layout_v<SourceCommandRange>);
+static_assert(std::is_trivially_copyable_v<DeferredTerminalSuffixProof>);
+static_assert(std::is_standard_layout_v<DeferredTerminalSuffixProof>);
+static_assert(std::is_trivially_copyable_v<DeferredTerminalSuffixPlan>);
+static_assert(std::is_standard_layout_v<DeferredTerminalSuffixPlan>);
+static_assert(sizeof(DeferredTerminalSuffixPlan) <= 1024u,
+              "deferred suffix proof must remain a bounded value");
 
 enum class MultiSourceReplayValidation : u8 {
   Valid,
@@ -183,6 +278,26 @@ struct MultiSourceReplayRuns {
 MultiSourceReplayValidation validateMultiSourceReplayPermutation(
     std::span<const MultiSourcePlanningSource> sources,
     std::span<const RetainedSourceCommandLocator> commands);
+
+// Classify and prove only the measured terminal suffix shape. FrameGraph and
+// payload borrows are call-local; the returned plan is a bounded value. The
+// general multi-source permutation validator is intentionally not involved.
+DeferredTerminalSuffixPlan planDeferredTerminalSuffixReplay(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor,
+    const ActiveRenderPlanningSeed& activeRender,
+    ResourceAliasResolver aliasResolver = {}) noexcept;
+
+// Narrow pre-effect validator for the proof above. It reclassifies the exact
+// generation-stamped sources and accepts only proof.joinedReplay with complete
+// four-command coverage.
+DeferredTerminalSuffixReplayValidation validateDeferredTerminalSuffixReplay(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor,
+    const ActiveRenderPlanningSeed& activeRender,
+    const DeferredTerminalSuffixProof& proof,
+    std::span<const RetainedSourceCommandLocator> commands,
+    ResourceAliasResolver aliasResolver = {}) noexcept;
 
 // Concatenate source-local graphs, re-infer hazards across source boundaries,
 // apply one optional active-render seed to the combined graph, and run only

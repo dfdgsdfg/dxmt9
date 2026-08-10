@@ -4,8 +4,10 @@
  * reserves a fixed physical-residency vector plus one complete ordinary
  * successor footprint. Synchronously encoded sources may retire out of that
  * vector while remaining charged to a separate bounded session-work list.
- * Completion is deliberately absent from grouping guards: it may reclaim
- * legacy submitted residency, but it cannot select a session boundary.
+ * A deferred terminal suffix keeps the represented current source charged
+ * once while its exact Writing successor consumes only the pre-reserved
+ * headroom. Completion is deliberately absent from grouping guards: it may
+ * reclaim legacy submitted residency, but it cannot select a session boundary.
  *)
 
 EXTENDS Naturals, Sequences, TLC
@@ -26,19 +28,41 @@ RECURSIVE SeqPages(_)
 SeqPages(seq) == IF Len(seq) = 0 THEN 0
                  ELSE ReservationPages(Head(seq)) + SeqPages(Tail(seq))
 
+DeferredPhases == {"Empty", "Held", "SuccessorReady", "Joined", "Drained"}
+DeferredSuffixState ==
+  [phase : DeferredPhases,
+   current : SourceIds0,
+   successor : SourceIds0,
+   leaseIdentity : 0 .. MaxLeaseGeneration,
+   releaseIdentity : {"None", "Semantic"},
+   writerWakePending : BOOLEAN,
+   borrowedOwner : BOOLEAN,
+   currentResidencyCharges : 0 .. 1,
+   currentWorkCharges : 0 .. 1,
+   successorHeadroomCredits : 0 .. 1,
+   successorWorkCharges : 0 .. 1]
+
+EmptyDeferredSuffix ==
+  [phase |-> "Empty", current |-> 0, successor |-> 0,
+   leaseIdentity |-> 0, releaseIdentity |-> "None",
+   writerWakePending |-> FALSE,
+   borrowedOwner |-> FALSE, currentResidencyCharges |-> 0,
+   currentWorkCharges |-> 0, successorHeadroomCredits |-> 0,
+   successorWorkCharges |-> 0]
+
 VARIABLES nextSource, ready, writing, session, residentSession,
           submitted, submittedResident, completed, completedResident, reclaimed,
           leaseActive, leaseGeneration, capPending, submittedGroups,
           rollbackSources, boundaryCause, pressureWakeEpoch,
           capacityProgressGeneration, leaseWaitActive,
-          leaseWaitObservedGeneration, startupPhase
+          leaseWaitObservedGeneration, startupPhase, deferredSuffix
 
 vars == <<nextSource, ready, writing, session, residentSession,
           submitted, submittedResident, completed, completedResident, reclaimed,
           leaseActive, leaseGeneration, capPending, submittedGroups,
           rollbackSources, boundaryCause, pressureWakeEpoch,
           capacityProgressGeneration, leaseWaitActive,
-          leaseWaitObservedGeneration, startupPhase>>
+          leaseWaitObservedGeneration, startupPhase, deferredSuffix>>
 
 WritingResident == IF writing = 0 THEN <<>> ELSE <<writing>>
 Resident == ready \o WritingResident \o residentSession \o
@@ -59,8 +83,9 @@ Init ==
   \* Clear+Present and source 2 is the following Ready Direct draw. With the
   \* production zero-slack lease policy, source 1 must reclaim before source 2
   \* can acquire its first session lease. In the Writing probe, two Ready
-  \* sources plus their unique ordered-tail Writing successor fill physical
-  \* capacity. The Writing claim is already covered by successor headroom, so
+  \* source plus its unique ordered-tail Writing successor occupy the lease's
+  \* session allocation and successor headroom. The Writing claim is already
+  \* covered by that headroom, so
   \* it must not be counted again as older unavailable residency.
   /\ \/ /\ nextSource = 1
          /\ ready = <<>>
@@ -72,9 +97,9 @@ Init ==
          /\ writing = 0
          /\ submitted = <<1>>
          /\ startupPhase = "NeedDenial"
-     \/ /\ nextSource = 4
-         /\ ready = <<1, 2>>
-         /\ writing = 3
+     \/ /\ nextSource = 3
+         /\ ready = <<1>>
+         /\ writing = 2
          /\ submitted = <<>>
          /\ startupPhase = "WritingNeedLease"
   /\ session = <<>>
@@ -93,6 +118,7 @@ Init ==
   /\ capacityProgressGeneration = 0
   /\ leaseWaitActive = FALSE
   /\ leaseWaitObservedGeneration = 0
+  /\ deferredSuffix = EmptyDeferredSuffix
 
 PublishOrdinary ==
   /\ nextSource <= MaxSources
@@ -109,7 +135,8 @@ PublishOrdinary ==
                   leaseGeneration, capPending, submittedGroups,
                   rollbackSources, boundaryCause, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 BeginLeaseWait ==
   /\ startupPhase = "NeedDenial"
@@ -124,7 +151,8 @@ BeginLeaseWait ==
                   submitted, submittedResident, completed, completedResident,
                   reclaimed, leaseActive, leaseGeneration, capPending,
                   submittedGroups, rollbackSources, boundaryCause,
-                  pressureWakeEpoch, capacityProgressGeneration>>
+                  pressureWakeEpoch, capacityProgressGeneration,
+                  deferredSuffix>>
 
 AcquireLease ==
   /\ ~leaseActive
@@ -146,11 +174,12 @@ AcquireLease ==
                   reclaimed, capPending, submittedGroups, rollbackSources,
                   boundaryCause, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration>>
+                  leaseWaitObservedGeneration, deferredSuffix>>
 
 AdmitReadyHead ==
   /\ leaseActive
   /\ ~capPending
+  /\ deferredSuffix.phase \in {"Empty", "Drained"}
   /\ ready # <<>>
   /\ SessionCanCharge(Head(ready))
   /\ session' = Append(session, Head(ready))
@@ -163,11 +192,107 @@ AdmitReadyHead ==
                   leaseGeneration, capPending, submittedGroups,
                   rollbackSources, boundaryCause, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, deferredSuffix>>
+
+ParkDeferredSuffix ==
+  /\ startupPhase = "WritingHeadAdmitted"
+  /\ deferredSuffix.phase = "Empty"
+  /\ leaseActive
+  /\ ~capPending
+  /\ session = <<1>>
+  /\ residentSession = <<1>>
+  /\ writing = 2
+  /\ leaseGeneration > 0
+  /\ deferredSuffix' =
+       [EmptyDeferredSuffix EXCEPT
+          !.phase = "Held",
+          !.current = 1,
+          !.successor = 2,
+          !.leaseIdentity = leaseGeneration,
+          !.currentResidencyCharges = 1,
+          !.currentWorkCharges = 1,
+          !.successorHeadroomCredits = 1]
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession,
+                  submitted, submittedResident, completed,
+                  completedResident, reclaimed, leaseActive,
+                  leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration, startupPhase>>
+
+PublishWritingSuccessor ==
+  /\ writing # 0
+  /\ \/ /\ deferredSuffix.phase = "Held"
+        /\ ~capPending
+        /\ leaseActive
+        /\ leaseGeneration = deferredSuffix.leaseIdentity
+        /\ writing = deferredSuffix.successor
+     \/ /\ deferredSuffix.phase = "Drained"
+        /\ deferredSuffix.writerWakePending
+        /\ writing = deferredSuffix.successor
+     \/ /\ deferredSuffix.phase = "Empty"
+        /\ leaseActive
+        /\ startupPhase = "WritingHeadRetired"
+  /\ Len(ready) < MaxReady
+  /\ ready' = Append(ready, writing)
+  /\ writing' = 0
+  /\ startupPhase' = "WritingPublished"
+  /\ deferredSuffix' =
+       IF deferredSuffix.phase = "Held"
+       THEN [deferredSuffix EXCEPT !.phase = "SuccessorReady"]
+       ELSE [deferredSuffix EXCEPT !.writerWakePending = FALSE]
+  /\ UNCHANGED <<nextSource, session, residentSession, submitted,
+                  submittedResident, completed, completedResident, reclaimed,
+                  leaseActive, leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
+
+JoinDeferredSuffix ==
+  /\ deferredSuffix.phase = "SuccessorReady"
+  /\ ~capPending
+  /\ leaseActive
+  /\ leaseGeneration = deferredSuffix.leaseIdentity
+  /\ ready # <<>>
+  /\ Head(ready) = deferredSuffix.successor
+  /\ SessionCanCharge(Head(ready))
+  /\ session' = Append(session, Head(ready))
+  /\ residentSession' = Append(residentSession, Head(ready))
+  /\ ready' = Tail(ready)
+  /\ startupPhase' = "DeferredJoined"
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "Joined",
+          !.successorWorkCharges = 1]
+  /\ UNCHANGED <<nextSource, writing, submitted, submittedResident,
+                  completed, completedResident, reclaimed, leaseActive,
+                  leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
+                  leaseWaitObservedGeneration>>
+
+DrainDeferredSuffix ==
+  /\ deferredSuffix.phase \in {"Held", "SuccessorReady"}
+  /\ capPending
+  /\ boundaryCause = "Semantic"
+  /\ startupPhase' = "DeferredDrained"
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "Drained",
+          !.releaseIdentity = "Semantic",
+          !.writerWakePending =
+             deferredSuffix.phase = "Held" /\ writing # 0]
+  /\ UNCHANGED <<nextSource, ready, writing, session, residentSession, submitted,
+                  submittedResident, completed, completedResident, reclaimed,
+                  leaseActive, leaseGeneration, capPending, submittedGroups,
+                  rollbackSources, boundaryCause, pressureWakeEpoch,
+                  capacityProgressGeneration, leaseWaitActive,
                   leaseWaitObservedGeneration>>
 
 RetireEncodedHead ==
   /\ leaseActive
   /\ ~capPending
+  /\ deferredSuffix.phase \notin {"Held", "SuccessorReady"}
   /\ residentSession # <<>>
   /\ Head(residentSession) \in {session[i] : i \in DOMAIN session}
   /\ residentSession' = Tail(residentSession)
@@ -178,22 +303,7 @@ RetireEncodedHead ==
                   leaseActive, leaseGeneration, capPending, submittedGroups,
                   rollbackSources, boundaryCause, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration>>
-
-PublishWritingSuccessor ==
-  /\ writing # 0
-  /\ leaseActive
-  /\ startupPhase = "WritingHeadRetired"
-  /\ Len(ready) < MaxReady
-  /\ ready' = Append(ready, writing)
-  /\ writing' = 0
-  /\ startupPhase' = "WritingPublished"
-  /\ UNCHANGED <<nextSource, session, residentSession, submitted,
-                  submittedResident, completed, completedResident, reclaimed,
-                  leaseActive, leaseGeneration, capPending, submittedGroups,
-                  rollbackSources, boundaryCause, pressureWakeEpoch,
-                  capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration>>
+                  leaseWaitObservedGeneration, deferredSuffix>>
 
 PostSessionCap ==
   /\ leaseActive
@@ -208,7 +318,8 @@ PostSessionCap ==
                   reclaimed, leaseActive, leaseGeneration, submittedGroups,
                   rollbackSources, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 PostSemanticRelease ==
   /\ leaseActive
@@ -221,7 +332,8 @@ PostSemanticRelease ==
                   reclaimed, leaseActive, leaseGeneration, submittedGroups,
                   rollbackSources, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 PressureWake ==
   /\ pressureWakeEpoch < MaxSources
@@ -231,7 +343,8 @@ PressureWake ==
                   reclaimed, leaseActive, leaseGeneration, capPending,
                   submittedGroups, rollbackSources, boundaryCause,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 SubmitPredecessor ==
   /\ capPending
@@ -248,7 +361,8 @@ SubmitPredecessor ==
                   leaseGeneration,
                   rollbackSources, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 CompleteSubmitted ==
   /\ submitted # <<>>
@@ -269,7 +383,8 @@ CompleteSubmitted ==
                   leaseGeneration, capPending, submittedGroups,
                   rollbackSources, boundaryCause, pressureWakeEpoch,
                   capacityProgressGeneration, leaseWaitActive,
-                  leaseWaitObservedGeneration, startupPhase>>
+                  leaseWaitObservedGeneration, startupPhase,
+                  deferredSuffix>>
 
 ReclaimCompleted ==
   /\ completed # <<>>
@@ -287,7 +402,7 @@ ReclaimCompleted ==
                   leaseGeneration, capPending, submittedGroups,
                   rollbackSources, boundaryCause, pressureWakeEpoch,
                   leaseWaitActive, leaseWaitObservedGeneration,
-                  startupPhase>>
+                  startupPhase, deferredSuffix>>
 
 WakeLeaseWait ==
   /\ leaseWaitActive
@@ -300,7 +415,7 @@ WakeLeaseWait ==
                   reclaimed, leaseActive, leaseGeneration, capPending,
                   submittedGroups, rollbackSources, boundaryCause,
                   pressureWakeEpoch, capacityProgressGeneration,
-                  leaseWaitObservedGeneration>>
+                  leaseWaitObservedGeneration, deferredSuffix>>
 
 Next ==
   IF startupPhase = "NeedDenial"
@@ -310,7 +425,17 @@ Next ==
   ELSE IF startupPhase = "WritingLeaseAcquired"
   THEN AdmitReadyHead
   ELSE IF startupPhase = "WritingHeadAdmitted"
-  THEN RetireEncodedHead
+  THEN ParkDeferredSuffix
+  ELSE IF deferredSuffix.phase = "Held"
+  THEN \/ PublishWritingSuccessor
+       \/ PostSemanticRelease
+       \/ PressureWake
+       \/ DrainDeferredSuffix
+  ELSE IF deferredSuffix.phase = "SuccessorReady"
+  THEN \/ JoinDeferredSuffix
+       \/ PostSemanticRelease
+       \/ PressureWake
+       \/ DrainDeferredSuffix
   ELSE IF startupPhase = "WritingHeadRetired"
   THEN PublishWritingSuccessor
   ELSE \/ PublishOrdinary
@@ -337,6 +462,9 @@ Spec == Init /\ [][Next]_vars
   /\ WF_vars(ReclaimCompleted)
   /\ WF_vars(BeginLeaseWait)
   /\ WF_vars(WakeLeaseWait)
+  /\ WF_vars(ParkDeferredSuffix)
+  /\ WF_vars(JoinDeferredSuffix)
+  /\ WF_vars(DrainDeferredSuffix)
 
 TypeOK ==
   /\ nextSource \in 1 .. (MaxSources + 1)
@@ -362,7 +490,9 @@ TypeOK ==
   /\ startupPhase \in
        {"Inactive", "NeedDenial", "Waiting", "Woken", "Acquired",
         "WritingNeedLease", "WritingLeaseAcquired", "WritingHeadAdmitted",
-        "WritingHeadRetired", "WritingPublished"}
+        "WritingHeadRetired", "WritingPublished", "DeferredJoined",
+        "DeferredDrained"}
+  /\ deferredSuffix \in DeferredSuffixState
 
 BoundedCapacity ==
   /\ Len(ready) <= MaxReady
@@ -419,6 +549,69 @@ ResidencyIsSeparateFromWork ==
   /\ \A s \in {residentSession[i] : i \in DOMAIN residentSession} :
        s \in {session[i] : i \in DOMAIN session}
 
+DeferredChargesExactlyOnce ==
+  /\ ~deferredSuffix.borrowedOwner
+  /\ deferredSuffix.currentResidencyCharges <= 1
+  /\ deferredSuffix.currentWorkCharges <= 1
+  /\ deferredSuffix.successorHeadroomCredits <= 1
+  /\ deferredSuffix.successorWorkCharges <= 1
+  /\ (deferredSuffix.phase \in {"Held", "SuccessorReady"} =>
+        /\ deferredSuffix.current = 1
+        /\ deferredSuffix.successor = 2
+        /\ deferredSuffix.leaseIdentity = leaseGeneration
+        /\ deferredSuffix.currentResidencyCharges = 1
+        /\ deferredSuffix.currentWorkCharges = 1
+        /\ deferredSuffix.successorHeadroomCredits = 1
+        /\ deferredSuffix.successorWorkCharges = 0
+        /\ deferredSuffix.current \in
+             {residentSession[i] : i \in DOMAIN residentSession}
+        /\ deferredSuffix.current \in
+             {session[i] : i \in DOMAIN session})
+  /\ (deferredSuffix.phase = "Joined" =>
+        deferredSuffix.successorWorkCharges = 1)
+
+SuccessorHeadroomHasNoDoubleCount ==
+  /\ \A i, j \in DOMAIN Resident :
+       i # j => Resident[i] # Resident[j]
+  /\ (deferredSuffix.phase = "Held" =>
+        /\ writing = deferredSuffix.successor
+        /\ deferredSuffix.successor \notin
+             {session[i] : i \in DOMAIN session})
+  /\ (deferredSuffix.phase = "SuccessorReady" =>
+        /\ writing = 0
+        /\ ready # <<>>
+        /\ Head(ready) = deferredSuffix.successor
+        /\ deferredSuffix.successor \notin
+             {session[i] : i \in DOMAIN session})
+  /\ (deferredSuffix.phase = "Joined" =>
+        /\ writing = 0
+        /\ deferredSuffix.successor \in
+             {session[i] : i \in DOMAIN session})
+  /\ (deferredSuffix.phase = "Drained" =>
+        /\ (deferredSuffix.writerWakePending <=>
+              writing = deferredSuffix.successor)
+        /\ \/ writing = deferredSuffix.successor
+           \/ deferredSuffix.successor \in
+                {ready[i] : i \in DOMAIN ready})
+
+ExactSuccessorWinsPressure ==
+  deferredSuffix.phase = "SuccessorReady" /\ ~capPending =>
+    /\ boundaryCause = "None"
+    /\ ready # <<>>
+    /\ Head(ready) = deferredSuffix.successor
+
+DeferredReleaseDrainsNaturally ==
+  deferredSuffix.phase = "Drained" =>
+    /\ deferredSuffix.releaseIdentity = "Semantic"
+    /\ deferredSuffix.successorWorkCharges = 0
+
+WriterOwnsDeferredPublication ==
+  deferredSuffix.writerWakePending =>
+    /\ deferredSuffix.phase = "Drained"
+    /\ writing = deferredSuffix.successor
+    /\ deferredSuffix.successor \notin
+         {ready[i] : i \in DOMAIN ready}
+
 Safety ==
   /\ TypeOK
   /\ BoundedCapacity
@@ -429,6 +622,11 @@ Safety ==
   /\ CapacityWakeMatchesProgress
   /\ SubmittedGroupsRespectCap
   /\ ResidencyIsSeparateFromWork
+  /\ DeferredChargesExactlyOnce
+  /\ SuccessorHeadroomHasNoDoubleCount
+  /\ ExactSuccessorWinsPressure
+  /\ DeferredReleaseDrainsNaturally
+  /\ WriterOwnsDeferredPublication
 
 CapProgress == capPending ~> ~capPending
 
@@ -441,5 +639,19 @@ StartupDirectLeaseProgress ==
 WritingSuccessorStartupProgress ==
   (startupPhase = "WritingNeedLease") ~>
     (startupPhase = "WritingPublished")
+
+WritingEventuallyPublishes ==
+  (deferredSuffix.current # 0 /\
+   writing = deferredSuffix.successor) ~>
+    (writing = 0)
+
+DeferredJoinOrDrainProgress ==
+  (deferredSuffix.phase = "SuccessorReady") ~>
+    (deferredSuffix.phase \in {"Joined", "Drained"})
+
+DeferredReleaseDrainProgress ==
+  (capPending /\
+   deferredSuffix.phase \in {"Held", "SuccessorReady"}) ~>
+    (deferredSuffix.phase = "Drained")
 
 ====

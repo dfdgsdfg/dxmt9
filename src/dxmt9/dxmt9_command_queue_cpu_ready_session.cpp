@@ -5,7 +5,10 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "framegraph/fg_multi_source_planner.hpp"
 #include "render/backend_interface.hpp"
+#include "render/dag_observer.hpp"
+#include "render/deferred_terminal_suffix.hpp"
 #include "render/encode_session_admission.hpp"
+#include "render/framegraph_backend.hpp"
 #include "render/open_cb_carrier.hpp"
 
 #include <algorithm>
@@ -80,6 +83,61 @@ bool sameResolvedSourceIdentity(
       left.hasPresent == right.hasPresent &&
       left.commandBegin == right.commandBegin &&
       left.commandCount == right.commandCount;
+}
+
+bool deferredTerminalSuffixJoinEnabled(
+    const render::IRenderBackend* backend) {
+  if (!backend || backend->mode() != render::BackendMode::FrameGraph) {
+    return false;
+  }
+  const auto profile = render::resolveRendererCompatProfile(
+      std::getenv("DXMT9_RENDERER_COMPAT_PROFILE"));
+  const auto features = render::resolveRendererFeatures(
+      std::getenv("DXMT9_RENDERER_FEATURES"), profile);
+  return profile == render::RendererCompatProfile::Progressive &&
+      features.passcoalesce && !features.dce;
+}
+
+bool isDeferredTerminalSuffixCandidate(
+    const core::SourcePayloadView& payload) noexcept {
+  return payload.valid() && payload.commandCount() == 3u &&
+      payload.commandAt(0u).kind() == core::MetalCommandKind::DrawRun &&
+      payload.commandAt(1u).kind() == core::MetalCommandKind::Clear &&
+      payload.commandAt(2u).kind() == core::MetalCommandKind::DrawRun;
+}
+
+render::DeferredTerminalSuffixSourceIdentity deferredSuffixIdentity(
+    const core::metalqueue::ResolvedPublishedSource& source) noexcept {
+  return {
+      .source = source.source,
+      .rawOrdinal = source.metadata.rawOrdinal,
+      .sourceOrdinal = source.metadata.sourceOrdinal,
+      .seqId = source.seqId,
+  };
+}
+
+framegraph::ActiveRenderPlanningSeed deferredSuffixActiveSeed(
+    const encoders::ActiveRenderDependencySnapshot& active) noexcept {
+  framegraph::ActiveRenderPlanningSeed seed{};
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    seed.targets.color[i] =
+        framegraph::TextureHandle{active.colorAttachments[i].value};
+    if (active.colorAttachments[i].value != 0) {
+      seed.targets.color_count = static_cast<framegraph::u32>(i) + 1u;
+    }
+  }
+  seed.targets.depth =
+      framegraph::TextureHandle{active.depthStencil.value};
+  seed.targets.sample_count = active.sampleCount;
+  seed.dependency_count = active.dependencyCount;
+  seed.complete = active.complete;
+  const std::size_t count = std::min<std::size_t>(
+      active.dependencyCount, seed.write_dependencies.size());
+  for (std::size_t i = 0; i < count; ++i) {
+    seed.write_dependencies[i] =
+        framegraph::ResourceHandle{active.writeDependencies[i].value};
+  }
+  return seed;
 }
 
 core::metalqueue::PostEncodeRetirementIneligibility
@@ -174,11 +232,19 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
   std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
+  const auto fullCaptureBoundary = [this, &pendingRecord]() noexcept {
+    return (pendingRecord &&
+            (pendingRecord->metalCapture.has_value() ||
+             pendingRecord->metalCaptureAlreadyStarted)) ||
+        metalCaptureEnabled();
+  };
   EncodeSessionSourceList pendingSources;
   encoders::EncodeChunkSession pendingSession;
   render::EncodeSessionAdmissionState pendingAdmission{};
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
+  const bool terminalSuffixJoinEnabled =
+      deferredTerminalSuffixJoinEnabled(backend_.get());
   const auto& tapeValues = cpuReadyTape_.config().values();
   const std::uint64_t successorPages =
       render::worstCaseNonWrappingReservationPages(
@@ -591,6 +657,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   return std::size_t{0};
                 }
                 const auto& candidate = candidates.front();
+                if (terminalSuffixJoinEnabled &&
+                    isDeferredTerminalSuffixCandidate(candidate.payload)) {
+                  // The terminal-suffix lane represents and encodes only the
+                  // current A prefix while the exact successor is Writing.
+                  // Whole-head retention would hide that effect boundary.
+                  return std::size_t{0};
+                }
                 const auto admission = admissionCandidateFor(candidate);
                 if (candidate.semantic.hasPresent() ||
                     !render::openCbCarrierSourceCanBeSessionHead(
@@ -1140,11 +1213,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     ? render::MultiSourceSessionWindowFrontier::
                           ActiveRenderComplete
                     : render::MultiSourceSessionWindowFrontier::Unsupported;
-      const bool captureBoundary =
-          (pendingRecord &&
-           (pendingRecord->metalCapture.has_value() ||
-            pendingRecord->metalCaptureAlreadyStarted)) ||
-          metalCaptureEnabled();
+      const bool captureBoundary = fullCaptureBoundary();
       const bool initializerBoundary =
           initializer_ && initializer_->hasPendingUploadsUnlocked();
       if (planningWindowValid && selectedCompletionSourcesValid) {
@@ -1222,10 +1291,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               sameResolvedSourceIdentity(live, resolvedWindow[i]);
         }
         const bool captureStillMatches =
-            ((pendingRecord &&
-              (pendingRecord->metalCapture.has_value() ||
-               pendingRecord->metalCaptureAlreadyStarted)) ||
-             metalCaptureEnabled()) == captureBoundary;
+            fullCaptureBoundary() == captureBoundary;
         const bool initializerStillMatches =
             (initializer_ && initializer_->hasPendingUploadsUnlocked()) ==
             initializerBoundary;
@@ -1470,6 +1536,678 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           }
           return retainSource(lock, source, retained);
         };
+
+    // A bounded opt-in lane may encode the current source's leading A draw
+    // while its exact FIFO successor is still Writing, then prove the only
+    // legal replay A(successor), Clear(B), B(current). The current source is
+    // already Represented and fully charged here; no borrowed payload enters
+    // the held state.
+    bool deferredSuffixHandled = false;
+    if (terminalSuffixJoinEnabled && freshPlanningFrontier && count == 1u &&
+        selectedPrefixStartsSession && selectedCompletionSourcesValid &&
+        !fullCaptureBoundary()) {
+      ResolvedPublishedSource current =
+          queueLifecycle_.resolveRepresentedSource(scratch[0]);
+      const auto writingCapacity =
+          cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
+      const bool exactWriting = current.valid() &&
+          isDeferredTerminalSuffixCandidate(current.payload) &&
+          writingCapacity.valid &&
+          writingCapacity.orderedTailWritingSuccessor.has_value() &&
+          writingCapacity.orderedTailWritingSuccessor->valid() &&
+          current.metadata.sourceOrdinal !=
+              std::numeric_limits<std::uint64_t>::max() &&
+          current.seqId != std::numeric_limits<std::uint64_t>::max();
+      if (exactWriting) {
+        const auto& writing =
+            *writingCapacity.orderedTailWritingSuccessor;
+        const auto currentIdentity = deferredSuffixIdentity(current);
+        const auto currentAdmission = admissionCandidateFor(current);
+        const framegraph::SourceCommandRange currentPrefix{
+            .source = current.source,
+            .sourceOrdinal = current.metadata.sourceOrdinal,
+            .seqId = current.seqId,
+            .commandBegin = 0u,
+            .commandCount = 1u,
+        };
+        const framegraph::SourceCommandRange currentSuffix{
+            .source = current.source,
+            .sourceOrdinal = current.metadata.sourceOrdinal,
+            .seqId = current.seqId,
+            .commandBegin = 1u,
+            .commandCount = 2u,
+        };
+        const auto releaseSnapshot =
+            sessionReleaseState_.peekNext().value_or(
+                core::metalqueue::SessionReleaseSnapshot{});
+
+        EncodeSessionSourceList stagedSources;
+        render::EncodeSessionAdmissionState stagedAdmission{};
+        encoders::EncodeChunkSession stagedSession =
+            encoders::makeEncodeChunkSession();
+        const bool registrationValid = stagedSources.append(
+                selectedCompletionSources[0]) &&
+            render::appendSessionAdmission(
+                stagedAdmission, currentAdmission, admissionLimits) &&
+            encoders::appendEncodeChunkSessionSources(
+                *stagedSession,
+                std::span<const QueueCompletionSource>(
+                    selectedCompletionSources.data(), 1u));
+        if (registrationValid) {
+          pendingSources = stagedSources;
+          pendingAdmission = stagedAdmission;
+          pendingSession = std::move(stagedSession);
+
+          encoders::PreRegisteredEncodeSourceFragmentAccumulator
+              currentFragments{};
+          ResolvedPublishedSource prefixSource = current;
+          prefixSource.commandBegin = 0u;
+          prefixSource.commandCount = 1u;
+          encoders::EncodeChunkOptions prefixOptions{};
+          prefixOptions.allowInjectedCommandBufferMidChunkCommits = true;
+          prefixOptions.session = pendingSession.get();
+          prefixOptions.deferSessionFinalization = true;
+          prefixOptions.partitionSource = current.source;
+          prefixOptions.preRegisteredFragment =
+              encoders::PreRegisteredEncodeChunkFragment{
+                  .commandBegin = 0u,
+                  .commandCount = 1u,
+                  .sourceFragmentOrdinal = 0u,
+                  .sourceFragmentCount = 2u,
+                  .transactionFragmentOrdinal = 0u,
+                  .transactionFragmentCount = 3u,
+              };
+          prefixOptions.preRegisteredSourceAccumulator =
+              &currentFragments;
+          prefixOptions.skipBackendPlanning = true;
+
+          lock.unlock();
+          auto prefixSubmission = encodeCpuReadySessionSource(
+              prefixSource, std::move(prefixOptions));
+          lock.lock();
+          prefixSource = {};
+          if (!prefixSubmission) {
+            abortCpuReadySessionFailOpen(
+                "deferred terminal-suffix prefix encode");
+          }
+          pendingRecord = std::move(*prefixSubmission);
+          const auto heldReplayFrontier =
+              encoders::encodeChunkSessionReplayFrontierState(
+                  *pendingSession);
+          const auto heldActive =
+              encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+                  *pendingSession);
+          const auto heldActiveInstance =
+              encoders::encodeChunkSessionActiveRenderInstanceToken(
+                  *pendingSession);
+          const bool heldCaptureBoundary = fullCaptureBoundary();
+
+          auto prefixEncoded =
+              render::makeDeferredTerminalSuffixPrefixEncoded(
+                  currentIdentity, scratch[0], selectedCompletionSources[0],
+                  currentAdmission, selectedCapacityCharges[0],
+                  currentPrefix, currentSuffix, writing.source,
+                  writing.claim, capacityLeaseState.lease(),
+                  capacityPolicy.successorHeadroom, releaseSnapshot);
+          if (!prefixEncoded) {
+            abortCpuReadySessionFailOpen(
+                "deferred terminal-suffix prefix state");
+          }
+          prefixEncoded->fragments = currentFragments;
+          auto held = render::holdDeferredTerminalSuffix(*prefixEncoded);
+          if (!held) {
+            abortCpuReadySessionFailOpen(
+                "deferred terminal-suffix held state");
+          }
+          // SourcePayloadView is a synchronous borrow. The park below retains
+          // only the value-only held state and re-resolves the represented
+          // current source for each later call-local use.
+          current = {};
+
+          const auto heldBoundaryStillMatches = [&]() noexcept {
+            return pendingSession &&
+                encoders::encodeChunkSessionReplayFrontierState(
+                    *pendingSession) == heldReplayFrontier &&
+                encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+                    *pendingSession) == heldActive &&
+                encoders::encodeChunkSessionActiveRenderInstanceToken(
+                    *pendingSession) == heldActiveInstance &&
+                fullCaptureBoundary() == heldCaptureBoundary;
+          };
+          const auto preEffectValuesStillMatch =
+              [&](const render::SessionCapacityVector& expectedUsed)
+                  noexcept {
+                const auto& liveLease = capacityLeaseState.lease();
+                return heldBoundaryStillMatches() &&
+                    liveLease.generation == held->leaseGeneration &&
+                    liveLease.reserved == held->leaseReserved &&
+                    liveLease.used == expectedUsed &&
+                    liveLease.successorRemaining ==
+                        held->leaseSuccessorRemaining &&
+                    sessionReleaseState_.peekNext().value_or(
+                        core::metalqueue::SessionReleaseSnapshot{}) ==
+                        held->release &&
+                    !sessionReleaseState_.hasPending() &&
+                    !queueLifecycle_.producerSequenceWaitActive() &&
+                    !(initializer_ &&
+                      initializer_->hasPendingUploadsUnlocked()) &&
+                    !stop_ && !heldCaptureBoundary;
+              };
+
+          const auto drainCurrentSuffix = [&]() {
+            ResolvedPublishedSource suffixSource =
+                queueLifecycle_.resolveRepresentedSource(scratch[0]);
+            if (!suffixSource.valid() ||
+                deferredSuffixIdentity(suffixSource) !=
+                    held->currentIdentity) {
+              abortCpuReadySessionFailOpen(
+                  "deferred terminal-suffix drain current identity");
+            }
+            suffixSource.commandBegin = 1u;
+            suffixSource.commandCount = 2u;
+            encoders::EncodeChunkOptions suffixOptions{};
+            const obj_handle_t injectedCommandBuffer =
+                pendingRecord ? pendingRecord->commandBuffer.handle
+                              : NULL_OBJECT_HANDLE;
+            if (pendingRecord) {
+              suffixOptions.commandBuffer = pendingRecord->commandBuffer;
+            }
+            suffixOptions.allowInjectedCommandBufferMidChunkCommits = true;
+            suffixOptions.session = pendingSession.get();
+            suffixOptions.deferSessionFinalization = true;
+            suffixOptions.partitionSource = held->currentIdentity.source;
+            suffixOptions.preRegisteredFragment =
+                encoders::PreRegisteredEncodeChunkFragment{
+                    .commandBegin = 1u,
+                    .commandCount = 2u,
+                    .sourceFragmentOrdinal = 1u,
+                    .sourceFragmentCount = 2u,
+                    .transactionFragmentOrdinal = 1u,
+                    .transactionFragmentCount = 2u,
+                };
+            suffixOptions.preRegisteredSourceAccumulator =
+                &held->fragments;
+            suffixOptions.skipBackendPlanning = true;
+            lock.unlock();
+            auto suffixSubmission = encodeCpuReadySessionSource(
+                suffixSource, std::move(suffixOptions));
+            lock.lock();
+            if (!suffixSubmission || !pendingRecord ||
+                !core::metalqueue::foldEncodedSessionFragmentCarrier(
+                    *suffixSubmission, *pendingRecord,
+                    injectedCommandBuffer)) {
+              abortCpuReadySessionFailOpen(
+                  "deferred terminal-suffix natural drain");
+            }
+            pendingRecord = std::move(*suffixSubmission);
+            pendingRecord->seqId = held->currentIdentity.seqId;
+            pendingRecord->slotIndex = held->current.slotIndex;
+            pendingRecord->diagnostics.seqId = held->currentIdentity.seqId;
+            pendingRecord->diagnostics.slotIndex = held->current.slotIndex;
+            QueueCompletionSource currentCompletion =
+                selectedCompletionSources[0];
+            (void)tryRetireEncodedSource(
+                0u, suffixSource, currentAdmission, currentCompletion);
+            recordCapacityLeaseUsed();
+            deferredSuffixHandled = true;
+          };
+
+          if (heldReplayFrontier != encoders::
+                  EncodeSessionReplayFrontierState::ActiveRenderComplete ||
+              !heldActive || !heldActive->complete ||
+              !heldActiveInstance || heldCaptureBoundary) {
+            drainCurrentSuffix();
+          }
+
+          std::array<core::CpuReadyTape::ReadyEntry, 1u> ready{};
+          bool exactReady = false;
+          while (!deferredSuffixHandled && !exactReady) {
+            exactReady = cpuReadyTape_.copyReadyPrefix(ready) == 1u &&
+                ready[0].valid() &&
+                ready[0].source == held->expectedWritingSuccessor.source &&
+                ready[0].seqId == held->expectedWritingSuccessor.seqId &&
+                ready[0].metadata.sourceOrdinal ==
+                    held->expectedWritingSuccessor.sourceOrdinal;
+
+            render::DeferredTerminalSuffixObservation observation{
+                .currentIdentity = held->currentIdentity,
+                .currentAdmission = held->admission,
+                .lease = capacityLeaseState.lease(),
+                .release = sessionReleaseState_.peekNext().value_or(
+                    core::metalqueue::SessionReleaseSnapshot{}),
+            };
+            if (exactReady) {
+              const auto readyPayload = cpuReadyTape_.resolveSourcePayload(
+                  ready[0].source.id, ready[0].source.storage,
+                  core::CpuReadyTape::State::Ready);
+              if (!readyPayload.valid()) {
+                exactReady = false;
+              } else {
+                const ResolvedPublishedSource readySource{
+                    .source = ready[0].source,
+                    .slotIndex = ready[0].controlIndex,
+                    .seqId = ready[0].seqId,
+                    .metadata = ready[0].metadata,
+                    .semantic = ready[0].semantic,
+                    .payload = readyPayload,
+                    .sourceId = ready[0].source.id,
+                    .storage = ready[0].source.storage,
+                    .slot = readyPayload.legacyPayload(),
+                    .hasPresent = readyPayload.presentRecordCount() != 0u,
+                    .commandBegin = 0u,
+                    .commandCount = readyPayload.commandCount(),
+                };
+                observation.successor = deferredSuffixIdentity(readySource);
+                observation.successorAdmission =
+                    admissionCandidateFor(readySource);
+                observation.wakeFlags |= render::
+                    DeferredTerminalSuffixWakeExactSuccessorReady;
+              }
+            }
+            if (sessionReleaseState_.hasPending()) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeOrderedRelease;
+            }
+            if (queueLifecycle_.producerSequenceWaitActive()) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeProducerWait;
+            }
+            if (initializer_ && initializer_->hasPendingUploadsUnlocked()) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeInitializer;
+            }
+            if (stop_) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeStop;
+            }
+            if (arenaAdmissionWaiterCount_.load(
+                    std::memory_order_acquire) != 0u) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeAdmissionPressure;
+            }
+            if (queueLifecycle_.producerWriterPressureActive()) {
+              observation.wakeFlags |=
+                  render::DeferredTerminalSuffixWakeWriterPressure;
+            }
+            if (!exactReady) {
+              const auto liveWriting =
+                  cpuReadyTape_.leaseAcquisitionCapacitySnapshot();
+              const bool writerStillExact = liveWriting.valid &&
+                  liveWriting.orderedTailWritingSuccessor.has_value() &&
+                  liveWriting.orderedTailWritingSuccessor->valid() &&
+                  liveWriting.orderedTailWritingSuccessor->source ==
+                      held->expectedWritingSuccessor.source &&
+                  liveWriting.orderedTailWritingSuccessor->claim ==
+                      held->successorWritingClaim;
+              if (!writerStillExact) {
+                observation.wakeFlags |=
+                    render::DeferredTerminalSuffixWakeWriterLost;
+              }
+            }
+
+            lock.unlock();
+            const auto decision =
+                render::classifyDeferredTerminalSuffix(*held, observation);
+            lock.lock();
+            if (decision.decision ==
+                render::DeferredTerminalSuffixDecision::NaturalDrain) {
+              drainCurrentSuffix();
+              break;
+            }
+            if (exactReady) {
+              break;
+            }
+            if (decision.decision !=
+                render::DeferredTerminalSuffixDecision::WaitUnlocked) {
+              abortCpuReadySessionFailOpen(
+                  "deferred terminal-suffix wait classification");
+            }
+            const std::uint64_t observedCapacityProgress =
+                queueLifecycle_.cpuReadyCapacityProgressGeneration();
+            encodeCv_.wait(lock, [this, observedCapacityProgress] {
+              return stop_ || !cpuReadyTape_.readyEmpty() ||
+                  sessionReleaseState_.hasPending() ||
+                  queueLifecycle_.producerSequenceWaitActive() ||
+                  arenaAdmissionWaiterCount_.load(
+                      std::memory_order_acquire) != 0u ||
+                  queueLifecycle_.producerWriterPressureActive() ||
+                  (initializer_ &&
+                   initializer_->hasPendingUploadsUnlocked()) ||
+                  queueLifecycle_.cpuReadyCapacityProgressGeneration() !=
+                      observedCapacityProgress;
+            });
+          }
+
+          if (!deferredSuffixHandled && exactReady &&
+              !preEffectValuesStillMatch(
+                  held->leaseUsedBeforeSuccessor)) {
+            drainCurrentSuffix();
+          }
+
+          if (!deferredSuffixHandled && exactReady) {
+            const std::size_t successorCount =
+                queueLifecycle_.reserveReadySlotBatchPrefix(
+                    lock,
+                    std::span<ReadySlotSnapshot>(scratch.data() + 1u, 1u),
+                    [&](std::span<const ResolvedPublishedSource> candidates)
+                        noexcept {
+                      if (candidates.empty()) {
+                        return std::size_t{0};
+                      }
+                      const auto& candidate = candidates[0];
+                      return candidate.source ==
+                                  held->expectedWritingSuccessor.source &&
+                              candidate.seqId ==
+                                  held->expectedWritingSuccessor.seqId &&
+                              candidate.metadata.sourceOrdinal ==
+                                  held->expectedWritingSuccessor.sourceOrdinal
+                          ? std::size_t{1}
+                          : std::size_t{0};
+                    });
+            if (successorCount != 1u) {
+              drainCurrentSuffix();
+            } else {
+              const ResolvedPublishedSource successor =
+                  queueLifecycle_.resolveTentativeSource(lock, scratch[1]);
+              const auto successorAdmission =
+                  admissionCandidateFor(successor);
+              render::DeferredTerminalSuffixObservation observation{
+                  .currentIdentity = held->currentIdentity,
+                  .currentAdmission = held->admission,
+                  .successor = deferredSuffixIdentity(successor),
+                  .successorAdmission = successorAdmission,
+                  .lease = capacityLeaseState.lease(),
+                  .release = sessionReleaseState_.peekNext().value_or(
+                      core::metalqueue::SessionReleaseSnapshot{}),
+                  .wakeFlags = render::
+                      DeferredTerminalSuffixWakeExactSuccessorReady,
+              };
+              lock.unlock();
+              const auto reserveDecision =
+                  render::classifyDeferredTerminalSuffix(*held,
+                                                         observation);
+              lock.lock();
+
+              bool successorCharged = false;
+              auto restoreSuccessor = [&]() {
+                if (successorCharged) {
+                  if (!capacityLeaseState.uncharge(
+                          capacityLeaseState.lease().generation,
+                          render::sessionCapacityFor(successorAdmission))) {
+                    abortCpuReadySessionFailOpen(
+                        "deferred terminal-suffix successor uncharge");
+                  }
+                  successorCharged = false;
+                }
+                if (!queueLifecycle_.restoreReservedReadySlotBatch(
+                        lock, std::span<const ReadySlotSnapshot>(
+                                  scratch.data() + 1u, 1u))) {
+                  queueLifecycle_.poisonTapeFailure();
+                  return false;
+                }
+                return true;
+              };
+
+              bool joinAccepted = successor.valid() &&
+                  reserveDecision.decision == render::
+                      DeferredTerminalSuffixDecision::ReserveExactSuccessor &&
+                  preEffectValuesStillMatch(
+                      held->leaseUsedBeforeSuccessor);
+              const ResolvedPublishedSource currentForPlanning =
+                  queueLifecycle_.resolveRepresentedSource(scratch[0]);
+              joinAccepted = joinAccepted && currentForPlanning.valid() &&
+                  heldActive && heldActive->complete &&
+                  heldActiveInstance.has_value();
+
+              framegraph::DeferredTerminalSuffixPlan exactPlan{};
+              if (joinAccepted) {
+                const auto currentView = framegraph::
+                    DeferredTerminalSuffixPlanningSourceView{
+                        .payload = currentForPlanning.payload,
+                        .source = currentForPlanning.source,
+                        .sourceOrdinal =
+                            currentForPlanning.metadata.sourceOrdinal,
+                        .seqId = currentForPlanning.seqId,
+                    };
+                const auto successorView = framegraph::
+                    DeferredTerminalSuffixPlanningSourceView{
+                        .payload = successor.payload,
+                        .source = successor.source,
+                        .sourceOrdinal = successor.metadata.sourceOrdinal,
+                        .seqId = successor.seqId,
+                    };
+                const auto activeSeed = deferredSuffixActiveSeed(*heldActive);
+                lock.unlock();
+                exactPlan = framegraph::planDeferredTerminalSuffixReplay(
+                    currentView, successorView, activeSeed,
+                    render::makeResourceAliasResolver(pool_));
+                const auto validation = exactPlan.qualified()
+                    ? framegraph::validateDeferredTerminalSuffixReplay(
+                          currentView, successorView, activeSeed,
+                          exactPlan.proof, exactPlan.proof.joinedReplay,
+                          render::makeResourceAliasResolver(pool_))
+                    : framegraph::
+                          DeferredTerminalSuffixReplayValidation::
+                              InvalidProof;
+                lock.lock();
+                joinAccepted = exactPlan.qualified() &&
+                    validation == framegraph::
+                        DeferredTerminalSuffixReplayValidation::Valid;
+              }
+
+              const auto liveCurrent =
+                  queueLifecycle_.resolveRepresentedSource(scratch[0]);
+              const auto liveSuccessor =
+                  queueLifecycle_.resolveTentativeSource(lock, scratch[1]);
+              joinAccepted = joinAccepted &&
+                  sameResolvedSourceIdentity(liveCurrent,
+                                             currentForPlanning) &&
+                  sameResolvedSourceIdentity(liveSuccessor, successor) &&
+                  preEffectValuesStillMatch(
+                      held->leaseUsedBeforeSuccessor);
+              if (testOnlyRestoreNextCpuReadySessionPreflight_) {
+                testOnlyRestoreNextCpuReadySessionPreflight_ = false;
+                joinAccepted = false;
+              }
+
+              render::EncodeSessionAdmissionState joinedAdmission =
+                  pendingAdmission;
+              QueueCompletionSource successorCompletion =
+                  core::metalqueue::completionSourceForReadySlot(scratch[1]);
+              joinAccepted = joinAccepted &&
+                  pendingSources.canAppend(successorCompletion) &&
+                  encoders::canAppendEncodeChunkSessionSource(
+                      *pendingSession, successorCompletion) &&
+                  render::appendSessionAdmission(
+                      joinedAdmission, successorAdmission, admissionLimits);
+              if (joinAccepted) {
+                successorCharged = capacityLeaseState.charge(
+                    held->leaseGeneration,
+                    render::sessionCapacityFor(successorAdmission));
+                joinAccepted = successorCharged;
+              }
+
+              const auto chargedUsed = render::addSessionCapacity(
+                  held->leaseUsedBeforeSuccessor,
+                  render::sessionCapacityFor(successorAdmission));
+              joinAccepted = joinAccepted && chargedUsed.has_value() &&
+                  preEffectValuesStillMatch(*chargedUsed);
+
+              std::optional<render::DeferredTerminalSuffixState> tentative;
+              if (joinAccepted) {
+                observation.lease = capacityLeaseState.lease();
+                observation.release = held->release;
+                observation.proof = exactPlan.proof;
+                observation.proofValidated = true;
+                lock.unlock();
+                tentative =
+                    render::markDeferredTerminalSuffixSuccessorTentative(
+                        *held, observation);
+                const auto effectDecision = tentative
+                    ? render::classifyDeferredTerminalSuffix(
+                          *tentative, observation)
+                    : render::DeferredTerminalSuffixDecisionResult{};
+                lock.lock();
+                const auto effectActive = pendingSession
+                    ? encoders::
+                          encodeChunkSessionActiveRenderDependencySnapshot(
+                              *pendingSession)
+                    : std::nullopt;
+                const auto effectActiveInstance = pendingSession
+                    ? encoders::encodeChunkSessionActiveRenderInstanceToken(
+                          *pendingSession)
+                    : std::nullopt;
+                joinAccepted = tentative.has_value() &&
+                    effectDecision.decision == render::
+                        DeferredTerminalSuffixDecision::JoinExactSuccessor &&
+                    effectActive == heldActive &&
+                    effectActiveInstance == heldActiveInstance &&
+                    preEffectValuesStillMatch(*chargedUsed);
+              }
+
+              if (!joinAccepted) {
+                if (restoreSuccessor()) {
+                  drainCurrentSuffix();
+                }
+              } else {
+                const ResolvedPublishedSource currentForEffects =
+                    queueLifecycle_.resolveRepresentedSource(scratch[0]);
+                const ResolvedPublishedSource successorForEffects =
+                    queueLifecycle_.resolveTentativeSource(lock, scratch[1]);
+                joinAccepted =
+                    sameResolvedSourceIdentity(currentForEffects,
+                                               currentForPlanning) &&
+                    sameResolvedSourceIdentity(successorForEffects,
+                                               successor) &&
+                    pendingSession &&
+                    encoders::encodeChunkSessionActiveRenderDependencySnapshot(
+                        *pendingSession) == heldActive &&
+                    encoders::encodeChunkSessionActiveRenderInstanceToken(
+                        *pendingSession) == heldActiveInstance &&
+                    preEffectValuesStillMatch(*chargedUsed);
+                if (!joinAccepted) {
+                  if (restoreSuccessor()) {
+                    drainCurrentSuffix();
+                  }
+                } else if (!queueLifecycle_.commitReservedReadySlotBatch(
+                             lock, std::span<const ReadySlotSnapshot>(
+                                       scratch.data() + 1u, 1u))) {
+                  if (restoreSuccessor()) {
+                    drainCurrentSuffix();
+                  }
+                } else {
+                  successorCharged = false;
+                  sessionReleaseCoveredSeqId_ = std::max(
+                      sessionReleaseCoveredSeqId_, successor.seqId);
+                  sessionReleaseCoveredRawOrdinal_ = std::max(
+                      sessionReleaseCoveredRawOrdinal_,
+                      successor.metadata.rawOrdinal);
+                  if (!retainSource(lock, scratch[1], successorCompletion) ||
+                      !pendingSources.append(successorCompletion) ||
+                      !encoders::appendEncodeChunkSessionSources(
+                          *pendingSession,
+                          std::span<const QueueCompletionSource>(
+                              &successorCompletion, 1u))) {
+                    abortCpuReadySessionFailOpen(
+                        "deferred terminal-suffix successor registration");
+                  }
+                  pendingAdmission = joinedAdmission;
+
+                  std::array<ResolvedPublishedSource, 2u> replaySources{
+                      successorForEffects, currentForEffects};
+                  replaySources[0].commandBegin = 0u;
+                  replaySources[0].commandCount = 1u;
+                  replaySources[1].commandBegin = 1u;
+                  replaySources[1].commandCount = 2u;
+                  std::array<ResolvedPublishedSource, 2u> naturalSources{
+                      currentForEffects, successorForEffects};
+                  encoders::PreRegisteredEncodeSourceFragmentAccumulator
+                      successorFragments{};
+                  std::optional<QueueSubmissionRecord> carrier =
+                      std::move(pendingRecord);
+                  pendingRecord.reset();
+
+                  for (std::size_t run = 0; run < replaySources.size();
+                       ++run) {
+                    const bool successorRun = run == 0u;
+                    encoders::EncodeChunkOptions options{};
+                    const obj_handle_t injectedCommandBuffer = carrier
+                        ? carrier->commandBuffer.handle
+                        : NULL_OBJECT_HANDLE;
+                    if (carrier) {
+                      options.commandBuffer = carrier->commandBuffer;
+                    }
+                    options.allowInjectedCommandBufferMidChunkCommits = true;
+                    options.session = pendingSession.get();
+                    options.deferSessionFinalization = true;
+                    options.partitionSource = replaySources[run].source;
+                    options.preRegisteredFragment =
+                        encoders::PreRegisteredEncodeChunkFragment{
+                            .commandBegin = replaySources[run].commandBegin,
+                            .commandCount = replaySources[run].commandCount,
+                            .sourceFragmentOrdinal = successorRun ? 0u : 1u,
+                            .sourceFragmentCount = successorRun ? 1u : 2u,
+                            .transactionFragmentOrdinal =
+                                static_cast<std::uint32_t>(run + 1u),
+                            .transactionFragmentCount = 3u,
+                        };
+                    options.preRegisteredSourceAccumulator = successorRun
+                        ? &successorFragments
+                        : &held->fragments;
+                    options.sessionLookaheadSources =
+                        std::span<const ResolvedPublishedSource>(
+                            replaySources.data() + run,
+                            replaySources.size() - run);
+                    options.skipBackendPlanning = true;
+                    lock.unlock();
+                    auto submission = encodeCpuReadySessionSource(
+                        replaySources[run], std::move(options));
+                    lock.lock();
+                    if (!submission ||
+                        (carrier &&
+                         !core::metalqueue::
+                             foldEncodedSessionFragmentCarrier(
+                                 *submission, *carrier,
+                                 injectedCommandBuffer))) {
+                      abortCpuReadySessionFailOpen(
+                          "deferred terminal-suffix joined effect");
+                    }
+                    carrier = std::move(*submission);
+                  }
+
+                  lock.unlock();
+                  backend_->observeMultiSourceSessionReplay(
+                      pool_, naturalSources);
+                  lock.lock();
+                  pendingRecord = std::move(carrier);
+                  pendingRecord->seqId = successor.seqId;
+                  pendingRecord->slotIndex = successor.slotIndex;
+                  pendingRecord->diagnostics.seqId = successor.seqId;
+                  pendingRecord->diagnostics.slotIndex =
+                      successorForEffects.slotIndex;
+                  QueueCompletionSource currentCompletion =
+                      selectedCompletionSources[0];
+                  (void)tryRetireEncodedSource(
+                      0u, currentForEffects, currentAdmission,
+                      currentCompletion);
+                  selectedCapacityCharges[1] =
+                      render::sessionCapacityFor(successorAdmission);
+                  selectedCapacityCharged[1] = true;
+                  (void)tryRetireEncodedSource(
+                      1u, successorForEffects, successorAdmission,
+                      successorCompletion);
+                  recordCapacityLeaseUsed();
+                  deferredSuffixHandled = true;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (deferredSuffixHandled) {
+      continue;
+    }
 
     // The production cross-source planner consumes only a fully retained
     // 2..8-source window. It may start from an active/clean carried session or

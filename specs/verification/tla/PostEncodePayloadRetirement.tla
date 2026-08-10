@@ -6,7 +6,9 @@
  * detach and activate a queue receipt while locked, destroy re-entrant owners
  * outside the lock, then finish page/generation release while locked. Receipt,
  * retained-resource, GPU-work, ordinary completion, device-loss settlement,
- * and Present completion are separate bounded state.
+ * and Present completion are separate bounded state. A two-command current
+ * source may retain a final borrow after its prefix while an exact successor
+ * is encoded; neither source can retire out of FIFO order or more than once.
  *)
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
@@ -17,13 +19,37 @@ SeqIds == 1 .. MaxSeqId
 SeqId0 == 0 .. MaxSeqId
 ReceiptSlots == 1 .. MaxReceiptSlots
 PayloadStates ==
-  {"Absent", "Published", "Encoded", "Detached", "OwnerDestroyed",
-   "Retired"}
+  {"Absent", "Published", "PrefixEncoded", "Encoded", "Detached",
+   "OwnerDestroyed", "Retired"}
 ReceiptStates == {"None", "Active", "Submitted", "Completed", "Released"}
 SettlementStates == {"None", "Gpu", "DeviceLoss"}
 
 SlotOf(s) == ((s - 1) % MaxReceiptSlots) + 1
 QueueSet(seq) == {seq[i] : i \in DOMAIN seq}
+ExpectedCommands(s) == IF s = 1 THEN 2 ELSE 1
+
+DeferredPaths == {"None", "Join", "StaleFailOpen", "Drain"}
+DeferredAccountingState ==
+  [remainingCommands : [SeqIds -> 0 .. 2],
+   finalBorrow : [SeqIds -> BOOLEAN],
+   commandEffects : [SeqIds -> 0 .. 2],
+   receiptActivations : [SeqIds -> 0 .. 1],
+   completionFinishes : [SeqIds -> 0 .. 1],
+   reclaims : [SeqIds -> 0 .. 1],
+   successorEffectful : BOOLEAN,
+   rollbackAfterEffect : BOOLEAN,
+   lastPath : DeferredPaths]
+
+EmptyDeferredAccounting ==
+  [remainingCommands |-> [s \in SeqIds |-> 0],
+   finalBorrow |-> [s \in SeqIds |-> FALSE],
+   commandEffects |-> [s \in SeqIds |-> 0],
+   receiptActivations |-> [s \in SeqIds |-> 0],
+   completionFinishes |-> [s \in SeqIds |-> 0],
+   reclaims |-> [s \in SeqIds |-> 0],
+   successorEffectful |-> FALSE,
+   rollbackAfterEffect |-> FALSE,
+   lastPath |-> "None"]
 
 VARIABLES
   nextSeq,
@@ -42,7 +68,8 @@ VARIABLES
   callbackCount,
   settlement,
   resourceRetained,
-  deviceLost
+  deviceLost,
+  deferredAccounting
 
 vars ==
   << nextSeq,
@@ -61,11 +88,14 @@ vars ==
      callbackCount,
      settlement,
      resourceRetained,
-     deviceLost >>
+     deviceLost,
+     deferredAccounting >>
 
 PayloadResident(s) ==
   payloadState[s] \in
-    {"Published", "Encoded", "Detached", "OwnerDestroyed"}
+    {"Published", "PrefixEncoded", "Encoded", "Detached", "OwnerDestroyed"}
+CompletionRegistered(s) ==
+  s \in gpuOutstanding \/ settlement[s] # "None"
 
 Init ==
   /\ nextSeq = 1
@@ -85,6 +115,7 @@ Init ==
   /\ settlement = [s \in SeqIds |-> "None"]
   /\ resourceRetained = [s \in SeqIds |-> FALSE]
   /\ deviceLost = FALSE
+  /\ deferredAccounting = EmptyDeferredAccounting
 
 Publish ==
   /\ ~deviceLost
@@ -94,6 +125,9 @@ Publish ==
        [hasPresent EXCEPT ![nextSeq] = (nextSeq = MaxSeqId)]
   /\ resourceRetained' =
        [resourceRetained EXCEPT ![nextSeq] = TRUE]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[nextSeq] = ExpectedCommands(nextSeq)]
   /\ nextSeq' = nextSeq + 1
   /\ UNCHANGED << payloadGeneration,
                   receiptState,
@@ -109,11 +143,17 @@ Publish ==
                   settlement,
                   deviceLost >>
 
-Encode(s) ==
+EncodeWhole(s) ==
   /\ ~deviceLost
+  /\ s # 1
+  /\ (s # 2 \/ payloadState[1] # "PrefixEncoded")
   /\ payloadState[s] = "Published"
   /\ \A older \in SeqIds : older < s => payloadState[older] # "Published"
   /\ payloadState' = [payloadState EXCEPT ![s] = "Encoded"]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[s] = 0,
+          !.commandEffects[s] = 1]
   /\ UNCHANGED << nextSeq,
                   payloadGeneration,
                   hasPresent,
@@ -131,9 +171,128 @@ Encode(s) ==
                   resourceRetained,
                   deviceLost >>
 
+EncodeDeferredPrefix ==
+  /\ ~deviceLost
+  /\ payloadState[1] = "Published"
+  /\ deferredAccounting.remainingCommands[1] = 2
+  /\ payloadState' = [payloadState EXCEPT ![1] = "PrefixEncoded"]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[1] = 1,
+          !.finalBorrow[1] = TRUE,
+          !.commandEffects[1] = 1]
+  /\ UNCHANGED << nextSeq,
+                  payloadGeneration,
+                  hasPresent,
+                  receiptState,
+                  receiptSlot,
+                  receiptGeneration,
+                  slotOwner,
+                  slotGeneration,
+                  gpuOutstanding,
+                  completionQueue,
+                  completedSeqId,
+                  completedPresentSeqId,
+                  callbackCount,
+                  settlement,
+                  resourceRetained,
+                  deviceLost >>
+
+EncodeDeferredSuccessor ==
+  /\ ~deviceLost
+  /\ payloadState[1] = "PrefixEncoded"
+  /\ deferredAccounting.finalBorrow[1]
+  /\ ~deferredAccounting.successorEffectful
+  /\ payloadState[2] = "Published"
+  /\ deferredAccounting.remainingCommands[2] = 1
+  /\ payloadState' = [payloadState EXCEPT ![2] = "Encoded"]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[2] = 0,
+          !.commandEffects[2] = 1,
+          !.successorEffectful = TRUE,
+          !.lastPath = "Join"]
+  /\ UNCHANGED << nextSeq,
+                  payloadGeneration,
+                  hasPresent,
+                  receiptState,
+                  receiptSlot,
+                  receiptGeneration,
+                  slotOwner,
+                  slotGeneration,
+                  gpuOutstanding,
+                  completionQueue,
+                  completedSeqId,
+                  completedPresentSeqId,
+                  callbackCount,
+                  settlement,
+                  resourceRetained,
+                  deviceLost >>
+
+FinishDeferredSuffix ==
+  /\ payloadState[1] = "PrefixEncoded"
+  /\ deferredAccounting.successorEffectful
+  /\ deferredAccounting.lastPath = "Join"
+  /\ payloadState' = [payloadState EXCEPT ![1] = "Encoded"]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[1] = 0,
+          !.finalBorrow[1] = FALSE,
+          !.commandEffects[1] = @ + 1]
+  /\ UNCHANGED << nextSeq,
+                  payloadGeneration,
+                  hasPresent,
+                  receiptState,
+                  receiptSlot,
+                  receiptGeneration,
+                  slotOwner,
+                  slotGeneration,
+                  gpuOutstanding,
+                  completionQueue,
+                  completedSeqId,
+                  completedPresentSeqId,
+                  callbackCount,
+                  settlement,
+                  resourceRetained,
+                  deviceLost >>
+
+NaturalDrainDeferredSuffix(path) ==
+  /\ path \in {"StaleFailOpen", "Drain"}
+  /\ payloadState[1] = "PrefixEncoded"
+  /\ ~deferredAccounting.successorEffectful
+  /\ deferredAccounting.finalBorrow[1]
+  /\ payloadState' = [payloadState EXCEPT ![1] = "Encoded"]
+  /\ deferredAccounting' =
+       [deferredAccounting EXCEPT
+          !.remainingCommands[1] = 0,
+          !.finalBorrow[1] = FALSE,
+          !.commandEffects[1] = @ + 1,
+          !.lastPath = path]
+  /\ UNCHANGED << nextSeq,
+                  payloadGeneration,
+                  hasPresent,
+                  receiptState,
+                  receiptSlot,
+                  receiptGeneration,
+                  slotOwner,
+                  slotGeneration,
+                  gpuOutstanding,
+                  completionQueue,
+                  completedSeqId,
+                  completedPresentSeqId,
+                  callbackCount,
+                  settlement,
+                  resourceRetained,
+                  deviceLost >>
+
+StaleFailOpen == NaturalDrainDeferredSuffix("StaleFailOpen")
+DrainDeferredSuffix == NaturalDrainDeferredSuffix("Drain")
+
 DetachRetiredPayload(s) ==
   LET slot == SlotOf(s) IN
     /\ payloadState[s] = "Encoded"
+    /\ deferredAccounting.remainingCommands[s] = 0
+    /\ ~deferredAccounting.finalBorrow[s]
     /\ s \notin gpuOutstanding
     /\ settlement[s] = "None"
     /\ ~hasPresent[s]
@@ -146,6 +305,9 @@ DetachRetiredPayload(s) ==
     /\ receiptGeneration' =
          [receiptGeneration EXCEPT ![s] = slotGeneration[slot]]
     /\ slotOwner' = [slotOwner EXCEPT ![slot] = s]
+    /\ deferredAccounting' =
+         [deferredAccounting EXCEPT
+            !.receiptActivations[s] = @ + 1]
     /\ UNCHANGED << nextSeq,
                     payloadGeneration,
                     hasPresent,
@@ -178,7 +340,8 @@ DestroyOwner(s) ==
                   callbackCount,
                   settlement,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 FinishPayloadRetirement(s) ==
   /\ payloadState[s] = "OwnerDestroyed"
@@ -199,7 +362,8 @@ FinishPayloadRetirement(s) ==
                   callbackCount,
                   settlement,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 SubmitRetired(s) ==
   /\ ~deviceLost
@@ -207,6 +371,8 @@ SubmitRetired(s) ==
   /\ receiptState[s] = "Active"
   /\ settlement[s] = "None"
   /\ s \notin gpuOutstanding
+  /\ \A older \in SeqIds :
+       older < s => CompletionRegistered(older)
   /\ receiptState' = [receiptState EXCEPT ![s] = "Submitted"]
   /\ gpuOutstanding' = gpuOutstanding \cup {s}
   /\ UNCHANGED << nextSeq,
@@ -223,14 +389,18 @@ SubmitRetired(s) ==
                   callbackCount,
                   settlement,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 SubmitLegacy(s) ==
   /\ ~deviceLost
   /\ payloadState[s] = "Encoded"
   /\ receiptState[s] = "None"
+  /\ (s > 2 \/ deferredAccounting.lastPath = "None")
   /\ settlement[s] = "None"
   /\ s \notin gpuOutstanding
+  /\ \A older \in SeqIds :
+       older < s => CompletionRegistered(older)
   /\ gpuOutstanding' = gpuOutstanding \cup {s}
   /\ UNCHANGED << nextSeq,
                   payloadState,
@@ -247,7 +417,8 @@ SubmitLegacy(s) ==
                   callbackCount,
                   settlement,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 GpuComplete(s) ==
   /\ ~deviceLost
@@ -273,7 +444,8 @@ GpuComplete(s) ==
                   completedSeqId,
                   completedPresentSeqId,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 BeginDeviceLoss ==
   /\ ~deviceLost
@@ -293,7 +465,8 @@ BeginDeviceLoss ==
                   completedPresentSeqId,
                   callbackCount,
                   settlement,
-                  resourceRetained >>
+                  resourceRetained,
+                  deferredAccounting >>
 
 SettleDeviceLoss(s) ==
   /\ deviceLost
@@ -320,7 +493,8 @@ SettleDeviceLoss(s) ==
                   completedSeqId,
                   completedPresentSeqId,
                   resourceRetained,
-                  deviceLost >>
+                  deviceLost,
+                  deferredAccounting >>
 
 FinishCompletion(s) ==
   /\ Len(completionQueue) > 0
@@ -358,6 +532,10 @@ FinishCompletion(s) ==
             IF retired
             THEN [slotGeneration EXCEPT ![slot] = @ + 1]
             ELSE slotGeneration
+       /\ deferredAccounting' =
+            [deferredAccounting EXCEPT
+               !.completionFinishes[s] = @ + 1,
+               !.reclaims[s] = @ + 1]
   /\ UNCHANGED << nextSeq,
                   hasPresent,
                   receiptSlot,
@@ -369,7 +547,12 @@ FinishCompletion(s) ==
 
 Next ==
   \/ Publish
-  \/ \E s \in SeqIds : Encode(s)
+  \/ \E s \in SeqIds : EncodeWhole(s)
+  \/ EncodeDeferredPrefix
+  \/ EncodeDeferredSuccessor
+  \/ FinishDeferredSuffix
+  \/ StaleFailOpen
+  \/ DrainDeferredSuffix
   \/ \E s \in SeqIds : DetachRetiredPayload(s)
   \/ \E s \in SeqIds : DestroyOwner(s)
   \/ \E s \in SeqIds : FinishPayloadRetirement(s)
@@ -380,7 +563,25 @@ Next ==
   \/ \E s \in SeqIds : SettleDeviceLoss(s)
   \/ \E s \in SeqIds : FinishCompletion(s)
 
-Spec == Init /\ [][Next]_vars
+RetirementFairness ==
+  /\ WF_vars(Publish)
+  /\ WF_vars(EncodeDeferredPrefix)
+  /\ WF_vars(EncodeDeferredSuccessor)
+  /\ WF_vars(FinishDeferredSuffix)
+  /\ WF_vars(StaleFailOpen)
+  /\ WF_vars(DrainDeferredSuffix)
+  /\ \A s \in SeqIds :
+       /\ WF_vars(EncodeWhole(s))
+       /\ WF_vars(DetachRetiredPayload(s))
+       /\ WF_vars(DestroyOwner(s))
+       /\ WF_vars(FinishPayloadRetirement(s))
+       /\ WF_vars(SubmitRetired(s))
+       /\ WF_vars(SubmitLegacy(s))
+       /\ WF_vars(GpuComplete(s))
+       /\ WF_vars(SettleDeviceLoss(s))
+       /\ WF_vars(FinishCompletion(s))
+
+Spec == Init /\ [][Next]_vars /\ RetirementFairness
 
 TypeOK ==
   /\ nextSeq \in 1 .. (MaxSeqId + 1)
@@ -400,6 +601,7 @@ TypeOK ==
   /\ settlement \in [SeqIds -> SettlementStates]
   /\ resourceRetained \in [SeqIds -> BOOLEAN]
   /\ deviceLost \in BOOLEAN
+  /\ deferredAccounting \in DeferredAccountingState
 
 RetirementRequiresEncode ==
   \A s \in SeqIds :
@@ -461,6 +663,92 @@ BoundedReceipts ==
   Cardinality({slot \in ReceiptSlots : slotOwner[slot] # 0}) <=
     MaxReceiptSlots
 
+NoRetireWhileDeferred ==
+  \A s \in SeqIds :
+    (deferredAccounting.remainingCommands[s] > 0 \/
+     deferredAccounting.finalBorrow[s]) =>
+      payloadState[s] \notin {"Detached", "OwnerDestroyed", "Retired"}
+
+CommandExactlyOnce ==
+  /\ \A s \in SeqIds :
+       deferredAccounting.commandEffects[s] <= ExpectedCommands(s)
+  /\ (payloadState[1] = "PrefixEncoded" =>
+        /\ deferredAccounting.remainingCommands[1] = 1
+        /\ deferredAccounting.finalBorrow[1]
+        /\ deferredAccounting.commandEffects[1] = 1)
+  /\ \A s \in SeqIds :
+       payloadState[s] \in
+         {"Encoded", "Detached", "OwnerDestroyed", "Retired"} =>
+         /\ deferredAccounting.remainingCommands[s] = 0
+         /\ ~deferredAccounting.finalBorrow[s]
+         /\ deferredAccounting.commandEffects[s] = ExpectedCommands(s)
+
+ReceiptExactlyOnce ==
+  \A s \in SeqIds :
+    /\ deferredAccounting.receiptActivations[s] <= 1
+    /\ (receiptState[s] # "None" <=>
+          deferredAccounting.receiptActivations[s] = 1)
+
+CompletionFinishExactlyOnce ==
+  \A s \in SeqIds :
+    /\ deferredAccounting.completionFinishes[s] <= 1
+    /\ (deferredAccounting.completionFinishes[s] = 1 <=>
+          s <= completedSeqId)
+
+ReclaimExactlyOnce ==
+  \A s \in SeqIds :
+    /\ deferredAccounting.reclaims[s] <= 1
+    /\ (deferredAccounting.reclaims[s] = 1 <=> s <= completedSeqId)
+
+CurrentThenSuccessorFifo ==
+  /\ (deferredAccounting.receiptActivations[2] = 1 =>
+        deferredAccounting.receiptActivations[1] = 1)
+  /\ (deferredAccounting.completionFinishes[2] = 1 =>
+        deferredAccounting.completionFinishes[1] = 1)
+  /\ (deferredAccounting.reclaims[2] = 1 =>
+        deferredAccounting.reclaims[1] = 1)
+
+CompletionRegistrationIsFifo ==
+  \A s \in SeqIds :
+    CompletionRegistered(s) =>
+      \A older \in SeqIds : older < s => CompletionRegistered(older)
+
+NoPostEffectRollback ==
+  /\ ~deferredAccounting.rollbackAfterEffect
+  /\ (deferredAccounting.successorEffectful =>
+        deferredAccounting.lastPath = "Join")
+  /\ (deferredAccounting.lastPath \in {"StaleFailOpen", "Drain"} =>
+        ~deferredAccounting.successorEffectful)
+
+DeferredJoinOrDrainProgress ==
+  (payloadState[1] = "PrefixEncoded") ~>
+    (payloadState[1] = "Encoded" /\
+     deferredAccounting.lastPath # "None")
+
+ReceiptActivationProgress ==
+  \A s \in 1 .. 2 :
+    (payloadState[s] = "Encoded" /\
+     deferredAccounting.receiptActivations[s] = 0) ~>
+      (deferredAccounting.receiptActivations[s] = 1)
+
+CompletionFinishProgress ==
+  \A s \in 1 .. 2 :
+    (deferredAccounting.receiptActivations[s] = 1) ~>
+      (deferredAccounting.completionFinishes[s] = 1 \/ deviceLost)
+
+ReclaimProgress ==
+  \A s \in 1 .. 2 :
+    (deferredAccounting.receiptActivations[s] = 1) ~>
+      (deferredAccounting.reclaims[s] = 1 \/ deviceLost)
+
+CurrentBeforeSuccessorProgress ==
+  (deferredAccounting.receiptActivations[2] = 1) ~>
+    (deferredAccounting.completionFinishes[1] = 1 \/ deviceLost)
+
+CurrentBeforeSuccessorCompletion ==
+  [](deferredAccounting.completionFinishes[2] = 0 \/
+     deferredAccounting.completionFinishes[1] = 1)
+
 Inv ==
   /\ TypeOK
   /\ RetirementRequiresEncode
@@ -474,5 +762,13 @@ Inv ==
   /\ PresentNeverRetires
   /\ GpuAccountingIndependentOfResidency
   /\ BoundedReceipts
+  /\ NoRetireWhileDeferred
+  /\ CommandExactlyOnce
+  /\ ReceiptExactlyOnce
+  /\ CompletionFinishExactlyOnce
+  /\ ReclaimExactlyOnce
+  /\ CurrentThenSuccessorFifo
+  /\ CompletionRegistrationIsFifo
+  /\ NoPostEffectRollback
 
 ====

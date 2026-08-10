@@ -1,9 +1,10 @@
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
 #include "../../../src/dxmt9/dxmt9_post_encode_retirement.hpp"
+#include "../../../src/dxmt9/render/encode_session_admission.hpp"
 
-#include <cstdint>
 #include <array>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -220,6 +222,216 @@ void receiptLedgerRejectsDuplicateStaleAndAbaUse() {
             collision.cancelBeforeActivationEffects(occupied.receipt) ==
                 PostEncodeReceiptResult::Stale,
         "only a pre-effect active receipt can roll back once");
+}
+
+enum class DeferredSuffixReplayPath : std::uint8_t {
+  NaturalDrain,
+  Join,
+};
+
+struct DeferredSuffixRetirementModel {
+  using SessionAdmissionCandidate =
+      dxmt9::render::SessionAdmissionCandidate;
+  using SessionCapacityVector = dxmt9::render::SessionCapacityVector;
+
+  static constexpr std::array<std::uint64_t, 2> kSeqIds{101u, 102u};
+  static constexpr std::array<std::uint32_t, 2> kCommandCounts{3u, 1u};
+
+  std::array<std::array<bool, 3>, 2> encodedCommands{};
+  std::array<SessionAdmissionCandidate, 2> candidates{};
+  std::array<SessionCapacityVector, 2> residencyCharges{};
+  std::array<SessionCapacityVector, 2> workCharges{};
+  std::array<dxmt9::core::metalqueue::PostEncodeCompletionReceipt, 2>
+      receipts{};
+  dxmt9::render::EncodeSessionAdmissionState admission{};
+  SessionCapacityVector residency{};
+  SessionCapacityVector encodedWork{};
+  PostEncodeCompletionLedger ledger{};
+  std::vector<std::uint64_t> detachOrder;
+  std::vector<std::uint64_t> finishOrder;
+  std::uint32_t payloadBorrows = 0;
+  bool suffixComplete = false;
+  bool effectsComplete = false;
+
+  DeferredSuffixRetirementModel() {
+    candidates[0].seqId = kSeqIds[0];
+    candidates[0].reservationPages = 2u;
+    candidates[0].residencyBytes.value = 128u;
+    candidates[1].seqId = kSeqIds[1];
+    candidates[1].reservationPages = 1u;
+    candidates[1].residencyBytes.value = 64u;
+    residencyCharges = {{
+        {
+            .sources = 1u,
+            .pages = 2u,
+            .bytes = 128u,
+            .payloadBlocks = 1u,
+            .readyEntries = 1u,
+            .retentionEntries = 1u,
+            .allocatorTickets = 1u,
+        },
+        {
+            .sources = 1u,
+            .pages = 1u,
+            .bytes = 64u,
+            .payloadBlocks = 1u,
+            .readyEntries = 1u,
+            .retentionEntries = 1u,
+            .allocatorTickets = 1u,
+        },
+    }};
+    workCharges = {{
+        {.sources = 1u, .draws = 2u, .commandBuffers = 1u},
+        {.sources = 1u, .draws = 1u, .commandBuffers = 1u},
+    }};
+    const auto totalResidency = dxmt9::render::addSessionCapacity(
+        residencyCharges[0], residencyCharges[1]);
+    const auto totalWork = dxmt9::render::addSessionCapacity(
+        workCharges[0], workCharges[1]);
+    check(totalResidency.has_value() && totalWork.has_value(),
+          "deferred suffix fixture capacity sums are representable");
+    residency = *totalResidency;
+    encodedWork = *totalWork;
+    admission.flags = dxmt9::render::EncodeSessionAdmissionValid;
+    admission.sources = 2u;
+    admission.residentSources = 2u;
+    admission.pages = 3u;
+    admission.draws = 3u;
+    admission.commandBuffers = 2u;
+    admission.residencyBytes.value = 192u;
+  }
+
+  bool encode(std::size_t sourceIndex,
+              std::size_t commandIndex) noexcept {
+    if (sourceIndex >= encodedCommands.size() ||
+        commandIndex >= kCommandCounts[sourceIndex] ||
+        encodedCommands[sourceIndex][commandIndex]) {
+      return false;
+    }
+    encodedCommands[sourceIndex][commandIndex] = true;
+    return true;
+  }
+
+  bool allCommandsEncoded() const noexcept {
+    return encodedCommands[0][0] && encodedCommands[0][1] &&
+        encodedCommands[0][2] && encodedCommands[1][0];
+  }
+
+  bool retirementEligible(std::size_t sourceIndex) const noexcept {
+    if (sourceIndex >= candidates.size() || !effectsComplete ||
+        payloadBorrows != 0u) {
+      return false;
+    }
+    return sourceIndex != 0u || suffixComplete;
+  }
+
+  bool detach(std::size_t sourceIndex) {
+    if (!retirementEligible(sourceIndex) ||
+        sourceIndex != detachOrder.size()) {
+      return false;
+    }
+    const auto activation = ledger.activate(kSeqIds[sourceIndex], false);
+    if (activation.result != PostEncodeReceiptResult::Succeeded) {
+      return false;
+    }
+    const auto remaining = dxmt9::render::subtractSessionCapacity(
+        residency, residencyCharges[sourceIndex]);
+    if (!remaining || !dxmt9::render::retireSessionAdmissionResidency(
+                          admission, candidates[sourceIndex])) {
+      return false;
+    }
+    residency = *remaining;
+    receipts[sourceIndex] = activation.receipt;
+    detachOrder.push_back(kSeqIds[sourceIndex]);
+    return true;
+  }
+
+  bool finish(std::size_t sourceIndex) {
+    if (sourceIndex != finishOrder.size() ||
+        sourceIndex >= receipts.size() ||
+        ledger.markSubmitted(receipts[sourceIndex], false) !=
+            PostEncodeReceiptResult::Succeeded ||
+        ledger.markCompleted(receipts[sourceIndex], false) !=
+            PostEncodeReceiptResult::Succeeded ||
+        ledger.finishAndRelease(kSeqIds[sourceIndex]) !=
+            PostEncodeReceiptResult::Succeeded) {
+      return false;
+    }
+    const auto remaining = dxmt9::render::subtractSessionCapacity(
+        encodedWork, workCharges[sourceIndex]);
+    if (!remaining) {
+      return false;
+    }
+    encodedWork = *remaining;
+    finishOrder.push_back(kSeqIds[sourceIndex]);
+    return true;
+  }
+};
+
+void deferredSuffixRetirementWaitsForAllEffectsAndConservesState() {
+  constexpr std::array paths{
+      DeferredSuffixReplayPath::NaturalDrain,
+      DeferredSuffixReplayPath::Join,
+  };
+  for (const auto path : paths) {
+    DeferredSuffixRetirementModel model;
+    check(model.encode(0u, 0u),
+          "held source encodes its current A prefix once");
+    ++model.payloadBorrows;
+    check(!model.retirementEligible(0u) && !model.detach(0u) &&
+              model.ledger.depth() == 0u &&
+              model.admission.residentSources == 2u,
+          "prefix-only current source cannot activate or detach");
+
+    if (path == DeferredSuffixReplayPath::Join) {
+      check(model.encode(1u, 0u) && model.encode(0u, 1u) &&
+                model.encode(0u, 2u),
+            "join encodes successor head before the complete current suffix");
+    } else {
+      check(model.encode(0u, 1u) && model.encode(0u, 2u) &&
+                model.encode(1u, 0u),
+            "natural drain consumes the current suffix before successor");
+    }
+    model.suffixComplete = true;
+    check(!model.retirementEligible(0u) && !model.detach(0u),
+          "final suffix command still cannot detach through a live borrow");
+    --model.payloadBorrows;
+    check(!model.retirementEligible(0u) && !model.detach(0u),
+          "borrow release alone cannot retire before all effects fold");
+    model.effectsComplete = model.allCommandsEncoded();
+
+    check(model.allCommandsEncoded() &&
+              !model.encode(0u, 0u) && !model.encode(0u, 1u) &&
+              !model.encode(0u, 2u) && !model.encode(1u, 0u),
+          "prefix, successor head, and suffix cover each command once");
+    check(!model.detach(1u),
+          "successor receipt cannot overtake the current source");
+    check(model.detach(0u) && !model.detach(0u) &&
+              model.detach(1u) && !model.detach(1u) &&
+              model.detachOrder ==
+                  std::vector<std::uint64_t>({101u, 102u}) &&
+              model.ledger.depth() == 2u,
+          "receipt activation and detach are FIFO exactly once");
+    check(model.residency ==
+                  dxmt9::render::SessionCapacityVector{} &&
+              model.admission.residentSources == 0u &&
+              model.admission.pages == 0u &&
+              model.admission.residencyBytes.value == 0u &&
+              model.encodedWork.sources == 2u &&
+              model.encodedWork.draws == 3u,
+          "detach releases residency while encoded work remains charged");
+
+    check(!model.finish(1u),
+          "successor completion cannot overtake current completion");
+    check(model.finish(0u) && !model.finish(0u) &&
+              model.finish(1u) && !model.finish(1u) &&
+              model.finishOrder ==
+                  std::vector<std::uint64_t>({101u, 102u}) &&
+              model.ledger.depth() == 0u &&
+              model.encodedWork ==
+                  dxmt9::render::SessionCapacityVector{},
+          "FIFO completion settles receipts and encoded work exactly once");
+  }
 }
 
 QueueCompletionSource completionSource(std::uint64_t seqId,
@@ -613,6 +825,7 @@ int main(int argc, char** argv) {
     invalidDuplicateAndTailPresentRejectWithoutMutation();
     mergePreservesOrderPresentAndBounds();
     receiptLedgerRejectsDuplicateStaleAndAbaUse();
+    deferredSuffixRetirementWaitsForAllEffectsAndConservesState();
     queueSealedShadowMatchesLegacyListDomain();
     mixedRetiredAndLocatorSourcesStayDenseAndOrdered();
     defaultMetalFactorySourceContractIsPinned(argv[1]);
