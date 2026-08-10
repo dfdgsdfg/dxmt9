@@ -157,25 +157,25 @@ std::vector<std::byte> bytesOf(const T& value) {
 struct RecordSpec {
   std::uint32_t type = 0;
   std::vector<std::byte> payload;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
 };
 
 struct WireFixture {
   std::vector<std::byte> bytes;
-  dxmt9::d3d9::V2ChunkEnvelope envelope{};
+  dxmt9::d3d9::CommandChunkEnvelope envelope{};
 };
 
 WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
-  std::vector<D9CCommandChunkWireRecordHeaderV2> records;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
   std::vector<std::byte> payload;
   for (const auto& spec : specs) {
-    const auto* rule = dxmt9::d3d9::v2RecordRule(spec.type);
+    const auto* rule = dxmt9::d3d9::recordRule(spec.type);
     check(rule != nullptr, "production routing fixture record must be known");
     payload.resize(alignUp(payload.size(), rule->payloadAlignment));
     records.push_back({
         .type = spec.type,
-        .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+        .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
         .payloadOffset = static_cast<std::uint32_t>(payload.size()),
         .payloadSize = static_cast<std::uint32_t>(spec.payload.size()),
         .firstHandle = static_cast<std::uint32_t>(handles.size()),
@@ -185,19 +185,19 @@ WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
     payload.insert(payload.end(), spec.payload.begin(), spec.payload.end());
   }
 
-  D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
-      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
+  D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleCount = static_cast<std::uint32_t>(handles.size()),
       .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
   };
   header.handleTableOffset = static_cast<std::uint32_t>(alignUp(
       header.recordTableOffset + records.size() * sizeof(records[0]),
-      alignof(D9CCommandChunkWireHandleEntryV2)));
+      alignof(D9CCommandChunkWireHandleEntry)));
   header.payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
       header.handleTableOffset + handles.size() * sizeof(handles[0]),
       alignof(std::uint32_t)));
@@ -216,7 +216,7 @@ WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
                 payload.data(), payload.size());
   }
   fixture.envelope = {
-      .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = header.recordCount,
       .handleCount = header.handleCount,
   };
@@ -224,13 +224,13 @@ WireFixture makeWireFixture(std::span<const RecordSpec> specs) {
 }
 
 RecordSpec clearRecord(std::uint32_t rectCount = 0) {
-  const D9CCommandChunkWireClearV2 clear{
+  const D9CCommandChunkWireClear clear{
       .flags = 1u,
       .colorARGB = 0xff123456u,
       .z = 1.0f,
       .stencil = 0,
       .rectCount = rectCount,
-      .rectOffset = sizeof(D9CCommandChunkWireClearV2),
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
   };
   RecordSpec record{
       .type = D9C_COMMAND_RECORD_CLEAR,
@@ -245,27 +245,27 @@ RecordSpec clearRecord(std::uint32_t rectCount = 0) {
 RecordSpec presentRecord() {
   return {
       .type = D9C_COMMAND_RECORD_PRESENT,
-      .payload = bytesOf(D9CCommandChunkWirePresentV2{}),
+      .payload = bytesOf(D9CCommandChunkWirePresent{}),
   };
 }
 
 RecordSpec applyRenderStateRecord(std::uint32_t state,
                                   std::uint32_t value) {
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .sectionCount = 1,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
-      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDescV2),
-      alignof(D9CCommandChunkWireRenderStateV2)));
-  const D9CCommandChunkWireSectionDescV2 section{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE,
-      .elementSize = sizeof(D9CCommandChunkWireRenderStateV2),
+      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDesc),
+      alignof(D9CCommandChunkWireRenderState)));
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+      .elementSize = sizeof(D9CCommandChunkWireRenderState),
       .count = 1,
       .payloadOffset = draw.sectionPayloadOffset,
-      .byteSize = sizeof(D9CCommandChunkWireRenderStateV2),
+      .byteSize = sizeof(D9CCommandChunkWireRenderState),
   };
-  const D9CCommandChunkWireRenderStateV2 renderState{
+  const D9CCommandChunkWireRenderState renderState{
       .state = state,
       .value = value,
   };
@@ -283,23 +283,23 @@ RecordSpec applyRenderStateRecord(std::uint32_t state,
 }
 
 RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
       .sectionCount = 1u,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
-      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDescV2),
-      alignof(D9CCommandChunkWireStreamBindingV2)));
-  const D9CCommandChunkWireSectionDescV2 section{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
-      .elementSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDesc),
+      alignof(D9CCommandChunkWireStreamBinding)));
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+      .elementSize = sizeof(D9CCommandChunkWireStreamBinding),
       .count = 1u,
       .payloadOffset = draw.sectionPayloadOffset,
-      .byteSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+      .byteSize = sizeof(D9CCommandChunkWireStreamBinding),
   };
-  const D9CCommandChunkWireStreamBindingV2 stream{
+  const D9CCommandChunkWireStreamBinding stream{
       .slot = 0u,
       .valid = 1u,
       .handleIndex = 0u,
@@ -317,7 +317,7 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
   return {
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       .payload = std::move(payload),
-      .handles = {dxmt9::d3d9::wireHandleEntryV2(bufferIdentity)},
+      .handles = {dxmt9::d3d9::wireHandleEntry(bufferIdentity)},
   };
 }
 
@@ -325,7 +325,7 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                       std::uint64_t rawOrdinal) {
   dxmt9::d3d9::WireObjectRegistry registry;
   dxmt9::d3d9::RawCommandChunk raw;
-  const bool prepared = dxmt9::d3d9::prepareV2OffloadChunk(
+  const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
       fixture.bytes, fixture.envelope, registry,
       [](std::uint32_t, void*) noexcept {}, raw);
   check(prepared, "production raw chunk must pass owned preflight");
@@ -532,7 +532,7 @@ void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {
   const std::array records{drawRecord(wireBuffer.wireIdentity)};
   const auto wire = makeWireFixture(records);
   D9CCommandChunk chunk{
-      .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = wire.envelope.recordCount,
       .recordBytes = static_cast<std::uint32_t>(wire.bytes.size()),
       .records = toWireHandle(wire.bytes.data()),

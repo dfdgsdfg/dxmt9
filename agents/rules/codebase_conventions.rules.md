@@ -111,7 +111,7 @@ conventions, not feature requirements; durable behavior belongs in `specs/`.
 
 - For normal implementation changes, run the smallest relevant Meson test target:
   for example `dxmt9-core-spec`, `dxmt9-state-draw-transform-spec`,
-  `dxmt9-shader-transform-spec`, `dxmt9-chunk-record-v2-validation-spec`, or
+  `dxmt9-shader-transform-spec`, `dxmt9-chunk-record-validation-spec`, or
   `dxmt9-resource-hazard-spec`.
 - For queue, resource lifetime, present latency, encoder lifecycle, or query
   sequencing changes, run `dxmt9-verify-tla` or `bash scripts/check/verify_tla.sh`.

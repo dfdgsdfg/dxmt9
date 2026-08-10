@@ -150,7 +150,7 @@ graph LR
 
 **PE CommandChunk** holds:
 - A compact command header array and POD payload arena
-- V2 production grammar: stable object-ID/generation table entries for buffers, textures,
+- Canonical numeric-version-2 grammar: stable object-ID/generation table entries for buffers, textures,
   surfaces, shaders, vertex declarations, and queries
 - No raw pointer-typed fields, COM pointers, ObjC pointers, lambdas, or owning
   C++ containers in the wire image
@@ -378,7 +378,7 @@ The observable contract is `R-BACK-2.51`. The mechanics:
 - `submitPresent` suppresses its inline seqId-based boundary only for the
   specific present that the app thread just paced through
   `waitPresentOrdinalBoundary`: `dxmt9c_device_commit_chunk`'s offload branch
-  calls `replayResolvedV2Chunk(..., pacedByPresentOrdinal=true)` for the raw
+  calls `replayResolvedChunk(..., pacedByPresentOrdinal=true)` for the raw
   chunk the worker later replays, and only that Present record's
   `dxmt9c_device_present` call marks the next `core::Device::presentEx()`
   call's `SwapDesc::pacedByPresentOrdinal`
@@ -452,7 +452,7 @@ The observable contract is `R-BACK-2.51`. The mechanics:
   clean worker stop also wakes scoped waiters with a non-success stopped result. The
   historical per-record synchronous HRESULT
   short-circuit of `commit_chunk` does not hold in offload mode.
-- With the flag explicitly set to `0` (the opt-out), the same admitted V2
+- With the flag explicitly set to `0` (the opt-out), the same admitted canonical
   representation and captured binding bytes pass through the same device-owned
   ledger and are replayed inline instead of being queued to the worker; inline
   success publishes the matching replayed watermarks before returning.
@@ -658,25 +658,25 @@ Hot-path allocation policy:
   objects, but steady-state replay of imported records must not allocate from the
   system heap.
 
-#### 2.4.1 Retired V1 Contract
+#### 2.4.1 Promotion History: Retired Pointer-Bearing Contract
 
-Wire V1 was retired from production after V2 promotion. PE and unix advertise
-only V2, the PE recorder always emits V2, and commit/offload replay rejects any
-outer version other than V2. The native V1 envelope/import/replay/parity fixture
-corpus was removed on 2026-07-19; layout, malformed-input, hazard, replay,
-marshalling, and allocation evidence now uses typed V2 fixtures. The shared `D9CCommandRecord*` semantic value
-structs and `appendLegacyCommandRecordAsV2` are both **gone** as of the PE
-legacy-record removal: the recorder builds `SparseStateV2Input` directly, so
-there is no staging form left to convert. Nothing constructs a V1 wire chunk,
-and `dxmt9c_device_commit_chunk` rejects any wire version other than 2.
+The numeric wire version 1 grammar was retired when numeric wire version 2 was
+promoted to the suffixless canonical contract. PE and unix now advertise and
+emit only the canonical contract, and commit/offload replay rejects every other
+outer version. The retired envelope/import/replay/parity fixture corpus was
+removed on 2026-07-19; layout, malformed-input, hazard, replay, marshalling, and
+allocation evidence now uses canonical typed fixtures. The shared
+`D9CCommandRecord*` semantic value structs and the conversion adapter are also
+gone: the recorder builds `SparseStateInput` directly, so there is no staging
+form left to convert.
 
-V1 had a sound bounds-checkable outer shape, but its
-resource representation is transitional: payload fields and
-`D9CCommandChunkWireHandleEntry::opaqueHandle` contain a server-side `D9C*`
+This section is history, not a supported lane. The retired grammar had a sound
+bounds-checkable outer shape, but its resource representation was transitional:
+payload fields and `D9CCommandChunkWireHandleEntry::opaqueHandle` contained a server-side `D9C*`
 wrapper address cast to `uint64_t`. This violated the pointer-free target in
 `R-BACK-2.21` and is why it cannot remain as a fallback.
 
-The historical hardened V1 importer applied these invariants before dispatching
+The historical hardened importer applied these invariants before dispatching
 any record. They are retained here as design history, not as an active fixture
 or conformance contract:
 
@@ -695,9 +695,9 @@ or conformance contract:
 - A full state snapshot sets every texture and stream slot mask bit and writes
   null handles for unbound slots. Without those explicit nulls, replay could
   retain bindings from the prior unix state.
-- Bulk resource marking covers only direct V1 payload references. Normal
+- Bulk resource marking covers only direct retired-payload references. Normal
   per-draw resource marking remains enabled because the effective unix state
-  can contain bindings not repeated by a sparse V1 delta.
+  can contain bindings not repeated by a sparse delta.
 
 The retired PE pending-command retainer was one capacity-preserving flat entry arena.
 Each record starts with a checkpoint; failure releases and removes only the
@@ -709,27 +709,27 @@ capacity survives calls. These changes close the known per-record container
 churn, but do not by themselves prove the complete no-system-allocation target
 in `R-BACK-2.27`.
 
-Historically, because the generated bridge hash canonicalizes function prototypes rather
-than nested record layouts, every incompatible V1 record-grammar change also
+Historically, because the generated bridge hash canonicalizes function
+prototypes rather than nested record layouts, every incompatible record-grammar change also
 bumps `ABI_HASH_VERSION_TAG`. The exact-slice/Query contract uses bridge ABI
 generation `dxmt9-bridge-abi-v3`, preventing an older PE recorder from attaching
 to a hardened unix importer (or the reverse) under the same outer
 `commit_chunk` prototype.
 
-#### 2.4.2 V2 Stable-Index and Sparse Draw Design
+#### 2.4.2 Canonical Stable-Index and Sparse Draw Design
 
-V2 keeps the outer header/record-table/handle-table/payload-arena shape and
-removes process-local identity from it:
+The canonical format (numeric wire version 2) keeps the outer header/record-
+table/handle-table/payload-arena shape and removes process-local identity:
 
 ```text
-HandleTableEntryV2 {
+HandleTableEntry {
   u32 kind
   u32 generation
   u64 objectId
 }
 
-PayloadHandleRefV2 = u32 absoluteHandleIndex
-NullHandleIndexV2  = 0xffffffff
+PayloadHandleRef = u32 absoluteHandleIndex
+NullHandleIndex  = 0xffffffff
 ```
 
 `objectId` is allocated by the bridge-visible object registry and remains
@@ -740,19 +740,19 @@ payload field schema. Null is the sentinel and never consumes a table entry.
 Slices may repeat the same object across different records to keep validation,
 retention, and offload ownership linear and record-local.
 
-A V2 draw payload is sparse. It carries only the state sections a draw actually
-changed, rather than a fixed full-state slab per draw — the shape V1 used, whose
+A canonical draw payload is sparse. It carries only the state sections a draw
+actually changed, rather than the fixed full-state slab used by the retired grammar, whose
 `D9CDrawPrimitivePacket` was deleted along with the rest of the legacy format
 (the name survives here only to describe what the sparse form replaced):
 
 ```text
-DrawRecordV2 {
-  DrawHeaderV2       drawArgsAndFlags
-  SectionDescV2      sections[sectionCount]
+DrawRecord {
+  DrawHeader       drawArgsAndFlags
+  SectionDesc      sections[sectionCount]
   byte               sectionPayload[]
 }
 
-SectionDescV2 {
+SectionDesc {
   u16 kind
   u16 elementSize
   u32 count
@@ -797,11 +797,12 @@ Import is transactional and ordered:
 5. Only after the entire chunk passes steps 1–4 may replay mutate device state
    or submit queue work.
 
-V2 is selected only after PE/unix capability negotiation and the generated
-bridge ABI-hash handshake agree. Production supports exactly V2: there is no
-fallback grammar and no mixed-version record mode. The registry, producer,
-importer, native parity tests, PE x64/x86 builds, and runtime bridge-op gates
-passed before V1 retirement.
+Numeric wire version 2 is selected only after PE/unix capability negotiation
+and the generated bridge ABI-hash handshake agree. Production supports exactly
+the canonical format: there is no fallback grammar and no mixed-version record
+mode. The registry, producer, importer, native parity tests, PE x64/x86 builds,
+and runtime bridge-op gates
+passed before the canonical promotion.
 
 ### 2.5 Draw-Run Batch Compatibility
 

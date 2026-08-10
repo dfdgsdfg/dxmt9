@@ -37,7 +37,7 @@ precise and machine-checkable.
 | R-BACK-32.11 / R-VERIF-2.13 (bounded ready-prefix DCE) | missing model extension or refinement | planned queue ready-prefix and FrameGraph summary owners |
 | R-BACK-2.60 / R-BACK-2.65 / R-VERIF-2.14 (CPU-ready/session admission progress) | `tla/CpuReadySessionProgress.tla` constrains releases to semantic/terminal events; `tla/SessionCapacityLease.tla` refines the generation lease, complete ordinary-successor reserve, cap boundary, and completion-independent grouping | `CpuReadyTape`, `SessionCapacityLeaseState`, and the session coordinator in `src/dxmt9/dxmt9_cpu_ready_tape.hpp`, `src/dxmt9/render/encode_session_admission.*`, and `src/dxmt9/dxmt9_command_queue_cpu_ready_session.cpp` |
 | R-BACK-2.63–2.64 / R-VERIF-2.15 (parallel/joint completion) | missing refinement model | planned encode coordinator and partition workers |
-| `backend/spec.md` §2.7 / `include/dxmt9/device_c.h` (cross-side generation) | `tla/WireHandleGeneration.tla` | `src/d3d9/d3d9_pe_recorder.*`, `src/d3d9/device_c_chunk_replay.cpp`, `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena) |
+| `backend/spec.md` §2.7 / `include/dxmt9/device_c.h` (cross-side stable identity) | `tla/WireObjectRegistry.tla` | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*` |
 | `backend/spec.md` §7.2 (slot reuse ABA-safety) | `tla/PresentIdAba.tla` | `src/dxmt9/dxmt9_resource_pool.hpp` (HandleArena), forward-looking PresenterSlot registry in `src/dxmt9/dxmt9_command_queue.*` |
 | `d3d9/queries/spec.md` §2-3 | `tla/QuerySeqId.tla` | `src/d3d9/core.cpp` |
 | `backend/spec.md` §2 and `tests/spec.md` §0.1 | queue observer / fake backend tests | `QueueLifecycleController`, chunk importer replay path |
@@ -71,8 +71,10 @@ specs/verification/
     ├── PostEncodePayloadRetirement.cfg
     ├── DceChunkLookahead.tla  one held source → FIFO successor proof window
     ├── DceChunkLookahead.cfg
-    ├── WireHandleGeneration.tla  PE → unix generation-stamp gate
-    ├── WireHandleGeneration.cfg
+    ├── WireObjectRegistry.tla  canonical stable object identity
+    ├── WireObjectRegistry.cfg
+    ├── ReplayScopedDrain.tla  scoped raw-replay drain ledger
+    ├── ReplayScopedDrain.cfg
     ├── PresentIdAba.tla   (slot, generation) tagged-handle ABA-safety
     ├── PresentIdAba.cfg
     ├── ResourceLifetime.tla  Deferred GPU resource destruction
@@ -187,7 +189,7 @@ exercise all structural behaviors while keeping the state space tractable.
 | EncodeSessionCompletion | `MaxSeqId` / `MaxSessionLen` | 5 / 3 | unbounded source seqIds, bounded by `kMaxEncodeSessionSources` and queue ring size |
 | CpuReadySessionProgress | `MaxSources` / `MaxReady` / `MaxResident` / `MaxBatch` / `MaxSessionLen` / `MaxReleaseEvents` / `MaxReleaseGeneration` / `MaxPressureGeneration` | 2 / 2 / 2 / 2 / 2 / 2 / 2 / 2 | unbounded source ordinals; fixed Tape/Ready/session/release capacities and monotone release/latch generations |
 | DceChunkLookahead | `MaxSources` / `MaxInflight` | 4 / 3 | unbounded source seqIds / `kMaxQueuedChunks`; exactly one held lookahead source |
-| WireHandleGeneration | `Handles` / `WireSlots` / `GENERATION_DOMAIN` / `MAX_BUMPS` | `{h1,h2}` / `{w1,w2}` / 3 / 3 | unbounded handles, generation domain = 2^24 (`D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS`) |
+| WireObjectRegistry | `Slots` / `Requests` / `Kinds` / `MAX_GENERATION` | `{s1,s2}` / `{r1,r2}` / `{Texture,Buffer}` / 3 | device-local stable object IDs, nonzero full `uint32_t` generations, exact kind/ID/generation admission, and retirement at `UINT32_MAX` |
 | PresentIdAba | `Slots` / `Entities` / `MAX_GEN` / `MAX_OPS` | `{s1,s2}` / `{p1,p2}` / 3 / 6 | unbounded slots, generation domain = 2^24 (`HandleArena::kGenerationBits`) |
 | ResourceLifetime | `Resources` | `{r1,r2,r3}` | dynamic |
 | ResourceLifetime | `MAX_SEQID` | 5 | unbounded |
@@ -252,7 +254,7 @@ or reviewing a TLA+ module.
 
 | Model | System | Code site (primary) | Invariants (safety) | Liveness | Companion native spec |
 |---|---|---|---|---|---|
-| `CommandQueue.tla` | 3-thread ring buffer (Wine / Encode / Finish), multi-sub-CB chain | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` | `TypeOK`, `SeqIdSafety`, `BoundedInflight`, `RingSafety`, `EncodeSafety`, `SubCBProgressBounded`, `OnlyFinalAdvancesSeqId`, `PresentRoutedToTail` | `PendingEventuallyFree`, `EventuallyDrained` | `tests/native/backend/chunk_record_v2_replay_spec.cpp`, `tests/native/backend/dod_replay_observer_spec.cpp` |
+| `CommandQueue.tla` | 3-thread ring buffer (Wine / Encode / Finish), multi-sub-CB chain | `src/dxmt9/dxmt9_queue.*`, `src/dxmt9/dxmt9_command_queue.*` | `TypeOK`, `SeqIdSafety`, `BoundedInflight`, `RingSafety`, `EncodeSafety`, `SubCBProgressBounded`, `OnlyFinalAdvancesSeqId`, `PresentRoutedToTail` | `PendingEventuallyFree`, `EventuallyDrained` | `tests/native/backend/chunk_record_replay_spec.cpp`, `tests/native/backend/dod_replay_observer_spec.cpp` |
 | `QueueLifecycleRefinement.tla` | Concrete refinement of `QueueLifecycleController` staging fields | `QueueLifecycleController` in `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `ReadySlotsArePending`, `PendingCompletionAreSubmitted`, `CompletedSeqQueueBounded`, lifecycle refinement of `CommandQueue!Spec` | `WaitForSequenceProgress`, `StopUnblocksWaits` | `tests/native/backend/dod_replay_observer_spec.cpp` |
 | `PresentFrameLatency.tla` | Queue-owned frame-latency tokens, present vs non-present timelines | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_presenter.*` | `TypeOK`, `SeqTimelineSafety`, `PresentCompletionSafety`, `OutstandingPresentBound`, `PresentQueueSafety`, `AppWaitReturnSafe` | `SubmittedPresentsEventuallyComplete`, `WaitEventuallyReturnsOrStops` | `tests/native/backend/present_boundary_policy_spec.cpp` |
 | `ConcurrentProgressSignals.tla` | Pacing independence across `completedSeqId` / `presentCompletedSeqId` / `ringSlotOccupancy` | `src/dxmt9/dxmt9_command_queue.*`, `src/dxmt9/dxmt9_queue.*` | `TypeOK`, `PacingOrdering` (`presentCompletedSeqId ≤ completedSeqId`), `RingOccupancyBound`, `FrameLatencyBound`, `OutstandingAccounting` | `NoQueryWaitBlocksPresent`, `NoFrameLatencyBlocksQuery`, `NoRingPressureBlocksPresentCompletion` | _(gap: no native spec — cross-axis non-blocking is observable only at the queue, not as a pure-data transform; tracked as `R-VERIF-2.9 / 2.10` evidence shortfall in `specs/verification/gap.md`)_ |
@@ -264,12 +266,12 @@ or reviewing a TLA+ module.
 | Bounded ready-prefix DCE (missing) | Already-ready FIFO prefix summaries shared without DCE source ownership (`R-VERIF-2.13`) | planned ready-prefix owner and FrameGraph summary consumer | consecutive bounded snapshot, independent DAG/completion, conservative stop | immediate no-proof release | missing summary native spec |
 | `SessionCapacityLease.tla` (`R-BACK-2.65` refinement) | Fixed encoded-work cap plus separate physical-residency vector and complete wrap-aware ordinary-successor reserve; an explicit full-residency Writing startup credits the unique successor once, eligible encoded heads may retire residency without reducing work, the deterministic work-cap candidate remains Ready, and exact predecessor submission is independent of GPU completion | `SessionCapacityLeaseState`, the typed `CpuReadyTape` first-acquisition snapshot, the queue-owned capacity-progress generation, and the command-queue session coordinator | `TypeOK`, `BoundedCapacity`, `LeaseOwnsCompleteHeadroom`, `WritingSuccessorIsUnique`, `CapCandidateStaysReady`, `NoPressureCreatedRelease`, `CapacityWakeMatchesProgress`, `SubmittedGroupsRespectCap`, `ResidencyIsSeparateFromWork` | `CapProgress`, `StartupCapacityWakeProgress`, `StartupDirectLeaseProgress`, `WritingSuccessorStartupProgress`; Writing startup reaches acquire/admit/retire/publish without completion or pressure release, while older submitted residency still waits for reclaim | `tests/native/backend/encode_session_admission_spec.cpp`, `tests/native/backend/cpu_ready_tape_spec.cpp`, `tests/native/backend/cpu_ready_session_join_spec.cpp`, `tests/native/backend/post_encode_payload_retirement_spec.cpp` |
 | Parallel/joint completion (missing) | Serial-order refinement for child encoders and Metal 4 groups (`R-VERIF-2.15`) | planned coordinator/partition executor | ordered child/segment join, completion after all represented work | bounded jobs eventually join or fail before side effects | missing fake-child executor spec |
-| `WireHandleGeneration.tla` | PE → unix cross-side generation-stamp gate on `D9CCommandChunkWireHandleEntryV2` | `src/d3d9/d3d9_pe_chunk_v2_builder.*`, `src/d3d9/device_c_chunk_v2_registry.cpp`, `src/dxmt9/dxmt9_resource_pool.hpp` (`HandleArena`, `kGenerationBits=24`), `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `StampedMatchesArenaOnAdmit`, `NoForwardInconsistency` | `EventuallyDecided`, `EventuallyRejectStale` | `tests/native/bridge/chunk_record_v2_registry_spec.cpp`, `tests/native/bridge/chunk_record_v2_validation_spec.cpp`, `tests/native/bridge/chunk_record_v2_layout_spec.cpp` |
-| `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_v2_registry_spec.cpp` (generation reuse/reject path); _(gap: no dedicated `HandleArena` slot-reuse spec)_ |
+| `WireObjectRegistry.tla` | PE → unix canonical stable identity and slot reuse | `src/d3d9/d3d9_pe_chunk_builder.*`, `src/d3d9/device_c_chunk_registry.*`, `src/d3d9/device_c_chunk_validate.*`, `include/dxmt9/device_c.h` | `TypeOK`, `NoZombieAccept`, `KindStable`, `NoReuseWithoutGenerationAdvance`, `NoGenerationWrap` | _(safety model; no fairness property)_ | `tests/native/bridge/chunk_record_registry_spec.cpp`, `tests/native/bridge/chunk_record_validation_spec.cpp` |
+| `PresentIdAba.tla` | (slot, generation) tagged-handle ABA-safety — `HandleArena` today, forward-looking `PresenterSlot` registry | `src/dxmt9/dxmt9_resource_pool.hpp` (`detail::HandleArena<R,K>`, `encode`, `find`, `releaseSlot`) | `TypeOK`, `StaleResolvesNull`, `NoCrossSlotAlias`, `GenerationOverflowDocumented`, `GenerationMonotone` | `EventualReclaim` | `tests/native/bridge/chunk_record_registry_spec.cpp` (generation reuse/reject path); _(gap: no dedicated `HandleArena` slot-reuse spec)_ |
 | `ResourceLifetime.tla` | Deferred GPU resource destruction; `lastUsedSeqId ≤ completedSeqId` before free | `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `NoUseAfterFree` | `DestroyPendingEventuallyFreed` | `tests/native/backend/resource_hazard_spec.cpp`, `tests/native/core/resource_format_boundary_spec.cpp` |
 | `BufferBackingVersioning.tla` | MANAGED CPU-shadow upload selects a safe concrete backing and draw packets pin it by sequence | `BufferRecord::renameRing`, `Pool::uploadBufferData`, `Pool::snapshotBufferBinding`, `Pool::markBufferSnapshotUse` | `TypeOK`, `ActiveBackingAllocated`, `LogicalWatermarkCoversEveryBacking`, `NoUploadOverwriteInFlight`, `NoBackingFreedInFlight`, `DestroyPendingCannotFreeEarly` | `DestroyPendingEventuallyFreed` | `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/core/core_device_com_spec.cpp`, `tests/native/bridge/pe_buffer_lock_order_spec.cpp` |
-| `ReplayScopedDrain.tla` | Core-buffer-identity commit-replay ledger shared by wrapper aliases, scoped/global terminal wakeups, failure-before-completion publication, pre-rename backing capture, and queued plus in-flight raw-entry residency | `ReplayDrainLedger`, `ReplayOffloadQueue`, the rename ring, and raw V2 admission/replay in `src/d3d9/device_c_*` / `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `ReplayedLeQueued`, `NoRejectedWatermark`, `ScopedReturnSafe`, `GlobalReturnSafe`, `StopUnblocksWithoutSuccess`, `QueuedChunkUsesCapturedGeneration`, `OneGenerationPerRawChunk`, `FailedNeverAcknowledged`, `RawEntryImmutable`, `RawResidencyMatchesOutstanding`, `InFlightRetainsResidency`, `TerminalPrecedesCompletion`, `FailureBlocksAdmission`, `InlineTraceEquivalent`, `UnrelatedResourceDoesNotBlock` | `ScopedWaitEventuallyReturnsOrStopsOrPoisons`, `GlobalWaitEventuallyReturnsOrStopsOrPoisons` | `tests/native/backend/replay_offload_queue_spec.cpp`, `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/backend/replay_byte_identity_spec.cpp`, `tests/native/bridge/pe_buffer_lock_order_spec.cpp`, `tests/native/core/core_device_com_spec.cpp` |
-| `EncoderLifecycle.tla` | `MTLCommandEncoder` mutual exclusion + exact hazard sets + Bloom-as-diagnostic | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers | `TypeOK`, `KindSwitchThroughIdle`, `RenderTargetConsistency`, `ExactHazardBlocksMerge`, `BloomNeverForcesSplit` | `ActiveEncoderEventuallyEnds` | `tests/native/backend/resource_hazard_v2_spec.cpp` |
+| `ReplayScopedDrain.tla` | Core-buffer-identity commit-replay ledger shared by wrapper aliases, scoped/global terminal wakeups, failure-before-completion publication, pre-rename backing capture, and queued plus in-flight raw-entry residency | `ReplayDrainLedger`, `ReplayOffloadQueue`, the rename ring, and raw canonical admission/replay in `src/d3d9/device_c_*` / `src/dxmt9/dxmt9_resource_pool.*` | `TypeOK`, `ReplayedLeQueued`, `NoRejectedWatermark`, `ScopedReturnSafe`, `GlobalReturnSafe`, `StopUnblocksWithoutSuccess`, `QueuedChunkUsesCapturedGeneration`, `OneGenerationPerRawChunk`, `FailedNeverAcknowledged`, `RawEntryImmutable`, `RawResidencyMatchesOutstanding`, `InFlightRetainsResidency`, `TerminalPrecedesCompletion`, `FailureBlocksAdmission`, `InlineTraceEquivalent`, `UnrelatedResourceDoesNotBlock` | `ScopedWaitEventuallyReturnsOrStopsOrPoisons`, `GlobalWaitEventuallyReturnsOrStopsOrPoisons` | `tests/native/backend/replay_offload_queue_spec.cpp`, `tests/native/backend/dynamic_rename_ring_spec.cpp`, `tests/native/backend/replay_byte_identity_spec.cpp`, `tests/native/bridge/pe_buffer_lock_order_spec.cpp`, `tests/native/core/core_device_com_spec.cpp` |
+| `EncoderLifecycle.tla` | `MTLCommandEncoder` mutual exclusion + exact hazard sets + Bloom-as-diagnostic | `src/dxmt9/dxmt9_draw_encoder.*`, blit/readback encoder helpers | `TypeOK`, `KindSwitchThroughIdle`, `RenderTargetConsistency`, `ExactHazardBlocksMerge`, `BloomNeverForcesSplit` | `ActiveEncoderEventuallyEnds` | `tests/native/backend/resource_hazard_spec.cpp` |
 | `QuerySeqId.tla` | D3D9 query seq-ID fence; `D3DGETDATA_FLUSH` deadlock freedom | `src/d3d9/core.cpp`, `src/d3d9/core_query.cpp` | `TypeOK`, `QueryResolutionSafety`, `SeqIdMonotone` | `QueriesEventuallyResolve`, `NoDeadlockOnFlushSpin` | `tests/conformance/d3d9/d3d9_queries.cpp`, `tests/native/core/core_device_lifecycle_spec.cpp` |
 
 ### 7.1 What the three new models close
@@ -287,15 +289,12 @@ prior pre-existing models could not see:
   only covers env-var resolution into an `AcquirePolicy` value; the
   state machine itself was previously unverified.
 
-- **`WireHandleGeneration.tla`** — formalises the cross-side
-  generation-stamp invariant on `D9CCommandChunkWireHandleEntry`.
-  Without it, a stale handle could survive PE-side recording and
-  alias onto a freshly-recycled arena slot at unix-side commit time
-  (a classic recorder/importer zombie race). The model proves
-  `NoZombieAccept` for stamped handles, `LegacyNoneAlwaysAccepts`
-  for opaque-pointer recorder paths (the documented soft exception),
-  and `NoForwardInconsistency` between the stamp and the live arena
-  generation at admit time.
+- **`WireObjectRegistry.tla`** — formalises the cross-side canonical stable-
+  identity invariant on `D9CCommandChunkWireHandleEntry`. Without it, a stale
+  handle could survive PE-side recording and alias onto a freshly recycled
+  registry slot at unix-side commit time. The model proves exact live
+  kind/object-ID/generation admission, generation advance before reuse, and
+  permanent slot retirement at the maximum full-`uint32_t` generation.
 
 - **`PresentIdAba.tla`** — the abstract slot/generation skeleton
   shared by `HandleArena` today and the planned `PresenterSlot`
@@ -321,7 +320,7 @@ deterministic native spec. They are tracked together in `specs/verification/gap.
   interleaving has no deterministic companion. The native
   `present_acquire_policy_spec` covers only policy selection.
 - `PresentIdAba.tla` — `HandleArena` slot reuse is only exercised end-to-end
-  through `chunk_record_v2_registry_spec`'s generation-reject path; a
+  through `chunk_record_registry_spec`'s generation-reject path; a
   focused `HandleArena` slot-recycle spec would tighten the binding.
 
 ---

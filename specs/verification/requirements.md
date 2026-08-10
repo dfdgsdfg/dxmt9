@@ -165,12 +165,12 @@ that hands out stable opaque ids across threads. Coverage is provided
 by `tla/PresentIdAba.tla`.
 
 **R-VERIF-3.5** The formal spec must prove the cross-side
-generation-stamp invariant on the PE → unix command-chunk bridge:
-a wire entry whose stamped generation differs from the live arena
-generation at admit time must be rejected before any record dispatch.
-The legacy NONE sentinel (opaque-pointer recorder path) is an
-intentional soft exception and must always be accepted. Coverage is
-provided by `tla/WireHandleGeneration.tla`.
+stable-identity invariant on the PE → unix command-chunk bridge:
+the device-local `WireObjectRegistry` must admit a wire entry only when its
+nonzero full-`uint32_t` generation and exact kind/object ID match the live slot,
+must reject stale generations and wrong kinds before any retain or record
+dispatch, and must retire a slot at `UINT32_MAX` instead of wrapping. Coverage
+is provided by `tla/WireObjectRegistry.tla`.
 
 **R-VERIF-3.6** The formal spec must prove that the
 `PresentDrawableToken` stash → wait → take → complete/fail handoff

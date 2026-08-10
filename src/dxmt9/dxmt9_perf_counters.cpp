@@ -301,15 +301,15 @@ void countCommandChunkWire(std::uint32_t version, std::uint64_t records,
                            std::uint64_t registryResolutions) {
   if (!enabled()) return;
   if (version == 2u) {
-    add(counters().commandChunkV2Chunks);
-    add(counters().commandChunkV2Records, records);
-    add(counters().commandChunkV2Bytes, bytes);
-    add(counters().commandChunkV2RegistryResolutions, registryResolutions);
+    add(counters().commandChunkChunks);
+    add(counters().commandChunkRecords, records);
+    add(counters().commandChunkBytes, bytes);
+    add(counters().commandChunkRegistryResolutions, registryResolutions);
   }
 }
 
-void countCommandChunkV2Reject() {
-  add(counters().commandChunkV2Rejects);
+void countCommandChunkReject() {
+  add(counters().commandChunkRejects);
 }
 
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {

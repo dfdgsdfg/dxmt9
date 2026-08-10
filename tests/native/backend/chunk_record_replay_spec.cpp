@@ -1,4 +1,4 @@
-#include "device_c_chunk_v2_replay.hpp"
+#include "device_c_chunk_replay.hpp"
 
 #include <array>
 #include <cstddef>
@@ -14,13 +14,13 @@
 
 namespace {
 
-using dxmt9::d3d9::NonDrawReplaySinkV2;
-using dxmt9::d3d9::ResolvedRecordV2View;
-using dxmt9::d3d9::SparseDrawCallV2;
-using dxmt9::d3d9::SparseReplaySinkV2;
-using dxmt9::d3d9::kCommandChunkV2DecodeFailure;
-using dxmt9::d3d9::replayNonDrawRecordV2;
-using dxmt9::d3d9::replaySparseRecordV2;
+using dxmt9::d3d9::NonDrawReplaySink;
+using dxmt9::d3d9::ResolvedRecordView;
+using dxmt9::d3d9::SparseDrawCall;
+using dxmt9::d3d9::SparseReplaySink;
+using dxmt9::d3d9::kCommandChunkDecodeFailure;
+using dxmt9::d3d9::replayNonDrawRecord;
+using dxmt9::d3d9::replaySparseRecord;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -47,13 +47,13 @@ std::vector<std::byte> bytesWithTail(const T& value,
   return bytes;
 }
 
-ResolvedRecordV2View makeRecord(std::uint32_t type,
+ResolvedRecordView makeRecord(std::uint32_t type,
                                 std::span<const std::byte> payload,
                                 std::span<void* const> objects = {},
                                 std::uint32_t firstHandle = 0u) {
-  return ResolvedRecordV2View{
-      .wire = dxmt9::d3d9::ImportedRecordV2View{
-          .header = D9CCommandChunkWireRecordHeaderV2{
+  return ResolvedRecordView{
+      .wire = dxmt9::d3d9::ImportedRecordView{
+          .header = D9CCommandChunkWireRecordHeader{
               .type = type,
               .flags = 0u,
               .payloadOffset = 0u,
@@ -91,17 +91,17 @@ SparseSectionInput sparseSection(std::uint16_t kind,
 struct SparseRecordFixture {
   std::uint32_t type = 0u;
   std::uint32_t firstHandle = 0u;
-  D9CCommandChunkWireDrawHeaderV2 draw{};
+  D9CCommandChunkWireDrawHeader draw{};
   std::vector<std::byte> payload;
   std::vector<void*> objects;
 
-  ResolvedRecordV2View view() const {
+  ResolvedRecordView view() const {
     const auto* sections =
-        reinterpret_cast<const D9CCommandChunkWireSectionDescV2*>(
+        reinterpret_cast<const D9CCommandChunkWireSectionDesc*>(
             payload.data() + draw.sectionTableOffset);
-    return ResolvedRecordV2View{
-        .wire = dxmt9::d3d9::ImportedRecordV2View{
-            .header = D9CCommandChunkWireRecordHeaderV2{
+    return ResolvedRecordView{
+        .wire = dxmt9::d3d9::ImportedRecordView{
+            .header = D9CCommandChunkWireRecordHeader{
                 .type = type,
                 .payloadSize = static_cast<std::uint32_t>(payload.size()),
                 .firstHandle = firstHandle,
@@ -109,7 +109,7 @@ struct SparseRecordFixture {
             },
             .payload = payload,
             .drawHeader = draw,
-            .sections = std::span<const D9CCommandChunkWireSectionDescV2>(
+            .sections = std::span<const D9CCommandChunkWireSectionDesc>(
                 sections, draw.sectionCount),
         },
         .objects = std::span<void* const>(objects.data(), objects.size()),
@@ -118,7 +118,7 @@ struct SparseRecordFixture {
 };
 
 SparseRecordFixture makeSparseRecord(
-    std::uint32_t type, D9CCommandChunkWireDrawHeaderV2 draw,
+    std::uint32_t type, D9CCommandChunkWireDrawHeader draw,
     std::span<const SparseSectionInput> sections,
     std::span<void* const> objects = {},
     std::uint32_t firstHandle = 0u) {
@@ -126,7 +126,7 @@ SparseRecordFixture makeSparseRecord(
   draw.sectionTableOffset = sizeof(draw);
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
       sizeof(draw) + sections.size() *
-                         sizeof(D9CCommandChunkWireSectionDescV2),
+                         sizeof(D9CCommandChunkWireSectionDesc),
       alignof(std::uint32_t)));
   SparseRecordFixture fixture{
       .type = type,
@@ -135,14 +135,14 @@ SparseRecordFixture makeSparseRecord(
       .payload = std::vector<std::byte>(draw.sectionPayloadOffset),
       .objects = std::vector<void*>(objects.begin(), objects.end()),
   };
-  std::vector<D9CCommandChunkWireSectionDescV2> descriptors;
+  std::vector<D9CCommandChunkWireSectionDesc> descriptors;
   descriptors.reserve(sections.size());
   for (const auto& section : sections) {
-    const auto* rule = dxmt9::d3d9::v2SectionRule(section.kind);
+    const auto* rule = dxmt9::d3d9::sectionRule(section.kind);
     check(rule != nullptr, "sparse replay fixture section is known");
     fixture.payload.resize(
         alignUp(fixture.payload.size(), rule->payloadAlignment));
-    descriptors.push_back(D9CCommandChunkWireSectionDescV2{
+    descriptors.push_back(D9CCommandChunkWireSectionDesc{
         .kind = section.kind,
         .elementSize = rule->elementSize,
         .count = section.count,
@@ -160,7 +160,7 @@ SparseRecordFixture makeSparseRecord(
   return fixture;
 }
 
-class RecordingSink final : public NonDrawReplaySinkV2 {
+class RecordingSink final : public NonDrawReplaySink {
  public:
   std::array<std::uint32_t, 30> calls{};
   std::uint32_t currentType = 0u;
@@ -177,7 +177,7 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t setConstants(
-      std::uint32_t type, const D9CCommandChunkWireSetConstV2& fixed,
+      std::uint32_t type, const D9CCommandChunkWireSetConst& fixed,
       std::span<const std::byte> registerBytes) override {
     start = fixed.startRegister;
     count = fixed.registerCount;
@@ -186,19 +186,19 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t clear(
-      const D9CCommandChunkWireClearV2&,
+      const D9CCommandChunkWireClear&,
       std::span<const D9CRect> rects) override {
     count = static_cast<std::uint32_t>(rects.size());
     return result(D9C_COMMAND_RECORD_CLEAR);
   }
 
   std::int32_t present(
-      const D9CCommandChunkWirePresentV2&) override {
+      const D9CCommandChunkWirePresent&) override {
     return result(D9C_COMMAND_RECORD_PRESENT);
   }
 
   std::int32_t stretchRect(
-      const D9CCommandChunkWireStretchRectV2&, void* src,
+      const D9CCommandChunkWireStretchRect&, void* src,
       void* dst) override {
     firstObject = src;
     secondObject = dst;
@@ -206,13 +206,13 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t colorFill(
-      const D9CCommandChunkWireColorFillV2&, void* surface) override {
+      const D9CCommandChunkWireColorFill&, void* surface) override {
     firstObject = surface;
     return result(D9C_COMMAND_RECORD_COLOR_FILL);
   }
 
   std::int32_t updateTexture(
-      const D9CCommandChunkWireUpdateTextureV2&, void* src,
+      const D9CCommandChunkWireUpdateTexture&, void* src,
       void* dst) override {
     firstObject = src;
     secondObject = dst;
@@ -220,7 +220,7 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t updateSurface(
-      const D9CCommandChunkWireUpdateSurfaceV2&, void* src,
+      const D9CCommandChunkWireUpdateSurface&, void* src,
       void* dst) override {
     firstObject = src;
     secondObject = dst;
@@ -228,13 +228,13 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t queryIssue(
-      const D9CCommandChunkWireQueryIssueV2&, void* query) override {
+      const D9CCommandChunkWireQueryIssue&, void* query) override {
     firstObject = query;
     return result(D9C_COMMAND_RECORD_QUERY_ISSUE);
   }
 
   std::int32_t readback(
-      const D9CCommandChunkWireReadbackV2&, void* src,
+      const D9CCommandChunkWireReadback&, void* src,
       void* dst) override {
     firstObject = src;
     secondObject = dst;
@@ -242,7 +242,7 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t reszDepthResolve(
-      const D9CCommandChunkWireReszDepthResolveV2&, void* msaaDepth,
+      const D9CCommandChunkWireReszDepthResolve&, void* msaaDepth,
       void* intzDest) override {
     firstObject = msaaDepth;
     secondObject = intzDest;
@@ -250,12 +250,12 @@ class RecordingSink final : public NonDrawReplaySinkV2 {
   }
 
   std::int32_t applyState(
-      const ResolvedRecordV2View&) override {
+      const ResolvedRecordView&) override {
     return result(D9C_COMMAND_RECORD_APPLY_STATE);
   }
 };
 
-class SparseRecordingSink final : public SparseReplaySinkV2 {
+class SparseRecordingSink final : public SparseReplaySink {
  public:
   std::vector<std::uint16_t> order;
   std::array<void*, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
@@ -272,7 +272,7 @@ class SparseRecordingSink final : public SparseReplaySinkV2 {
   std::size_t constantBytes = 0u;
   std::uint32_t applyCount = 0u;
   std::uint32_t drawCount = 0u;
-  SparseDrawCallV2 lastDraw{};
+  SparseDrawCall lastDraw{};
 
   std::int32_t note(std::uint16_t kind) {
     order.push_back(kind);
@@ -280,103 +280,103 @@ class SparseRecordingSink final : public SparseReplaySinkV2 {
   }
 
   std::int32_t setRenderStates(
-      std::span<const D9CCommandChunkWireRenderStateV2> values) override {
+      std::span<const D9CCommandChunkWireRenderState> values) override {
     if (!values.empty()) {
       renderStateValue = values.back().value;
     }
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE);
+    return note(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE);
   }
 
   std::int32_t setTexture(std::uint32_t slot, void* texture) override {
     textures[slot] = texture;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE);
+    return note(D9C_COMMAND_CHUNK_SECTION_TEXTURE);
   }
 
   std::int32_t setStream(
-      const D9CCommandChunkWireStreamBindingV2& value,
+      const D9CCommandChunkWireStreamBinding& value,
       void* buffer) override {
     streams[value.slot] = buffer;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_STREAM);
+    return note(D9C_COMMAND_CHUNK_SECTION_STREAM);
   }
 
   std::int32_t setShader(std::uint32_t stage, void* shader) override {
     shaders[stage] = shader;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_SHADER);
+    return note(D9C_COMMAND_CHUNK_SECTION_SHADER);
   }
 
   std::int32_t setVertexInput(
       std::uint32_t kind, std::uint32_t value,
       void* declaration) override {
-    if (kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF) {
+    if (kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
       fvf = value;
       vertexDeclaration = nullptr;
     } else {
       vertexDeclaration = declaration;
     }
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT);
+    return note(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT);
   }
 
   std::int32_t setIndexBuffer(void* buffer) override {
     indexBuffer = buffer;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER);
+    return note(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER);
   }
 
   std::int32_t setRenderTarget(
       std::uint32_t slot, void* surface) override {
     renderTargets[slot] = surface;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET);
+    return note(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET);
   }
 
   std::int32_t setDepthStencil(void* surface) override {
     depthStencil = surface;
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL);
+    return note(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL);
   }
 
   std::int32_t setViewport(const D9CViewport&) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT);
+    return note(D9C_COMMAND_CHUNK_SECTION_VIEWPORT);
   }
 
   std::int32_t setScissor(const D9CRect&) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR);
+    return note(D9C_COMMAND_CHUNK_SECTION_SCISSOR);
   }
 
   std::int32_t setMaterial(const D9CMaterial&) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL);
+    return note(D9C_COMMAND_CHUNK_SECTION_MATERIAL);
   }
 
   std::int32_t setClipPlane(
-      const D9CCommandChunkWireClipPlaneV2&) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE);
+      const D9CCommandChunkWireClipPlane&) override {
+    return note(D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE);
   }
 
   std::int32_t setTextureStageStates(
       std::span<const D9CDrawPacketTextureStageState>) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE);
+    return note(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE);
   }
 
   std::int32_t setSamplerStates(
       std::span<const D9CDrawPacketSamplerState>) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE);
+    return note(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE);
   }
 
   std::int32_t setTransforms(
       std::span<const D9CDrawPacketTransform>) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM);
+    return note(D9C_COMMAND_CHUNK_SECTION_TRANSFORM);
   }
 
   std::int32_t setLights(
-      std::span<const D9CCommandChunkWireLightV2>) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_LIGHT);
+      std::span<const D9CCommandChunkWireLight>) override {
+    return note(D9C_COMMAND_CHUNK_SECTION_LIGHT);
   }
 
   std::int32_t setLightEnables(
-      std::span<const D9CCommandChunkWireLightEnableV2>) override {
-    return note(D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE);
+      std::span<const D9CCommandChunkWireLightEnable>) override {
+    return note(D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE);
   }
 
   std::int32_t setConstants(
       std::uint16_t sectionKind,
-      const D9CCommandChunkWireConstantRangeV2& range,
+      const D9CCommandChunkWireConstantRange& range,
       std::span<const std::byte> registerBytes) override {
     constantKind = sectionKind;
     constantStart = range.startRegister;
@@ -389,7 +389,7 @@ class SparseRecordingSink final : public SparseReplaySinkV2 {
     return 71;
   }
 
-  std::int32_t draw(const SparseDrawCallV2& call) override {
+  std::int32_t draw(const SparseDrawCall& call) override {
     ++drawCount;
     lastDraw = call;
     return 73;
@@ -413,9 +413,9 @@ void testConstantReplayMatrix() {
                 type == D9C_COMMAND_RECORD_SET_PS_CONST_B
             ? std::span<const std::byte>(data).first(4u)
             : std::span<const std::byte>(data);
-    const D9CCommandChunkWireSetConstV2 fixed{3u, 1u};
+    const D9CCommandChunkWireSetConst fixed{3u, 1u};
     const auto payload = bytesWithTail(fixed, bytes);
-    const auto status = replayNonDrawRecordV2(
+    const auto status = replayNonDrawRecord(
         makeRecord(type, payload), sink);
     check(status == static_cast<std::int32_t>(1000u + type) &&
               sink.start == 3u && sink.count == 1u &&
@@ -427,19 +427,19 @@ void testConstantReplayMatrix() {
 void testOrderingAndResourceReplayMatrix() {
   RecordingSink sink;
   const std::array rects = {D9CRect{0, 0, 4, 4}, D9CRect{4, 4, 8, 8}};
-  D9CCommandChunkWireClearV2 clear{};
+  D9CCommandChunkWireClear clear{};
   clear.rectCount = static_cast<std::uint32_t>(rects.size());
   clear.rectOffset = sizeof(clear);
   const auto clearPayload = bytesWithTail(clear, std::as_bytes(std::span(rects)));
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_CLEAR, clearPayload), sink) ==
             1000 + D9C_COMMAND_RECORD_CLEAR &&
             sink.count == rects.size(),
         "Clear replay exposes bounded rect span");
 
-  const D9CCommandChunkWirePresentV2 present{};
+  const D9CCommandChunkWirePresent present{};
   const auto presentPayload = bytesOf(present);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_PRESENT, presentPayload), sink) ==
             1000 + D9C_COMMAND_RECORD_PRESENT,
         "Present replay preserves sink boundary result");
@@ -449,23 +449,23 @@ void testOrderingAndResourceReplayMatrix() {
   std::array<void*, 2> objects{&first, &second};
   constexpr std::uint32_t firstHandle = 9u;
 
-  const D9CCommandChunkWireStretchRectV2 stretch{
+  const D9CCommandChunkWireStretchRect stretch{
       .srcHandleIndex = firstHandle,
       .dstHandleIndex = firstHandle + 1u,
   };
   auto payload = bytesOf(stretch);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_STRETCH_RECT, payload, objects,
                        firstHandle),
             sink) == 1000 + D9C_COMMAND_RECORD_STRETCH_RECT &&
             sink.firstObject == &first && sink.secondObject == &second,
         "StretchRect absolute indices resolve through record slice");
 
-  const D9CCommandChunkWireColorFillV2 color{
+  const D9CCommandChunkWireColorFill color{
       .surfaceHandleIndex = firstHandle,
   };
   payload = bytesOf(color);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_COLOR_FILL, payload,
                        std::span<void* const>(objects).first(1u), firstHandle),
             sink) == 1000 + D9C_COMMAND_RECORD_COLOR_FILL &&
@@ -474,47 +474,47 @@ void testOrderingAndResourceReplayMatrix() {
 
   const auto replayTwo = [&](std::uint32_t type, const auto& fixed) {
     const auto fixedBytes = bytesOf(fixed);
-    const auto status = replayNonDrawRecordV2(
+    const auto status = replayNonDrawRecord(
         makeRecord(type, fixedBytes, objects, firstHandle), sink);
     check(status == static_cast<std::int32_t>(1000u + type) &&
               sink.firstObject == &first && sink.secondObject == &second,
           "two-handle non-draw replay resolves in source order");
   };
   replayTwo(D9C_COMMAND_RECORD_UPDATE_TEXTURE,
-            D9CCommandChunkWireUpdateTextureV2{firstHandle,
+            D9CCommandChunkWireUpdateTexture{firstHandle,
                                                 firstHandle + 1u});
   replayTwo(D9C_COMMAND_RECORD_UPDATE_SURFACE,
-            D9CCommandChunkWireUpdateSurfaceV2{
+            D9CCommandChunkWireUpdateSurface{
                 .srcHandleIndex = firstHandle,
                 .dstHandleIndex = firstHandle + 1u,
             });
   replayTwo(D9C_COMMAND_RECORD_READBACK,
-            D9CCommandChunkWireReadbackV2{firstHandle,
+            D9CCommandChunkWireReadback{firstHandle,
                                           firstHandle + 1u});
   replayTwo(D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
-            D9CCommandChunkWireReszDepthResolveV2{firstHandle,
+            D9CCommandChunkWireReszDepthResolve{firstHandle,
                                                    firstHandle + 1u});
 
-  const D9CCommandChunkWireQueryIssueV2 issue{firstHandle, 1u};
+  const D9CCommandChunkWireQueryIssue issue{firstHandle, 1u};
   payload = bytesOf(issue);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_QUERY_ISSUE, payload,
                        std::span<void* const>(objects).first(1u), firstHandle),
             sink) == 1000 + D9C_COMMAND_RECORD_QUERY_ISSUE &&
             sink.firstObject == &first,
         "Query::Issue resolves and preserves ordering");
 
-  D9CCommandChunkWireDrawHeaderV2 apply{};
+  D9CCommandChunkWireDrawHeader apply{};
   apply.sectionTableOffset = sizeof(apply);
   apply.sectionPayloadOffset = sizeof(apply);
   payload = bytesOf(apply);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_APPLY_STATE, payload), sink) ==
             1000 + D9C_COMMAND_RECORD_APPLY_STATE,
         "APPLY_STATE routes through the sparse-state replay sink");
 }
 
-void testSparseStateSectionReplayWithoutV1Packet() {
+void testSparseStateSectionReplayWithoutLegacyPacket() {
   constexpr std::uint32_t firstHandle = 10u;
   int textureObject = 1;
   int bufferObject = 2;
@@ -530,14 +530,14 @@ void testSparseStateSectionReplayWithoutV1Packet() {
   };
 
   const std::array renderStates = {
-      D9CCommandChunkWireRenderStateV2{.state = 7u, .value = 91u},
+      D9CCommandChunkWireRenderState{.state = 7u, .value = 91u},
   };
   const std::array textures = {
-      D9CCommandChunkWireTextureBindingV2{
+      D9CCommandChunkWireTextureBinding{
           .slot = 2u, .valid = 1u, .handleIndex = firstHandle},
   };
   const std::array streams = {
-      D9CCommandChunkWireStreamBindingV2{
+      D9CCommandChunkWireStreamBinding{
           .slot = 1u,
           .valid = 1u,
           .handleIndex = firstHandle + 1u,
@@ -547,36 +547,36 @@ void testSparseStateSectionReplayWithoutV1Packet() {
       },
   };
   const std::array shaders = {
-      D9CCommandChunkWireShaderBindingV2{
-          .stage = D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX,
+      D9CCommandChunkWireShaderBinding{
+          .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
           .valid = 1u,
           .handleIndex = firstHandle + 2u,
       },
   };
   const std::array vertexInputs = {
-      D9CCommandChunkWireVertexInputV2{
+      D9CCommandChunkWireVertexInput{
           .valid = 1u,
-          .kind = D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION,
+          .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION,
           .handleIndex = firstHandle + 3u,
       },
   };
   const std::array indexBuffers = {
-      D9CCommandChunkWireIndexBindingV2{
+      D9CCommandChunkWireIndexBinding{
           .valid = 1u,
           .handleIndex = firstHandle + 1u,
       },
   };
   const std::array renderTargets = {
-      D9CCommandChunkWireRenderTargetBindingV2{
+      D9CCommandChunkWireRenderTargetBinding{
           .slot = 0u,
           .valid = 1u,
           .handleIndex = firstHandle + 4u,
       },
   };
   const std::array depthStencils = {
-      D9CCommandChunkWireDepthStencilBindingV2{
+      D9CCommandChunkWireDepthStencilBinding{
           .valid = 1u,
-          .handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
       },
   };
   const std::array viewports = {
@@ -585,7 +585,7 @@ void testSparseStateSectionReplayWithoutV1Packet() {
   const std::array scissors = {D9CRect{0, 0, 640, 480}};
   const std::array materials = {D9CMaterial{}};
   const std::array clipPlanes = {
-      D9CCommandChunkWireClipPlaneV2{.slot = 0u,
+      D9CCommandChunkWireClipPlane{.slot = 0u,
                                      .values = {0.0f, 1.0f, 0.0f, 0.0f}},
   };
   const std::array textureStageStates = {
@@ -595,75 +595,75 @@ void testSparseStateSectionReplayWithoutV1Packet() {
       D9CDrawPacketSamplerState{.sampler = 0u, .type = 1u, .value = 2u},
   };
   const std::array transforms = {D9CDrawPacketTransform{.state = 2u}};
-  const std::array lights = {D9CCommandChunkWireLightV2{.slot = 0u}};
+  const std::array lights = {D9CCommandChunkWireLight{.slot = 0u}};
   const std::array lightEnables = {
-      D9CCommandChunkWireLightEnableV2{.slot = 0u, .enabled = 1u},
+      D9CCommandChunkWireLightEnable{.slot = 0u, .enabled = 1u},
   };
-  D9CCommandChunkWireConstantRangeV2 constantRange{3u, 1u};
+  D9CCommandChunkWireConstantRange constantRange{3u, 1u};
   auto constantBytes = bytesOf(constantRange);
   constantBytes.resize(sizeof(constantRange) + 16u, std::byte{0x2a});
 
   std::vector<SparseSectionInput> sections;
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE,
-      std::span<const D9CCommandChunkWireRenderStateV2>(renderStates)));
+      D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+      std::span<const D9CCommandChunkWireRenderState>(renderStates)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
-      std::span<const D9CCommandChunkWireTextureBindingV2>(textures)));
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+      std::span<const D9CCommandChunkWireTextureBinding>(textures)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
-      std::span<const D9CCommandChunkWireStreamBindingV2>(streams)));
+      D9C_COMMAND_CHUNK_SECTION_STREAM,
+      std::span<const D9CCommandChunkWireStreamBinding>(streams)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_SHADER,
-      std::span<const D9CCommandChunkWireShaderBindingV2>(shaders)));
+      D9C_COMMAND_CHUNK_SECTION_SHADER,
+      std::span<const D9CCommandChunkWireShaderBinding>(shaders)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT,
-      std::span<const D9CCommandChunkWireVertexInputV2>(vertexInputs)));
+      D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
+      std::span<const D9CCommandChunkWireVertexInput>(vertexInputs)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER,
-      std::span<const D9CCommandChunkWireIndexBindingV2>(indexBuffers)));
+      D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER,
+      std::span<const D9CCommandChunkWireIndexBinding>(indexBuffers)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET,
-      std::span<const D9CCommandChunkWireRenderTargetBindingV2>(
+      D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+      std::span<const D9CCommandChunkWireRenderTargetBinding>(
           renderTargets)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL,
-      std::span<const D9CCommandChunkWireDepthStencilBindingV2>(
+      D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
+      std::span<const D9CCommandChunkWireDepthStencilBinding>(
           depthStencils)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT,
+      D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
       std::span<const D9CViewport>(viewports)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR,
+      D9C_COMMAND_CHUNK_SECTION_SCISSOR,
       std::span<const D9CRect>(scissors)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL,
+      D9C_COMMAND_CHUNK_SECTION_MATERIAL,
       std::span<const D9CMaterial>(materials)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE,
-      std::span<const D9CCommandChunkWireClipPlaneV2>(clipPlanes)));
+      D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
+      std::span<const D9CCommandChunkWireClipPlane>(clipPlanes)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE,
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
       std::span<const D9CDrawPacketTextureStageState>(textureStageStates)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE,
+      D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
       std::span<const D9CDrawPacketSamplerState>(samplerStates)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM,
+      D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
       std::span<const D9CDrawPacketTransform>(transforms)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_LIGHT,
-      std::span<const D9CCommandChunkWireLightV2>(lights)));
+      D9C_COMMAND_CHUNK_SECTION_LIGHT,
+      std::span<const D9CCommandChunkWireLight>(lights)));
   sections.push_back(sparseSection(
-      D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE,
-      std::span<const D9CCommandChunkWireLightEnableV2>(lightEnables)));
+      D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
+      std::span<const D9CCommandChunkWireLightEnable>(lightEnables)));
   sections.push_back(SparseSectionInput{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F,
+      .kind = D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
       .count = 1u,
       .bytes = constantBytes,
   });
 
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .startVertex = 6u,
       .primitiveCount = 2u,
@@ -672,7 +672,7 @@ void testSparseStateSectionReplayWithoutV1Packet() {
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, sections, objects,
       firstHandle);
   SparseRecordingSink sink;
-  check(replaySparseRecordV2(fixture.view(), sink) == 73 &&
+  check(replaySparseRecord(fixture.view(), sink) == 73 &&
             sink.drawCount == 1u && sink.renderStateValue == 91u &&
             sink.textures[2] == &textureObject &&
             sink.streams[1] == &bufferObject &&
@@ -681,9 +681,9 @@ void testSparseStateSectionReplayWithoutV1Packet() {
             sink.indexBuffer == &bufferObject &&
             sink.renderTargets[0] == &surfaceObject &&
             sink.depthStencil == nullptr,
-        "sparse importer resolves canonical state operations without a V1 packet");
+        "sparse importer resolves canonical state operations without a legacy packet");
   check(std::is_sorted(sink.order.begin(), sink.order.end()) &&
-            sink.constantKind == D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F &&
+            sink.constantKind == D9C_COMMAND_CHUNK_SECTION_VS_CONST_F &&
             sink.constantStart == 3u && sink.constantBytes == 16u &&
             sink.lastDraw.param.primitiveType ==
                 dxmt9::core::PrimitiveType::TriangleList &&
@@ -694,7 +694,7 @@ void testSparseStateSectionReplayWithoutV1Packet() {
 
 void testAllDrawFormsAndSpanBackedUpPayloads() {
   SparseRecordingSink sink;
-  D9CCommandChunkWireDrawHeaderV2 indexed{
+  D9CCommandChunkWireDrawHeader indexed{
       .primitiveType = 5u,
       .baseVertex = -2,
       .numVertices = 8u,
@@ -703,7 +703,7 @@ void testAllDrawFormsAndSpanBackedUpPayloads() {
   };
   const auto indexedFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, indexed, {});
-  check(replaySparseRecordV2(indexedFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(indexedFixture.view(), sink) == 73 &&
             sink.lastDraw.param.indexed &&
             sink.lastDraw.param.baseVertexIndex == -2 &&
             sink.lastDraw.param.startIndex == 4u,
@@ -711,17 +711,17 @@ void testAllDrawFormsAndSpanBackedUpPayloads() {
 
   const std::array<std::byte, 12> vertices{};
   const std::array directUpSections = {
-      sparseSection(D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+      sparseSection(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
                     std::span<const std::byte>(vertices)),
   };
-  D9CCommandChunkWireDrawHeaderV2 directUp{
+  D9CCommandChunkWireDrawHeader directUp{
       .primitiveType = 4u,
       .primitiveCount = 1u,
       .stride = 4u,
   };
   const auto directUpFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP, directUp, directUpSections);
-  check(replaySparseRecordV2(directUpFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(directUpFixture.view(), sink) == 73 &&
             !sink.lastDraw.param.indexed &&
             sink.lastDraw.payload.userVertexData.size() == vertices.size() &&
             sink.lastDraw.payload.userIndexData.empty(),
@@ -729,12 +729,12 @@ void testAllDrawFormsAndSpanBackedUpPayloads() {
 
   const std::array<std::byte, 6> indices{};
   const std::array indexedUpSections = {
-      sparseSection(D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA,
+      sparseSection(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
                     std::span<const std::byte>(indices)),
-      sparseSection(D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+      sparseSection(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
                     std::span<const std::byte>(vertices)),
   };
-  D9CCommandChunkWireDrawHeaderV2 indexedUp{
+  D9CCommandChunkWireDrawHeader indexedUp{
       .primitiveType = 4u,
       .numVertices = 3u,
       .primitiveCount = 1u,
@@ -744,7 +744,7 @@ void testAllDrawFormsAndSpanBackedUpPayloads() {
   const auto indexedUpFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP, indexedUp,
       indexedUpSections);
-  check(replaySparseRecordV2(indexedUpFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(indexedUpFixture.view(), sink) == 73 &&
             sink.lastDraw.param.indexed &&
             sink.lastDraw.param.indexType == dxmt9::core::IndexType::UInt16 &&
             sink.lastDraw.payload.userIndexData.size() == indices.size() &&
@@ -752,16 +752,16 @@ void testAllDrawFormsAndSpanBackedUpPayloads() {
         "indexed-UP preserves ordered index and vertex payload spans");
 
   const std::array applyState = {
-      D9CCommandChunkWireRenderStateV2{.state = 1u, .value = 44u},
+      D9CCommandChunkWireRenderState{.state = 1u, .value = 44u},
   };
   const std::array applySections = {
-      sparseSection(D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE,
-                    std::span<const D9CCommandChunkWireRenderStateV2>(
+      sparseSection(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+                    std::span<const D9CCommandChunkWireRenderState>(
                         applyState)),
   };
   const auto applyFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_APPLY_STATE, {}, applySections);
-  check(replaySparseRecordV2(applyFixture.view(), sink) == 71 &&
+  check(replaySparseRecord(applyFixture.view(), sink) == 71 &&
             sink.applyCount == 1u && sink.renderStateValue == 44u &&
             sink.drawCount == 3u,
         "APPLY_STATE uses identical sparse state operations without drawing");
@@ -772,14 +772,14 @@ void testSparseCarryUnbindFullSnapshotAndPreflight() {
   int textureObject = 1;
   std::array<void*, 1> object{&textureObject};
   const std::array bind = {
-      D9CCommandChunkWireTextureBindingV2{
+      D9CCommandChunkWireTextureBinding{
           .slot = 0u, .valid = 1u, .handleIndex = 0u},
   };
   const std::array bindSection = {
-      sparseSection(D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
-                    std::span<const D9CCommandChunkWireTextureBindingV2>(bind)),
+      sparseSection(D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+                    std::span<const D9CCommandChunkWireTextureBinding>(bind)),
   };
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
   };
@@ -787,92 +787,92 @@ void testSparseCarryUnbindFullSnapshotAndPreflight() {
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, bindSection, object);
   const auto emptyFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, {});
-  check(replaySparseRecordV2(bindFixture.view(), sink) == 73 &&
-            replaySparseRecordV2(emptyFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(bindFixture.view(), sink) == 73 &&
+            replaySparseRecord(emptyFixture.view(), sink) == 73 &&
             sink.textures[0] == &textureObject,
         "an absent section carries canonical state across records");
 
   const std::array unbind = {
-      D9CCommandChunkWireTextureBindingV2{
+      D9CCommandChunkWireTextureBinding{
           .slot = 0u,
           .valid = 1u,
-          .handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
       },
   };
   const std::array unbindSection = {
       sparseSection(
-          D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
-          std::span<const D9CCommandChunkWireTextureBindingV2>(unbind)),
+          D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+          std::span<const D9CCommandChunkWireTextureBinding>(unbind)),
   };
   const auto unbindFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, unbindSection);
-  check(replaySparseRecordV2(unbindFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(unbindFixture.view(), sink) == 73 &&
             sink.textures[0] == nullptr,
         "valid plus null index performs an explicit unbind");
 
-  std::array<D9CCommandChunkWireTextureBindingV2,
+  std::array<D9CCommandChunkWireTextureBinding,
              D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
     textures[slot].slot = slot;
     textures[slot].valid = 1u;
-    textures[slot].handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    textures[slot].handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     sink.textures[slot] = &textureObject;
   }
-  std::array<D9CCommandChunkWireStreamBindingV2,
+  std::array<D9CCommandChunkWireStreamBinding,
              D9C_DRAW_PACKET_MAX_STREAMS>
       streams{};
   for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
     streams[slot].slot = slot;
     streams[slot].valid = 1u;
-    streams[slot].handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    streams[slot].handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     sink.streams[slot] = &textureObject;
   }
   const std::array fullSections = {
       sparseSection(
-          D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
-          std::span<const D9CCommandChunkWireTextureBindingV2>(textures)),
+          D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+          std::span<const D9CCommandChunkWireTextureBinding>(textures)),
       sparseSection(
-          D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
-          std::span<const D9CCommandChunkWireStreamBindingV2>(streams)),
+          D9C_COMMAND_CHUNK_SECTION_STREAM,
+          std::span<const D9CCommandChunkWireStreamBinding>(streams)),
   };
-  draw.flags = D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT;
+  draw.flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   const auto fullFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, fullSections);
-  check(replaySparseRecordV2(fullFixture.view(), sink) == 73 &&
+  check(replaySparseRecord(fullFixture.view(), sink) == 73 &&
             std::all_of(sink.textures.begin(), sink.textures.end(),
                         [](const void* value) { return value == nullptr; }) &&
             std::all_of(sink.streams.begin(), sink.streams.end(),
                         [](const void* value) { return value == nullptr; }) &&
             sink.lastDraw.flags ==
-                D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT,
+                D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
         "full snapshot replays every null texture and stream slot");
 
   std::array<void*, 1> unresolved{nullptr};
   const auto unresolvedFixture = makeSparseRecord(
       D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, bindSection, unresolved);
   SparseRecordingSink untouched;
-  check(replaySparseRecordV2(unresolvedFixture.view(), untouched) ==
-            kCommandChunkV2DecodeFailure &&
+  check(replaySparseRecord(unresolvedFixture.view(), untouched) ==
+            kCommandChunkDecodeFailure &&
             untouched.order.empty() && untouched.drawCount == 0u,
         "all registry objects resolve before the first state mutation");
 }
 
 void testRejectsUnresolvedAndDrawRecords() {
   RecordingSink sink;
-  const D9CCommandChunkWireUpdateTextureV2 update{0u, 1u};
+  const D9CCommandChunkWireUpdateTexture update{0u, 1u};
   const auto payload = bytesOf(update);
   std::array<void*, 2> unresolved{reinterpret_cast<void*>(1u), nullptr};
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE, payload, unresolved),
-            sink) == kCommandChunkV2DecodeFailure,
+            sink) == kCommandChunkDecodeFailure,
         "unresolved registry object rejects before sink entry");
 
-  D9CCommandChunkWireDrawHeaderV2 draw{};
+  D9CCommandChunkWireDrawHeader draw{};
   const auto drawPayload = bytesOf(draw);
-  check(replayNonDrawRecordV2(
+  check(replayNonDrawRecord(
             makeRecord(D9C_COMMAND_RECORD_DRAW_PRIMITIVE, drawPayload), sink) ==
-            kCommandChunkV2DecodeFailure,
+            kCommandChunkDecodeFailure,
         "draw opcode cannot enter non-draw replay path");
 }
 
@@ -882,15 +882,15 @@ int main() {
   try {
     testConstantReplayMatrix();
     testOrderingAndResourceReplayMatrix();
-    testSparseStateSectionReplayWithoutV1Packet();
+    testSparseStateSectionReplayWithoutLegacyPacket();
     testAllDrawFormsAndSpanBackedUpPayloads();
     testSparseCarryUnbindFullSnapshotAndPreflight();
     testRejectsUnresolvedAndDrawRecords();
   } catch (const TestFailure& error) {
-    std::cerr << "chunk_record_v2_replay_spec failed: " << error.what()
+    std::cerr << "chunk_record_replay_spec failed: " << error.what()
               << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "chunk_record_v2_replay_spec passed\n";
+  std::cout << "chunk_record_replay_spec passed\n";
   return EXIT_SUCCESS;
 }

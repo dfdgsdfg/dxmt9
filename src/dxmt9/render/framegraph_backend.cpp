@@ -716,7 +716,7 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
       std::call_once(warning, [] {
         util::logf(util::LogLevel::Warn, "dxmt9-renderer",
                    "framegraph replay plan was incomplete; falling back to "
-                   "source-order v2 replay");
+                   "source-order canonical replay");
       });
     }
     recordSourceLocalReturnOutcome(

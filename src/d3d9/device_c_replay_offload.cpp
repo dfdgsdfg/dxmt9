@@ -231,9 +231,9 @@ void noteWorkerIdleWait(std::uint64_t nanoseconds) {
   dxmt9::perf::countOffloadWorkerIdleWaitNs(nanoseconds);
 }
 
-bool prepareV2OffloadChunk(
+bool prepareOffloadChunk(
     std::span<const std::byte> blob,
-    const V2ChunkEnvelope& envelope,
+    const CommandChunkEnvelope& envelope,
     const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain,
     RawCommandChunk& out) noexcept {
@@ -255,11 +255,11 @@ bool prepareV2OffloadChunk(
     return false;
   }
 
-  ImportedChunkV2View view;
+  ImportedChunkView view;
   const auto ownedBytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(candidate.recordBlob.data()),
       candidate.recordBlob.size());
-  if (!validateCommandChunkV2(ownedBytes, envelope, &view).valid() ||
+  if (!validateCommandChunk(ownedBytes, envelope, &view).valid() ||
       !registry.resolveAndRetain(view.handles, candidate.resolvedObjects,
                                 retain)) {
     return false;
@@ -271,7 +271,7 @@ bool prepareV2OffloadChunk(
         .ptr = candidate.resolvedObjects[i],
     };
   }
-  candidate.wireVersion = D9C_COMMAND_CHUNK_VERSION_V2;
+  candidate.wireVersion = D9C_COMMAND_CHUNK_VERSION;
   candidate.recordCount = envelope.recordCount;
   candidate.recordBytes = static_cast<std::uint32_t>(blob.size());
   candidate.handleCount = envelope.handleCount;

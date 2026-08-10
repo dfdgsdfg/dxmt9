@@ -1,8 +1,8 @@
-// CPU-only V2 chunk-build microbenchmark for boundary B1.
+// CPU-only canonical chunk-build microbenchmark for boundary B1.
 //
 // Measures a representative sparse APPLY_STATE, two constant uploads, eight
-// draws, V2 table/arena sealing, and unix-side V2 preflight validation.
-#include "device_c_chunk_v2_validate.hpp"
+// draws, canonical table/arena sealing, and unix-side canonical preflight validation.
+#include "device_c_chunk_validate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,8 +17,8 @@
 
 namespace {
 
-using dxmt9::d3d9::V2ChunkEnvelope;
-using dxmt9::d3d9::validateCommandChunkV2;
+using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::validateCommandChunk;
 
 constexpr std::size_t kInnerIterations = 1000u;
 constexpr std::size_t kOuterBatches = 100u;
@@ -32,8 +32,8 @@ std::size_t alignUp(std::size_t value, std::size_t alignment) {
 }
 
 struct ChunkScratch {
-  std::vector<D9CCommandChunkWireRecordHeaderV2> records;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
   std::vector<std::byte> payload;
   std::vector<std::byte> blob;
 
@@ -74,19 +74,19 @@ void appendApplyState(ChunkScratch& scratch) {
   const auto payloadStart = alignUp(scratch.payload.size(), 8u);
   scratch.payload.resize(payloadStart);
 
-  std::array<D9CCommandChunkWireRenderStateV2, 16> renderStates{};
+  std::array<D9CCommandChunkWireRenderState, 16> renderStates{};
   for (std::uint32_t i = 0u; i < renderStates.size(); ++i) {
-    renderStates[i] = D9CCommandChunkWireRenderStateV2{7u + i, 1u + i};
+    renderStates[i] = D9CCommandChunkWireRenderState{7u + i, 1u + i};
   }
 
-  std::array<D9CCommandChunkWireTextureBindingV2, 4> textures{};
+  std::array<D9CCommandChunkWireTextureBinding, 4> textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
-    textures[slot] = D9CCommandChunkWireTextureBindingV2{
+    textures[slot] = D9CCommandChunkWireTextureBinding{
         .slot = slot,
         .valid = 1u,
         .handleIndex = slot,
     };
-    scratch.handles.push_back(D9CCommandChunkWireHandleEntryV2{
+    scratch.handles.push_back(D9CCommandChunkWireHandleEntry{
         .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
         .generation = 1u,
         .objectId = 0x10000ull + slot,
@@ -107,16 +107,16 @@ void appendApplyState(ChunkScratch& scratch) {
     }
   }
 
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .sectionCount = 4u,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
       .sectionPayloadOffset =
-          sizeof(D9CCommandChunkWireDrawHeaderV2) +
-          4u * sizeof(D9CCommandChunkWireSectionDescV2),
+          sizeof(D9CCommandChunkWireDrawHeader) +
+          4u * sizeof(D9CCommandChunkWireSectionDesc),
   };
   const auto drawOffset = appendValues(
       scratch.payload, &draw, 1u, payloadStart);
-  std::array<D9CCommandChunkWireSectionDescV2, 4> sections{};
+  std::array<D9CCommandChunkWireSectionDesc, 4> sections{};
   const auto sectionTableOffset = appendValues(
       scratch.payload, sections.data(), sections.size(), payloadStart);
 
@@ -125,7 +125,7 @@ void appendApplyState(ChunkScratch& scratch) {
     using Value = typename std::decay_t<decltype(values)>::value_type;
     const auto offset = appendValues(
         scratch.payload, values.data(), values.size(), payloadStart);
-    sections[index] = D9CCommandChunkWireSectionDescV2{
+    sections[index] = D9CCommandChunkWireSectionDesc{
         .kind = kind,
         .elementSize = static_cast<std::uint16_t>(sizeof(Value)),
         .count = static_cast<std::uint32_t>(values.size()),
@@ -134,19 +134,19 @@ void appendApplyState(ChunkScratch& scratch) {
             static_cast<std::uint32_t>(sizeof(Value) * values.size()),
     };
   };
-  appendSection(0u, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE,
+  appendSection(0u, D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
                 renderStates);
-  appendSection(1u, D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE, textures);
-  appendSection(2u, D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE,
+  appendSection(1u, D9C_COMMAND_CHUNK_SECTION_TEXTURE, textures);
+  appendSection(2u, D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
                 samplerStates);
-  appendSection(3u, D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM, transforms);
+  appendSection(3u, D9C_COMMAND_CHUNK_SECTION_TRANSFORM, transforms);
   overwriteValue(scratch.payload, payloadStart + drawOffset, draw);
   std::memcpy(scratch.payload.data() + payloadStart + sectionTableOffset,
               sections.data(), sizeof(sections));
 
-  scratch.records.push_back(D9CCommandChunkWireRecordHeaderV2{
+  scratch.records.push_back(D9CCommandChunkWireRecordHeader{
       .type = D9C_COMMAND_RECORD_APPLY_STATE,
-      .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
       .payloadOffset = static_cast<std::uint32_t>(payloadStart),
       .payloadSize =
           static_cast<std::uint32_t>(scratch.payload.size() - payloadStart),
@@ -159,16 +159,16 @@ void appendConstant(ChunkScratch& scratch, std::uint32_t type,
                     std::uint32_t count) {
   const auto payloadStart = alignUp(scratch.payload.size(), 8u);
   scratch.payload.resize(payloadStart);
-  const D9CCommandChunkWireSetConstV2 fixed{
+  const D9CCommandChunkWireSetConst fixed{
       .startRegister = 0u,
       .registerCount = count,
   };
   appendValues(scratch.payload, &fixed, 1u, payloadStart);
   std::array<std::byte, 128> values{};
   appendValues(scratch.payload, values.data(), count * 16u, payloadStart);
-  scratch.records.push_back(D9CCommandChunkWireRecordHeaderV2{
+  scratch.records.push_back(D9CCommandChunkWireRecordHeader{
       .type = type,
-      .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
       .payloadOffset = static_cast<std::uint32_t>(payloadStart),
       .payloadSize =
           static_cast<std::uint32_t>(scratch.payload.size() - payloadStart),
@@ -179,17 +179,17 @@ void appendConstant(ChunkScratch& scratch, std::uint32_t type,
 void appendDraw(ChunkScratch& scratch, std::uint32_t startVertex) {
   const auto payloadStart = alignUp(scratch.payload.size(), 8u);
   scratch.payload.resize(payloadStart);
-  const D9CCommandChunkWireDrawHeaderV2 draw{
+  const D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .startVertex = startVertex,
       .primitiveCount = 1u,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
-      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
   appendValues(scratch.payload, &draw, 1u, payloadStart);
-  scratch.records.push_back(D9CCommandChunkWireRecordHeaderV2{
+  scratch.records.push_back(D9CCommandChunkWireRecordHeader{
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-      .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
       .payloadOffset = static_cast<std::uint32_t>(payloadStart),
       .payloadSize = sizeof(draw),
       .firstHandle = static_cast<std::uint32_t>(scratch.handles.size()),
@@ -208,21 +208,21 @@ void buildChunk(ChunkScratch& scratch) {
 
 bool sealAndValidate(ChunkScratch& scratch) {
   const auto recordTableOffset =
-      static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireHeaderV2));
+      static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireHeader));
   const auto handleTableOffset = recordTableOffset +
       static_cast<std::uint32_t>(
           scratch.records.size() *
-          sizeof(D9CCommandChunkWireRecordHeaderV2));
+          sizeof(D9CCommandChunkWireRecordHeader));
   const auto payloadArenaOffset = static_cast<std::uint32_t>(
       alignUp(handleTableOffset +
                   scratch.handles.size() *
-                      sizeof(D9CCommandChunkWireHandleEntryV2),
+                      sizeof(D9CCommandChunkWireHandleEntry),
               8u));
-  const D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = recordTableOffset,
       .recordCount = static_cast<std::uint32_t>(scratch.records.size()),
       .handleTableOffset = handleTableOffset,
@@ -240,10 +240,10 @@ bool sealAndValidate(ChunkScratch& scratch) {
               scratch.handles.size() * sizeof(scratch.handles[0]));
   std::memcpy(scratch.blob.data() + payloadArenaOffset,
               scratch.payload.data(), scratch.payload.size());
-  return validateCommandChunkV2(
+  return validateCommandChunk(
              scratch.blob,
-             V2ChunkEnvelope{
-                 .version = D9C_COMMAND_CHUNK_VERSION_V2,
+             CommandChunkEnvelope{
+                 .version = D9C_COMMAND_CHUNK_VERSION,
                  .recordCount =
                      static_cast<std::uint32_t>(scratch.records.size()),
                  .handleCount =
@@ -269,7 +269,7 @@ void runMicroBench() {
       const bool valid = sealAndValidate(scratch);
       const auto end = std::chrono::steady_clock::now();
       if (!valid) {
-        std::cerr << "chunk_record_micro_spec: V2 validation failed\n";
+        std::cerr << "chunk_record_micro_spec: canonical validation failed\n";
         std::exit(EXIT_FAILURE);
       }
       samples.push_back(static_cast<std::uint64_t>(
@@ -294,7 +294,7 @@ void runMicroBench() {
             << " p95_ns=" << percentile(95u)
             << " p99_ns=" << percentile(99u) << '\n';
   if (mean >= kBuildBudgetNs) {
-    std::cerr << "chunk_record_micro_spec: mean V2 build cost "
+    std::cerr << "chunk_record_micro_spec: mean canonical build cost "
               << mean << " ns exceeds budget\n";
     std::exit(EXIT_FAILURE);
   }

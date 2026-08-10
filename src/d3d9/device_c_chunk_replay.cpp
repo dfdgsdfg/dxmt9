@@ -6,7 +6,7 @@
 #include "device_c_provider.hpp"
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_ordered_control.hpp"
-#include "device_c_chunk_v2_replay.hpp"
+#include "device_c_chunk_replay.hpp"
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_offload.hpp"
 #include "util/unixcall_marshal.hpp"
@@ -76,7 +76,7 @@ extern "C" int32_t dxmt9c_device_set_fvf(D9CDevice* d, uint32_t fvf);
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags);
 
 // Native production-routing observer. It never replaces dispatch: tests may
-// observe the exact ordered-control phases while replayResolvedV2Chunk still
+// observe the exact ordered-control phases while replayResolvedChunk still
 // executes the queue release API and the real record sink. Production leaves
 // the callback null, so non-control records pay no cost.
 using Dxmt9OrderedControlReplayObserver = void (*)(
@@ -355,12 +355,12 @@ int32_t commitChunkFail(const char* reason,
 // commitChunkDrawDeltaMask below them. All of it served
 // dxmt9c_device_draw_primitive_packet / _chunk, the two direct fat-packet bridge
 // ops, which had no PE-side caller; the chunk path has rejected any wire version
-// other than V2 since long before this deletion. Task 10 stage D removed the
+// other than canonical since long before this deletion. Task 10 stage D removed the
 // whole component.
 
 }  // namespace
 
-// V2 admission retains every resolved wrapper before inline or offloaded
+// canonical admission retains every resolved wrapper before inline or offloaded
 // replay. Both replay completion and queue teardown release the same list.
 void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
   for (const auto& entry : chunk.retainedWrappers) {
@@ -392,7 +392,7 @@ void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
 
 namespace {
 
-void retainV2Wrapper(std::uint32_t kind, void* object) noexcept {
+void retainWrapper(std::uint32_t kind, void* object) noexcept {
   if (!object) return;
   switch (kind) {
   case D9C_CHUNK_HANDLE_KIND_TEXTURE:
@@ -418,10 +418,10 @@ void retainV2Wrapper(std::uint32_t kind, void* object) noexcept {
   }
 }
 
-class DeviceReplaySinkV2 final : public dxmt9::d3d9::NonDrawReplaySinkV2,
-                                 public dxmt9::d3d9::SparseReplaySinkV2 {
+class DeviceReplaySink final : public dxmt9::d3d9::NonDrawReplaySink,
+                                 public dxmt9::d3d9::SparseReplaySink {
 public:
-  DeviceReplaySinkV2(
+  DeviceReplaySink(
       D9CDevice* device, bool pacedByPresentOrdinal,
       std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
@@ -453,13 +453,13 @@ public:
   }
 
   std::int32_t setConstants(
-      std::uint32_t type, const D9CCommandChunkWireSetConstV2& fixed,
+      std::uint32_t type, const D9CCommandChunkWireSetConst& fixed,
       std::span<const std::byte> bytes) override {
     return setConstantBytes(type, fixed.startRegister, fixed.registerCount,
                             bytes);
   }
 
-  std::int32_t clear(const D9CCommandChunkWireClearV2& fixed,
+  std::int32_t clear(const D9CCommandChunkWireClear& fixed,
                      std::span<const D9CRect> rects) override {
     return dxmt9c_device_clear(device_, fixed.rectCount, rects.data(),
                                fixed.flags, fixed.colorARGB, fixed.z,
@@ -467,7 +467,7 @@ public:
   }
 
   std::int32_t present(
-      const D9CCommandChunkWirePresentV2& fixed) override {
+      const D9CCommandChunkWirePresent& fixed) override {
     device_->dev().setNextPresentPacedByOrdinal(pacedByPresentOrdinal_);
     return dxmt9c_device_present(device_, fixed.hasSrc ? &fixed.src : nullptr,
                                  fixed.hasDst ? &fixed.dst : nullptr,
@@ -475,7 +475,7 @@ public:
   }
 
   std::int32_t stretchRect(
-      const D9CCommandChunkWireStretchRectV2& fixed, void* src,
+      const D9CCommandChunkWireStretchRect& fixed, void* src,
       void* dst) override {
     return dxmt9c_device_stretch_rect(
         device_, static_cast<D9CSurface*>(src),
@@ -485,21 +485,21 @@ public:
   }
 
   std::int32_t colorFill(
-      const D9CCommandChunkWireColorFillV2& fixed, void* surface) override {
+      const D9CCommandChunkWireColorFill& fixed, void* surface) override {
     return dxmt9c_device_color_fill(
         device_, static_cast<D9CSurface*>(surface),
         fixed.hasRect ? &fixed.rect : nullptr, fixed.colorARGB);
   }
 
   std::int32_t updateTexture(
-      const D9CCommandChunkWireUpdateTextureV2&, void* src,
+      const D9CCommandChunkWireUpdateTexture&, void* src,
       void* dst) override {
     return dxmt9c_device_update_texture(device_, static_cast<D9CTexture*>(src),
                                         static_cast<D9CTexture*>(dst));
   }
 
   std::int32_t updateSurface(
-      const D9CCommandChunkWireUpdateSurfaceV2& fixed, void* src,
+      const D9CCommandChunkWireUpdateSurface& fixed, void* src,
       void* dst) override {
     return dxmt9c_device_update_surface(
         device_, static_cast<D9CSurface*>(src),
@@ -509,19 +509,19 @@ public:
   }
 
   std::int32_t queryIssue(
-      const D9CCommandChunkWireQueryIssueV2& fixed, void* query) override {
+      const D9CCommandChunkWireQueryIssue& fixed, void* query) override {
     return dxmt9c_query_issue(static_cast<D9CQuery*>(query), fixed.flags);
   }
 
   std::int32_t readback(
-      const D9CCommandChunkWireReadbackV2&, void* src, void* dst) override {
+      const D9CCommandChunkWireReadback&, void* src, void* dst) override {
     return dxmt9c_device_get_render_target_data(
         device_, static_cast<D9CSurface*>(src),
         static_cast<D9CSurface*>(dst));
   }
 
   std::int32_t reszDepthResolve(
-      const D9CCommandChunkWireReszDepthResolveV2&, void* msaaDepth,
+      const D9CCommandChunkWireReszDepthResolve&, void* msaaDepth,
       void* intzDest) override {
     auto* surface = static_cast<D9CSurface*>(msaaDepth);
     auto* texture = static_cast<D9CTexture*>(intzDest);
@@ -531,12 +531,12 @@ public:
   }
 
   std::int32_t applyState(
-      const dxmt9::d3d9::ResolvedRecordV2View& record) override {
-    return dxmt9::d3d9::replaySparseRecordV2(record, *this);
+      const dxmt9::d3d9::ResolvedRecordView& record) override {
+    return dxmt9::d3d9::replaySparseRecord(record, *this);
   }
 
   std::int32_t setRenderStates(
-      std::span<const D9CCommandChunkWireRenderStateV2> values) override {
+      std::span<const D9CCommandChunkWireRenderState> values) override {
     for (const auto& value : values) {
       const auto hr = dxmt9c_device_set_render_state(
           device_, value.state, value.value);
@@ -558,7 +558,7 @@ public:
   }
 
   std::int32_t setStream(
-      const D9CCommandChunkWireStreamBindingV2& value,
+      const D9CCommandChunkWireStreamBinding& value,
       void* buffer) override {
     const auto hr = dxmt9c_device_set_stream_source(
         device_, value.slot, static_cast<D9CBuffer*>(buffer), value.offset,
@@ -574,7 +574,7 @@ public:
   }
 
   std::int32_t setShader(std::uint32_t stage, void* shader) override {
-    return stage == D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX
+    return stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX
                ? dxmt9c_device_set_vertex_shader(
                      device_, static_cast<D9CShader*>(shader))
                : dxmt9c_device_set_pixel_shader(
@@ -583,7 +583,7 @@ public:
 
   std::int32_t setVertexInput(std::uint32_t kind, std::uint32_t value,
                               void* declaration) override {
-    if (kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF) {
+    if (kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
       return dxmt9c_device_set_fvf(device_, value);
     }
     const auto fvfHr = dxmt9c_device_set_fvf(device_, value);
@@ -634,7 +634,7 @@ public:
   }
 
   std::int32_t setClipPlane(
-      const D9CCommandChunkWireClipPlaneV2& value) override {
+      const D9CCommandChunkWireClipPlane& value) override {
     if (auto* queue = findDirtyQueue(device_)) {
       queue->applyDirtyClipPlaneChange();
     }
@@ -682,7 +682,7 @@ public:
   }
 
   std::int32_t setLights(
-      std::span<const D9CCommandChunkWireLightV2> values) override {
+      std::span<const D9CCommandChunkWireLight> values) override {
     if (!values.empty()) {
       if (auto* queue = findDirtyQueue(device_)) {
         queue->applyDirtyTransformChange();
@@ -697,7 +697,7 @@ public:
   }
 
   std::int32_t setLightEnables(
-      std::span<const D9CCommandChunkWireLightEnableV2> values) override {
+      std::span<const D9CCommandChunkWireLightEnable> values) override {
     if (!values.empty()) {
       if (auto* queue = findDirtyQueue(device_)) {
         queue->applyDirtyTransformChange();
@@ -713,26 +713,26 @@ public:
 
   std::int32_t setConstants(
       std::uint16_t sectionKind,
-      const D9CCommandChunkWireConstantRangeV2& range,
+      const D9CCommandChunkWireConstantRange& range,
       std::span<const std::byte> bytes) override {
     std::uint32_t type = 0u;
     switch (sectionKind) {
-    case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F:
+    case D9C_COMMAND_CHUNK_SECTION_VS_CONST_F:
       type = D9C_COMMAND_RECORD_SET_VS_CONST_F;
       break;
-    case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I:
+    case D9C_COMMAND_CHUNK_SECTION_VS_CONST_I:
       type = D9C_COMMAND_RECORD_SET_VS_CONST_I;
       break;
-    case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B:
+    case D9C_COMMAND_CHUNK_SECTION_VS_CONST_B:
       type = D9C_COMMAND_RECORD_SET_VS_CONST_B;
       break;
-    case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F:
+    case D9C_COMMAND_CHUNK_SECTION_PS_CONST_F:
       type = D9C_COMMAND_RECORD_SET_PS_CONST_F;
       break;
-    case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I:
+    case D9C_COMMAND_CHUNK_SECTION_PS_CONST_I:
       type = D9C_COMMAND_RECORD_SET_PS_CONST_I;
       break;
-    case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B:
+    case D9C_COMMAND_CHUNK_SECTION_PS_CONST_B:
       type = D9C_COMMAND_RECORD_SET_PS_CONST_B;
       break;
     default:
@@ -746,7 +746,7 @@ public:
     return dxmt9::core::D3D_OK;
   }
 
-  std::int32_t draw(const dxmt9::d3d9::SparseDrawCallV2& call) override {
+  std::int32_t draw(const dxmt9::d3d9::SparseDrawCall& call) override {
     if (!call.payload.userIndexData.empty()) {
       return device_->dev().drawIndexedPrimitiveUP(
           call.param.primitiveType, call.param.primitiveCount,
@@ -902,9 +902,9 @@ private:
   bool batchCurrentDraw_ = false;
 };
 
-bool v2RecordCanBatchDraw(
+bool recordCanBatchDraw(
     D9CDevice* device,
-    const dxmt9::d3d9::ImportedRecordV2View& record) noexcept {
+    const dxmt9::d3d9::ImportedRecordView& record) noexcept {
   if (!device || device->stateBlockRecording ||
       (record.header.type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
        record.header.type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)) {
@@ -915,26 +915,26 @@ bool v2RecordCanBatchDraw(
          dxmt9::core::PrimitiveType::TriangleFan;
 }
 
-int32_t replayResolvedV2Chunk(
+int32_t replayResolvedChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
     dxmt9::CommandQueue::CpuReadyArenaBuildLease* arenaLease = nullptr,
-    std::span<const dxmt9::d3d9::V2CpuReadySegmentPlan> arenaSegments = {},
+    std::span<const dxmt9::d3d9::CpuReadySegmentPlan> arenaSegments = {},
     bool containsOrderedControls = false) {
   const auto bytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
       raw.recordBlob.size());
-  dxmt9::d3d9::ImportedChunkV2View imported;
-  const dxmt9::d3d9::V2ChunkEnvelope envelope{
+  dxmt9::d3d9::ImportedChunkView imported;
+  const dxmt9::d3d9::CommandChunkEnvelope envelope{
       .version = raw.wireVersion,
       .recordCount = raw.recordCount,
       .handleCount = raw.handleCount,
   };
   if (!raw.preflightValidated ||
-      !dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+      !dxmt9::d3d9::importPrevalidatedCommandChunk(
           bytes, envelope, imported) ||
       raw.resolvedObjects.size() != imported.handles.size()) {
-    return commitChunkFail("v2-replay-preflight-view");
+    return commitChunkFail("chunk-replay-preflight-view");
   }
   if (arenaLease) {
     std::size_t coveredRecords = 0;
@@ -943,12 +943,12 @@ int32_t replayResolvedV2Chunk(
           segment.firstRecordIndex != coveredRecords ||
           coveredRecords > imported.records.size() ||
           segment.recordCount > imported.records.size() - coveredRecords) {
-        return commitChunkFail("v2-replay-segment-range");
+        return commitChunkFail("chunk-replay-segment-range");
       }
       coveredRecords += segment.recordCount;
     }
     if (coveredRecords != imported.records.size()) {
-      return commitChunkFail("v2-replay-segment-cover");
+      return commitChunkFail("chunk-replay-segment-cover");
     }
   }
   if (containsOrderedControls) {
@@ -967,7 +967,7 @@ int32_t replayResolvedV2Chunk(
         if (!dxmt9::d3d9::makeOrderedControlDisposition(
                 record, raw.replaySeq, index)) {
           return commitChunkFail(
-              "v2-ordered-control-preflight",
+              "chunk-ordered-control-preflight",
               static_cast<std::uint32_t>(index), record.header.type);
         }
         break;
@@ -976,11 +976,11 @@ int32_t replayResolvedV2Chunk(
       }
     }
     if (!foundOrderedControl) {
-      return commitChunkFail("v2-ordered-control-preflight-empty");
+      return commitChunkFail("chunk-ordered-control-preflight-empty");
     }
   }
 
-  dxmt9::d3d9::ResolvedChunkV2View resolved{
+  dxmt9::d3d9::ResolvedChunkView resolved{
       .wire = imported,
       .objects = raw.resolvedObjects,
   };
@@ -999,7 +999,7 @@ int32_t replayResolvedV2Chunk(
     device->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
     pendingDrawSubmissions.clear();
   };
-  DeviceReplaySinkV2 sink(
+  DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
       raw.bufferSnapshotsCaptured);
@@ -1007,7 +1007,7 @@ int32_t replayResolvedV2Chunk(
   if ((!arenaLease && !arenaSegments.empty()) ||
       (arenaLease && arenaSegments.empty()) ||
       (arenaLease && !arenaLease->selectSegment(0))) {
-    return commitChunkFail("v2-replay-segment-initial");
+    return commitChunkFail("chunk-replay-segment-initial");
   }
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
     if (arenaLease && activeSegment + 1u < arenaSegments.size()) {
@@ -1015,7 +1015,7 @@ int32_t replayResolvedV2Chunk(
           arenaSegments[activeSegment + 1u].firstRecordIndex;
       if (index > nextFirstRecord) {
         flushPendingDrawSubmissions();
-        return commitChunkFail("v2-replay-segment-edge",
+        return commitChunkFail("chunk-replay-segment-edge",
                                static_cast<std::uint32_t>(index));
       }
       if (index == nextFirstRecord) {
@@ -1025,13 +1025,13 @@ int32_t replayResolvedV2Chunk(
         flushPendingDrawSubmissions();
         ++activeSegment;
         if (!arenaLease->selectSegment(activeSegment)) {
-          return commitChunkFail("v2-replay-segment-select",
+          return commitChunkFail("chunk-replay-segment-select",
                                  static_cast<std::uint32_t>(index));
         }
       }
     }
     const auto record = resolved.record(index);
-    const bool batchableDraw = v2RecordCanBatchDraw(device, record.wire);
+    const bool batchableDraw = recordCanBatchDraw(device, record.wire);
     sink.setBatchCurrentDraw(batchableDraw);
     if (!batchableDraw &&
         !commitChunkRecordAllowsPendingDrawBatchThrough(
@@ -1048,7 +1048,7 @@ int32_t replayResolvedV2Chunk(
             record.wire, raw.replaySeq, index);
         if (!orderedControl) {
           flushPendingDrawSubmissions();
-          return commitChunkFail("v2-ordered-control-rebuild",
+          return commitChunkFail("chunk-ordered-control-rebuild",
                                  static_cast<std::uint32_t>(index),
                                  record.wire.header.type);
         }
@@ -1072,7 +1072,7 @@ int32_t replayResolvedV2Chunk(
           !queue->releaseCpuReadySessionBeforeOrderedControl(
               reason, orderedControl->requiredReleaseAction,
               orderedControl->rawOrdinal)) {
-        return commitChunkFail("v2-ordered-control-release",
+        return commitChunkFail("chunk-ordered-control-release",
                                static_cast<std::uint32_t>(index),
                                record.wire.header.type);
       }
@@ -1084,30 +1084,30 @@ int32_t replayResolvedV2Chunk(
       observeOrderedControlReplay(/*BeforeDispatch=*/3u, index,
                                   record.wire.header.type);
     }
-    const auto hr = dxmt9::d3d9::isSparseRecordV2(record.wire.header.type)
-                        ? dxmt9::d3d9::replaySparseRecordV2(record, sink)
-                        : dxmt9::d3d9::replayNonDrawRecordV2(record, sink);
+    const auto hr = dxmt9::d3d9::isSparseRecord(record.wire.header.type)
+                        ? dxmt9::d3d9::replaySparseRecord(record, sink)
+                        : dxmt9::d3d9::replayNonDrawRecord(record, sink);
     if (dispatchingOrderedControl) {
       observeOrderedControlReplay(/*AfterDispatch=*/4u, index,
                                   record.wire.header.type, hr);
     }
     if (failed(hr)) {
       flushPendingDrawSubmissions();
-      return commitChunkFail("v2-replay", static_cast<std::uint32_t>(index),
+      return commitChunkFail("chunk-replay", static_cast<std::uint32_t>(index),
                              record.wire.header.type, hr);
     }
   }
   flushPendingDrawSubmissions();
   if (arenaLease && activeSegment + 1u != arenaSegments.size()) {
-    return commitChunkFail("v2-replay-segment-incomplete");
+    return commitChunkFail("chunk-replay-segment-incomplete");
   }
   dxmt9::perf::countChunkAdmit();
   return dxmt9::core::D3D_OK;
 }
 
-bool persistResolvedV2ResourcesAndCaptureBindings(
+bool persistResolvedResourcesAndCaptureBindings(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
-    const dxmt9::d3d9::ImportedChunkV2View& imported) {
+    const dxmt9::d3d9::ImportedChunkView& imported) {
   auto& scratch = replayScratchArena();
   ScopedReplayScratchUse scratchUse(scratch);
   for (std::size_t i = 0u; i < imported.handles.size(); ++i) {
@@ -1175,25 +1175,25 @@ bool persistResolvedV2ResourcesAndCaptureBindings(
   return true;
 }
 
-bool v2ChunkRequiresInlineReplay(
-    const dxmt9::d3d9::ImportedChunkV2View& imported) noexcept {
+bool chunkRequiresInlineReplay(
+    const dxmt9::d3d9::ImportedChunkView& imported) noexcept {
   return std::any_of(
       imported.records.begin(), imported.records.end(),
-      [](const D9CCommandChunkWireRecordHeaderV2& record) {
+      [](const D9CCommandChunkWireRecordHeader& record) {
         return replayInfoForCommandRecordType(record.type)
             .synchronousReadBoundary;
       });
 }
 
-bool importOwnedV2Chunk(dxmt9::d3d9::RawCommandChunk& raw,
-                        dxmt9::d3d9::ImportedChunkV2View& imported) noexcept {
+bool importOwnedChunk(dxmt9::d3d9::RawCommandChunk& raw,
+                        dxmt9::d3d9::ImportedChunkView& imported) noexcept {
   const auto bytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
       raw.recordBlob.size());
   return raw.preflightValidated && raw.replaySeq != 0 &&
-         dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+         dxmt9::d3d9::importPrevalidatedCommandChunk(
              bytes,
-             dxmt9::d3d9::V2ChunkEnvelope{
+             dxmt9::d3d9::CommandChunkEnvelope{
                  .version = raw.wireVersion,
                  .recordCount = raw.recordCount,
                  .handleCount = raw.handleCount,
@@ -1202,7 +1202,7 @@ bool importOwnedV2Chunk(dxmt9::d3d9::RawCommandChunk& raw,
          raw.resolvedObjects.size() == imported.handles.size();
 }
 
-void markLegacyV2Resources(D9CDevice* device,
+void markLegacyResources(D9CDevice* device,
                            dxmt9::d3d9::RawCommandChunk& raw) {
   if (raw.resourcesMarkedBeforeReplay) {
     return;
@@ -1213,7 +1213,7 @@ void markLegacyV2Resources(D9CDevice* device,
   }
 }
 
-int32_t replayPlannedV2Chunk(D9CDevice* device,
+int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
                              bool allowDirectArena) {
@@ -1221,22 +1221,22 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
     // Gate-off is the historical R-BACK-2.51(a) lane: admission already used
     // the combined mark/capture hook before handoff and replay performs no
     // planning or repeated marking.
-    markLegacyV2Resources(device, raw);
-    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+    markLegacyResources(device, raw);
+    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
-  dxmt9::d3d9::ImportedChunkV2View imported;
-  if (!importOwnedV2Chunk(raw, imported)) {
-    return commitChunkFail("v2-planned-import");
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!importOwnedChunk(raw, imported)) {
+    return commitChunkFail("chunk-planned-import");
   }
   auto upper = device->dev().upperDevice();
   auto* queue = upper ? &upper->queue() : nullptr;
   const auto limits = queue
       ? queue->cpuReadyArenaPlanLimits()
       : dxmt9::CommandQueue::CpuReadyArenaPlanLimits{};
-  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
       imported, raw.replaySeq,
-      dxmt9::d3d9::V2CpuReadyPlanOptions{
+      dxmt9::d3d9::CpuReadyPlanOptions{
           .pageSize = limits.pageSize == 0 ? 4096 : limits.pageSize,
           .maxOrdinaryPagesPerSegment =
               limits.maxOrdinaryPagesPerSegment,
@@ -1249,27 +1249,27 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
                           : limits.maxPagesPerSource,
       });
   switch (plan.lane) {
-  case dxmt9::d3d9::V2ReplayLane::Reject:
+  case dxmt9::d3d9::ReplayLane::Reject:
     dxmt9::perf::countCpuReadySessionDisposition(
         dxmt9::perf::CpuReadySessionDisposition::Invalid);
-    return commitChunkFail("v2-planned-reject");
-  case dxmt9::d3d9::V2ReplayLane::StateOnly:
+    return commitChunkFail("chunk-planned-reject");
+  case dxmt9::d3d9::ReplayLane::StateOnly:
     // State-only chunks mutate the replay shadow exactly once but publish no
     // GPU source and therefore consume neither a queue seq nor resource marks.
-    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
-  case dxmt9::d3d9::V2ReplayLane::Legacy:
-    if (plan.reason == dxmt9::d3d9::V2ReplayReason::Oversize) {
+    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
+  case dxmt9::d3d9::ReplayLane::Legacy:
+    if (plan.reason == dxmt9::d3d9::ReplayReason::Oversize) {
       dxmt9::perf::countCpuReadyTapeLegacyOversizeBypass();
       dxmt9::perf::countCpuReadySessionDisposition(
           dxmt9::perf::CpuReadySessionDisposition::LegacyRollback);
     }
     [[fallthrough]];
-  case dxmt9::d3d9::V2ReplayLane::Inline:
-    markLegacyV2Resources(device, raw);
-    return replayResolvedV2Chunk(
+  case dxmt9::d3d9::ReplayLane::Inline:
+    markLegacyResources(device, raw);
+    return replayResolvedChunk(
         device, raw, pacedByPresentOrdinal, nullptr, {},
         plan.containsOrderedControls);
-  case dxmt9::d3d9::V2ReplayLane::DirectArenaCandidate:
+  case dxmt9::d3d9::ReplayLane::DirectArenaCandidate:
     break;
   }
 
@@ -1277,8 +1277,8 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
     // Inline execution (including synchronous Readback) still needs the
     // ordered-control plan and release hooks when the Tape gate is enabled.
     // Only Direct arena construction depends on worker-side arena admission.
-    markLegacyV2Resources(device, raw);
-    return replayResolvedV2Chunk(
+    markLegacyResources(device, raw);
+    return replayResolvedChunk(
         device, raw, pacedByPresentOrdinal, nullptr, {},
         plan.containsOrderedControls);
   }
@@ -1286,8 +1286,8 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
   if (!queue || !plan.arenaLayout.has_value()) {
     // No D3D semantics have run yet, so a stub/non-production backend may
     // still use the compatibility lane without duplication.
-    markLegacyV2Resources(device, raw);
-    return replayResolvedV2Chunk(device, raw, pacedByPresentOrdinal);
+    markLegacyResources(device, raw);
+    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
   dxmt9::CommandQueue::CpuReadyArenaBeginResult begin;
@@ -1299,18 +1299,18 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
       break;
     }
     if (!queue->waitForCpuReadyArenaAdmission(*plan.arenaLayout)) {
-      return commitChunkFail("v2-arena-pressure-stopped");
+      return commitChunkFail("chunk-arena-pressure-stopped");
     }
   }
   if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
       !begin.has_value()) {
     // Oversize was classified by the structural planner. Any remaining
     // admission failure is queue terminal/corruption, not a legacy fallback.
-    return commitChunkFail("v2-arena-admission");
+    return commitChunkFail("chunk-arena-admission");
   }
 
   auto lease = std::move(*begin);
-  const int32_t hr = replayResolvedV2Chunk(
+  const int32_t hr = replayResolvedChunk(
       device, raw, pacedByPresentOrdinal, &lease,
       std::span(plan.segments).first(plan.segmentCount));
   if (failed(hr)) {
@@ -1319,29 +1319,29 @@ int32_t replayPlannedV2Chunk(D9CDevice* device,
     return hr;
   }
   if (!lease.publish(raw.resourceEntries)) {
-    return commitChunkFail("v2-arena-publish");
+    return commitChunkFail("chunk-arena-publish");
   }
   return dxmt9::core::D3D_OK;
 }
 
 }  // namespace
 
-// Runs on the ReplayOffloadWorker thread. V2 admission has already validated
+// Runs on the ReplayOffloadWorker thread. canonical admission has already validated
 // the blob and resolved/retained every object, so the worker replays only that
 // owned representation. The caller publishes ledger completion before it
 // releases the wrapper retention that keeps ledger targets alive.
 int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& chunk) {
-  if (chunk.wireVersion != D9C_COMMAND_CHUNK_VERSION_V2) {
-    dxmt9::perf::countCommandChunkV2Reject();
+  if (chunk.wireVersion != D9C_COMMAND_CHUNK_VERSION) {
+    dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
   const auto replayCpuStart = std::chrono::steady_clock::now();
-  const int32_t hr = replayPlannedV2Chunk(
+  const int32_t hr = replayPlannedChunk(
       d, chunk, /*pacedByPresentOrdinal=*/true,
       /*allowDirectArena=*/true);
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   if (failed(hr)) {
-    dxmt9::perf::countCommandChunkV2Reject();
+    dxmt9::perf::countCommandChunkReject();
   }
   return hr;
 }
@@ -1380,24 +1380,24 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
                       static_cast<unsigned long long>(nativeThreadId));
   }
 #endif
-  if (chunk->version != D9C_COMMAND_CHUNK_VERSION_V2) {
-    dxmt9::perf::countCommandChunkV2Reject();
+  if (chunk->version != D9C_COMMAND_CHUNK_VERSION) {
+    dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("unsupported-wire-version", chunk->version);
   }
   {
     if (wireHandleValue(chunk->handles) != 0u ||
         chunk->recordBytes == 0u) {
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-bad-outer");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-bad-outer");
     }
     const auto* records = wireHandlePtr<const std::byte>(chunk->records);
     if (!records) {
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-missing-records");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-missing-records");
     }
     const auto blob = std::span<const std::byte>(records,
                                                  chunk->recordBytes);
-    const dxmt9::d3d9::V2ChunkEnvelope envelope{
+    const dxmt9::d3d9::CommandChunkEnvelope envelope{
         .version = chunk->version,
         .recordCount = chunk->recordCount,
         .handleCount = chunk->handleCount,
@@ -1408,46 +1408,46 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     }
     dxmt9::d3d9::RawCommandChunk raw;
     CommitChunkPhaseTimer preparePhase(phaseSplit);
-    const bool prepared = dxmt9::d3d9::prepareV2OffloadChunk(
-        blob, envelope, d->wireObjects, retainV2Wrapper, raw);
+    const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
+        blob, envelope, d->wireObjects, retainWrapper, raw);
     preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
     if (!prepared) {
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-admission");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-admission");
     }
-    dxmt9::d3d9::ImportedChunkV2View imported;
+    dxmt9::d3d9::ImportedChunkView imported;
     const auto ownedBytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
         raw.recordBlob.size());
     CommitChunkPhaseTimer importPhase(phaseSplit);
     const bool importedOk =
         raw.preflightValidated &&
-        dxmt9::d3d9::importPrevalidatedCommandChunkV2(
+        dxmt9::d3d9::importPrevalidatedCommandChunk(
             ownedBytes, envelope, imported);
     importPhase.stop(dxmt9::perf::countCommitChunkPhaseImportCpuTime);
     if (!importedOk) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-owned-preflight-view");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-owned-preflight-view");
     }
     CommitChunkPhaseTimer markPhase(phaseSplit);
     const bool resourcesMarked =
-        persistResolvedV2ResourcesAndCaptureBindings(d, raw, imported);
+        persistResolvedResourcesAndCaptureBindings(d, raw, imported);
     markPhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCpuTime);
     if (!resourcesMarked) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-buffer-capture");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-buffer-capture");
     }
     dxmt9::perf::countCommandChunkWire(
-        D9C_COMMAND_CHUNK_VERSION_V2, chunk->recordCount,
+        D9C_COMMAND_CHUNK_VERSION, chunk->recordCount,
         chunk->recordBytes, chunk->handleCount);
 
     if (auto* q = findDirtyQueue(d)) {
       q->noteCommitChunkEntryForCompletionGap();
     }
     if (dxmt9::d3d9::offloadCommitReplayEnabled() &&
-        !v2ChunkRequiresInlineReplay(imported)) {
+        !chunkRequiresInlineReplay(imported)) {
       if (!d->replayOffload) {
         d->replayOffload =
             std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>();
@@ -1455,8 +1455,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       }
       if (d->replayOffload->failed()) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
-        dxmt9::perf::countCommandChunkV2Reject();
-        return commitChunkFail("v2-offload-worker-failed");
+        dxmt9::perf::countCommandChunkReject();
+        return commitChunkFail("chunk-offload-worker-failed");
       }
       const bool hasPresent = raw.hasPresent;
       CommitChunkPhaseTimer enqueuePhase(phaseSplit);
@@ -1467,8 +1467,8 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
       enqueuePhase.stop(dxmt9::perf::countCommitChunkPhaseEnqueueCpuTime);
       if (!pushed) {
         dxmt9::d3d9::releaseRetainedWrappers(raw);
-        dxmt9::perf::countCommandChunkV2Reject();
-        return commitChunkFail("v2-offload-queue-stopped");
+        dxmt9::perf::countCommandChunkReject();
+        return commitChunkFail("chunk-offload-queue-stopped");
       }
       if (hasPresent) {
         ++d->presentOrdinal;
@@ -1515,15 +1515,15 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
     // fail-stop contract the offload's safety story rests on.
     if (d->replayOffload && d->replayOffload->failed()) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-offload-worker-failed-inline");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-offload-worker-failed-inline");
     }
     if (!d->replayDrainLedger.publishInline(raw)) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
-      dxmt9::perf::countCommandChunkV2Reject();
-      return commitChunkFail("v2-replay-ledger-stopped-inline");
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("chunk-replay-ledger-stopped-inline");
     }
-    const int32_t hr = replayPlannedV2Chunk(
+    const int32_t hr = replayPlannedChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);
     if (!failed(hr)) {
@@ -1539,7 +1539,7 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* d, const D9CCommandChun
               .count()));
     }
     if (failed(hr)) {
-      dxmt9::perf::countCommandChunkV2Reject();
+      dxmt9::perf::countCommandChunkReject();
     }
     return hr;
   }

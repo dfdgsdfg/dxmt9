@@ -1,4 +1,4 @@
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +27,7 @@ bool alignUp(std::size_t value, std::uint32_t alignment, std::size_t& out) {
   return true;
 }
 
-bool identityEqual(const D9CCommandChunkWireHandleEntryV2& entry,
+bool identityEqual(const D9CCommandChunkWireHandleEntry& entry,
                    const D9CWireObjectIdentity& identity) {
   return entry.kind == identity.kind &&
          entry.generation == identity.generation &&
@@ -84,8 +84,8 @@ bool lookupCachedWireObjectRef(void* object, std::uint32_t expectedKind,
   return true;
 }
 
-CommandChunkV2Builder::CommandChunkV2Builder(
-    const CommandChunkV2BuilderCapacities& capacities) {
+CommandChunkBuilder::CommandChunkBuilder(
+    const CommandChunkBuilderCapacities& capacities) {
   records_.reserve(capacities.records);
   handles_.reserve(capacities.handles);
   handleObjects_.reserve(capacities.handles);
@@ -93,8 +93,8 @@ CommandChunkV2Builder::CommandChunkV2Builder(
   sealedBlob_.reserve(capacities.sealedBytes);
 }
 
-bool CommandChunkV2Builder::beginRecord(std::uint32_t type) noexcept {
-  const auto* rule = v2RecordRule(type);
+bool CommandChunkBuilder::beginRecord(std::uint32_t type) noexcept {
+  const auto* rule = recordRule(type);
   if (active_.active || sealed_ || !rule) {
     return false;
   }
@@ -121,7 +121,7 @@ bool CommandChunkV2Builder::beginRecord(std::uint32_t type) noexcept {
   return true;
 }
 
-bool CommandChunkV2Builder::appendPayload(
+bool CommandChunkBuilder::appendPayload(
     std::span<const std::byte> bytes, std::uint32_t alignment,
     std::uint32_t* recordRelativeOffset) noexcept {
   if (!active_.active || sealed_) {
@@ -153,7 +153,7 @@ bool CommandChunkV2Builder::appendPayload(
   return true;
 }
 
-bool CommandChunkV2Builder::overwritePayload(
+bool CommandChunkBuilder::overwritePayload(
     std::uint32_t recordRelativeOffset,
     std::span<const std::byte> bytes) noexcept {
   if (!active_.active || sealed_) {
@@ -170,10 +170,10 @@ bool CommandChunkV2Builder::overwritePayload(
   return true;
 }
 
-bool CommandChunkV2Builder::appendHandle(const PeWireObjectRef& object,
+bool CommandChunkBuilder::appendHandle(const PeWireObjectRef& object,
                                          std::uint32_t expectedKind,
                                          std::uint32_t& absoluteIndex) noexcept {
-  absoluteIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+  absoluteIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
   if (!active_.active || sealed_ || !object.valid(expectedKind)) {
     return failActiveRecord();
   }
@@ -192,7 +192,7 @@ bool CommandChunkV2Builder::appendHandle(const PeWireObjectRef& object,
   }
 
   try {
-    handles_.push_back(D9CCommandChunkWireHandleEntryV2{
+    handles_.push_back(D9CCommandChunkWireHandleEntry{
         .kind = object.identity.kind,
         .generation = object.identity.generation,
         .objectId = object.identity.objectId,
@@ -212,11 +212,11 @@ bool CommandChunkV2Builder::appendHandle(const PeWireObjectRef& object,
   return true;
 }
 
-bool CommandChunkV2Builder::commitRecord() noexcept {
+bool CommandChunkBuilder::commitRecord() noexcept {
   if (!active_.active || sealed_) {
     return false;
   }
-  const auto* rule = v2RecordRule(active_.type);
+  const auto* rule = recordRule(active_.type);
   const auto payloadBytes = payload_.size() - active_.payloadStart;
   const auto handleCount = handles_.size() - active_.handleCheckpoint;
   if (!rule || payloadBytes < rule->fixedPayloadSize ||
@@ -226,9 +226,9 @@ bool CommandChunkV2Builder::commitRecord() noexcept {
       handleCount > std::numeric_limits<std::uint32_t>::max()) {
     return failActiveRecord();
   }
-  const D9CCommandChunkWireRecordHeaderV2 record{
+  const D9CCommandChunkWireRecordHeader record{
       .type = active_.type,
-      .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
       .payloadOffset = static_cast<std::uint32_t>(active_.payloadStart),
       .payloadSize = static_cast<std::uint32_t>(payloadBytes),
       .firstHandle = static_cast<std::uint32_t>(active_.handleCheckpoint),
@@ -245,7 +245,7 @@ bool CommandChunkV2Builder::commitRecord() noexcept {
   return true;
 }
 
-void CommandChunkV2Builder::rollbackRecord() noexcept {
+void CommandChunkBuilder::rollbackRecord() noexcept {
   if (!active_.active) {
     return;
   }
@@ -257,17 +257,17 @@ void CommandChunkV2Builder::rollbackRecord() noexcept {
   active_ = {};
 }
 
-bool CommandChunkV2Builder::failActiveRecord() noexcept {
+bool CommandChunkBuilder::failActiveRecord() noexcept {
   rollbackRecord();
   return false;
 }
 
-SealedCommandChunkV2 CommandChunkV2Builder::seal() noexcept {
+SealedCommandChunk CommandChunkBuilder::seal() noexcept {
   if (active_.active) {
     return {};
   }
   if (sealed_) {
-    return SealedCommandChunkV2{
+    return SealedCommandChunk{
         .blob = sealedBlob_,
         .recordCount = static_cast<std::uint32_t>(records_.size()),
         .handleCount = static_cast<std::uint32_t>(handles_.size()),
@@ -280,26 +280,26 @@ SealedCommandChunkV2 CommandChunkV2Builder::seal() noexcept {
   }
 
   const auto recordTableOffset =
-      static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE);
+      static_cast<std::size_t>(D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE);
   if (records_.size() >
       (std::numeric_limits<std::size_t>::max() - recordTableOffset) /
-          sizeof(D9CCommandChunkWireRecordHeaderV2)) {
+          sizeof(D9CCommandChunkWireRecordHeader)) {
     return {};
   }
   const auto recordEnd =
       recordTableOffset +
-      records_.size() * sizeof(D9CCommandChunkWireRecordHeaderV2);
+      records_.size() * sizeof(D9CCommandChunkWireRecordHeader);
   std::size_t handleTableOffset = 0u;
-  if (!alignUp(recordEnd, alignof(D9CCommandChunkWireHandleEntryV2),
+  if (!alignUp(recordEnd, alignof(D9CCommandChunkWireHandleEntry),
                handleTableOffset) ||
       handles_.size() >
           (std::numeric_limits<std::size_t>::max() - handleTableOffset) /
-              sizeof(D9CCommandChunkWireHandleEntryV2)) {
+              sizeof(D9CCommandChunkWireHandleEntry)) {
     return {};
   }
   const auto handleEnd =
       handleTableOffset +
-      handles_.size() * sizeof(D9CCommandChunkWireHandleEntryV2);
+      handles_.size() * sizeof(D9CCommandChunkWireHandleEntry);
   std::size_t payloadArenaOffset = 0u;
   if (!alignUp(handleEnd, alignof(std::uint32_t), payloadArenaOffset) ||
       payload_.size() >
@@ -319,11 +319,11 @@ SealedCommandChunkV2 CommandChunkV2Builder::seal() noexcept {
   } catch (...) {
     return {};
   }
-  const D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
       .recordCount = static_cast<std::uint32_t>(records_.size()),
       .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
@@ -347,14 +347,14 @@ SealedCommandChunkV2 CommandChunkV2Builder::seal() noexcept {
                 payload_.size());
   }
   sealed_ = true;
-  return SealedCommandChunkV2{
+  return SealedCommandChunk{
       .blob = sealedBlob_,
       .recordCount = header.recordCount,
       .handleCount = header.handleCount,
   };
 }
 
-void CommandChunkV2Builder::reset() noexcept {
+void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
   retainer_.clear();
   records_.clear();
@@ -365,7 +365,7 @@ void CommandChunkV2Builder::reset() noexcept {
   sealed_ = false;
 }
 
-bool CommandChunkV2Builder::referencesObject(void* object) const noexcept {
+bool CommandChunkBuilder::referencesObject(void* object) const noexcept {
   return object &&
          std::find(handleObjects_.begin(), handleObjects_.end(), object) !=
              handleObjects_.end();

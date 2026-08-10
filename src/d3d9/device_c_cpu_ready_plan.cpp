@@ -45,7 +45,7 @@ bool addAlignedBytes(std::size_t& target,
 }
 
 template <typename T>
-bool loadFixed(const ImportedRecordV2View& record, T& out) noexcept {
+bool loadFixed(const ImportedRecordView& record, T& out) noexcept {
   if (record.payload.size() < sizeof(T)) {
     return false;
   }
@@ -53,11 +53,11 @@ bool loadFixed(const ImportedRecordV2View& record, T& out) noexcept {
   return true;
 }
 
-V2CpuReadyPlan fallback(RawOrdinal rawOrdinal,
-                        V2ReplayLane lane,
-                        V2ReplayReason reason,
+CpuReadyPlan fallback(RawOrdinal rawOrdinal,
+                        ReplayLane lane,
+                        ReplayReason reason,
                         bool containsOrderedControls = false) noexcept {
-  return V2CpuReadyPlan{
+  return CpuReadyPlan{
       .rawOrdinal = rawOrdinal,
       .lane = lane,
       .reason = reason,
@@ -67,8 +67,8 @@ V2CpuReadyPlan fallback(RawOrdinal rawOrdinal,
 
 bool addTriangleFanPayloadCapacity(
     core::SourcePayloadCapacity& capacity,
-    const ImportedRecordV2View& record,
-    const D9CCommandChunkWireDrawHeaderV2& draw) noexcept {
+    const ImportedRecordView& record,
+    const D9CCommandChunkWireDrawHeader& draw) noexcept {
   if (draw.primitiveCount >
       std::numeric_limits<std::uint32_t>::max() / 3u) {
     return false;
@@ -103,13 +103,13 @@ bool addTriangleFanPayloadCapacity(
   return multiplyU32Count(triangleElementCount, elementSize, byteCount) &&
          (byteCount == 0 ||
           addAlignedBytes(capacity.drawPayloadBytes, byteCount,
-                          kV2ArenaDrawPayloadAppendAlignment));
+                          kArenaDrawPayloadAppendAlignment));
 }
 
 bool addDrawCapacities(
     core::SourcePayloadCapacity& capacity,
-    const ImportedRecordV2View& record,
-    const D9CCommandChunkWireDrawHeaderV2& draw) noexcept {
+    const ImportedRecordView& record,
+    const D9CCommandChunkWireDrawHeader& draw) noexcept {
   if (!addCount(capacity.commandHeaders, 1) ||
       !addCount(capacity.drawHotStates, 1) ||
       !addCount(capacity.drawShaderLayouts, 1) ||
@@ -133,21 +133,21 @@ bool addDrawCapacities(
       return false;
     }
     switch (section.descriptor.kind) {
-    case D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA:
+    case D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA:
       if (draw.primitiveType == 6 &&
           record.header.type ==
               D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
         break;
       }
       [[fallthrough]];
-    case D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA:
+    case D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA:
       if (draw.primitiveType == 6 &&
           record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP) {
         break;
       }
       if (!addAlignedBytes(capacity.drawPayloadBytes,
                            section.descriptor.byteSize,
-                           kV2ArenaDrawPayloadAppendAlignment)) {
+                           kArenaDrawPayloadAppendAlignment)) {
         return false;
       }
       break;
@@ -159,10 +159,10 @@ bool addDrawCapacities(
           addTriangleFanPayloadCapacity(capacity, record, draw)) &&
          addAlignedBytes(capacity.drawPayloadBytes,
                          sizeof(core::DrawBindingOverride),
-                         kV2ArenaDrawPayloadAppendAlignment) &&
+                         kArenaDrawPayloadAppendAlignment) &&
          addAlignedBytes(capacity.drawPayloadBytes,
                          sizeof(core::DrawBindingSnapshot),
-                         kV2ArenaDrawPayloadAppendAlignment);
+                         kArenaDrawPayloadAppendAlignment);
 }
 
 enum class DirectRecordResult {
@@ -176,13 +176,13 @@ enum class DirectRecordResult {
 DirectRecordResult addDirectRecordCapacity(
     core::SourcePayloadCapacity& capacity,
     std::size_t& drawCount,
-    const ImportedRecordV2View& record) noexcept {
+    const ImportedRecordView& record) noexcept {
   switch (record.header.type) {
   case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
   case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
   case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
   case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP: {
-    D9CCommandChunkWireDrawHeaderV2 draw{};
+    D9CCommandChunkWireDrawHeader draw{};
     if (!loadFixed(record, draw) || draw.primitiveType < 1 ||
         draw.primitiveType > 6) {
       return DirectRecordResult::Invalid;
@@ -202,7 +202,7 @@ DirectRecordResult addDirectRecordCapacity(
   case D9C_COMMAND_RECORD_APPLY_STATE:
     return DirectRecordResult::StateOnly;
   case D9C_COMMAND_RECORD_CLEAR: {
-    D9CCommandChunkWireClearV2 clear{};
+    D9CCommandChunkWireClear clear{};
     if (!loadFixed(record, clear)) {
       return DirectRecordResult::Invalid;
     }
@@ -234,7 +234,7 @@ DirectRecordResult addDirectRecordCapacity(
                ? DirectRecordResult::GpuProducing
                : DirectRecordResult::Overflow;
   case D9C_COMMAND_RECORD_PRESENT: {
-    D9CCommandChunkWirePresentV2 present{};
+    D9CCommandChunkWirePresent present{};
     if (!loadFixed(record, present)) {
       return DirectRecordResult::Invalid;
     }
@@ -297,10 +297,10 @@ struct SegmentAccumulator {
 
 }  // namespace
 
-V2CpuReadyPlan planCpuReadyChunkV2(
-    const ImportedChunkV2View& imported,
+CpuReadyPlan planCpuReadyChunk(
+    const ImportedChunkView& imported,
     RawOrdinal rawOrdinal,
-    V2CpuReadyPlanOptions options) noexcept {
+    CpuReadyPlanOptions options) noexcept {
   if (rawOrdinal == 0 || options.pageSize == 0 || options.maxPages == 0 ||
       options.maxOrdinaryPagesPerSegment == 0 ||
       options.maxSegmentsPerSource == 0 ||
@@ -308,8 +308,8 @@ V2CpuReadyPlan planCpuReadyChunkV2(
           core::kMaxArenaSourcePayloadSegments ||
       options.maxPagesPerSource == 0 ||
       imported.records.size() != imported.header.recordCount) {
-    return fallback(rawOrdinal, V2ReplayLane::Reject,
-                    V2ReplayReason::InvalidImportedView);
+    return fallback(rawOrdinal, ReplayLane::Reject,
+                    ReplayReason::InvalidImportedView);
   }
 
   // Ordered controls force whole-raw compatibility replay, but every control
@@ -317,42 +317,42 @@ V2CpuReadyPlan planCpuReadyChunkV2(
   // any D3D or Metal effect. Keep this preflight allocation-free and retain
   // only the routing fact; replay rebuilds each exact-index disposition.
   bool containsOrderedControls = false;
-  V2ReplayLane orderedLane = V2ReplayLane::Legacy;
-  V2ReplayReason orderedReason = V2ReplayReason::Eligible;
+  ReplayLane orderedLane = ReplayLane::Legacy;
+  ReplayReason orderedReason = ReplayReason::Eligible;
   for (std::size_t i = 0; i < imported.records.size(); ++i) {
     const auto record = imported.record(i);
     if (record.header.type != imported.records[i].type ||
         record.payload.size() != imported.records[i].payloadSize) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::InvalidImportedView);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::InvalidImportedView);
     }
 
-    V2ReplayReason reason = V2ReplayReason::Eligible;
+    ReplayReason reason = ReplayReason::Eligible;
     switch (record.header.type) {
     case D9C_COMMAND_RECORD_QUERY_ISSUE:
-      reason = V2ReplayReason::Query;
+      reason = ReplayReason::Query;
       break;
     case D9C_COMMAND_RECORD_READBACK:
-      reason = V2ReplayReason::Readback;
+      reason = ReplayReason::Readback;
       break;
     case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
-      reason = V2ReplayReason::UpdateTexture;
+      reason = ReplayReason::UpdateTexture;
       break;
     default:
       continue;
     }
     if (!makeOrderedControlDisposition(record, rawOrdinal, i)) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::InvalidImportedView);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::InvalidImportedView);
     }
     if (!containsOrderedControls) {
       orderedReason = reason;
     }
     containsOrderedControls = true;
-    if (reason == V2ReplayReason::Readback) {
+    if (reason == ReplayReason::Readback) {
       // Any synchronous observation makes the complete raw an Inline lane,
       // even if an earlier Query first selected compatibility replay.
-      orderedLane = V2ReplayLane::Inline;
+      orderedLane = ReplayLane::Inline;
       orderedReason = reason;
     }
   }
@@ -360,10 +360,10 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     return fallback(rawOrdinal, orderedLane, orderedReason, true);
   }
 
-  V2CpuReadyPlan plan{
+  CpuReadyPlan plan{
       .rawOrdinal = rawOrdinal,
-      .lane = V2ReplayLane::DirectArenaCandidate,
-      .reason = V2ReplayReason::Eligible,
+      .lane = ReplayLane::DirectArenaCandidate,
+      .reason = ReplayReason::Eligible,
   };
   const std::size_t maxPagesPerSource =
       std::min(options.maxPages, options.maxPagesPerSource);
@@ -394,7 +394,7 @@ V2CpuReadyPlan planCpuReadyChunkV2(
             std::numeric_limits<std::uint32_t>::max()) {
       return false;
     }
-    plan.segments[plan.segmentCount++] = V2CpuReadySegmentPlan{
+    plan.segments[plan.segmentCount++] = CpuReadySegmentPlan{
         .firstRecordIndex =
             static_cast<std::uint32_t>(segment.firstRecordIndex),
         .recordCount = static_cast<std::uint32_t>(
@@ -410,14 +410,14 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     const auto record = imported.record(i);
     if (record.header.type != imported.records[i].type ||
         record.payload.size() != imported.records[i].payloadSize) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::InvalidImportedView);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::InvalidImportedView);
     }
 
     if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {
       if (sawPresent || i + 1u != imported.records.size()) {
-        return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                        V2ReplayReason::Present);
+        return fallback(rawOrdinal, ReplayLane::Legacy,
+                        ReplayReason::Present);
       }
       sawPresent = true;
     }
@@ -427,16 +427,16 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     const auto aggregateResult = addDirectRecordCapacity(
         aggregateCapacity, aggregateDrawCount, record);
     if (aggregateResult == DirectRecordResult::Invalid) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::InvalidImportedView);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::InvalidImportedView);
     }
     if (aggregateResult == DirectRecordResult::Overflow) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     if (aggregateResult == DirectRecordResult::Unsupported) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::UnknownRecord);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::UnknownRecord);
     }
     plan.capacity = aggregateCapacity;
     totalDrawCount = aggregateDrawCount;
@@ -453,14 +453,14 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     const auto candidateResult = addDirectRecordCapacity(
         candidate.capacity, candidate.drawCount, record);
     if (candidateResult != DirectRecordResult::GpuProducing) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     auto candidateLayout = makeSegmentLayout(
         candidate.capacity, candidate.drawCount, options.pageSize);
     if (!candidateLayout) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     if (candidateLayout->pageCount <=
         options.maxOrdinaryPagesPerSegment) {
@@ -470,8 +470,8 @@ V2CpuReadyPlan planCpuReadyChunkV2(
     }
 
     if (current.active && !appendSegment(current, false)) {
-      return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                      V2ReplayReason::Oversize);
+      return fallback(rawOrdinal, ReplayLane::Legacy,
+                      ReplayReason::Oversize);
     }
     if (current.active) {
       nextSegmentRecordIndex = current.lastRecordIndex + 1u;
@@ -484,21 +484,21 @@ V2CpuReadyPlan planCpuReadyChunkV2(
                                 indivisible.drawCount,
                                 record) !=
         DirectRecordResult::GpuProducing) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     const auto indivisibleLayout = makeSegmentLayout(
         indivisible.capacity, indivisible.drawCount, options.pageSize);
     if (!indivisibleLayout) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     if (indivisibleLayout->pageCount >
             options.maxOrdinaryPagesPerSegment) {
       if (indivisibleLayout->pageCount > maxPagesPerSource ||
           !appendSegment(indivisible, true)) {
-        return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                        V2ReplayReason::Oversize);
+        return fallback(rawOrdinal, ReplayLane::Legacy,
+                        ReplayReason::Oversize);
       }
       nextSegmentRecordIndex = i + 1u;
       current = {};
@@ -509,29 +509,29 @@ V2CpuReadyPlan planCpuReadyChunkV2(
   }
 
   if (!plan.logicalSource) {
-    plan.lane = V2ReplayLane::StateOnly;
+    plan.lane = ReplayLane::StateOnly;
     return plan;
   }
 
   if (current.active) {
     current.lastRecordIndex = imported.records.size() - 1u;
     if (!appendSegment(current, false)) {
-      return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                      V2ReplayReason::Oversize);
+      return fallback(rawOrdinal, ReplayLane::Legacy,
+                      ReplayReason::Oversize);
     }
   } else if (nextSegmentRecordIndex < imported.records.size()) {
     auto& tail = plan.segments[plan.segmentCount - 1u];
     const std::size_t tailCount =
         imported.records.size() - tail.firstRecordIndex;
     if (tailCount > std::numeric_limits<std::uint32_t>::max()) {
-      return fallback(rawOrdinal, V2ReplayLane::Reject,
-                      V2ReplayReason::StructuralOverflow);
+      return fallback(rawOrdinal, ReplayLane::Reject,
+                      ReplayReason::StructuralOverflow);
     }
     tail.recordCount = static_cast<std::uint32_t>(tailCount);
   }
   if (!addDerivedDrawCapacity(plan.capacity, totalDrawCount)) {
-    return fallback(rawOrdinal, V2ReplayLane::Reject,
-                    V2ReplayReason::StructuralOverflow);
+    return fallback(rawOrdinal, ReplayLane::Reject,
+                    ReplayReason::StructuralOverflow);
   }
   std::array<core::SourcePayloadLayout,
              core::kMaxArenaSourcePayloadSegments> segmentLayouts{};
@@ -542,12 +542,12 @@ V2CpuReadyPlan planCpuReadyChunkV2(
       std::span(segmentLayouts).first(plan.segmentCount), options.pageSize,
       std::numeric_limits<std::uint32_t>::max());
   if (!arenaLayout) {
-    return fallback(rawOrdinal, V2ReplayLane::Reject,
-                    V2ReplayReason::StructuralOverflow);
+    return fallback(rawOrdinal, ReplayLane::Reject,
+                    ReplayReason::StructuralOverflow);
   }
   if (arenaLayout->pageCount > maxPagesPerSource) {
-    return fallback(rawOrdinal, V2ReplayLane::Legacy,
-                    V2ReplayReason::Oversize);
+    return fallback(rawOrdinal, ReplayLane::Legacy,
+                    ReplayReason::Oversize);
   }
   plan.arenaLayout = *arenaLayout;
   if (plan.segmentCount == 1) {

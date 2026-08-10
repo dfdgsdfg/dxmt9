@@ -221,9 +221,9 @@ data-oriented encode path, which is already function-separated (so the §15
 | `IExternalDrawEmitter` | new interface wrapping `encoders::encodeDraw` + a clear emitter; `endEncoding`/`beginRenderPass` stay caller-owned | new `src/dxmt9/render/` |
 | DAG observe + export side-channel (R-BACK-39.7) | `render::DagObserver` — a shared, backend-agnostic observer owned by both `TraditionalBackend` and `FrameGraphBackend`; `onSourceReady` invokes `observer_.observeAndExport(payload, seqId, aliasResolver)` with the same logical `SourcePayloadView` consumed by replay. It carries the owning backend's resolved `framegraph::OptimizerOptions` (default/all-off for traditional) plus the encode-thread-local `observe_frame_` counter. | `src/dxmt9/render/dag_observer.{hpp,cpp}` |
 
-The target Frame Graph backend consumes `SourcePayloadView`, not the PE-side
-`D9CCommandRecord*` wire records. The legacy adapter resolves the same
-`ChunkSlot.commandHeaders` input that `encoders::encodeChunk` consumes; the
+The target Frame Graph backend consumes `SourcePayloadView`, not the retired
+PE-local `D9CCommandRecord*` semantic carriers. The legacy adapter resolves the
+same `ChunkSlot.commandHeaders` input that `encoders::encodeChunk` consumes; the
 Arena adapter resolves the equivalent ordered command stream across the
 source's packed block chain. Both adapters expose stable
 `(retainedSourceIndex, commandIndex)` attribution and call-local typed record
@@ -764,7 +764,7 @@ When `dce` **is** enabled, a pass is dead **only when all** of:
   its canonical source, so the in-source unread gate keeps a final backbuffer
   writer alive. Otherwise the pass stays alive.
 
-Dead passes are kept in the array for counter reporting. The production v2
+Dead passes are kept in the array for counter reporting. The production command-chunk
 linearizer validates that every source command belongs to exactly one live or
 dead pass, then emits a duplicate-free ordered subset that omits only dead-pass
 commands. An empty subset is represented explicitly rather than confused with

@@ -26,7 +26,7 @@ unix side replays them into Metal command buffers and presents through
   D3D9 → Vulkan → Metal.
 - **Formally verified concurrency.** The concurrency-sensitive
   subsystems — command queue, resource lifetime, encoder lifecycle,
-  present pacing, bridge wire protocol — are modeled in 14 TLA+ specs
+  present pacing, bridge wire protocol — are modeled in 17 TLA+ specs
   checked with TLC on every test run. Debug builds assert the same
   invariants at runtime.
 - **Data-oriented hot paths.** Draw/state/bridge paths use flat records
@@ -104,16 +104,16 @@ build from source, see [docs/build.md](docs/build.md).
 
 ## Formal verification
 
-The concurrency-sensitive parts of the backend are specified in 14 TLA+
+The concurrency-sensitive parts of the backend are specified in 17 TLA+
 modules under [`specs/verification/tla/`](specs/verification/tla/):
 
 | Area | Specs |
 |---|---|
-| Command queue & encoding | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals` |
+| Command queue & encoding | `CommandQueue`, `EncoderLifecycle`, `EncodeSessionCompletion`, `QueueLifecycleRefinement`, `ConcurrentProgressSignals`, `CpuReadySessionProgress`, `SessionCapacityLease`, `PostEncodePayloadRetirement` |
 | Resource & buffer lifetime | `ResourceLifetime`, `BufferBackingVersioning` |
 | Present pacing | `PresentFrameLatency`, `DrawableToken`, `PresentIdAba` |
 | Query resolution | `QuerySeqId` |
-| Bridge wire protocol | `WireHandleGeneration`, `WireObjectRegistryV2` |
+| Bridge wire protocol | `WireObjectRegistry`, `ReplayScopedDrain` |
 | Frame-graph DCE | `DceChunkLookahead` |
 
 `meson test` runs TLC over every model; to run them alone:

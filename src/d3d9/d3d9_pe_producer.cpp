@@ -11,14 +11,14 @@
 
 namespace dxmt9::d3d9::pe {
 
-// Fills SparseStateV2Input straight from the shadows and the binding view.
+// Fills SparseStateInput straight from the shadows and the binding view.
 //
 // Section content and ORDER must match what the legacy shim's
 // populateLegacySparseState (deleted with the legacy format) produced from
 // the fat packet, because the
 // differential compares emitted chunk bytes. Every walk therefore goes slot 0
-// upward, which is also what appendSparseRecordV2's orderedSlot() requires.
-bool buildSparseStateV2(const PeHotStateShadow& shadow,
+// upward, which is also what appendSparseRecord's orderedSlot() requires.
+bool buildSparseState(const PeHotStateShadow& shadow,
                         PeConstShadowBlock& constants,
                         const PeBindingView& bindings,
                         const PeDrawPayloads& payloads,
@@ -26,13 +26,13 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
                         bool forceFullSnapshot,
                         bool inlineConstDelta,
                         PeSparseScratch& scratch,
-                        D9CCommandChunkWireDrawHeaderV2& header,
-                        SparseStateV2Input& out) noexcept {
+                        D9CCommandChunkWireDrawHeader& header,
+                        SparseStateInput& out) noexcept {
   // Snapshot mode drains the whole shadow instead of the pending set, so the
   // record is self-contained and replayable out of order. Same gate the fat-
   // packet producer used.
   const bool snapshot = forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
-  out = SparseStateV2Input{};
+  out = SparseStateInput{};
 
   // --- render states -------------------------------------------------------
   const auto& renderStateTable =
@@ -43,7 +43,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   std::size_t renderStateCount = 0;
   renderStateTable.forEach([&](std::uint32_t state, std::uint32_t value) {
     scratch.renderStates[renderStateCount++] =
-        D9CCommandChunkWireRenderStateV2{.state = state, .value = value};
+        D9CCommandChunkWireRenderState{.state = state, .value = value};
   });
   out.renderStates = std::span(scratch.renderStates).first(renderStateCount);
 
@@ -54,7 +54,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       continue;
     }
     auto& entry = scratch.textures[textureCount++];
-    entry.wire = D9CCommandChunkWireTextureBindingV2{};
+    entry.wire = D9CCommandChunkWireTextureBinding{};
     entry.wire.slot = slot;
     entry.wire.valid = 1u;
     entry.object = bindings.textures[slot];
@@ -68,7 +68,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       continue;
     }
     auto& entry = scratch.streams[streamCount++];
-    entry.wire = D9CCommandChunkWireStreamBindingV2{};
+    entry.wire = D9CCommandChunkWireStreamBinding{};
     entry.wire.slot = slot;
     entry.wire.valid = 1u;
     entry.wire.offset = bindings.streams[slot].offset;
@@ -86,14 +86,14 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       return;
     }
     auto& entry = scratch.shaders[shaderCount++];
-    entry.wire = D9CCommandChunkWireShaderBindingV2{};
+    entry.wire = D9CCommandChunkWireShaderBinding{};
     entry.wire.stage = stage;
     entry.wire.valid = 1u;
     entry.object = ref;
   };
-  appendShader(D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX,
+  appendShader(D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
                snapshot || shadow.pendingVs, bindings.vs);
-  appendShader(D9C_COMMAND_CHUNK_V2_SHADER_STAGE_PIXEL,
+  appendShader(D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
                snapshot || shadow.pendingPs, bindings.ps);
   out.shaders = std::span(scratch.shaders).first(shaderCount);
 
@@ -108,17 +108,17 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
     // DECLARATION build: vertexInputPrepare rejects an FVF entry whose object
     // is non-null (`return !object.object;`) and fails the whole record through
     // failActiveRecord() with no log line.
-    entry = SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>{};
+    entry = SparseBindingInput<D9CCommandChunkWireVertexInput>{};
     entry.wire.valid = 1u;
     entry.wire.value = bindings.fvf;
     // In snapshot mode the fat-packet producer set BOTH vdeclValid and
     // fvfValid, and the shim's declaration-wins rule then selected the
     // declaration. Keep that outcome.
     if (snapshot || shadow.pendingVdecl) {
-      entry.wire.kind = D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION;
+      entry.wire.kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION;
       entry.object = bindings.vdecl;
     } else {
-      entry.wire.kind = D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF;
+      entry.wire.kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF;
     }
   }
   out.vertexInputs = std::span(scratch.vertexInputs).first(vertexInputCount);
@@ -141,7 +141,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   if (indexedDraw && shadow.pendingIb) {
     auto& entry = scratch.indexBuffers[indexBufferCount++];
-    entry.wire = D9CCommandChunkWireIndexBindingV2{};
+    entry.wire = D9CCommandChunkWireIndexBinding{};
     entry.wire.valid = 1u;
     entry.object = bindings.indexBuffer;
   }
@@ -161,7 +161,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       continue;
     }
     auto& entry = scratch.renderTargets[renderTargetCount++];
-    entry.wire = D9CCommandChunkWireRenderTargetBindingV2{};
+    entry.wire = D9CCommandChunkWireRenderTargetBinding{};
     entry.wire.slot = slot;
     entry.wire.valid = 1u;
     entry.object = bindings.renderTargets[slot];
@@ -171,7 +171,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   std::size_t depthStencilCount = 0;
   if (snapshot || shadow.pendingDs) {
     auto& entry = scratch.depthStencils[depthStencilCount++];
-    entry.wire = D9CCommandChunkWireDepthStencilBindingV2{};
+    entry.wire = D9CCommandChunkWireDepthStencilBinding{};
     entry.wire.valid = 1u;
     entry.object = bindings.depthStencil;
   }
@@ -271,7 +271,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // Under DXMT9_PE_INLINE_CONST_DELTA the draw sites deliberately do NOT call
   // flushPendingConsts, and the dirty ranges ride inside the draw record
   // instead. The legacy shape folded them into the fat packet's
-  // constDeltaSections; V2 expresses the same thing natively as constant-range
+  // constDeltaSections; canonical expresses the same thing natively as constant-range
   // sections, so this drains straight into them.
   //
   // DRAINING MUTATES: each range is cleared once emitted, exactly as
@@ -286,7 +286,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   if (inlineConstDelta) {
     struct ConstRange {
       ConstShadow* shadow;
-      SparseConstantRangeV2Input* out;
+      SparseConstantRangeInput* out;
       std::size_t elemSize;
     };
     const ConstRange ranges[D9C_DRAW_PACKET_CONST_DELTA_COUNT] = {
@@ -313,7 +313,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       if (shadowRange.values.size() < offset + bytes) {
         return false;
       }
-      *ranges[kind].out = SparseConstantRangeV2Input{
+      *ranges[kind].out = SparseConstantRangeInput{
           .startRegister = start,
           .registerCount = count,
           .registerBytes = std::span<const std::byte>(
@@ -328,7 +328,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // --- payloads and draw header -------------------------------------------
   // Every ref that reached a section must carry a usable identity. Without
   // this, a caller that fills only `object` produces sections that
-  // CommandChunkV2Builder::appendHandle silently rejects -- it calls
+  // CommandChunkBuilder::appendHandle silently rejects -- it calls
   // PeWireObjectRef::valid(), fails the record through failActiveRecord() with
   // NO log line, and the app sees a bare D3DERR_INVALIDCALL from whatever API
   // call happened to trigger the barrier. That is exactly how the APPLY_STATE
@@ -350,7 +350,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
     }
     reported = true;
     dxmt9::util::logf(dxmt9::util::LogLevel::Error, "dxmt9-pe",
-                      "buildSparseStateV2: %s section carries a bound object "
+                      "buildSparseState: %s section carries a bound object "
                       "with an unusable wire identity; appendHandle will reject "
                       "the record and the caller will see a bare "
                       "D3DERR_INVALIDCALL. The binding view was filled without "
@@ -373,7 +373,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   checkUsableRefs(out.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, "render target");
   checkUsableRefs(out.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, "depth stencil");
   for (const auto& entry : out.vertexInputs) {
-    if (entry.wire.kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION &&
+    if (entry.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION &&
         entry.object.object != nullptr &&
         !entry.object.valid(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)) {
       reportUnusableRef("vertex declaration");
@@ -400,7 +400,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   // startIndex to the indexed non-UP case only, and indexFormat to the indexed
   // UP case only. Setting all of them unconditionally is what a first cut does,
   // and the differential catches it as a one-word byte difference.
-  header = D9CCommandChunkWireDrawHeaderV2{};
+  header = D9CCommandChunkWireDrawHeader{};
   header.primitiveType = params.primitiveType;
   switch (params.recordType) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
@@ -427,7 +427,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
       break;
     default:
       // APPLY_STATE and the unset type carry no draw parameters;
-      // appendApplyStateV2 takes only the flags.
+      // appendApplyState takes only the flags.
       break;
   }
   // The shim set FULL_SNAPSHOT from all-ones texture and stream masks, which
@@ -437,7 +437,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
   constexpr auto allStreams = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
   if (snapshot || (shadow.pendingTextureMask == allTextures &&
                    shadow.pendingStreamMask == allStreams)) {
-    header.flags |= D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT;
+    header.flags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   }
   return true;
 }
@@ -449,7 +449,7 @@ namespace {
 // This is not hypothetical: the first wiring of the draw call sites reached
 // addChunkContextSections with recordType == 0, because the device forwarder
 // stamped it onto a by-value copy of params. The stream/index rebuild then WIPED
-// the index section buildSparseStateV2 had already emitted for pendingIb, and
+// the index section buildSparseState had already emitted for pendingIb, and
 // since SetIndices records nothing standalone in chunk mode, every indexed draw
 // replayed against a stale index buffer -- GT1 rendered sliver triangles with
 // garbled HUD digits while the harness still reported status=pass. The offline
@@ -487,11 +487,11 @@ bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeDrawParams& params,
                              bool forceFullSnapshot,
                              PeSparseScratch& scratch,
-                             SparseStateV2Input& out) noexcept {
+                             SparseStateInput& out) noexcept {
   if (!validRecordType(params, "addChunkContextSections")) {
     return false;
   }
-  // Snapshot mode: buildSparseStateV2 already emitted all 16 stream sections,
+  // Snapshot mode: buildSparseState already emitted all 16 stream sections,
   // null unbinds included, and legacy's add-only mask semantics left an all-ones
   // mask untouched here. The rebuild below is a REPLACEMENT, so running it under
   // snapshot silently drops every bound-but-retained-and-clean slot and every
@@ -512,7 +512,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
       continue;
     }
     auto& entry = scratch.streams[streamCount++];
-    entry = SparseBindingV2Input<D9CCommandChunkWireStreamBindingV2>{};
+    entry = SparseBindingInput<D9CCommandChunkWireStreamBinding>{};
     entry.wire.slot = slot;
     entry.wire.valid = 1u;
     entry.wire.offset = bindings.streams[slot].offset;
@@ -556,7 +556,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
   std::size_t indexCount = 0;
   if (emitIndex) {
     auto& entry = scratch.indexBuffers[indexCount++];
-    entry = SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>{};
+    entry = SparseBindingInput<D9CCommandChunkWireIndexBinding>{};
     entry.wire.valid = 1u;
     entry.object = bindings.indexBuffer;
   }

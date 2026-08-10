@@ -219,8 +219,8 @@ sequenceDiagram
         CQ->>Slot: copy to SoA arrays + payload arena
         Slot-->>CQ: DrawRunCommandRecord index
     else PE/unix bridge path
-        Rec->>Rec: buildSparseStateV2 -> SparseStateV2Input
-        Rec->>Rec: appendRecordV2 (seal + flush every N records)
+        Rec->>Rec: buildSparseState -> SparseStateInput
+        Rec->>Rec: appendRecord (seal + flush every N records)
         Rec->>Bridge: commitChunk(wire blob)
         Bridge->>Import: one unix-call with POD blob
         Import->>Import: validate header/table/ranges/handles
@@ -235,7 +235,7 @@ sequenceDiagram
 The bridge branch is two-phase since the commit-replay offload became the engine
 default (`R-BACK-2.51`): validation, import, wrapper retention and bulk resource
 marking stay synchronous on the app thread, and only record replay and slot
-publish are deferred to the worker. `Rec` builds `SparseStateV2Input` directly —
+publish are deferred to the worker. `Rec` builds `SparseStateInput` directly —
 there is no intermediate record format between the PE state shadow and the wire.
 
 CPU-bound design rules:
@@ -719,7 +719,7 @@ The license policy is conservative by design:
 |---|---|
 | `R-ARCH-1.*` DXMT ownership | `specs/backend/spec.md`, command queue tests, import tests, gap row for merge readiness |
 | `R-ARCH-2.*` DOD layout | `dxmt9-state-draw-transform-spec`, chunk/import specs, backend key/pipeline specs |
-| `R-ARCH-3.*` boundaries | `dxmt9-chunk-record-v2-validation-spec`, `dxmt9-chunk-record-v2-replay-spec`, `dxmt9-resource-hazard-v2-spec`, TLA+ queue/resource models |
+| `R-ARCH-3.*` boundaries | `dxmt9-chunk-record-validation-spec`, `dxmt9-chunk-record-replay-spec`, `dxmt9-resource-hazard-spec`, TLA+ queue/resource models |
 | `R-ARCH-4.*` provenance | specs review, conformance manifest provenance, license review before imports |
 | `R-ARCH-5.*` verification | `specs/verification/`, `specs/tests/`, `specs/benchmarks/`, `specs/archicture/gap.md` |
 | `R-ARCH-6.*` concurrency | `CommandQueue.tla`, `QueueLifecycleRefinement.tla`, `PresentFrameLatency.tla`, `ResourceLifetime.tla`, `EncoderLifecycle.tla` (exact handle sets + Bloom-as-diagnostic-only invariants), `QuerySeqId.tla`, `ConcurrentProgressSignals.tla` (three-axis pacing independence), planned CPU-ready/session admission and parallel-join refinements, queue observer tests, wait/perf counters |

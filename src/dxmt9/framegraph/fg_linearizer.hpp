@@ -25,7 +25,7 @@
 //   3. planReplayCommands() — the production passcoalesce bridge.
 //      Flattens the optimized pass order into a complete source-command
 //      permutation or a DCE-validated ordered subset. FrameGraphBackend
-//      supplies it to the existing v2 encodeChunk path, preserving its
+//      supplies it to the existing canonical encodeChunk path, preserving its
 //      batching, binding, presenter, capture, and completion behavior while
 //      changing only proven pass order/retention.
 //
@@ -96,7 +96,7 @@ struct LinearizationPlan {
   friend bool operator==(const LinearizationPlan&, const LinearizationPlan&) = default;
 };
 
-// Source-record replay order for the production v2 encoder. This keeps the
+// Source-record replay order for the production canonical encoder. This keeps the
 // optimized pass order while routing every Clear/DrawRun/helper/Present record
 // back through encodeChunk, preserving batching, dirty-rebind, capture,
 // presenter, and completion behavior.

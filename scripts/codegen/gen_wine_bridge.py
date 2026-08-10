@@ -13,7 +13,7 @@ from dataclasses import dataclass
 # the tag forces a hash mismatch between previously-built winemetal.dll /
 # winemetal.so even when the underlying device_c.h prototypes are unchanged,
 # so old binaries are caught instead of silently misbehaving.
-ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v4"  # v4: V2 stable-index layouts + negotiation/identity ABI (R-BACK-2.54)
+ABI_HASH_VERSION_TAG = "dxmt9-bridge-abi-v4"  # v4: canonical stable-index layouts + negotiation/identity ABI (R-BACK-2.54)
 
 # 64-bit FNV-1a constants. Chosen because the implementation is trivially
 # deterministic across Python versions and does not depend on hashlib's

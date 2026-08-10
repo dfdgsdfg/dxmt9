@@ -346,10 +346,12 @@ mechanics), `dxmt9-present-boundary-policy-spec`
 (`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. Clauses (g)
 and (h) close the two boundary-pacing gaps that previously blocked promoting
 this flag to an engine default; the third blocker — offload-forced crashes in
-the former V1 imported-record harnesses that looked like a replay-worker
+the former imported-record harnesses that looked like a replay-worker
 resource-retention defect — was root-caused as a test-harness drain gap, not a
-production race (`cad446ce`). Those V1 runtime harnesses were retired with the
-V1 producer/importer; current offload coverage is V2-only. With all three
+production race (`cad446ce`). Those runtime harnesses were retired with the
+pointer-bearing producer/importer; current offload coverage uses the canonical
+format only.
+With all three
 resolved, the engine default
 flipped to ON on 2026-07-10 (`d45af067`) — see the `specs/backend/gap.md`
 "Commit-replay offload" row.
@@ -383,33 +385,36 @@ the PE record byte-pinning specs (off-path unchanged plus new inline-section
 rows) and an on/off replay-equivalence spec following the
 `pe_full_snapshot_equivalence_spec` pattern.
 
-**R-BACK-2.53** *(Retired V1 compatibility contract.)* Production PE and unix
-code must not advertise, negotiate, produce, import, or replay wire version 1.
-Any outer chunk version other than V2 must be rejected before validation,
-retention, state mutation, or queue submission. V1 envelope/record fixtures
-must not be compiled as active conformance evidence. The transitional allowance for `D9CCommandRecord*` semantic value structs as
-PE-local staging inputs is **discharged**: those structs no longer exist, the PE
-recorder emits V2 sparse state directly, and `dxmt9c_device_commit_chunk`
-rejects any wire version other than 2.
+**R-BACK-2.53** *(Retired wire grammar absent.)* Production PE and unix code
+must not declare, advertise, negotiate, produce, import, or replay the retired
+numeric wire version 1 envelope or records. Numeric wire version 1 and every
+unsupported version must be rejected before validation, retention, state
+mutation, or queue submission; no retired struct, conversion adapter, or replay
+fixture may remain in active code.
 
-**R-BACK-2.54** *(V2 stable handle-index ABI.)* Wire version 2 must replace all
-payload-embedded server-wrapper addresses with `uint32_t` handle-table indices.
+**R-BACK-2.54** *(Canonical stable handle-index ABI.)* The canonical command-
+chunk format has numeric wire version 2 and must use `uint32_t` handle-table
+indices instead of payload-embedded server-wrapper addresses.
 Each table entry must carry a schema kind, stable object identifier, and
-generation; null must use the schema-defined index sentinel and must not occupy
-a table entry. Every non-null payload index must fall within its record's
-canonical handle slice and resolve to the declared kind and generation before
-any retain or replay side effect. A chunk must contain one wire version only,
-and PE/unix negotiation plus the ABI-hash handshake must reject unsupported or
+generation. The generation stamp must be a nonzero full `uint32_t`, and the
+device-local registry must match the exact `{kind, objectId, generation}` before
+any retain, replay, dispatch, or state-mutation side effect. Releasing a slot at
+`UINT32_MAX` generation must retire it instead of wrapping. Null must use the
+schema-defined index sentinel and must not occupy a table entry. Every non-null
+payload index must fall within its record's canonical handle slice and resolve
+to the declared identity. A chunk must contain one wire version only, and
+PE/unix negotiation plus the ABI-hash handshake must reject unsupported or
 mixed-version builds.
 
-**R-BACK-2.55** *(V2 sparse draw packets.)* A V2 draw record must store fixed
-draw arguments plus a canonical, typed section-descriptor array. Only changed
-state sections and required draw/UP data may ride the payload; absent sections
-mean no delta, while explicit null handle indices mean unbind. Section kinds
-must be unique and sorted, and every `{offset, byteSize, elementSize, count}`
-must pass overflow-safe alignment, non-overlap, and schema-size validation.
-The importer must preflight the complete record/chunk, including UP index,
-vertex, and inline-constant sections, before applying any state.
+**R-BACK-2.55** *(Canonical sparse draw packets.)* A canonical numeric-version-2
+draw record must store fixed draw arguments plus a canonical, typed section-
+descriptor array. Only changed state sections and required draw/UP data may ride
+the payload; absent sections mean no delta, while explicit null handle indices
+mean unbind. Section kinds must be unique and sorted, and every
+`{offset, byteSize, elementSize, count}` must pass overflow-safe alignment,
+non-overlap, and schema-size validation. The importer must preflight the complete
+record/chunk, including UP index, vertex, and inline-constant sections, before
+applying any state.
 
 **R-BACK-2.56** *(Recorder/replay scratch ownership.)* Steady-state PE wrapper
 retention and unix replay staging must reuse capacity-preserving chunk/device or

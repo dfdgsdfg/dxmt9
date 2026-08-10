@@ -10,7 +10,7 @@
 // The header itself is intentionally not split — all three areas share the
 // devicec namespace and the D9C* wrapper structs declared below.
 
-#include "device_c_chunk_v2_registry.hpp"
+#include "device_c_chunk_registry.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"

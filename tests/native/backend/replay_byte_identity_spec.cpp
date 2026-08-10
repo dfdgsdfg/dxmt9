@@ -132,23 +132,23 @@ void writeObject(std::vector<std::byte>& bytes, std::size_t offset,
 std::vector<std::byte> makeDrawChunk(const D9CWireObjectIdentity& identity,
                                      bool oversize) {
   constexpr std::size_t kOversizeRectCount = 17000u;
-  const D9CCommandChunkWireDrawHeaderV2 draw{
+  const D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
       .sectionCount = 1u,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
       .sectionPayloadOffset =
-          sizeof(D9CCommandChunkWireDrawHeaderV2) +
-          sizeof(D9CCommandChunkWireSectionDescV2),
+          sizeof(D9CCommandChunkWireDrawHeader) +
+          sizeof(D9CCommandChunkWireSectionDesc),
   };
-  const D9CCommandChunkWireSectionDescV2 section{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_STREAM,
-      .elementSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+      .elementSize = sizeof(D9CCommandChunkWireStreamBinding),
       .count = 1u,
       .payloadOffset = draw.sectionPayloadOffset,
-      .byteSize = sizeof(D9CCommandChunkWireStreamBindingV2),
+      .byteSize = sizeof(D9CCommandChunkWireStreamBinding),
   };
-  const D9CCommandChunkWireStreamBindingV2 stream{
+  const D9CCommandChunkWireStreamBinding stream{
       .slot = 0u,
       .valid = 1u,
       .handleIndex = 0u,
@@ -157,25 +157,25 @@ std::vector<std::byte> makeDrawChunk(const D9CWireObjectIdentity& identity,
       .frequency = 1u,
   };
   const std::size_t drawPayloadSize =
-      draw.sectionPayloadOffset + sizeof(D9CCommandChunkWireStreamBindingV2);
+      draw.sectionPayloadOffset + sizeof(D9CCommandChunkWireStreamBinding);
   const std::size_t clearPayloadSize = oversize
-      ? sizeof(D9CCommandChunkWireClearV2) +
+      ? sizeof(D9CCommandChunkWireClear) +
             kOversizeRectCount * sizeof(D9CRect)
       : 0u;
   const std::uint32_t recordCount = oversize ? 2u : 1u;
   const auto recordTableOffset =
-      static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireHeaderV2));
+      static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireHeader));
   const auto handleTableOffset = static_cast<std::uint32_t>(
       recordTableOffset +
-      recordCount * sizeof(D9CCommandChunkWireRecordHeaderV2));
+      recordCount * sizeof(D9CCommandChunkWireRecordHeader));
   const auto payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
-      handleTableOffset + sizeof(D9CCommandChunkWireHandleEntryV2),
+      handleTableOffset + sizeof(D9CCommandChunkWireHandleEntry),
       alignof(std::uint32_t)));
-  const D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = recordTableOffset,
       .recordCount = recordCount,
       .handleTableOffset = handleTableOffset,
@@ -184,14 +184,14 @@ std::vector<std::byte> makeDrawChunk(const D9CWireObjectIdentity& identity,
       .payloadArenaSize =
           static_cast<std::uint32_t>(clearPayloadSize + drawPayloadSize),
   };
-  const D9CCommandChunkWireRecordHeaderV2 drawRecord{
+  const D9CCommandChunkWireRecordHeader drawRecord{
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       .payloadOffset = static_cast<std::uint32_t>(clearPayloadSize),
       .payloadSize = static_cast<std::uint32_t>(drawPayloadSize),
       .firstHandle = 0u,
       .handleCount = 1u,
   };
-  const D9CCommandChunkWireHandleEntryV2 handle{
+  const D9CCommandChunkWireHandleEntry handle{
       .kind = identity.kind,
       .generation = identity.generation,
       .objectId = identity.objectId,
@@ -202,18 +202,18 @@ std::vector<std::byte> makeDrawChunk(const D9CWireObjectIdentity& identity,
   writeObject(blob, 0u, header);
   std::size_t drawRecordOffset = recordTableOffset;
   if (oversize) {
-    const D9CCommandChunkWireRecordHeaderV2 clearRecord{
+    const D9CCommandChunkWireRecordHeader clearRecord{
         .type = D9C_COMMAND_RECORD_CLEAR,
         .payloadOffset = 0u,
         .payloadSize = static_cast<std::uint32_t>(clearPayloadSize),
     };
-    const D9CCommandChunkWireClearV2 clear{
+    const D9CCommandChunkWireClear clear{
         .rectCount = static_cast<std::uint32_t>(kOversizeRectCount),
-        .rectOffset = sizeof(D9CCommandChunkWireClearV2),
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
     };
     writeObject(blob, recordTableOffset, clearRecord);
     writeObject(blob, payloadArenaOffset, clear);
-    drawRecordOffset += sizeof(D9CCommandChunkWireRecordHeaderV2);
+    drawRecordOffset += sizeof(D9CCommandChunkWireRecordHeader);
   }
   writeObject(blob, drawRecordOffset, drawRecord);
   writeObject(blob, handleTableOffset, handle);
@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
     D9CBuffer bufferWire(buffer, &cDevice);
     auto blob = makeDrawChunk(bufferWire.wireIdentity, oversize);
     D9CCommandChunk chunk{
-        .version = D9C_COMMAND_CHUNK_VERSION_V2,
+        .version = D9C_COMMAND_CHUNK_VERSION,
         .recordCount = oversize ? 2u : 1u,
         .recordBytes = static_cast<std::uint32_t>(blob.size()),
         .records = toWireHandle(blob.data()),

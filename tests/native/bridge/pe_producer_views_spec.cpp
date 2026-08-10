@@ -2,7 +2,7 @@
 //
 // The producer's input views must be trivially copyable PODs, because the
 // differential harness constructs them directly and the producer must retain
-// nothing from them past the call. Scratch capacity must match the V2 section
+// nothing from them past the call. Scratch capacity must match the canonical section
 // caps, or a full-width delta silently truncates.
 
 #include "d3d9_pe_producer.hpp"
@@ -88,7 +88,7 @@ void defaultDrawParamsAreZero() {
 }
 
 void baseVertexIsSigned() {
-  // D9CCommandChunkWireDrawHeaderV2::baseVertex is int32_t. If PeDrawParams
+  // D9CCommandChunkWireDrawHeader::baseVertex is int32_t. If PeDrawParams
   // narrowed it to unsigned, a negative BaseVertexIndex would silently wrap.
   static_assert(std::is_signed_v<decltype(pe::PeDrawParams{}.baseVertex)>);
   pe::PeDrawParams params{};
@@ -121,7 +121,7 @@ void scratchCapacityMatchesSectionCaps() {
 // Regression pin for the GT1 indexed-draw corruption. addChunkContextSections
 // decides "is this an indexed draw" solely from params.recordType, and on a
 // non-indexed verdict it does not merely skip the index section -- it rebuilds
-// the span as first(0), wiping whatever buildSparseStateV2 already emitted for
+// the span as first(0), wiping whatever buildSparseState already emitted for
 // pendingIb. The device forwarder used to stamp recordType onto a by-value copy
 // of params, so the live call arrived with 0, and every indexed draw shipped
 // with no index binding. SetIndices records nothing standalone in chunk mode, so
@@ -136,7 +136,7 @@ void unstampedRecordTypeIsRefused() {
   PeHotStateShadow shadow{};
   pe::PeBindingView bindings{};
   pe::PeSparseScratch scratch{};
-  pe::SparseStateV2Input out{};
+  pe::SparseStateInput out{};
   int indexObject = 0;
   bindings.indexBuffer.object = &indexObject;
   bindings.indexBuffer.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
@@ -162,10 +162,10 @@ void indexedDrawKeepsItsIndexSection() {
   bindings.indexBuffer.identity.objectId = 7u;
   shadow.pendingIb = true;
 
-  // Seed the section the way buildSparseStateV2 would have, so a rebuild that
+  // Seed the section the way buildSparseState would have, so a rebuild that
   // wrongly drops it is visible rather than merely absent.
-  pe::SparseStateV2Input out{};
-  scratch.indexBuffers[0] = pe::SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>{};
+  pe::SparseStateInput out{};
+  scratch.indexBuffers[0] = pe::SparseBindingInput<D9CCommandChunkWireIndexBinding>{};
   scratch.indexBuffers[0].wire.valid = 1u;
   scratch.indexBuffers[0].object = bindings.indexBuffer;
   out.indexBuffers = std::span(scratch.indexBuffers).first(1);
@@ -182,7 +182,7 @@ void indexedDrawKeepsItsIndexSection() {
         "the retained index section must name the bound index buffer");
 
   // Same inputs, non-indexed record: no section at all is the correct answer.
-  pe::SparseStateV2Input nonIndexedOut{};
+  pe::SparseStateInput nonIndexedOut{};
   pe::PeDrawParams nonIndexed{};
   nonIndexed.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
   check(pe::addChunkContextSections(pe::PeChunkContext{}, shadow, bindings,

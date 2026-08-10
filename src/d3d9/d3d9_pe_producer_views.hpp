@@ -17,11 +17,11 @@
 // stale within a task or two.
 //
 // PeChunkContext is passed as data rather than reached for through
-// CommandChunkV2Builder so a native differential test can drive it.
+// CommandChunkBuilder so a native differential test can drive it.
 
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
-#include "device_c_chunk_v2_schema.hpp"
+#include "device_c_chunk_schema.hpp"
 #include "dxmt9/device_c.h"
 
 #include <array>
@@ -48,7 +48,7 @@ struct PeStreamBinding {
 };
 
 // (a) COM-derived bindings, already translated by the device. The producer
-// forwards `object` to CommandChunkV2Builder::appendHandle, which owns
+// forwards `object` to CommandChunkBuilder::appendHandle, which owns
 // retention; it never dereferences it.
 struct PeBindingView {
   std::array<PeWireObjectRef, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
@@ -99,7 +99,7 @@ struct PeDrawPayloads {
 
 // Per-draw scalars. APPLY_STATE passes this default-constructed and the
 // producer leaves the draw header alone. baseVertex is signed to match
-// D9CCommandChunkWireDrawHeaderV2::baseVertex (int32_t); a negative
+// D9CCommandChunkWireDrawHeader::baseVertex (int32_t); a negative
 // BaseVertexIndex is legal in D3D9.
 struct PeDrawParams {
   std::uint32_t recordType = 0u;
@@ -114,67 +114,67 @@ struct PeDrawParams {
   std::uint32_t indexFormat = 0u;
 };
 
-// Device-owned, reused output storage. The SparseStateV2Input spans the
+// Device-owned, reused output storage. The SparseStateInput spans the
 // producer fills point into these arrays, so the scratch must outlive the
 // append that consumes them. The producer returns false rather than
 // truncating.
 //
-// Every capacity is asserted against the V2 schema's own maxCount below, not
+// Every capacity is asserted against the canonical schema's own maxCount below, not
 // against a hand-copied D9C_DRAW_PACKET_MAX_* value. Oversizing a category is
-// not a harmless slack: appendSparseRecordV2 rejects a span longer than
+// not a harmless slack: appendSparseRecord rejects a span longer than
 // maxCount through validSectionCount(), so the draw would be dropped at
 // runtime. Undersizing truncates. Both are caught at compile time now.
 //
 // Single-element arrays are used for the scalar sections (viewport, scissor,
 // material, index buffer, depth stencil, vertex input) so every category is
-// addressed the same way and SparseStateV2Input's spans can point at them
+// addressed the same way and SparseStateInput's spans can point at them
 // uniformly.
 struct PeSparseScratch {
-  std::array<D9CCommandChunkWireRenderStateV2,
+  std::array<D9CCommandChunkWireRenderState,
              D9C_DRAW_PACKET_MAX_RENDER_STATES> renderStates{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireTextureBindingV2>,
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>,
              D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireStreamBindingV2>,
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>,
              D9C_DRAW_PACKET_MAX_STREAMS> streams{};
   // Two shader stages (vertex, pixel).
-  std::array<SparseBindingV2Input<D9CCommandChunkWireShaderBindingV2>, 2>
+  std::array<SparseBindingInput<D9CCommandChunkWireShaderBinding>, 2>
       shaders{};
-  // ONE vertex input, not two. The section is V2SectionRuleSingle with
+  // ONE vertex input, not two. The section is SectionRuleSingle with
   // maxCount 1: FVF and vertex declaration are the two values of the entry's
   // `kind` field, not two entries. Declaration wins when both are dirty, and
-  // `value` carries the FVF either way -- see buildSparseStateV2's vertex-input
+  // `value` carries the FVF either way -- see buildSparseState's vertex-input
   // block in d3d9_pe_producer.cpp.
-  std::array<SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>, 1>
+  std::array<SparseBindingInput<D9CCommandChunkWireVertexInput>, 1>
       vertexInputs{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>, 1>
+  std::array<SparseBindingInput<D9CCommandChunkWireIndexBinding>, 1>
       indexBuffers{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireRenderTargetBindingV2>,
+  std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>,
              D9C_DRAW_PACKET_MAX_RENDER_TARGETS> renderTargets{};
-  std::array<SparseBindingV2Input<D9CCommandChunkWireDepthStencilBindingV2>, 1>
+  std::array<SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>, 1>
       depthStencils{};
   std::array<D9CViewport, 1> viewports{};
   std::array<D9CRect, 1> scissors{};
   std::array<D9CMaterial, 1> materials{};
   // D3D9 exposes six clip planes; the packet carries clipPlanes[6 * 4] floats.
-  std::array<D9CCommandChunkWireClipPlaneV2, 6> clipPlanes{};
+  std::array<D9CCommandChunkWireClipPlane, 6> clipPlanes{};
   std::array<D9CDrawPacketTextureStageState, D9C_DRAW_PACKET_MAX_TSS>
       textureStageStates{};
   std::array<D9CDrawPacketSamplerState, D9C_DRAW_PACKET_MAX_SAMPLER>
       samplerStates{};
   std::array<D9CDrawPacketTransform, D9C_DRAW_PACKET_MAX_TRANSFORMS>
       transforms{};
-  std::array<D9CCommandChunkWireLightV2, D9C_DRAW_PACKET_MAX_LIGHTS> lights{};
-  std::array<D9CCommandChunkWireLightEnableV2, D9C_DRAW_PACKET_MAX_LIGHTS>
+  std::array<D9CCommandChunkWireLight, D9C_DRAW_PACKET_MAX_LIGHTS> lights{};
+  std::array<D9CCommandChunkWireLightEnable, D9C_DRAW_PACKET_MAX_LIGHTS>
       lightEnables{};
 };
 
-// Tie every scratch capacity to the V2 schema rather than to a copied macro,
+// Tie every scratch capacity to the canonical schema rather than to a copied macro,
 // so a schema change breaks the build here instead of dropping draws at
-// runtime. v2SectionRule is constexpr, so this costs nothing.
+// runtime. sectionRule is constexpr, so this costs nothing.
 namespace detail {
 
 constexpr std::uint32_t sectionMaxCount(std::uint16_t kind) {
-  const auto* rule = v2SectionRule(kind);
+  const auto* rule = sectionRule(kind);
   return rule != nullptr ? rule->maxCount : 0u;
 }
 
@@ -182,26 +182,26 @@ constexpr std::uint32_t sectionMaxCount(std::uint16_t kind) {
   static_assert(std::tuple_size_v<decltype(PeSparseScratch::member)> ==      \
                     sectionMaxCount(sectionKind),                            \
                 "PeSparseScratch::" #member                                  \
-                " must equal the V2 schema maxCount for " #sectionKind)
+                " must equal the canonical schema maxCount for " #sectionKind)
 
-DXMT9_ASSERT_SCRATCH_CAP(renderStates, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE);
-DXMT9_ASSERT_SCRATCH_CAP(textures, D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE);
-DXMT9_ASSERT_SCRATCH_CAP(streams, D9C_COMMAND_CHUNK_V2_SECTION_STREAM);
-DXMT9_ASSERT_SCRATCH_CAP(shaders, D9C_COMMAND_CHUNK_V2_SECTION_SHADER);
-DXMT9_ASSERT_SCRATCH_CAP(vertexInputs, D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT);
-DXMT9_ASSERT_SCRATCH_CAP(indexBuffers, D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER);
-DXMT9_ASSERT_SCRATCH_CAP(renderTargets, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET);
-DXMT9_ASSERT_SCRATCH_CAP(depthStencils, D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL);
-DXMT9_ASSERT_SCRATCH_CAP(viewports, D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT);
-DXMT9_ASSERT_SCRATCH_CAP(scissors, D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR);
-DXMT9_ASSERT_SCRATCH_CAP(materials, D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL);
-DXMT9_ASSERT_SCRATCH_CAP(clipPlanes, D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE);
+DXMT9_ASSERT_SCRATCH_CAP(renderStates, D9C_COMMAND_CHUNK_SECTION_RENDER_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(textures, D9C_COMMAND_CHUNK_SECTION_TEXTURE);
+DXMT9_ASSERT_SCRATCH_CAP(streams, D9C_COMMAND_CHUNK_SECTION_STREAM);
+DXMT9_ASSERT_SCRATCH_CAP(shaders, D9C_COMMAND_CHUNK_SECTION_SHADER);
+DXMT9_ASSERT_SCRATCH_CAP(vertexInputs, D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT);
+DXMT9_ASSERT_SCRATCH_CAP(indexBuffers, D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER);
+DXMT9_ASSERT_SCRATCH_CAP(renderTargets, D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET);
+DXMT9_ASSERT_SCRATCH_CAP(depthStencils, D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL);
+DXMT9_ASSERT_SCRATCH_CAP(viewports, D9C_COMMAND_CHUNK_SECTION_VIEWPORT);
+DXMT9_ASSERT_SCRATCH_CAP(scissors, D9C_COMMAND_CHUNK_SECTION_SCISSOR);
+DXMT9_ASSERT_SCRATCH_CAP(materials, D9C_COMMAND_CHUNK_SECTION_MATERIAL);
+DXMT9_ASSERT_SCRATCH_CAP(clipPlanes, D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE);
 DXMT9_ASSERT_SCRATCH_CAP(textureStageStates,
-                         D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE);
-DXMT9_ASSERT_SCRATCH_CAP(samplerStates, D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE);
-DXMT9_ASSERT_SCRATCH_CAP(transforms, D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM);
-DXMT9_ASSERT_SCRATCH_CAP(lights, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT);
-DXMT9_ASSERT_SCRATCH_CAP(lightEnables, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE);
+                         D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(samplerStates, D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE);
+DXMT9_ASSERT_SCRATCH_CAP(transforms, D9C_COMMAND_CHUNK_SECTION_TRANSFORM);
+DXMT9_ASSERT_SCRATCH_CAP(lights, D9C_COMMAND_CHUNK_SECTION_LIGHT);
+DXMT9_ASSERT_SCRATCH_CAP(lightEnables, D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE);
 
 #undef DXMT9_ASSERT_SCRATCH_CAP
 

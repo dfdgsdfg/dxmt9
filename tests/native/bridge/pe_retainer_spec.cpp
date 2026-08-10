@@ -90,7 +90,7 @@ int main() {
   auto objectAcquire = retainer.beginAcquire();
   retainer.retainWireObject(D9C_CHUNK_HANDLE_KIND_QUERY, &first,
                             objectAcquire);
-  if (!check(first.refs == 2u, "typed V2 retain de-duplicates query")) {
+  if (!check(first.refs == 2u, "typed canonical retain de-duplicates query")) {
     return 1;
   }
 

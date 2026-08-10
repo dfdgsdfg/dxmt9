@@ -1,6 +1,6 @@
 #pragma once
 
-#include "device_c_chunk_v2_schema.hpp"
+#include "device_c_chunk_schema.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +29,7 @@ class WireObjectRegistry {
   // retain for every entry while registry mutation remains excluded. Callers
   // supply capacity-preserving scratch for `objects`.
   bool resolveAndRetain(
-      std::span<const D9CCommandChunkWireHandleEntryV2> entries,
+      std::span<const D9CCommandChunkWireHandleEntry> entries,
       std::span<void*> objects,
       RetainFn retain) const;
 
@@ -72,9 +72,9 @@ class WireObjectRegistry {
   std::size_t activeCount_ = 0u;
 };
 
-constexpr D9CCommandChunkWireHandleEntryV2 wireHandleEntryV2(
+constexpr D9CCommandChunkWireHandleEntry wireHandleEntry(
     const D9CWireObjectIdentity& identity) {
-  return D9CCommandChunkWireHandleEntryV2{
+  return D9CCommandChunkWireHandleEntry{
       .kind = identity.kind,
       .generation = identity.generation,
       .objectId = identity.objectId,

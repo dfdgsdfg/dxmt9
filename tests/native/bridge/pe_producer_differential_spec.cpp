@@ -1,7 +1,7 @@
 // pe_producer_differential_spec
 //
 // Runs the REAL old and new producers over one corpus and requires that they
-// agree on the emitted V2 chunk bytes and on the builder side effects that
+// agree on the emitted canonical chunk bytes and on the builder side effects that
 // bytes do not capture: record/handle/payload counts, retained object count,
 // and the return value.
 //
@@ -17,7 +17,7 @@
 // the code paths that consume them, so a fixture never sits red across a task
 // it does not belong to.
 
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe_producer_views.hpp"
@@ -41,7 +41,7 @@
 #include <utility>
 #include <vector>
 
-// --- C-ABI object stubs the V2 builder's retainer links against -------------
+// --- C-ABI object stubs the canonical builder's retainer links against -------------
 
 struct RefCounter {
   std::uint32_t refs = 1u;
@@ -178,8 +178,8 @@ struct LaneResult {
 };
 
 // Counts and retention are read BEFORE seal(); the blob is copied out because
-// SealedCommandChunkV2::blob is a span into the builder, which is lane-local.
-LaneResult finishLane(pe::CommandChunkV2Builder& builder, bool ok) {
+// SealedCommandChunk::blob is a span into the builder, which is lane-local.
+LaneResult finishLane(pe::CommandChunkBuilder& builder, bool ok) {
   LaneResult result;
   result.ok = ok;
   if (!ok) {
@@ -211,30 +211,30 @@ bool isUpRecord(std::uint32_t type) {
 // The direct UP lane: state build plus payload spans, and NO chunk-context step,
 // mirroring what the migrated UP call sites do.
 LaneResult runDirectUpLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
+  pe::CommandChunkBuilder builder;
   PeConstShadowBlock constants = fixture.constants;
   pe::PeSparseScratch& scratch = sharedScratch();
-  pe::SparseStateV2Input state{};
-  D9CCommandChunkWireDrawHeaderV2 header{};
-  if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  if (!pe::buildSparseState(fixture.shadow, constants, fixture.bindings,
                               fixture.payloads, fixture.params,
                               fixture.forceFullSnapshot,
                               /*inlineConstDelta=*/false, scratch, header,
                               state)) {
     return LaneResult{};
   }
-  const bool ok = pe::appendSparseRecordV2(
+  const bool ok = pe::appendSparseRecord(
       builder, fixture.params.recordType, header, state);
   return finishLane(builder, ok);
 }
 
 LaneResult runDirectDrawLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
+  pe::CommandChunkBuilder builder;
   PeConstShadowBlock constants = fixture.constants;
   pe::PeSparseScratch& scratch = sharedScratch();
-  pe::SparseStateV2Input state{};
-  D9CCommandChunkWireDrawHeaderV2 header{};
-  if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  if (!pe::buildSparseState(fixture.shadow, constants, fixture.bindings,
                               fixture.payloads, fixture.params,
                               fixture.forceFullSnapshot,
                               fixture.inlineConstDelta, scratch, header,
@@ -247,25 +247,25 @@ LaneResult runDirectDrawLane(const Fixture& fixture) {
     return LaneResult{};
   }
   const bool ok =
-      pe::appendSparseRecordV2(builder, fixture.params.recordType, header,
+      pe::appendSparseRecord(builder, fixture.params.recordType, header,
                                state);
   return finishLane(builder, ok);
 }
 
 LaneResult runDirectLane(const Fixture& fixture) {
-  pe::CommandChunkV2Builder builder;
+  pe::CommandChunkBuilder builder;
   PeConstShadowBlock constants = fixture.constants;  // lanes must not share
   pe::PeSparseScratch& scratch = sharedScratch();
-  pe::SparseStateV2Input state{};
-  D9CCommandChunkWireDrawHeaderV2 header{};
-  if (!pe::buildSparseStateV2(fixture.shadow, constants, fixture.bindings,
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
+  if (!pe::buildSparseState(fixture.shadow, constants, fixture.bindings,
                               fixture.payloads, fixture.params,
                               fixture.forceFullSnapshot,
                               fixture.inlineConstDelta, scratch, header,
                               state)) {
     return LaneResult{};
   }
-  const bool ok = pe::appendApplyStateV2(builder, header.flags, state);
+  const bool ok = pe::appendApplyState(builder, header.flags, state);
   return finishLane(builder, ok);
 }
 
@@ -513,7 +513,7 @@ void renderStatesAtCap() {
 void renderStatesOverCapFails() {
   Fixture f;
   f.name = "render states over cap";
-  // The pending table holds kPeRenderStateSlots (256) slots while the V2
+  // The pending table holds kPeRenderStateSlots (256) slots while the canonical
   // section cap is D9C_DRAW_PACKET_MAX_RENDER_STATES (64), so 65 distinct sets
   // really do over-fill rather than being silently dropped by the table.
   for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_RENDER_STATES + 1u;
@@ -973,7 +973,7 @@ void upIndexedDrawUnderFullSnapshot() {
 // --- draw records under forceFullSnapshot ----------------------------------
 //
 // The composition no named fixture covered before: a non-UP draw (so the chunk
-// context step runs) in snapshot mode (so buildSparseStateV2 emitted all 16
+// context step runs) in snapshot mode (so buildSparseState emitted all 16
 // stream sections including null unbinds). Legacy's
 // populateDrawPacketStreamDependencies only ever ADDED mask bits, so an all-ones
 // snapshot mask survived it untouched.

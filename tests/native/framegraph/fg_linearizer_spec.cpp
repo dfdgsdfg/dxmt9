@@ -263,7 +263,7 @@ void testPassCoalesceFewerBeginOps() {
 
   const ReplayCommandPlan replay = planReplayCommands(coalesced, slot);
   check(replay.valid && replay.reordered,
-        "passcoalesce produces a valid reordered v2 replay command plan");
+        "passcoalesce produces a valid reordered canonical replay command plan");
   check(replay.command_indices ==
             std::vector<std::uint32_t>({0u, 2u, 1u}),
         "replay command plan groups the two rtA DrawRuns before rtB");

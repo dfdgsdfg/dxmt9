@@ -3,7 +3,7 @@
 // FrameGraphBackend — modern-renderer backend (R-BACK-40.5).
 //
 // `progressive` + passcoalesce is the promoted default. It builds an optimized
-// source-command permutation and sends every record back through the same v2
+// source-command permutation and sends every record back through the same canonical
 // encodeChunk switch. Explicit `dce` may instead produce a proven ordered
 // subset through the bounded successor window. Explicit `strict` remains a
 // pure source-order delegate that is byte-identical to the traditional path.

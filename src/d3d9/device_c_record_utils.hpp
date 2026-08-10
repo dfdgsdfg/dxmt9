@@ -9,7 +9,7 @@
 #include "dxmt9/device_c.h"
 
 namespace dxmt9::d3d9 {
-struct ResolvedRecordV2View;
+struct ResolvedRecordView;
 }
 
 namespace dxmt9::d3d9::devicec {

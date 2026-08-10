@@ -141,12 +141,12 @@ texture_lock_shadow_spec = executable(
 
 test('dxmt9-texture-lock-shadow-spec', texture_lock_shadow_spec)
 
-# R-BACK-2.54 / R-BACK-2.55 command-chunk V2 ABI scaffolds. A1 pins the
+# R-BACK-2.54 / R-BACK-2.55 command-chunk canonical ABI scaffolds. A1 pins the
 # layout/schema; later plan waves replace the focused behavior-test bodies.
 foreach spec : [
-  ['chunk-record-v2-layout', 'chunk_record_v2_layout_spec.cpp'],
-  ['chunk-record-v2-registry', 'chunk_record_v2_registry_spec.cpp'],
-  ['chunk-record-v2-validation', 'chunk_record_v2_validation_spec.cpp'],
+  ['chunk-record-layout', 'chunk_record_layout_spec.cpp'],
+  ['chunk-record-registry', 'chunk_record_registry_spec.cpp'],
+  ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
 ]
   target = executable(
     'dxmt9-' + spec[0] + '-spec',
@@ -159,13 +159,13 @@ foreach spec : [
        env: dxmt9_native_test_env)
 endforeach
 
-pe_chunk_record_v2_value_spec = executable(
-  'dxmt9-pe-chunk-record-v2-value-spec',
+pe_chunk_record_value_spec = executable(
+  'dxmt9-pe-chunk-record-value-spec',
   [
-    'pe_chunk_record_v2_value_spec.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
+    'pe_chunk_record_value_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
   ],
   include_directories: [
     dxmt9_inc,
@@ -174,8 +174,8 @@ pe_chunk_record_v2_value_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
-test('dxmt9-pe-chunk-record-v2-value-spec',
-     pe_chunk_record_v2_value_spec,
+test('dxmt9-pe-chunk-record-value-spec',
+     pe_chunk_record_value_spec,
      env: dxmt9_native_test_env)
 
 pe_shadow_native_spec = executable(
@@ -214,9 +214,9 @@ pe_producer_differential_spec = executable(
   [
     'pe_producer_differential_spec.cpp',
     '../../../src/d3d9/d3d9_pe_producer.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
   ],
   include_directories: [
     dxmt9_inc,

@@ -13,7 +13,7 @@
 //   pair into the chunk's SoA draw-run arrays rather than carrying any decoded
 //   per-draw geometry/binding payload. It also retains a lightweight source
 //   CommandRef for every record so proven pass order can be replayed by the
-//   existing v2 encoder without reconstructing command semantics.
+//   existing canonical encoder without reconstructing command semantics.
 //
 //   The full mesh DrawDescriptor from spec.md §3.3 (vb_pointers, bindless
 //   indices, bbox, …) is DEFERRED TO L2 and is intentionally NOT declared here.
@@ -106,7 +106,7 @@ struct DrawRef {
 
 // Source command carried through pass reordering/coalescing. Unlike DrawRef,
 // this also retains Clear/helper/Present records so an optimized pass order can
-// be replayed by the existing v2 encodeChunk path without reconstructing or
+// be replayed by the existing canonical encodeChunk path without reconstructing or
 // bypassing its command semantics.
 struct CommandRef {
   u32 command_index = 0;

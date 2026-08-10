@@ -22,7 +22,7 @@
 //
 // WHAT IT IS NOW
 //
-// This runs the REAL producer -- buildSparseStateV2 plus addChunkContextSections,
+// This runs the REAL producer -- buildSparseState plus addChunkContextSections,
 // the exact pair the draw call sites use -- twice over identical inputs, once per
 // mode, and asserts the two structural properties that are what make the knob
 // safe:
@@ -136,8 +136,8 @@ pe::PeBindingView fullyBoundView() {
 // the differential covers that reuse.
 struct Built {
   pe::PeSparseScratch scratch{};
-  pe::SparseStateV2Input state{};
-  D9CCommandChunkWireDrawHeaderV2 header{};
+  pe::SparseStateInput state{};
+  D9CCommandChunkWireDrawHeader header{};
   bool ok = false;
 };
 
@@ -146,7 +146,7 @@ void build(Built& out, const PeHotStateShadow& shadow,
            const pe::PeChunkContext& chunk, bool snapshot) {
   PeConstShadowBlock constants{};
   pe::PeDrawPayloads payloads{};
-  out.ok = pe::buildSparseStateV2(shadow, constants, bindings, payloads, params,
+  out.ok = pe::buildSparseState(shadow, constants, bindings, payloads, params,
                                   snapshot, /*inlineConstDelta=*/false,
                                   out.scratch, out.header, out.state);
   if (!out.ok) {
@@ -232,7 +232,7 @@ void requireSelfContained(const Built& snap, const std::string& name) {
         name + ": a snapshot record must carry both shader stages");
   check(snap.state.vertexInputs.size() == 1u,
         name + ": a snapshot record must carry the vertex input");
-  check((snap.header.flags & D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT) !=
+  check((snap.header.flags & D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) !=
             0u,
         name + ": a snapshot record must set FULL_SNAPSHOT in its draw header");
 }

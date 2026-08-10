@@ -811,9 +811,9 @@ tests/
 │   │   ├── backend_pipeline_key_spec.cpp
 │   │   └── resource_hazard_spec.cpp
 │   └── bridge/
-│       ├── chunk_record_v2_layout_spec.cpp
-│       ├── chunk_record_v2_validation_spec.cpp
-│       └── pe_chunk_record_v2_value_spec.cpp
+│       ├── chunk_record_layout_spec.cpp
+│       ├── chunk_record_validation_spec.cpp
+│       └── pe_chunk_record_value_spec.cpp
 ├── shader_runner/
 │   ├── shader_runner_dxmt9.cpp
 │   └── corpus/

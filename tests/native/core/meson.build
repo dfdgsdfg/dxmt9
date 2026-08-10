@@ -313,8 +313,8 @@ core_d3d9_shared_handle_spec = executable(
 test('dxmt9-core-d3d9-shared-handle-spec', core_d3d9_shared_handle_spec,
      env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
 
-# CPU-only V2 chunk-build microbenchmark (boundary B1). Times typed sparse
-# record construction, sealing, and V2 preflight without bridge/Metal/GPU. Output
+# CPU-only canonical chunk-build microbenchmark (boundary B1). Times typed sparse
+# record construction, sealing, and canonical preflight without bridge/Metal/GPU. Output
 # scrape line: `[chunk_record_micro] iterations=... mean_ns=... ...`.
 chunk_record_micro_spec = executable(
   'dxmt9-chunk-record-micro-spec',

@@ -145,7 +145,7 @@ struct EncodeChunkOptions {
   // Passcoalesce supplies a complete permutation; DCE may supply an ordered
   // subset, including an empty subset when every command belongs to a proven
   // dead pass. `replayCommandPlanActive` distinguishes that case from the
-  // source-order default. Records still execute through the existing v2
+  // source-order default. Records still execute through the existing canonical
   // encodeChunk switch. The span is call-local and must not be retained.
   bool replayCommandPlanActive = false;
   std::span<const std::uint32_t> replayCommandOrder{};

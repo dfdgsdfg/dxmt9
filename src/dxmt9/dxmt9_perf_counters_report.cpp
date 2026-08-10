@@ -24,7 +24,7 @@ struct CounterEntry {
     Hex64,           // " key=0x%llx" for handle/hash values
     WidthByHeight,   // " key=%llux%llu" using both atomicField and field2
     PercentileMs,    // " key=%.3f" from PercentileRing::percentile(p) / 1e6
-    // V1 boundary B2: the historical bridge_commit_latency counter is still
+    // Historical boundary B2: bridge_commit_latency is still
     // reported in raw nanoseconds, but it now represents the whole
     // commit_chunk call wall time, not a raw ABI-only bridge cost.
     PercentileNs,    // " key=%llu" from PercentileRing::percentile(p)
@@ -45,11 +45,11 @@ struct CounterEntry {
 constexpr CounterEntry kCounterTable[] = {
     {"chunk_admit", CounterEntry::Kind::UnsignedCount, &Counters::chunkAdmit, nullptr, nullptr, 0.0},
     {"chunk_reject", CounterEntry::Kind::UnsignedCount, &Counters::chunkReject, nullptr, nullptr, 0.0},
-    {"command_chunk_v2_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Chunks, nullptr, nullptr, 0.0},
-    {"command_chunk_v2_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Records, nullptr, nullptr, 0.0},
-    {"command_chunk_v2_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Bytes, nullptr, nullptr, 0.0},
-    {"command_chunk_v2_rejects", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2Rejects, nullptr, nullptr, 0.0},
-    {"command_chunk_v2_registry_resolutions", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkV2RegistryResolutions, nullptr, nullptr, 0.0},
+    {"command_chunk_chunks", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkChunks, nullptr, nullptr, 0.0},
+    {"command_chunk_records", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkRecords, nullptr, nullptr, 0.0},
+    {"command_chunk_bytes", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkBytes, nullptr, nullptr, 0.0},
+    {"command_chunk_rejects", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkRejects, nullptr, nullptr, 0.0},
+    {"command_chunk_registry_resolutions", CounterEntry::Kind::UnsignedCount, &Counters::commandChunkRegistryResolutions, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_count", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCount, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_bytes", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackBytes, nullptr, nullptr, 0.0},
     {"ring_arena_heap_fallback_argbuf", CounterEntry::Kind::UnsignedCount, &Counters::ringArenaHeapFallbackCountArgbuf, nullptr, nullptr, 0.0},
@@ -1611,7 +1611,7 @@ constexpr CounterEntry kCounterTable[] = {
     {"command_buffer_commit_cpu_p50_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.5},
     {"command_buffer_commit_cpu_p95_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.95},
     {"command_buffer_commit_cpu_p99_ms", CounterEntry::Kind::PercentileMs, nullptr, nullptr, &Counters::commandBufferCommitCpuRing, 0.99},
-    // V1 boundary B2 — whole commit_chunk bridge-call latency in raw
+    // Historical boundary B2 — whole commit_chunk bridge-call latency in raw
     // nanoseconds. Sum + max + 3 percentiles.
     {"bridge_commit_latency_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyNs, nullptr, nullptr, 0.0},
     {"bridge_commit_latency_max_ns", CounterEntry::Kind::UnsignedCount, &Counters::bridgeCommitLatencyMaxNs, nullptr, nullptr, 0.0},

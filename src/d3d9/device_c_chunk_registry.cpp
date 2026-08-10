@@ -1,5 +1,5 @@
 #include "device_c_provider.hpp"
-#include "device_c_chunk_v2_registry.hpp"
+#include "device_c_chunk_registry.hpp"
 
 #include <atomic>
 #include <cstring>
@@ -100,7 +100,7 @@ bool WireObjectRegistry::contains(const D9CWireObjectIdentity& identity,
 }
 
 bool WireObjectRegistry::resolveAndRetain(
-    std::span<const D9CCommandChunkWireHandleEntryV2> entries,
+    std::span<const D9CCommandChunkWireHandleEntry> entries,
     std::span<void*> objects,
     RetainFn retain) const {
   if (objects.size() != entries.size() || (!entries.empty() && !retain)) {
@@ -177,16 +177,16 @@ extern "C" int32_t dxmt9c_device_negotiate_command_chunk(
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  negotiation->unixSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_2;
+  negotiation->unixSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
   negotiation->selectedVersion = 0u;
   const auto common = negotiation->peSupportedVersions &
                       negotiation->unixSupportedVersions;
-  if (negotiation->pePreferredVersion != D9C_COMMAND_CHUNK_VERSION_V2 ||
-      (common & D9C_COMMAND_CHUNK_CAP_VERSION_2) == 0u) {
+  if (negotiation->pePreferredVersion != D9C_COMMAND_CHUNK_VERSION ||
+      (common & D9C_COMMAND_CHUNK_CAP_CURRENT) == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
-  negotiation->selectedVersion = D9C_COMMAND_CHUNK_VERSION_V2;
+  negotiation->selectedVersion = D9C_COMMAND_CHUNK_VERSION;
   return dxmt9::core::D3D_OK;
 }
 

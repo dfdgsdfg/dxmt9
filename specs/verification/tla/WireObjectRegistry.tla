@@ -1,9 +1,11 @@
----- MODULE WireObjectRegistryV2 ----
+---- MODULE WireObjectRegistry ----
 (*
- * dxmt9 command-chunk V2 device-local wire object registry.
+ * dxmt9 canonical command-chunk device-local wire object registry.
  *
- * A producer captures {slot, generation, kind} while a wrapper is live. The
- * unix importer admits that identity only when all three fields still match.
+ * A producer captures {objectId, generation, kind} while a wrapper is live.
+ * This model fixes one registry namespace and represents objectId by its slot;
+ * the unix importer admits that identity only when all three fields still
+ * match. Generation is a nonzero full uint32 in production.
  * Final release advances the generation before a slot can be reused. A slot
  * at MAX_GENERATION is retired instead of wrapping to an identity that may
  * have existed before.
@@ -71,7 +73,7 @@ CaptureLive(r, s) ==
 
 ForgeRequest(r, s, generation, kind) ==
   /\ outcome[r] = "Empty"
-  /\ generation \in 1..MAX_GENERATION
+  /\ generation \in 0..MAX_GENERATION
   /\ kind \in Kinds
   /\ requestSlot' = [requestSlot EXCEPT ![r] = s]
   /\ requestGeneration' = [requestGeneration EXCEPT ![r] = generation]
@@ -107,6 +109,7 @@ Resolve(r) ==
   /\ outcome[r] = "Pending"
   /\ LET s == requestSlot[r]
          matches == /\ slotState[s] = "Live"
+                    /\ requestGeneration[r] # 0
                     /\ slotGeneration[s] = requestGeneration[r]
                     /\ slotKind[s] = requestKind[r]
      IN outcome' = [outcome EXCEPT
@@ -123,7 +126,7 @@ Resolve(r) ==
 Next ==
   \/ \E r \in Requests, s \in Slots : CaptureLive(r, s)
   \/ \E r \in Requests, s \in Slots,
-       generation \in 1..MAX_GENERATION, kind \in Kinds :
+       generation \in 0..MAX_GENERATION, kind \in Kinds :
        ForgeRequest(r, s, generation, kind)
   \/ \E s \in Slots : Release(s)
   \/ \E s \in Slots, kind \in Kinds : Register(s, kind)

@@ -2,14 +2,14 @@
 
 // The PE draw-packet / sparse-state producer.
 //
-// buildSparseStateV2 is the PE recorder's sole state producer: it reads the
+// buildSparseState is the PE recorder's sole state producer: it reads the
 // hot-state shadow, the constant shadow, the binding view and the draw payloads,
-// and fills a SparseStateV2Input plus the record's draw header. addChunkContextSections
+// and fills a SparseStateInput plus the record's draw header. addChunkContextSections
 // then adds the sections that depend on what the DESTINATION chunk already
 // retains, which is why it is separate -- that input is not available until
 // after the capacity precheck has sealed the previous chunk.
 //
-// buildSparseStateV2 is a pure read of its inputs apart from draining the
+// buildSparseState is a pure read of its inputs apart from draining the
 // constant shadow's dirty ranges when asked to fold them inline. It does NOT
 // clear pending hot-state bits; callers do that on success. The
 // DXMT9_PE_STATS_DECIMATION `draw_packet` scope stays on the device side, in the
@@ -48,7 +48,7 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 
 // `primitiveType` is the D3DPRIMITIVETYPE value widened to uint32_t; this TU
 // cannot see the D3D9 enum. Callers cast.
-// Fills SparseStateV2Input directly from the shadows and the binding view, with
+// Fills SparseStateInput directly from the shadows and the binding view, with
 // no fat packet in between.
 //
 // NOTE: no PeChunkContext. Destination-chunk re-emission is a draw-site step
@@ -59,7 +59,7 @@ inline bool dxmt9PeFullSnapshotEnabled() {
 // signature because the draw sites can skip that flush under
 // DXMT9_PE_INLINE_CONST_DELTA=1 and fold the ranges into the record instead --
 // whoever migrates them owns that decision. Non-const for the same reason.
-bool buildSparseStateV2(const PeHotStateShadow& shadow,
+bool buildSparseState(const PeHotStateShadow& shadow,
                         PeConstShadowBlock& constants,
                         const PeBindingView& bindings,
                         const PeDrawPayloads& payloads,
@@ -67,16 +67,16 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
                         bool forceFullSnapshot,
                         bool inlineConstDelta,
                         PeSparseScratch& scratch,
-                        D9CCommandChunkWireDrawHeaderV2& header,
-                        SparseStateV2Input& out) noexcept;
+                        D9CCommandChunkWireDrawHeader& header,
+                        SparseStateInput& out) noexcept;
 
-// Applies destination-chunk re-emission on top of a buildSparseStateV2 result.
+// Applies destination-chunk re-emission on top of a buildSparseState result.
 // Draw sites only: the barrier path never calls this, matching production.
 //
 // It REBUILDS the stream and index spans rather than appending to them. The
 // emitted set is the union of "dirty" and "bound but not retained by this
-// chunk", and V2 sections must be in strictly ascending slot order
-// (appendSparseRecordV2's orderedSlot); merging two independently-ordered
+// chunk", and canonical sections must be in strictly ascending slot order
+// (appendSparseRecord's orderedSlot); merging two independently-ordered
 // subsets is easy to get wrong, so one ascending pass over the union is the
 // whole point.
 //
@@ -84,7 +84,7 @@ bool buildSparseStateV2(const PeHotStateShadow& shadow,
 // resealed the chunk -- the retention answers are about the DESTINATION chunk.
 // `bindings.streams` must be authoritative for every slot, not just pending
 // ones; see populateBindingView's allStreams parameter.
-// forceFullSnapshot must be the SAME value the paired buildSparseStateV2 call
+// forceFullSnapshot must be the SAME value the paired buildSparseState call
 // received. Under snapshot that call emits all 16 stream sections, including null
 // unbinds, and this function must then leave them alone: legacy's
 // populateDrawPacketStreamDependencies only ever ADDED mask bits, so an all-ones
@@ -98,7 +98,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
                              const PeDrawParams& params,
                              bool forceFullSnapshot,
                              PeSparseScratch& scratch,
-                             SparseStateV2Input& out) noexcept;
+                             SparseStateInput& out) noexcept;
 
 
 }  // namespace dxmt9::d3d9::pe

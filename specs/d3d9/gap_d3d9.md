@@ -112,7 +112,7 @@ a `file:line` anchor checked against the live tree.
 | `D32_LOCKABLE` (84) + `Q16W16V16U16` (110) formats end-to-end (closed 2026-05-24) | C.12#7 | mirror D32F_LOCKABLE→Depth32Float / A16B16G16R16→RGBA16Snorm; gate `dxmt9-core-format-caps-spec`. Caveat: Q16W16V16U16 FormatInfo mirrors its analog's `renderTarget=true` — real D3D9 may not advertise RT for it (minor caps over-report) |
 | `ATOC` alpha-to-coverage — classification + behavioral (closed 2026-05-24) | C.5 | R-FORMAT-13; `RS_ADAPTIVETESS_Y`(181) ATOC/A2M1/A2M0 token → PSO `alphaToCoverage` bit → bridge `alphaToCoverageEnabled` (already exposed). `3293e39`, gate `dxmt9-backend-pipeline-key-spec` |
 | `NULL` colorless render target — classification + runtime depth-only probe (closed 2026-05-29) | C.5 | R-FORMAT-12; no color backing, `beginRenderPass` omits color attachment, Lock/readback→INVALIDCALL. Gates: `dxmt9-resource-format-boundary-spec`, `dxmt9-null-rt-attachment-spec`, `dxmt9-shader-corpus-render_state-dxmt9_null_rt_depth_occlusion_readback`. |
-| `RESZ` MSAA depth-resolve — **end-to-end + runtime readback** (closed 2026-05-29) | C.5 | R-FORMAT-11. Full pipeline: PE sentinel detect (`82c89fc`) → V2 record validate/classify → recorder retention + replay-execute + `MetalCommandKind::DepthResolve` + encoder dispatch (`d5572fc`) → `encodeDepthResolve` primitive + winemetal depth-resolve ABI (`8568fab`). Gates: `dxmt9-wmt-depth-resolve-abi-spec`, `dxmt9-resource-hazard-v2-spec`, `dxmt9-chunk-record-v2-replay-spec`, `dxmt9-state-draw-transform-spec`, `dxmt9-resz-depth-resolve-spec`, `dxmt9-shader-corpus-render_state-dxmt9_resz_intz_sample_readback`. |
+| `RESZ` MSAA depth-resolve — **end-to-end + runtime readback** (closed 2026-05-29) | C.5 | R-FORMAT-11. Full pipeline: PE sentinel detect (`82c89fc`) → canonical record validate/classify → recorder retention + replay-execute + `MetalCommandKind::DepthResolve` + encoder dispatch (`d5572fc`) → `encodeDepthResolve` primitive + winemetal depth-resolve ABI (`8568fab`). Gates: `dxmt9-wmt-depth-resolve-abi-spec`, `dxmt9-resource-hazard-spec`, `dxmt9-chunk-record-replay-spec`, `dxmt9-state-draw-transform-spec`, `dxmt9-resz-depth-resolve-spec`, `dxmt9-shader-corpus-render_state-dxmt9_resz_intz_sample_readback`. |
 | `SAMP_MIPMAPLODBIAS` per-sampler mip LOD bias — shader-side + readback validation (closed 2026-05-29) | B.3/B.10#4 | `bfb8a2d`; `SamplerLodBias` uniform (fragment slot 4) + `sample(…, bias(b))` at FFP (4) + translated-texld (1) sites; `bias(0)` no-op. Gates: `dxmt9-shader-transform-spec`, `dxmt9-shader-corpus-texture-dxmt9_mipmaplodbias_readback`, `dxmt9-shader-corpus-texture-dxmt9_mipmaplodbias_zero_control_readback`. NOT an ABI change. |
 | `D3DSAMP_MAXMIPLEVEL` → sampler `lod_min_clamp` | B.3 | `include/dxmt9/core_constants.hpp:SAMP_MAX_MIP_LEVEL`; `src/dxmt9/dxmt9_draw_encoder.mm:824-829,883-885`; gate `backend_key_descriptor_spec.cpp` |
 | `D3DRS_TWOSIDEDSTENCILMODE` (185) per-face stencil ops (closed 2026-05-24) | B.10#7 | `19f4274`+`fc10a5b`; mode-on → back-face ops from CCW render states (`MTLDepthStencilDescriptor.backFaceStencil`); mode-off mirrors front (byte-identical default). Also fixed a latent CCW-state leak. Gate `dxmt9-stencil-ref-spec`. |
@@ -883,8 +883,8 @@ clipPlaneShadow" src/d3d9/d3d9_pe_state_shadow.hpp
 
 # 4. Chunk packet wire fields.
 # D9CDrawPrimitivePacket and D9CDrawPacketRenderState were deleted with the
-# legacy record format; render states now ride D9CCommandChunkWireRenderStateV2.
-grep -n "D9CCommandChunkWireRenderStateV2\|\
+# legacy record format; render states now ride D9CCommandChunkWireRenderState.
+grep -n "D9CCommandChunkWireRenderState\|\
 D9CDrawPacketTextureStageState\|D9CDrawPacketSamplerState\|\
 D9CDrawPacketTransform\|D9CMaterial\|D9CLight\|D9CViewport" \
   include/dxmt9/device_c.h

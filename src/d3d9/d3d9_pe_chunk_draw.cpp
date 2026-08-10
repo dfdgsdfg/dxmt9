@@ -1,4 +1,4 @@
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 
 #include <array>
 #include <cstring>
@@ -14,14 +14,14 @@ std::span<const std::byte> asBytes(std::span<const T> values) {
 }
 
 bool validSectionCount(std::uint16_t kind, std::size_t count) {
-  const auto* rule = v2SectionRule(kind);
+  const auto* rule = sectionRule(kind);
   return rule && count != 0u && count <= rule->maxCount &&
          count <= std::numeric_limits<std::uint32_t>::max();
 }
 
 bool validConstant(std::uint16_t kind,
-                   const SparseConstantRangeV2Input& input) {
-  const auto* rule = v2SectionRule(kind);
+                   const SparseConstantRangeInput& input) {
+  const auto* rule = sectionRule(kind);
   if (!input.present()) {
     return input.startRegister == 0u && input.registerBytes.empty();
   }
@@ -29,29 +29,29 @@ bool validConstant(std::uint16_t kind,
                    input.registerCount;
   const auto byteSize = static_cast<std::uint64_t>(input.registerCount) *
                         (rule ? rule->elementSize : 0u);
-  return rule && (rule->ruleFlags & V2SectionRuleConstantRange) != 0u &&
+  return rule && (rule->ruleFlags & SectionRuleConstantRange) != 0u &&
          input.registerCount <= rule->maxCount && end <= rule->maxCount &&
          byteSize == input.registerBytes.size();
 }
 
 template <typename T>
 bool appendPlainSection(
-    CommandChunkV2Builder& builder, std::uint16_t kind,
+    CommandChunkBuilder& builder, std::uint16_t kind,
     std::span<const T> values,
-    std::array<D9CCommandChunkWireSectionDescV2,
-               D9C_COMMAND_CHUNK_V2_SECTION_COUNT>& descs,
+    std::array<D9CCommandChunkWireSectionDesc,
+               D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
     std::uint32_t& sectionIndex) {
   if (values.empty()) {
     return true;
   }
-  const auto* rule = v2SectionRule(kind);
+  const auto* rule = sectionRule(kind);
   std::uint32_t offset = 0u;
   if (!rule || !validSectionCount(kind, values.size()) ||
       !builder.appendPayload(asBytes(values), rule->payloadAlignment,
                              &offset)) {
     return false;
   }
-  descs[sectionIndex++] = D9CCommandChunkWireSectionDescV2{
+  descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
       .kind = kind,
       .elementSize = rule->elementSize,
       .count = static_cast<std::uint32_t>(values.size()),
@@ -62,16 +62,16 @@ bool appendPlainSection(
 }
 
 bool appendConstantSection(
-    CommandChunkV2Builder& builder, std::uint16_t kind,
-    const SparseConstantRangeV2Input& input,
-    std::array<D9CCommandChunkWireSectionDescV2,
-               D9C_COMMAND_CHUNK_V2_SECTION_COUNT>& descs,
+    CommandChunkBuilder& builder, std::uint16_t kind,
+    const SparseConstantRangeInput& input,
+    std::array<D9CCommandChunkWireSectionDesc,
+               D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
     std::uint32_t& sectionIndex) {
   if (!input.present()) {
     return true;
   }
-  const auto* rule = v2SectionRule(kind);
-  const D9CCommandChunkWireConstantRangeV2 range{
+  const auto* rule = sectionRule(kind);
+  const D9CCommandChunkWireConstantRange range{
       .startRegister = input.startRegister,
       .registerCount = input.registerCount,
   };
@@ -81,7 +81,7 @@ bool appendConstantSection(
       !builder.appendPayload(input.registerBytes)) {
     return false;
   }
-  descs[sectionIndex++] = D9CCommandChunkWireSectionDescV2{
+  descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
       .kind = kind,
       .elementSize = rule->elementSize,
       .count = input.registerCount,
@@ -93,21 +93,21 @@ bool appendConstantSection(
 }
 
 bool appendRawSection(
-    CommandChunkV2Builder& builder, std::uint16_t kind,
+    CommandChunkBuilder& builder, std::uint16_t kind,
     std::span<const std::byte> bytes,
-    std::array<D9CCommandChunkWireSectionDescV2,
-               D9C_COMMAND_CHUNK_V2_SECTION_COUNT>& descs,
+    std::array<D9CCommandChunkWireSectionDesc,
+               D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
     std::uint32_t& sectionIndex) {
   if (bytes.empty()) {
     return true;
   }
-  const auto* rule = v2SectionRule(kind);
+  const auto* rule = sectionRule(kind);
   std::uint32_t offset = 0u;
   if (!rule || !validSectionCount(kind, bytes.size()) ||
       !builder.appendPayload(bytes, rule->payloadAlignment, &offset)) {
     return false;
   }
-  descs[sectionIndex++] = D9CCommandChunkWireSectionDescV2{
+  descs[sectionIndex++] = D9CCommandChunkWireSectionDesc{
       .kind = kind,
       .elementSize = rule->elementSize,
       .count = static_cast<std::uint32_t>(bytes.size()),
@@ -117,11 +117,11 @@ bool appendRawSection(
   return true;
 }
 
-bool appendNullableHandle(CommandChunkV2Builder& builder,
+bool appendNullableHandle(CommandChunkBuilder& builder,
                           const PeWireObjectRef& object,
                           std::uint32_t expectedKind,
                           std::uint32_t& index) {
-  index = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+  index = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
   if (!object.object) {
     return true;
   }
@@ -130,10 +130,10 @@ bool appendNullableHandle(CommandChunkV2Builder& builder,
 
 template <typename Wire, std::size_t Capacity, typename Prepare>
 bool appendBindingSection(
-    CommandChunkV2Builder& builder, std::uint16_t kind,
-    std::span<const SparseBindingV2Input<Wire>> inputs, Prepare&& prepare,
-    std::array<D9CCommandChunkWireSectionDescV2,
-               D9C_COMMAND_CHUNK_V2_SECTION_COUNT>& descs,
+    CommandChunkBuilder& builder, std::uint16_t kind,
+    std::span<const SparseBindingInput<Wire>> inputs, Prepare&& prepare,
+    std::array<D9CCommandChunkWireSectionDesc,
+               D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
     std::uint32_t& sectionIndex) {
   if (inputs.empty()) {
     return true;
@@ -154,7 +154,7 @@ bool appendBindingSection(
       sectionIndex);
 }
 
-std::uint32_t sectionCount(const SparseStateV2Input& state) {
+std::uint32_t sectionCount(const SparseStateInput& state) {
   std::uint32_t count = 0u;
   const auto add = [&count](bool present) {
     count += present ? 1u : 0u;
@@ -199,26 +199,26 @@ bool orderedSlot(std::uint32_t slot, bool& havePrevious,
 
 }  // namespace
 
-bool appendSparseRecordV2(CommandChunkV2Builder& builder,
+bool appendSparseRecord(CommandChunkBuilder& builder,
                           std::uint32_t type,
-                          D9CCommandChunkWireDrawHeaderV2 draw,
-                          const SparseStateV2Input& state) noexcept {
-  const auto* recordRule = v2RecordRule(type);
+                          D9CCommandChunkWireDrawHeader draw,
+                          const SparseStateInput& state) noexcept {
+  const auto* rule = recordRule(type);
   const auto count = sectionCount(state);
-  if (!recordRule ||
-      (recordRule->ruleFlags & V2RecordRuleSparseState) == 0u ||
-      count > D9C_COMMAND_CHUNK_V2_SECTION_COUNT ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F,
+  if (!rule ||
+      (rule->ruleFlags & RecordRuleSparseState) == 0u ||
+      count > D9C_COMMAND_CHUNK_SECTION_COUNT ||
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
                      state.vsFloatConstants) ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I,
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
                      state.vsIntConstants) ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B,
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
                      state.vsBoolConstants) ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F,
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
                      state.psFloatConstants) ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I,
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
                      state.psIntConstants) ||
-      !validConstant(D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B,
+      !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
                      state.psBoolConstants)) {
     return false;
   }
@@ -226,30 +226,30 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
   draw.sectionCount = count;
   draw.sectionTableOffset = sizeof(draw);
   draw.sectionPayloadOffset =
-      sizeof(draw) + count * sizeof(D9CCommandChunkWireSectionDescV2);
+      sizeof(draw) + count * sizeof(D9CCommandChunkWireSectionDesc);
   draw.reserved0 = 0u;
   if (!builder.beginRecord(type) || !builder.appendPayloadValue(draw)) {
     return false;
   }
 
-  std::array<D9CCommandChunkWireSectionDescV2,
-             D9C_COMMAND_CHUNK_V2_SECTION_COUNT>
+  std::array<D9CCommandChunkWireSectionDesc,
+             D9C_COMMAND_CHUNK_SECTION_COUNT>
       descs{};
   const auto descBytes = std::span<const std::byte>(
       reinterpret_cast<const std::byte*>(descs.data()),
       count * sizeof(descs[0]));
   if (!builder.appendPayload(descBytes,
-                             alignof(D9CCommandChunkWireSectionDescV2))) {
+                             alignof(D9CCommandChunkWireSectionDesc))) {
     return false;
   }
 
   std::uint32_t sectionIndex = 0u;
   bool havePrevious = false;
   std::uint32_t previous = 0u;
-  const auto texturePrepare = [&](D9CCommandChunkWireTextureBindingV2& value,
+  const auto texturePrepare = [&](D9CCommandChunkWireTextureBinding& value,
                                   const PeWireObjectRef& object) {
     value.reserved0 = 0u;
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            orderedSlot(value.slot, havePrevious, previous) &&
            (!value.valid || appendNullableHandle(
@@ -257,12 +257,12 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
                                 D9C_CHUNK_HANDLE_KIND_TEXTURE,
                                 value.handleIndex));
   };
-  if (!appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE,
+  if (!appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
                           state.renderStates, descs, sectionIndex) ||
       !appendBindingSection<
-          D9CCommandChunkWireTextureBindingV2,
+          D9CCommandChunkWireTextureBinding,
           D9C_DRAW_PACKET_MAX_TEXTURES>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE, state.textures,
+          builder, D9C_COMMAND_CHUNK_SECTION_TEXTURE, state.textures,
           texturePrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
@@ -270,19 +270,19 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
 
   havePrevious = false;
   previous = 0u;
-  const auto streamPrepare = [&](D9CCommandChunkWireStreamBindingV2& value,
+  const auto streamPrepare = [&](D9CCommandChunkWireStreamBinding& value,
                                  const PeWireObjectRef& object) {
     value.reserved0 = 0u;
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            orderedSlot(value.slot, havePrevious, previous) &&
            (!value.valid || appendNullableHandle(
                                 builder, object, D9C_CHUNK_HANDLE_KIND_BUFFER,
                                 value.handleIndex));
   };
-  if (!appendBindingSection<D9CCommandChunkWireStreamBindingV2,
+  if (!appendBindingSection<D9CCommandChunkWireStreamBinding,
                             D9C_DRAW_PACKET_MAX_STREAMS>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_STREAM, state.streams,
+          builder, D9C_COMMAND_CHUNK_SECTION_STREAM, state.streams,
           streamPrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
@@ -290,59 +290,59 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
 
   havePrevious = false;
   previous = 0u;
-  const auto shaderPrepare = [&](D9CCommandChunkWireShaderBindingV2& value,
+  const auto shaderPrepare = [&](D9CCommandChunkWireShaderBinding& value,
                                  const PeWireObjectRef& object) {
     value.reserved0 = 0u;
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            orderedSlot(value.stage, havePrevious, previous) &&
            (!value.valid || appendNullableHandle(
                                 builder, object, D9C_CHUNK_HANDLE_KIND_SHADER,
                                 value.handleIndex));
   };
-  if (!appendBindingSection<D9CCommandChunkWireShaderBindingV2, 2u>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_SHADER, state.shaders,
+  if (!appendBindingSection<D9CCommandChunkWireShaderBinding, 2u>(
+          builder, D9C_COMMAND_CHUNK_SECTION_SHADER, state.shaders,
           shaderPrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
   }
 
   const auto vertexInputPrepare = [&builder](
-                                      D9CCommandChunkWireVertexInputV2& value,
+                                      D9CCommandChunkWireVertexInput& value,
                                       const PeWireObjectRef& object) {
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     if (value.valid > 1u ||
-        value.kind > D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION) {
+        value.kind > D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
       return false;
     }
     if (!value.valid) {
       value.value = 0u;
       return true;
     }
-    if (value.kind == D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF) {
+    if (value.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
       return !object.object;
     }
     return appendNullableHandle(builder, object,
                                 D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
                                 value.handleIndex);
   };
-  if (!appendBindingSection<D9CCommandChunkWireVertexInputV2, 1u>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT,
+  if (!appendBindingSection<D9CCommandChunkWireVertexInput, 1u>(
+          builder, D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
           state.vertexInputs, vertexInputPrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
   }
 
-  const auto indexPrepare = [&builder](D9CCommandChunkWireIndexBindingV2& value,
+  const auto indexPrepare = [&builder](D9CCommandChunkWireIndexBinding& value,
                                       const PeWireObjectRef& object) {
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            (!value.valid || appendNullableHandle(
                                 builder, object, D9C_CHUNK_HANDLE_KIND_BUFFER,
                                 value.handleIndex));
   };
-  if (!appendBindingSection<D9CCommandChunkWireIndexBindingV2, 1u>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER,
+  if (!appendBindingSection<D9CCommandChunkWireIndexBinding, 1u>(
+          builder, D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER,
           state.indexBuffers, indexPrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
@@ -351,10 +351,10 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
   havePrevious = false;
   previous = 0u;
   const auto renderTargetPrepare = [&builder, &havePrevious, &previous](
-                                       D9CCommandChunkWireRenderTargetBindingV2& value,
+                                       D9CCommandChunkWireRenderTargetBinding& value,
                                        const PeWireObjectRef& object) {
     value.reserved0 = 0u;
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            orderedSlot(value.slot, havePrevious, previous) &&
            (!value.valid || appendNullableHandle(
@@ -362,67 +362,67 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
                                 value.handleIndex));
   };
   if (!appendBindingSection<
-          D9CCommandChunkWireRenderTargetBindingV2,
+          D9CCommandChunkWireRenderTargetBinding,
           D9C_DRAW_PACKET_MAX_RENDER_TARGETS>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET,
+          builder, D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
           state.renderTargets, renderTargetPrepare, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
   }
 
   const auto depthPrepare = [&builder](
-                                  D9CCommandChunkWireDepthStencilBindingV2& value,
+                                  D9CCommandChunkWireDepthStencilBinding& value,
                                   const PeWireObjectRef& object) {
-    value.handleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     return value.valid <= 1u &&
            (!value.valid || appendNullableHandle(
                                 builder, object, D9C_CHUNK_HANDLE_KIND_SURFACE,
                                 value.handleIndex));
   };
-  if (!appendBindingSection<D9CCommandChunkWireDepthStencilBindingV2, 1u>(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL,
+  if (!appendBindingSection<D9CCommandChunkWireDepthStencilBinding, 1u>(
+          builder, D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
           state.depthStencils, depthPrepare, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
                           state.viewports, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_SCISSOR,
                           state.scissors, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_MATERIAL,
                           state.materials, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
                           state.clipPlanes, descs, sectionIndex) ||
       !appendPlainSection(
-          builder, D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE,
+          builder, D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
           state.textureStageStates, descs, sectionIndex) ||
       !appendPlainSection(builder,
-                          D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE,
+                          D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
                           state.samplerStates, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
                           state.transforms, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_LIGHT,
                           state.lights, descs, sectionIndex) ||
-      !appendPlainSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE,
+      !appendPlainSection(builder, D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
                           state.lightEnables, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F,
+                             D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
                              state.vsFloatConstants, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I,
+                             D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
                              state.vsIntConstants, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B,
+                             D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
                              state.vsBoolConstants, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F,
+                             D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
                              state.psFloatConstants, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I,
+                             D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
                              state.psIntConstants, descs, sectionIndex) ||
       !appendConstantSection(builder,
-                             D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B,
+                             D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
                              state.psBoolConstants, descs, sectionIndex) ||
-      !appendRawSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA,
+      !appendRawSection(builder, D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
                         state.upIndexData, descs, sectionIndex) ||
-      !appendRawSection(builder, D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+      !appendRawSection(builder, D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
                         state.upVertexData, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
@@ -441,12 +441,12 @@ bool appendSparseRecordV2(CommandChunkV2Builder& builder,
   return true;
 }
 
-bool appendApplyStateV2(CommandChunkV2Builder& builder,
+bool appendApplyState(CommandChunkBuilder& builder,
                         std::uint32_t flags,
-                        const SparseStateV2Input& state) noexcept {
-  D9CCommandChunkWireDrawHeaderV2 draw{};
+                        const SparseStateInput& state) noexcept {
+  D9CCommandChunkWireDrawHeader draw{};
   draw.flags = flags;
-  return appendSparseRecordV2(builder, D9C_COMMAND_RECORD_APPLY_STATE, draw,
+  return appendSparseRecord(builder, D9C_COMMAND_RECORD_APPLY_STATE, draw,
                               state);
 }
 

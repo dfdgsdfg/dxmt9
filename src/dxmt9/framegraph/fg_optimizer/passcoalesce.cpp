@@ -244,7 +244,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
       if (collect_return_candidate && pb.commands.count == 0) {
         ++stats->pass_coalesce_return_commandless;
       }
-      // The existing v2 replay path can keep P_a's encoder open across P_b
+      // The existing canonical replay path can keep P_a's encoder open across P_b
       // only when P_b contributes draw records. A Clear/helper command at the
       // head of P_b is a semantic encoder boundary and must not be silently
       // folded into the merged pass.

@@ -16,8 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "device_c_chunk_v2_registry.hpp"
-#include "device_c_chunk_v2_validate.hpp"
+#include "device_c_chunk_registry.hpp"
+#include "device_c_chunk_validate.hpp"
 #include "dxmt9/core.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -32,7 +32,7 @@ struct D9CStateBlock; // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
-// Wrapper pointer retained across the V2 offload queue boundary. `kind` is a
+// Wrapper pointer retained across the canonical offload queue boundary. `kind` is a
 // D9C_CHUNK_HANDLE_KIND_* value; Query wrappers participate in the same
 // validated wire handle table.
 struct RetainedWireHandle {
@@ -43,10 +43,10 @@ struct RetainedWireHandle {
 using ReplaySeq = std::uint64_t;
 using RawOrdinal = ReplaySeq;
 
-// One decision covers the complete immutable raw V2 chunk. Records are never
+// One decision covers the complete immutable raw canonical chunk. Records are never
 // split between lanes, and RawCommandChunk::replaySeq is the rawOrdinal used by
 // this decision.
-enum class V2ReplayLane : std::uint8_t {
+enum class ReplayLane : std::uint8_t {
   DirectArenaCandidate,
   StateOnly,
   Legacy,  // Existing ReplayOffloadWorker path, including paced Present.
@@ -54,7 +54,7 @@ enum class V2ReplayLane : std::uint8_t {
   Reject,
 };
 
-enum class V2ReplayReason : std::uint8_t {
+enum class ReplayReason : std::uint8_t {
   Eligible,
   Query,
   Readback,
@@ -137,13 +137,13 @@ class ReplayDrainLedger {
 
 struct RawCommandChunk {
   std::vector<dxmt9::core::u8> recordBlob;
-  uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION_V2;
+  uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION;
   uint32_t recordCount = 0;
   uint32_t recordBytes = 0;
   uint32_t handleCount = 0;
   bool preflightValidated = false;
   bool hasPresent = false;
-  // V2 objects are resolved and retained synchronously before enqueue.
+  // canonical objects are resolved and retained synchronously before enqueue.
   // The worker consumes these pointers directly and never looks a stable
   // registry ID up after the app-thread commit returns.
   std::vector<void*> resolvedObjects;
@@ -155,7 +155,7 @@ struct RawCommandChunk {
   // ticket sequence after strict admission.
   std::vector<dxmt9::core::ChunkHandleEntry> resourceEntries;
   std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
-  // Raw FIFO identity. For V2 planning/admission, replaySeq == rawOrdinal.
+  // Raw FIFO identity. For canonical planning/admission, replaySeq == rawOrdinal.
   ReplaySeq replaySeq = 0;
   bool bufferSnapshotsCaptured = false;
   // Admission-time cutover decision. The worker never re-reads the runtime
@@ -283,9 +283,9 @@ class ReplayBufferSnapshotResolver {
   std::span<const dxmt9::core::ChunkBufferBindingSnapshot> entries_{};
 };
 
-bool prepareV2OffloadChunk(
+bool prepareOffloadChunk(
     std::span<const std::byte> blob,
-    const V2ChunkEnvelope& envelope,
+    const CommandChunkEnvelope& envelope,
     const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain,
     RawCommandChunk& out) noexcept;
@@ -555,12 +555,12 @@ class ReplayOffloadWorker {
   void* failureHookContext_ = nullptr;
 };
 
-// Replays a prevalidated, resolved V2 chunk. The worker publishes ledger
+// Replays a prevalidated, resolved canonical chunk. The worker publishes ledger
 // completion before releasing retained wrappers so its target pointers remain
 // alive through the publication.
 int32_t replayRawChunk(D9CDevice* d, RawCommandChunk& chunk);
 
-// Releases every wrapper retained during V2 admission and clears the list.
+// Releases every wrapper retained during canonical admission and clears the list.
 // Namespace linkage allows both the commit push-failure path and the offload
 // worker's fail-stop drain to call it.
 void releaseRetainedWrappers(RawCommandChunk& chunk);

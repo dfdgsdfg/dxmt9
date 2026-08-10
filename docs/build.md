@@ -355,7 +355,7 @@ Do not use `WINEDLLOVERRIDES="d3d9=b"` for app-local mode; it bypasses the
 ## Verify TLA+ Specs
 
 The concurrency-sensitive subsystems are formally verified with TLC —
-14 modules under `specs/verification/tla/` (see the README's formal
+17 modules under `specs/verification/tla/` (see the README's formal
 verification section for the full list):
 
 ```sh
@@ -387,7 +387,7 @@ specs/           Specifications and formal verification
   core/          D3D9 COM requirements and design
   backend/       Metal translation requirements and design
   deploy/        Wine runtime and native app-local deployment specs
-  verification/  TLA+ specs (14 modules: command queue, resource
+  verification/  TLA+ specs (17 modules: command queue, resource
                  lifetime, present pacing, wire protocol, ...) + .cfg
                  model files
   gap.md         Spec–implementation gap tracker

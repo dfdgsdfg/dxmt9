@@ -1,6 +1,6 @@
 #pragma once
 
-#include "device_c_chunk_v2_validate.hpp"
+#include "device_c_chunk_validate.hpp"
 #include "device_c_replay_offload.hpp"
 #include "../dxmt9/dxmt9_source_payload.hpp"
 
@@ -12,7 +12,7 @@
 
 namespace dxmt9::d3d9 {
 
-struct V2CpuReadyPlanOptions {
+struct CpuReadyPlanOptions {
   std::size_t pageSize = 4096;
   std::size_t maxOrdinaryPagesPerSegment = 64;
   std::size_t maxSegmentsPerSource =
@@ -27,10 +27,10 @@ struct V2CpuReadyPlanOptions {
 // Future arena construction appends every UP byte range and synthesized
 // binding payload independently with this alignment. Planning applies the
 // same policy with checked padding, so drawPayloadBytes is a safe upper bound.
-inline constexpr std::size_t kV2ArenaDrawPayloadAppendAlignment =
+inline constexpr std::size_t kArenaDrawPayloadAppendAlignment =
     core::kSourcePayloadByteAlignment;
 
-struct V2CpuReadySegmentPlan {
+struct CpuReadySegmentPlan {
   // Exact semantic-replay range for this construction segment. Adjacent
   // segments partition the complete raw record stream without gaps: leading
   // and interstitial state belongs to the following GPU-producing record,
@@ -42,13 +42,13 @@ struct V2CpuReadySegmentPlan {
   core::SourcePayloadLayout layout{};
 };
 
-struct V2CpuReadyPlan {
+struct CpuReadyPlan {
   RawOrdinal rawOrdinal = 0;
-  V2ReplayLane lane = V2ReplayLane::Legacy;
-  V2ReplayReason reason = V2ReplayReason::InvalidImportedView;
+  ReplayLane lane = ReplayLane::Legacy;
+  ReplayReason reason = ReplayReason::InvalidImportedView;
   bool logicalSource = false;
   core::SourcePayloadCapacity capacity{};
-  std::array<V2CpuReadySegmentPlan,
+  std::array<CpuReadySegmentPlan,
              core::kMaxArenaSourcePayloadSegments> segments{};
   std::size_t segmentCount = 0;
   std::optional<core::ArenaSourcePayloadLayout> arenaLayout{};
@@ -64,7 +64,7 @@ struct V2CpuReadyPlan {
   std::optional<core::SourcePayloadLayout> layout{};
 
   bool directArenaCandidate() const noexcept {
-    return lane == V2ReplayLane::DirectArenaCandidate && logicalSource &&
+    return lane == ReplayLane::DirectArenaCandidate && logicalSource &&
            arenaLayout.has_value();
   }
 
@@ -73,16 +73,16 @@ struct V2CpuReadyPlan {
   // Every non-rejected whole-raw disposition must replay D3D semantics once;
   // StateOnly is explicit because it performs replay without source admission.
   bool replaysSemanticsExactlyOnce() const noexcept {
-    return lane != V2ReplayLane::Reject;
+    return lane != ReplayLane::Reject;
   }
 };
 
-// Scans one already-validated ImportedChunkV2View structurally. It does not
+// Scans one already-validated ImportedChunkView structurally. It does not
 // resolve handles, mutate D3D state, invoke semantic replay, or reserve Tape
 // storage. The returned lane covers the whole raw chunk.
-V2CpuReadyPlan planCpuReadyChunkV2(
-    const ImportedChunkV2View& imported,
+CpuReadyPlan planCpuReadyChunk(
+    const ImportedChunkView& imported,
     RawOrdinal rawOrdinal,
-    V2CpuReadyPlanOptions options = {}) noexcept;
+    CpuReadyPlanOptions options = {}) noexcept;
 
 }  // namespace dxmt9::d3d9

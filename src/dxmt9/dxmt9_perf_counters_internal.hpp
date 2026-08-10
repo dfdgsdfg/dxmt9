@@ -78,13 +78,13 @@ struct Counters {
   // R-BACK-2.10 / 2.27 admit + ring heap fallback gauges.
   std::atomic<std::uint64_t> chunkAdmit{0};
   std::atomic<std::uint64_t> chunkReject{0};
-  // Retired schema fields kept at zero so existing perf-result parsers retain
-  // a stable column set across the V1 removal.
-  std::atomic<std::uint64_t> commandChunkV2Chunks{0};
-  std::atomic<std::uint64_t> commandChunkV2Records{0};
-  std::atomic<std::uint64_t> commandChunkV2Bytes{0};
-  std::atomic<std::uint64_t> commandChunkV2Rejects{0};
-  std::atomic<std::uint64_t> commandChunkV2RegistryResolutions{0};
+  // Canonical command-chunk counters. The emitted suffixless keys are the
+  // promoted telemetry schema.
+  std::atomic<std::uint64_t> commandChunkChunks{0};
+  std::atomic<std::uint64_t> commandChunkRecords{0};
+  std::atomic<std::uint64_t> commandChunkBytes{0};
+  std::atomic<std::uint64_t> commandChunkRejects{0};
+  std::atomic<std::uint64_t> commandChunkRegistryResolutions{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};
@@ -548,9 +548,9 @@ struct Counters {
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};
   std::atomic<std::uint64_t> hazardBloomFalsePositive{0};
-  // Historical V1 importer/replay detail columns remain in the JSON schema
+  // Historical importer/replay detail columns remain in the JSON schema
   // at zero for result-parser compatibility. Fields in this block that still
-  // have a count* entry are shared by the V2 replay path.
+  // have a count* entry are shared by the canonical replay path.
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchSubmits{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchRecords{0};
   std::atomic<std::uint64_t> commitChunkDrawSubmissionBatchMaxRecords{0};
@@ -1646,8 +1646,8 @@ struct Counters {
   // excludes asynchronous encode and GPU work after commit_chunk returns.
   std::atomic<std::uint64_t> bridgeCommitLatencyNs{0};
   std::atomic<std::uint64_t> bridgeCommitLatencyMaxNs{0};
-  // Retired V1 importer phase columns kept at zero for stable perf output.
-  // The raw-enqueue V1 phase columns are retired; the V2 offload counters
+  // Retired importer phase columns are kept at zero for stable perf output.
+  // The raw-enqueue phase columns are retired; the canonical offload counters
   // beginning at offloadReplayCpuNs remain live.
   std::atomic<std::uint64_t> offloadReplayCpuNs{0};
   std::atomic<std::uint64_t> offloadReplayCpuMaxNs{0};
@@ -2080,7 +2080,7 @@ struct Counters {
   PercentileRing encodeSlotPsoPrefetchTileDrawLookupCpuRing;
   PercentileRing encodeSlotPsoPrefetchArgbufSelectCpuRing;
   PercentileRing encodeSlotPsoPrefetchDrawLookupCpuRing;
-  // V1 boundary B2 — paired with bridgeCommitLatency*Ns above.
+  // Historical boundary B2 — paired with bridgeCommitLatency*Ns above.
   PercentileRing bridgeCommitLatencyRing;
   PercentileRing offloadReplayCpuRing;
   PercentileRing completionWaitCommitChunkReplayCpuRing;

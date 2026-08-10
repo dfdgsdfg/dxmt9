@@ -2,7 +2,7 @@
 
 #include "d3d9_pe.hpp"
 
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 
 #include <array>
@@ -63,7 +63,7 @@ struct D3D9PeRecorderFlush {
   virtual bool IsChunkRecorderEnabledForChild() const = 0;
   // Query::Issue is the only child-side record. It takes a PeWireObjectRef
   // rather than opaque bytes because opaque legacy-record bytes cannot express
-  // a V2 handle reference -- the builder needs the ref to append and retain it.
+  // a canonical handle reference -- the builder needs the ref to append and retain it.
   // The former byte-oriented AppendRecordForChild died with the last legacy
   // child record.
   virtual HRESULT AppendQueryIssueForChild(

@@ -30,7 +30,7 @@ See:
 
 | Boundary | Owner | Probe(s) | Counter keys reported |
 |---|---|---|---|
-| **B1** PE → CommandRecorder | PE D3D9 layer + `CommandChunkV2Builder` | `dxmt9-chunk-record-micro-spec` (native), runtime probes echo it via volume sentinels | `chunk_admit`, `submit_draw_cpu_ms`, `draw_calls` |
+| **B1** PE → CommandRecorder | PE D3D9 layer + `CommandChunkBuilder` | `dxmt9-chunk-record-micro-spec` (native), runtime probes echo it via volume sentinels | `chunk_admit`, `submit_draw_cpu_ms`, `draw_calls` |
 | **B2** PE → unix bridge | `winemetal::commit_chunk`, importer | `perf-d3d9-bridge-empty` | `chunk_admit`, `chunk_reject`, `bridge_commit_latency_ns`, `bridge_commit_latency_max_ns`, `bridge_commit_latency_p50_ns`, `bridge_commit_latency_p95_ns`, `bridge_commit_latency_p99_ns` |
 | **B3** unix CommandQueue | `CommandQueue` lifecycle, sub-CB chain, CPU-ready Tape | `perf-d3d9-encode-replay`, `perf-d3d9-chain-parametric` | `command_buffers`, `sub_command_buffers`, `chunk_subcb_count_max`, `queue_writer_wait_ms`, `queue_commit_wait_ms`, `cpu_ready_tape_resident_{sources,pages}_peak`, `cpu_ready_tape_admission_wait_ms`, `cpu_ready_tape_legacy_oversize_bypass`, `cpu_ready_tape_reclaim_wakeups`, `ring_arena_heap_fallback_count`, `ring_arena_heap_fallback_bytes` |
 | **B4** encode thread → MTLCB | encoder lifecycle, render-pass actions, hazards | `dxmt9-perf-{ffp-only,multi-rt,depth-heavy,skeletal,encode-replay,chain-parametric}` | `encode_chunk_calls`, `encode_chunk_cpu_ms`, `encode_chunk_cpu_max_ms`, `encode_draw_*_cpu_ms` family, `render_pass_begin/end`, `render_pass_load/store_action_*`, `render_pass_tile_preservation_bytes`, `uniform_*_calls`, `uniform_volatile_pushes` |

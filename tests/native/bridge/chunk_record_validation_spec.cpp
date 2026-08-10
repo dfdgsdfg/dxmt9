@@ -1,4 +1,4 @@
-#include "device_c_chunk_v2_validate.hpp"
+#include "device_c_chunk_validate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,12 +17,12 @@
 
 namespace {
 
-using dxmt9::d3d9::ImportedChunkV2View;
-using dxmt9::d3d9::V2ChunkEnvelope;
-using dxmt9::d3d9::V2ValidationScratch;
-using dxmt9::d3d9::V2ValidationStatus;
-using dxmt9::d3d9::importPrevalidatedCommandChunkV2;
-using dxmt9::d3d9::validateCommandChunkV2;
+using dxmt9::d3d9::ImportedChunkView;
+using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::CommandChunkValidationScratch;
+using dxmt9::d3d9::CommandChunkValidationStatus;
+using dxmt9::d3d9::importPrevalidatedCommandChunk;
+using dxmt9::d3d9::validateCommandChunk;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -53,52 +53,52 @@ T& at(std::vector<std::byte>& bytes, std::size_t offset) {
 struct RecordSpec {
   std::uint32_t type = 0u;
   std::vector<std::byte> payload;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
 };
 
 struct ChunkFixture {
   std::vector<std::byte> bytes;
-  V2ChunkEnvelope envelope{};
+  CommandChunkEnvelope envelope{};
 
-  D9CCommandChunkWireHeaderV2& header() {
-    return at<D9CCommandChunkWireHeaderV2>(bytes, 0u);
+  D9CCommandChunkWireHeader& header() {
+    return at<D9CCommandChunkWireHeader>(bytes, 0u);
   }
 
-  D9CCommandChunkWireRecordHeaderV2& record(std::size_t index) {
-    return at<D9CCommandChunkWireRecordHeaderV2>(
+  D9CCommandChunkWireRecordHeader& record(std::size_t index) {
+    return at<D9CCommandChunkWireRecordHeader>(
         bytes, header().recordTableOffset +
-                   index * sizeof(D9CCommandChunkWireRecordHeaderV2));
+                   index * sizeof(D9CCommandChunkWireRecordHeader));
   }
 
-  D9CCommandChunkWireHandleEntryV2& handle(std::size_t index) {
-    return at<D9CCommandChunkWireHandleEntryV2>(
+  D9CCommandChunkWireHandleEntry& handle(std::size_t index) {
+    return at<D9CCommandChunkWireHandleEntry>(
         bytes, header().handleTableOffset +
-                   index * sizeof(D9CCommandChunkWireHandleEntryV2));
+                   index * sizeof(D9CCommandChunkWireHandleEntry));
   }
 
   std::byte& payloadByte(std::size_t offset) {
     return bytes[header().payloadArenaOffset + offset];
   }
 
-  auto validate(ImportedChunkV2View* view = nullptr) const {
-    return validateCommandChunkV2(bytes, envelope, view);
+  auto validate(ImportedChunkView* view = nullptr) const {
+    return validateCommandChunk(bytes, envelope, view);
   }
 };
 
 ChunkFixture makeChunk(std::span<const RecordSpec> specs) {
   ChunkFixture fixture;
-  std::vector<D9CCommandChunkWireRecordHeaderV2> records;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
   std::vector<std::byte> payload;
   records.reserve(specs.size());
 
   for (const auto& spec : specs) {
-    const auto* rule = dxmt9::d3d9::v2RecordRule(spec.type);
-    check(rule != nullptr, "fixture record type exists in V2 schema");
+    const auto* rule = dxmt9::d3d9::recordRule(spec.type);
+    check(rule != nullptr, "fixture record type exists in canonical schema");
     payload.resize(alignUp(payload.size(), rule->payloadAlignment));
-    records.push_back(D9CCommandChunkWireRecordHeaderV2{
+    records.push_back(D9CCommandChunkWireRecordHeader{
         .type = spec.type,
-        .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+        .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
         .payloadOffset = static_cast<std::uint32_t>(payload.size()),
         .payloadSize = static_cast<std::uint32_t>(spec.payload.size()),
         .firstHandle = static_cast<std::uint32_t>(handles.size()),
@@ -110,12 +110,12 @@ ChunkFixture makeChunk(std::span<const RecordSpec> specs) {
     handles.insert(handles.end(), spec.handles.begin(), spec.handles.end());
   }
 
-  D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
-      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
+  D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleTableOffset = 0u,
       .handleCount = static_cast<std::uint32_t>(handles.size()),
@@ -126,7 +126,7 @@ ChunkFixture makeChunk(std::span<const RecordSpec> specs) {
   };
   header.handleTableOffset = static_cast<std::uint32_t>(alignUp(
       header.recordTableOffset + records.size() * sizeof(records[0]),
-      alignof(D9CCommandChunkWireHandleEntryV2)));
+      alignof(D9CCommandChunkWireHandleEntry)));
   header.payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
       header.handleTableOffset + handles.size() * sizeof(handles[0]),
       alignof(std::uint32_t)));
@@ -144,8 +144,8 @@ ChunkFixture makeChunk(std::span<const RecordSpec> specs) {
     std::memcpy(fixture.bytes.data() + header.payloadArenaOffset,
                 payload.data(), payload.size());
   }
-  fixture.envelope = V2ChunkEnvelope{
-      .version = D9C_COMMAND_CHUNK_VERSION_V2,
+  fixture.envelope = CommandChunkEnvelope{
+      .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = header.recordCount,
       .handleCount = header.handleCount,
   };
@@ -156,10 +156,10 @@ ChunkFixture makeChunk(const RecordSpec& spec) {
   return makeChunk(std::span<const RecordSpec>(&spec, 1u));
 }
 
-D9CCommandChunkWireHandleEntryV2 handle(std::uint32_t kind,
+D9CCommandChunkWireHandleEntry handle(std::uint32_t kind,
                                         std::uint64_t id,
                                         std::uint32_t generation = 1u) {
-  return D9CCommandChunkWireHandleEntryV2{
+  return D9CCommandChunkWireHandleEntry{
       .kind = kind,
       .generation = generation,
       .objectId = id,
@@ -173,22 +173,22 @@ struct SectionSpec {
 };
 
 std::vector<std::byte> makeDrawPayload(
-    D9CCommandChunkWireDrawHeaderV2 draw,
+    D9CCommandChunkWireDrawHeader draw,
     std::span<const SectionSpec> sectionSpecs) {
   draw.sectionCount = static_cast<std::uint32_t>(sectionSpecs.size());
   draw.sectionTableOffset = sizeof(draw);
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
       sizeof(draw) + sectionSpecs.size() *
-                         sizeof(D9CCommandChunkWireSectionDescV2),
+                         sizeof(D9CCommandChunkWireSectionDesc),
       alignof(std::uint32_t)));
   std::vector<std::byte> payload(draw.sectionPayloadOffset);
-  std::vector<D9CCommandChunkWireSectionDescV2> descriptors;
+  std::vector<D9CCommandChunkWireSectionDesc> descriptors;
   descriptors.reserve(sectionSpecs.size());
   for (const auto& section : sectionSpecs) {
-    const auto* rule = dxmt9::d3d9::v2SectionRule(section.kind);
-    check(rule != nullptr, "fixture section kind exists in V2 schema");
+    const auto* rule = dxmt9::d3d9::sectionRule(section.kind);
+    check(rule != nullptr, "fixture section kind exists in canonical schema");
     payload.resize(alignUp(payload.size(), rule->payloadAlignment));
-    descriptors.push_back(D9CCommandChunkWireSectionDescV2{
+    descriptors.push_back(D9CCommandChunkWireSectionDesc{
         .kind = section.kind,
         .elementSize = rule->elementSize,
         .count = section.count,
@@ -205,8 +205,8 @@ std::vector<std::byte> makeDrawPayload(
   return payload;
 }
 
-D9CCommandChunkWireDrawHeaderV2 directDrawHeader() {
-  return D9CCommandChunkWireDrawHeaderV2{
+D9CCommandChunkWireDrawHeader directDrawHeader() {
+  return D9CCommandChunkWireDrawHeader{
       .flags = 0u,
       .primitiveType = 4u,
       .baseVertex = 0,
@@ -224,7 +224,7 @@ D9CCommandChunkWireDrawHeaderV2 directDrawHeader() {
   };
 }
 
-void expectStatus(const ChunkFixture& fixture, V2ValidationStatus status,
+void expectStatus(const ChunkFixture& fixture, CommandChunkValidationStatus status,
                   std::string_view message) {
   const auto result = fixture.validate();
   check(result.status == status, message);
@@ -232,12 +232,12 @@ void expectStatus(const ChunkFixture& fixture, V2ValidationStatus status,
 
 void testEmptyAndFixedRecordViews() {
   const auto empty = makeChunk(std::span<const RecordSpec>{});
-  ImportedChunkV2View emptyView;
+  ImportedChunkView emptyView;
   check(empty.validate(&emptyView).valid(), "canonical empty chunk validates");
   check(emptyView.empty() && emptyView.handles.empty(),
         "empty view owns only bounded empty spans");
 
-  const D9CCommandChunkWireUpdateTextureV2 update{
+  const D9CCommandChunkWireUpdateTexture update{
       .srcHandleIndex = 0u,
       .dstHandleIndex = 1u,
   };
@@ -250,9 +250,9 @@ void testEmptyAndFixedRecordViews() {
       },
   };
   const auto fixture = makeChunk(spec);
-  ImportedChunkV2View view;
+  ImportedChunkView view;
   check(fixture.validate(&view).valid(),
-        "fixed V2 record with exact handle slice validates");
+        "fixed canonical record with exact handle slice validates");
   const auto record = view.record(0u);
   check(record.header.type == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
             record.payload.size() == sizeof(update) &&
@@ -261,14 +261,14 @@ void testEmptyAndFixedRecordViews() {
 }
 
 void testSparseDrawAndUpData() {
-  const D9CCommandChunkWireTextureBindingV2 texture{
+  const D9CCommandChunkWireTextureBinding texture{
       .slot = 2u,
       .valid = 1u,
       .handleIndex = 0u,
       .reserved0 = 0u,
   };
   const SectionSpec textureSection{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+      .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
       .count = 1u,
       .bytes = bytesOf(texture),
   };
@@ -279,7 +279,7 @@ void testSparseDrawAndUpData() {
       .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x200000001ull)},
   };
   const auto drawFixture = makeChunk(drawSpec);
-  ImportedChunkV2View drawView;
+  ImportedChunkView drawView;
   check(drawFixture.validate(&drawView).valid(),
         "sorted sparse draw section validates");
   const auto drawRecord = drawView.record(0u);
@@ -292,7 +292,7 @@ void testSparseDrawAndUpData() {
   upHeader.stride = 4u;
   std::vector<std::byte> vertices(12u, std::byte{0x2a});
   const SectionSpec vertexSection{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+      .kind = D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
       .count = 12u,
       .bytes = vertices,
   };
@@ -305,7 +305,7 @@ void testSparseDrawAndUpData() {
 }
 
 void testHeaderTableAndSliceRejects() {
-  D9CCommandChunkWireUpdateTextureV2 update{0u, 1u};
+  D9CCommandChunkWireUpdateTexture update{0u, 1u};
   const RecordSpec spec{
       .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
       .payload = bytesOf(update),
@@ -316,46 +316,51 @@ void testHeaderTableAndSliceRejects() {
   };
 
   auto wrongOuter = makeChunk(spec);
-  wrongOuter.envelope.version = D9C_COMMAND_CHUNK_VERSION;
-  expectStatus(wrongOuter, V2ValidationStatus::OuterVersionMismatch,
-               "mixed outer V1 / inner V2 rejects");
+  wrongOuter.envelope.version = 1u;
+  expectStatus(wrongOuter, CommandChunkValidationStatus::OuterVersionMismatch,
+               "outer numeric version 1 rejects before effects");
 
   auto reserved = makeChunk(spec);
   reserved.header().reserved0 = 1u;
-  expectStatus(reserved, V2ValidationStatus::NonZeroReserved,
+  expectStatus(reserved, CommandChunkValidationStatus::NonZeroReserved,
                "nonzero header reserved field rejects");
 
   const auto aligned = makeChunk(spec);
   std::vector<std::byte> shifted(aligned.bytes.size() + 1u);
   std::memcpy(shifted.data() + 1u, aligned.bytes.data(), aligned.bytes.size());
-  const auto unalignedResult = validateCommandChunkV2(
+  const auto unalignedResult = validateCommandChunk(
       std::span<const std::byte>(shifted).subspan(1u), aligned.envelope);
-  check(unalignedResult.status == V2ValidationStatus::InvalidAlignment,
+  check(unalignedResult.status == CommandChunkValidationStatus::InvalidAlignment,
         "misaligned chunk base rejects before typed views are formed");
 
   auto tableGap = makeChunk(spec);
   tableGap.header().recordTableOffset += 4u;
-  expectStatus(tableGap, V2ValidationStatus::NonCanonicalChunkLayout,
+  expectStatus(tableGap, CommandChunkValidationStatus::NonCanonicalChunkLayout,
                "noncanonical table start rejects");
 
   auto sliceGap = makeChunk(spec);
   sliceGap.record(0u).firstHandle = 1u;
-  expectStatus(sliceGap, V2ValidationStatus::NonCanonicalHandleSlice,
+  expectStatus(sliceGap, CommandChunkValidationStatus::NonCanonicalHandleSlice,
                "noncanonical record handle slice rejects");
 
   auto zeroGeneration = makeChunk(spec);
   zeroGeneration.handle(0u).generation = 0u;
-  expectStatus(zeroGeneration, V2ValidationStatus::InvalidHandleEntry,
+  expectStatus(zeroGeneration, CommandChunkValidationStatus::InvalidHandleEntry,
                "zero generation rejects before replay");
+
+  auto fullWidthGeneration = makeChunk(spec);
+  fullWidthGeneration.handle(0u).generation = 0x01000000u;
+  check(fullWidthGeneration.validate().valid(),
+        "nonzero generation above 24 bits is canonical");
 
   auto duplicate = makeChunk(spec);
   duplicate.handle(1u) = duplicate.handle(0u);
-  expectStatus(duplicate, V2ValidationStatus::InvalidHandleEntry,
+  expectStatus(duplicate, CommandChunkValidationStatus::InvalidHandleEntry,
                "duplicate identity in one record slice rejects");
 }
 
 void testBidirectionalHandleRejects() {
-  D9CCommandChunkWireUpdateTextureV2 update{0u, 1u};
+  D9CCommandChunkWireUpdateTexture update{0u, 1u};
   const RecordSpec spec{
       .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
       .payload = bytesOf(update),
@@ -366,34 +371,34 @@ void testBidirectionalHandleRejects() {
   };
 
   auto outOfSlice = makeChunk(spec);
-  auto& outPayload = at<D9CCommandChunkWireUpdateTextureV2>(
+  auto& outPayload = at<D9CCommandChunkWireUpdateTexture>(
       outOfSlice.bytes, outOfSlice.header().payloadArenaOffset);
   outPayload.dstHandleIndex = 2u;
-  expectStatus(outOfSlice, V2ValidationStatus::InvalidHandleReference,
+  expectStatus(outOfSlice, CommandChunkValidationStatus::InvalidHandleReference,
                "payload index outside record slice rejects");
 
   auto wrongKind = makeChunk(spec);
   wrongKind.handle(1u).kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
-  expectStatus(wrongKind, V2ValidationStatus::InvalidHandleReference,
+  expectStatus(wrongKind, CommandChunkValidationStatus::InvalidHandleReference,
                "payload schema kind mismatch rejects");
 
   auto orphan = makeChunk(spec);
-  auto& orphanPayload = at<D9CCommandChunkWireUpdateTextureV2>(
+  auto& orphanPayload = at<D9CCommandChunkWireUpdateTexture>(
       orphan.bytes, orphan.header().payloadArenaOffset);
   orphanPayload.dstHandleIndex = 0u;
-  expectStatus(orphan, V2ValidationStatus::HandleSliceMismatch,
+  expectStatus(orphan, CommandChunkValidationStatus::HandleSliceMismatch,
                "unreferenced handle-table entry rejects");
 }
 
 void testSparseSectionRejects() {
-  const D9CCommandChunkWireTextureBindingV2 texture{
+  const D9CCommandChunkWireTextureBinding texture{
       .slot = 0u,
       .valid = 1u,
       .handleIndex = 0u,
       .reserved0 = 0u,
   };
   const SectionSpec textureSection{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+      .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
       .count = 1u,
       .bytes = bytesOf(texture),
   };
@@ -405,19 +410,19 @@ void testSparseSectionRejects() {
   };
 
   auto elementSize = makeChunk(spec);
-  auto& elementDesc = at<D9CCommandChunkWireSectionDescV2>(
+  auto& elementDesc = at<D9CCommandChunkWireSectionDesc>(
       elementSize.bytes,
       elementSize.header().payloadArenaOffset + sizeof(directDrawHeader()));
   ++elementDesc.elementSize;
-  expectStatus(elementSize, V2ValidationStatus::InvalidSectionSchema,
+  expectStatus(elementSize, CommandChunkValidationStatus::InvalidSectionSchema,
                "wrong section element size rejects");
 
   auto wrongOffset = makeChunk(spec);
-  auto& offsetDesc = at<D9CCommandChunkWireSectionDescV2>(
+  auto& offsetDesc = at<D9CCommandChunkWireSectionDesc>(
       wrongOffset.bytes,
       wrongOffset.header().payloadArenaOffset + sizeof(directDrawHeader()));
   offsetDesc.payloadOffset += 4u;
-  expectStatus(wrongOffset, V2ValidationStatus::InvalidSectionRange,
+  expectStatus(wrongOffset, CommandChunkValidationStatus::InvalidSectionRange,
                "noncanonical section payload offset rejects");
 
   const std::array duplicateSections = {textureSection, textureSection};
@@ -426,46 +431,46 @@ void testSparseSectionRejects() {
       .payload = makeDrawPayload(directDrawHeader(), duplicateSections),
       .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x500000002ull)},
   };
-  expectStatus(makeChunk(duplicateSpec), V2ValidationStatus::InvalidSectionOrder,
+  expectStatus(makeChunk(duplicateSpec), CommandChunkValidationStatus::InvalidSectionOrder,
                "duplicate section kinds reject");
 
   auto fullHeader = directDrawHeader();
-  fullHeader.flags = D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT;
+  fullHeader.flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   const RecordSpec fullSpec{
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       .payload = makeDrawPayload(fullHeader,
                                  std::span<const SectionSpec>{}),
   };
-  expectStatus(makeChunk(fullSpec), V2ValidationStatus::InvalidFullSnapshot,
+  expectStatus(makeChunk(fullSpec), CommandChunkValidationStatus::InvalidFullSnapshot,
                "full snapshot missing texture and stream slots rejects");
 }
 
 void testConstantUpAndPaddingRejects() {
-  D9CCommandChunkWireConstantRangeV2 constantRange{
+  D9CCommandChunkWireConstantRange constantRange{
       .startRegister = D9C_DRAW_PACKET_MAX_CONST_VS_F - 1u,
       .registerCount = 2u,
   };
   auto constantBytes = bytesOf(constantRange);
   constantBytes.resize(sizeof(constantRange) + 2u * 16u);
   const SectionSpec constantSection{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F,
+      .kind = D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
       .count = 2u,
       .bytes = constantBytes,
   };
-  D9CCommandChunkWireDrawHeaderV2 apply{};
+  D9CCommandChunkWireDrawHeader apply{};
   const RecordSpec constantSpec{
       .type = D9C_COMMAND_RECORD_APPLY_STATE,
       .payload = makeDrawPayload(apply, std::span(&constantSection, 1u)),
   };
   expectStatus(makeChunk(constantSpec),
-               V2ValidationStatus::InvalidConstantRange,
+               CommandChunkValidationStatus::InvalidConstantRange,
                "constant register overflow rejects");
 
   auto upHeader = directDrawHeader();
   upHeader.startVertex = 0u;
   upHeader.stride = 4u;
   const SectionSpec shortVertices{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+      .kind = D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
       .count = 8u,
       .bytes = std::vector<std::byte>(8u),
   };
@@ -473,13 +478,13 @@ void testConstantUpAndPaddingRejects() {
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
       .payload = makeDrawPayload(upHeader, std::span(&shortVertices, 1u)),
   };
-  expectStatus(makeChunk(upSpec), V2ValidationStatus::InvalidUpData,
+  expectStatus(makeChunk(upSpec), CommandChunkValidationStatus::InvalidUpData,
                "short UP vertex range rejects");
 
-  D9CCommandChunkWireSetConstV2 boolConst{0u, 1u};
+  D9CCommandChunkWireSetConst boolConst{0u, 1u};
   auto boolPayload = bytesOf(boolConst);
   boolPayload.resize(sizeof(boolConst) + sizeof(std::uint32_t));
-  D9CCommandChunkWirePresentV2 present{};
+  D9CCommandChunkWirePresent present{};
   const std::array records = {
       RecordSpec{.type = D9C_COMMAND_RECORD_SET_VS_CONST_B,
                  .payload = boolPayload},
@@ -490,28 +495,28 @@ void testConstantUpAndPaddingRejects() {
   check(padding.record(1u).payloadOffset > padding.record(0u).payloadSize,
         "fixture has inter-record alignment padding");
   padding.payloadByte(padding.record(0u).payloadSize) = std::byte{1};
-  expectStatus(padding, V2ValidationStatus::NonZeroPadding,
+  expectStatus(padding, CommandChunkValidationStatus::NonZeroPadding,
                "nonzero inter-record padding rejects");
 }
 
 void testFailedValidationDoesNotPublishViewOrAllocatePerRecord() {
-  D9CCommandChunkWireUpdateTextureV2 update{0u, 0u};
+  D9CCommandChunkWireUpdateTexture update{0u, 0u};
   const RecordSpec spec{
       .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
       .payload = bytesOf(update),
       .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x600000001ull)},
   };
   auto fixture = makeChunk(spec);
-  ImportedChunkV2View view;
-  V2ValidationScratch scratch;
+  ImportedChunkView view;
+  CommandChunkValidationScratch scratch;
   check(fixture.validate(&view).valid(), "warm-up validation succeeds");
   const auto capacity = scratch.referencedHandles.capacity();
-  const auto result = validateCommandChunkV2(fixture.bytes, fixture.envelope,
+  const auto result = validateCommandChunk(fixture.bytes, fixture.envelope,
                                              &view, scratch);
   check(result.valid(), "explicit reusable scratch validates");
   const auto warmedCapacity = scratch.referencedHandles.capacity();
   check(warmedCapacity >= capacity, "scratch capacity is retained");
-  check(validateCommandChunkV2(fixture.bytes, fixture.envelope, &view, scratch)
+  check(validateCommandChunk(fixture.bytes, fixture.envelope, &view, scratch)
             .valid() &&
             scratch.referencedHandles.capacity() == warmedCapacity,
         "warm validation reuses one chunk-level scratch allocation");
@@ -524,17 +529,17 @@ void testFailedValidationDoesNotPublishViewOrAllocatePerRecord() {
 }
 
 void testPrevalidatedViewReconstruction() {
-  D9CCommandChunkWirePresentV2 present{};
+  D9CCommandChunkWirePresent present{};
   const RecordSpec spec{
       .type = D9C_COMMAND_RECORD_PRESENT,
       .payload = bytesOf(present),
   };
   const auto fixture = makeChunk(spec);
-  ImportedChunkV2View validated;
-  ImportedChunkV2View reconstructed;
+  ImportedChunkView validated;
+  ImportedChunkView reconstructed;
   check(fixture.validate(&validated).valid(),
         "prevalidated-view fixture validates");
-  check(importPrevalidatedCommandChunkV2(
+  check(importPrevalidatedCommandChunk(
             fixture.bytes, fixture.envelope, reconstructed),
         "validated immutable blob reconstructs a view");
   check(reconstructed.records.data() == validated.records.data() &&
@@ -547,11 +552,11 @@ void testPrevalidatedViewReconstruction() {
 
   auto wrongEnvelope = fixture.envelope;
   ++wrongEnvelope.recordCount;
-  check(!importPrevalidatedCommandChunkV2(
+  check(!importPrevalidatedCommandChunk(
             fixture.bytes, wrongEnvelope, reconstructed) &&
             reconstructed.empty(),
         "outer count drift cannot reconstruct a prevalidated view");
-  check(!importPrevalidatedCommandChunkV2(
+  check(!importPrevalidatedCommandChunk(
             std::span<const std::byte>(fixture.bytes).first(
                 fixture.bytes.size() - 1u),
             fixture.envelope, reconstructed) &&
@@ -575,7 +580,7 @@ struct RejectObservers {
 
 struct MutationCase {
   std::string_view name;
-  V2ValidationStatus status;
+  CommandChunkValidationStatus status;
   std::function<void(ChunkFixture&)> mutate;
 };
 
@@ -584,7 +589,7 @@ void expectRejectedWithoutSideEffects(const ChunkFixture& fixture,
                                       std::uint32_t seed,
                                       std::uint32_t ordinal) {
   RejectObservers observers;
-  ImportedChunkV2View view;
+  ImportedChunkView view;
   const auto result = fixture.validate(&view);
   if (result.valid()) {
     ++observers.registryRetains;
@@ -608,14 +613,14 @@ void expectRejectedWithoutSideEffects(const ChunkFixture& fixture,
 }
 
 void testTableAndSeededMalformedPropertyCorpus() {
-  const D9CCommandChunkWireTextureBindingV2 texture{
+  const D9CCommandChunkWireTextureBinding texture{
       .slot = 2u,
       .valid = 1u,
       .handleIndex = 0u,
       .reserved0 = 0u,
   };
   const SectionSpec textureSection{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE,
+      .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
       .count = 1u,
       .bytes = bytesOf(texture),
   };
@@ -629,104 +634,104 @@ void testTableAndSeededMalformedPropertyCorpus() {
   check(valid.validate().valid(), "property corpus base chunk validates");
 
   const auto drawAt = [](ChunkFixture& fixture)
-      -> D9CCommandChunkWireDrawHeaderV2& {
-    return at<D9CCommandChunkWireDrawHeaderV2>(
+      -> D9CCommandChunkWireDrawHeader& {
+    return at<D9CCommandChunkWireDrawHeader>(
         fixture.bytes,
         fixture.header().payloadArenaOffset + fixture.record(0u).payloadOffset);
   };
   const auto descAt = [](ChunkFixture& fixture)
-      -> D9CCommandChunkWireSectionDescV2& {
-    return at<D9CCommandChunkWireSectionDescV2>(
+      -> D9CCommandChunkWireSectionDesc& {
+    return at<D9CCommandChunkWireSectionDesc>(
         fixture.bytes,
         fixture.header().payloadArenaOffset + fixture.record(0u).payloadOffset +
-            sizeof(D9CCommandChunkWireDrawHeaderV2));
+            sizeof(D9CCommandChunkWireDrawHeader));
   };
   const auto textureAt = [](ChunkFixture& fixture)
-      -> D9CCommandChunkWireTextureBindingV2& {
+      -> D9CCommandChunkWireTextureBinding& {
     const auto payloadStart = fixture.header().payloadArenaOffset +
                               fixture.record(0u).payloadOffset;
-    const auto offset = at<D9CCommandChunkWireSectionDescV2>(
+    const auto offset = at<D9CCommandChunkWireSectionDesc>(
                             fixture.bytes,
                             payloadStart +
-                                sizeof(D9CCommandChunkWireDrawHeaderV2))
+                                sizeof(D9CCommandChunkWireDrawHeader))
                             .payloadOffset;
-    return at<D9CCommandChunkWireTextureBindingV2>(fixture.bytes,
+    return at<D9CCommandChunkWireTextureBinding>(fixture.bytes,
                                                    payloadStart + offset);
   };
 
   const std::array<MutationCase, 34> mutations = {{
-      {"outer-version", V2ValidationStatus::OuterVersionMismatch,
+      {"outer-version", CommandChunkValidationStatus::OuterVersionMismatch,
        [](ChunkFixture& value) { value.envelope.version = 1u; }},
-      {"outer-record-count", V2ValidationStatus::OuterCountMismatch,
+      {"outer-record-count", CommandChunkValidationStatus::OuterCountMismatch,
        [](ChunkFixture& value) { ++value.envelope.recordCount; }},
-      {"outer-handle-count", V2ValidationStatus::OuterCountMismatch,
+      {"outer-handle-count", CommandChunkValidationStatus::OuterCountMismatch,
        [](ChunkFixture& value) { ++value.envelope.handleCount; }},
-      {"wire-version", V2ValidationStatus::OuterVersionMismatch,
+      {"wire-version", CommandChunkValidationStatus::OuterVersionMismatch,
        [](ChunkFixture& value) { value.header().version = 1u; }},
-      {"header-size", V2ValidationStatus::InvalidHeader,
+      {"header-size", CommandChunkValidationStatus::InvalidHeader,
        [](ChunkFixture& value) { ++value.header().headerSize; }},
-      {"record-header-size", V2ValidationStatus::InvalidHeader,
+      {"record-header-size", CommandChunkValidationStatus::InvalidHeader,
        [](ChunkFixture& value) { ++value.header().recordHeaderSize; }},
-      {"handle-entry-size", V2ValidationStatus::InvalidHeader,
+      {"handle-entry-size", CommandChunkValidationStatus::InvalidHeader,
        [](ChunkFixture& value) { ++value.header().handleEntrySize; }},
-      {"record-table-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+      {"record-table-gap", CommandChunkValidationStatus::NonCanonicalChunkLayout,
        [](ChunkFixture& value) { value.header().recordTableOffset += 4u; }},
-      {"record-count-overflow", V2ValidationStatus::NonCanonicalChunkLayout,
+      {"record-count-overflow", CommandChunkValidationStatus::NonCanonicalChunkLayout,
        [](ChunkFixture& value) {
          value.header().recordCount = std::numeric_limits<std::uint32_t>::max();
          value.envelope.recordCount = value.header().recordCount;
        }},
-      {"handle-table-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+      {"handle-table-gap", CommandChunkValidationStatus::NonCanonicalChunkLayout,
        [](ChunkFixture& value) { value.header().handleTableOffset += 4u; }},
-      {"payload-arena-gap", V2ValidationStatus::NonCanonicalChunkLayout,
+      {"payload-arena-gap", CommandChunkValidationStatus::NonCanonicalChunkLayout,
        [](ChunkFixture& value) { value.header().payloadArenaOffset += 4u; }},
-      {"payload-arena-tail", V2ValidationStatus::NonCanonicalChunkLayout,
+      {"payload-arena-tail", CommandChunkValidationStatus::NonCanonicalChunkLayout,
        [](ChunkFixture& value) { ++value.header().payloadArenaSize; }},
-      {"header-reserved-0", V2ValidationStatus::NonZeroReserved,
+      {"header-reserved-0", CommandChunkValidationStatus::NonZeroReserved,
        [](ChunkFixture& value) { value.header().reserved0 = 1u; }},
-      {"header-reserved-1", V2ValidationStatus::NonZeroReserved,
+      {"header-reserved-1", CommandChunkValidationStatus::NonZeroReserved,
        [](ChunkFixture& value) { value.header().reserved1 = 1u; }},
-      {"record-type", V2ValidationStatus::InvalidRecordType,
+      {"record-type", CommandChunkValidationStatus::InvalidRecordType,
        [](ChunkFixture& value) { value.record(0u).type = 0u; }},
-      {"record-flags", V2ValidationStatus::InvalidRecordFlags,
+      {"record-flags", CommandChunkValidationStatus::InvalidRecordFlags,
        [](ChunkFixture& value) { value.record(0u).flags = 1u; }},
-      {"record-payload-offset", V2ValidationStatus::NonCanonicalPayloadLayout,
+      {"record-payload-offset", CommandChunkValidationStatus::NonCanonicalPayloadLayout,
        [](ChunkFixture& value) { value.record(0u).payloadOffset = 4u; }},
-      {"record-payload-size", V2ValidationStatus::InvalidSectionRange,
+      {"record-payload-size", CommandChunkValidationStatus::InvalidSectionRange,
        [](ChunkFixture& value) { --value.record(0u).payloadSize; }},
-      {"record-first-handle", V2ValidationStatus::NonCanonicalHandleSlice,
+      {"record-first-handle", CommandChunkValidationStatus::NonCanonicalHandleSlice,
        [](ChunkFixture& value) { value.record(0u).firstHandle = 1u; }},
-      {"record-handle-count", V2ValidationStatus::InvalidHandleReference,
+      {"record-handle-count", CommandChunkValidationStatus::InvalidHandleReference,
        [](ChunkFixture& value) { value.record(0u).handleCount = 0u; }},
-      {"record-reserved-0", V2ValidationStatus::NonZeroReserved,
+      {"record-reserved-0", CommandChunkValidationStatus::NonZeroReserved,
        [](ChunkFixture& value) { value.record(0u).reserved0 = 1u; }},
-      {"record-reserved-1", V2ValidationStatus::NonZeroReserved,
+      {"record-reserved-1", CommandChunkValidationStatus::NonZeroReserved,
        [](ChunkFixture& value) { value.record(0u).reserved1 = 1u; }},
-      {"handle-kind", V2ValidationStatus::InvalidHandleEntry,
+      {"handle-kind", CommandChunkValidationStatus::InvalidHandleEntry,
        [](ChunkFixture& value) {
          value.handle(0u).kind = D9C_CHUNK_HANDLE_KIND_QUERY + 1u;
        }},
-      {"handle-generation", V2ValidationStatus::InvalidHandleEntry,
+      {"handle-generation", CommandChunkValidationStatus::InvalidHandleEntry,
        [](ChunkFixture& value) { value.handle(0u).generation = 0u; }},
-      {"handle-object-id", V2ValidationStatus::InvalidHandleEntry,
+      {"handle-object-id", CommandChunkValidationStatus::InvalidHandleEntry,
        [](ChunkFixture& value) { value.handle(0u).objectId = 0u; }},
-      {"draw-reserved", V2ValidationStatus::InvalidDrawHeader,
+      {"draw-reserved", CommandChunkValidationStatus::InvalidDrawHeader,
        [drawAt](ChunkFixture& value) { drawAt(value).reserved0 = 1u; }},
-      {"section-table-offset", V2ValidationStatus::InvalidSectionTable,
+      {"section-table-offset", CommandChunkValidationStatus::InvalidSectionTable,
        [drawAt](ChunkFixture& value) { ++drawAt(value).sectionTableOffset; }},
-      {"section-payload-offset", V2ValidationStatus::InvalidSectionTable,
+      {"section-payload-offset", CommandChunkValidationStatus::InvalidSectionTable,
        [drawAt](ChunkFixture& value) { drawAt(value).sectionPayloadOffset += 4u; }},
-      {"descriptor-kind", V2ValidationStatus::InvalidSectionOrder,
+      {"descriptor-kind", CommandChunkValidationStatus::InvalidSectionOrder,
        [descAt](ChunkFixture& value) { descAt(value).kind = 0u; }},
-      {"descriptor-element-size", V2ValidationStatus::InvalidSectionSchema,
+      {"descriptor-element-size", CommandChunkValidationStatus::InvalidSectionSchema,
        [descAt](ChunkFixture& value) { ++descAt(value).elementSize; }},
-      {"descriptor-count", V2ValidationStatus::InvalidSectionSchema,
+      {"descriptor-count", CommandChunkValidationStatus::InvalidSectionSchema,
        [descAt](ChunkFixture& value) { descAt(value).count = 0u; }},
-      {"descriptor-offset", V2ValidationStatus::InvalidSectionRange,
+      {"descriptor-offset", CommandChunkValidationStatus::InvalidSectionRange,
        [descAt](ChunkFixture& value) { descAt(value).payloadOffset += 4u; }},
-      {"texture-valid", V2ValidationStatus::InvalidSectionSchema,
+      {"texture-valid", CommandChunkValidationStatus::InvalidSectionSchema,
        [textureAt](ChunkFixture& value) { textureAt(value).valid = 2u; }},
-      {"texture-index", V2ValidationStatus::InvalidHandleReference,
+      {"texture-index", CommandChunkValidationStatus::InvalidHandleReference,
        [textureAt](ChunkFixture& value) { textureAt(value).handleIndex = 1u; }},
   }};
 
@@ -764,10 +769,10 @@ int main() {
     testPrevalidatedViewReconstruction();
     testTableAndSeededMalformedPropertyCorpus();
   } catch (const TestFailure& error) {
-    std::cerr << "chunk_record_v2_validation_spec failed: " << error.what()
+    std::cerr << "chunk_record_validation_spec failed: " << error.what()
               << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "chunk_record_v2_validation_spec passed\n";
+  std::cout << "chunk_record_validation_spec passed\n";
   return EXIT_SUCCESS;
 }

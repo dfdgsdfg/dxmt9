@@ -1,6 +1,6 @@
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_const_shadow.hpp"
-#include "device_c_chunk_v2_validate.hpp"
+#include "device_c_chunk_validate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -61,12 +61,12 @@ extern "C" std::uint32_t dxmt9c_query_release(D9CQuery* value) {
 
 namespace {
 
-using dxmt9::d3d9::ImportedChunkV2View;
-using dxmt9::d3d9::V2ChunkEnvelope;
-using dxmt9::d3d9::pe::CommandChunkV2Builder;
+using dxmt9::d3d9::ImportedChunkView;
+using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::PeWireObjectRef;
-using dxmt9::d3d9::pe::SparseBindingV2Input;
-using dxmt9::d3d9::pe::SparseStateV2Input;
+using dxmt9::d3d9::pe::SparseBindingInput;
+using dxmt9::d3d9::pe::SparseStateInput;
 using dxmt9::d3d9::pe::cacheWireObjectRef;
 
 struct TestFailure : std::runtime_error {
@@ -136,7 +136,7 @@ void testCachedIdentityBuilderAndSeal() {
         "child construction caches each typed identity once");
   check(getterCalls == 3u, "identity getter count equals wrapper count");
 
-  CommandChunkV2Builder builder;
+  CommandChunkBuilder builder;
   std::uint32_t firstIndex = 0u;
   std::uint32_t secondIndex = 0u;
   std::uint32_t duplicateIndex = 0u;
@@ -151,7 +151,7 @@ void testCachedIdentityBuilderAndSeal() {
   check(firstIndex == 0u && secondIndex == 1u && duplicateIndex == firstIndex &&
             builder.handleCount() == 2u,
         "record-local handles are deduplicated into absolute indices");
-  const D9CCommandChunkWireUpdateTextureV2 firstUpdate{
+  const D9CCommandChunkWireUpdateTexture firstUpdate{
       .srcHandleIndex = firstIndex,
       .dstHandleIndex = secondIndex,
   };
@@ -168,7 +168,7 @@ void testCachedIdentityBuilderAndSeal() {
             builder.appendHandle(secondRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
                                  repeatedSecond),
         "later record may repeat the same identities");
-  const D9CCommandChunkWireUpdateTextureV2 secondUpdate{
+  const D9CCommandChunkWireUpdateTexture secondUpdate{
       .srcHandleIndex = repeatedFirst,
       .dstHandleIndex = repeatedSecond,
   };
@@ -206,13 +206,13 @@ void testCachedIdentityBuilderAndSeal() {
         "builder seals one immutable table/table/arena blob");
   check(!containsPointerBytes(sealed.blob, &first) &&
             !containsPointerBytes(sealed.blob, &second),
-        "sealed V2 bytes contain no PE or D9C wrapper address");
+        "sealed canonical bytes contain no PE or D9C wrapper address");
 
-  ImportedChunkV2View imported;
-  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
+  ImportedChunkView imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunk(
       sealed.blob,
-      V2ChunkEnvelope{
-          .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      CommandChunkEnvelope{
+          .version = D9C_COMMAND_CHUNK_VERSION,
           .recordCount = sealed.recordCount,
           .handleCount = sealed.handleCount,
       },
@@ -241,7 +241,7 @@ void testInvalidIdentityAndExplicitRollback() {
       },
       .object = &texture,
   };
-  CommandChunkV2Builder builder;
+  CommandChunkBuilder builder;
   std::uint32_t index = 0u;
   check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
             !builder.appendHandle(invalid, D9C_CHUNK_HANDLE_KIND_TEXTURE,
@@ -281,7 +281,7 @@ void testNonDrawProducerMatrix() {
   const auto queryRef =
       wireRef(&query, D9C_CHUNK_HANDLE_KIND_QUERY, 0x810000005ull);
 
-  CommandChunkV2Builder builder;
+  CommandChunkBuilder builder;
   std::array<std::byte, 16> oneRegister{};
   const std::array constantTypes = {
       D9C_COMMAND_RECORD_SET_VS_CONST_F,
@@ -297,25 +297,25 @@ void testNonDrawProducerMatrix() {
                 type == D9C_COMMAND_RECORD_SET_PS_CONST_B
             ? std::span<const std::byte>(oneRegister).first(4u)
             : std::span<const std::byte>(oneRegister);
-    check(dxmt9::d3d9::pe::appendSetConstantsV2(
+    check(dxmt9::d3d9::pe::appendSetConstants(
               builder, type, 0u, 1u, bytes),
-          "each standalone constant opcode has a V2 producer");
+          "each standalone constant opcode has a canonical producer");
   }
 
   const std::array rects = {
       D9CRect{0, 0, 32, 32},
       D9CRect{32, 32, 64, 64},
   };
-  D9CCommandChunkWireClearV2 clear{
+  D9CCommandChunkWireClear clear{
       .flags = 1u,
       .colorARGB = 0xff102030u,
       .z = 0.5f,
       .stencil = 3u,
   };
-  check(dxmt9::d3d9::pe::appendClearV2(builder, clear, rects),
-        "Clear V2 producer appends typed rect tail");
+  check(dxmt9::d3d9::pe::appendClear(builder, clear, rects),
+        "Clear canonical producer appends typed rect tail");
 
-  D9CCommandChunkWirePresentV2 present{
+  D9CCommandChunkWirePresent present{
       .hwnd = 0x1234u,
       .flags = 2u,
       .hasSrc = 1u,
@@ -323,54 +323,54 @@ void testNonDrawProducerMatrix() {
       .reserved0 = 99u,
       .src = D9CRect{0, 0, 640, 480},
   };
-  check(dxmt9::d3d9::pe::appendPresentV2(builder, present),
-        "Present V2 producer canonicalizes reserved bytes");
+  check(dxmt9::d3d9::pe::appendPresent(builder, present),
+        "Present canonical producer canonicalizes reserved bytes");
 
-  D9CCommandChunkWireStretchRectV2 stretch{
+  D9CCommandChunkWireStretchRect stretch{
       .hasSrcRect = 1u,
       .hasDstRect = 1u,
       .filter = 2u,
       .srcRect = D9CRect{0, 0, 16, 16},
       .dstRect = D9CRect{4, 4, 20, 20},
   };
-  check(dxmt9::d3d9::pe::appendStretchRectV2(
+  check(dxmt9::d3d9::pe::appendStretchRect(
             builder, stretch, srcSurfaceRef, dstSurfaceRef),
-        "StretchRect V2 producer uses surface indices");
+        "StretchRect canonical producer uses surface indices");
 
-  D9CCommandChunkWireColorFillV2 colorFill{
+  D9CCommandChunkWireColorFill colorFill{
       .colorARGB = 0xffaabbccu,
       .hasRect = 1u,
       .rect = D9CRect{1, 2, 3, 4},
   };
-  check(dxmt9::d3d9::pe::appendColorFillV2(
+  check(dxmt9::d3d9::pe::appendColorFill(
             builder, colorFill, dstSurfaceRef) &&
-            dxmt9::d3d9::pe::appendUpdateTextureV2(
+            dxmt9::d3d9::pe::appendUpdateTexture(
                 builder, srcTextureRef, dstTextureRef),
-        "ColorFill and UpdateTexture V2 producers append");
+        "ColorFill and UpdateTexture canonical producers append");
 
-  D9CCommandChunkWireUpdateSurfaceV2 updateSurface{
+  D9CCommandChunkWireUpdateSurface updateSurface{
       .hasSrcRect = 1u,
       .hasDstPoint = 1u,
       .srcRect = D9CRect{0, 0, 8, 8},
       .dstPoint = D9CRect{8, 9, 0, 0},
   };
-  check(dxmt9::d3d9::pe::appendUpdateSurfaceV2(
+  check(dxmt9::d3d9::pe::appendUpdateSurface(
             builder, updateSurface, srcSurfaceRef, dstSurfaceRef) &&
-            dxmt9::d3d9::pe::appendQueryIssueV2(builder, 1u, queryRef) &&
-            dxmt9::d3d9::pe::appendReadbackV2(
+            dxmt9::d3d9::pe::appendQueryIssue(builder, 1u, queryRef) &&
+            dxmt9::d3d9::pe::appendReadback(
                 builder, srcSurfaceRef, dstSurfaceRef) &&
-            dxmt9::d3d9::pe::appendReszDepthResolveV2(
+            dxmt9::d3d9::pe::appendReszDepthResolve(
                 builder, srcSurfaceRef, dstTextureRef),
-        "remaining fixed non-draw V2 producers append");
+        "remaining fixed non-draw canonical producers append");
 
   const auto sealed = builder.seal();
   check(sealed.valid() && sealed.recordCount == 15u,
         "non-draw producer matrix seals all fixed opcodes");
-  ImportedChunkV2View imported;
-  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
+  ImportedChunkView imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunk(
       sealed.blob,
-      V2ChunkEnvelope{
-          .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      CommandChunkEnvelope{
+          .version = D9C_COMMAND_CHUNK_VERSION,
           .recordCount = sealed.recordCount,
           .handleCount = sealed.handleCount,
       },
@@ -407,7 +407,7 @@ void testSparseDrawAndApplyProducerMatrix() {
   const auto surfaceRef = wireRef(
       &surface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0x820000005ull);
 
-  std::array<SparseBindingV2Input<D9CCommandChunkWireTextureBindingV2>,
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>,
              D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
@@ -416,7 +416,7 @@ void testSparseDrawAndApplyProducerMatrix() {
   }
   textures[0].object = textureRef;
 
-  std::array<SparseBindingV2Input<D9CCommandChunkWireStreamBindingV2>,
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>,
              D9C_DRAW_PACKET_MAX_STREAMS>
       streams{};
   for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
@@ -428,46 +428,46 @@ void testSparseDrawAndApplyProducerMatrix() {
   streams[0].object = bufferRef;
 
   const std::array shaders = {
-      SparseBindingV2Input<D9CCommandChunkWireShaderBindingV2>{
-          .wire = {.stage = D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX,
+      SparseBindingInput<D9CCommandChunkWireShaderBinding>{
+          .wire = {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
                    .valid = 1u},
           .object = shaderRef,
       },
-      SparseBindingV2Input<D9CCommandChunkWireShaderBindingV2>{
-          .wire = {.stage = D9C_COMMAND_CHUNK_V2_SHADER_STAGE_PIXEL,
+      SparseBindingInput<D9CCommandChunkWireShaderBinding>{
+          .wire = {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
                    .valid = 1u},
           .object = shaderRef,
       },
   };
   const std::array vertexInputs = {
-      SparseBindingV2Input<D9CCommandChunkWireVertexInputV2>{
+      SparseBindingInput<D9CCommandChunkWireVertexInput>{
           .wire = {
               .valid = 1u,
-              .kind = D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION,
+              .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION,
           },
           .object = vertexDeclRef,
       },
   };
   const std::array indexBuffers = {
-      SparseBindingV2Input<D9CCommandChunkWireIndexBindingV2>{
+      SparseBindingInput<D9CCommandChunkWireIndexBinding>{
           .wire = {.valid = 1u},
           .object = bufferRef,
       },
   };
   const std::array renderTargets = {
-      SparseBindingV2Input<D9CCommandChunkWireRenderTargetBindingV2>{
+      SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>{
           .wire = {.slot = 0u, .valid = 1u},
           .object = surfaceRef,
       },
   };
   const std::array depthStencils = {
-      SparseBindingV2Input<D9CCommandChunkWireDepthStencilBindingV2>{
+      SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>{
           .wire = {.valid = 1u},
           .object = surfaceRef,
       },
   };
   const std::array renderStates = {
-      D9CCommandChunkWireRenderStateV2{.state = 7u, .value = 1u},
+      D9CCommandChunkWireRenderState{.state = 7u, .value = 1u},
   };
   const std::array viewports = {
       D9CViewport{.width = 640u, .height = 480u, .maxZ = 1.0f},
@@ -477,7 +477,7 @@ void testSparseDrawAndApplyProducerMatrix() {
   };
   const std::array materials = {D9CMaterial{}};
   const std::array clipPlanes = {
-      D9CCommandChunkWireClipPlaneV2{.slot = 0u,
+      D9CCommandChunkWireClipPlane{.slot = 0u,
                                      .values = {0.0f, 1.0f, 0.0f, 0.0f}},
   };
   const std::array textureStageStates = {
@@ -490,15 +490,15 @@ void testSparseDrawAndApplyProducerMatrix() {
       D9CDrawPacketTransform{.state = 2u},
   };
   const std::array lights = {
-      D9CCommandChunkWireLightV2{.slot = 0u},
+      D9CCommandChunkWireLight{.slot = 0u},
   };
   const std::array lightEnables = {
-      D9CCommandChunkWireLightEnableV2{.slot = 0u, .enabled = 1u},
+      D9CCommandChunkWireLightEnable{.slot = 0u, .enabled = 1u},
   };
   const std::array<std::byte, 16> wideRegister{};
   const std::array<std::byte, 4> boolRegister{};
 
-  SparseStateV2Input fullState{
+  SparseStateInput fullState{
       .renderStates = renderStates,
       .textures = textures,
       .streams = streams,
@@ -524,73 +524,73 @@ void testSparseDrawAndApplyProducerMatrix() {
       .psBoolConstants = {0u, 1u, boolRegister},
   };
 
-  CommandChunkV2Builder builder;
-  D9CCommandChunkWireDrawHeaderV2 direct{
-      .flags = D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT,
+  CommandChunkBuilder builder;
+  D9CCommandChunkWireDrawHeader direct{
+      .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
       .primitiveType = 4u,
       .startVertex = 2u,
       .primitiveCount = 1u,
   };
-  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+  check(dxmt9::d3d9::pe::appendSparseRecord(
             builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, direct, fullState),
-        "full-snapshot DrawPrimitive V2 producer emits every state section");
+        "full-snapshot DrawPrimitive canonical producer emits every state section");
 
-  D9CCommandChunkWireDrawHeaderV2 indexed{
+  D9CCommandChunkWireDrawHeader indexed{
       .primitiveType = 4u,
       .baseVertex = -1,
       .numVertices = 3u,
       .primitiveCount = 1u,
   };
-  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+  check(dxmt9::d3d9::pe::appendSparseRecord(
             builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, indexed, {}),
-        "DrawIndexedPrimitive V2 producer accepts an empty delta");
+        "DrawIndexedPrimitive canonical producer accepts an empty delta");
 
   const std::array<std::byte, 12> vertices{};
-  D9CCommandChunkWireDrawHeaderV2 up{
+  D9CCommandChunkWireDrawHeader up{
       .primitiveType = 4u,
       .primitiveCount = 1u,
       .stride = 4u,
   };
-  SparseStateV2Input upState{.upVertexData = vertices};
-  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+  SparseStateInput upState{.upVertexData = vertices};
+  check(dxmt9::d3d9::pe::appendSparseRecord(
             builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP, up, upState),
-        "DrawPrimitiveUP V2 producer emits its exact vertex byte range");
+        "DrawPrimitiveUP canonical producer emits its exact vertex byte range");
 
   const std::array<std::byte, 6> indices{};
-  D9CCommandChunkWireDrawHeaderV2 indexedUp{
+  D9CCommandChunkWireDrawHeader indexedUp{
       .primitiveType = 4u,
       .numVertices = 3u,
       .primitiveCount = 1u,
       .stride = 4u,
       .indexFormat = 101u,
   };
-  SparseStateV2Input indexedUpState{
+  SparseStateInput indexedUpState{
       .upIndexData = indices,
       .upVertexData = vertices,
   };
-  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+  check(dxmt9::d3d9::pe::appendSparseRecord(
             builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
             indexedUp, indexedUpState) &&
-            dxmt9::d3d9::pe::appendApplyStateV2(
+            dxmt9::d3d9::pe::appendApplyState(
                 builder, 0u,
-                SparseStateV2Input{.renderStates = renderStates}),
-        "DrawIndexedPrimitiveUP and APPLY_STATE V2 producers append");
+                SparseStateInput{.renderStates = renderStates}),
+        "DrawIndexedPrimitiveUP and APPLY_STATE canonical producers append");
 
   const auto sealed = builder.seal();
-  ImportedChunkV2View imported;
-  const auto validation = dxmt9::d3d9::validateCommandChunkV2(
+  ImportedChunkView imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunk(
       sealed.blob,
-      V2ChunkEnvelope{
-          .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      CommandChunkEnvelope{
+          .version = D9C_COMMAND_CHUNK_VERSION,
           .recordCount = sealed.recordCount,
           .handleCount = sealed.handleCount,
       },
       &imported);
   check(validation.valid() && sealed.recordCount == 5u &&
             imported.record(0u).sections.size() ==
-                D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA - 1u &&
+                D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA - 1u &&
             imported.records.back().type == D9C_COMMAND_RECORD_APPLY_STATE,
-        "all sparse producers seal a canonical pointer-free V2 chunk");
+        "all sparse producers seal a canonical pointer-free canonical chunk");
   check(texture.refs == 2u && buffer.refs == 2u && shader.refs == 2u &&
             vertexDecl.refs == 2u && surface.refs == 2u,
         "draw handle table retains each cached wrapper once per chunk");
@@ -600,20 +600,20 @@ void testSparseDrawAndApplyProducerMatrix() {
         "draw builder reset releases every retained wrapper");
 
   std::array duplicateSlots = {
-      SparseBindingV2Input<D9CCommandChunkWireTextureBindingV2>{
+      SparseBindingInput<D9CCommandChunkWireTextureBinding>{
           .wire = {.slot = 0u, .valid = 1u},
       },
-      SparseBindingV2Input<D9CCommandChunkWireTextureBindingV2>{
+      SparseBindingInput<D9CCommandChunkWireTextureBinding>{
           .wire = {.slot = 0u, .valid = 1u},
       },
   };
-  check(!dxmt9::d3d9::pe::appendApplyStateV2(
-            builder, 0u, SparseStateV2Input{.textures = duplicateSlots}) &&
+  check(!dxmt9::d3d9::pe::appendApplyState(
+            builder, 0u, SparseStateInput{.textures = duplicateSlots}) &&
             !builder.recordActive() && builder.recordCount() == 0u,
         "noncanonical sparse input rolls back transactionally");
 }
 
-// testPeStateStagingFeedsV2Producer lived here. It tested only the fat-packet
+// testPeStateStagingFeedsProducer lived here. It tested only the fat-packet
 // staging helpers (populateDrawPacketAttachmentDelta / ...StreamDependencies /
 // ...IndexDependency), which Task 10 deleted along with the format they staged.
 // The properties it asserted did not disappear with it: "retained streams stay
@@ -622,7 +622,7 @@ void testSparseDrawAndApplyProducerMatrix() {
 // pe_producer_differential_spec's stream-retention and six index-buffer fixtures,
 // which exercise the real production path rather than a staging helper.
 
-void testConstShadowFeedsV2ConstantSections() {
+void testConstShadowFeedsConstantSections() {
   const std::array<float, 8> values{
       1.0f, -2.0f, 3.0f, -4.0f, 5.0f, -6.0f, 7.0f, -8.0f};
   ConstShadow shadow;
@@ -633,29 +633,29 @@ void testConstShadowFeedsV2ConstantSections() {
   // The dirty range IS the sparse section range. This used to go through
   // foldConstShadowIntoDeltaSection, which staged the range into a fat-packet
   // D9CDrawPacketConstDeltaSection first; Task 10 deleted both, and
-  // buildSparseStateV2 now drains the shadow into a sparse range directly. The
+  // buildSparseState now drains the shadow into a sparse range directly. The
   // property under test is unchanged: the shadow's merged range and the bytes it
   // covers must land in the record exactly.
   const std::uint32_t startRegister = shadow.dirtyStart;
   const std::uint32_t registerCount = shadow.dirtyEnd - shadow.dirtyStart;
   check(startRegister == 4u && registerCount == 2u,
-        "the merged dirty range is the exact V2 section range");
+        "the merged dirty range is the exact canonical section range");
 
-  CommandChunkV2Builder builder;
-  SparseStateV2Input state{
+  CommandChunkBuilder builder;
+  SparseStateInput state{
       .vsFloatConstants = {
           startRegister,
           registerCount,
           std::as_bytes(std::span(values)),
       },
   };
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
   };
-  check(dxmt9::d3d9::pe::appendSparseRecordV2(
+  check(dxmt9::d3d9::pe::appendSparseRecord(
             builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, state),
-        "staged constant range appends through the direct V2 producer");
+        "staged constant range appends through the direct canonical producer");
 }
 
 }  // namespace
@@ -666,12 +666,12 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
-    testConstShadowFeedsV2ConstantSections();
+    testConstShadowFeedsConstantSections();
   } catch (const TestFailure& error) {
-    std::cerr << "pe_chunk_record_v2_value_spec failed: " << error.what()
+    std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "pe_chunk_record_v2_value_spec passed\n";
+  std::cout << "pe_chunk_record_value_spec passed\n";
   return EXIT_SUCCESS;
 }

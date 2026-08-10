@@ -47,7 +47,7 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
           "device_c bridge starts after shader unix-call slots");
   // 156 since Task 10 stage D removed dxmt9c_device_draw_primitive_packet and
   // ..._chunk, the two direct fat-packet ops. They had no PE caller and the wire
-  // has rejected non-V2 chunks for far longer.
+  // has rejected non-canonical chunks for far longer.
   checkEq(dxmt9::bridge::kBridgeOpcodeCount, 156u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
@@ -55,7 +55,7 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
           "bridge opcode count matches enum span");
 }
 
-void testCommandChunkV2BridgeOpsAreGenerated() {
+void testCommandChunkBridgeOpsAreGenerated() {
   const auto first = opcode(dxmt9::bridge::BridgeOpcode::dxmt9c_factory_create);
   const auto count = dxmt9::bridge::kBridgeOpcodeCount;
   const auto inRange = [first](dxmt9::bridge::BridgeOpcode value) {
@@ -65,7 +65,7 @@ void testCommandChunkV2BridgeOpsAreGenerated() {
 
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_negotiate_command_chunk),
-        "V2 negotiation opcode is generated");
+        "canonical negotiation opcode is generated");
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_texture_get_wire_identity),
         "texture identity opcode is generated");
@@ -146,7 +146,7 @@ int main() {
   try {
     testBridgeOpcodeCountMatchesEnumSpan();
     testDodChunkBridgeOpsStaySingleCallShape();
-    testCommandChunkV2BridgeOpsAreGenerated();
+    testCommandChunkBridgeOpsAreGenerated();
     testWow64OpaqueHandleRegistryKeepsRetainedTokensAlive();
     testBridgeAbiHashIsNonZeroAndStable();
   } catch (const TestFailure& e) {

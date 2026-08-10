@@ -98,8 +98,8 @@ perf-probe toolkit.
 It compared a draw packet's declared state bits against the unix-side
 `DeviceState` and bucketed actual-changing versus redundant deltas. The whole
 premise was the fat `D9CDrawPrimitivePacket`, which the PE legacy-record removal
-deleted: there is no packet delta to compare any more, only sparse V2 sections
-that carry exactly what the producer decided to emit. Removed together with its
+deleted: there is no packet delta to compare any more, only sparse canonical
+sections that carry exactly what the producer decided to emit. Removed together with its
 `drawPacketActualChangeMask` implementation, every `draw_packet_*` counter it
 fed, and the wrapper's `--probe-draw-packet-actual-change` flag;
 `summarize_3dmark05_perf.py` keeps its tolerant rows so historical `result.json`
@@ -112,7 +112,7 @@ passed because the rows were present, and the callsite audit had nothing to chec
 because the `count*()` declaration had gone with the function. A sweep for the
 same shape found **165** such fields in total, most of them orphaned when the
 legacy replay path was deleted (`commitChunkReplay*Record*`,
-`commitChunkDrawDelta*`, `commandChunkV1*`). All are gone, and
+`commitChunkDrawDelta*`, and the retired command-chunk fields). All are gone, and
 `scripts/check/audit_perf_counter_table.py` now checks the second direction --
 a field with a table row that no writer anywhere names -- so the shape cannot
 come back. A counter stuck at zero is worse than a missing one: it reads as

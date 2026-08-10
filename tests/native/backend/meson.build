@@ -630,9 +630,9 @@ present_ordinal_boundary_spec = executable(
 test('dxmt9-present-ordinal-boundary-spec', present_ordinal_boundary_spec,
      env: dxmt9_native_test_env)
 
-# R-BACK-2.54 / R-BACK-2.56 command-chunk V2 replay/lifetime scaffolds.
+# R-BACK-2.54 / R-BACK-2.56 command-chunk canonical replay/lifetime scaffolds.
 foreach spec : [
-  ['chunk-record-v2-replay', 'chunk_record_v2_replay_spec.cpp'],
+  ['chunk-record-replay', 'chunk_record_replay_spec.cpp'],
 ]
   target = executable(
     'dxmt9-' + spec[0] + '-spec',
@@ -645,13 +645,13 @@ foreach spec : [
        env: dxmt9_native_test_env)
 endforeach
 
-chunk_record_v2_allocation_spec = executable(
-  'dxmt9-chunk-record-v2-allocation-spec',
+chunk_record_allocation_spec = executable(
+  'dxmt9-chunk-record-allocation-spec',
   [
-    'chunk_record_v2_allocation_spec.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_builder.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_draw.cpp',
-    '../../../src/d3d9/d3d9_pe_chunk_v2_nondraw.cpp',
+    'chunk_record_allocation_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
   ],
   include_directories: [
     dxmt9_inc,
@@ -660,6 +660,6 @@ chunk_record_v2_allocation_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
-test('dxmt9-chunk-record-v2-allocation-spec',
-     chunk_record_v2_allocation_spec,
+test('dxmt9-chunk-record-allocation-spec',
+     chunk_record_allocation_spec,
      env: dxmt9_native_test_env)

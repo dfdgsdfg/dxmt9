@@ -1,4 +1,4 @@
-#include "device_c_chunk_v2_replay.hpp"
+#include "device_c_chunk_replay.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -8,7 +8,7 @@ namespace dxmt9::d3d9 {
 namespace {
 
 template <typename T>
-std::span<const T> typedSection(const ImportedSectionV2View& section) {
+std::span<const T> typedSection(const ImportedSectionView& section) {
   return std::span<const T>(
       reinterpret_cast<const T*>(section.payload.data()),
       section.descriptor.count);
@@ -27,7 +27,7 @@ bool failed(std::int32_t result) {
   return result < 0;
 }
 
-void* bindingObject(const ResolvedRecordV2View& record,
+void* bindingObject(const ResolvedRecordView& record,
                     std::uint32_t handleIndex) {
   return record.objectForAbsoluteIndex(handleIndex);
 }
@@ -36,9 +36,9 @@ dxmt9::core::PrimitiveType primitiveType(std::uint32_t value) {
   return static_cast<dxmt9::core::PrimitiveType>(value - 1u);
 }
 
-SparseDrawCallV2 makeDrawCall(const ResolvedRecordV2View& record) {
+SparseDrawCall makeDrawCall(const ResolvedRecordView& record) {
   const auto& draw = record.wire.drawHeader;
-  SparseDrawCallV2 call{
+  SparseDrawCall call{
       .flags = draw.flags,
       .minVertex = draw.minVertex,
       .numVertices = draw.numVertices,
@@ -62,36 +62,36 @@ SparseDrawCallV2 makeDrawCall(const ResolvedRecordV2View& record) {
 
 }  // namespace
 
-bool isSparseRecordV2(std::uint32_t type) noexcept {
-  const auto* rule = v2RecordRule(type);
-  return rule && (rule->ruleFlags & V2RecordRuleSparseState) != 0u;
+bool isSparseRecord(std::uint32_t type) noexcept {
+  const auto* rule = recordRule(type);
+  return rule && (rule->ruleFlags & RecordRuleSparseState) != 0u;
 }
 
-std::int32_t replaySparseRecordV2(
-    const ResolvedRecordV2View& record,
-    SparseReplaySinkV2& sink) noexcept {
-  if (!isSparseRecordV2(record.wire.header.type) ||
+std::int32_t replaySparseRecord(
+    const ResolvedRecordView& record,
+    SparseReplaySink& sink) noexcept {
+  if (!isSparseRecord(record.wire.header.type) ||
       record.objects.size() != record.wire.header.handleCount ||
       std::any_of(record.objects.begin(), record.objects.end(),
                   [](const void* object) { return object == nullptr; })) {
-    return kCommandChunkV2DecodeFailure;
+    return kCommandChunkDecodeFailure;
   }
 
   const bool applyOnly =
       record.wire.header.type == D9C_COMMAND_RECORD_APPLY_STATE;
-  auto call = applyOnly ? SparseDrawCallV2{} : makeDrawCall(record);
+  auto call = applyOnly ? SparseDrawCall{} : makeDrawCall(record);
   for (std::size_t sectionIndex = 0u;
        sectionIndex < record.wire.sections.size(); ++sectionIndex) {
     const auto section = record.wire.section(sectionIndex);
     std::int32_t result = 0;
     switch (section.descriptor.kind) {
-      case D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE:
+      case D9C_COMMAND_CHUNK_SECTION_RENDER_STATE:
         result = sink.setRenderStates(
-            typedSection<D9CCommandChunkWireRenderStateV2>(section));
+            typedSection<D9CCommandChunkWireRenderState>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE:
+      case D9C_COMMAND_CHUNK_SECTION_TEXTURE:
         for (const auto& value :
-             typedSection<D9CCommandChunkWireTextureBindingV2>(section)) {
+             typedSection<D9CCommandChunkWireTextureBinding>(section)) {
           if (!value.valid) {
             continue;
           }
@@ -102,9 +102,9 @@ std::int32_t replaySparseRecordV2(
           }
         }
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_STREAM:
+      case D9C_COMMAND_CHUNK_SECTION_STREAM:
         for (const auto& value :
-             typedSection<D9CCommandChunkWireStreamBindingV2>(section)) {
+             typedSection<D9CCommandChunkWireStreamBinding>(section)) {
           if (!value.valid) {
             continue;
           }
@@ -115,9 +115,9 @@ std::int32_t replaySparseRecordV2(
           }
         }
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_SHADER:
+      case D9C_COMMAND_CHUNK_SECTION_SHADER:
         for (const auto& value :
-             typedSection<D9CCommandChunkWireShaderBindingV2>(section)) {
+             typedSection<D9CCommandChunkWireShaderBinding>(section)) {
           if (!value.valid) {
             continue;
           }
@@ -128,9 +128,9 @@ std::int32_t replaySparseRecordV2(
           }
         }
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT: {
+      case D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT: {
         const auto& value =
-            typedSection<D9CCommandChunkWireVertexInputV2>(section).front();
+            typedSection<D9CCommandChunkWireVertexInput>(section).front();
         if (value.valid) {
           result = sink.setVertexInput(
               value.kind, value.value,
@@ -138,18 +138,18 @@ std::int32_t replaySparseRecordV2(
         }
         break;
       }
-      case D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER: {
+      case D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER: {
         const auto& value =
-            typedSection<D9CCommandChunkWireIndexBindingV2>(section).front();
+            typedSection<D9CCommandChunkWireIndexBinding>(section).front();
         if (value.valid) {
           result = sink.setIndexBuffer(
               bindingObject(record, value.handleIndex));
         }
         break;
       }
-      case D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET:
+      case D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET:
         for (const auto& value :
-             typedSection<D9CCommandChunkWireRenderTargetBindingV2>(section)) {
+             typedSection<D9CCommandChunkWireRenderTargetBinding>(section)) {
           if (!value.valid) {
             continue;
           }
@@ -160,9 +160,9 @@ std::int32_t replaySparseRecordV2(
           }
         }
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL: {
+      case D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL: {
         const auto& value =
-            typedSection<D9CCommandChunkWireDepthStencilBindingV2>(section)
+            typedSection<D9CCommandChunkWireDepthStencilBinding>(section)
                 .front();
         if (value.valid) {
           result = sink.setDepthStencil(
@@ -170,67 +170,67 @@ std::int32_t replaySparseRecordV2(
         }
         break;
       }
-      case D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT:
+      case D9C_COMMAND_CHUNK_SECTION_VIEWPORT:
         result = sink.setViewport(typedSection<D9CViewport>(section).front());
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR:
+      case D9C_COMMAND_CHUNK_SECTION_SCISSOR:
         result = sink.setScissor(typedSection<D9CRect>(section).front());
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL:
+      case D9C_COMMAND_CHUNK_SECTION_MATERIAL:
         result = sink.setMaterial(typedSection<D9CMaterial>(section).front());
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE:
+      case D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE:
         for (const auto& value :
-             typedSection<D9CCommandChunkWireClipPlaneV2>(section)) {
+             typedSection<D9CCommandChunkWireClipPlane>(section)) {
           result = sink.setClipPlane(value);
           if (failed(result)) {
             return result;
           }
         }
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE:
+      case D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE:
         result = sink.setTextureStageStates(
             typedSection<D9CDrawPacketTextureStageState>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE:
+      case D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE:
         result = sink.setSamplerStates(
             typedSection<D9CDrawPacketSamplerState>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM:
+      case D9C_COMMAND_CHUNK_SECTION_TRANSFORM:
         result = sink.setTransforms(
             typedSection<D9CDrawPacketTransform>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_LIGHT:
+      case D9C_COMMAND_CHUNK_SECTION_LIGHT:
         result = sink.setLights(
-            typedSection<D9CCommandChunkWireLightV2>(section));
+            typedSection<D9CCommandChunkWireLight>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE:
+      case D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE:
         result = sink.setLightEnables(
-            typedSection<D9CCommandChunkWireLightEnableV2>(section));
+            typedSection<D9CCommandChunkWireLightEnable>(section));
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F:
-      case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I:
-      case D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B:
-      case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F:
-      case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I:
-      case D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B: {
-        D9CCommandChunkWireConstantRangeV2 range{};
+      case D9C_COMMAND_CHUNK_SECTION_VS_CONST_F:
+      case D9C_COMMAND_CHUNK_SECTION_VS_CONST_I:
+      case D9C_COMMAND_CHUNK_SECTION_VS_CONST_B:
+      case D9C_COMMAND_CHUNK_SECTION_PS_CONST_F:
+      case D9C_COMMAND_CHUNK_SECTION_PS_CONST_I:
+      case D9C_COMMAND_CHUNK_SECTION_PS_CONST_B: {
+        D9CCommandChunkWireConstantRange range{};
         if (!load(section.payload, range)) {
-          return kCommandChunkV2DecodeFailure;
+          return kCommandChunkDecodeFailure;
         }
         result = sink.setConstants(
             section.descriptor.kind, range,
             section.payload.subspan(sizeof(range)));
         break;
       }
-      case D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA:
+      case D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA:
         call.payload.userIndexData =
             std::span<const dxmt9::core::u8>(
                 reinterpret_cast<const dxmt9::core::u8*>(
                     section.payload.data()),
                 section.payload.size());
         break;
-      case D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA:
+      case D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA:
         call.payload.userVertexData =
             std::span<const dxmt9::core::u8>(
                 reinterpret_cast<const dxmt9::core::u8*>(
@@ -238,7 +238,7 @@ std::int32_t replaySparseRecordV2(
                 section.payload.size());
         break;
       default:
-        return kCommandChunkV2DecodeFailure;
+        return kCommandChunkDecodeFailure;
     }
     if (failed(result)) {
       return result;

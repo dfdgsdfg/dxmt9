@@ -228,8 +228,8 @@ typedef struct D9CWireHandle {
 } D9CWireHandle;
 
 /* Phase 12: per-stage TSS / per-sampler scalar deltas (mirrors the
- * D9CCommandChunkWireRenderStateV2 shape). PE recorder accumulates dirty
- * (stage,type)→value tuples; the next record ships them as a sparse V2
+ * D9CCommandChunkWireRenderState shape). PE recorder accumulates dirty
+ * (stage,type)→value tuples; the next record ships them as a sparse canonical
  * section and the server-side dispatcher applies via dxmt9c_device_set_*. */
 typedef struct D9CDrawPacketTextureStageState {
     uint32_t stage;
@@ -267,7 +267,7 @@ typedef struct D9CDrawPacketTransform {
 #define D9C_DRAW_PACKET_MAX_CONST_PS_B 16
 
 /* Canonical wire order for the six inline const-delta sections — also the
- * order of the six V2 constant sections. Mirrors the
+ * order of the six canonical constant sections. Mirrors the
  * PeConstShadowBlock field order (d3d9_pe_const_shadow.hpp: vsConstF,
  * vsConstI, vsConstB, psConstF, psConstI, psConstB) and the
  * D9C_COMMAND_RECORD_SET_*_CONST_* record-type grouping below. */
@@ -288,7 +288,7 @@ enum {
  *
  * The fixed-size section header this comment used to describe
  * (D9CDrawPacketConstDeltaSection, carried on the fat D9CDrawPrimitivePacket)
- * was deleted with the legacy record format. Constants now ride the V2 sparse
+ * was deleted with the legacy record format. Constants now ride the canonical sparse
  * constant sections, which are absent entirely rather than present-and-invalid
  * when nothing is folded, so the byte-identical-off-path property the old
  * design had to engineer is structural here. Element sizes are unchanged:
@@ -328,52 +328,44 @@ enum {
  * replay, environments where importer statelessness matters more
  * than wire efficiency. */
 
-#define D9C_COMMAND_CHUNK_VERSION 1u
+/* Per-record handle ranges. The PE recorder derives the deduplicated set of
+ * direct, non-null references encoded by each command payload and appends it
+ * as one canonical contiguous table slice. The importer requires an exact
+ * bidirectional match between payload references and that slice before replay.
+ * Effective unix-state dependencies not encoded by the delta remain covered
+ * by normal per-draw resource marking. */
+enum {
+    D9C_CHUNK_HANDLE_KIND_TEXTURE = 0,
+    D9C_CHUNK_HANDLE_KIND_SURFACE = 1,
+    D9C_CHUNK_HANDLE_KIND_BUFFER = 2,
+    D9C_CHUNK_HANDLE_KIND_SHADER = 3,
+    D9C_CHUNK_HANDLE_KIND_VERTEX_DECL = 4,
+    D9C_CHUNK_HANDLE_KIND_QUERY = 5,
+};
 
-/* Retired command chunk wire V1 shape. Production PE and unix runtimes no
- * longer advertise, produce, import, or replay this grammar. The pointer-bearing
- * envelope definitions remain for migration fixtures. D9CCommandRecord* value
- * structs also remain temporarily as PE-local semantic staging inputs that are
- * converted directly into V2; they are never serialized as a V1 chunk. The
- * historical blob layout was:
+/* Canonical pointer-free command chunk wire format (numeric version 2,
+ * R-BACK-2.54 / R-BACK-2.55). It uses a table/table/arena organization. All
+ * offsets are byte offsets
+ * from the start of the chunk blob or record payload as documented by the
+ * field. The supported PE and unix targets are little-endian; C++ consumers
+ * pin that assumption in device_c_chunk_schema.hpp.
  *
- *   D9CCommandChunkWireHeader
- *   D9CCommandChunkWireRecordHeader[recordCount]
- *   D9CCommandChunkWireHandleEntry[handleCount]
- *   payload arena bytes
- *
- * Offsets are byte offsets from the start of the chunk blob. Per-record
- * payload ranges are byte offsets inside the payload arena. Per-record handle
- * ranges index into the chunk-level handle table. Reserved fields must be
- * written as zero by producers and validated as zero by consumers before
- * execution.
- *
- * V1 compatibility debt: payload handle fields and opaqueHandle contained
- * SERVER-SIDE D9C* wrapper addresses cast to integers. New schemas must not
- * extend that convention; wire V2 is specified to use stable object IDs and
- * payload handle-table indices (R-BACK-2.54). */
-#define D9C_COMMAND_CHUNK_WIRE_VERSION 1u
+ * Resource identity is never a D9C* address. Payload fields contain an
+ * absolute uint32_t index into D9CCommandChunkWireHandleEntry[], and the
+ * indexed entry carries the device-local object ID plus generation. Null uses
+ * D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX and consumes no table entry. */
+#define D9C_COMMAND_CHUNK_VERSION 2u
+#define D9C_COMMAND_CHUNK_WIRE_VERSION 2u
 #define D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE 48u
 #define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE 32u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE 24u
-#define D9C_COMMAND_CHUNK_WIRE_PAYLOAD_SLICE_SIZE 8u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_RANGE_SIZE 8u
-#define D9C_COMMAND_CHUNK_WIRE_RECORD_RANGES_SIZE 16u
-#define D9C_COMMAND_CHUNK_WIRE_RECORD_FLAG_NONE 0u
-/* Sentinel for "producer did not stamp a generation" (legacy / opaque-pointer
- * wire entries). Importers MUST accept this value without comparing against
- * the resolved handle's generation; this preserves backward compatibility
- * with the pre-validation PE recorder while still letting newer producers
- * stamp the actual encoded generation so the importer can reject zombie
- * handles. The encoded generation field uses 24 bits (matching
- * `dxmt9::detail::HandleArena::kGenerationBits` in
- * `src/dxmt9/dxmt9_resource_pool.hpp`); zero is therefore reserved as the
- * "unstamped" sentinel and never produced by `HandleArena::insert`. */
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE 0u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS 24u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT 32u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK \
-    ((1u << D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_BITS) - 1u)
+#define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE 16u
+#define D9C_COMMAND_CHUNK_WIRE_SECTION_DESC_SIZE 16u
+#define D9C_COMMAND_CHUNK_WIRE_DRAW_HEADER_SIZE 56u
+#define D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX 0xffffffffu
+#define D9C_COMMAND_CHUNK_RECORD_FLAG_NONE 0u
+#define D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT 0x00000001u
+#define D9C_COMMAND_CHUNK_CAP_CURRENT 0x00000002u
+#define D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION 2u
 
 typedef struct D9CCommandChunkWireHeader {
     uint32_t version;
@@ -401,239 +393,14 @@ typedef struct D9CCommandChunkWireRecordHeader {
     uint32_t reserved1;
 } D9CCommandChunkWireRecordHeader;
 
-/* TLA+ binding: `specs/verification/tla/WireHandleGeneration.tla` —
- * `NoZombieAccept` (with `StampedMatchesArenaOnAdmit`) proves that no
- * wire entry whose stamped `generation` disagrees with the unix-side
- * resolved `core::Handle` generation can reach the importer's admit
- * branch; `LegacyNoneAlwaysAccepts` encodes the documented NONE-sentinel
- * trade-off, and `NoForwardInconsistency` pins the 24-bit domain. */
 typedef struct D9CCommandChunkWireHandleEntry {
     uint32_t kind;
-    uint32_t generation;
-    uint64_t opaqueHandle;
-    uint32_t reserved0;
-    uint32_t reserved1;
-} D9CCommandChunkWireHandleEntry;
-
-typedef struct D9CCommandChunkWirePayloadSlice {
-    uint32_t payloadOffset;
-    uint32_t payloadSize;
-} D9CCommandChunkWirePayloadSlice;
-
-typedef struct D9CCommandChunkWireHandleRange {
-    uint32_t firstHandle;
-    uint32_t handleCount;
-} D9CCommandChunkWireHandleRange;
-
-typedef struct D9CCommandChunkWireRecordRanges {
-    D9CCommandChunkWirePayloadSlice payload;
-    D9CCommandChunkWireHandleRange handles;
-} D9CCommandChunkWireRecordRanges;
-
-static inline int d9c_command_chunk_wire_payload_range_valid(
-    uint32_t payloadArenaSize,
-    uint32_t payloadOffset,
-    uint32_t payloadSize) {
-    return payloadOffset <= payloadArenaSize &&
-           payloadSize <= payloadArenaSize - payloadOffset;
-}
-
-static inline int d9c_command_chunk_wire_handle_range_valid(
-    uint32_t handleTableCount,
-    uint32_t firstHandle,
-    uint32_t handleCount) {
-    return firstHandle <= handleTableCount &&
-           handleCount <= handleTableCount - firstHandle;
-}
-
-static inline D9CCommandChunkWirePayloadSlice
-d9c_command_chunk_wire_record_payload_slice(
-    const D9CCommandChunkWireRecordHeader* record) {
-    D9CCommandChunkWirePayloadSlice slice;
-    if (!record) {
-        slice.payloadOffset = 0u;
-        slice.payloadSize = 0u;
-        return slice;
-    }
-    slice.payloadOffset = record->payloadOffset;
-    slice.payloadSize = record->payloadSize;
-    return slice;
-}
-
-static inline D9CCommandChunkWireHandleRange
-d9c_command_chunk_wire_record_handle_range(
-    const D9CCommandChunkWireRecordHeader* record) {
-    D9CCommandChunkWireHandleRange range;
-    if (!record) {
-        range.firstHandle = 0u;
-        range.handleCount = 0u;
-        return range;
-    }
-    range.firstHandle = record->firstHandle;
-    range.handleCount = record->handleCount;
-    return range;
-}
-
-static inline D9CCommandChunkWireRecordRanges
-d9c_command_chunk_wire_record_ranges(
-    const D9CCommandChunkWireRecordHeader* record) {
-    D9CCommandChunkWireRecordRanges ranges;
-    ranges.payload = d9c_command_chunk_wire_record_payload_slice(record);
-    ranges.handles = d9c_command_chunk_wire_record_handle_range(record);
-    return ranges;
-}
-
-static inline int d9c_command_chunk_wire_record_ranges_valid(
-    uint32_t payloadArenaSize,
-    uint32_t handleTableCount,
-    const D9CCommandChunkWireRecordHeader* record) {
-    return record &&
-           d9c_command_chunk_wire_payload_range_valid(
-               payloadArenaSize, record->payloadOffset, record->payloadSize) &&
-           d9c_command_chunk_wire_handle_range_valid(
-               handleTableCount, record->firstHandle, record->handleCount);
-}
-
-static inline int d9c_command_chunk_wire_record_ranges_valid_for_chunk(
-    const D9CCommandChunkWireHeader* chunk,
-    const D9CCommandChunkWireRecordHeader* record) {
-    return chunk &&
-           d9c_command_chunk_wire_record_ranges_valid(
-               chunk->payloadArenaSize, chunk->handleCount, record);
-}
-
-static inline int d9c_command_chunk_wire_header_reserved_valid(
-    const D9CCommandChunkWireHeader* chunk) {
-    return chunk && chunk->reserved0 == 0u && chunk->reserved1 == 0u;
-}
-
-static inline int d9c_command_chunk_wire_record_reserved_valid(
-    const D9CCommandChunkWireRecordHeader* record) {
-    return record && record->reserved0 == 0u && record->reserved1 == 0u;
-}
-
-static inline int d9c_command_chunk_wire_handle_entry_reserved_valid(
-    const D9CCommandChunkWireHandleEntry* handle) {
-    return handle && handle->reserved0 == 0u && handle->reserved1 == 0u;
-}
-
-/* Decode the generation field that `dxmt9::detail::HandleArena<...>::encode`
- * stuffs into bits [32, 32+24) of a `core::Handle.value`. The wire entry's
- * `generation` slot mirrors this field so PE producers and unix importers
- * can cross-check that they see the same generation for a given handle
- * (zombie / freed-slot rejection). The bit layout MUST match
- * `kGenerationBits` / `kGenerationShift` / `kGenerationMask` in
- * `src/dxmt9/dxmt9_resource_pool.hpp`. */
-static inline uint32_t d9c_command_chunk_wire_handle_generation_from_handle(
-    uint64_t coreHandleValue) {
-    return (uint32_t)((coreHandleValue >>
-                       D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_SHIFT) &
-                      D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK);
-}
-
-/* Returns non-zero when `entry.generation` is accepted by the wire-record
- * importer: either the legacy NONE sentinel (producer did not stamp) or a
- * stamped value within the encoded generation domain. The cross-side equality
- * check against a resolved handle is performed separately by
- * `d9c_command_chunk_wire_handle_generation_matches`. */
-static inline int d9c_command_chunk_wire_handle_generation_valid(
-    uint32_t generation) {
-    return generation == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE ||
-           (generation & ~D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_MASK) == 0u;
-}
-
-/* Compares the wire entry's stamped generation against the generation
- * decoded from a resolved unix-side `core::Handle.value`. Returns non-zero
- * when the entry is either unstamped (legacy NONE — caller may bump a
- * "legacy" counter and accept) OR exactly matches the resolved generation.
- * A non-zero stamped generation that disagrees with the resolved generation
- * is a zombie / use-after-free wire record and the importer MUST reject it. */
-static inline int d9c_command_chunk_wire_handle_generation_matches(
-    uint32_t stampedGeneration,
-    uint64_t resolvedCoreHandleValue) {
-    if (stampedGeneration == D9C_COMMAND_CHUNK_WIRE_HANDLE_GENERATION_NONE) {
-        return 1;
-    }
-    return stampedGeneration ==
-           d9c_command_chunk_wire_handle_generation_from_handle(
-               resolvedCoreHandleValue);
-}
-
-/* Per-record V1 handle ranges. The PE recorder derives the deduplicated set of
- * direct, non-null references encoded by each command payload and appends it
- * as one canonical contiguous table slice. The importer requires an exact
- * bidirectional match between payload references and that slice before replay.
- * Effective unix-state dependencies not encoded by the V1 delta remain covered
- * by normal per-draw resource marking. */
-enum {
-    D9C_CHUNK_HANDLE_KIND_TEXTURE = 0,
-    D9C_CHUNK_HANDLE_KIND_SURFACE = 1,
-    D9C_CHUNK_HANDLE_KIND_BUFFER = 2,
-    D9C_CHUNK_HANDLE_KIND_SHADER = 3,
-    D9C_CHUNK_HANDLE_KIND_VERTEX_DECL = 4,
-    D9C_CHUNK_HANDLE_KIND_QUERY = 5,
-};
-
-/* Pointer-free command chunk wire V2 (R-BACK-2.54 / R-BACK-2.55).
- *
- * The retired V1 envelope declarations above remain only as migration fixtures;
- * the shared semantic record values may be consumed only by the PE-local V2
- * conversion adapter. V2 keeps the same outer
- * table/table/arena organization, but gives every type a V2 suffix so a layout
- * change cannot silently reinterpret a V1 blob. All offsets are byte offsets
- * from the start of the chunk blob or record payload as documented by the
- * field. The supported PE and unix targets are little-endian; C++ consumers
- * pin that assumption in device_c_chunk_v2_schema.hpp.
- *
- * Resource identity is never a D9C* address in V2. Payload fields contain an
- * absolute uint32_t index into D9CCommandChunkWireHandleEntryV2[], and the
- * indexed entry carries the device-local object ID plus generation. Null uses
- * D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX and consumes no table entry. */
-#define D9C_COMMAND_CHUNK_VERSION_V2 2u
-#define D9C_COMMAND_CHUNK_WIRE_VERSION_V2 2u
-#define D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE 48u
-#define D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE 32u
-#define D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE 16u
-#define D9C_COMMAND_CHUNK_WIRE_SECTION_DESC_V2_SIZE 16u
-#define D9C_COMMAND_CHUNK_WIRE_DRAW_HEADER_V2_SIZE 56u
-#define D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX 0xffffffffu
-#define D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE 0u
-#define D9C_COMMAND_CHUNK_V2_DRAW_FLAG_FULL_SNAPSHOT 0x00000001u
-#define D9C_COMMAND_CHUNK_CAP_VERSION_1 0x00000001u
-#define D9C_COMMAND_CHUNK_CAP_VERSION_2 0x00000002u
-#define D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION 2u
-
-typedef struct D9CCommandChunkWireHeaderV2 {
-    uint32_t version;
-    uint32_t headerSize;
-    uint32_t recordHeaderSize;
-    uint32_t handleEntrySize;
-    uint32_t recordTableOffset;
-    uint32_t recordCount;
-    uint32_t handleTableOffset;
-    uint32_t handleCount;
-    uint32_t payloadArenaOffset;
-    uint32_t payloadArenaSize;
-    uint32_t reserved0;
-    uint32_t reserved1;
-} D9CCommandChunkWireHeaderV2;
-
-typedef struct D9CCommandChunkWireRecordHeaderV2 {
-    uint32_t type;
-    uint32_t flags;
-    uint32_t payloadOffset;
-    uint32_t payloadSize;
-    uint32_t firstHandle;
-    uint32_t handleCount;
-    uint32_t reserved0;
-    uint32_t reserved1;
-} D9CCommandChunkWireRecordHeaderV2;
-
-typedef struct D9CCommandChunkWireHandleEntryV2 {
-    uint32_t kind;
+    /* Nonzero full-width registry generation. The unix registry requires an
+     * exact {kind, objectId, generation} match before retain or replay, and
+     * retires a slot at UINT32_MAX rather than wrapping this field. */
     uint32_t generation;
     uint64_t objectId;
-} D9CCommandChunkWireHandleEntryV2;
+} D9CCommandChunkWireHandleEntry;
 
 typedef struct D9CWireObjectIdentity {
     uint32_t kind;
@@ -656,19 +423,19 @@ typedef struct D9CCommandChunkNegotiation {
     uint32_t reserved3;
 } D9CCommandChunkNegotiation;
 
-typedef struct D9CCommandChunkWireSectionDescV2 {
+typedef struct D9CCommandChunkWireSectionDesc {
     uint16_t kind;
     uint16_t elementSize;
     uint32_t count;
     uint32_t payloadOffset;
     uint32_t byteSize;
-} D9CCommandChunkWireSectionDescV2;
+} D9CCommandChunkWireSectionDesc;
 
 /* Fixed prefix shared by DrawPrimitive, DrawIndexedPrimitive, both UP draw
  * forms, and APPLY_STATE. Fields unused by the selected opcode must be zero.
  * sectionTableOffset and sectionPayloadOffset are relative to the start of
  * this record payload. */
-typedef struct D9CCommandChunkWireDrawHeaderV2 {
+typedef struct D9CCommandChunkWireDrawHeader {
     uint32_t flags;
     uint32_t primitiveType;
     int32_t baseVertex;
@@ -683,60 +450,60 @@ typedef struct D9CCommandChunkWireDrawHeaderV2 {
     uint32_t sectionTableOffset;
     uint32_t sectionPayloadOffset;
     uint32_t reserved0;
-} D9CCommandChunkWireDrawHeaderV2;
+} D9CCommandChunkWireDrawHeader;
 
 enum {
-    D9C_COMMAND_CHUNK_V2_SECTION_RENDER_STATE = 1,
-    D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE = 2,
-    D9C_COMMAND_CHUNK_V2_SECTION_STREAM = 3,
-    D9C_COMMAND_CHUNK_V2_SECTION_SHADER = 4,
-    D9C_COMMAND_CHUNK_V2_SECTION_VERTEX_INPUT = 5,
-    D9C_COMMAND_CHUNK_V2_SECTION_INDEX_BUFFER = 6,
-    D9C_COMMAND_CHUNK_V2_SECTION_RENDER_TARGET = 7,
-    D9C_COMMAND_CHUNK_V2_SECTION_DEPTH_STENCIL = 8,
-    D9C_COMMAND_CHUNK_V2_SECTION_VIEWPORT = 9,
-    D9C_COMMAND_CHUNK_V2_SECTION_SCISSOR = 10,
-    D9C_COMMAND_CHUNK_V2_SECTION_MATERIAL = 11,
-    D9C_COMMAND_CHUNK_V2_SECTION_CLIP_PLANE = 12,
-    D9C_COMMAND_CHUNK_V2_SECTION_TEXTURE_STAGE_STATE = 13,
-    D9C_COMMAND_CHUNK_V2_SECTION_SAMPLER_STATE = 14,
-    D9C_COMMAND_CHUNK_V2_SECTION_TRANSFORM = 15,
-    D9C_COMMAND_CHUNK_V2_SECTION_LIGHT = 16,
-    D9C_COMMAND_CHUNK_V2_SECTION_LIGHT_ENABLE = 17,
-    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_F = 18,
-    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_I = 19,
-    D9C_COMMAND_CHUNK_V2_SECTION_VS_CONST_B = 20,
-    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_F = 21,
-    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_I = 22,
-    D9C_COMMAND_CHUNK_V2_SECTION_PS_CONST_B = 23,
-    D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA = 24,
-    D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA = 25,
-    D9C_COMMAND_CHUNK_V2_SECTION_COUNT = 25,
+    D9C_COMMAND_CHUNK_SECTION_RENDER_STATE = 1,
+    D9C_COMMAND_CHUNK_SECTION_TEXTURE = 2,
+    D9C_COMMAND_CHUNK_SECTION_STREAM = 3,
+    D9C_COMMAND_CHUNK_SECTION_SHADER = 4,
+    D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT = 5,
+    D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER = 6,
+    D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET = 7,
+    D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL = 8,
+    D9C_COMMAND_CHUNK_SECTION_VIEWPORT = 9,
+    D9C_COMMAND_CHUNK_SECTION_SCISSOR = 10,
+    D9C_COMMAND_CHUNK_SECTION_MATERIAL = 11,
+    D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE = 12,
+    D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE = 13,
+    D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE = 14,
+    D9C_COMMAND_CHUNK_SECTION_TRANSFORM = 15,
+    D9C_COMMAND_CHUNK_SECTION_LIGHT = 16,
+    D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE = 17,
+    D9C_COMMAND_CHUNK_SECTION_VS_CONST_F = 18,
+    D9C_COMMAND_CHUNK_SECTION_VS_CONST_I = 19,
+    D9C_COMMAND_CHUNK_SECTION_VS_CONST_B = 20,
+    D9C_COMMAND_CHUNK_SECTION_PS_CONST_F = 21,
+    D9C_COMMAND_CHUNK_SECTION_PS_CONST_I = 22,
+    D9C_COMMAND_CHUNK_SECTION_PS_CONST_B = 23,
+    D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA = 24,
+    D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA = 25,
+    D9C_COMMAND_CHUNK_SECTION_COUNT = 25,
 };
 
 enum {
-    D9C_COMMAND_CHUNK_V2_SHADER_STAGE_VERTEX = 0,
-    D9C_COMMAND_CHUNK_V2_SHADER_STAGE_PIXEL = 1,
+    D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX = 0,
+    D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL = 1,
 };
 
 enum {
-    D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_FVF = 0,
-    D9C_COMMAND_CHUNK_V2_VERTEX_INPUT_DECLARATION = 1,
+    D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF = 0,
+    D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION = 1,
 };
 
-typedef struct D9CCommandChunkWireRenderStateV2 {
+typedef struct D9CCommandChunkWireRenderState {
     uint32_t state;
     uint32_t value;
-} D9CCommandChunkWireRenderStateV2;
+} D9CCommandChunkWireRenderState;
 
-typedef struct D9CCommandChunkWireTextureBindingV2 {
+typedef struct D9CCommandChunkWireTextureBinding {
     uint32_t slot;
     uint32_t valid;
     uint32_t handleIndex;
     uint32_t reserved0;
-} D9CCommandChunkWireTextureBindingV2;
+} D9CCommandChunkWireTextureBinding;
 
-typedef struct D9CCommandChunkWireStreamBindingV2 {
+typedef struct D9CCommandChunkWireStreamBinding {
     uint32_t slot;
     uint32_t valid;
     uint32_t handleIndex;
@@ -744,83 +511,83 @@ typedef struct D9CCommandChunkWireStreamBindingV2 {
     uint32_t stride;
     uint32_t frequency;
     uint32_t reserved0;
-} D9CCommandChunkWireStreamBindingV2;
+} D9CCommandChunkWireStreamBinding;
 
-typedef struct D9CCommandChunkWireShaderBindingV2 {
+typedef struct D9CCommandChunkWireShaderBinding {
     uint32_t stage;
     uint32_t valid;
     uint32_t handleIndex;
     uint32_t reserved0;
-} D9CCommandChunkWireShaderBindingV2;
+} D9CCommandChunkWireShaderBinding;
 
-typedef struct D9CCommandChunkWireVertexInputV2 {
+typedef struct D9CCommandChunkWireVertexInput {
     uint32_t valid;
     uint32_t kind;
     /* FVF value. Declaration entries carry the effective FVF too so replay
-     * can preserve V1's ordered SetFVF-then-SetVertexDeclaration semantics. */
+     * can preserve ordered SetFVF-then-SetVertexDeclaration semantics. */
     uint32_t value;
     uint32_t handleIndex;
-} D9CCommandChunkWireVertexInputV2;
+} D9CCommandChunkWireVertexInput;
 
-typedef struct D9CCommandChunkWireIndexBindingV2 {
+typedef struct D9CCommandChunkWireIndexBinding {
     uint32_t valid;
     uint32_t handleIndex;
-} D9CCommandChunkWireIndexBindingV2;
+} D9CCommandChunkWireIndexBinding;
 
-typedef struct D9CCommandChunkWireRenderTargetBindingV2 {
+typedef struct D9CCommandChunkWireRenderTargetBinding {
     uint32_t slot;
     uint32_t valid;
     uint32_t handleIndex;
     uint32_t reserved0;
-} D9CCommandChunkWireRenderTargetBindingV2;
+} D9CCommandChunkWireRenderTargetBinding;
 
-typedef struct D9CCommandChunkWireDepthStencilBindingV2 {
+typedef struct D9CCommandChunkWireDepthStencilBinding {
     uint32_t valid;
     uint32_t handleIndex;
-} D9CCommandChunkWireDepthStencilBindingV2;
+} D9CCommandChunkWireDepthStencilBinding;
 
-typedef struct D9CCommandChunkWireClipPlaneV2 {
+typedef struct D9CCommandChunkWireClipPlane {
     uint32_t slot;
     uint32_t reserved0;
     float values[4];
-} D9CCommandChunkWireClipPlaneV2;
+} D9CCommandChunkWireClipPlane;
 
-typedef struct D9CCommandChunkWireLightV2 {
+typedef struct D9CCommandChunkWireLight {
     uint32_t slot;
     uint32_t reserved0;
     D9CLight light;
-} D9CCommandChunkWireLightV2;
+} D9CCommandChunkWireLight;
 
-typedef struct D9CCommandChunkWireLightEnableV2 {
+typedef struct D9CCommandChunkWireLightEnable {
     uint32_t slot;
     uint32_t enabled;
-} D9CCommandChunkWireLightEnableV2;
+} D9CCommandChunkWireLightEnable;
 
 /* Constant section payloads begin with this range header, followed by
  * count*elementSize register bytes. The enclosing section kind selects
  * VS/PS and float/int/bool. */
-typedef struct D9CCommandChunkWireConstantRangeV2 {
+typedef struct D9CCommandChunkWireConstantRange {
     uint32_t startRegister;
     uint32_t registerCount;
-} D9CCommandChunkWireConstantRangeV2;
+} D9CCommandChunkWireConstantRange;
 
-/* Fixed non-draw V2 payloads. Variable arrays or bytes follow at the
+/* Fixed non-draw canonical payloads. Variable arrays or bytes follow at the
  * record-relative offsets carried by the fixed payload. */
-typedef struct D9CCommandChunkWireSetConstV2 {
+typedef struct D9CCommandChunkWireSetConst {
     uint32_t startRegister;
     uint32_t registerCount;
-} D9CCommandChunkWireSetConstV2;
+} D9CCommandChunkWireSetConst;
 
-typedef struct D9CCommandChunkWireClearV2 {
+typedef struct D9CCommandChunkWireClear {
     uint32_t flags;
     uint32_t colorARGB;
     float z;
     uint32_t stencil;
     uint32_t rectCount;
     uint32_t rectOffset;
-} D9CCommandChunkWireClearV2;
+} D9CCommandChunkWireClear;
 
-typedef struct D9CCommandChunkWirePresentV2 {
+typedef struct D9CCommandChunkWirePresent {
     uint64_t hwnd;
     uint32_t flags;
     uint32_t hasSrc;
@@ -828,9 +595,9 @@ typedef struct D9CCommandChunkWirePresentV2 {
     uint32_t reserved0;
     D9CRect src;
     D9CRect dst;
-} D9CCommandChunkWirePresentV2;
+} D9CCommandChunkWirePresent;
 
-typedef struct D9CCommandChunkWireStretchRectV2 {
+typedef struct D9CCommandChunkWireStretchRect {
     uint32_t srcHandleIndex;
     uint32_t dstHandleIndex;
     uint32_t hasSrcRect;
@@ -839,44 +606,44 @@ typedef struct D9CCommandChunkWireStretchRectV2 {
     uint32_t reserved0;
     D9CRect srcRect;
     D9CRect dstRect;
-} D9CCommandChunkWireStretchRectV2;
+} D9CCommandChunkWireStretchRect;
 
-typedef struct D9CCommandChunkWireColorFillV2 {
+typedef struct D9CCommandChunkWireColorFill {
     uint32_t surfaceHandleIndex;
     uint32_t colorARGB;
     uint32_t hasRect;
     uint32_t reserved0;
     D9CRect rect;
-} D9CCommandChunkWireColorFillV2;
+} D9CCommandChunkWireColorFill;
 
-typedef struct D9CCommandChunkWireUpdateTextureV2 {
+typedef struct D9CCommandChunkWireUpdateTexture {
     uint32_t srcHandleIndex;
     uint32_t dstHandleIndex;
-} D9CCommandChunkWireUpdateTextureV2;
+} D9CCommandChunkWireUpdateTexture;
 
-typedef struct D9CCommandChunkWireUpdateSurfaceV2 {
+typedef struct D9CCommandChunkWireUpdateSurface {
     uint32_t srcHandleIndex;
     uint32_t dstHandleIndex;
     uint32_t hasSrcRect;
     uint32_t hasDstPoint;
     D9CRect srcRect;
     D9CRect dstPoint;
-} D9CCommandChunkWireUpdateSurfaceV2;
+} D9CCommandChunkWireUpdateSurface;
 
-typedef struct D9CCommandChunkWireQueryIssueV2 {
+typedef struct D9CCommandChunkWireQueryIssue {
     uint32_t queryHandleIndex;
     uint32_t flags;
-} D9CCommandChunkWireQueryIssueV2;
+} D9CCommandChunkWireQueryIssue;
 
-typedef struct D9CCommandChunkWireReadbackV2 {
+typedef struct D9CCommandChunkWireReadback {
     uint32_t srcHandleIndex;
     uint32_t dstHandleIndex;
-} D9CCommandChunkWireReadbackV2;
+} D9CCommandChunkWireReadback;
 
-typedef struct D9CCommandChunkWireReszDepthResolveV2 {
+typedef struct D9CCommandChunkWireReszDepthResolve {
     uint32_t msaaDepthHandleIndex;
     uint32_t intzDestHandleIndex;
-} D9CCommandChunkWireReszDepthResolveV2;
+} D9CCommandChunkWireReszDepthResolve;
 
 enum {
     D9C_COMMAND_RECORD_DRAW_PRIMITIVE = 1,
@@ -934,7 +701,7 @@ enum {
      * record (Present pattern), so the chunk-commit boundary IS the
      * readback boundary. */
     D9C_COMMAND_RECORD_READBACK = 27,
-    /* Phase 28: standalone state-delta record. Carries the same sparse V2
+    /* Phase 28: standalone state-delta record. Carries the same sparse canonical
      * state sections a draw record does, with no draw header fields — the
      * state delta is the whole point. Emitted BEFORE chunk-barrier records
      * (Clear / Present / surface ops / readback) when the PE recorder
@@ -948,8 +715,8 @@ enum {
      * the bound multisampled depth source into the bound INTZ depth texture.
      * Fire-and-forget (no synchronous result), so it travels as a chunk
      * record like the other surface ops rather than a flush+bridge call.
-     * Two-handle shape mirrors D9C_COMMAND_RECORD_READBACK: both handles are
-     * SERVER-SIDE casts the importer decodes the same way as the surface ops.
+     * Its 8-byte payload carries two uint32 handle-table indices, matching the
+     * canonical readback payload shape.
      * GPU correctness (MSAA depth + INTZ readback) is deferred runtime
      * validation; this record only carries the (source, destination) pair. */
     D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE = 29,
@@ -958,7 +725,7 @@ enum {
 /* Const-array upload semantics. `kind` selects which dxmt9c_device_set_*_const_*
  * the importer calls; the PE side encodes it as the matching
  * D9C_COMMAND_RECORD_SET_*_CONST_* record type. The fixed-size header struct
- * this annotated is gone -- the payload is a V2 constant section now -- but the
+ * this annotated is gone -- the payload is a canonical constant section now -- but the
  * type-selects-the-setter contract is unchanged. */
 
 /* R-BACK-2.52: inline const-delta encode/decode helpers. These compute
@@ -971,8 +738,8 @@ enum {
  *
  * Payload placement is no longer chained by hand. The fixed-size Draw* records
  * that used to carry const-delta sections after their trailing vertex/index
- * region were deleted with the legacy format; constants now ride the V2 sparse
- * constant sections, which appendSparseRecordV2 lays out with every other
+ * region were deleted with the legacy format; constants now ride the canonical sparse
+ * constant sections, which appendSparseRecord lays out with every other
  * section. What survives here is the range arithmetic these helpers do. */
 
 /* Register-file cap for a const-delta section kind
@@ -1007,14 +774,10 @@ static inline int d9c_draw_packet_const_delta_section_range_valid(
 
 /* ── Record-kind semantics ───────────────────────────────────────────────────
  *
- * The paragraphs below documented the fixed-size D9CCommandRecord* structs,
- * which went with the legacy format. The record KINDS they describe are live
- * D9C_COMMAND_RECORD_* values whose payloads are now V2 wire structs and sparse
- * sections. The prose is kept because the semantics are the contract -- who
- * drains what before the record is appended, which pointers are server-side
- * casts, which records are ordering barriers and which block on a result -- and
- * none of that is recoverable from an enum value. Where a paragraph names a
- * deleted struct field, read it as naming the same field on the V2 wire struct.
+ * These live D9C_COMMAND_RECORD_* kinds use the canonical pointer-free payload
+ * structs above. Every non-null object reference is an absolute uint32 handle-
+ * table index whose exact {kind, objectId, generation} identity is resolved
+ * before any retain, dispatch, or state mutation.
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /* Standalone clear record. Variable-size: rect array (D9CRect[count])
@@ -1027,36 +790,33 @@ static inline int d9c_draw_packet_const_delta_section_range_valid(
  * by the backend). The optional src/dst rects ride inline; hasX flags
  * select whether the matching D9CRect is meaningful (zeroed otherwise). */
 
-/* Standalone surface ops. Surface pointers are SERVER-SIDE D9CSurface*
- * cast to uint64 (importer decodes via wrapper->obj->handle() the same
- * way as chunk.handles[]). Both rects ride inline; hasX flags select
- * whether the matching D9CRect is meaningful. */
+/* Standalone surface ops reference surfaces through canonical handle-table
+ * indices. Rects ride inline; hasX flags select whether the matching D9CRect
+ * is meaningful. */
 
 /* Standalone surface-to-surface region copy. dstPoint encodes only an
  * (x, y) offset on the destination — represented as a D9CRect with
  * left/top set and right/bottom equal (importer reads only left/top).
  * hasSrcRect / hasDstPoint mirror StretchRect's hasX flag pattern. */
 
-/* Standalone Query::Issue record. queryWire is the SERVER-SIDE D9CQuery*
- * cast to uint64; importer round-trips back via reinterpret_cast.
- * flags is the D3DISSUE_* value from the caller. The direct query reference
- * rides the record's handle-table slice as D9C_CHUNK_HANDLE_KIND_QUERY; the
+/* Standalone Query::Issue record. queryHandleIndex selects a
+ * D9C_CHUNK_HANDLE_KIND_QUERY entry and flags is the caller's D3DISSUE_* value.
+ * The direct query reference rides the record's canonical handle slice; the
  * PE pending-chunk retainer and offload queue each AddRef it for their own
  * ownership interval. Queries remain outside the core resource pool. */
 
 /* Standalone readback record (RT surface → CPU-mappable destination).
- * Both surfaces are SERVER-SIDE D9CSurface* casts; importer dispatches
- * via dxmt9c_device_get_render_target_data, which internally encodes
- * the copy + waits for GPU completion. The HRESULT propagates back
- * through commit_chunk's per-record failure-short-circuit, so PE
+ * srcHandleIndex and dstHandleIndex select surface entries from the canonical
+ * handle table. Replay dispatches via dxmt9c_device_get_render_target_data,
+ * which internally encodes the copy + waits for GPU completion. The HRESULT
+ * propagates through commit_chunk's per-record failure short-circuit, so PE
  * receives the readback's actual return code. */
 
-/* Standalone RESZ depth-resolve record. Mirrors D9CCommandRecordReadback's
- * two-handle shape exactly (header + two uint64 wire handles → 24 bytes,
- * uint64 alignment). srcWire is the bound multisampled depth source
- * (SERVER-SIDE D9CSurface* cast); dstWire is the bound INTZ depth
- * destination texture (SERVER-SIDE D9CTexture* cast — RESZ writes the
- * resolved depth into the stage-0 INTZ texture). Fire-and-forget: like
+/* Standalone RESZ depth-resolve record. Its live payload is the 8-byte
+ * D9CCommandChunkWireReszDepthResolve: msaaDepthHandleIndex selects the bound
+ * multisampled depth surface and intzDestHandleIndex selects the bound INTZ
+ * destination texture. RESZ writes resolved depth into the stage-0 INTZ
+ * texture. Fire-and-forget: like
  * StretchRect/ColorFill it is a surface-op ordering barrier, NOT a
  * synchronous read boundary, so the PE caller does not block on a result. */
 

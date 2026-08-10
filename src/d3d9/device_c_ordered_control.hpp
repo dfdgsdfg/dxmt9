@@ -1,6 +1,6 @@
 #pragma once
 
-#include "device_c_chunk_v2_validate.hpp"
+#include "device_c_chunk_validate.hpp"
 #include "../dxmt9/dxmt9_session_release.hpp"
 
 #include <cstdint>
@@ -13,7 +13,7 @@ namespace dxmt9::d3d9 {
 inline constexpr std::uint32_t kNoOrderedControlRecordIndex =
     std::numeric_limits<std::uint32_t>::max();
 inline constexpr std::uint32_t kNoOrderedControlHandleIndex =
-    D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX;
+    D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
 
 enum class OrderedControlKind : std::uint8_t {
   Invalid,
@@ -24,7 +24,7 @@ enum class OrderedControlKind : std::uint8_t {
 
 // Pointer-free locator for one compatibility-path control at its exact place
 // in the immutable raw record stream. The handle fields are indices into the
-// raw V2 handle table; firstHandle/handleCount preserve the validated record
+// raw canonical handle table; firstHandle/handleCount preserve the validated record
 // slice used to resolve them later.
 struct OrderedControlDisposition {
   OrderedControlKind kind = OrderedControlKind::Invalid;
@@ -49,7 +49,7 @@ struct OrderedControlDisposition {
 // Builds a disposition only from an already-imported record's wire metadata.
 // It does not resolve handles, execute the control, or retain source storage.
 std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
-    const ImportedRecordV2View& record,
+    const ImportedRecordView& record,
     std::uint64_t rawOrdinal,
     std::size_t recordIndex) noexcept;
 

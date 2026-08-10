@@ -16,7 +16,7 @@ Each spec is a standalone executable wired into Meson via
 | `dod_state_format_spec.cpp` | DOD state record + format pack/unpack POD invariants (`R-ARCH-2.*`) |
 | `draw_uniforms_layout_spec.cpp` | Per-frequency uniform struct layout asserts (`R-BACK-12.16-12.18`) |
 | `draw_uniforms_dirty_spec.cpp` | DirtyMask + range counter contract (`R-BACK-12.8-12.12`) |
-| `chunk_record_micro_spec.cpp` | CPU-only V2 sparse chunk build/seal/preflight microbenchmark (B1) |
+| `chunk_record_micro_spec.cpp` | CPU-only canonical sparse chunk build/seal/preflight microbenchmark (B1) |
 
 Shared helpers in `core_spec_fixtures.hpp` (harness, byte builders, recording
 backend, D3D9 bytecode constants, token builders).

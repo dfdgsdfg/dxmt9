@@ -17,13 +17,13 @@
 
 namespace {
 
-using dxmt9::d3d9::ImportedChunkV2View;
+using dxmt9::d3d9::ImportedChunkView;
 using dxmt9::d3d9::OrderedControlDisposition;
 using dxmt9::d3d9::OrderedControlKind;
 using dxmt9::d3d9::RawCommandChunk;
-using dxmt9::d3d9::V2ChunkEnvelope;
-using dxmt9::d3d9::V2ReplayLane;
-using dxmt9::d3d9::V2ReplayReason;
+using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::ReplayLane;
+using dxmt9::d3d9::ReplayReason;
 using dxmt9::core::metalqueue::SessionReleaseAction;
 
 static_assert(std::is_trivially_copyable_v<OrderedControlDisposition>);
@@ -53,16 +53,16 @@ std::vector<std::byte> bytesOf(const T& value) {
 struct RecordSpec {
   std::uint32_t type = 0;
   std::vector<std::byte> payload;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
 };
 
 struct ValidatedFixture {
   std::vector<std::byte> bytes;
-  V2ChunkEnvelope envelope{};
+  CommandChunkEnvelope envelope{};
 
-  ImportedChunkV2View view() const {
-    ImportedChunkV2View imported;
-    const auto result = dxmt9::d3d9::validateCommandChunkV2(
+  ImportedChunkView view() const {
+    ImportedChunkView imported;
+    const auto result = dxmt9::d3d9::validateCommandChunk(
         bytes, envelope, &imported);
     if (!result.valid()) {
       throw TestFailure(
@@ -75,16 +75,16 @@ struct ValidatedFixture {
 };
 
 ValidatedFixture makeValidatedFixture(std::span<const RecordSpec> specs) {
-  std::vector<D9CCommandChunkWireRecordHeaderV2> records;
-  std::vector<D9CCommandChunkWireHandleEntryV2> handles;
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<D9CCommandChunkWireHandleEntry> handles;
   std::vector<std::byte> payload;
   for (const auto& spec : specs) {
-    const auto* rule = dxmt9::d3d9::v2RecordRule(spec.type);
-    check(rule != nullptr, "fixture record must exist in the V2 schema");
+    const auto* rule = dxmt9::d3d9::recordRule(spec.type);
+    check(rule != nullptr, "fixture record must exist in the canonical schema");
     payload.resize(alignUp(payload.size(), rule->payloadAlignment));
     records.push_back({
         .type = spec.type,
-        .flags = D9C_COMMAND_CHUNK_V2_RECORD_FLAG_NONE,
+        .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
         .payloadOffset = static_cast<std::uint32_t>(payload.size()),
         .payloadSize = static_cast<std::uint32_t>(spec.payload.size()),
         .firstHandle = static_cast<std::uint32_t>(handles.size()),
@@ -94,19 +94,19 @@ ValidatedFixture makeValidatedFixture(std::span<const RecordSpec> specs) {
     handles.insert(handles.end(), spec.handles.begin(), spec.handles.end());
   }
 
-  D9CCommandChunkWireHeaderV2 header{
-      .version = D9C_COMMAND_CHUNK_WIRE_VERSION_V2,
-      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
-      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_V2_SIZE,
-      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_V2_SIZE,
-      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_V2_SIZE,
+  D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleCount = static_cast<std::uint32_t>(handles.size()),
       .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
   };
   header.handleTableOffset = static_cast<std::uint32_t>(alignUp(
       header.recordTableOffset + records.size() * sizeof(records[0]),
-      alignof(D9CCommandChunkWireHandleEntryV2)));
+      alignof(D9CCommandChunkWireHandleEntry)));
   header.payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
       header.handleTableOffset + handles.size() * sizeof(handles[0]),
       alignof(std::uint32_t)));
@@ -127,14 +127,14 @@ ValidatedFixture makeValidatedFixture(std::span<const RecordSpec> specs) {
                 payload.data(), payload.size());
   }
   fixture.envelope = {
-      .version = D9C_COMMAND_CHUNK_VERSION_V2,
+      .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = header.recordCount,
       .handleCount = header.handleCount,
   };
   return fixture;
 }
 
-D9CCommandChunkWireHandleEntryV2 handle(std::uint32_t kind,
+D9CCommandChunkWireHandleEntry handle(std::uint32_t kind,
                                         std::uint64_t objectId) {
   return {
       .kind = kind,
@@ -146,34 +146,34 @@ D9CCommandChunkWireHandleEntryV2 handle(std::uint32_t kind,
 RecordSpec drawRecord(std::uint32_t type =
                           D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
                       std::uint32_t primitiveType = 4) {
-  D9CCommandChunkWireDrawHeaderV2 draw{};
+  D9CCommandChunkWireDrawHeader draw{};
   if (type != D9C_COMMAND_RECORD_APPLY_STATE) {
     draw.primitiveType = primitiveType;
     draw.startVertex = 3;
     draw.primitiveCount = 1;
   }
-  draw.sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2);
-  draw.sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeaderV2);
+  draw.sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
+  draw.sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader);
   return {.type = type, .payload = bytesOf(draw)};
 }
 
 RecordSpec directUpDrawRecord() {
   constexpr std::size_t kVertexBytes = 12;
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4,
       .primitiveCount = 1,
       .stride = 4,
       .sectionCount = 1,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
-      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDescV2),
+      sizeof(draw) + sizeof(D9CCommandChunkWireSectionDesc),
       alignof(std::uint32_t)));
-  const auto* rule = dxmt9::d3d9::v2SectionRule(
-      D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA);
+  const auto* rule = dxmt9::d3d9::sectionRule(
+      D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA);
   check(rule != nullptr, "UP vertex section rule must exist");
-  const D9CCommandChunkWireSectionDescV2 section{
-      .kind = D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA,
+  const D9CCommandChunkWireSectionDesc section{
+      .kind = D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
       .elementSize = rule->elementSize,
       .count = kVertexBytes,
       .payloadOffset = draw.sectionPayloadOffset,
@@ -193,12 +193,12 @@ RecordSpec triangleFanRecord(std::uint32_t type,
                              std::uint32_t indexFormat = 101u,
                              std::uint32_t primitiveCount = 3u,
                              std::uint32_t stride = 4u) {
-  D9CCommandChunkWireDrawHeaderV2 draw{
+  D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 6,
       .primitiveCount = primitiveCount,
-      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeaderV2),
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
-  std::array<D9CCommandChunkWireSectionDescV2, 2> sections{};
+  std::array<D9CCommandChunkWireSectionDesc, 2> sections{};
   std::size_t sectionCount = 0;
   std::array<std::size_t, 2> sectionBytes{};
   if (type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
@@ -208,7 +208,7 @@ RecordSpec triangleFanRecord(std::uint32_t type,
     sectionBytes[sectionCount] =
         static_cast<std::size_t>(primitiveCount + 2u) * stride;
     sections[sectionCount++].kind =
-        D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA;
+        D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA;
   } else if (type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP) {
     draw.numVertices = primitiveCount + 2u;
     draw.stride = stride;
@@ -217,11 +217,11 @@ RecordSpec triangleFanRecord(std::uint32_t type,
         static_cast<std::size_t>(primitiveCount + 2u) *
         (indexFormat == 102u ? 4u : 2u);
     sections[sectionCount++].kind =
-        D9C_COMMAND_CHUNK_V2_SECTION_UP_INDEX_DATA;
+        D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA;
     sectionBytes[sectionCount] =
         static_cast<std::size_t>(draw.numVertices) * stride;
     sections[sectionCount++].kind =
-        D9C_COMMAND_CHUNK_V2_SECTION_UP_VERTEX_DATA;
+        D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA;
   }
   draw.sectionCount = static_cast<std::uint32_t>(sectionCount);
   draw.sectionPayloadOffset = static_cast<std::uint32_t>(alignUp(
@@ -229,7 +229,7 @@ RecordSpec triangleFanRecord(std::uint32_t type,
       alignof(std::uint32_t)));
   std::size_t payloadEnd = draw.sectionPayloadOffset;
   for (std::size_t i = 0; i < sectionCount; ++i) {
-    const auto* rule = dxmt9::d3d9::v2SectionRule(sections[i].kind);
+    const auto* rule = dxmt9::d3d9::sectionRule(sections[i].kind);
     check(rule != nullptr, "fan UP section rule must exist");
     payloadEnd = alignUp(payloadEnd, rule->payloadAlignment);
     sections[i].elementSize = rule->elementSize;
@@ -248,9 +248,9 @@ RecordSpec triangleFanRecord(std::uint32_t type,
 }
 
 RecordSpec clearRecord(std::size_t rectCount) {
-  D9CCommandChunkWireClearV2 clear{
+  D9CCommandChunkWireClear clear{
       .rectCount = static_cast<std::uint32_t>(rectCount),
-      .rectOffset = sizeof(D9CCommandChunkWireClearV2),
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
   };
   auto payload = bytesOf(clear);
   payload.resize(payload.size() + rectCount * sizeof(D9CRect));
@@ -293,7 +293,7 @@ std::size_t clearRectCountForSegmentPages(std::size_t targetPages,
 
 RecordSpec partialFloatConstantRecord(std::uint32_t type,
                                       std::uint32_t startRegister) {
-  const D9CCommandChunkWireSetConstV2 fixed{
+  const D9CCommandChunkWireSetConst fixed{
       .startRegister = startRegister,
       .registerCount = 1,
   };
@@ -309,27 +309,27 @@ std::vector<RecordSpec> eligibleRecords() {
       clearRecord(2),
       RecordSpec{
           .type = D9C_COMMAND_RECORD_UPDATE_SURFACE,
-          .payload = bytesOf(D9CCommandChunkWireUpdateSurfaceV2{
+          .payload = bytesOf(D9CCommandChunkWireUpdateSurface{
               .srcHandleIndex = 0, .dstHandleIndex = 1}),
           .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 1),
                       handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 2)},
       },
       RecordSpec{
           .type = D9C_COMMAND_RECORD_STRETCH_RECT,
-          .payload = bytesOf(D9CCommandChunkWireStretchRectV2{
+          .payload = bytesOf(D9CCommandChunkWireStretchRect{
               .srcHandleIndex = 2, .dstHandleIndex = 3}),
           .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 3),
                       handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 4)},
       },
       RecordSpec{
           .type = D9C_COMMAND_RECORD_COLOR_FILL,
-          .payload = bytesOf(D9CCommandChunkWireColorFillV2{
+          .payload = bytesOf(D9CCommandChunkWireColorFill{
               .surfaceHandleIndex = 4}),
           .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 5)},
       },
       RecordSpec{
           .type = D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
-          .payload = bytesOf(D9CCommandChunkWireReszDepthResolveV2{
+          .payload = bytesOf(D9CCommandChunkWireReszDepthResolve{
               .msaaDepthHandleIndex = 5, .intzDestHandleIndex = 6}),
           .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 6),
                       handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 7)},
@@ -342,11 +342,11 @@ void eligibleWholeRawPlanHasTypedCapacity() {
   const auto imported = fixture.view();
   RawCommandChunk raw;
   raw.replaySeq = 77;
-  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
       imported, raw.replaySeq);
   check(plan.rawOrdinal == raw.replaySeq &&
-            plan.lane == V2ReplayLane::DirectArenaCandidate &&
-            plan.reason == V2ReplayReason::Eligible &&
+            plan.lane == ReplayLane::DirectArenaCandidate &&
+            plan.reason == ReplayReason::Eligible &&
             plan.logicalSource && plan.requiresAdmission() && plan.layout,
         "one whole eligible raw chunk becomes one direct arena candidate");
   check(!plan.containsOrderedControls,
@@ -382,9 +382,9 @@ void stateOnlyRawHasNoLogicalSourceOrAdmission() {
       drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
   };
   const auto fixture = makeValidatedFixture(records);
-  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 9);
-  check(plan.lane == V2ReplayLane::StateOnly &&
-            plan.reason == V2ReplayReason::Eligible &&
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(fixture.view(), 9);
+  check(plan.lane == ReplayLane::StateOnly &&
+            plan.reason == ReplayReason::Eligible &&
             !plan.logicalSource && !plan.layout &&
             !plan.containsOrderedControls &&
             !plan.requiresAdmission() &&
@@ -398,7 +398,7 @@ RecordSpec blockingRecord(std::uint32_t type,
   case D9C_COMMAND_RECORD_QUERY_ISSUE:
     return {
         .type = type,
-        .payload = bytesOf(D9CCommandChunkWireQueryIssueV2{
+        .payload = bytesOf(D9CCommandChunkWireQueryIssue{
             .queryHandleIndex = firstHandle,
             .flags = 0x41u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_QUERY, 10)},
@@ -406,7 +406,7 @@ RecordSpec blockingRecord(std::uint32_t type,
   case D9C_COMMAND_RECORD_READBACK:
     return {
         .type = type,
-        .payload = bytesOf(D9CCommandChunkWireReadbackV2{
+        .payload = bytesOf(D9CCommandChunkWireReadback{
             firstHandle, firstHandle + 1u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 11),
                     handle(D9C_CHUNK_HANDLE_KIND_SURFACE, 12)},
@@ -414,14 +414,14 @@ RecordSpec blockingRecord(std::uint32_t type,
   case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
     return {
         .type = type,
-        .payload = bytesOf(D9CCommandChunkWireUpdateTextureV2{
+        .payload = bytesOf(D9CCommandChunkWireUpdateTexture{
             firstHandle, firstHandle + 1u}),
         .handles = {handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 13),
                     handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 14)},
     };
   case D9C_COMMAND_RECORD_PRESENT:
     return {.type = type,
-            .payload = bytesOf(D9CCommandChunkWirePresentV2{})};
+            .payload = bytesOf(D9CCommandChunkWirePresent{})};
   default:
     return {};
   }
@@ -430,23 +430,23 @@ RecordSpec blockingRecord(std::uint32_t type,
 void blockersSelectOneWholeRawFallbackLane() {
   struct Expected {
     std::uint32_t type;
-    V2ReplayLane lane;
-    V2ReplayReason reason;
+    ReplayLane lane;
+    ReplayReason reason;
     OrderedControlKind kind;
     SessionReleaseAction action;
     std::uint32_t handleCount;
   };
   const std::array expected{
       Expected{D9C_COMMAND_RECORD_QUERY_ISSUE,
-               V2ReplayLane::Legacy, V2ReplayReason::Query,
+               ReplayLane::Legacy, ReplayReason::Query,
                OrderedControlKind::Query,
                SessionReleaseAction::ClosePass, 1},
       Expected{D9C_COMMAND_RECORD_READBACK,
-               V2ReplayLane::Inline, V2ReplayReason::Readback,
+               ReplayLane::Inline, ReplayReason::Readback,
                OrderedControlKind::Readback,
                SessionReleaseAction::SubmitAndWait, 2},
       Expected{D9C_COMMAND_RECORD_UPDATE_TEXTURE,
-               V2ReplayLane::Legacy, V2ReplayReason::UpdateTexture,
+               ReplayLane::Legacy, ReplayReason::UpdateTexture,
                OrderedControlKind::UpdateTexture,
                SessionReleaseAction::SubmitSession, 2},
   };
@@ -454,7 +454,7 @@ void blockersSelectOneWholeRawFallbackLane() {
     const std::array records{
         drawRecord(), blockingRecord(item.type), drawRecord()};
     const auto fixture = makeValidatedFixture(records);
-    const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 5);
+    const auto plan = dxmt9::d3d9::planCpuReadyChunk(fixture.view(), 5);
     check(plan.lane == item.lane && plan.reason == item.reason &&
               !plan.requiresAdmission() && plan.containsOrderedControls,
           "one blocker must route the complete raw chunk off the arena lane");
@@ -487,11 +487,11 @@ void blockersSelectOneWholeRawFallbackLane() {
       drawRecord(),
   };
   const auto multipleFixture = makeValidatedFixture(multipleBlockers);
-  const auto multiple = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto multiple = dxmt9::d3d9::planCpuReadyChunk(
       multipleFixture.view(), 17);
   check(multiple.containsOrderedControls &&
-            multiple.lane == V2ReplayLane::Inline &&
-            multiple.reason == V2ReplayReason::Readback,
+            multiple.lane == ReplayLane::Inline &&
+            multiple.reason == ReplayReason::Readback,
         "all controls preflight and any readback selects whole-raw Inline");
   auto invalid = *dxmt9::d3d9::makeOrderedControlDisposition(
       multipleFixture.view().record(1), 17, 1);
@@ -499,17 +499,17 @@ void blockersSelectOneWholeRawFallbackLane() {
   check(!OrderedControlDisposition{}.valid() && !invalid.valid(),
         "default and action-mismatched dispositions are structurally invalid");
 
-  const D9CCommandChunkWireRecordHeaderV2 unknownHeader{
+  const D9CCommandChunkWireRecordHeader unknownHeader{
       .type = 0xffff,
   };
-  const ImportedChunkV2View unknown{
+  const ImportedChunkView unknown{
       .header = {.recordCount = 1},
       .records = std::span(&unknownHeader, 1),
   };
   const auto unknownPlan =
-      dxmt9::d3d9::planCpuReadyChunkV2(unknown, 6);
-  check(unknownPlan.lane == V2ReplayLane::Reject &&
-            unknownPlan.reason == V2ReplayReason::UnknownRecord &&
+      dxmt9::d3d9::planCpuReadyChunk(unknown, 6);
+  check(unknownPlan.lane == ReplayLane::Reject &&
+            unknownPlan.reason == ReplayReason::UnknownRecord &&
             !unknownPlan.containsOrderedControls &&
             !unknownPlan.replaysSemanticsExactlyOnce(),
         "defensive unknown records reject rather than replay through legacy");
@@ -526,7 +526,7 @@ void partialConstantDeltasDoNotInflateSnapshotCapacity() {
   records.push_back(drawRecord());
   const auto fixture = makeValidatedFixture(records);
   const auto plan =
-      dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 15);
+      dxmt9::d3d9::planCpuReadyChunk(fixture.view(), 15);
   check(plan.directArenaCandidate() &&
             plan.capacity.drawUniformVertexConstantBytes ==
                 sizeof(dxmt9::core::VertexShaderConstants) &&
@@ -551,7 +551,7 @@ void triangleFanAndLookupBoundaryPlans() {
     const std::array fanRecords{triangleFanRecord(form.type)};
     const auto fanFixture = makeValidatedFixture(fanRecords);
     const auto fanPlan =
-        dxmt9::d3d9::planCpuReadyChunkV2(fanFixture.view(), 10);
+        dxmt9::d3d9::planCpuReadyChunk(fanFixture.view(), 10);
     check(fanPlan.directArenaCandidate() && fanPlan.segmentCount == 1 &&
               fanPlan.capacity.drawPayloadBytes >=
                   form.minimumGeneratedBytes,
@@ -561,7 +561,7 @@ void triangleFanAndLookupBoundaryPlans() {
   std::vector<RecordSpec> fiveDraws(5, drawRecord());
   const auto fiveFixture = makeValidatedFixture(fiveDraws);
   const auto plan =
-      dxmt9::d3d9::planCpuReadyChunkV2(fiveFixture.view(), 11);
+      dxmt9::d3d9::planCpuReadyChunk(fiveFixture.view(), 11);
   check(plan.directArenaCandidate() &&
             plan.capacity.drawUniformPayloadLookupHeads == 16 &&
             plan.capacity.drawUniformPayloadLookupTails == 16 &&
@@ -579,8 +579,8 @@ void upPayloadUsesCheckedAlignedBuilderUpperBound() {
   const std::array records{directUpDrawRecord()};
   const auto fixture = makeValidatedFixture(records);
   const auto plan =
-      dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 14);
-  const auto alignment = dxmt9::d3d9::kV2ArenaDrawPayloadAppendAlignment;
+      dxmt9::d3d9::planCpuReadyChunk(fixture.view(), 14);
+  const auto alignment = dxmt9::d3d9::kArenaDrawPayloadAppendAlignment;
   std::size_t expected = 12;
   expected = alignUp(expected, alignment) +
              sizeof(dxmt9::core::DrawBindingOverride);
@@ -600,7 +600,7 @@ void segmentedArenaBoundariesAndHardCaps() {
 
   const std::array exact64Records{clearRecord(exact64Rects)};
   const auto exact64Fixture = makeValidatedFixture(exact64Records);
-  const auto exact64 = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto exact64 = dxmt9::d3d9::planCpuReadyChunk(
       exact64Fixture.view(), 20,
       {.pageSize = 4096, .maxOrdinaryPagesPerSegment = 64});
   check(exact64.directArenaCandidate() && exact64.segmentCount == 1 &&
@@ -611,7 +611,7 @@ void segmentedArenaBoundariesAndHardCaps() {
 
   const std::array jumboRecords{clearRecord(exact65Rects)};
   const auto jumboFixture = makeValidatedFixture(jumboRecords);
-  const auto jumbo = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto jumbo = dxmt9::d3d9::planCpuReadyChunk(
       jumboFixture.view(), 21,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
@@ -620,19 +620,19 @@ void segmentedArenaBoundariesAndHardCaps() {
             jumbo.segments[0].layout.pageCount == 65 &&
             jumbo.segments[0].jumbo,
         "one indivisible 65-page record receives one bounded jumbo block");
-  const auto jumboCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto jumboCapped = dxmt9::d3d9::planCpuReadyChunk(
       jumboFixture.view(), 21,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
        .maxPagesPerSource = 64});
-  check(jumboCapped.lane == V2ReplayLane::Legacy &&
-            jumboCapped.reason == V2ReplayReason::Oversize,
+  check(jumboCapped.lane == ReplayLane::Legacy &&
+            jumboCapped.reason == ReplayReason::Oversize,
         "jumbo cannot exceed the complete source page cap");
 
   const std::array twoJumboRecords{
       clearRecord(exact65Rects), clearRecord(exact65Rects)};
   const auto twoJumboFixture = makeValidatedFixture(twoJumboRecords);
-  const auto twoJumbo = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto twoJumbo = dxmt9::d3d9::planCpuReadyChunk(
       twoJumboFixture.view(), 27,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
@@ -650,7 +650,7 @@ void segmentedArenaBoundariesAndHardCaps() {
   const std::array splitRecords{
       clearRecord(exact40Rects), clearRecord(exact40Rects)};
   const auto splitFixture = makeValidatedFixture(splitRecords);
-  const auto split = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto split = dxmt9::d3d9::planCpuReadyChunk(
       splitFixture.view(), 22,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
@@ -665,23 +665,23 @@ void segmentedArenaBoundariesAndHardCaps() {
             split.segments[0].layout.pageCount <= 64 &&
             split.segments[1].layout.pageCount <= 64,
         "a 65+-page aggregate splits before the second GPU record in source order");
-  const auto segmentCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto segmentCapped = dxmt9::d3d9::planCpuReadyChunk(
       splitFixture.view(), 22,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
        .maxSegmentsPerSource = 1,
        .maxPagesPerSource = 128});
-  check(segmentCapped.lane == V2ReplayLane::Legacy &&
-            segmentCapped.reason == V2ReplayReason::Oversize,
+  check(segmentCapped.lane == ReplayLane::Legacy &&
+            segmentCapped.reason == ReplayReason::Oversize,
         "the segment hard cap rejects a required second block");
-  const auto pageCapped = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto pageCapped = dxmt9::d3d9::planCpuReadyChunk(
       splitFixture.view(), 22,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
        .maxSegmentsPerSource = 2,
        .maxPagesPerSource = split.arenaLayout->pageCount - 1});
-  check(pageCapped.lane == V2ReplayLane::Legacy &&
-            pageCapped.reason == V2ReplayReason::Oversize,
+  check(pageCapped.lane == ReplayLane::Legacy &&
+            pageCapped.reason == ReplayReason::Oversize,
         "packed segments still obey the complete source page hard cap");
 }
 
@@ -695,7 +695,7 @@ void segmentedRangesCoverEveryRawRecordExactlyOnce() {
       drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
   };
   const auto fixture = makeValidatedFixture(records);
-  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
       fixture.view(), 24,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
@@ -723,7 +723,7 @@ void presentTailIsAOrderedDirectSegment() {
       blockingRecord(D9C_COMMAND_RECORD_PRESENT),
   };
   const auto fixture = makeValidatedFixture(records);
-  const auto plan = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
       fixture.view(), 23,
       {.pageSize = 4096,
        .maxOrdinaryPagesPerSegment = 64,
@@ -744,10 +744,10 @@ void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
       drawRecord(),
   };
   const auto beforeDrawFixture = makeValidatedFixture(presentBeforeDraw);
-  const auto beforeDraw = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto beforeDraw = dxmt9::d3d9::planCpuReadyChunk(
       beforeDrawFixture.view(), 25);
-  check(beforeDraw.lane == V2ReplayLane::Legacy &&
-            beforeDraw.reason == V2ReplayReason::Present &&
+  check(beforeDraw.lane == ReplayLane::Legacy &&
+            beforeDraw.reason == ReplayReason::Present &&
             !beforeDraw.containsOrderedControls &&
             beforeDraw.replaysSemanticsExactlyOnce(),
         "Present before later work falls back as one ordered legacy source");
@@ -757,10 +757,10 @@ void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
       blockingRecord(D9C_COMMAND_RECORD_PRESENT),
   };
   const auto repeatedFixture = makeValidatedFixture(repeatedPresent);
-  const auto repeated = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto repeated = dxmt9::d3d9::planCpuReadyChunk(
       repeatedFixture.view(), 26);
-  check(repeated.lane == V2ReplayLane::Legacy &&
-            repeated.reason == V2ReplayReason::Present &&
+  check(repeated.lane == ReplayLane::Legacy &&
+            repeated.reason == ReplayReason::Present &&
             !repeated.containsOrderedControls &&
             repeated.replaysSemanticsExactlyOnce(),
         "multiple Present records fall back as one ordered legacy source");
@@ -769,34 +769,34 @@ void nonFinalOrRepeatedPresentFallsBackAsOneSource() {
 void oversizeAndOverflowFallbackBeforeReplay() {
   const auto fixture = makeValidatedFixture(eligibleRecords());
   const auto base =
-      dxmt9::d3d9::planCpuReadyChunkV2(fixture.view(), 12);
+      dxmt9::d3d9::planCpuReadyChunk(fixture.view(), 12);
   check(base.directArenaCandidate() && base.layout &&
             base.layout->pageCount > 1,
         "page-boundary fixture must span multiple pages");
-  const auto exactBoundary = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto exactBoundary = dxmt9::d3d9::planCpuReadyChunk(
       fixture.view(), 12,
       {.pageSize = 4096, .maxPages = base.layout->pageCount});
-  const auto belowBoundary = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto belowBoundary = dxmt9::d3d9::planCpuReadyChunk(
       fixture.view(), 12,
       {.pageSize = 4096, .maxPages = base.layout->pageCount - 1});
   check(exactBoundary.directArenaCandidate() &&
-            belowBoundary.lane == V2ReplayLane::Legacy &&
-            belowBoundary.reason == V2ReplayReason::Oversize,
+            belowBoundary.lane == ReplayLane::Legacy &&
+            belowBoundary.reason == ReplayReason::Oversize,
         "maxPages accepts the exact boundary and rejects one page below it");
-  const auto oversize = dxmt9::d3d9::planCpuReadyChunkV2(
+  const auto oversize = dxmt9::d3d9::planCpuReadyChunk(
       fixture.view(), 12,
       {.pageSize = dxmt9::core::kSourcePayloadByteAlignment,
        .maxPages = 1});
-  check(oversize.lane == V2ReplayLane::Legacy &&
-            oversize.reason == V2ReplayReason::Oversize &&
+  check(oversize.lane == ReplayLane::Legacy &&
+            oversize.reason == ReplayReason::Oversize &&
             !oversize.layout && !oversize.containsOrderedControls,
         "a valid plan beyond the configured page lane falls back pre-replay");
 
-  std::array<D9CCommandChunkWireClearV2, 2> clears{{
+  std::array<D9CCommandChunkWireClear, 2> clears{{
       {.rectCount = std::numeric_limits<std::uint32_t>::max()},
       {.rectCount = 1},
   }};
-  std::array<D9CCommandChunkWireRecordHeaderV2, 2> headers{};
+  std::array<D9CCommandChunkWireRecordHeader, 2> headers{};
   for (std::size_t i = 0; i < headers.size(); ++i) {
     headers[i] = {
         .type = D9C_COMMAND_RECORD_CLEAR,
@@ -804,16 +804,16 @@ void oversizeAndOverflowFallbackBeforeReplay() {
         .payloadSize = sizeof(clears[0]),
     };
   }
-  const ImportedChunkV2View arithmeticFixture{
+  const ImportedChunkView arithmeticFixture{
       .header = {.recordCount = 2},
       .records = headers,
       .payloadArena = std::span<const std::byte>(
           reinterpret_cast<const std::byte*>(clears.data()), sizeof(clears)),
   };
   const auto overflow =
-      dxmt9::d3d9::planCpuReadyChunkV2(arithmeticFixture, 13);
-  check(overflow.lane == V2ReplayLane::Reject &&
-            overflow.reason == V2ReplayReason::StructuralOverflow &&
+      dxmt9::d3d9::planCpuReadyChunk(arithmeticFixture, 13);
+  check(overflow.lane == ReplayLane::Reject &&
+            overflow.reason == ReplayReason::StructuralOverflow &&
             !overflow.layout && !overflow.containsOrderedControls &&
             !overflow.replaysSemanticsExactlyOnce(),
         "u32 capacity overflow rejects before semantic replay");

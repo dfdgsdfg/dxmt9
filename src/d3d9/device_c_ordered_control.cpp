@@ -6,7 +6,7 @@ namespace dxmt9::d3d9 {
 namespace {
 
 template <typename T>
-bool loadFixed(const ImportedRecordV2View& record, T& value) noexcept {
+bool loadFixed(const ImportedRecordView& record, T& value) noexcept {
   if (record.payload.size() < sizeof(T)) {
     return false;
   }
@@ -58,7 +58,7 @@ bool OrderedControlDisposition::valid() const noexcept {
 }
 
 std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
-    const ImportedRecordV2View& record,
+    const ImportedRecordView& record,
     std::uint64_t rawOrdinal,
     std::size_t recordIndex) noexcept {
   if (rawOrdinal == 0 ||
@@ -75,7 +75,7 @@ std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
   };
   switch (record.header.type) {
   case D9C_COMMAND_RECORD_QUERY_ISSUE: {
-    D9CCommandChunkWireQueryIssueV2 query{};
+    D9CCommandChunkWireQueryIssue query{};
     if (!loadFixed(record, query)) {
       return std::nullopt;
     }
@@ -87,7 +87,7 @@ std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
     break;
   }
   case D9C_COMMAND_RECORD_READBACK: {
-    D9CCommandChunkWireReadbackV2 readback{};
+    D9CCommandChunkWireReadback readback{};
     if (!loadFixed(record, readback)) {
       return std::nullopt;
     }
@@ -99,7 +99,7 @@ std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
     break;
   }
   case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
-    D9CCommandChunkWireUpdateTextureV2 update{};
+    D9CCommandChunkWireUpdateTexture update{};
     if (!loadFixed(record, update)) {
       return std::nullopt;
     }

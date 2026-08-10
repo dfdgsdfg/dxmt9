@@ -1,4 +1,4 @@
-#include "device_c_chunk_v2_registry.hpp"
+#include "device_c_chunk_registry.hpp"
 
 #include <array>
 #include <atomic>
@@ -51,8 +51,8 @@ void testInsertResolveEraseReuse() {
   check(registry.activeCount() == 2u, "registry tracks active object count");
 
   const std::array entries = {
-      dxmt9::d3d9::wireHandleEntryV2(textureIdentity),
-      dxmt9::d3d9::wireHandleEntryV2(bufferIdentity),
+      dxmt9::d3d9::wireHandleEntry(textureIdentity),
+      dxmt9::d3d9::wireHandleEntry(bufferIdentity),
   };
   std::array<void*, 2> resolved{};
   check(registry.resolveAndRetain(entries, resolved, retainFake),
@@ -85,10 +85,10 @@ void testTransactionalFailureAndWrongKind() {
   const auto bufferIdentity =
       registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, &buffer);
 
-  auto wrongKind = dxmt9::d3d9::wireHandleEntryV2(bufferIdentity);
+  auto wrongKind = dxmt9::d3d9::wireHandleEntry(bufferIdentity);
   wrongKind.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
   const std::array entries = {
-      dxmt9::d3d9::wireHandleEntryV2(textureIdentity), wrongKind};
+      dxmt9::d3d9::wireHandleEntry(textureIdentity), wrongKind};
   std::array<void*, 2> resolved{
       reinterpret_cast<void*>(std::uintptr_t{1u}),
       reinterpret_cast<void*>(std::uintptr_t{2u}),
@@ -107,7 +107,7 @@ void testDuplicateIdentityRetainsEachEntry() {
   FakeObject texture;
   const auto identity =
       registry.insert(D9C_CHUNK_HANDLE_KIND_TEXTURE, &texture);
-  const auto entry = dxmt9::d3d9::wireHandleEntryV2(identity);
+  const auto entry = dxmt9::d3d9::wireHandleEntry(identity);
   const std::array entries = {entry, entry};
   std::array<void*, 2> resolved{};
 
@@ -154,51 +154,49 @@ void testGenerationWrapRetiresSlot() {
       dxmt9::d3d9::WireObjectRegistry::advanceGeneration(41u);
   check(normal.generation == 42u && !normal.retired,
         "ordinary release advances generation");
+  const auto aboveTwentyFourBits =
+      dxmt9::d3d9::WireObjectRegistry::advanceGeneration(0x00ffffffu);
+  check(aboveTwentyFourBits.generation == 0x01000000u &&
+            !aboveTwentyFourBits.retired,
+        "registry generation advances across the retired 24-bit boundary");
   const auto wrapped = dxmt9::d3d9::WireObjectRegistry::advanceGeneration(
       std::numeric_limits<std::uint32_t>::max());
-  check(wrapped.retired, "generation wrap retires slot");
+  check(wrapped.generation == std::numeric_limits<std::uint32_t>::max() &&
+            wrapped.retired,
+        "maximum uint32 generation retires slot without wrapping");
 }
 
 void testPerDeviceVersionNegotiation() {
   auto* device = reinterpret_cast<D9CDevice*>(std::uintptr_t{1u});
   static_assert(D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION ==
-                D9C_COMMAND_CHUNK_VERSION_V2);
+                D9C_COMMAND_CHUNK_VERSION);
   D9CCommandChunkNegotiation automatic{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_2,
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT,
       .pePreferredVersion = D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION,
   };
   check(dxmt9p_device_negotiate_command_chunk(device, &automatic) == 0 &&
             automatic.unixSupportedVersions ==
-                D9C_COMMAND_CHUNK_CAP_VERSION_2 &&
-            automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
-        "V2-only peers negotiate V2");
+                D9C_COMMAND_CHUNK_CAP_CURRENT &&
+            automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION,
+        "canonical peers negotiate numeric wire version 2");
 
-  D9CCommandChunkNegotiation v1{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
-                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
-      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION,
+  D9CCommandChunkNegotiation versionOne{
+      .peSupportedVersions = 0x00000001u,
+      .pePreferredVersion = 1u,
   };
-  check(dxmt9p_device_negotiate_command_chunk(device, &v1) < 0 &&
-            v1.unixSupportedVersions == D9C_COMMAND_CHUNK_CAP_VERSION_2 &&
-            v1.selectedVersion == 0u,
-        "retired V1 preference is rejected");
-
-  D9CCommandChunkNegotiation v2{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1 |
-                             D9C_COMMAND_CHUNK_CAP_VERSION_2,
-      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
-  };
-  check(dxmt9p_device_negotiate_command_chunk(device, &v2) == 0 &&
-            v2.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2,
-        "V2 preference negotiates V2 without fallback");
+  check(dxmt9p_device_negotiate_command_chunk(device, &versionOne) < 0 &&
+            versionOne.unixSupportedVersions ==
+                D9C_COMMAND_CHUNK_CAP_CURRENT &&
+            versionOne.selectedVersion == 0u,
+        "numeric wire version 1 is rejected");
 
   D9CCommandChunkNegotiation unsupported{
-      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_1,
-      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2,
+      .peSupportedVersions = 0x00000004u,
+      .pePreferredVersion = 3u,
   };
   check(dxmt9p_device_negotiate_command_chunk(device, &unsupported) < 0 &&
             unsupported.selectedVersion == 0u,
-        "unsupported forced V2 fails instead of selecting V1");
+        "unsupported numeric wire version rejects without fallback");
 }
 
 }  // namespace
@@ -212,10 +210,10 @@ int main() {
     testGenerationWrapRetiresSlot();
     testPerDeviceVersionNegotiation();
   } catch (const TestFailure& error) {
-    std::cerr << "chunk_record_v2_registry_spec failed: " << error.what()
+    std::cerr << "chunk_record_registry_spec failed: " << error.what()
               << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "chunk_record_v2_registry_spec passed\n";
+  std::cout << "chunk_record_registry_spec passed\n";
   return EXIT_SUCCESS;
 }

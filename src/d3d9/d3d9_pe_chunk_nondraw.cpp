@@ -1,4 +1,4 @@
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 
 #include <limits>
 
@@ -41,7 +41,7 @@ std::uint32_t constantRegisterLimit(std::uint32_t type) {
 }
 
 template <typename T>
-bool appendFixed(CommandChunkV2Builder& builder, std::uint32_t type,
+bool appendFixed(CommandChunkBuilder& builder, std::uint32_t type,
                  const T& fixed) {
   if (!builder.beginRecord(type)) {
     return false;
@@ -54,7 +54,7 @@ bool appendFixed(CommandChunkV2Builder& builder, std::uint32_t type,
 }
 
 template <typename T>
-bool appendTwoHandleFixed(CommandChunkV2Builder& builder, std::uint32_t type,
+bool appendTwoHandleFixed(CommandChunkBuilder& builder, std::uint32_t type,
                           T fixed, const PeWireObjectRef& first,
                           std::uint32_t firstKind,
                           std::uint32_t T::* firstField,
@@ -75,8 +75,8 @@ bool appendTwoHandleFixed(CommandChunkV2Builder& builder, std::uint32_t type,
 
 }  // namespace
 
-bool appendSetConstantsV2(
-    CommandChunkV2Builder& builder, std::uint32_t type,
+bool appendSetConstants(
+    CommandChunkBuilder& builder, std::uint32_t type,
     std::uint32_t startRegister, std::uint32_t registerCount,
     std::span<const std::byte> registerBytes) noexcept {
   const auto elementSize = constantElementSize(type);
@@ -88,7 +88,7 @@ bool appendSetConstantsV2(
       expectedBytes != registerBytes.size() || !builder.beginRecord(type)) {
     return false;
   }
-  const D9CCommandChunkWireSetConstV2 fixed{
+  const D9CCommandChunkWireSetConst fixed{
       .startRegister = startRegister,
       .registerCount = registerCount,
   };
@@ -101,8 +101,8 @@ bool appendSetConstantsV2(
   return true;
 }
 
-bool appendClearV2(CommandChunkV2Builder& builder,
-                   D9CCommandChunkWireClearV2 fixed,
+bool appendClear(CommandChunkBuilder& builder,
+                   D9CCommandChunkWireClear fixed,
                    std::span<const D9CRect> rects) noexcept {
   if (rects.size() > std::numeric_limits<std::uint32_t>::max() ||
       !builder.beginRecord(D9C_COMMAND_RECORD_CLEAR)) {
@@ -119,28 +119,28 @@ bool appendClearV2(CommandChunkV2Builder& builder,
   return true;
 }
 
-bool appendPresentV2(CommandChunkV2Builder& builder,
-                     const D9CCommandChunkWirePresentV2& input) noexcept {
+bool appendPresent(CommandChunkBuilder& builder,
+                     const D9CCommandChunkWirePresent& input) noexcept {
   auto fixed = input;
   fixed.reserved0 = 0u;
   return appendFixed(builder, D9C_COMMAND_RECORD_PRESENT, fixed);
 }
 
-bool appendStretchRectV2(CommandChunkV2Builder& builder,
-                         D9CCommandChunkWireStretchRectV2 fixed,
+bool appendStretchRect(CommandChunkBuilder& builder,
+                         D9CCommandChunkWireStretchRect fixed,
                          const PeWireObjectRef& src,
                          const PeWireObjectRef& dst) noexcept {
   fixed.reserved0 = 0u;
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_STRETCH_RECT, fixed, src,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireStretchRectV2::srcHandleIndex, dst,
+      &D9CCommandChunkWireStretchRect::srcHandleIndex, dst,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireStretchRectV2::dstHandleIndex);
+      &D9CCommandChunkWireStretchRect::dstHandleIndex);
 }
 
-bool appendColorFillV2(CommandChunkV2Builder& builder,
-                       D9CCommandChunkWireColorFillV2 fixed,
+bool appendColorFill(CommandChunkBuilder& builder,
+                       D9CCommandChunkWireColorFill fixed,
                        const PeWireObjectRef& surface) noexcept {
   if (!builder.beginRecord(D9C_COMMAND_RECORD_COLOR_FILL)) {
     return false;
@@ -158,35 +158,35 @@ bool appendColorFillV2(CommandChunkV2Builder& builder,
   return true;
 }
 
-bool appendUpdateTextureV2(CommandChunkV2Builder& builder,
+bool appendUpdateTexture(CommandChunkBuilder& builder,
                            const PeWireObjectRef& src,
                            const PeWireObjectRef& dst) noexcept {
-  D9CCommandChunkWireUpdateTextureV2 fixed{};
+  D9CCommandChunkWireUpdateTexture fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_UPDATE_TEXTURE, fixed, src,
       D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      &D9CCommandChunkWireUpdateTextureV2::srcHandleIndex, dst,
+      &D9CCommandChunkWireUpdateTexture::srcHandleIndex, dst,
       D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      &D9CCommandChunkWireUpdateTextureV2::dstHandleIndex);
+      &D9CCommandChunkWireUpdateTexture::dstHandleIndex);
 }
 
-bool appendUpdateSurfaceV2(CommandChunkV2Builder& builder,
-                           D9CCommandChunkWireUpdateSurfaceV2 fixed,
+bool appendUpdateSurface(CommandChunkBuilder& builder,
+                           D9CCommandChunkWireUpdateSurface fixed,
                            const PeWireObjectRef& src,
                            const PeWireObjectRef& dst) noexcept {
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_UPDATE_SURFACE, fixed, src,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireUpdateSurfaceV2::srcHandleIndex, dst,
+      &D9CCommandChunkWireUpdateSurface::srcHandleIndex, dst,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireUpdateSurfaceV2::dstHandleIndex);
+      &D9CCommandChunkWireUpdateSurface::dstHandleIndex);
 }
 
-bool appendQueryIssueV2(CommandChunkV2Builder& builder,
+bool appendQueryIssue(CommandChunkBuilder& builder,
                         std::uint32_t flags,
                         const PeWireObjectRef& query) noexcept {
-  D9CCommandChunkWireQueryIssueV2 fixed{
-      .queryHandleIndex = D9C_COMMAND_CHUNK_V2_NULL_HANDLE_INDEX,
+  D9CCommandChunkWireQueryIssue fixed{
+      .queryHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
       .flags = flags,
   };
   if (!builder.beginRecord(D9C_COMMAND_RECORD_QUERY_ISSUE)) {
@@ -201,28 +201,28 @@ bool appendQueryIssueV2(CommandChunkV2Builder& builder,
   return true;
 }
 
-bool appendReadbackV2(CommandChunkV2Builder& builder,
+bool appendReadback(CommandChunkBuilder& builder,
                       const PeWireObjectRef& src,
                       const PeWireObjectRef& dst) noexcept {
-  D9CCommandChunkWireReadbackV2 fixed{};
+  D9CCommandChunkWireReadback fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_READBACK, fixed, src,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireReadbackV2::srcHandleIndex, dst,
+      &D9CCommandChunkWireReadback::srcHandleIndex, dst,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireReadbackV2::dstHandleIndex);
+      &D9CCommandChunkWireReadback::dstHandleIndex);
 }
 
-bool appendReszDepthResolveV2(CommandChunkV2Builder& builder,
+bool appendReszDepthResolve(CommandChunkBuilder& builder,
                               const PeWireObjectRef& msaaDepth,
                               const PeWireObjectRef& intzDest) noexcept {
-  D9CCommandChunkWireReszDepthResolveV2 fixed{};
+  D9CCommandChunkWireReszDepthResolve fixed{};
   return appendTwoHandleFixed(
       builder, D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE, fixed, msaaDepth,
       D9C_CHUNK_HANDLE_KIND_SURFACE,
-      &D9CCommandChunkWireReszDepthResolveV2::msaaDepthHandleIndex, intzDest,
+      &D9CCommandChunkWireReszDepthResolve::msaaDepthHandleIndex, intzDest,
       D9C_CHUNK_HANDLE_KIND_TEXTURE,
-      &D9CCommandChunkWireReszDepthResolveV2::intzDestHandleIndex);
+      &D9CCommandChunkWireReszDepthResolve::intzDestHandleIndex);
 }
 
 }  // namespace dxmt9::d3d9::pe

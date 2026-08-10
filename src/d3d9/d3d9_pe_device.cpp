@@ -23,7 +23,7 @@
 #endif
 #include "d3d9_pe.hpp"
 #include "d3d9_pe_device_child.hpp"
-#include "d3d9_pe_chunk_v2_builder.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_process_vertices.hpp"
@@ -110,7 +110,7 @@ static bool dxmt9PeRecorderChunkLogEnabled() {
 // D9C_COMMAND_RECORD_SET_*_CONST_* + fixed-size record path verbatim
 // (R-BACK-2.52(a)). On, appendDrawPrimitiveRecord /
 // appendDrawIndexedPrimitiveRecord drain the six pending const shadows' merged
-// dirty ranges directly into V2 draw-record constant sections (R-BACK-2.52(b)).
+// dirty ranges directly into canonical draw-record constant sections (R-BACK-2.52(b)).
 // Non-draw const consumers (ProcessVertices, chunkBarrierFlush's drain, the
 // UP draw variants — see appendDrawPrimitiveUPRecordWithFvf /
 // appendDrawIndexedPrimitiveUPRecordWithFvf) are untouched by this flag and
@@ -330,7 +330,7 @@ static std::array<char, 2048> dxmt9PeFormatCallerStack(
 // the ones before it, which is what makes isolated and out-of-order replay
 // meaningful for debug and stress.
 //
-// APPLICATION SITE: buildSparseStateV2() in d3d9_pe_producer.cpp, which per
+// APPLICATION SITE: buildSparseState() in d3d9_pe_producer.cpp, which per
 // category selects the shadow table instead of the pending set (`snapshot ?
 // shadow.renderStateShadow : shadow.pendingRenderStates` and its four siblings)
 // and emits every bound slot rather than only the dirty ones.
@@ -1012,34 +1012,34 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // per call. Mutable because the binding-view fill is a const method.
     mutable dxmt9::d3d9::pe::PeBindingView peBindingView_{};
 
-    // Reused sparse-producer storage. The SparseStateV2Input spans point into
+    // Reused sparse-producer storage. The SparseStateInput spans point into
     // peSparseScratch_, so both must outlive the append that consumes them --
     // they are members for that reason as well as to avoid per-draw zeroing.
     mutable dxmt9::d3d9::pe::PeSparseScratch peSparseScratch_{};
-    mutable dxmt9::d3d9::pe::SparseStateV2Input peSparseState_{};
-    mutable D9CCommandChunkWireDrawHeaderV2 peSparseHeader_{};
+    mutable dxmt9::d3d9::pe::SparseStateInput peSparseState_{};
+    mutable D9CCommandChunkWireDrawHeader peSparseHeader_{};
     mutable dxmt9::d3d9::pe::PeDrawPayloads peSparsePayloads_{};
     bool dsSurfaceExplicit_ = false;
-    dxmt9::d3d9::pe::CommandChunkV2Builder commandChunkV2_{};
+    dxmt9::d3d9::pe::CommandChunkBuilder commandChunk_{};
     bool commandChunkNegotiated_ = false;
     std::uint64_t commandChunkCommits_ = 0;
     std::uint64_t commandChunkRecords_ = 0;
     std::uint64_t commandChunkBytes_ = 0;
     PeRecorderStats peRecorderStats_{};
     // DXMT9_PE_STATS_DECIMATION diagnostic accumulators (const_flush,
-    // draw_packet, and V2 append scopes). The const_setter accumulator lives
+    // draw_packet, and canonical append scopes). The const_setter accumulator lives
     // next to its owner (touchConstShadow's function-local static) — see
     // d3d9_pe_stats_decimation.hpp and logPeStatsDecimation() below.
     // draw_packet's stats are mutable because the state build's forwarder
     // is a const method.
-    PeDecimatedScopeStats peV2AppendDecimatedStats_{};
+    PeDecimatedScopeStats peChunkAppendDecimatedStats_{};
     // Phase split of the record append, sampled on the same calls the
     // parent scope samples. CAVEAT: each phase costs one clock pair, so on a
     // sampled call the parent `append_sampled_ms` is inflated by roughly four
     // pairs. Read the phases against each other, not against the parent, and
     // do not quote the parent's absolute figure from a run with these enabled
     // -- a 2026-07-29 GT2 run read 4,180 ns for the parent here against
-    // 2,851 ns with the phases off. Direct V2 emitters time only their builder
+    // 2,851 ns with the phases off. Direct canonical emitters time only their builder
     // append as `encode`; capacity commits accumulate in the `flush` phase.
     // Per-record-type append census. Counting only -- no clock reads -- so it
     // can run alongside the decimated timers without adding to the bias that
@@ -1302,7 +1302,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     void clearPendingCommandChunk() {
-        commandChunkV2_.reset();
+        commandChunk_.reset();
     }
 
     void clearPeStateTracking() {
@@ -1503,12 +1503,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // Fills the FULL PeWireObjectRef -- identity as well as object -- via the
     // D3D9PeWire* accessors, which return each wrapper's cached ref.
     //
-    // Identity is not optional: CommandChunkV2Builder::appendHandle rejects a
+    // Identity is not optional: CommandChunkBuilder::appendHandle rejects a
     // ref whose identity is zero (PeWireObjectRef::valid checks kind,
     // generation and objectId) and fails the whole record through
     // failActiveRecord() with NO log line. An earlier revision filled only
     // `object`, on the reasoning that nothing read identity yet; the moment
-    // APPLY_STATE started going through appendApplyStateV2 that turned into
+    // APPLY_STATE started going through appendApplyState that turned into
     // "IDirect3DDevice9::Clear failed: Invalid call" with nothing explaining
     // why, and the harness still reported status=pass because it does not gate
     // on the rendered image.
@@ -1554,7 +1554,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         view.rtExplicitMask = currentRtExplicitMask();
         view.fvf = fvf_;
         // Filled unconditionally now: addChunkContextSections needs it to answer
-        // the retention question, and buildSparseStateV2 emits the index section
+        // the retention question, and buildSparseState emits the index section
         // only for the indexed record types anyway.
         view.indexBuffer = D3D9PeWireIndexBuffer(indexBuf_);
     }
@@ -1595,7 +1595,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // payload. Without this, enabling DXMT9_PE_INLINE_CONST_DELTA would move
     // chunk boundaries.
     std::size_t sparseConstPayloadBytes() const {
-        const dxmt9::d3d9::pe::SparseConstantRangeV2Input* ranges[] = {
+        const dxmt9::d3d9::pe::SparseConstantRangeInput* ranges[] = {
             &peSparseState_.vsFloatConstants, &peSparseState_.vsIntConstants,
             &peSparseState_.vsBoolConstants,  &peSparseState_.psFloatConstants,
             &peSparseState_.psIntConstants,   &peSparseState_.psBoolConstants,
@@ -1612,7 +1612,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // no fat packet in between. The decimated draw_packet scope lives here for
     // the same reason it does on the fat-packet forwarder: it has to cover the
     // COM-to-wire binding translation, not just the section fill.
-    // Not const: buildSparseStateV2 takes the const shadow by non-const
+    // Not const: buildSparseState takes the const shadow by non-const
     // reference. It does not currently write to it -- see that function's
     // comment -- but the signature reserves the right, so this must not claim
     // const and cast it away.
@@ -1622,7 +1622,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // every caller that later handed its own params to addChunkContextSections
     // passed recordType == 0. That reads as "not an indexed draw", and the
     // context step does not merely skip the index section -- it rebuilds the
-    // span as first(0), wiping the one buildSparseStateV2 had already emitted
+    // span as first(0), wiping the one buildSparseState had already emitted
     // for pendingIb. SetIndices records nothing standalone in chunk mode, so
     // every indexed draw then replayed against a stale index buffer: GT1 came
     // out as sliver triangles with garbled HUD digits. Two sources of truth for
@@ -1661,7 +1661,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const bool isDraw =
             recordType != D9C_COMMAND_RECORD_APPLY_STATE;
         populateBindingView(peBindingView_, needAllSlots, isDraw);
-        return dxmt9::d3d9::pe::buildSparseStateV2(
+        return dxmt9::d3d9::pe::buildSparseState(
             peState_, peConsts_, peBindingView_, peSparsePayloads_, params,
             forceFullSnapshot, inlineConstDelta, peSparseScratch_,
             peSparseHeader_, peSparseState_);
@@ -5487,7 +5487,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     void notePeChunkAppendBoundary(std::int64_t appendReturnNs,
                                    std::uint32_t type) {
         if (!dxmt9PeRecorderStatsEnabled() ||
-            commandChunkV2_.recordCount() == 0) {
+            commandChunk_.recordCount() == 0) {
             return;
         }
         if (peRecorderCurrentChunkFirstAppendNs_ == 0) {
@@ -6569,7 +6569,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (decimationN == 0) {
             return;
         }
-        const auto& appendStats = peV2AppendDecimatedStats_;
+        const auto& appendStats = peChunkAppendDecimatedStats_;
         const auto& constSetterStats = peConstSetterDecimatedStats();
         // Per-call register-count split of the const_setter scope. A flat
         // ns/sample across buckets means the fixed per-call entry cost
@@ -6739,16 +6739,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (!commandChunkNegotiated_) {
             return D3DERR_NOTAVAILABLE;
         }
-        if (commandChunkV2_.recordCount() == 0u) {
+        if (commandChunk_.recordCount() == 0u) {
             return S_OK;
         }
-        const auto payloadBytes = commandChunkV2_.payloadBytes();
-        const auto sealed = commandChunkV2_.seal();
+        const auto payloadBytes = commandChunk_.payloadBytes();
+        const auto sealed = commandChunk_.seal();
         if (!sealed.valid() || sealed.blob.size() > 0xffffffffull) {
             return D3DERR_INVALIDCALL;
         }
         D9CCommandChunk chunk{};
-        chunk.version = D9C_COMMAND_CHUNK_VERSION_V2;
+        chunk.version = D9C_COMMAND_CHUNK_VERSION;
         chunk.recordCount = sealed.recordCount;
         chunk.recordBytes = static_cast<std::uint32_t>(sealed.blob.size());
         chunk.records = toWireHandle(sealed.blob.data());
@@ -6762,12 +6762,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         };
         const HRESULT hr = commitPendingCommandChunk(reason, chunk, info);
         if (SUCCEEDED(hr)) {
-            commandChunkV2_.reset();
+            commandChunk_.reset();
         }
         return hr;
     }
 
-    // Phase timer handed to an appendRecordV2 emitter. The envelope owns the
+    // Phase timer handed to an appendRecord emitter. The envelope owns the
     // decimation sampling decision, so an emitter that has its own phases to
     // attribute (the legacy adapter's resize and write) records them through
     // this rather than re-deriving `phaseSampled`.
@@ -6798,17 +6798,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // still pass a value on the same scale as the legacy record it replaced,
     // or chunk seal cadence shifts -- which no per-record test can observe.
     //
-    // `emit` is invoked as HRESULT(CommandChunkV2Builder&, const AppendPhaseTimer&).
+    // `emit` is invoked as HRESULT(CommandChunkBuilder&, const AppendPhaseTimer&).
     // It returns an HRESULT rather than bool so an emitter can distinguish
     // E_OUTOFMEMORY from a malformed record.
     //
     // The return type is asserted, not merely documented, because HRESULT is
-    // LONG: an emitter that returned the V2 emitters' natural `bool` would
+    // LONG: an emitter that returned the canonical emitters' natural `bool` would
     // convert `false` to 0 == S_OK, so a failed append would be reported as a
     // success. CapacityPost would run, notePeChunkAppendBoundary would count a
     // record that was never appended, and the record would vanish with no
     // error. Emitters must spell out `? S_OK : D3DERR_INVALIDCALL`.
-    // Chunk seal cadence is a behavioural contract, not a size. appendRecordV2's
+    // Chunk seal cadence is a behavioural contract, not a size. appendRecord's
     // sizeHint is what the capacity precheck compares against, so changing it
     // moves where chunks seal and therefore which draws share a chunk. These are
     // the sizes of the legacy records each site used to build, preserved verbatim
@@ -6841,13 +6841,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     static constexpr std::size_t kLegacyUpdateTextureSizeHint = 24u;
 
     template<typename EmitFn>
-    HRESULT appendRecordV2(uint32_t type, size_t sizeHint, EmitFn emit) {
+    HRESULT appendRecord(uint32_t type, size_t sizeHint, EmitFn emit) {
         static_assert(
             std::is_same_v<
-                decltype(emit(std::declval<dxmt9::d3d9::pe::CommandChunkV2Builder&>(),
+                decltype(emit(std::declval<dxmt9::d3d9::pe::CommandChunkBuilder&>(),
                               std::declval<const AppendPhaseTimer&>())),
                 HRESULT>,
-            "appendRecordV2 emitters must return HRESULT, not bool: a bool "
+            "appendRecord emitters must return HRESULT, not bool: a bool "
             "false would silently convert to S_OK");
         const size_t bytes = sizeHint;
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
@@ -6857,8 +6857,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         const auto maxRecords = maxPendingCommandRecords();
         const auto maxBytes = maxPendingCommandBytes();
-        const auto recordCountBefore = commandChunkV2_.recordCount();
-        const auto payloadBytesBefore = commandChunkV2_.payloadBytes();
+        const auto recordCountBefore = commandChunk_.recordCount();
+        const auto payloadBytesBefore = commandChunk_.payloadBytes();
         const bool willFlushBeforeAppend = recordCountBefore != 0u &&
             (recordCountBefore >= maxRecords ||
              payloadBytesBefore + bytes > maxBytes);
@@ -6890,8 +6890,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
         if (decimationN != 0 &&
             PeDecimatedScopeTimer::shouldSample(
-                peV2AppendDecimatedStats_, decimationN)) {
-            appendDecimatedScope.stats = &peV2AppendDecimatedStats_;
+                peChunkAppendDecimatedStats_, decimationN)) {
+            appendDecimatedScope.stats = &peChunkAppendDecimatedStats_;
             {
                 const auto n0 = std::chrono::steady_clock::now();
                 const auto n1 = std::chrono::steady_clock::now();
@@ -6924,15 +6924,15 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         }
         if (SUCCEEDED(hr)) {
             // The emitter records peAppendPhaseEncode_ itself around the direct
-            // V2 builder append. Timing the whole callable here would include
+            // canonical builder append. Timing the whole callable here would include
             // context/retention preparation and silently redefine `encode`,
             // the figure the migration is measured against -- see
             // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.01.md.
-            hr = emit(commandChunkV2_, AppendPhaseTimer{phaseSampled});
+            hr = emit(commandChunk_, AppendPhaseTimer{phaseSampled});
         }
         if (SUCCEEDED(hr) &&
-            (commandChunkV2_.recordCount() >= maxRecords ||
-             commandChunkV2_.payloadBytes() >= maxBytes)) {
+            (commandChunk_.recordCount() >= maxRecords ||
+             commandChunk_.payloadBytes() >= maxBytes)) {
             const auto t0 = phaseNow();
             hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
             phaseRecord(peAppendPhaseFlush_, t0);
@@ -6959,7 +6959,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     }
 
     // Non-indexed draw: fold or flush pending constants, then emit one sparse
-    // V2 draw record through the appendRecordV2 envelope.
+    // canonical draw record through the appendRecord envelope.
     HRESULT appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT startVertex, UINT count) {
         Dxmt9PeAppendFamilyScope appendFamily(PeInterAppendCallFamily::Draw);
         // Hold the recorder lock across the const-flush/fold + draw-record
@@ -6985,10 +6985,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                        inlineConstDelta)) {
             return D3DERR_INVALIDCALL;
         }
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
             kLegacyDrawPrimitiveSizeHint + sparseConstPayloadBytes(),
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 // Inside the emitter on purpose: CapacityPre may have sealed the
                 // old chunk, and the retention answers are about the chunk this
@@ -7000,7 +7000,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                     return D3DERR_INVALIDCALL;
                 }
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
                     builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, peSparseHeader_,
                     peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
@@ -7042,11 +7042,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // update, exactly as the legacy code keyed it on the final ibValid --
         // which the append-time dependency checkpoint could itself set.
         bool indexSectionEmitted = false;
-        const HRESULT hr = appendRecordV2(
+        const HRESULT hr = appendRecord(
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
             kLegacyDrawIndexedPrimitiveSizeHint +
                 sparseConstPayloadBytes(),
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 if (!dxmt9::d3d9::pe::addChunkContextSections(
                         currentChunkContext(), peState_, peBindingView_, params,
@@ -7056,7 +7056,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 }
                 indexSectionEmitted = !peSparseState_.indexBuffers.empty();
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
                     builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
                     peSparseHeader_, peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
@@ -7077,7 +7077,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         if (value == 0u) {
             return false;
         }
-        return commandChunkV2_.referencesObject(reinterpret_cast<void*>(
+        return commandChunk_.referencesObject(reinterpret_cast<void*>(
             static_cast<std::uintptr_t>(value)));
     }
 
@@ -7165,13 +7165,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // a UP draw binds no app buffer, so there is nothing for the destination
         // chunk to have retained -- matching both legacy UP call sites, which ran
         // neither dependency checkpoint.
-        const HRESULT hr = appendRecordV2(
+        const HRESULT hr = appendRecord(
             D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
             kLegacyDrawPrimitiveUPSizeHint + vertexBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
                     builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
                     peSparseHeader_, peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
@@ -7255,7 +7255,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         params.stride = stride;
         params.indexFormat = static_cast<std::uint32_t>(indexFormat);
         // Borrowed for this call only; cleared below. Index bytes precede vertex
-        // bytes in the record, and appendSparseRecordV2 lays them out in that
+        // bytes in the record, and appendSparseRecord lays them out in that
         // order from these two spans.
         peSparsePayloads_.upIndex = std::span<const std::byte>(
             static_cast<const std::byte*>(indexData), indexBytes);
@@ -7282,14 +7282,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // indexed UP draw carries its indices inline and binds no index buffer.
         // dxmt9_pe_producer.cpp's indexedDraw predicate excludes _UP for exactly
         // this reason.
-        const HRESULT hr = appendRecordV2(
+        const HRESULT hr = appendRecord(
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
             kLegacyDrawIndexedPrimitiveUPSizeHint + indexBytes +
                 vertexBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendSparseRecordV2(
+                const bool ok = dxmt9::d3d9::pe::appendSparseRecord(
                     builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
                     peSparseHeader_, peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
@@ -7329,13 +7329,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         // untouched, which is why flushConstShadow's DXMT9_SPLIT_SPARSE_CONST_
         // RECORDS diagnostic path and its telemetry need no changes: this is
         // the single emitter behind all six VS/PS constant kinds.
-        return appendRecordV2(
+        return appendRecord(
             recordType,
             kLegacySetConstSizeHint + payloadBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendSetConstantsV2(
+                const bool ok = dxmt9::d3d9::pe::appendSetConstants(
                     builder, recordType, start, count,
                     std::span<const std::byte>(
                         reinterpret_cast<const std::byte*>(data), payloadBytes));
@@ -7485,7 +7485,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // state is pending, packages the delta into a D9C_COMMAND_RECORD_
     // APPLY_STATE record + appends to the chunk + clears the pending
     // bits. Server importer dispatches APPLY_STATE via the same
-    // V2 state replay that draw records use, so the server
+    // canonical state replay that draw records use, so the server
     // shadow is updated before the upcoming barrier record runs.
     //
     // Caller still appends the actual barrier record afterwards;
@@ -7514,13 +7514,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             recordPeApplyStateBuildCpu(buildEntryNs);
             // sizeHint stays kLegacyApplyStateSizeHint: it is what the
             // capacity precheck saw before, so seal cadence is unchanged.
-            const HRESULT appendHr = appendRecordV2(
+            const HRESULT appendHr = appendRecord(
                 D9C_COMMAND_RECORD_APPLY_STATE,
                 kLegacyApplyStateSizeHint,
-                [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+                [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                     const AppendPhaseTimer& phase) -> HRESULT {
                     const auto t0 = AppendPhaseTimer::now();
-                    const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                    const bool ok = dxmt9::d3d9::pe::appendApplyState(
                         builder, peSparseHeader_.flags, peSparseState_);
                     phase.record(peAppendPhaseEncode_, t0);
                     return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -7544,16 +7544,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
     // capacity precheck saw when this drained legacy records, so seal cadence is
     // unchanged. flags stay 0: these are batches, never snapshots.
     template <typename Fill>
-    HRESULT appendSingleCategoryApplyStateV2(Fill fill) {
-        peSparseState_ = dxmt9::d3d9::pe::SparseStateV2Input{};
+    HRESULT appendSingleCategoryApplyState(Fill fill) {
+        peSparseState_ = dxmt9::d3d9::pe::SparseStateInput{};
         fill();
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_APPLY_STATE,
             kLegacyApplyStateSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                const bool ok = dxmt9::d3d9::pe::appendApplyState(
                     builder, /*flags=*/0u, peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -7577,7 +7577,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 std::uint32_t n = 0;
                 std::uint32_t key = 0;
                 std::uint32_t value = 0;
-                const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+                const HRESULT hr = appendSingleCategoryApplyState([&] {
                     while (n < cap && pendingTable.popFirst(key, value)) {
                         fillEntry(n, key, value);
                         ++n;
@@ -7594,7 +7594,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 std::uint32_t row = 0;
                 std::uint32_t key = 0;
                 std::uint32_t value = 0;
-                const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+                const HRESULT hr = appendSingleCategoryApplyState([&] {
                     while (n < cap && pendingTable.popFirst(row, key, value)) {
                         fillEntry(n, row, key, value);
                         ++n;
@@ -7609,7 +7609,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 (std::uint32_t)D9C_DRAW_PACKET_MAX_RENDER_STATES,
                 [&](std::uint32_t i, std::uint32_t k, std::uint32_t v) {
                     peSparseScratch_.renderStates[i] =
-                        D9CCommandChunkWireRenderStateV2{k, v};
+                        D9CCommandChunkWireRenderState{k, v};
                     peSparseState_.renderStates =
                         std::span(peSparseScratch_.renderStates).first(i + 1u);
                 });
@@ -7640,7 +7640,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
             std::uint32_t n = 0;
             std::uint32_t key = 0;
             D9CMatrix value{};
-            const HRESULT hr = appendSingleCategoryApplyStateV2([&] {
+            const HRESULT hr = appendSingleCategoryApplyState([&] {
                 while (n < (std::uint32_t)D9C_DRAW_PACKET_MAX_TRANSFORMS &&
                        peState_.pendingTransforms.popFirst(key, value)) {
                     peSparseScratch_.transforms[n] =
@@ -7672,13 +7672,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                 "should treat as recorder failure.");
             return D3DERR_INVALIDCALL;
         }
-        const HRESULT hr = appendRecordV2(
+        const HRESULT hr = appendRecord(
             D9C_COMMAND_RECORD_APPLY_STATE,
             kLegacyApplyStateSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendApplyStateV2(
+                const bool ok = dxmt9::d3d9::pe::appendApplyState(
                     builder, peSparseHeader_.flags, peSparseState_);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -7697,7 +7697,7 @@ public:
             return S_OK;
         }
         std::lock_guard<std::recursive_mutex> recorderLock(recorderMutex_);
-        const bool referenced = commandChunkV2_.referencesObject(buffer);
+        const bool referenced = commandChunk_.referencesObject(buffer);
         if (!referenced) {
             return S_OK;
         }
@@ -7735,13 +7735,13 @@ public:
     HRESULT AppendQueryIssueForChild(
         std::uint32_t flags,
         const dxmt9::d3d9::pe::PeWireObjectRef& query) noexcept override {
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_QUERY_ISSUE,
             kLegacyQueryIssueSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendQueryIssueV2(
+                const bool ok = dxmt9::d3d9::pe::appendQueryIssue(
                     builder, flags, query);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -7848,21 +7848,21 @@ public:
         }
         if (dev_) {
             D9CCommandChunkNegotiation negotiation{};
-            negotiation.peSupportedVersions = D9C_COMMAND_CHUNK_CAP_VERSION_2;
-            negotiation.pePreferredVersion = D9C_COMMAND_CHUNK_VERSION_V2;
+            negotiation.peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
+            negotiation.pePreferredVersion = D9C_COMMAND_CHUNK_VERSION;
             const HRESULT negotiationHr =
                 hr32(dxmt9c_device_negotiate_command_chunk(
                     dev_, &negotiation));
             commandChunkNegotiated_ = SUCCEEDED(negotiationHr) &&
-                negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION_V2;
+                negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION;
             if (commandChunkNegotiated_) {
                 dxmt9DeviceInfoLog(
-                    "command chunk negotiation selected v2 pe_caps=0x%x unix_caps=0x%x",
+                    "command chunk negotiation selected canonical pe_caps=0x%x unix_caps=0x%x",
                     negotiation.peSupportedVersions,
                     negotiation.unixSupportedVersions);
             } else {
                 dxmt9DeviceInfoLog(
-                    "command chunk negotiation failed hr=0x%08x preferred=v2 selected=v%u unix_caps=0x%x",
+                    "command chunk negotiation failed hr=0x%08x preferred=canonical selected=v%u unix_caps=0x%x",
                     static_cast<unsigned>(negotiationHr),
                     negotiation.selectedVersion,
                     negotiation.unixSupportedVersions);
@@ -7899,7 +7899,7 @@ public:
     ~D3D9DeviceImpl() {
         (void)flushPeRecorder(PeRecorderFlushReason::Destructor);
         dxmt9DeviceInfoLog(
-            "command chunk totals selected=v2 chunks=%llu records=%llu bytes=%llu identity_getter_calls=%llu",
+            "command chunk totals selected=canonical chunks=%llu records=%llu bytes=%llu identity_getter_calls=%llu",
             static_cast<unsigned long long>(commandChunkCommits_),
             static_cast<unsigned long long>(commandChunkRecords_),
             static_cast<unsigned long long>(commandChunkBytes_),
@@ -8287,7 +8287,7 @@ public:
         // sizeHint stays kLegacyPresentSizeHint even though no legacy
         // record is built: it is what the capacity precheck saw before, so
         // chunk seal cadence is unchanged.
-        const D9CCommandChunkWirePresentV2 presentWire{
+        const D9CCommandChunkWirePresent presentWire{
             .hwnd = (uint64_t)(uintptr_t)wnd,
             .flags = 0,
             .hasSrc = src ? 1u : 0u,
@@ -8296,13 +8296,13 @@ public:
             .src = src ? cs : D9CRect{},
             .dst = dst ? cd : D9CRect{},
         };
-        const HRESULT appendHr = appendRecordV2(
+        const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
                 const bool ok =
-                    dxmt9::d3d9::pe::appendPresentV2(builder, presentWire);
+                    dxmt9::d3d9::pe::appendPresent(builder, presentWire);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
@@ -8804,9 +8804,9 @@ public:
         // so callers may release their D3D9 wrappers immediately.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        // Handle indices are assigned by appendUpdateSurfaceV2 as it appends
+        // Handle indices are assigned by appendUpdateSurface as it appends
         // the refs, so they stay zero here.
-        const D9CCommandChunkWireUpdateSurfaceV2 wire{
+        const D9CCommandChunkWireUpdateSurface wire{
             .srcHandleIndex = 0u,
             .dstHandleIndex = 0u,
             .hasSrcRect = srcRect ? 1u : 0u,
@@ -8814,13 +8814,13 @@ public:
             .srcRect = cs,
             .dstPoint = cd,
         };
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_UPDATE_SURFACE,
             kLegacyUpdateSurfaceSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendUpdateSurfaceV2(
+                const bool ok = dxmt9::d3d9::pe::appendUpdateSurface(
                     builder, wire, D3D9PeWireSurface(src),
                     D3D9PeWireSurface(dst));
                 phase.record(peAppendPhaseEncode_, t0);
@@ -8852,13 +8852,13 @@ public:
         if (FAILED(barrierHr)) return barrierHr;
         // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
         // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
-        const HRESULT appendHr = appendRecordV2(
+        const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_UPDATE_TEXTURE,
             kLegacyUpdateTextureSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendUpdateTextureV2(
+                const bool ok = dxmt9::d3d9::pe::appendUpdateTexture(
                     builder, D3D9PeWireTexture(src), D3D9PeWireTexture(dst));
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -8918,12 +8918,12 @@ public:
         // the actual readback HRESULT back to PE.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        const HRESULT appendHr = appendRecordV2(
+        const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendReadbackV2(
+                const bool ok = dxmt9::d3d9::pe::appendReadback(
                     builder, D3D9PeWireSurface(rt), D3D9PeWireSurface(dst));
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -9031,7 +9031,7 @@ public:
         if (srcRect) cs = toR(*srcRect); if (dstRect) cd = toR(*dstRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        const D9CCommandChunkWireStretchRectV2 wire{
+        const D9CCommandChunkWireStretchRect wire{
             .srcHandleIndex = 0u,
             .dstHandleIndex = 0u,
             .hasSrcRect = srcRect ? 1u : 0u,
@@ -9041,13 +9041,13 @@ public:
             .srcRect = srcRect ? cs : D9CRect{},
             .dstRect = dstRect ? cd : D9CRect{},
         };
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_STRETCH_RECT,
             kLegacyStretchRectSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendStretchRectV2(
+                const bool ok = dxmt9::d3d9::pe::appendStretchRect(
                     builder, wire, D3D9PeWireSurface(src),
                     D3D9PeWireSurface(dst));
                 phase.record(peAppendPhaseEncode_, t0);
@@ -9078,19 +9078,19 @@ public:
         D9CRect cr{}; if (pRect) cr = toR(*pRect);
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        const D9CCommandChunkWireColorFillV2 wire{
+        const D9CCommandChunkWireColorFill wire{
             .surfaceHandleIndex = 0u,
             .colorARGB = (uint32_t)color,
             .hasRect = pRect ? 1u : 0u,
             .reserved0 = 0u,
             .rect = pRect ? cr : D9CRect{},
         };
-        return appendRecordV2(
+        return appendRecord(
             D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendColorFillV2(
+                const bool ok = dxmt9::d3d9::pe::appendColorFill(
                     builder, wire, D3D9PeWireSurface(pSurf));
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
@@ -9377,10 +9377,10 @@ public:
         if (FAILED(barrierHr)) return finishPeCall(barrierHr);
 
         const std::uint32_t rectBytes = static_cast<std::uint32_t>(count) * sizeof(D9CRect);
-        // rectCount / rectOffset are computed by appendClearV2 from the span,
+        // rectCount / rectOffset are computed by appendClear from the span,
         // so they stay zero here. sizeHint keeps the legacy header+payload size
         // the capacity precheck saw before, so seal cadence is unchanged.
-        const D9CCommandChunkWireClearV2 clearWire{
+        const D9CCommandChunkWireClear clearWire{
             .flags = (uint32_t)flags,
             .colorARGB = (uint32_t)color,
             .z = z,
@@ -9391,14 +9391,14 @@ public:
         const std::span<const D9CRect> rects(
             reinterpret_cast<const D9CRect*>(pRects),
             pRects ? static_cast<std::size_t>(count) : 0u);
-        const HRESULT hr = appendRecordV2(
+        const HRESULT hr = appendRecord(
             D9C_COMMAND_RECORD_CLEAR,
             kLegacyClearSizeHint + rectBytes,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
                 const bool ok =
-                    dxmt9::d3d9::pe::appendClearV2(builder, clearWire, rects);
+                    dxmt9::d3d9::pe::appendClear(builder, clearWire, rects);
                 phase.record(peAppendPhaseEncode_, t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
@@ -9421,7 +9421,7 @@ public:
             pM->m[3][0], pM->m[3][1], pM->m[3][2], pM->m[3][3]);
         // Phase 12: PE-shadow-only when chunk recorder is active. Pending
         // transforms ride on the next draw packet's transforms[] array;
-        // server-side V2 state replay dispatches set_transform per
+        // server-side canonical state replay dispatches set_transform per
         // entry before the draw runs.
         const D9CMatrix& wireM = *reinterpret_cast<const D9CMatrix*>(pM);
         const uint32_t stateKey = static_cast<uint32_t>(state);
@@ -9542,7 +9542,7 @@ public:
                         pVP->MinZ, pVP->MaxZ };
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries viewportValid=1 + the
-        // shadow snapshot; server-side V2 state replay dispatches
+        // shadow snapshot; server-side canonical state replay dispatches
         // dxmt9c_device_set_viewport before the draw runs.
         if (std::memcmp(&peState_.viewportShadow, &vp, sizeof(vp)) == 0) {
             return S_OK;
@@ -9857,13 +9857,13 @@ public:
         // them via the same wireValuePtr path.
         const HRESULT barrierHr = chunkBarrierFlush();
         if (FAILED(barrierHr)) return barrierHr;
-        const HRESULT appendHr = appendRecordV2(
+        const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
             kLegacyReszDepthResolveSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkV2Builder& builder,
+            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = AppendPhaseTimer::now();
-                const bool ok = dxmt9::d3d9::pe::appendReszDepthResolveV2(
+                const bool ok = dxmt9::d3d9::pe::appendReszDepthResolve(
                     builder, D3D9PeWireSurface(dsSurface_),
                     D3D9PeWireTexture(textures_[0]));
                 phase.record(peAppendPhaseEncode_, t0);
@@ -10503,7 +10503,7 @@ public:
         dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
         // Phase 12: PE-shadow-only when chunk recorder is active. The
         // packet built for the next draw carries vsValid=1 + the vs_
-        // wire handle; server-side V2 state replay dispatches the
+        // wire handle; server-side canonical state replay dispatches the
         // dxmt9c_device_set_vertex_shader call before the draw runs.
         if (vs_ == pVS) return S_OK;
         setRef(vs_, pVS);

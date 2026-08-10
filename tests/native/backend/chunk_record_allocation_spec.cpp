@@ -1,6 +1,6 @@
-#include "d3d9_pe_chunk_v2_builder.hpp"
-#include "device_c_chunk_v2_registry.hpp"
-#include "device_c_chunk_v2_replay.hpp"
+#include "d3d9_pe_chunk_builder.hpp"
+#include "device_c_chunk_registry.hpp"
+#include "device_c_chunk_replay.hpp"
 #include "device_c_replay_offload.hpp"
 
 #include <array>
@@ -112,16 +112,16 @@ extern "C" std::uint32_t dxmt9c_query_release(D9CQuery* value) {
 
 namespace {
 
-using dxmt9::d3d9::ImportedChunkV2View;
-using dxmt9::d3d9::ResolvedChunkV2View;
-using dxmt9::d3d9::SparseDrawCallV2;
-using dxmt9::d3d9::V2ChunkEnvelope;
-using dxmt9::d3d9::V2ValidationScratch;
+using dxmt9::d3d9::ImportedChunkView;
+using dxmt9::d3d9::ResolvedChunkView;
+using dxmt9::d3d9::SparseDrawCall;
+using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::CommandChunkValidationScratch;
 using dxmt9::d3d9::WireObjectRegistry;
-using dxmt9::d3d9::pe::CommandChunkV2Builder;
+using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::PeWireObjectRef;
-using dxmt9::d3d9::pe::SparseBindingV2Input;
-using dxmt9::d3d9::pe::SparseStateV2Input;
+using dxmt9::d3d9::pe::SparseBindingInput;
+using dxmt9::d3d9::pe::SparseStateInput;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -131,13 +131,13 @@ void check(bool condition, std::string_view message) {
   if (!condition) throw TestFailure(std::string(message));
 }
 
-class CountingSink final : public dxmt9::d3d9::SparseReplaySinkV2 {
+class CountingSink final : public dxmt9::d3d9::SparseReplaySink {
  public:
   std::uint32_t drawCount = 0u;
   std::uint32_t textureCount = 0u;
 
   std::int32_t setRenderStates(
-      std::span<const D9CCommandChunkWireRenderStateV2>) override {
+      std::span<const D9CCommandChunkWireRenderState>) override {
     return 0;
   }
   std::int32_t setTexture(std::uint32_t, void*) override {
@@ -145,7 +145,7 @@ class CountingSink final : public dxmt9::d3d9::SparseReplaySinkV2 {
     return 0;
   }
   std::int32_t setStream(
-      const D9CCommandChunkWireStreamBindingV2&, void*) override {
+      const D9CCommandChunkWireStreamBinding&, void*) override {
     return 0;
   }
   std::int32_t setShader(std::uint32_t, void*) override { return 0; }
@@ -159,7 +159,7 @@ class CountingSink final : public dxmt9::d3d9::SparseReplaySinkV2 {
   std::int32_t setScissor(const D9CRect&) override { return 0; }
   std::int32_t setMaterial(const D9CMaterial&) override { return 0; }
   std::int32_t setClipPlane(
-      const D9CCommandChunkWireClipPlaneV2&) override {
+      const D9CCommandChunkWireClipPlane&) override {
     return 0;
   }
   std::int32_t setTextureStageStates(
@@ -175,20 +175,20 @@ class CountingSink final : public dxmt9::d3d9::SparseReplaySinkV2 {
     return 0;
   }
   std::int32_t setLights(
-      std::span<const D9CCommandChunkWireLightV2>) override {
+      std::span<const D9CCommandChunkWireLight>) override {
     return 0;
   }
   std::int32_t setLightEnables(
-      std::span<const D9CCommandChunkWireLightEnableV2>) override {
+      std::span<const D9CCommandChunkWireLightEnable>) override {
     return 0;
   }
   std::int32_t setConstants(
-      std::uint16_t, const D9CCommandChunkWireConstantRangeV2&,
+      std::uint16_t, const D9CCommandChunkWireConstantRange&,
       std::span<const std::byte>) override {
     return 0;
   }
   std::int32_t finishApplyState(std::uint32_t) override { return 0; }
-  std::int32_t draw(const SparseDrawCallV2&) override {
+  std::int32_t draw(const SparseDrawCall&) override {
     ++drawCount;
     return 0;
   }
@@ -198,15 +198,15 @@ struct Fixture {
   WireObjectRegistry registry;
   D9CTexture texture;
   PeWireObjectRef textureRef;
-  CommandChunkV2Builder builder;
-  V2ValidationScratch validationScratch;
+  CommandChunkBuilder builder;
+  CommandChunkValidationScratch validationScratch;
   std::array<void*, 1u> resolved{};
   CountingSink sink;
-  std::array<D9CCommandChunkWireRenderStateV2, 1u> renderStates{{
+  std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{
       {.state = 7u, .value = 11u},
   }};
-  std::array<SparseBindingV2Input<
-                 D9CCommandChunkWireTextureBindingV2>,
+  std::array<SparseBindingInput<
+                 D9CCommandChunkWireTextureBinding>,
              1u>
       textures{};
 
@@ -228,24 +228,24 @@ struct Fixture {
 };
 
 bool appendRepresentativeCorpus(Fixture& fixture) {
-  const SparseStateV2Input singleState{
+  const SparseStateInput singleState{
       .renderStates = fixture.renderStates,
       .textures = fixture.textures,
   };
-  const D9CCommandChunkWireDrawHeaderV2 first{
+  const D9CCommandChunkWireDrawHeader first{
       .primitiveType = 4u,
       .startVertex = 3u,
       .primitiveCount = 1u,
   };
-  const D9CCommandChunkWireDrawHeaderV2 second{
+  const D9CCommandChunkWireDrawHeader second{
       .primitiveType = 4u,
       .startVertex = 6u,
       .primitiveCount = 1u,
   };
-  return dxmt9::d3d9::pe::appendSparseRecordV2(
+  return dxmt9::d3d9::pe::appendSparseRecord(
              fixture.builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, first,
              singleState) &&
-         dxmt9::d3d9::pe::appendSparseRecordV2(
+         dxmt9::d3d9::pe::appendSparseRecord(
              fixture.builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, second, {});
 }
 
@@ -254,13 +254,13 @@ bool runRepresentativeCorpus(Fixture& fixture) {
   if (!appendRepresentativeCorpus(fixture)) return false;
   const auto sealed = fixture.builder.seal();
   if (!sealed.valid()) return false;
-  const V2ChunkEnvelope envelope{
-      .version = D9C_COMMAND_CHUNK_VERSION_V2,
+  const CommandChunkEnvelope envelope{
+      .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = sealed.recordCount,
       .handleCount = sealed.handleCount,
   };
-  ImportedChunkV2View imported;
-  if (!dxmt9::d3d9::validateCommandChunkV2(
+  ImportedChunkView imported;
+  if (!dxmt9::d3d9::validateCommandChunk(
            sealed.blob, envelope, &imported,
            fixture.validationScratch).valid() ||
       imported.handles.size() != fixture.resolved.size()) {
@@ -273,13 +273,13 @@ bool runRepresentativeCorpus(Fixture& fixture) {
                                          retain)) {
     return false;
   }
-  const ResolvedChunkV2View resolved{
+  const ResolvedChunkView resolved{
       .wire = imported,
       .objects = fixture.resolved,
   };
   bool replayed = true;
   for (std::size_t i = 0u; i < imported.records.size(); ++i)
-    replayed &= dxmt9::d3d9::replaySparseRecordV2(
+    replayed &= dxmt9::d3d9::replaySparseRecord(
                     resolved.record(i), fixture.sink) == 0;
   release(static_cast<D9CTexture*>(fixture.resolved[0]));
   fixture.resolved[0] = nullptr;
@@ -287,13 +287,13 @@ bool runRepresentativeCorpus(Fixture& fixture) {
   return replayed;
 }
 
-std::size_t sealedSize(Fixture& fixture, const SparseStateV2Input& state) {
+std::size_t sealedSize(Fixture& fixture, const SparseStateInput& state) {
   fixture.builder.reset();
-  const D9CCommandChunkWireDrawHeaderV2 draw{
+  const D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
   };
-  if (!dxmt9::d3d9::pe::appendSparseRecordV2(
+  if (!dxmt9::d3d9::pe::appendSparseRecord(
           fixture.builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, state)) {
     return 0u;
   }
@@ -312,7 +312,7 @@ void testWarmRecordImportReplayAllocations() {
   queue.markReplayDone();
 
   check(runRepresentativeCorpus(fixture),
-        "representative V2 corpus warms every measured capacity");
+        "representative canonical corpus warms every measured capacity");
   const auto drawsBefore = fixture.sink.drawCount;
   const auto texturesBefore = fixture.sink.textureCount;
 
@@ -323,9 +323,9 @@ void testWarmRecordImportReplayAllocations() {
     repeated &= runRepresentativeCorpus(fixture);
   gCountAllocations.store(false, std::memory_order_release);
 
-  check(repeated, "bounded warm V2 corpus records, imports, and replays");
+  check(repeated, "bounded warm canonical corpus records, imports, and replays");
   check(gAllocationCount.load(std::memory_order_relaxed) == 0u,
-        "warm V2 record/import/replay performs zero system allocations");
+        "warm canonical record/import/replay performs zero system allocations");
   check(fixture.sink.drawCount - drawsBefore == 512u &&
             fixture.sink.textureCount - texturesBefore == 256u &&
             fixture.texture.refs == 1u,
@@ -334,7 +334,7 @@ void testWarmRecordImportReplayAllocations() {
 
 void testSparseDrawWireSizeReduction() {
   Fixture fixture;
-  const SparseStateV2Input singleState{
+  const SparseStateInput singleState{
       .renderStates = fixture.renderStates,
       .textures = fixture.textures,
   };
@@ -342,7 +342,7 @@ void testSparseDrawWireSizeReduction() {
   const auto noStateBytes = sealedSize(fixture, {});
   check(singleStateBytes != 0u && noStateBytes != 0u &&
             noStateBytes < singleStateBytes,
-        "sparse V2 state adds bytes only when a section is present");
+        "sparse canonical state adds bytes only when a section is present");
 }
 
 }  // namespace
@@ -353,10 +353,10 @@ int main() {
     testSparseDrawWireSizeReduction();
   } catch (const TestFailure& error) {
     gCountAllocations.store(false, std::memory_order_relaxed);
-    std::cerr << "chunk_record_v2_allocation_spec failed: " << error.what()
+    std::cerr << "chunk_record_allocation_spec failed: " << error.what()
               << '\n';
     return EXIT_FAILURE;
   }
-  std::cout << "chunk_record_v2_allocation_spec passed\n";
+  std::cout << "chunk_record_allocation_spec passed\n";
   return EXIT_SUCCESS;
 }

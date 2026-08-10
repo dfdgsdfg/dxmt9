@@ -8,7 +8,7 @@ conformance lane cross-builds PE executables that Wine runs on macOS.
 |-----------|------|-------------|
 | `native/smoke/` | Bootstrap smoke (`dxmt9-smoke`) | yes |
 | `native/core/` | D3D9 frontend specs (device lifecycle, FFP keys, format caps, draw-state transforms, dod state format, draw-uniforms layout/dirty, shader translator) | yes (~12 specs) |
-| `native/bridge/` | V2 wire layout/validation/producer specs + bridge ops/marshalling + WMT dispatch | yes |
+| `native/bridge/` | canonical wire layout/validation/producer specs + bridge ops/marshalling + WMT dispatch | yes |
 | `native/backend/` | Metal backend specs (descriptor/pipeline keys, replay observer, resource hazard, render-pass actions, allocation counter, MTLHeap pooling, argbuf hybrid, tile FFP, dynamic rename ring, metalcapture) | yes (~15 specs) |
 | `native/shader/` | Shader bytecode → MSL translator spec | yes (1 spec) |
 | `shader_runner/` | GPU-visible `.shader_test` corpus runner (~28 corpus files) | yes (sharded `dxmt9-shader-corpus-*` per file) |
