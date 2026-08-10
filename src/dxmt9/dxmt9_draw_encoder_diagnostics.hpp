@@ -8,6 +8,7 @@
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_state.hpp"
+#include "dxmt9_perf_counters.hpp"
 #include "dxmt9_resource_pool.hpp"
 
 #include <algorithm>

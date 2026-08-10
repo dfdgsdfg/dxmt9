@@ -314,6 +314,7 @@ using u64 = std::uint64_t;
 using i32 = std::int32_t;
 using f32 = float;
 
+namespace {
 
 std::optional<u64> parseEnvU64Auto(const char* name) {
   const char* env = std::getenv(name);
@@ -382,6 +383,8 @@ std::optional<u64> traceEncodeProgressSeqFilter() {
   return filter;
 }
 
+}  // namespace
+
 bool traceEncodeProgressForSeq(u64 seqId) {
   if (!traceEncodeProgressEnabled()) {
     return false;
@@ -430,6 +433,8 @@ void emitEncodeProgressDrawStage(u64 seqId,
   emitQueueTraceLine(out.str());
 }
 
+namespace {
+
 struct VisibilityScoutConfig {
   bool enabled = false;
   std::string path;
@@ -477,6 +482,8 @@ bool visibilityScoutWantsPass(u64 seqId, u64 encoderIndex) {
   }
   return true;
 }
+
+}  // namespace
 
 std::optional<VisibilityScoutPass> makeVisibilityScoutPass(
     WMT::Device device,
@@ -667,6 +674,8 @@ void enqueueVisibilityScoutCompletion(
       });
   pass.results = nullptr;
 }
+
+namespace {
 
 struct DepthAttachmentDumpConfig {
   bool enabled = false;
@@ -888,6 +897,8 @@ const DrawTextureDumpConfig& drawTextureDumpConfig() {
   }();
   return config;
 }
+
+}  // namespace
 
 std::size_t drawTextureDumpReserveCapacity() {
   return drawTextureDumpConfig().handles.size();
@@ -2271,6 +2282,8 @@ bool effectDrawTraceEnabled() {
   return enabled;
 }
 
+namespace {
+
 std::optional<u64> effectDrawTraceSeqFilter() {
   static const auto value = parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_SEQ");
   return value;
@@ -2359,6 +2372,8 @@ bool effectDrawTraceIncludeUntextured() {
   return enabled;
 }
 
+}  // namespace
+
 bool effectDrawTraceGeometryEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY");
@@ -2366,6 +2381,8 @@ bool effectDrawTraceGeometryEnabled() {
   }();
   return enabled;
 }
+
+namespace {
 
 u64 effectDrawTraceGeometryMaxRefs() {
   static const u64 value = [] {
@@ -2375,6 +2392,8 @@ u64 effectDrawTraceGeometryMaxRefs() {
   }();
   return value;
 }
+
+}  // namespace
 
 
 void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
@@ -2727,6 +2746,7 @@ bool x8ShaderAlphaFillEnabledForDiagnostics() {
   return enabled;
 }
 
+namespace {
 
 std::optional<u32> readEffectTraceIndexValue(
     std::span<const u8> indexBytes,
@@ -2813,6 +2833,8 @@ EffectTraceStream0Layout resolveEffectTraceStream0Layout(
   }
   return out;
 }
+
+}  // namespace
 
 void traceEffectIndexedGeometry(const ActiveEncoderBreakdown* encoderBreakdown,
                                 core::FlatDrawStateView drawState,
