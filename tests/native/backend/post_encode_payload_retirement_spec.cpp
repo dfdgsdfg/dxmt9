@@ -574,8 +574,8 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
     const std::filesystem::path& sourceRoot) {
   const std::string queue =
       readFile(sourceRoot / "src/dxmt9/dxmt9_queue.hpp");
-  const std::string encoder =
-      readFile(sourceRoot / "src/dxmt9/dxmt9_draw_encoder.mm");
+  const std::string renderPassLifecycle = readFile(
+      sourceRoot / "src/dxmt9/dxmt9_render_pass_lifecycle.mm");
   const std::string sessionStorage = readFile(
       sourceRoot / "src/dxmt9/dxmt9_encode_session_storage_internal.hpp");
   const std::string queueImplementation =
@@ -625,19 +625,20 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
                 std::string_view::npos,
         "GPU attribution is locator-free while pending clear stays audited");
 
-  const auto firstAttachmentBegin = encoder.find(
-      "RenderEncoderGpuAttachment makeRenderEncoderGpuAttachment(");
-  const auto attachmentBegin = encoder.find(
-      "RenderEncoderGpuAttachment makeRenderEncoderGpuAttachment(",
+  const auto firstAttachmentBegin = renderPassLifecycle.find(
+      "LifecycleRuntime::makeRenderEncoderGpuAttachment(");
+  const auto attachmentBegin = renderPassLifecycle.find(
+      "LifecycleRuntime::makeRenderEncoderGpuAttachment(",
       firstAttachmentBegin + 1u);
-  const auto attachmentEnd = encoder.find(
-      "void recordRenderEncoderGpuAttachment", attachmentBegin);
+  const auto attachmentEnd = renderPassLifecycle.find(
+      "LifecycleRuntime::recordRenderEncoderGpuAttachment", attachmentBegin);
   check(firstAttachmentBegin != std::string::npos &&
             attachmentBegin != std::string::npos &&
             attachmentEnd != std::string::npos,
         "GPU sample attachment production body is locatable");
   const std::string_view attachmentBody(
-      encoder.data() + attachmentBegin, attachmentEnd - attachmentBegin);
+      renderPassLifecycle.data() + attachmentBegin,
+      attachmentEnd - attachmentBegin);
   const auto conversion = attachmentBody.find(
       "encodedCommandIdAtSynchronousEncodeSeam(command)");
   const auto cursorConsumption = attachmentBody.find(
