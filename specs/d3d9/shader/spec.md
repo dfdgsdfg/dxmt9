@@ -608,7 +608,6 @@ these in as the intended fix; the gap row for FP16 is the supersession.
 | RT metadata removal | `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW`, `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW` | rejected (texture writes dropped, VS buffer-write unchanged) |
 | Draw-call splits / merges | various probes | rejected (cost amplification) |
 | Drop VSOut point-size only | `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE` | rejected |
-| Const-upload coalescing variants | `DXMT9_SPLIT_SPARSE_CONST_RECORDS` and inverse | rejected as VS-write owner |
 
 Pattern: state-bit and RT-metadata changes do not move the native backend
 VS write bucket. The empirically-proven control variable is post-transform

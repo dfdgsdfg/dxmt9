@@ -1827,17 +1827,6 @@ OUT
             result.stderr,
         )
 
-    def test_wrapper_dry_run_includes_sparse_const_split_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--split-sparse-const-records",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_SPLIT_SPARSE_CONST_RECORDS=1", result.stdout)
-
     def test_wrapper_dry_run_includes_vertex_temp_trim_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,

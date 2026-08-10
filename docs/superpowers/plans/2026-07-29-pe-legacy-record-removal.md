@@ -1036,9 +1036,9 @@ noteWireIdentityGetterCall counter."
 **There is one emitter, not six.** `appendSetConstRecord(recordType, start,
 count, data, elemSize)` at `:9705` is called once, from `flushConstShadow` at
 `:9850`, for all six kinds. Replacing its body migrates the whole family and
-automatically preserves `flushConstShadow`'s surroundings: the
-`DXMT9_SPLIT_SPARSE_CONST_RECORDS` multi-run diagnostic path (`:9864-9874`) and
-the const-flush telemetry (`recordPeConstFlushCpu`, `recordVsConstSetterRange`).
+automatically preserves `flushConstShadow`'s surroundings: the merged-range
+flush path and the const-flush telemetry (`recordPeConstFlushCpu`,
+`recordVsConstSetterRange`).
 
 - [ ] **Step 1: Pin the existing equivalence for all six kinds**
 

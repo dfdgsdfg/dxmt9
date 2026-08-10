@@ -193,8 +193,8 @@ inline void touchConstShadow(ConstShadow& shadow,
 // section header plus the caller-owned trailing payload buffer, instead of
 // emitting a standalone D9C_COMMAND_RECORD_SET_*_CONST_* record. This MUST
 // produce EXACTLY the same [dirtyStart, dirtyEnd) merged range and the same
-// per-register `elemSize` that flushConstShadow's default (non-split, see
-// DXMT9_SPLIT_SPARSE_CONST_RECORDS) path would have emitted as one record —
+// per-register `elemSize` that flushConstShadow would have emitted as one
+// record —
 // that equivalence is what makes the fold path's server-side effective
 // state match the standalone-record wire (R-BACK-2.52(d)).
 //

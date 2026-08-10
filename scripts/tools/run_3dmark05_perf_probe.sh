@@ -56,7 +56,6 @@ probe_half_vsout=0
 force_fragment_color=0
 trim_vertex_temps=0
 trim_vs_output_scratch=0
-split_sparse_const_records=0
 suppress_rt_pixel_format_view=0
 suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
@@ -759,9 +758,6 @@ Options:
   --trim-vs-output-scratch
                       Set DXMT9_TRIM_VS_OUTPUT_SCRATCH=1 to size translated
                       VS outTexcoord[] scratch to observed output usage
-  --split-sparse-const-records
-                      Set DXMT9_SPLIT_SPARSE_CONST_RECORDS=1 for sparse
-                      constant-upload record splitting experiments
   --suppress-rt-pixel-format-view
                       Set DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1 to test
                       RT-only swizzle formats without PixelFormatView usage
@@ -1803,10 +1799,6 @@ while (($#)); do
       ;;
     --trim-vs-output-scratch)
       trim_vs_output_scratch=1
-      shift
-      ;;
-    --split-sparse-const-records)
-      split_sparse_const_records=1
       shift
       ;;
     --suppress-rt-pixel-format-view)
@@ -4282,10 +4274,6 @@ fi
 
 if (( trim_vs_output_scratch )); then
   env_args+=("DXMT9_TRIM_VS_OUTPUT_SCRATCH=1")
-fi
-
-if (( split_sparse_const_records )); then
-  env_args+=("DXMT9_SPLIT_SPARSE_CONST_RECORDS=1")
 fi
 
 if (( suppress_rt_pixel_format_view )); then

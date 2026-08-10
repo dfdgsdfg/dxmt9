@@ -7,10 +7,13 @@ title: PE Const Setter And Flush Source Audit
 date: 2026-06-20
 type: source-audit
 status: accepted-current-attribution
+outdated: knob-removed
 source: src/d3d9/d3d9_pe_const_shadow.hpp, src/d3d9/d3d9_pe_device.cpp, include/dxmt9/device_c.h, src/d3d9/device_c_chunk_replay.cpp, docs/perfomance/present-pacing/present-pacing-pe-between-call-body-current.119.md, docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.150.md
 ---
 
 # Present Pacing / PE Const Setter And Flush Source Audit 120
+
+> **Retired path:** the sparse-constant split knob and multi-record branch audited here were removed on 2026-08-10; the merged flush, dirty bitmap, and no-op comparison remain current.
 
 **Question.** H119 shows `SetVertexShaderConstantF` body time is the largest
 exact call-name row inside the current focused between-calls windows, and
@@ -21,10 +24,10 @@ P4/replay/encode work?
 **Answer.** No new safe shortcut is proven by the current evidence. The PE
 constant shadow already compares per element and marks only changed registers
 dirty. Unchanged setter calls still cost validation, comparison, and PE call
-overhead, but they do not create dirty flush records. The historical broad
-merged-range flush can be split by `DXMT9_SPLIT_SPARSE_CONST_RECORDS`, and H151
-already proved that this makes VS float records exact while failing the current
-FPS/P4 gate. Treat constant traffic as bounded local attribution unless a new
+overhead, but they do not create dirty flush records. The retired
+`DXMT9_SPLIT_SPARSE_CONST_RECORDS` path split the broad merged range, and H151
+proved that it made VS float records exact while failing the FPS/P4 gate. Treat
+constant traffic as bounded local attribution unless a new
 candidate moves `completion_wait_without_enqueue`, `completion_wait_with_enqueue`,
 or serial replay/encode rows while passing the `v0.0.3` visual-safe gate.
 
@@ -44,7 +47,7 @@ or serial replay/encode rows while passing the `v0.0.3` visual-safe gate.
 | Mode | Behavior | Status |
 |---|---|---|
 | default | emit one merged min/max dirty range per stage/type | current default |
-| `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1` | collect dirty runs and emit one record per contiguous changed run | diagnostic-only after H151 |
+| `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1` | collect dirty runs and emit one record per contiguous changed run | retired and removed on 2026-08-10 |
 
 The replay path is normal command-record replay. `D9C_COMMAND_RECORD_SET_*_CONST_*`
 records call the corresponding `dxmt9c_device_set_*_const_*()` entry and mark

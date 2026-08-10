@@ -7,11 +7,14 @@ title: Splitting Sparse Const Records Is A Null — GT2's Constant Cost Is Call 
 date: 2026-07-29
 type: experiment-run
 status: rejected-fps-lever
+outdated: knob-removed
 source: experiments/output/app-d3d9-3dmark05-gt2-sparseconst-base; experiments/output/app-d3d9-3dmark05-gt2-sparseconst-cand; experiments/output/app-d3d9-3dmark05-gt2-const-setter-r1
 related: docs/perfomance/present-pacing/present-pacing-post-defselect-cpu-attribution.03.md; docs/perfomance/const-upload/overview.md
 ---
 
 # Splitting Sparse Const Records Is A Null — GT2's Constant Cost Is Call Count, Not Bytes
+
+> **Retired:** the sparse-constant split knob and its multi-record path were removed on 2026-08-10 after this null result; this page remains historical evidence.
 
 > **Corrected on 2026-07-29 by [attribution.04](../present-pacing/present-pacing-post-defselect-cpu-attribution.04.md).** The null verdict stands, but its stated reason does not: the constant path is `0.8%` of the frame, not `13%` — the difference was instrument bias — so there was never enough there to win. The `84.7%` redundant-register figure was also misread as an opportunity; `touchConstShadow` already skips unchanged registers, so that number is the existing filter working.
 

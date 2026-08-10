@@ -83,12 +83,6 @@ static bool dxmt9PeRecorderStatsEnabled() {
     return enabled;
 }
 
-static bool dxmt9SplitSparseConstRecordsEnabled() {
-    static const bool enabled =
-        dxmt9::util::getenvFlag("DXMT9_SPLIT_SPARSE_CONST_RECORDS");
-    return enabled;
-}
-
 static bool dxmt9PerfVsConstSetterRangeEnabled() {
     static const bool enabled =
         dxmt9::util::getenvFlag("DXMT9_PERF_VS_CONST_SETTER_RANGE");
@@ -9784,33 +9778,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         return count;
     }
 
-    static std::vector<std::pair<uint32_t, uint32_t>>
-    collectConstDirtyRuns(const ConstShadow& shadow) {
-        std::vector<std::pair<uint32_t, uint32_t>> runs;
-        if (!shadow.dirty()) return runs;
-        uint32_t runStart = 0;
-        bool inRun = false;
-        const uint32_t dirtyEnd = std::min<uint32_t>(
-            shadow.dirtyEnd, static_cast<uint32_t>(shadow.dirtyElems.size()));
-        for (uint32_t reg = shadow.dirtyStart; reg < dirtyEnd; ++reg) {
-            const bool dirty = shadow.dirtyElems[reg] != 0;
-            if (dirty && !inRun) {
-                runStart = reg;
-                inRun = true;
-            } else if (!dirty && inRun) {
-                runs.emplace_back(runStart, reg);
-                inRun = false;
-            }
-        }
-        if (inRun) {
-            runs.emplace_back(runStart, dirtyEnd);
-        }
-        return runs;
-    }
-
-    // Emit records covering pending dirty constants, then clear them. Default
-    // behavior keeps the historical merged range. DXMT9_SPLIT_SPARSE_CONST_RECORDS
-    // is an opt-in perf experiment for sparse constant updates.
+    // Emit one record covering the pending merged dirty range, then clear it.
     HRESULT flushConstShadow(ConstShadow& shadow, uint32_t recordType, std::size_t elemSize) {
         // Decimated timing (const_flush scope): sample only every Nth call
         // so the CPU cost of measuring is itself negligible. Independent of
@@ -9839,8 +9807,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
         std::uint32_t flushedRecords = 0u;
         std::uint32_t flushedRegs = 0u;
         // Emits one D9C_COMMAND_RECORD_SET_*_CONST_* record for [start, end)
-        // and updates the flush counters above; shared by both branches
-        // below so their per-run bodies stay byte-for-byte identical.
+        // and updates the flush counters above.
         const auto emitRun = [&](uint32_t start, uint32_t end) {
             if (end <= start) return;
             const uint32_t count = end - start;
@@ -9860,22 +9827,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex, public D3D9PeRecorderFlu
                                          start, count, dirtyRegs, count);
             }
         };
-        if (dxmt9SplitSparseConstRecordsEnabled()) {
-            // Diagnostic path: unchanged vector-of-runs logic.
-            std::vector<std::pair<uint32_t, uint32_t>> runs =
-                collectConstDirtyRuns(shadow);
-            if (runs.empty()) {
-                runs.emplace_back(shadow.dirtyStart, shadow.dirtyEnd);
-            }
-            for (const auto& [start, end] : runs) {
-                emitRun(start, end);
-                if (FAILED(hr)) break;
-            }
-        } else {
-            // Default path: the historical merged range is always exactly
-            // one run, so emit it directly without building a std::vector.
-            emitRun(shadow.dirtyStart, shadow.dirtyEnd);
-        }
+        emitRun(shadow.dirtyStart, shadow.dirtyEnd);
         recordPeConstFlushCpu(recordType, flushEntryNs, flushedRecords,
                               flushedRegs);
         if (SUCCEEDED(hr)) {

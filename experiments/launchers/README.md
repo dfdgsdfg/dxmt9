@@ -434,11 +434,6 @@ Commercial / 3rd-party titles (require external prefix):
     VS/PS F/I/B subtype count/byte shares plus subtype coverage, so
     a constant-upload coalescing candidate can be checked without hand-dividing
     the raw counters.
-    For a paired sparse-constant candidate, add
-    `--split-sparse-const-records`; it sets
-    `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`, which keeps default merged-constant
-    behavior off the baseline but splits an opt-in dirty const range into
-    actual changed register runs when the app updates sparse registers.
     For the R32F render-target compression hypothesis, add
     `--suppress-rt-pixel-format-view`; it sets
     `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1`, which keeps the default D3D9

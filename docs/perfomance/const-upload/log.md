@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Const-Upload — CPU-side constant-buffer (cbuf/argbuf) upload traffic - Historical Log"
 type: domain-log
 status: historical
-updated: 2026-07-08
+updated: 2026-08-10
 source: docs/perfomance/const-upload/index.md
 related: docs/perfomance/const-upload/index.md; docs/perfomance/const-upload/overview.md
 ---
@@ -58,8 +58,11 @@ bottleneck — proving cbuf upload is a **CPU amplifier**, not the GPU limiter.
 - **Dirty-range reset** — `DirtyState` consumption clears the range high-water
   with the dirty bit. Proves the stale dirty high-water (not shader usage) sized
   the VS upload prefix.
-- **`DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`** (`--split-sparse-const-records`) —
-  split one merged min/max const record into changed-register runs.
+- **Retired sparse-record split** — `DXMT9_SPLIT_SPARSE_CONST_RECORDS=1`
+  (`--split-sparse-const-records`) split one merged min/max const record into
+  changed-register runs. The knob, wrapper flag, and multi-record path were
+  removed on 2026-08-10 after the null result; the linked leaves remain as
+  historical evidence.
 - **Run-level gates** — `compare_3dmark05_perf_counters.py`
   `--require-const-upload-break-bytes-decrease`,
   `--max-const-upload-break-count-ratio`, `--require-const-upload-passthrough-present`
@@ -130,29 +133,13 @@ vertex/backend storage.** What remains open is purely upstream record coalescing
 / letting the draw-run scanner cross safe const records — a batching concern, not
 a cbuf-byte concern.
 
-## How to run
-Every experiment here is a 3DMark05 GT1 run via the standard wrapper. The cbuf
-attribution chain runs on `DXMT9_PERF_ENCODER_BREAKDOWN=1`; a sparse-const A/B
-adds `--split-sparse-const-records`. Prove the CPU mechanism with run-level gates,
-then confirm the GPU is inert against a baseline:
+## Historical recipe status
 
-```sh
-# CPU mechanism A/B (scout, no Xcode needed for the run-level proof):
-DXMT9_PERF_ENCODER_BREAKDOWN=1 \
-bash scripts/tools/run_3dmark05_perf_probe.sh --suffix sparse-const --frame 60 \
-  --split-sparse-const-records --no-gputrace --timeout 180
-
-# GPU impact: capture .gputrace, then after Xcode export finalize vs baseline.
-# Run-level gates need --baseline-output; the GPU gate needs --baseline-joined.
-bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix sparse-const --frame 60 \
-  --baseline-output experiments/output/<baseline>/result.json \
-  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
-  --require-const-upload-break-bytes-decrease --require-top-vs-buffer-write-decrease
-```
-
-The exact per-experiment flags live in each leaf's `**Method.**` field. See
-`agents/rules/environment_variables.rules.md` for env-var meanings and
-`agents/rules/metal_debugging.rules.md` for the full workflow.
+Every experiment here used the standard 3DMark05 wrapper. The cbuf attribution
+chain remains available through `DXMT9_PERF_ENCODER_BREAKDOWN=1`, but the
+sparse-constant A/B recipe is retired and cannot be rerun because its knob,
+wrapper flag, and multi-record implementation were removed on 2026-08-10.
+Each leaf retains the original method and artifacts as historical evidence.
 
 ## Cross-references
 - [hidden-backend-storage](../hidden-backend-storage/index.md) — the surviving GPU owner every cbuf reduction points at (hidden TVB/parameter storage scaling with VS invocations × VSOut bytes).
