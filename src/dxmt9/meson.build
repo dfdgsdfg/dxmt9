@@ -32,6 +32,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_draw_encoder_hazard.mm',
   'dxmt9_encode_partition.cpp',
   'dxmt9_encode_session.mm',
+  'dxmt9_encode_session_storage_internal.mm',
   'dxmt9_draw_state.cpp',
   'dxmt9_format_convert.cpp',
   'dxmt9_heap_manager.cpp',

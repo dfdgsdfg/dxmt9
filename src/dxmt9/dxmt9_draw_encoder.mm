@@ -6,6 +6,7 @@
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
 #include "dxmt9_draw_encoder_diagnostics.hpp"
+#include "dxmt9_encode_session_storage_internal.hpp"
 #include "dxmt9_render_pass_close_ledger.hpp"
 #include "dxmt9_encode_session_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
@@ -160,6 +161,12 @@ using f32 = float;
 
 namespace {
 
+using encode_session::ArgbufCbufCache;
+using encode_session::ArgbufPayloadDeltaComponentKey;
+using encode_session::ArgbufPayloadDeltaKey;
+using encode_session::AttachmentKey;
+using encode_session::StreamIbStagingCache;
+
 [[noreturn]] void abortEncodePartitionInvariant(const char* reason) {
   std::fprintf(
       stderr,
@@ -255,193 +262,9 @@ void bufferBindShadowStore(BufferBindShadowSlot& slot,
   slot.offset = offset;
 }
 
-struct StreamIbStagingCache {
-  struct Entry {
-    u64 sourceHandle = 0;
-    WMT::Buffer buffer{};
-    u64 offset = 0;
-    std::size_t size = 0;
-  };
-
-  static constexpr std::size_t kMaxEntries = 512;
-
-  bool enabled = false;
-  std::array<Entry, kMaxEntries> entries{};
-  std::size_t count = 0;
-
-  void begin(bool active) noexcept {
-    enabled = active;
-    entries = {};
-    count = 0;
-  }
-
-  CommandQueue::TransientBufferSlice findOrStage(
-      EncodeContext& ctx,
-      u64 seqId,
-      u64 sourceHandle,
-      const resources::BufferRecord* record,
-      ActiveEncoderBreakdown* encoderBreakdown,
-      bool indexBuffer) {
-    if (!enabled || sourceHandle == 0 || !record) {
-      return {};
-    }
-    for (std::size_t i = 0; i < count; ++i) {
-      const auto& entry = entries[i];
-      if (entry.sourceHandle == sourceHandle && entry.buffer) {
-        return CommandQueue::TransientBufferSlice{
-            .buffer = entry.buffer,
-            .offset = entry.offset,
-            .size = entry.size,
-        };
-      }
-    }
-    if (count >= entries.size()) {
-      return {};
-    }
-
-    std::span<const u8> sourceBytes;
-    if (!record->shadow.empty()) {
-      sourceBytes = record->shadow;
-    } else if (record->contents && record->desc.size > 0) {
-      sourceBytes = std::span<const u8>(
-          static_cast<const u8*>(record->contents),
-          static_cast<std::size_t>(record->desc.size));
-    }
-    if (sourceBytes.empty()) {
-      return {};
-    }
-
-    auto slice = ctx.queue.uploadTransientBuffer(
-        std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(sourceBytes.data()),
-            sourceBytes.size()),
-        16,
-        seqId);
-    if (!slice) {
-      return {};
-    }
-    entries[count++] = Entry{
-        .sourceHandle = sourceHandle,
-        .buffer = slice.buffer,
-        .offset = slice.offset,
-        .size = slice.size,
-    };
-    if (encoderBreakdown) {
-      if (indexBuffer) {
-        encoderBreakdown->addTransientIndexBytes(
-            static_cast<u64>(slice.size),
-            ActiveEncoderBreakdown::TransientIndexSource::StagedIb);
-      } else {
-        encoderBreakdown->addTransientVertexBytes(
-            static_cast<u64>(slice.size),
-            ActiveEncoderBreakdown::TransientVertexSource::StagedStream);
-      }
-    }
-    return slice;
-  }
-};
-
 bool streamIbStagingActive(const StreamIbStagingCache* cache) noexcept {
   return cache && cache->enabled;
 }
-
-struct ArgbufCbufCache {
-  bool valid = false;
-  u64 payloadHash = 0;
-  dxmt9::argbuf_hybrid::ConstantBufferBindings bindings{};
-  bool ffpVsValid = false;
-  std::array<std::byte, sizeof(FfpVsConsts)> ffpVsBytes{};
-
-  void reset() noexcept {
-    valid = false;
-    payloadHash = 0;
-    bindings = {};
-    ffpVsValid = false;
-    ffpVsBytes = {};
-  }
-
-  bool matches(u64 hash) const noexcept {
-    return valid && payloadHash == hash && bindings.complete();
-  }
-
-  bool hasBinding(u32 argbufIndex) const noexcept {
-    return argbufIndex < bindings.entries.size() &&
-           static_cast<bool>(bindings.entries[argbufIndex]);
-  }
-
-  dxmt9::argbuf_hybrid::ConstantBufferBinding binding(u32 argbufIndex) const noexcept {
-    return argbufIndex < bindings.entries.size()
-               ? bindings.entries[argbufIndex]
-               : dxmt9::argbuf_hybrid::ConstantBufferBinding{};
-  }
-
-  bool hasMatchingBinding(u32 argbufIndex, u64 contentHash, u64 bytes) const noexcept {
-    return argbufIndex < bindings.entries.size() &&
-           bindings.entries[argbufIndex].contentMatches(contentHash, bytes);
-  }
-
-  bool hasMatchingIdentity(u32 argbufIndex, u64 identityHash, u64 bytes) const noexcept {
-    return argbufIndex < bindings.entries.size() &&
-           bindings.entries[argbufIndex].identityMatches(identityHash, bytes);
-  }
-
-  bool hasMatchingFfpVs(const FfpVsConsts& host) const noexcept {
-    const auto& binding =
-        bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex];
-    return ffpVsValid && binding &&
-           std::memcmp(ffpVsBytes.data(), &host, sizeof(FfpVsConsts)) == 0;
-  }
-
-  dxmt9::argbuf_hybrid::ConstantBufferBinding ffpVsBinding() const noexcept {
-    return bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex];
-  }
-
-  void merge(u64 hash,
-             const dxmt9::argbuf_hybrid::ConstantBufferBindings& written) noexcept {
-    for (std::size_t i = 0; i < bindings.entries.size(); ++i) {
-      if (written.entries[i]) {
-        bindings.entries[i] = written.entries[i];
-      }
-    }
-    if (bindings.complete()) {
-      payloadHash = hash;
-      valid = true;
-    } else {
-      valid = false;
-    }
-  }
-
-  void promotePayloadHash(u64 hash) noexcept {
-    if (bindings.complete()) {
-      payloadHash = hash;
-      valid = true;
-    }
-  }
-
-  void storeFfpVs(u64 hash,
-                  const FfpVsConsts& host,
-                  WMT::Buffer buffer,
-                  u64 offset,
-                  u64 bytes) noexcept {
-    bindings.entries[dxmt9::argbuf_hybrid::kConstantBufferFfpVsIndex] =
-        dxmt9::argbuf_hybrid::ConstantBufferBinding{
-            .buffer = buffer,
-            .offset = offset,
-            .bytes = bytes,
-            .contentHash = dxmt9::argbuf_hybrid::hashConstantBufferBytes(
-                &host, bytes),
-            .identityHash = 0,
-        };
-    std::memcpy(ffpVsBytes.data(), &host, sizeof(FfpVsConsts));
-    ffpVsValid = true;
-    if (bindings.complete()) {
-      payloadHash = hash;
-      valid = true;
-    } else {
-      valid = false;
-    }
-  }
-};
 
 struct ArgbufCbufIdentityProbe {
   u64 bytes = 0;
@@ -697,31 +520,6 @@ void setRasterizerCullMode(EncodeContext& ctx,
   countRasterizerBind();
 }
 
-// Attachment key + hazard bloom used by encodeChunk to decide whether to
-// flush + restart the render pass between commands. Previously file-local
-// to backend_metal.mm.
-struct AttachmentKey {
-  std::array<u64, core::kMaxRenderTargets> colorHandles{};
-  u64 depthHandle = 0;
-  u32 sampleCount = 1;
-  friend bool operator==(const AttachmentKey&, const AttachmentKey&) = default;
-};
-
-struct ArgbufPayloadDeltaKey {
-  u64 hash = 0;
-  u64 vertexConstantsHash = 0;
-  u64 pixelConstantsHash = 0;
-};
-
-struct ArgbufPayloadDeltaComponentKey {
-  u64 vsFloatHash = 0;
-  u64 vsIntHash = 0;
-  u64 vsBoolHash = 0;
-  u64 psFloatHash = 0;
-  u64 psIntHash = 0;
-  u64 psBoolHash = 0;
-};
-
 struct RenderEncoderGpuAttachment {
   std::array<WMTSampleBufferAttachmentInfo, 1> attachments{};
   core::metalqueue::QueueSubmissionRecord::RenderEncoderGpuSample sample{};
@@ -734,299 +532,11 @@ struct RenderEncoderGpuAttachment {
   }
 };
 
-constexpr std::uint32_t kMaxRenderEncoderGpuSamples = 8192;
-
 }  // namespace
-
-namespace encode_session {
-
-struct EncoderState {
-  WMT::Reference<WMT::RenderCommandEncoder> activeRenderEncoder{};
-  WMT::Reference<WMT::BlitCommandEncoder> activeBlitEncoder{};
-  bool hasActiveRender = false;
-};
-
-struct PassState {
-  AttachmentKey activeKey{};
-  HazardProbe activeWriteHazard{};
-  RenderPassInstanceToken activeInstance{};
-  // R-BACK-13.1 / 13.6: current render encoder's chosen FFP path.
-  bool activePassUsesTileFfp = false;
-  std::optional<core::ClearDesc> pendingClear;
-  core::metalqueue::PublishedCommandRef pendingClearCommand{};
-  // R-BACK-15.4: color attachment handles bound on the active render encoder.
-  std::array<core::Handle, core::kMaxRenderTargets> activeColorHandles{};
-  // Copied attachment identity/action facts for exactly-once late store-action
-  // resolution. No source payload or borrowed lookahead storage escapes here.
-  LateRenderPassStoreState lateStore{};
-};
-
-struct BindingState {
-  // R-BACK-12.22 / 12.24: current render encoder's sticky argbuf state.
-  bool activePassUsesArgbufHybrid = false;
-  // R-BACK-12.22..12.26: resource-array sub-mode of the sticky argbuf table.
-  bool activePassUsesArgbufResourceArray = false;
-  bool activePassUsesArgbufDirectCbuf = false;
-  std::optional<core::FlatDrawStateKey> activeDrawStateKey;
-  bool activeDrawStateUsesPrefetchedPsoLayout = false;
-  uniform::DirtyState uniformDirty{};
-  std::optional<u64> lastArgbufPayloadHash;
-  std::optional<ArgbufPayloadDeltaKey> lastArgbufPayloadDeltaKey;
-  std::optional<ArgbufPayloadDeltaComponentKey>
-      lastArgbufPayloadDeltaComponentKey;
-  std::optional<core::DrawUniformPayload> lastArgbufPayloadDeltaPayload;
-  ArgbufCbufCache argbufCbufCache;
-  StreamIbStagingCache activeStreamIbStaging;
-  TextureSamplerBindShadow textureSamplerShadow{};
-  bool initialized = false;
-};
-
-struct DiagnosticsState {
-  std::optional<core::metalcapture::MetalCaptureRequest> metalCaptureRequest;
-  ActiveColorAttachmentDump activeColorAttachmentDump{};
-  ActiveDepthAttachmentDump activeDepthAttachmentDump{};
-  std::vector<ActiveDrawTextureDump> activeDrawTextureDumps;
-  ActiveEncoderBreakdown activeEncoderBreakdown;
-  std::optional<VisibilityScoutPass> activeVisibilityScout;
-  u64 renderEncoderIndex = 0;
-  WMT::Reference<WMT::CounterSampleBuffer> renderEncoderGpuSampleBuffer{};
-  std::vector<core::metalqueue::QueueSubmissionRecord::RenderEncoderGpuSample>
-      renderEncoderGpuSamples;
-  std::uint32_t renderEncoderGpuSampleCursor = 0;
-  std::uint32_t requestedRenderEncoderGpuSamples = 0;
-};
-
-struct CompletionState {
-  std::vector<std::function<void()>> postCommitCallbacks;
-  std::vector<std::function<void()>> completionCallbacks;
-  std::uint64_t committedSubCommandBuffers = 0;
-  // Split-policy state belongs to the command-buffer chain, not one
-  // encodeChunk call. A source fragment is only a replay range edge and must
-  // not make an already-populated tail look empty or reset PerNRecords.
-  bool tailCommandBufferHasWork = false;
-  std::uint32_t recordsSinceLastSplit = 0;
-};
-
-struct EncodeChunkSessionStorage {
-  EncoderState encoder{};
-  PassState pass{};
-  BindingState binding{};
-  DiagnosticsState diagnostics{};
-  CompletionState completion{};
-  // Identity of the current tail command buffer in this session's in-order
-  // chain. This is non-owning: the queue's pending submission carrier owns the
-  // WMT::Reference. It changes only when the encoder legitimately replaces the
-  // tail during a mid-chunk split.
-  obj_handle_t commandBufferChainTail = NULL_OBJECT_HANDLE;
-};
-
-EncodeChunkSessionStorage* createStorage() {
-  return new EncodeChunkSessionStorage{};
-}
-
-void destroyStorage(EncodeChunkSessionStorage* storage) noexcept {
-  delete storage;
-}
-
-void resetStorage(EncodeChunkSessionStorage& storage) {
-  DXMT_ASSERT(!storage.encoder.activeRenderEncoder);
-  DXMT_ASSERT(!storage.encoder.activeBlitEncoder);
-  DXMT_ASSERT(!storage.encoder.hasActiveRender);
-  storage = EncodeChunkSessionStorage{};
-}
-
-bool storageHasActiveRender(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  return static_cast<bool>(storage.encoder.activeRenderEncoder);
-}
-
-std::optional<ActiveRenderDependencySnapshot>
-storageActiveRenderDependencySnapshot(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  if (!storage.encoder.activeRenderEncoder ||
-      !storage.encoder.hasActiveRender ||
-      storage.pass.pendingClear.has_value()) {
-    return std::nullopt;
-  }
-
-  ActiveRenderDependencySnapshot snapshot{};
-  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
-    snapshot.colorAttachments[i] =
-        core::Handle{storage.pass.activeKey.colorHandles[i]};
-  }
-  snapshot.depthStencil = core::Handle{storage.pass.activeKey.depthHandle};
-  snapshot.sampleCount = storage.pass.activeKey.sampleCount;
-  snapshot.dependencyCount = static_cast<std::uint32_t>(
-      storage.pass.activeWriteHazard.exact.count);
-  if (storage.pass.activeWriteHazard.exact.count >
-      snapshot.writeDependencies.size()) {
-    return snapshot;
-  }
-  for (std::size_t i = 0;
-       i < storage.pass.activeWriteHazard.exact.count; ++i) {
-    snapshot.writeDependencies[i] =
-        core::Handle{storage.pass.activeWriteHazard.exact.handles[i]};
-  }
-  auto dependencyContains = [&](core::Handle handle) {
-    if (handle.value == 0) {
-      return true;
-    }
-    for (std::size_t i = 0; i < snapshot.dependencyCount; ++i) {
-      if (snapshot.writeDependencies[i] == handle) {
-        return true;
-      }
-    }
-    return false;
-  };
-  bool hasAttachment = snapshot.depthStencil.value != 0;
-  bool coversAttachments = dependencyContains(snapshot.depthStencil);
-  for (const core::Handle handle : snapshot.colorAttachments) {
-    hasAttachment = hasAttachment || handle.value != 0;
-    coversAttachments = coversAttachments && dependencyContains(handle);
-  }
-  snapshot.complete = snapshot.sampleCount != 0 && hasAttachment &&
-                      coversAttachments;
-  return snapshot;
-}
-
-std::optional<RenderPassInstanceToken> storageActiveRenderInstanceToken(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  if (!storage.encoder.activeRenderEncoder ||
-      !storage.encoder.hasActiveRender ||
-      storage.pass.pendingClear.has_value() ||
-      !storage.pass.activeInstance.valid()) {
-    return std::nullopt;
-  }
-  return storage.pass.activeInstance;
-}
-
-EncodeSessionReplayFrontierState storageReplayFrontierState(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  const bool hasActiveRender = storage.encoder.activeRenderEncoder ||
-                               storage.encoder.hasActiveRender;
-  const auto snapshot = hasActiveRender
-                            ? storageActiveRenderDependencySnapshot(storage)
-                            : std::nullopt;
-  return replayFrontierStateForFacts({
-      .hasPendingClearPayload = storage.pass.pendingClear.has_value(),
-      .hasPendingClearCommand =
-          storage.pass.pendingClearCommand !=
-          core::metalqueue::PublishedCommandRef{},
-      .hasActiveRenderEncoder =
-          static_cast<bool>(storage.encoder.activeRenderEncoder),
-      .hasActiveBlitEncoder =
-          static_cast<bool>(storage.encoder.activeBlitEncoder),
-      .hasActiveRender = storage.encoder.hasActiveRender,
-      .activeRenderSnapshotComplete = snapshot && snapshot->complete,
-  });
-}
-
-bool storageHasDeferredSubmissionPayload(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  return static_cast<bool>(storage.encoder.activeRenderEncoder) ||
-         static_cast<bool>(storage.encoder.activeBlitEncoder) ||
-         storage.encoder.hasActiveRender ||
-         storage.pass.pendingClear.has_value() ||
-         !storage.completion.postCommitCallbacks.empty() ||
-         !storage.completion.completionCallbacks.empty() ||
-         storage.diagnostics.metalCaptureRequest.has_value() ||
-         static_cast<bool>(storage.diagnostics.renderEncoderGpuSampleBuffer) ||
-         !storage.diagnostics.renderEncoderGpuSamples.empty();
-}
-
-std::optional<core::metalqueue::PublishedCommandRef>
-storagePendingClearCommand(
-    const EncodeChunkSessionStorage& storage) noexcept {
-  if (!storage.pass.pendingClear.has_value()) {
-    return std::nullopt;
-  }
-  return storage.pass.pendingClearCommand;
-}
-
-}  // namespace encode_session
 
 namespace {
 
 using encode_session::EncodeChunkSessionStorage;
-
-void initializeEncodeChunkSessionStorage(
-    EncodeChunkSessionStorage& state,
-    const uniform::DirtyState& dirty) {
-  if (state.binding.initialized) {
-    return;
-  }
-  state.binding.uniformDirty = dirty;
-  state.binding.initialized = true;
-}
-
-EncodeChunkSessionStorage makeEncodeChunkSessionStorage(
-    const uniform::DirtyState& dirty) {
-  EncodeChunkSessionStorage state{};
-  initializeEncodeChunkSessionStorage(state, dirty);
-  return state;
-}
-
-void initializeEncodeChunkSessionGpuSamplingStorage(
-    EncodeChunkSessionStorage& state,
-    WMT::Device device,
-    std::size_t commandCount) {
-  auto& diagnostics = state.diagnostics;
-  if (diagnostics.requestedRenderEncoderGpuSamples != 0) {
-    return;
-  }
-  if (!renderEncoderGpuTimeEnabled() ||
-      !device.supportsCounterSampling(WMTCounterSamplingPointAtStageBoundary)) {
-    return;
-  }
-  diagnostics.requestedRenderEncoderGpuSamples =
-      static_cast<std::uint32_t>(std::min<std::size_t>(
-          kMaxRenderEncoderGpuSamples,
-          std::max<std::size_t>(2u, commandCount * 2u + 16u)));
-  diagnostics.renderEncoderGpuSampleBuffer =
-      device.newCounterSampleBuffer(
-          diagnostics.requestedRenderEncoderGpuSamples,
-                                    /*shared=*/true);
-  if (!diagnostics.renderEncoderGpuSampleBuffer) {
-    diagnostics.requestedRenderEncoderGpuSamples = 0;
-  }
-}
-
-std::size_t sessionGpuSamplingCommandCount(
-    core::SourcePayloadView payload,
-    std::uint64_t sourceSeqId,
-    std::size_t currentCommandCount,
-    std::span<const core::metalqueue::ResolvedPublishedSource>
-        lookaheadSources) noexcept {
-  if (lookaheadSources.empty()) {
-    return currentCommandCount;
-  }
-
-  constexpr std::size_t kMaxSampledCommands =
-      (kMaxRenderEncoderGpuSamples - 16u) / 2u;
-  std::size_t total = 0;
-  bool includesCurrentSlot = false;
-  auto addCommands = [&](std::size_t count) noexcept {
-    if (total >= kMaxSampledCommands) {
-      return;
-    }
-    const std::size_t remaining = kMaxSampledCommands - total;
-    total += std::min(count, remaining);
-  };
-  for (const auto& source : lookaheadSources) {
-    if (!source.payload.valid() && source.seqId == 0) {
-      continue;
-    }
-    includesCurrentSlot =
-        includesCurrentSlot || source.payload == payload ||
-        source.seqId == sourceSeqId;
-    addCommands(source.commandCount);
-  }
-  if (!includesCurrentSlot) {
-    addCommands(currentCommandCount);
-  }
-  return std::min(kMaxSampledCommands,
-                  std::max<std::size_t>(currentCommandCount, total));
-}
 
 AttachmentKey makeAttachmentKey(const core::FlatDrawStateRecord& hot) {
   AttachmentKey key;
@@ -10431,11 +9941,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   // One-shot storage for direct callers. The opt-in EncodeSession path below
   // supplies persistent storage so source boundaries can remain metadata-only.
   EncodeChunkSessionStorage localSession =
-      makeEncodeChunkSessionStorage(ctx.dirty);
+      encode_session::makeStorage(ctx.dirty);
   EncodeChunkSessionStorage& session =
       options.session ? *options.session->storage : localSession;
   if (options.session) {
-    initializeEncodeChunkSessionStorage(session, ctx.dirty);
+    encode_session::initializeStorage(session, ctx.dirty);
     if (session.commandBufferChainTail == NULL_OBJECT_HANDLE) {
       session.commandBufferChainTail = commandBuffer.handle;
     }
@@ -10465,13 +9975,13 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
 
   traceEncodeStage("before-gpu-sampling-setup");
   if (firstTransactionFragment) {
-    initializeEncodeChunkSessionGpuSamplingStorage(
+    encode_session::initializeGpuSamplingStorage(
         session, WMT::Device{ctx.device.handle},
         options.sessionLookaheadSources.empty()
             ? replayRange.commandCount()
-            : sessionGpuSamplingCommandCount(payload, sourceSeqId,
-                                             replayRange.commandCount(),
-                                             options.sessionLookaheadSources));
+            : encode_session::gpuSamplingCommandCount(
+                  payload, sourceSeqId, replayRange.commandCount(),
+                  options.sessionLookaheadSources));
   }
   traceEncodeStage("after-gpu-sampling-setup");
 

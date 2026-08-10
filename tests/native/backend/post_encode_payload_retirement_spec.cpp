@@ -576,6 +576,8 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
       readFile(sourceRoot / "src/dxmt9/dxmt9_queue.hpp");
   const std::string encoder =
       readFile(sourceRoot / "src/dxmt9/dxmt9_draw_encoder.mm");
+  const std::string sessionStorage = readFile(
+      sourceRoot / "src/dxmt9/dxmt9_encode_session_storage_internal.hpp");
   const std::string queueImplementation =
       readFile(sourceRoot / "src/dxmt9/dxmt9_queue.cpp");
   const std::string sessionCoordinator = readFile(
@@ -587,11 +589,12 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
   const auto pendingBegin = queue.find("struct PendingCompletion");
   const auto pendingEnd = queue.find("void notifyPendingCompletionStop",
                                      pendingBegin);
-  const auto storageBegin = encoder.find("struct EncodeChunkSessionStorage");
-  const auto storageEnd = encoder.find("EncodeChunkSessionStorage* createStorage",
-                                       storageBegin);
-  const auto passBegin = encoder.find("struct PassState");
-  const auto passEnd = encoder.find("struct BindingState", passBegin);
+  const auto storageBegin =
+      sessionStorage.find("struct EncodeChunkSessionStorage");
+  const auto storageEnd = sessionStorage.find("void initializeStorage",
+                                              storageBegin);
+  const auto passBegin = sessionStorage.find("struct PassState");
+  const auto passEnd = sessionStorage.find("struct BindingState", passBegin);
   check(submissionBegin != std::string::npos &&
             submissionEnd != std::string::npos &&
             pendingBegin != std::string::npos &&
@@ -605,9 +608,9 @@ void borrowedViewAsyncEscapeSourceContractIsPinned(
                                         submissionEnd - submissionBegin);
   const std::string_view pendingBody(queue.data() + pendingBegin,
                                      pendingEnd - pendingBegin);
-  const std::string_view storageBody(encoder.data() + storageBegin,
+  const std::string_view storageBody(sessionStorage.data() + storageBegin,
                                      storageEnd - storageBegin);
-  const std::string_view passBody(encoder.data() + passBegin,
+  const std::string_view passBody(sessionStorage.data() + passBegin,
                                   passEnd - passBegin);
   check(submissionBody.find("SourcePayloadView") == std::string_view::npos &&
             pendingBody.find("SourcePayloadView") == std::string_view::npos &&
