@@ -98,9 +98,12 @@ may append the frontier only after its complete payload-block chain is Ready,
 or must process its ordered control/compatibility disposition before examining
 any younger source. A sessionless fresh frontier may tentatively retain one
 Ready source for one exact ordered-tail Writing successor under the bounded
-contract in the specification. An active session must consume its current
-Ready head immediately and must not park that source to manufacture a future
-multi-source planning window.
+contract in the specification. An active session ordinarily consumes its
+current Ready head immediately. The only active-session exception is the
+source-local terminal-suffix transaction in `R-BACK-2.43`: after encoding the
+source's natural prefix, the coordinator may defer only a value-described
+terminal `Clear(B), DrawRun(B)` suffix while waiting for the exact ordered-tail
+Writing successor that begins with a returning `DrawRun(A)`.
 
 ## 2. EncodeSession
 
@@ -159,6 +162,52 @@ boundary. Replay registers completion sources exactly once in natural FIFO
 order independently of command replay order, and still applies the exact
 attachment, hazard, initializer, and tile-route checks required above before
 continuing the active encoder.
+
+The serial coordinator has one narrower source-qualified terminal-suffix
+exception for the exact measured shape `DrawRun(A), Clear(B), DrawRun(B) |
+DrawRun(A)`. The current source must already be `Represented` and admitted to a
+live session whose complete active-render dependency snapshot proves `A`; it
+must contain exactly those three commands, and the exact consecutive successor
+must contain exactly the returning `DrawRun(A)`. The coordinator may encode the
+first current-source `DrawRun(A)` and defer the remaining two-command suffix
+only when the capacity snapshot proves one generation-stamped ordered-tail
+Writing successor whose complete physical claim fits `successorHeadroom`. The
+allocation-free narrow validator must re-resolve both payloads and prove exact
+source identity and adjacency, complete command coverage, a full Clear,
+attachment/sample compatibility, disjoint aliased attachment resources, and no
+`B`-reads-`A` or successor-`A`-reads-`B` hazard before accepting replay
+`A -> A | Clear(B) -> B`. The universal multi-source permutation validator
+continues to reject cross-source movement over non-draw commands and must not be
+relaxed.
+
+The held suffix is coordinator-owned value state. At the prefix transaction
+edge, the coordinator must retain only value snapshots: exact current and
+expected-successor source/storage generations, raw/source ordinals and `seqId`s,
+Ready-slot and completion identity, admission and command ranges, fragment
+accounting, ordered release, lease generation/reserved/used/successor-remaining
+capacity, the prefix-time replay frontier, active-render dependency snapshot and
+instance token, and the full capture boundary. The capture boundary includes
+both the capture controller and a pending carrier whose capture is attached or
+already started. No `SourcePayloadView`, span, page pointer, session pointer,
+Metal object, or other borrowed storage may survive the park. The whole current
+source remains `Represented`; its completion is registered once in natural FIFO
+order and it cannot retire until the suffix's final synchronous borrow and
+replay finish.
+
+If the exact successor becomes Ready, it is reserved as
+`TentativeRepresented`, charged once against the live lease, re-resolved, and
+all value snapshots above are revalidated after planning and again immediately
+before commit and the first reordered successor replay. Rejection before that
+successor effect restores only the unaffected successor, uncharges its
+tentative capacity, and drains the older suffix in natural order. It never
+restores or replays the already-effectful current prefix. The first reordered
+successor replay call is the join effect boundary; failure after it is
+fail-stop. Ordered release, producer wait, initializer work,
+query/readback/update/Present, stop or device loss, writer identity loss,
+headroom or lease failure, capture-boundary change, and admission or writer
+pressure force a natural suffix drain rather than manufacture a submission
+boundary. Semantic drains have priority; after they are excluded, an exact
+Ready successor must win over simultaneous admission or writer pressure.
 
 The coordinator must reserve the exact selected Ready prefix as
 `TentativeRepresented` while holding the scheduling mutex and snapshot every
@@ -317,6 +366,11 @@ and notify producers. After receipt activation or any Metal effect, failure is
 fail-stop; rollback is permitted only before both. Completion consumes mixed
 receipt and legacy identities once in strict `seqId` order and does not change
 resource waterlines.
+For a represented source split by the terminal-suffix transaction, the current
+source's receipt cannot activate or detach until its suffix is consumed and no
+payload borrow remains. The successor may replay first, but completion
+registration and receipt retirement remain dense natural FIFO: current source
+exactly once, then successor exactly once.
 
 **R-BACK-2.50** A scheduling lane may be promoted only after, in order: native
 or fake-backend proof of source order, boundaries, fail-open behavior, and
@@ -490,13 +544,11 @@ unavailable capacity. Multiple/non-tail writers, invalid publication identity,
 or checked capacity arithmetic make the snapshot invalid and must fail-stop
 rather than wait for a generation that cannot repair structural corruption.
 
-At either a fresh frontier before first acquisition or a coherent active
-session frontier with a live lease, the serial coordinator may speculatively
-reserve exactly one compatible, present-free Ready head as
+At a fresh frontier before first acquisition, the serial coordinator may
+speculatively reserve exactly one compatible, present-free Ready head as
 `TentativeRepresented` only when the capacity snapshot proves exactly one
-generation-stamped ordered-tail Writing successor. The active case must also
-prove admission against the pending session and prove the candidate charge on
-a copy of the live lease. This is a pre-admission lookahead hold, not session
+generation-stamped ordered-tail Writing successor. This is a pre-admission
+lookahead hold, not session
 representation: it acquires or mutates no capacity lease, admission charge,
 completion entry, or Metal effect, and it must restore the exact snapshot to
 the FIFO front before either the successor joins normal bounded selection or
@@ -508,6 +560,20 @@ pressure observation because the required forward source already exists. The
 coordinator acquires or charges the normal lease only after restore, before the
 selected source becomes final `Represented`/encoding state. Restore failure is
 structural corruption and fail-stops the Tape.
+
+An active session uses the distinct terminal-suffix transaction in
+`R-BACK-2.43`, not the pre-admission Ready-head hold above. Its already-
+represented current source and live lease may wait only after the natural
+prefix has encoded and only when the snapshot proves one exact ordered-tail
+Writing successor whose complete claim fits the still-available
+`successorHeadroom`. The wait owns the current source's residency and encoded
+work exactly once, holds no scheduling lock, and neither acquires duplicate
+physical credit nor releases the current source. Release/control, wait,
+initializer, capture-boundary, stop/loss, writer-identity, headroom, and lease-
+generation invalidation drain first. Once those semantic drains are absent, the
+exact successor becoming Ready wins simultaneous admission or writer pressure;
+pressure without that Ready identity drains naturally and resumes ordinary
+progress.
 
 Each admitted source is charged against a fixed encoded-work cap and a physical
 residency vector. Encoded work retains `maxSessionSources`, `maxSessionDraws`,

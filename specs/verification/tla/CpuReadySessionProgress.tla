@@ -5,9 +5,11 @@
  * This model deliberately abstracts payload bytes, Metal commands, and the
  * individual ordered-control reasons into two required-action classes:
  * Submit and PassClose.  It retains the scheduling facts that matter here:
- * a bounded FIFO, one exact pre-effect tentative prefix, queue/latch fences,
- * session effects and acknowledgement, ordered completion/reclaim, and a
- * terminal shutdown fence. The terminal action is a forward-looking model
+ * a bounded FIFO, one exact pre-effect tentative prefix, and one pointer-free
+ * deferred terminal suffix with an exact Writing successor. Park, Join,
+ * StaleFailOpen, and semantic drain preserve queue/latch fences, session
+ * effects and acknowledgement, ordered completion/reclaim, and a terminal
+ * shutdown fence. The terminal action is a forward-looking model
  * obligation: production still drains shutdown directly and does not yet call
  * SessionReleaseState::requestTerminal.
  *
@@ -55,6 +57,36 @@ CapacityWakeState ==
    generation : 0 .. MaxSources,
    observedGeneration : 0 .. MaxSources]
 
+DeferredPhases ==
+  {"Empty", "PrefixEncoded", "Held", "SuccessorTentative",
+   "JoinEffectful"}
+DeferredProvenances == {"None", "Ordinary", "NaturalAfterMerge"}
+DeferredDrainReasons ==
+  {"None", "Pressure", "Release", "Control", "Initializer", "Stop",
+   "Loss", "WriterLoss", "Headroom", "Lease"}
+
+DeferredSuffixState ==
+  [phase : DeferredPhases,
+   current : SourceIds0,
+   currentGeneration : SourceIds0,
+   provenance : DeferredProvenances,
+   expectedSuccessor : SourceIds0,
+   successorGeneration : SourceIds0,
+   releaseIdentity : 0 .. MaxReleaseGeneration,
+   leaseIdentity : SourceIds0,
+   liveSuccessorGeneration : SourceIds0,
+   liveLeaseGeneration : SourceIds0,
+   writingSuccessor : SourceIds0,
+   writerWakePending : BOOLEAN,
+   drainReason : DeferredDrainReasons,
+   borrowedOwner : BOOLEAN,
+   currentPrefixEffects : 0 .. 1,
+   currentSuffixEffects : 0 .. 1,
+   successorHeadEffects : 0 .. 1,
+   successorEffectful : BOOLEAN,
+   lastRestored : SourceIds0,
+   rollbackAfterEffect : BOOLEAN]
+
 VARIABLES
   nextSource,
   ready,
@@ -87,7 +119,8 @@ VARIABLES
   lastRollbackSuffix,
   lastRollbackReady,
   lastRollbackPreEffect,
-  capacityWake
+  capacityWake,
+  deferredSuffix
 
 vars ==
   <<nextSource, ready, tentative, tentativeBaseSuffix,
@@ -98,7 +131,7 @@ vars ==
     admissionAckGeneration, writerAckGeneration, lastPressureAck,
     shutdownRequested, terminalFence, terminalAck, shutdownComplete,
     lastRollbackPrefix, lastRollbackSuffix, lastRollbackReady,
-    lastRollbackPreEffect, capacityWake>>
+    lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 SeqSet(seq) == {seq[i] : i \in DOMAIN seq}
 
@@ -113,7 +146,16 @@ IsPrefix(prefix, seq) ==
 IsConsecutive(seq) ==
   \A i \in DOMAIN seq : i < Len(seq) => seq[i + 1] = seq[i] + 1
 
-LiveOrder == completed \o submitted \o session \o tentative \o ready
+DeferredTentativeOrder ==
+  IF deferredSuffix.phase \in {"SuccessorTentative", "JoinEffectful"}
+  THEN <<deferredSuffix.expectedSuccessor>>
+  ELSE <<>>
+DeferredWritingOrder ==
+  IF deferredSuffix.writingSuccessor = 0
+  THEN <<>>
+  ELSE <<deferredSuffix.writingSuccessor>>
+LiveOrder == completed \o submitted \o session \o tentative \o
+             DeferredTentativeOrder \o ready \o DeferredWritingOrder
 ResidentCount == nextSource - 1 - reclaimed
 CompletedThrough == reclaimed + Len(completed)
 SubmittedThrough == CompletedThrough + Len(submitted)
@@ -146,6 +188,17 @@ EmptyLatch == [active |-> FALSE, fence |-> 0, generation |-> 0]
 EmptyPressureAck ==
   [kind |-> "None", requestedGeneration |-> 0,
    liveGeneration |-> 0, accepted |-> FALSE]
+EmptyDeferredSuffix ==
+  [phase |-> "Empty", current |-> 0, currentGeneration |-> 0,
+   provenance |-> "None", expectedSuccessor |-> 0,
+   successorGeneration |-> 0, releaseIdentity |-> 0,
+   leaseIdentity |-> 0, liveSuccessorGeneration |-> 0,
+   liveLeaseGeneration |-> 0, writingSuccessor |-> 0,
+   writerWakePending |-> FALSE,
+   drainReason |-> "None", borrowedOwner |-> FALSE,
+   currentPrefixEffects |-> 0, currentSuffixEffects |-> 0,
+   successorHeadEffects |-> 0, successorEffectful |-> FALSE,
+   lastRestored |-> 0, rollbackAfterEffect |-> FALSE]
 
 Init ==
   /\ \/ /\ nextSource = 1
@@ -153,6 +206,7 @@ Init ==
          /\ submitted = <<>>
          /\ effectsThrough = 0
          /\ passClosedThrough = 0
+         /\ deferredSuffix = EmptyDeferredSuffix
          /\ capacityWake =
               [phase |-> "Inactive", generation |-> 0,
                observedGeneration |-> 0]
@@ -161,15 +215,39 @@ Init ==
          /\ submitted = <<>>
          /\ effectsThrough = 0
          /\ passClosedThrough = 0
+         /\ deferredSuffix = EmptyDeferredSuffix
          /\ capacityWake =
               [phase |-> "NeedDenial", generation |-> 0,
                observedGeneration |-> 0]
+     \/ \E provenance \in {"Ordinary", "NaturalAfterMerge"} :
+          /\ nextSource = 3
+          /\ ready = <<>>
+          /\ submitted = <<>>
+          /\ effectsThrough = 1
+          /\ passClosedThrough = 0
+          /\ capacityWake =
+               [phase |-> "Inactive", generation |-> 0,
+                observedGeneration |-> 0]
+          /\ deferredSuffix =
+               [EmptyDeferredSuffix EXCEPT
+                  !.phase = "PrefixEncoded",
+                  !.current = 1,
+                  !.currentGeneration = 1,
+                  !.provenance = provenance,
+                  !.expectedSuccessor = 2,
+                  !.successorGeneration = 1,
+                  !.leaseIdentity = 1,
+                  !.liveSuccessorGeneration = 1,
+                  !.liveLeaseGeneration = 1,
+                  !.writingSuccessor = 2,
+                  !.currentPrefixEffects = 1]
   /\ tentative = <<>>
   /\ tentativeBaseSuffix = <<>>
   /\ tentativeValidation = "Pass"
   /\ validationFailedOnce = {}
-  /\ session = <<>>
-  /\ passOpen = FALSE
+  /\ session =
+       IF deferredSuffix.phase = "PrefixEncoded" THEN <<1>> ELSE <<>>
+  /\ passOpen = (deferredSuffix.phase = "PrefixEncoded")
   /\ completed = <<>>
   /\ reclaimed = 0
   /\ releaseQ = <<>>
@@ -218,7 +296,7 @@ SeedStartupCapacityBlocker ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, deferredSuffix>>
 
 Publish ==
   /\ ~shutdownRequested
@@ -238,7 +316,7 @@ Publish ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 ReservePrefix(count, outcome) ==
   /\ tentative = <<>>
@@ -262,7 +340,7 @@ ReservePrefix(count, outcome) ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 ReserveAny ==
   \E count \in 1 .. MaxBatch, outcome \in ValidationOutcomes :
@@ -289,7 +367,7 @@ CommitTentative ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, deferredSuffix>>
 
 RollbackTentative ==
   /\ tentative # <<>>
@@ -310,7 +388,219 @@ RollbackTentative ==
                   ackedSubmitFences, ackedPassCloseFences, admissionLatch,
                   writerLatch, admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
-                  terminalAck, shutdownComplete, capacityWake>>
+                  terminalAck, shutdownComplete, capacityWake,
+                  deferredSuffix>>
+
+ParkDeferredSuffix ==
+  /\ deferredSuffix.phase = "PrefixEncoded"
+  /\ deferredSuffix.current = 1
+  /\ deferredSuffix.expectedSuccessor = 2
+  /\ deferredSuffix.writingSuccessor = 2
+  /\ deferredSuffix.releaseIdentity = releaseGeneration
+  /\ deferredSuffix.leaseIdentity = deferredSuffix.liveLeaseGeneration
+  /\ ~ReleasePending
+  /\ deferredSuffix' = [deferredSuffix EXCEPT !.phase = "Held"]
+  /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+WriterPublishDeferredSuccessor ==
+  /\ deferredSuffix.phase \in {"Held", "Empty"}
+  /\ deferredSuffix.current # 0
+  /\ deferredSuffix.writingSuccessor = deferredSuffix.expectedSuccessor
+  /\ (deferredSuffix.phase = "Held" \/
+      deferredSuffix.writerWakePending)
+  /\ Len(ready) < MaxReady
+  /\ ready' = Append(ready, deferredSuffix.writingSuccessor)
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.writingSuccessor = 0,
+          !.writerWakePending = FALSE]
+  /\ UNCHANGED <<nextSource, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+ReserveDeferredSuccessor ==
+  /\ deferredSuffix.phase = "Held"
+  /\ deferredSuffix.writingSuccessor = 0
+  /\ ready # <<>>
+  /\ Head(ready) = deferredSuffix.expectedSuccessor
+  /\ ~ReleasePending
+  /\ deferredSuffix.drainReason \in {"None", "Pressure"}
+  /\ deferredSuffix.currentGeneration = 1
+  /\ deferredSuffix.successorGeneration =
+       deferredSuffix.liveSuccessorGeneration
+  /\ deferredSuffix.releaseIdentity = releaseGeneration
+  /\ deferredSuffix.leaseIdentity = deferredSuffix.liveLeaseGeneration
+  /\ ready' = Tail(ready)
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT !.phase = "SuccessorTentative"]
+  /\ UNCHANGED <<nextSource, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+RequestDeferredDrain(reason) ==
+  /\ deferredSuffix.phase \in {"Held", "SuccessorTentative"}
+  /\ deferredSuffix.drainReason = "None"
+  /\ reason \in DeferredDrainReasons \ {"None"}
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.drainReason = reason,
+          !.liveLeaseGeneration =
+             IF reason = "Lease" THEN @ + 1 ELSE @]
+  /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+RequestAnyDeferredDrain ==
+  \E reason \in DeferredDrainReasons \ {"None"} :
+    RequestDeferredDrain(reason)
+
+StaleFailOpen ==
+  /\ deferredSuffix.phase = "SuccessorTentative"
+  /\ ~deferredSuffix.successorEffectful
+  /\ deferredSuffix.writingSuccessor = 0
+  /\ deferredSuffix.successorGeneration =
+       deferredSuffix.liveSuccessorGeneration
+  /\ deferredSuffix.leaseIdentity # deferredSuffix.liveLeaseGeneration
+  /\ ready' = <<deferredSuffix.expectedSuccessor>> \o ready
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "Empty",
+          !.drainReason = "None",
+          !.currentSuffixEffects = 1,
+          !.lastRestored = deferredSuffix.expectedSuccessor]
+  /\ UNCHANGED <<nextSource, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+JoinDeferredSuccessor ==
+  /\ deferredSuffix.phase = "SuccessorTentative"
+  /\ ~ReleasePending
+  /\ deferredSuffix.drainReason \in {"None", "Pressure"}
+  /\ deferredSuffix.currentGeneration = 1
+  /\ deferredSuffix.successorGeneration =
+       deferredSuffix.liveSuccessorGeneration
+  /\ deferredSuffix.releaseIdentity = releaseGeneration
+  /\ deferredSuffix.leaseIdentity = deferredSuffix.liveLeaseGeneration
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "JoinEffectful",
+          !.successorHeadEffects = 1,
+          !.successorEffectful = TRUE]
+  /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+CompleteDeferredJoin ==
+  /\ deferredSuffix.phase = "JoinEffectful"
+  /\ deferredSuffix.successorEffectful
+  /\ deferredSuffix.currentSuffixEffects = 0
+  /\ session' = Append(session, deferredSuffix.expectedSuccessor)
+  /\ effectsThrough' = effectsThrough + 1
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "Empty",
+          !.drainReason = "None",
+          !.currentSuffixEffects = 1]
+  /\ UNCHANGED <<nextSource, ready, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, passOpen,
+                  submitted, completed, reclaimed, passClosedThrough,
+                  releaseQ, releaseGeneration, ordinaryAckGeneration,
+                  ackedSubmitFences, ackedPassCloseFences, admissionLatch,
+                  writerLatch, admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
+
+ExactDeferredSuccessorAvailable ==
+  /\ deferredSuffix.writingSuccessor = 0
+  /\ \/ deferredSuffix.phase = "SuccessorTentative"
+     \/ /\ deferredSuffix.phase = "Held"
+        /\ ready # <<>>
+        /\ Head(ready) = deferredSuffix.expectedSuccessor
+
+DrainDeferredSuffix ==
+  /\ deferredSuffix.phase \in {"Held", "SuccessorTentative"}
+  /\ \/ ReleasePending
+     \/ deferredSuffix.drainReason # "None"
+  /\ ~(deferredSuffix.drainReason = "Pressure" /\
+       ExactDeferredSuccessorAvailable)
+  /\ ready' =
+       IF deferredSuffix.phase = "SuccessorTentative"
+       THEN <<deferredSuffix.expectedSuccessor>> \o ready
+       ELSE ready
+  /\ deferredSuffix' =
+       [deferredSuffix EXCEPT
+          !.phase = "Empty",
+          !.writerWakePending =
+             deferredSuffix.phase = "Held" /\
+             deferredSuffix.writingSuccessor # 0,
+          !.drainReason = "None",
+          !.currentSuffixEffects = 1,
+          !.lastRestored =
+             IF deferredSuffix.phase = "SuccessorTentative"
+             THEN deferredSuffix.expectedSuccessor ELSE @]
+  /\ UNCHANGED <<nextSource, tentative, tentativeBaseSuffix,
+                  tentativeValidation, validationFailedOnce, session,
+                  passOpen, submitted, completed, reclaimed, effectsThrough,
+                  passClosedThrough, releaseQ, releaseGeneration,
+                  ordinaryAckGeneration, ackedSubmitFences,
+                  ackedPassCloseFences, admissionLatch, writerLatch,
+                  admissionAckGeneration, writerAckGeneration,
+                  lastPressureAck, shutdownRequested, terminalFence,
+                  terminalAck, shutdownComplete, lastRollbackPrefix,
+                  lastRollbackSuffix, lastRollbackReady,
+                  lastRollbackPreEffect, capacityWake>>
 
 ClosePass ==
   /\ passOpen
@@ -327,7 +617,7 @@ ClosePass ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 SubmitSession ==
   /\ session # <<>>
@@ -344,7 +634,7 @@ SubmitSession ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 PostOrdinaryRelease(kind) ==
   /\ ~shutdownRequested
@@ -366,7 +656,8 @@ PostOrdinaryRelease(kind) ==
                   writerLatch, admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 PostAnyOrdinaryRelease == \E kind \in ReleaseKinds : PostOrdinaryRelease(kind)
 
@@ -394,7 +685,7 @@ AckOrdinaryRelease ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 PostAdmissionPressure ==
   /\ ~shutdownRequested
@@ -414,7 +705,7 @@ PostAdmissionPressure ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 PostWriterPressure ==
   /\ ~shutdownRequested
@@ -434,7 +725,7 @@ PostWriterPressure ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 AckAdmissionPressure ==
   /\ admissionLatch.active
@@ -457,7 +748,7 @@ AckAdmissionPressure ==
                   writerAckGeneration, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 AckWriterPressure ==
   /\ writerLatch.active
@@ -478,7 +769,8 @@ AckWriterPressure ==
                   admissionLatch, admissionAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 RejectStaleAdmissionAck(generation) ==
   /\ admissionLatch.active
@@ -496,7 +788,8 @@ RejectStaleAdmissionAck(generation) ==
                   admissionAckGeneration, writerAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 RejectStaleWriterAck(generation) ==
   /\ writerLatch.active
@@ -514,7 +807,8 @@ RejectStaleWriterAck(generation) ==
                   admissionAckGeneration, writerAckGeneration,
                   shutdownRequested, terminalFence, terminalAck,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 RejectAnyStalePressureAck ==
   (\E generation \in 0 .. MaxPressureGeneration :
@@ -535,7 +829,8 @@ RequestShutdown ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, terminalAck, shutdownComplete,
                   lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 AckTerminalFence ==
   /\ shutdownRequested
@@ -554,7 +849,8 @@ AckTerminalFence ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
                   shutdownComplete, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 CompleteSubmitted ==
   /\ submitted # <<>>
@@ -569,7 +865,7 @@ CompleteSubmitted ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect, capacityWake>>
+                  lastRollbackPreEffect, capacityWake, deferredSuffix>>
 
 ReclaimCompleted ==
   /\ completed # <<>>
@@ -587,7 +883,7 @@ ReclaimCompleted ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, deferredSuffix>>
 
 WakeCapacityLease ==
   /\ capacityWake.phase = "Waiting"
@@ -603,7 +899,7 @@ WakeCapacityLease ==
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, shutdownComplete, lastRollbackPrefix,
                   lastRollbackSuffix, lastRollbackReady,
-                  lastRollbackPreEffect>>
+                  lastRollbackPreEffect, deferredSuffix>>
 
 FinishShutdown ==
   /\ shutdownRequested
@@ -625,12 +921,32 @@ FinishShutdown ==
                   admissionAckGeneration, writerAckGeneration,
                   lastPressureAck, shutdownRequested, terminalFence,
                   terminalAck, lastRollbackPrefix, lastRollbackSuffix,
-                  lastRollbackReady, lastRollbackPreEffect, capacityWake>>
+                  lastRollbackReady, lastRollbackPreEffect, capacityWake,
+                  deferredSuffix>>
 
 Next ==
   IF capacityWake.phase = "NeedDenial"
   THEN SeedStartupCapacityBlocker
+  ELSE IF deferredSuffix.phase = "PrefixEncoded"
+  THEN ParkDeferredSuffix
+  ELSE IF deferredSuffix.phase = "Held"
+  THEN \/ WriterPublishDeferredSuccessor
+       \/ ReserveDeferredSuccessor
+       \/ RequestAnyDeferredDrain
+       \/ PostAnyOrdinaryRelease
+       \/ RequestShutdown
+       \/ DrainDeferredSuffix
+  ELSE IF deferredSuffix.phase = "SuccessorTentative"
+  THEN \/ JoinDeferredSuccessor
+       \/ StaleFailOpen
+       \/ RequestAnyDeferredDrain
+       \/ PostAnyOrdinaryRelease
+       \/ RequestShutdown
+       \/ DrainDeferredSuffix
+  ELSE IF deferredSuffix.phase = "JoinEffectful"
+  THEN CompleteDeferredJoin
   ELSE \/ Publish
+       \/ WriterPublishDeferredSuccessor
        \/ ReserveAny
        \/ CommitTentative
        \/ RollbackTentative
@@ -658,6 +974,13 @@ SystemFairness ==
   /\ WF_vars(SeedStartupCapacityBlocker)
   /\ WF_vars(WakeCapacityLease)
   /\ WF_vars(FinishShutdown)
+  /\ WF_vars(ParkDeferredSuffix)
+  /\ WF_vars(WriterPublishDeferredSuccessor)
+  /\ WF_vars(ReserveDeferredSuccessor)
+  /\ WF_vars(StaleFailOpen)
+  /\ WF_vars(JoinDeferredSuccessor)
+  /\ WF_vars(CompleteDeferredJoin)
+  /\ WF_vars(DrainDeferredSuffix)
 
 Spec == Init /\ [][Next]_vars /\ SystemFairness
 
@@ -694,6 +1017,7 @@ TypeOK ==
   /\ lastRollbackReady \in Seq(SourceIds)
   /\ lastRollbackPreEffect \in BOOLEAN
   /\ capacityWake \in CapacityWakeState
+  /\ deferredSuffix \in DeferredSuffixState
 
 BoundedStores ==
   /\ ResidentCount <= MaxResident
@@ -710,6 +1034,78 @@ FifoSourceOrder ==
   /\ IsConsecutive(session)
   /\ IsConsecutive(submitted)
   /\ IsConsecutive(completed)
+
+DeferredOwnerIsBoundedValue ==
+  /\ ~deferredSuffix.borrowedOwner
+  /\ (deferredSuffix.current = 0 <=>
+        deferredSuffix.phase = "Empty" /\
+        deferredSuffix.expectedSuccessor = 0)
+  /\ (deferredSuffix.current # 0 =>
+        /\ deferredSuffix.current = 1
+        /\ deferredSuffix.expectedSuccessor = 2
+        /\ deferredSuffix.currentGeneration = 1
+        /\ deferredSuffix.provenance \in
+             {"Ordinary", "NaturalAfterMerge"}
+        /\ deferredSuffix.leaseIdentity > 0)
+
+DeferredCommandsExactlyOnce ==
+  /\ deferredSuffix.currentPrefixEffects <= 1
+  /\ deferredSuffix.currentSuffixEffects <= 1
+  /\ deferredSuffix.successorHeadEffects <= 1
+  /\ (deferredSuffix.current # 0 =>
+        deferredSuffix.currentPrefixEffects = 1)
+  /\ (deferredSuffix.phase = "JoinEffectful" =>
+        /\ deferredSuffix.successorHeadEffects = 1
+        /\ deferredSuffix.currentSuffixEffects = 0)
+  /\ (deferredSuffix.current # 0 /\
+       deferredSuffix.phase = "Empty" =>
+        deferredSuffix.currentSuffixEffects = 1)
+
+DeferredIdentityAndEffectBoundary ==
+  /\ (deferredSuffix.phase \in
+        {"PrefixEncoded", "Held", "SuccessorTentative",
+         "JoinEffectful"} =>
+        /\ deferredSuffix.currentGeneration = 1
+        /\ deferredSuffix.releaseIdentity <= releaseGeneration
+        /\ deferredSuffix.leaseIdentity <=
+             deferredSuffix.liveLeaseGeneration)
+  /\ (deferredSuffix.phase = "JoinEffectful" =>
+        /\ deferredSuffix.successorGeneration =
+             deferredSuffix.liveSuccessorGeneration
+        /\ deferredSuffix.releaseIdentity = releaseGeneration
+        /\ deferredSuffix.leaseIdentity =
+             deferredSuffix.liveLeaseGeneration
+        /\ deferredSuffix.successorEffectful)
+  /\ ~deferredSuffix.rollbackAfterEffect
+
+OnlyUnaffectedSuccessorRestores ==
+  /\ deferredSuffix.lastRestored \in
+       {0, deferredSuffix.expectedSuccessor}
+  /\ (deferredSuffix.lastRestored # 0 =>
+        /\ deferredSuffix.successorHeadEffects = 0
+        /\ deferredSuffix.writingSuccessor = 0
+        /\ deferredSuffix.successorGeneration =
+             deferredSuffix.liveSuccessorGeneration)
+
+WriterOwnsDeferredPublication ==
+  /\ (deferredSuffix.writerWakePending =>
+        /\ deferredSuffix.phase = "Empty"
+        /\ deferredSuffix.writingSuccessor =
+             deferredSuffix.expectedSuccessor
+        /\ deferredSuffix.expectedSuccessor \notin SeqSet(ready))
+  /\ (deferredSuffix.writingSuccessor # 0 =>
+        deferredSuffix.writingSuccessor =
+          deferredSuffix.expectedSuccessor)
+
+ExactSuccessorBeatsPressure ==
+  ~(deferredSuffix.drainReason = "Pressure" /\
+    ExactDeferredSuccessorAvailable /\
+    deferredSuffix.currentSuffixEffects = 1)
+
+ReleaseOrControlDrainsBeforeEffects ==
+  deferredSuffix.phase = "JoinEffectful" =>
+    /\ ~ReleasePending
+    /\ deferredSuffix.drainReason \in {"None", "Pressure"}
 
 OneTentativePrefix ==
   /\ (tentative = <<>> => tentativeBaseSuffix = <<>>)
@@ -786,6 +1182,13 @@ Safety ==
   /\ TypeOK
   /\ BoundedStores
   /\ FifoSourceOrder
+  /\ DeferredOwnerIsBoundedValue
+  /\ DeferredCommandsExactlyOnce
+  /\ DeferredIdentityAndEffectBoundary
+  /\ OnlyUnaffectedSuccessorRestores
+  /\ WriterOwnsDeferredPublication
+  /\ ExactSuccessorBeatsPressure
+  /\ ReleaseOrControlDrainsBeforeEffects
   /\ OneTentativePrefix
   /\ CompatibleSuffixStaysReady
   /\ NoYoungerThanEarliestFence
@@ -812,6 +1215,27 @@ StartupCapacityWakeProgress ==
 StartupDirectProgress ==
   (capacityWake.phase = "Woken") ~>
     (capacityWake.phase = "DirectStarted")
+
+DeferredWriterPublicationProgress ==
+  (deferredSuffix.current # 0 /\
+   deferredSuffix.writingSuccessor =
+     deferredSuffix.expectedSuccessor) ~>
+    (deferredSuffix.writingSuccessor = 0)
+
+DeferredExactSuccessorProgress ==
+  (deferredSuffix.phase = "SuccessorTentative" /\
+   deferredSuffix.drainReason = "Pressure" /\
+   deferredSuffix.successorGeneration =
+     deferredSuffix.liveSuccessorGeneration) ~>
+    (deferredSuffix.phase \in {"JoinEffectful", "Empty"})
+
+DeferredDrainProgress ==
+  (deferredSuffix.phase \in {"Held", "SuccessorTentative"} /\
+   (ReleasePending \/
+    deferredSuffix.drainReason \in
+      {"Release", "Control", "Initializer", "Stop", "Loss",
+       "WriterLoss", "Headroom", "Lease"})) ~>
+    (deferredSuffix.phase = "Empty")
 
 AdmissionPressureProgress ==
   \A generation \in 1 .. MaxPressureGeneration :

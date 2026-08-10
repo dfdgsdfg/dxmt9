@@ -438,8 +438,10 @@ consumed by the existing bounded planner. Every semantic, progress, pressure,
 initializer, writer-identity, or shutdown exit also restores first and re-
 enters exact single-source replay; an exact Ready successor wins over a
 simultaneous pressure observation. The retained head is never committed
-directly. Once a session is active, a sole Ready head is consumed immediately;
-active-session retention is not a scheduling option.
+directly. Once a session is active, a sole Ready head is ordinarily consumed
+immediately. Section 5.2 defines the only exception: the source remains
+represented while a value-described terminal suffix waits for one exact
+ordered-tail Writing successor.
 
 ## 5. EncodeSession State Machine
 
@@ -570,6 +572,11 @@ stateDiagram-v2
   Idle --> OpenStreaming: attach first source
   OpenStreaming --> OpenStreaming: append compatible ready source
   OpenStreaming --> OpenStreaming: producer quiescent, no release obligation
+  OpenStreaming --> DeferredSuffixHeld: encode natural prefix; exact Writing successor proved
+  DeferredSuffixHeld --> SuccessorTentative: exact successor becomes Ready
+  SuccessorTentative --> OpenStreaming: pre-effect rejection; restore successor and natural-drain suffix
+  SuccessorTentative --> OpenStreaming: join successor A, then older Clear(B), B suffix
+  DeferredSuffixHeld --> OpenStreaming: release/invalidation; natural-drain suffix
   OpenStreaming --> PrefixSubmit: ordered queue/API release event
   OpenStreaming --> PassSealed: semantic end or bounded complete pass known
   PassSealed --> Serial: identity or serial explicit plan
@@ -622,6 +629,90 @@ and unproved moved heads stay on the pre-effect source-local fallback. A
 combined merge whose locators remain natural may therefore be lost to
 source-local backend replanning; executing that result is an open scheduling
 and progress gap rather than part of the current contract.
+
+#### 5.2.1 Coordinator-owned deferred terminal suffix
+
+The terminal-suffix lane is a bounded exception inside the source-local branch,
+after the current source is `Represented` and admitted but before its terminal
+Clear has any Metal effect. It is enabled only inside the opt-in CPU-ready Tape
+loop for the FrameGraph backend with the progressive profile, `passcoalesce`
+enabled, and DCE disabled. It recognizes exactly
+`DrawRun(A), Clear(B), DrawRun(B) | DrawRun(A)` and may replay
+`A -> A | Clear(B) -> B`. It bypasses, but does not weaken, the universal
+cross-source validator, which still rejects every permutation in which a
+DrawRun crosses another source's non-draw command.
+
+The implemented value vocabulary is:
+
+| Type/value | Exact retained content |
+|---|---|
+| `DeferredTerminalSuffixSourceIdentity` | generation-stamped `SourceRef`, optional `rawOrdinal`, exact `sourceOrdinal`, and exact `seqId` |
+| `SourceCommandRange` | `SourceRef`, `sourceOrdinal`, `seqId`, `commandBegin`, and `commandCount` |
+| `DeferredTerminalSuffixProof` | current prefix/suffix and successor-head ranges; `ActiveRenderPlanningSeed`; exact `AttachmentSet` values for `A` and `B`; fixed four-command natural and joined locator arrays |
+| `DeferredTerminalSuffixState` | phase; current `ReadySlotSnapshot` and `QueueCompletionSource`; current/successor identities; current/successor admission and charges; current ranges; Writing and physical-headroom claims; lease reserved/used/successor-remaining values and generation; `SessionReleaseSnapshot`; optional attached proof; pre-registered fragment accumulator |
+| Prefix-time coordinator snapshots | `EncodeSessionReplayFrontierState`, complete `ActiveRenderDependencySnapshot`, `RenderPassInstanceToken`, and the full capture-boundary Boolean |
+
+`DeferredTerminalSuffixState`, its identities, ranges, proof, and observation
+are standard-layout trivially copyable values; the proof is statically bounded
+to 1,024 bytes. The full capture boundary is true when the capture controller is
+enabled or the pending carrier has a capture object or reports capture already
+started. Payload resolution is repeated synchronously from generation-checked
+sources for planning, revalidation, and replay. No `SourcePayloadView`, span,
+page pointer, session pointer, Metal object, or callback survives the park.
+
+The transaction is:
+
+1. Require a fresh planning frontier with one represented candidate and no full
+   capture boundary. The current source must contain exactly
+   `DrawRun(A), Clear(B), DrawRun(B)`, and the capacity snapshot must expose one
+   exact ordered-tail Writing successor with a valid physical claim inside
+   successor headroom. Pre-register current completion once, admit and charge
+   it once, and encode only command 0 with backend replanning suppressed and a
+   pre-registered fragment accumulator.
+2. At prefix completion, snapshot the replay frontier, complete active-render
+   dependency state, active render-pass instance token, and full capture
+   boundary. Retain the current Ready/completion/admission/range values, the
+   expected successor identity and Writing claim, lease generation and
+   reserved/used/successor-remaining values, and ordered-release snapshot.
+3. Clear the call-local current payload view and park with the scheduling mutex
+   released. The current source remains `Represented`; its residency and
+   encoded work remain charged once, while the writer, completion, and reclaim
+   paths remain runnable.
+4. Semantic drains are classified before readiness: ordered release, producer
+   wait, initializer or control work, capture-boundary change, shutdown/loss,
+   writer loss, or lease/headroom invalidation drains the older suffix
+   naturally. Once none applies, the exact Ready identity wins simultaneous
+   admission or writer pressure; pressure without that identity drains.
+5. Reserve only that Ready successor as `TentativeRepresented`. Re-resolve both
+   sources, require exact current/successor identity and FIFO adjacency, then
+   run the allocation-free narrow proof: three current commands, one successor
+   command, full Clear, matching `A`/`B` attachments and samples, disjoint
+   aliased attachment resources, no `B` read of `A`, no successor-`A` read of
+   `B`, and complete fixed natural/joined command coverage.
+6. Revalidate the prefix-time replay frontier, active dependency snapshot and
+   instance token, full capture boundary, exact source values, release
+   snapshot, lease generation/reserved/used/successor-remaining values,
+   admission, proof, and command ranges after planning, after the one real
+   successor charge, and immediately before commit and replay.
+7. A rejection before the first successor replay restores and uncharges only
+   the unaffected successor, then encodes the represented current suffix in
+   natural order. The already-effectful current prefix is never restored or
+   replayed. After successor commit, replay successor command 0 and then current
+   commands 1..2 with backend replanning suppressed; the first successor replay
+   call is the effect boundary and every later replay/fold/publication failure
+   is fail-stop.
+8. Observe the composite transaction once, after all effects and carrier folds,
+   in natural current-then-successor order with scheduling released. Terminal
+   Clear/action/sidecar work publishes only at its ordinary later boundary.
+   Current receipt activation waits for suffix completion and final borrow
+   release; current and successor then retire, complete, and reclaim once in
+   dense natural FIFO order.
+
+The production policy object exposes `Empty`, `PrefixEncoded`, `Held`,
+`SuccessorTentative`, and `JoinEffectful` as the bounded phase vocabulary. The
+concrete coordinator uses the first successor replay call, rather than a
+rollback-capable state mutation, as the `JoinEffectful` cut. No drain condition
+invents a session or command-buffer boundary.
 
 When perf counters explicitly enable collection, every bounded replay window
 carries call-local, trivially copyable diagnostic provenance after its existing
@@ -873,6 +964,16 @@ restore the exact prefix. Transaction observation is an after-effect operation;
 it runs exactly once in natural FIFO source order only after all qualified
 fragment effects and carrier folds succeed, with scheduling released.
 
+A deferred terminal suffix follows the same ticket discipline but retains no
+borrow across its park. At prefix completion the coordinator keeps
+`DeferredTerminalSuffixState` plus value-only snapshots of the replay frontier,
+active-render dependency state and instance token, and the full controller plus
+pending-carrier capture boundary. It releases scheduling before waiting,
+resolves current and successor payloads anew for each synchronous proof or
+replay, and revalidates those prefix-time values together with release, lease,
+writer/source generations, FIFO adjacency, admission, proof, and command ranges
+at every pre-effect checkpoint and immediately before successor commit/replay.
+
 The finish thread dequeues a completion record, releases the completion lock,
 then takes the scheduling lock to mark consecutive sources Completed and detach
 the reclaimable prefix. It releases scheduling before destroying payload owners
@@ -889,6 +990,9 @@ advance generations, and signals admission after unlocking.
 | Validation, owner construction, or retention failure before seal | destroy the partial block, roll back the complete reservation, then follow deferred-replay fail-stop/error policy |
 | Stale source/page/retention generation | reject before dereference and poison the affected scheduling lane |
 | Exact replay mismatch during whole-batch preflight | finalize and submit any older already-emitted session prefix as required; atomically restore only the newly represented batch, while the suffix remains `Ready`, then use the valid legacy/serial path if available |
+| Deferred-suffix rejection before successor replay | restore and uncharge only the unaffected successor; natural-drain the represented current suffix; never restore or replay the affected prefix |
+| Release, initializer, control, capture, stop/loss, writer/headroom, or lease invalidates a held suffix | natural-drain the represented suffix, then follow the ordered event; these semantic drains precede Ready handling |
+| Admission or writer pressure while a suffix is held | natural-drain unless the exact successor is Ready; after semantic drains are excluded, exact Ready wins simultaneous pressure |
 | Failure after Metal emission | fail-stop submission; never rewind, reuse pages, or synthesize success |
 | Orderly shutdown | stop admission, broadcast admission wait, drain Ready/Represented work normally while Metal remains available, then reclaim in order |
 | Device lost or Metal queue failure | stop admission, broadcast waiters, route submitted work through error completion, cancel unsubmitted reservations without successful completion, and retain storage until reuse is safe |
@@ -1032,12 +1136,13 @@ or deleting rollback is a promotion decision, not a storage-only refactor.
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
-| CPU-ready admission and session progress | missing `CpuReadySessionProgress` model plus fake actors covering high/low hysteresis, replay-only admission wait, fixed session-lease acquisition, successor reserve, deterministic cap selection, completion-schedule-independent grouping, finish wake, shutdown, and no progress cycle |
-| Pass streaming | active-render seed planner specs cover legal `A + B,A -> A,B`, invalid/incomplete/overflow and dependency-wedged natural fallback; the production lifecycle spec covers mixed Legacy/Arena DrawRun carry, pass shape, one carrier, and ordered completion. Admission-vs-render predicates, suffix-stays-Ready selection, ordered control dispositions, event-driven non-present release, producer-quiescent parking, Arena Present-tail ownership, and wild GT2 locality remain broader evidence. |
+| CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure; the production join spec covers Ready over admission pressure. `CpuReadySessionProgress` and `SessionCapacityLease` model bounded value ownership, writer publication, Park/Join/StaleFailOpen/Drain, charge-once, and exact-successor-over-pressure safety/liveness; `dxmt9-verify-tla` is green. |
+| Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | existing partition snapshot/serial native specs; production planner evidence missing |
 | Parallel order and join | missing fake-child executor spec and formal/refinement evidence |
-| Logical-pass actions across segments | render-pass-actions native spec extension and Metal integration evidence |
+| Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
+| Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |
 | Metal 4 capability lane | missing capability/fallback unit evidence, Metal integration, and visual/locality A/B |
 
 The current status and historical performance evidence are tracked in

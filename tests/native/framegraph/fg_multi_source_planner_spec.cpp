@@ -27,6 +27,17 @@ using dxmt9::core::MetalCommandHeader;
 using dxmt9::core::MetalCommandKind;
 using dxmt9::tests::framegraph::ArenaPayloadFixture;
 
+static_assert(noexcept(planDeferredTerminalSuffixReplay(
+    DeferredTerminalSuffixPlanningSourceView{},
+    DeferredTerminalSuffixPlanningSourceView{},
+    ActiveRenderPlanningSeed{})));
+static_assert(noexcept(validateDeferredTerminalSuffixReplay(
+    DeferredTerminalSuffixPlanningSourceView{},
+    DeferredTerminalSuffixPlanningSourceView{}, ActiveRenderPlanningSeed{},
+    DeferredTerminalSuffixProof{},
+    std::span<const RetainedSourceCommandLocator>{})));
+static_assert(sizeof(DeferredTerminalSuffixPlan) <= 1024u);
+
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
@@ -81,6 +92,45 @@ ActiveRenderPlanningSeed activeSeed(Handle target) {
   seed.dependency_count = 1u;
   seed.complete = true;
   return seed;
+}
+
+dxmt9::core::CpuReadyTape::SourceRef sourceRef(std::uint32_t index,
+                                               std::uint64_t generation,
+                                               std::uint32_t firstPage) {
+  return {
+      .id = {.index = index, .generation = generation},
+      .storage = {
+          .firstPage = firstPage,
+          .pageCount = 1u,
+          .generation = generation,
+      },
+  };
+}
+
+DeferredTerminalSuffixPlanningSourceView planningSource(
+    const ChunkSlot& slot, std::uint32_t sourceIndex,
+    std::uint64_t sourceOrdinal, std::uint64_t seqId) {
+  return {
+      .payload = dxmt9::core::SourcePayloadView(slot),
+      .source = sourceRef(sourceIndex, sourceOrdinal + 10u, sourceIndex + 1u),
+      .sourceOrdinal = sourceOrdinal,
+      .seqId = seqId,
+  };
+}
+
+struct AliasPair {
+  Handle first{};
+  Handle second{};
+  Handle canonical{};
+};
+
+ResourceHandle resolveAliasPair(const void* context,
+                                ResourceHandle handle) noexcept {
+  const auto& aliases = *static_cast<const AliasPair*>(context);
+  return handle.value == aliases.first.value ||
+          handle.value == aliases.second.value
+      ? ResourceHandle{aliases.canonical.value}
+      : handle;
 }
 
 void testLegalActiveAThenSourceBThenSourceA() {
@@ -524,6 +574,273 @@ void testCrossSourceNonDrawMovementRejected() {
         "Present cannot cross a retained source boundary");
 }
 
+void testDeferredTerminalSuffixProofQualifiesExactShape() {
+  const Handle targetA{0xA500u};
+  const Handle targetB{0xB500u};
+  ChunkSlot current;
+  ChunkSlot successor;
+  appendDrawRun(current, targetA);
+  appendClearColor(current, targetB);
+  appendDrawRun(current, targetB);
+  appendDrawRun(successor, targetA);
+  const auto currentSource = planningSource(current, 2u, 41u, 101u);
+  const auto successorSource = planningSource(successor, 3u, 42u, 102u);
+  const ActiveRenderPlanningSeed seed = activeSeed(targetA);
+
+  const DeferredTerminalSuffixPlan plan = planDeferredTerminalSuffixReplay(
+      currentSource, successorSource, seed);
+  const std::array natural{
+      RetainedSourceCommandLocator{0u, 0u},
+      RetainedSourceCommandLocator{0u, 1u},
+      RetainedSourceCommandLocator{0u, 2u},
+      RetainedSourceCommandLocator{1u, 0u},
+  };
+  const std::array joined{
+      RetainedSourceCommandLocator{0u, 0u},
+      RetainedSourceCommandLocator{1u, 0u},
+      RetainedSourceCommandLocator{0u, 1u},
+      RetainedSourceCommandLocator{0u, 2u},
+  };
+  check(plan.qualified() && plan.proof.naturalReplay == natural &&
+            plan.proof.joinedReplay == joined &&
+            plan.proof.currentPrefix.commandBegin == 0u &&
+            plan.proof.currentPrefix.commandCount == 1u &&
+            plan.proof.currentSuffix.commandBegin == 1u &&
+            plan.proof.currentSuffix.commandCount == 2u &&
+            plan.proof.successorHead.commandBegin == 0u &&
+            plan.proof.successorHead.commandCount == 1u &&
+            plan.proof.currentPrefix.source == currentSource.source &&
+            plan.proof.successorHead.source == successorSource.source,
+        "exact A,Clear(B),B | A produces bounded source-qualified ranges");
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, successorSource, seed, plan.proof, joined) ==
+            DeferredTerminalSuffixReplayValidation::Valid,
+        "narrow validator accepts only the proved joined replay");
+
+  const std::array ordinarySources{
+      MultiSourcePlanningSource{.payload = currentSource.payload},
+      MultiSourcePlanningSource{.payload = successorSource.payload},
+  };
+  check(validateMultiSourceReplayPermutation(ordinarySources, joined) ==
+            MultiSourceReplayValidation::NonDrawCrossSourceMovement,
+        "universal validator remains strict for the same Clear crossing");
+}
+
+void testDeferredTerminalSuffixRejectsBoundariesAndMalformedRanges() {
+  const Handle targetA{0xA600u};
+  const Handle targetB{0xB600u};
+  const ActiveRenderPlanningSeed seed = activeSeed(targetA);
+
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::UnsupportedShape,
+          "extra terminal DrawRun is outside the exact bounded shape");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    current.appendPresent(dxmt9::core::SwapDesc{}, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::UnsupportedBoundary,
+          "Present cannot occupy the terminal Clear boundary");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    dxmt9::core::ClearDesc clear{};
+    clear.colorAttachments[0].handle = targetB;
+    clear.clearColor = true;
+    clear.rects.push_back({.left = 0, .top = 0, .right = 2, .bottom = 2});
+    current.appendClear(clear);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::MalformedRange,
+          "rectangular partial Clear cannot become a foldable full Clear");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    current.drawRunRecords.back().paramCount = 0u;
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::MalformedRange,
+          "malformed DrawRun parameter coverage is rejected");
+  }
+}
+
+void testDeferredTerminalSuffixRejectsIdentityAttachmentAndHazards() {
+  const Handle targetA{0xA700u};
+  const Handle targetB{0xB700u};
+  const Handle targetC{0xC700u};
+  const ActiveRenderPlanningSeed seed = activeSeed(targetA);
+
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    const auto currentSource = planningSource(current, 0u, 7u, 20u);
+    auto successorSource = planningSource(successor, 1u, 9u, 21u);
+    check(planDeferredTerminalSuffixReplay(
+              currentSource, successorSource, seed).disposition ==
+            DeferredTerminalSuffixDisposition::StaleIdentity,
+          "non-adjacent source ordinal cannot qualify as exact successor");
+    successorSource = planningSource(successor, 1u, 8u, 22u);
+    check(planDeferredTerminalSuffixReplay(
+              currentSource, successorSource, seed).disposition ==
+            DeferredTerminalSuffixDisposition::StaleIdentity,
+          "non-adjacent seqId cannot qualify as exact successor");
+    successorSource = planningSource(successor, 0u, 8u, 21u);
+    check(planDeferredTerminalSuffixReplay(
+              currentSource, successorSource, seed).disposition ==
+            DeferredTerminalSuffixDisposition::StaleIdentity,
+          "reused live source slot cannot qualify as exact successor");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetC);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::AttachmentMismatch,
+          "successor must return to exact active A attachments");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB, targetA);
+    appendDrawRun(successor, targetA);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::DependencyWedged,
+          "B reading A creates a dependency wedge against returning A");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA, targetB);
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::DependencyWedged,
+          "returning A reading B cannot move before the B suffix");
+  }
+  {
+    ChunkSlot current;
+    ChunkSlot successor;
+    appendDrawRun(current, targetA);
+    appendClearColor(current, targetB);
+    appendDrawRun(current, targetB);
+    appendDrawRun(successor, targetA);
+    const AliasPair aliases{
+        .first = targetA,
+        .second = targetB,
+        .canonical = Handle{0xAB00u},
+    };
+    const ResourceAliasResolver resolver{
+        .context = &aliases,
+        .resolve = resolveAliasPair,
+    };
+    check(planDeferredTerminalSuffixReplay(
+              planningSource(current, 0u, 1u, 1u),
+              planningSource(successor, 1u, 2u, 2u), seed, resolver)
+              .disposition ==
+            DeferredTerminalSuffixDisposition::DependencyWedged,
+          "aliased A/B resources cannot be relocated across the Clear");
+  }
+}
+
+void testDeferredTerminalSuffixNarrowValidatorRejectsStaleAndMalformed() {
+  const Handle targetA{0xA800u};
+  const Handle targetB{0xB800u};
+  ChunkSlot current;
+  ChunkSlot successor;
+  appendDrawRun(current, targetA);
+  appendClearColor(current, targetB);
+  appendDrawRun(current, targetB);
+  appendDrawRun(successor, targetA);
+  const auto currentSource = planningSource(current, 4u, 12u, 30u);
+  const auto successorSource = planningSource(successor, 5u, 13u, 31u);
+  const ActiveRenderPlanningSeed seed = activeSeed(targetA);
+  const DeferredTerminalSuffixPlan plan = planDeferredTerminalSuffixReplay(
+      currentSource, successorSource, seed);
+  check(plan.qualified(), "validator fixture must first qualify");
+
+  const std::array natural = plan.proof.naturalReplay;
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, successorSource, seed, plan.proof, natural) ==
+            DeferredTerminalSuffixReplayValidation::UnsupportedMovement,
+        "narrow validator rejects any complete but unproved permutation");
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, successorSource, seed, plan.proof,
+            std::span<const RetainedSourceCommandLocator>(
+                plan.proof.joinedReplay.data(), 3u)) ==
+            DeferredTerminalSuffixReplayValidation::Missing,
+        "narrow validator rejects incomplete replay coverage");
+  auto duplicate = plan.proof.joinedReplay;
+  duplicate[3] = duplicate[2];
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, successorSource, seed, plan.proof, duplicate) ==
+            DeferredTerminalSuffixReplayValidation::Duplicate,
+        "narrow validator rejects duplicate command coverage");
+  auto staleSuccessor = successorSource;
+  ++staleSuccessor.source.id.generation;
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, staleSuccessor, seed, plan.proof,
+            plan.proof.joinedReplay) ==
+            DeferredTerminalSuffixReplayValidation::StaleIdentity,
+        "generation-stale successor is rejected before replay");
+  auto corruptedProof = plan.proof;
+  corruptedProof.currentSuffix.commandCount = 1u;
+  check(validateDeferredTerminalSuffixReplay(
+            currentSource, successorSource, seed, corruptedProof,
+            plan.proof.joinedReplay) ==
+            DeferredTerminalSuffixReplayValidation::InvalidProof,
+        "mutated proof cannot authorize the narrow movement");
+}
+
 void testRejectedReturnCandidateRetainsClearCrossingProof() {
   const Handle targetA{0xA000u};
   const Handle targetB{0xB000u};
@@ -802,6 +1119,10 @@ int main() {
     testSeedNaturalAttributionCountersClassifyShapes();
     testPermutationValidationRejectsMalformedPlans();
     testCrossSourceNonDrawMovementRejected();
+    testDeferredTerminalSuffixProofQualifiesExactShape();
+    testDeferredTerminalSuffixRejectsBoundariesAndMalformedRanges();
+    testDeferredTerminalSuffixRejectsIdentityAttachmentAndHazards();
+    testDeferredTerminalSuffixNarrowValidatorRejectsStaleAndMalformed();
     testRejectedReturnCandidateRetainsClearCrossingProof();
     testRejectedReturnCandidateRetainsNaturalYoungerSuffix();
     testValidReturnCandidateJointTerminals();

@@ -65,6 +65,7 @@ dxmt9_runtime_srcs = files(
   'render/backend_factory.cpp',
   'render/dag_observer.cpp',
   'render/decision_recorder.cpp',
+  'render/deferred_terminal_suffix.cpp',
   'render/open_cb_carrier.cpp',
   'render/framegraph_backend.cpp',
   'render/encode_session_admission.cpp',

@@ -269,6 +269,367 @@ bool seedMerged(const FrameGraph& graph) noexcept {
                      });
 }
 
+AttachmentSet drawAttachmentSet(const core::SourceCommandView& source,
+                                bool& valid) noexcept {
+  AttachmentSet result{};
+  valid = source.kind() == core::MetalCommandKind::DrawRun &&
+      source.command.drawRunRecord && source.command.drawState.hot;
+  if (!valid) {
+    return result;
+  }
+  const auto& record = *source.command.drawRunRecord;
+  if (record.paramCount == 0 ||
+      source.command.drawParams.size() != record.paramCount) {
+    valid = false;
+    return result;
+  }
+
+  const auto& hot = *source.command.drawState.hot;
+  u32 remainingTextureMask = hot.textureMask;
+  static_assert(std::tuple_size_v<decltype(hot.textures)> <=
+                std::numeric_limits<u32>::digits);
+  for (std::size_t i = 0; i < hot.textures.size(); ++i) {
+    const u32 bit = 1u << i;
+    if ((remainingTextureMask & bit) == 0u) {
+      continue;
+    }
+    remainingTextureMask &= ~bit;
+    if (hot.textures[i].value == 0) {
+      valid = false;
+      return result;
+    }
+  }
+  if (remainingTextureMask != 0u) {
+    valid = false;
+    return result;
+  }
+  for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+    const auto& attachment = hot.colorAttachments[i];
+    result.color[i] = TextureHandle{attachment.handle.value};
+    result.sample_count =
+        std::max(result.sample_count, attachment.sampleCount);
+    if (attachment.handle.value != 0) {
+      result.color_count = static_cast<u32>(i) + 1u;
+    }
+  }
+  result.depth = TextureHandle{hot.depthStencil.handle.value};
+  result.sample_count =
+      std::max(result.sample_count, hot.depthStencil.sampleCount);
+  valid = result.sample_count != 0 &&
+      (result.color_count != 0 || result.depth.value != 0);
+  return result;
+}
+
+AttachmentSet clearAttachmentSet(const core::SourceCommandView& source,
+                                 ResourceAliasResolver aliasResolver,
+                                 bool& valid) noexcept {
+  AttachmentSet result{};
+  valid = source.kind() == core::MetalCommandKind::Clear && source.clear &&
+      source.clear->rects.empty() &&
+      (source.clear->clearColor || source.clear->clearDepth ||
+       source.clear->clearStencil);
+  if (!valid) {
+    return result;
+  }
+
+  const core::ClearCommandView& clear = *source.clear;
+  if (clear.clearColor) {
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      const auto& attachment = clear.colorAttachments[i];
+      result.color[i] = TextureHandle{attachment.handle.value};
+      result.sample_count =
+          std::max(result.sample_count, attachment.sampleCount);
+      if (attachment.handle.value != 0) {
+        result.color_count = static_cast<u32>(i) + 1u;
+      }
+    }
+  }
+  if (clear.clearDepth || clear.clearStencil) {
+    result.depth = TextureHandle{clear.depthStencil.handle.value};
+    result.sample_count =
+        std::max(result.sample_count, clear.depthStencil.sampleCount);
+    if (!aliasResolver.depthStencilClearCoversResource(
+            ResourceHandle{clear.depthStencil.handle.value}, clear.clearDepth,
+            clear.clearStencil)) {
+      valid = false;
+      return {};
+    }
+  }
+  valid = result.sample_count != 0 &&
+      (result.color_count != 0 || result.depth.value != 0);
+  return result;
+}
+
+bool validSourceIdentity(
+    const DeferredTerminalSuffixPlanningSourceView& source) noexcept {
+  return source.payload.valid() && source.source.valid() &&
+      source.sourceOrdinal != 0 && source.seqId != 0 &&
+      source.payload.commandCount() <= std::numeric_limits<u32>::max();
+}
+
+bool exactSuccessorIdentity(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor) noexcept {
+  return validSourceIdentity(current) && validSourceIdentity(successor) &&
+      current.source.id.index != successor.source.id.index &&
+      current.sourceOrdinal != std::numeric_limits<u64>::max() &&
+      current.seqId != std::numeric_limits<u64>::max() &&
+      successor.sourceOrdinal == current.sourceOrdinal + 1u &&
+      successor.seqId == current.seqId + 1u;
+}
+
+inline constexpr std::size_t kDeferredAttachmentResourceCapacity =
+    core::kMaxRenderTargets + 1u;
+
+struct DeferredAttachmentResources {
+  std::array<ResourceHandle, kDeferredAttachmentResourceCapacity> values{};
+  std::size_t count = 0;
+};
+
+bool appendCanonicalResource(DeferredAttachmentResources& resources,
+                             ResourceHandle raw,
+                             ResourceAliasResolver aliasResolver) noexcept {
+  if (raw.value == 0) {
+    return true;
+  }
+  const ResourceHandle canonical = aliasResolver(raw);
+  if (canonical.value == 0) {
+    return false;
+  }
+  if (std::find(resources.values.begin(),
+                resources.values.begin() + resources.count,
+                canonical) != resources.values.begin() + resources.count) {
+    return true;
+  }
+  if (resources.count == resources.values.size()) {
+    return false;
+  }
+  resources.values[resources.count++] = canonical;
+  return true;
+}
+
+bool collectAttachmentResources(
+    const AttachmentSet& attachments, ResourceAliasResolver aliasResolver,
+    DeferredAttachmentResources& resources) noexcept {
+  if (attachments.color_count > core::kMaxRenderTargets ||
+      attachments.color_count > attachments.color.size()) {
+    return false;
+  }
+  for (u32 i = 0; i < attachments.color_count; ++i) {
+    if (!appendCanonicalResource(
+            resources, ResourceHandle{attachments.color[i].value},
+            aliasResolver)) {
+      return false;
+    }
+  }
+  return appendCanonicalResource(
+      resources, ResourceHandle{attachments.depth.value}, aliasResolver);
+}
+
+bool containsResource(const DeferredAttachmentResources& resources,
+                      ResourceHandle handle) noexcept {
+  return std::find(resources.values.begin(),
+                   resources.values.begin() + resources.count,
+                   handle) != resources.values.begin() + resources.count;
+}
+
+bool attachmentResourcesIntersect(
+    const DeferredAttachmentResources& left,
+    const DeferredAttachmentResources& right) noexcept {
+  for (std::size_t i = 0; i < left.count; ++i) {
+    if (containsResource(right, left.values[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool drawReadsAttachmentResources(
+    const core::SourceCommandView& draw,
+    const DeferredAttachmentResources& resources) noexcept {
+  const core::FlatDrawStateRecord& hot = *draw.command.drawState.hot;
+  for (std::size_t i = 0; i < hot.textures.size(); ++i) {
+    if ((hot.textureMask & (1u << i)) != 0u &&
+        containsResource(resources,
+                         ResourceHandle{hot.textures[i].value})) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool activeRenderSeedCoversAttachments(
+    const ActiveRenderPlanningSeed& seed,
+    const AttachmentSet& attachments,
+    ResourceAliasResolver aliasResolver) noexcept {
+  if (!seed.complete || seed.targets != attachments ||
+      seed.dependency_count == 0u ||
+      seed.dependency_count > seed.write_dependencies.size()) {
+    return false;
+  }
+  DeferredAttachmentResources dependencies{};
+  for (u32 i = 0; i < seed.dependency_count; ++i) {
+    if (seed.write_dependencies[i].value == 0 ||
+        !appendCanonicalResource(dependencies, seed.write_dependencies[i],
+                                 aliasResolver)) {
+      return false;
+    }
+  }
+  DeferredAttachmentResources targets{};
+  if (!collectAttachmentResources(attachments, aliasResolver, targets) ||
+      targets.count == 0u) {
+    return false;
+  }
+  for (std::size_t i = 0; i < targets.count; ++i) {
+    if (!containsResource(dependencies, targets.values[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool activeSeedsEqual(const ActiveRenderPlanningSeed& left,
+                      const ActiveRenderPlanningSeed& right) noexcept {
+  return left.targets == right.targets &&
+      left.write_dependencies == right.write_dependencies &&
+      left.dependency_count == right.dependency_count &&
+      left.complete == right.complete;
+}
+
+bool proofsEqual(const DeferredTerminalSuffixProof& left,
+                 const DeferredTerminalSuffixProof& right) noexcept {
+  return left.currentPrefix == right.currentPrefix &&
+      left.currentSuffix == right.currentSuffix &&
+      left.successorHead == right.successorHead &&
+      activeSeedsEqual(left.activeRender, right.activeRender) &&
+      left.currentAttachmentA == right.currentAttachmentA &&
+      left.clearAttachmentB == right.clearAttachmentB &&
+      left.naturalReplay == right.naturalReplay &&
+      left.joinedReplay == right.joinedReplay;
+}
+
+DeferredTerminalSuffixPlan classifyDeferredTerminalSuffixReplay(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor,
+    const ActiveRenderPlanningSeed& activeRender,
+    ResourceAliasResolver aliasResolver) noexcept {
+  DeferredTerminalSuffixPlan result{};
+  if (!current.payload.valid() || !successor.payload.valid()) {
+    return result;
+  }
+  if (!exactSuccessorIdentity(current, successor)) {
+    result.disposition = DeferredTerminalSuffixDisposition::StaleIdentity;
+    return result;
+  }
+  if (current.payload.commandCount() != 3u ||
+      successor.payload.commandCount() != 1u) {
+    result.disposition = DeferredTerminalSuffixDisposition::UnsupportedShape;
+    return result;
+  }
+
+  const core::SourceCommandView currentA = current.payload.commandAt(0u);
+  const core::SourceCommandView clearB = current.payload.commandAt(1u);
+  const core::SourceCommandView currentB = current.payload.commandAt(2u);
+  const core::SourceCommandView successorA = successor.payload.commandAt(0u);
+  if (currentA.kind() != core::MetalCommandKind::DrawRun ||
+      clearB.kind() != core::MetalCommandKind::Clear ||
+      currentB.kind() != core::MetalCommandKind::DrawRun ||
+      successorA.kind() != core::MetalCommandKind::DrawRun) {
+    result.disposition =
+        DeferredTerminalSuffixDisposition::UnsupportedBoundary;
+    return result;
+  }
+
+  bool currentAValid = false;
+  bool currentBValid = false;
+  bool successorAValid = false;
+  bool clearBValid = false;
+  const AttachmentSet currentATargets =
+      drawAttachmentSet(currentA, currentAValid);
+  const AttachmentSet currentBTargets =
+      drawAttachmentSet(currentB, currentBValid);
+  const AttachmentSet successorATargets =
+      drawAttachmentSet(successorA, successorAValid);
+  const AttachmentSet clearBTargets =
+      clearAttachmentSet(clearB, aliasResolver, clearBValid);
+  if (!currentAValid || !currentBValid || !successorAValid || !clearBValid) {
+    result.disposition = DeferredTerminalSuffixDisposition::MalformedRange;
+    return result;
+  }
+  if (activeRender.targets != currentATargets ||
+      successorATargets != currentATargets ||
+      clearBTargets != currentBTargets ||
+      currentATargets == currentBTargets) {
+    result.disposition =
+        DeferredTerminalSuffixDisposition::AttachmentMismatch;
+    return result;
+  }
+
+  DeferredAttachmentResources attachmentAResources{};
+  DeferredAttachmentResources attachmentBResources{};
+  if (!activeRenderSeedCoversAttachments(activeRender, currentATargets,
+                                         aliasResolver) ||
+      !collectAttachmentResources(currentATargets, aliasResolver,
+                                  attachmentAResources) ||
+      !collectAttachmentResources(currentBTargets, aliasResolver,
+                                  attachmentBResources)) {
+    result.disposition =
+        DeferredTerminalSuffixDisposition::IncompleteCoverage;
+    return result;
+  }
+  // Moving successor A before the terminal suffix is legal only when the two
+  // attachment sets are disjoint, B does not read A, and successor A does not
+  // read B. These are the complete DrawRun/Clear RAW, WAR, and WAW hazards for
+  // the exact four-command shape; no graph scratch or optimizer is needed.
+  if (attachmentResourcesIntersect(attachmentAResources,
+                                   attachmentBResources) ||
+      drawReadsAttachmentResources(currentB, attachmentAResources) ||
+      drawReadsAttachmentResources(successorA, attachmentBResources)) {
+    result.disposition = DeferredTerminalSuffixDisposition::DependencyWedged;
+    return result;
+  }
+
+  result.proof.currentPrefix = SourceCommandRange{
+      .source = current.source,
+      .sourceOrdinal = current.sourceOrdinal,
+      .seqId = current.seqId,
+      .commandBegin = 0u,
+      .commandCount = 1u,
+  };
+  result.proof.currentSuffix = SourceCommandRange{
+      .source = current.source,
+      .sourceOrdinal = current.sourceOrdinal,
+      .seqId = current.seqId,
+      .commandBegin = 1u,
+      .commandCount = 2u,
+  };
+  result.proof.successorHead = SourceCommandRange{
+      .source = successor.source,
+      .sourceOrdinal = successor.sourceOrdinal,
+      .seqId = successor.seqId,
+      .commandBegin = 0u,
+      .commandCount = 1u,
+  };
+  result.proof.activeRender = activeRender;
+  result.proof.currentAttachmentA = currentATargets;
+  result.proof.clearAttachmentB = clearBTargets;
+  result.proof.naturalReplay = {{
+      {.retainedSourceIndex = 0u, .commandIndex = 0u},
+      {.retainedSourceIndex = 0u, .commandIndex = 1u},
+      {.retainedSourceIndex = 0u, .commandIndex = 2u},
+      {.retainedSourceIndex = 1u, .commandIndex = 0u},
+  }};
+  result.proof.joinedReplay = {{
+      {.retainedSourceIndex = 0u, .commandIndex = 0u},
+      {.retainedSourceIndex = 1u, .commandIndex = 0u},
+      {.retainedSourceIndex = 0u, .commandIndex = 1u},
+      {.retainedSourceIndex = 0u, .commandIndex = 2u},
+  }};
+
+  result.disposition = DeferredTerminalSuffixDisposition::Qualified;
+  return result;
+}
+
 }  // namespace
 
 MultiSourceReplayValidation validateMultiSourceReplayPermutation(
@@ -356,6 +717,75 @@ MultiSourceReplayValidation validateMultiSourceReplayPermutation(
         std::min(suffixMin[sourceIndex], naturalIndices[i]);
   }
   return MultiSourceReplayValidation::Valid;
+}
+
+DeferredTerminalSuffixPlan planDeferredTerminalSuffixReplay(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor,
+    const ActiveRenderPlanningSeed& activeRender,
+    ResourceAliasResolver aliasResolver) noexcept {
+  return classifyDeferredTerminalSuffixReplay(current, successor, activeRender,
+                                               aliasResolver);
+}
+
+DeferredTerminalSuffixReplayValidation validateDeferredTerminalSuffixReplay(
+    const DeferredTerminalSuffixPlanningSourceView& current,
+    const DeferredTerminalSuffixPlanningSourceView& successor,
+    const ActiveRenderPlanningSeed& activeRender,
+    const DeferredTerminalSuffixProof& proof,
+    std::span<const RetainedSourceCommandLocator> commands,
+    ResourceAliasResolver aliasResolver) noexcept {
+  if (proof.currentPrefix.source != current.source ||
+      proof.currentPrefix.sourceOrdinal != current.sourceOrdinal ||
+      proof.currentPrefix.seqId != current.seqId ||
+      proof.currentSuffix.source != current.source ||
+      proof.currentSuffix.sourceOrdinal != current.sourceOrdinal ||
+      proof.currentSuffix.seqId != current.seqId ||
+      proof.successorHead.source != successor.source ||
+      proof.successorHead.sourceOrdinal != successor.sourceOrdinal ||
+      proof.successorHead.seqId != successor.seqId) {
+    return DeferredTerminalSuffixReplayValidation::StaleIdentity;
+  }
+  const DeferredTerminalSuffixPlan fresh =
+      classifyDeferredTerminalSuffixReplay(current, successor, activeRender,
+                                            aliasResolver);
+  if (fresh.disposition == DeferredTerminalSuffixDisposition::StaleIdentity) {
+    return DeferredTerminalSuffixReplayValidation::StaleIdentity;
+  }
+  if (!fresh.qualified() || !proofsEqual(fresh.proof, proof)) {
+    return DeferredTerminalSuffixReplayValidation::InvalidProof;
+  }
+  if (commands.size() < kDeferredTerminalSuffixCommandCount) {
+    return DeferredTerminalSuffixReplayValidation::Missing;
+  }
+  if (commands.size() > kDeferredTerminalSuffixCommandCount) {
+    return DeferredTerminalSuffixReplayValidation::Duplicate;
+  }
+
+  std::array<bool, kDeferredTerminalSuffixCommandCount> seen{};
+  for (const RetainedSourceCommandLocator command : commands) {
+    if (command.retainedSourceIndex >= kDeferredTerminalSuffixSourceCount) {
+      return DeferredTerminalSuffixReplayValidation::InvalidSource;
+    }
+    const u32 commandCount = command.retainedSourceIndex == 0u ? 3u : 1u;
+    if (command.commandIndex >= commandCount) {
+      return DeferredTerminalSuffixReplayValidation::InvalidCommand;
+    }
+    const u32 flattened = command.retainedSourceIndex == 0u
+        ? command.commandIndex
+        : 3u + command.commandIndex;
+    if (seen[flattened]) {
+      return DeferredTerminalSuffixReplayValidation::Duplicate;
+    }
+    seen[flattened] = true;
+  }
+  if (std::find(seen.begin(), seen.end(), false) != seen.end()) {
+    return DeferredTerminalSuffixReplayValidation::Missing;
+  }
+  if (!std::equal(commands.begin(), commands.end(), proof.joinedReplay.begin())) {
+    return DeferredTerminalSuffixReplayValidation::UnsupportedMovement;
+  }
+  return DeferredTerminalSuffixReplayValidation::Valid;
 }
 
 MultiSourceReplayPlan planMultiSourcePassCoalesceReplay(

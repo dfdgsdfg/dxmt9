@@ -37,6 +37,7 @@
 #include "../../../src/dxmt9/dxmt9_ring_arena.hpp"
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
 #include "../../../src/dxmt9/render/backend_interface.hpp"
+#include "../../../src/dxmt9/render/deferred_terminal_suffix.hpp"
 #include "../../../src/dxmt9/render/framegraph_backend.hpp"
 #include "../../../src/dxmt9/render/open_cb_carrier.hpp"
 
@@ -321,6 +322,15 @@ struct CommandQueueArenaLeaseTestAccess {
       }
     }
     return true;
+  }
+
+  static bool hasActivePostEncodeReceipt(CommandQueue& queue,
+                                         std::uint64_t seqId) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.queueLifecycle_.postEncodeReceiptForTest(
+               seqId,
+               core::metalqueue::PostEncodeReceiptState::Active)
+        .has_value();
   }
 
   static std::size_t completeAndFinish(
@@ -877,6 +887,77 @@ struct RuntimeFixture {
     check(lease.publish(), "arena target source must publish directly");
   }
 
+  dxmt9::CommandQueue::CpuReadyArenaBuildLease beginArenaTargetDraw(
+      std::uint64_t rawOrdinal, std::uint64_t target) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1;
+    capacity.drawHotStates = 1;
+    capacity.drawShaderLayouts = 1;
+    capacity.drawDebugSnapshots = 1;
+    capacity.drawPsoSubviews = 1;
+    capacity.drawUniformFixedPayloads = 1;
+    capacity.drawUniformVertexConstants = 1;
+    capacity.drawUniformVertexConstantBytes = sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = 1;
+    capacity.drawUniformPixelConstantBytes = sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = 1;
+    capacity.drawParams = 1;
+    capacity.drawPayloadBytes = 4096;
+    capacity.drawRunRecords = 1;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "Writing target segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "Writing target source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "Writing target source admission must succeed");
+    auto lease = std::move(*begin.lease);
+    publishTargetDraw(target);
+    return lease;
+  }
+
+  void publishArenaTerminalSuffix(std::uint64_t rawOrdinal,
+                                  std::uint64_t targetA,
+                                  std::uint64_t targetB) {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 3;
+    capacity.clearRecords = 1;
+    capacity.drawHotStates = 2;
+    capacity.drawShaderLayouts = 2;
+    capacity.drawDebugSnapshots = 2;
+    capacity.drawPsoSubviews = 2;
+    capacity.drawUniformFixedPayloads = 2;
+    capacity.drawUniformVertexConstants = 2;
+    capacity.drawUniformVertexConstantBytes =
+        2 * sizeof(VertexShaderConstants);
+    capacity.drawUniformPixelConstants = 2;
+    capacity.drawUniformPixelConstantBytes =
+        2 * sizeof(PixelShaderConstants);
+    capacity.drawUniformPayloads = 2;
+    capacity.drawParams = 2;
+    capacity.drawPayloadBytes = 2 * 4096;
+    capacity.drawRunRecords = 2;
+    const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+    check(segment.has_value(), "terminal-suffix segment layout must build");
+    const std::array segments{*segment};
+    const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 64);
+    check(layout.has_value(), "terminal-suffix source layout must build");
+    auto begin = routing->queue_.beginCpuReadyArenaSource(rawOrdinal, *layout);
+    check(begin.has_value(), "terminal-suffix admission must succeed");
+    auto lease = std::move(*begin.lease);
+
+    publishTargetDraw(targetA);
+    ClearDesc clear{};
+    clear.colorAttachments[0] = RenderTargetAttachment{
+        .handle = Handle{targetB},
+        .sampleCount = 1u,
+    };
+    clear.clearColor = true;
+    routing->queue_.submitClear(clear);
+    publishTargetDraw(targetB);
+    check(lease.publish(), "terminal-suffix source must publish directly");
+  }
+
   void publishArenaMovedHeadReturn(std::uint64_t rawOrdinal,
                                    std::uint64_t targetA,
                                    std::uint64_t targetB) {
@@ -1153,6 +1234,7 @@ struct PlannedProductionBackendState {
   std::vector<std::uint64_t> sourceEpilogueSeqIds;
   std::atomic<std::size_t> observedCalls{0};
   std::atomic<bool> firstRecordPostCommitRan{false};
+  std::atomic<std::size_t> firstRecordPostCommitRuns{0};
   std::atomic<std::size_t> backendCallsAtFirstRecordSubmit{0};
   std::uint64_t currentSeqId = 0;
   std::size_t plannerCalls = 0;
@@ -1172,6 +1254,7 @@ struct PlannedProductionBackendState {
   bool holdFirstPlanner = false;
   bool holdFirstObserver = false;
   bool disableMidChunkCommits = false;
+  bool markFirstRecordCaptureBoundary = false;
   std::optional<dxmt9::framegraph::MultiSourceReplayPlan> forcedPlan;
   std::atomic<bool> firstCallEncoded{false};
   std::atomic<bool> releaseFirstReturn{false};
@@ -1317,11 +1400,17 @@ class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
       state_->calls.back().returnedCommandBufferChainLength =
           submission->commandBufferChainLength;
       submission->testOnlyAllowNullCommandBuffer = true;
+      if (state_->markFirstRecordCaptureBoundary &&
+          state_->calls.size() == 1u) {
+        submission->metalCaptureAlreadyStarted = true;
+      }
       if (state_->observeFirstRecordSubmit && state_->calls.size() == 1) {
         const auto state = state_;
         submission->postCommitCallbacks.emplace_back([state] {
           state->backendCallsAtFirstRecordSubmit.store(
               state->calls.size(), std::memory_order_relaxed);
+          state->firstRecordPostCommitRuns.fetch_add(
+              1u, std::memory_order_relaxed);
           state->firstRecordPostCommitRan.store(true,
                                                 std::memory_order_release);
         });
@@ -2337,6 +2426,405 @@ void productionLoopNaturalSourceKeepsDefaultPassSplitBaseline() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
             queue, sources) == sources.size(),
         "natural split baseline remains FIFO-completable");
+}
+
+struct TerminalSuffixProductionResult {
+  std::vector<ProductionLoopBackendCall> calls;
+  std::vector<std::uint64_t> encodedSeqIds;
+  std::vector<std::size_t> encodedCommandIndices;
+  std::vector<std::uint64_t> sourcePreambleSeqIds;
+  std::vector<std::uint64_t> sourceEpilogueSeqIds;
+  std::vector<std::uint64_t> compositeObservedSeqIds;
+  std::size_t plannerCalls = 0;
+  std::size_t compositeObserverCalls = 0;
+  std::size_t renderPassBegins = 0;
+  std::size_t renderPassEnds = 0;
+  std::size_t midChunkSplits = 0;
+  std::size_t transactionPreambles = 0;
+  std::size_t firstRecordPostCommitRuns = 0;
+  std::vector<std::size_t> storeProofLookaheadCounts;
+  bool bothSourcesRetiredBeforeSubmit = false;
+  std::size_t residentSourcesAfterFinish = 0;
+};
+
+TerminalSuffixProductionResult runTerminalSuffixProductionCase(
+    bool joinEnabled, bool admissionPressure = false) {
+  setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+  setenv("DXMT9_RENDERER_FEATURES",
+         joinEnabled ? "passcoalesce" : "0", 1);
+
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  auto backendState = std::make_shared<PlannedProductionBackendState>();
+  backendState->holdFirstReturn = joinEnabled;
+  backendState->observeFirstRecordSubmit = joinEnabled;
+  auto plannedBackend =
+      std::make_unique<PlannedProductionBackend>(backendState);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+      queue, plannedBackend->drawRecorder());
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::move(plannedBackend));
+
+  constexpr std::uint64_t kTargetA = 0xA5F0u;
+  constexpr std::uint64_t kTargetB = 0xB5F0u;
+  fixture.publishArenaTerminalSuffix(160u, kTargetA, kTargetB);
+  const auto current = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(current.size() == 1u && current.front().seqId == 1u,
+        "terminal-suffix fixture publishes one current source");
+  std::optional<dxmt9::CommandQueue::CpuReadyArenaBuildLease>
+      successorLease;
+  if (admissionPressure) {
+    fixture.beginLegacyTargetDraw(kTargetA);
+  } else {
+    successorLease.emplace(
+        fixture.beginArenaTargetDraw(161u, kTargetA));
+  }
+  const auto writing = dxmt9::CommandQueueArenaLeaseTestAccess::
+      leaseAcquisitionCapacitySnapshot(queue);
+  check(writing.valid && writing.orderedTailWritingSuccessor.has_value(),
+        "terminal-suffix fixture owns one exact Writing successor");
+
+  std::vector<dxmt9::core::metalqueue::QueueCompletionSource> successor;
+  if (!joinEnabled) {
+    check(successorLease->publish(),
+          "default-off successor publishes before natural replay");
+    successor = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(successor.size() == 2u && successor[1].seqId == 2u,
+          "default-off fixture exposes the natural two-source window");
+    successor.erase(successor.begin());
+  }
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        runCpuReadySessionEncodeLoop(queue);
+  });
+  bool bothSourcesRetiredBeforeSubmit = false;
+  try {
+    if (joinEnabled) {
+      check(waitUntil([&] {
+              return backendState->firstCallEncoded.load(
+                  std::memory_order_acquire);
+            }),
+            "terminal-suffix join encodes the current A prefix before Ready");
+      check(backendState->calls.size() == 1u &&
+                backendState->calls.front().seqId == 1u &&
+                backendState->calls.front().fragment.has_value() &&
+                backendState->calls.front().fragment->commandBegin == 0u &&
+                backendState->calls.front().fragment->commandCount == 1u &&
+                backendState->calls.front().renderPassBeginsAfter == 1u &&
+                backendState->calls.front().renderPassEndsAfter == 0u &&
+                backendState->calls.front().createdCommandBuffer &&
+                backendState->calls.front().returnedCommandBuffer !=
+                    NULL_OBJECT_HANDLE &&
+                backendState->calls.front()
+                        .returnedCommandBufferChainLength == 1u &&
+                backendState->encodedSeqIds ==
+                    std::vector<std::uint64_t>({1u}) &&
+                backendState->encodedCommandIndices ==
+                    std::vector<std::size_t>({0u}),
+            "the held current source snapshots one exact active-A frontier");
+      check(!backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire) &&
+                !dxmt9::CommandQueueArenaLeaseTestAccess::
+                    hasActivePostEncodeReceipt(queue, 1u),
+            "the prefix edge emits no sidecar or completion receipt");
+      const bool published = admissionPressure
+          ? dxmt9::CommandQueueArenaLeaseTestAccess::
+                publishLegacyWritingSlotWithAdmissionPressure(queue)
+          : successorLease->publish();
+      check(published,
+            admissionPressure
+                ? "exact Ready successor publishes with admission pressure"
+                : "terminal-suffix successor publishes after the prefix effect");
+      successor = dxmt9::CommandQueueArenaLeaseTestAccess::
+          snapshotReadyCompletionSources(queue);
+      check(successor.size() == 1u && successor.front().seqId == 2u,
+            "the exact successor becomes the sole Ready source");
+      backendState->releaseFirstReturn.store(true,
+                                             std::memory_order_release);
+    }
+    check(waitUntil([&] {
+            return backendState->completedCalls.load(
+                       std::memory_order_acquire) ==
+                (joinEnabled ? 3u : 2u);
+          }),
+          "terminal-suffix production replay reaches its exact call count");
+    bothSourcesRetiredBeforeSubmit = joinEnabled &&
+        waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::
+                     hasActivePostEncodeReceipt(queue, 1u) &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::
+                  hasActivePostEncodeReceipt(queue, 2u);
+        });
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    backendState->releaseFirstReturn.store(true,
+                                           std::memory_order_release);
+    if (admissionPressure) {
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          clearSyntheticAdmissionPressure(queue);
+    }
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  if (admissionPressure) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::
+        clearSyntheticAdmissionPressure(queue);
+  }
+
+  const std::array expectedSources{current.front(), successor.front()};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, expectedSources),
+        "terminal-suffix submission covers current then successor");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, expectedSources) == expectedSources.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
+                2u,
+        "terminal-suffix completion remains natural FIFO exactly once");
+  const auto finishedStats =
+      dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+
+  setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+  return TerminalSuffixProductionResult{
+      .calls = backendState->calls,
+      .encodedSeqIds = backendState->encodedSeqIds,
+      .encodedCommandIndices = backendState->encodedCommandIndices,
+      .sourcePreambleSeqIds = backendState->sourcePreambleSeqIds,
+      .sourceEpilogueSeqIds = backendState->sourceEpilogueSeqIds,
+      .compositeObservedSeqIds = backendState->compositeObservedSeqIds,
+      .plannerCalls = backendState->plannerCalls,
+      .compositeObserverCalls = backendState->compositeObserverCalls,
+      .renderPassBegins = backendState->renderPassBegins,
+      .renderPassEnds = backendState->renderPassEnds,
+      .midChunkSplits = backendState->midChunkSplits,
+      .transactionPreambles = backendState->transactionPreambles,
+      .firstRecordPostCommitRuns =
+          backendState->firstRecordPostCommitRuns.load(
+              std::memory_order_relaxed),
+      .storeProofLookaheadCounts =
+          backendState->storeProofLookaheadCounts,
+      .bothSourcesRetiredBeforeSubmit =
+          bothSourcesRetiredBeforeSubmit,
+      .residentSourcesAfterFinish = finishedStats.residentSources,
+  };
+}
+
+void productionLoopJoinsDeferredTerminalSuffix() {
+  const auto baseline = runTerminalSuffixProductionCase(false);
+  const auto joined = runTerminalSuffixProductionCase(true);
+  const auto pressured = runTerminalSuffixProductionCase(true, true);
+
+  check(baseline.calls.size() == 2u &&
+            std::none_of(baseline.calls.begin(), baseline.calls.end(),
+                         [](const auto& call) {
+                           return call.fragment.has_value();
+                         }) &&
+            baseline.encodedSeqIds ==
+                std::vector<std::uint64_t>({1u, 1u, 2u}) &&
+            baseline.encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 2u, 0u}),
+        "default-off replay remains natural A,Clear(B),B then A");
+  check(joined.calls.size() == 3u && joined.plannerCalls == 0u,
+        "qualified exact replay bypasses the universal planner");
+  check(pressured.calls.size() == 3u &&
+            pressured.encodedSeqIds == joined.encodedSeqIds &&
+            pressured.encodedCommandIndices == joined.encodedCommandIndices,
+        "exact Ready admission wins simultaneous admission pressure");
+  check(joined.compositeObserverCalls == 1u &&
+            joined.compositeObservedSeqIds ==
+                std::vector<std::uint64_t>({1u, 2u}),
+        "qualified replay observes the natural FIFO transaction once");
+  check(joined.encodedSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u, 1u}) &&
+            joined.encodedCommandIndices ==
+                std::vector<std::size_t>({0u, 0u, 2u}) &&
+            joined.calls[1].fragment.has_value() &&
+            joined.calls[1].fragment->commandBegin == 0u &&
+            joined.calls[1].fragment->commandCount == 1u &&
+            joined.calls[2].fragment.has_value() &&
+            joined.calls[2].fragment->commandBegin == 1u &&
+            joined.calls[2].fragment->commandCount == 2u,
+        "qualified replay is exactly A,A,Clear(B),B");
+  check(baseline.renderPassBegins == 3u &&
+            baseline.renderPassEnds == 3u &&
+            baseline.midChunkSplits == 1u,
+        "default-off replay preserves three passes and one split");
+  check(joined.renderPassBegins == 2u && joined.renderPassEnds == 2u,
+        "terminal-suffix join removes one A pass");
+  check(joined.storeProofLookaheadCounts.size() == 2u &&
+            baseline.storeProofLookaheadCounts.size() == 3u &&
+            joined.firstRecordPostCommitRuns == 1u,
+        "joined Clear resolves two pass actions and preserves one sidecar");
+  check(joined.midChunkSplits == 0u,
+        "terminal-suffix join removes one command-buffer split");
+  check(joined.sourcePreambleSeqIds ==
+            std::vector<std::uint64_t>({1u, 2u}) &&
+            joined.sourceEpilogueSeqIds ==
+                std::vector<std::uint64_t>({2u, 1u}) &&
+            joined.transactionPreambles == 1u,
+        "joined fragments run source and transaction hooks exactly once");
+  check(joined.bothSourcesRetiredBeforeSubmit &&
+            joined.residentSourcesAfterFinish == 0u &&
+            baseline.residentSourcesAfterFinish == 0u,
+        "current then successor retire to receipts and FIFO finish reclaims "
+        "all source residency");
+}
+
+enum class TerminalSuffixFallbackEvent {
+  StaleSuccessor,
+  OrderedRelease,
+  Stop,
+  CaptureBoundary,
+};
+
+void productionLoopDrainsDeferredTerminalSuffixFallbacks() {
+  constexpr std::array cases{
+      TerminalSuffixFallbackEvent::StaleSuccessor,
+      TerminalSuffixFallbackEvent::OrderedRelease,
+      TerminalSuffixFallbackEvent::Stop,
+      TerminalSuffixFallbackEvent::CaptureBoundary,
+  };
+
+  for (const auto event : cases) {
+    setenv("DXMT9_RENDERER_COMPAT_PROFILE", "progressive", 1);
+    setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
+    RuntimeFixture fixture;
+    auto& queue = fixture.routing->queue_;
+    auto backendState = std::make_shared<PlannedProductionBackendState>();
+    backendState->holdFirstReturn = true;
+    backendState->observeFirstRecordSubmit = true;
+    backendState->markFirstRecordCaptureBoundary =
+        event == TerminalSuffixFallbackEvent::CaptureBoundary;
+    auto backend = std::make_unique<PlannedProductionBackend>(backendState);
+    dxmt9::CommandQueueArenaLeaseTestAccess::installDrawRecorder(
+        queue, backend->drawRecorder());
+    dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+        queue, std::move(backend));
+
+    constexpr std::uint64_t kTargetA = 0xA6F0u;
+    constexpr std::uint64_t kTargetB = 0xB6F0u;
+    fixture.publishArenaTerminalSuffix(170u, kTargetA, kTargetB);
+    const auto current = dxmt9::CommandQueueArenaLeaseTestAccess::
+        snapshotReadyCompletionSources(queue);
+    check(current.size() == 1u,
+          "fallback fixture publishes one current source");
+    auto writingSuccessor = fixture.beginArenaTargetDraw(171u, kTargetA);
+    std::optional<dxmt9::CommandQueue::CpuReadyArenaBuildLease>
+        successorLease{std::move(writingSuccessor)};
+
+    std::thread encodeThread([&] {
+      dxmt9::CommandQueueArenaLeaseTestAccess::
+          runCpuReadySessionEncodeLoop(queue);
+    });
+    std::vector<dxmt9::core::metalqueue::QueueCompletionSource> successor;
+    try {
+      check(waitUntil([&] {
+              return backendState->firstCallEncoded.load(
+                  std::memory_order_acquire);
+            }),
+            "fallback fixture reaches the held prefix edge");
+      check(!backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire),
+            "held prefix publishes no edge action, sidecar, or completion");
+
+      if (event == TerminalSuffixFallbackEvent::StaleSuccessor) {
+        check(successorLease->publish(),
+              "stale fixture publishes the exact successor");
+        successor = dxmt9::CommandQueueArenaLeaseTestAccess::
+            snapshotReadyCompletionSources(queue);
+        check(successor.size() == 1u && successor[0].seqId == 2u,
+              "stale fixture exposes the successor alone");
+        dxmt9::CommandQueueArenaLeaseTestAccess::
+            restoreNextTentativePreflightAndReturn(queue);
+      } else if (event == TerminalSuffixFallbackEvent::OrderedRelease) {
+        check(dxmt9::CommandQueueArenaLeaseTestAccess::postOrderedSubmit(
+                  queue, 170u, 1u),
+              "ordered-release fixture posts the held-current fence");
+      } else if (event == TerminalSuffixFallbackEvent::Stop) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      }
+      backendState->releaseFirstReturn.store(true,
+                                             std::memory_order_release);
+
+      const std::size_t expectedCalls =
+          event == TerminalSuffixFallbackEvent::StaleSuccessor ? 3u : 2u;
+      check(waitUntil([&] {
+              return backendState->completedCalls.load(
+                         std::memory_order_acquire) == expectedCalls;
+            }),
+            "fallback fixture drains the current suffix before younger "
+            "effects");
+      if (event != TerminalSuffixFallbackEvent::Stop) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      }
+      encodeThread.join();
+    } catch (...) {
+      backendState->releaseFirstReturn.store(true,
+                                             std::memory_order_release);
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      encodeThread.join();
+      throw;
+    }
+    successorLease.reset();
+
+    check(backendState->calls.size() >= 2u &&
+              backendState->calls[0].fragment.has_value() &&
+              backendState->calls[1].fragment.has_value() &&
+              backendState->calls[0].fragment->transactionFragmentOrdinal ==
+                  0u &&
+              backendState->calls[0].fragment->transactionFragmentCount ==
+                  3u &&
+              backendState->calls[1].fragment->transactionFragmentOrdinal ==
+                  1u &&
+              backendState->calls[1].fragment->transactionFragmentCount ==
+                  2u,
+          "fallback pins the harmless provisional 3-to-natural-2 fragment "
+          "notation");
+    check(backendState->compositeObserverCalls == 0u &&
+              backendState->encodedSeqIds.size() >= 2u &&
+              backendState->encodedSeqIds[0] == 1u &&
+              backendState->encodedSeqIds[1] == 1u &&
+              backendState->transactionPreambles >= 1u,
+          "fallback emits no joined observer and drains current naturally");
+
+    if (event == TerminalSuffixFallbackEvent::StaleSuccessor) {
+      check(backendState->calls.size() == 3u &&
+                !backendState->calls[2].fragment.has_value() &&
+                backendState->encodedSeqIds ==
+                    std::vector<std::uint64_t>({1u, 1u, 2u}),
+            "stale tentative successor restores before its natural replay");
+      const std::array sources{current[0], successor[0]};
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, sources) &&
+                dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+                    queue, sources) == sources.size(),
+            "stale rollback completes current then successor exactly once");
+    } else {
+      const std::array sources{current[0]};
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, sources) &&
+                dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+                    queue, sources) == sources.size(),
+            "real drain completes the current source exactly once");
+    }
+    if (event == TerminalSuffixFallbackEvent::CaptureBoundary) {
+      check(backendState->calls.size() == 2u &&
+                backendState->compositeObserverCalls == 0u &&
+                backendState->encodedSeqIds ==
+                    std::vector<std::uint64_t>({1u, 1u}) &&
+                backendState->encodedCommandIndices ==
+                    std::vector<std::size_t>({0u, 2u}),
+            "pending-record capture boundary revalidates and drains the "
+            "natural Clear suffix");
+    }
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0u,
+          "fallback FIFO finish reclaims every published source");
+  }
 }
 
 void productionLoopAttributesNaturalFallbackAbaWithinOneWindow() {
@@ -5178,6 +5666,8 @@ int main() {
     plannerUnlockRestoresExactPrefixBeforeOrderedRelease();
     compositeObserverDoesNotOwnSchedulingMutex();
     productionLoopNaturalSourceKeepsDefaultPassSplitBaseline();
+    productionLoopJoinsDeferredTerminalSuffix();
+    productionLoopDrainsDeferredTerminalSuffixFallbacks();
     productionLoopAttributesNaturalFallbackAbaWithinOneWindow();
     productionLoopAttributesExactActiveSeedBridge();
     productionLoopRejectsWrongActiveSeedBridgeTarget();

@@ -144,16 +144,6 @@ constexpr SessionCapacityVector subtractVector(
   };
 }
 
-bool candidateIdentityValid(
-    const SessionAdmissionCandidate& candidate) noexcept {
-  return candidate.key.valid() && candidate.semantic.valid() &&
-         candidate.residencyBytes.valid() &&
-         candidate.sourceOrdinal != 0 && candidate.seqId != 0 &&
-         candidate.predictedCommandBuffers != 0 &&
-         candidate.payloadBlocks != 0 && candidate.retentionEntries != 0 &&
-         candidate.allocatorTickets != 0;
-}
-
 bool candidateMustBeIsolated(
     const SessionAdmissionCandidate& candidate) noexcept {
   return candidate.semantic.requiresIsolation() ||
@@ -162,6 +152,50 @@ bool candidateMustBeIsolated(
 }
 
 }  // namespace
+
+bool sessionCapacityFitsWithin(
+    const SessionCapacityVector& value,
+    const SessionCapacityVector& limit) noexcept {
+  return vectorAtMost(value, limit);
+}
+
+std::optional<SessionCapacityVector> addSessionCapacity(
+    const SessionCapacityVector& left,
+    const SessionCapacityVector& right) noexcept {
+  SessionCapacityVector result{};
+  if (!addVector(left, right, result)) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+std::optional<SessionCapacityVector> subtractSessionCapacity(
+    const SessionCapacityVector& value,
+    const SessionCapacityVector& deduction) noexcept {
+  if (!vectorAtMost(deduction, value)) {
+    return std::nullopt;
+  }
+  return subtractVector(value, deduction);
+}
+
+std::optional<SessionCapacityVector> sessionCapacityLeaseUsableBound(
+    const SessionCapacityLease& lease) noexcept {
+  if (!lease.valid()) {
+    return std::nullopt;
+  }
+  return subtractSessionCapacity(lease.reserved,
+                                 lease.successorRemaining);
+}
+
+bool sessionAdmissionCandidateIdentityValid(
+    const SessionAdmissionCandidate& candidate) noexcept {
+  return candidate.key.valid() && candidate.semantic.valid() &&
+         candidate.residencyBytes.valid() &&
+         candidate.sourceOrdinal != 0 && candidate.seqId != 0 &&
+         candidate.predictedCommandBuffers != 0 &&
+         candidate.payloadBlocks != 0 && candidate.retentionEntries != 0 &&
+         candidate.allocatorTickets != 0;
+}
 
 bool SessionCapacityPolicy::valid() const noexcept {
   SessionCapacityVector reserved{};
@@ -369,7 +403,8 @@ SessionAdmissionDecision classifySessionAdmission(
     const EncodeSessionAdmissionState& session,
     const SessionAdmissionCandidate& candidate,
     const EncodeSessionLimits& limits) noexcept {
-  if (!limits.valid() || !candidateIdentityValid(candidate)) {
+  if (!limits.valid() ||
+      !sessionAdmissionCandidateIdentityValid(candidate)) {
     return SessionAdmissionDecision::RejectInvalid;
   }
 
@@ -493,7 +528,7 @@ MultiSourceSessionWindowPreflight preflightMultiSourceSessionWindow(
   std::uint64_t priorSeqId = pending.lastSeqId;
   bool hasPrior = pending.valid();
   for (const SessionAdmissionCandidate& candidate : candidates) {
-    if (!candidateIdentityValid(candidate)) {
+    if (!sessionAdmissionCandidateIdentityValid(candidate)) {
       result.reason =
           MultiSourceSessionWindowPreflightReason::InvalidCandidate;
       return result;

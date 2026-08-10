@@ -1,5 +1,6 @@
 #include "../../../src/dxmt9/dxmt9_cpu_ready_tape.hpp"
 #include "../../../src/dxmt9/dxmt9_source_semantics.hpp"
+#include "../../../src/dxmt9/render/deferred_terminal_suffix.hpp"
 #include "../../../src/dxmt9/render/encode_session_admission.hpp"
 
 #include <array>
@@ -30,6 +31,11 @@ using dxmt9::render::ActiveRenderContinuationState;
 using dxmt9::render::EncodeCaptureMode;
 using dxmt9::render::EncodeSessionAdmissionState;
 using dxmt9::render::EncodeSessionLimits;
+using dxmt9::render::DeferredTerminalSuffixDecision;
+using dxmt9::render::DeferredTerminalSuffixDecisionReason;
+using dxmt9::render::DeferredTerminalSuffixObservation;
+using dxmt9::render::DeferredTerminalSuffixPhase;
+using dxmt9::render::DeferredTerminalSuffixSourceIdentity;
 using dxmt9::render::RenderContinuationDecision;
 using dxmt9::render::SessionAdmissionCandidate;
 using dxmt9::render::SessionAdmissionDecision;
@@ -105,6 +111,154 @@ SessionAdmissionCandidate candidate(
       .seqId = seqId,
       .predictedCommandBuffers = 1,
   };
+}
+
+DeferredTerminalSuffixSourceIdentity suffixIdentity(
+    std::uint32_t sourceIndex,
+    std::uint32_t firstPage,
+    std::uint64_t generation,
+    std::uint64_t ordinal) {
+  return {
+      .source = {
+          .id = {.index = sourceIndex, .generation = generation},
+          .storage = {
+              .firstPage = firstPage,
+              .pageCount = 2,
+              .generation = generation,
+          },
+      },
+      .rawOrdinal = ordinal,
+      .sourceOrdinal = ordinal,
+      .seqId = ordinal,
+  };
+}
+
+dxmt9::framegraph::DeferredTerminalSuffixProof suffixProof(
+    const DeferredTerminalSuffixSourceIdentity& current,
+    const DeferredTerminalSuffixSourceIdentity& successor) {
+  const auto range = [](
+                         const DeferredTerminalSuffixSourceIdentity& source,
+                         std::uint32_t begin,
+                         std::uint32_t count) {
+    return dxmt9::framegraph::SourceCommandRange{
+        .source = source.source,
+        .sourceOrdinal = source.sourceOrdinal,
+        .seqId = source.seqId,
+        .commandBegin = begin,
+        .commandCount = count,
+    };
+  };
+  return {
+      .currentPrefix = range(current, 0u, 1u),
+      .currentSuffix = range(current, 1u, 2u),
+      .successorHead = range(successor, 0u, 1u),
+  };
+}
+
+dxmt9::core::metalqueue::ReadySlotSnapshot suffixReadySnapshot(
+    const DeferredTerminalSuffixSourceIdentity& identity,
+    const SessionAdmissionCandidate& admission,
+    const dxmt9::framegraph::DeferredTerminalSuffixProof& proof) {
+  return {
+      .slotIndex = 12u,
+      .seqId = identity.seqId,
+      .metadata = {
+          .rawOrdinal = identity.rawOrdinal,
+          .sourceOrdinal = identity.sourceOrdinal,
+          .seqId = identity.seqId,
+          .usedBytes = admission.semantic.byteCount,
+          .pageCount = identity.source.storage.pageCount,
+      },
+      .semantic = admission.semantic,
+      .hasPresent = admission.semantic.hasPresent(),
+      .commandBegin = proof.currentPrefix.commandBegin,
+      .commandCount = static_cast<std::size_t>(
+          proof.currentPrefix.commandCount + proof.currentSuffix.commandCount),
+      .sourceId = identity.source.id,
+      .storage = identity.source.storage,
+  };
+}
+
+dxmt9::core::metalqueue::QueueCompletionSource suffixCompletionSource(
+    const DeferredTerminalSuffixSourceIdentity& identity,
+    const dxmt9::core::metalqueue::ReadySlotSnapshot& snapshot) {
+  return {
+      .source = identity.source,
+      .slotIndex = snapshot.slotIndex,
+      .seqId = identity.seqId,
+      .hasPresent = snapshot.hasPresent,
+      .commandBegin = snapshot.commandBegin,
+      .commandCount = snapshot.commandCount,
+  };
+}
+
+dxmt9::core::CpuReadyTape::LeaseCapacityClaim suffixWritingClaim(
+    const SessionCapacityVector& capacity) {
+  return {
+      .sources = capacity.sources,
+      .pages = capacity.pages,
+      .bytes = capacity.bytes,
+      .payloadBlocks = capacity.payloadBlocks,
+      .readyEntries = capacity.readyEntries,
+      .retentionEntries = capacity.retentionEntries,
+      .allocatorTickets = capacity.allocatorTickets,
+  };
+}
+
+SessionCapacityVector suffixWritingCapacity(
+    const SessionCapacityVector& capacity) {
+  auto result = capacity;
+  result.draws = 0u;
+  result.commandBuffers = 0u;
+  return result;
+}
+
+SessionCapacityPolicy suffixCapacityPolicy(
+    const SessionCapacityVector& current,
+    const SessionCapacityVector& successor) {
+  const auto maxSession =
+      dxmt9::render::addSessionCapacity(current, successor);
+  check(maxSession.has_value(), "suffix session capacity adds exactly");
+  auto successorHeadroom = successor;
+  successorHeadroom.pages =
+      dxmt9::render::worstCaseNonWrappingReservationPages(
+          successor.pages);
+  const auto highWater = dxmt9::render::addSessionCapacity(
+      *maxSession, successorHeadroom);
+  check(highWater.has_value(), "suffix high-water capacity adds exactly");
+  return {
+      .highWater = *highWater,
+      .maxSession = *maxSession,
+      .successorHeadroom = successorHeadroom,
+      .ordinaryDirect = current,
+  };
+}
+
+std::optional<dxmt9::render::DeferredTerminalSuffixState>
+makeHeldSuffix(
+    const DeferredTerminalSuffixSourceIdentity& current,
+    const DeferredTerminalSuffixSourceIdentity& successor,
+    const SessionAdmissionCandidate& currentAdmission,
+    const dxmt9::render::SessionCapacityLease& lease,
+    const SessionCapacityVector& successorHeadroom) {
+  const auto proof = suffixProof(current, successor);
+  const auto currentSnapshot =
+      suffixReadySnapshot(current, currentAdmission, proof);
+  const auto currentCompletion =
+      suffixCompletionSource(current, currentSnapshot);
+  const auto prefixEncoded =
+      dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+          current, currentSnapshot, currentCompletion, currentAdmission,
+          dxmt9::render::sessionCapacityFor(currentAdmission),
+          proof.currentPrefix, proof.currentSuffix, successor.source,
+          suffixWritingClaim(dxmt9::render::sessionCapacityFor(
+              candidate(successor.sourceOrdinal, successor.seqId,
+                        currentAdmission.semantic))),
+          lease, successorHeadroom, {});
+  if (!prefixEncoded) {
+    return std::nullopt;
+  }
+  return dxmt9::render::holdDeferredTerminalSuffix(*prefixEncoded);
 }
 
 void sourceSummaryIsFlatAndClassifiesBoundaries() {
@@ -953,6 +1107,399 @@ void retirementSplitsResidencyCreditFromEncodedWorkCap() {
         "work-cap attribution names a logical, not residency, dimension");
 }
 
+void deferredTerminalSuffixQualificationIsExactAndBounded() {
+  static_assert(std::is_trivially_copyable_v<
+                dxmt9::render::DeferredTerminalSuffixState>);
+  static_assert(std::is_standard_layout_v<
+                dxmt9::render::DeferredTerminalSuffixState>);
+  static_assert(std::is_trivially_copyable_v<
+                DeferredTerminalSuffixSourceIdentity>);
+  static_assert(!std::is_pointer_v<decltype(
+                DeferredTerminalSuffixSourceIdentity::source)>);
+
+  ChunkSlot slot{};
+  appendDraw(slot, 0x10);
+  const auto semantic = summarize(slot);
+  const auto current = suffixIdentity(2u, 4u, 7u, 10u);
+  const auto successor = suffixIdentity(3u, 6u, 9u, 11u);
+  const auto currentAdmission = candidate(10u, 10u, semantic);
+  const auto successorAdmission = candidate(11u, 11u, semantic);
+  const auto currentCharge =
+      dxmt9::render::sessionCapacityFor(currentAdmission);
+  const auto successorClaim =
+      dxmt9::render::sessionCapacityFor(successorAdmission);
+  const auto policy = suffixCapacityPolicy(currentCharge, successorClaim);
+  check(policy.valid(), "bounded suffix lease policy is valid");
+  const dxmt9::render::SessionCapacityLeaseAcquisitionSnapshot snapshot{
+      .orderedTailWritingSuccessor =
+          suffixWritingCapacity(successorClaim),
+  };
+  const auto unavailable =
+      dxmt9::render::sessionCapacityUnavailableForFirstLease(
+          snapshot, policy.successorHeadroom);
+  check(unavailable.has_value() && *unavailable == SessionCapacityVector{},
+        "exact Writing physical claim is credited at acquisition");
+  SessionCapacityLeaseState leaseState;
+  check(leaseState.acquire(policy, *unavailable, currentCharge),
+        "real lease state admits the current charge");
+  const auto lease = leaseState.lease();
+  const auto proof = suffixProof(current, successor);
+  const auto currentSnapshot =
+      suffixReadySnapshot(current, currentAdmission, proof);
+  const auto currentCompletion =
+      suffixCompletionSource(current, currentSnapshot);
+
+  const auto prefixEncoded =
+      dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+          current, currentSnapshot, currentCompletion, currentAdmission,
+          currentCharge, proof.currentPrefix, proof.currentSuffix,
+          successor.source, suffixWritingClaim(successorClaim), lease,
+          policy.successorHeadroom, {});
+  check(prefixEncoded.has_value() &&
+            prefixEncoded->phase ==
+                DeferredTerminalSuffixPhase::PrefixEncoded &&
+            !prefixEncoded->proofAttached,
+        "prefix state parks without a successor payload proof");
+  const auto held = dxmt9::render::holdDeferredTerminalSuffix(
+      *prefixEncoded);
+  check(held.has_value(),
+        "exact current ranges, Writing source, and physical headroom hold");
+  checkEq(held->phase, DeferredTerminalSuffixPhase::Held,
+          "qualification enters the bounded Held phase");
+  checkEq(held->leaseGeneration, lease.generation,
+          "held state snapshots the exact lease generation");
+  checkEq(held->leaseUsedBeforeSuccessor, currentCharge,
+          "current work and residency are represented by one lease charge");
+  check(!held->proofAttached &&
+            held->successorClaim == SessionCapacityVector{},
+        "Held retains neither proof nor invented logical successor charge");
+
+  const auto narrowHighWater = dxmt9::render::addSessionCapacity(
+      currentCharge, policy.successorHeadroom);
+  check(narrowHighWater.has_value(), "narrow lease policy adds exactly");
+  const SessionCapacityPolicy narrowPolicy{
+      .highWater = *narrowHighWater,
+      .maxSession = currentCharge,
+      .successorHeadroom = policy.successorHeadroom,
+      .ordinaryDirect = currentCharge,
+  };
+  SessionCapacityLeaseState narrowLeaseState;
+  check(narrowPolicy.valid() &&
+            narrowLeaseState.acquire(narrowPolicy, {}, currentCharge),
+        "the formerly accepted current-only usable lease is producible");
+  check(!dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+             current, currentSnapshot, currentCompletion, currentAdmission,
+             currentCharge, proof.currentPrefix, proof.currentSuffix,
+             successor.source, suffixWritingClaim(successorClaim),
+             narrowLeaseState.lease(), narrowPolicy.successorHeadroom, {}),
+        "Held rejects Writing residency beyond reserved-minus-remaining");
+  check(!narrowLeaseState.charge(
+             narrowLeaseState.lease().generation, successorClaim),
+        "real lease state confirms the old held fixture was impossible");
+
+  check(held->expectedWritingSuccessor.source == successor.source &&
+            held->expectedWritingSuccessor.sourceOrdinal ==
+                current.sourceOrdinal + 1u &&
+            held->expectedWritingSuccessor.seqId == current.seqId + 1u,
+        "Writing identity infers exact consecutive ordinals without payload");
+
+  auto staleAdmission = currentAdmission;
+  ++staleAdmission.sourceOrdinal;
+  check(!dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+             current, currentSnapshot, currentCompletion, staleAdmission,
+             currentCharge, proof.currentPrefix, proof.currentSuffix,
+             successor.source, suffixWritingClaim(successorClaim), lease,
+             policy.successorHeadroom, {}),
+        "admission identity must match the represented current source");
+
+  const auto doubledCurrent =
+      dxmt9::render::addSessionCapacity(currentCharge, currentCharge);
+  check(doubledCurrent.has_value(), "duplicate-charge fixture adds");
+  check(!dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+             current, currentSnapshot, currentCompletion, currentAdmission,
+             *doubledCurrent, proof.currentPrefix, proof.currentSuffix,
+             successor.source, suffixWritingClaim(successorClaim), lease,
+             policy.successorHeadroom, {}),
+        "current encoded work cannot be duplicated in held state");
+
+  auto oversizedWriting = suffixWritingClaim(successorClaim);
+  oversizedWriting.pages = policy.successorHeadroom.pages + 1u;
+  check(!dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+             current, currentSnapshot, currentCompletion, currentAdmission,
+             currentCharge, proof.currentPrefix, proof.currentSuffix,
+             successor.source, oversizedWriting, lease,
+             policy.successorHeadroom, {}),
+        "the physical Writing claim must fit reserved successor headroom");
+
+  auto staleLease = lease;
+  staleLease.generation = 0u;
+  check(!dxmt9::render::makeDeferredTerminalSuffixPrefixEncoded(
+             current, currentSnapshot, currentCompletion, currentAdmission,
+             currentCharge, proof.currentPrefix, proof.currentSuffix,
+             successor.source, suffixWritingClaim(successorClaim), staleLease,
+             policy.successorHeadroom, {}),
+        "a dead lease generation cannot own a held suffix");
+}
+
+void deferredTerminalSuffixWakePolicyDrainsWithoutLockedWait() {
+  ChunkSlot slot{};
+  appendDraw(slot, 0x10);
+  const auto semantic = summarize(slot);
+  const auto current = suffixIdentity(2u, 4u, 7u, 10u);
+  const auto successor = suffixIdentity(3u, 6u, 9u, 11u);
+  const auto currentAdmission = candidate(10u, 10u, semantic);
+  const auto successorAdmission = candidate(11u, 11u, semantic);
+  const auto currentCharge =
+      dxmt9::render::sessionCapacityFor(currentAdmission);
+  const auto successorClaim =
+      dxmt9::render::sessionCapacityFor(successorAdmission);
+  const auto policy = suffixCapacityPolicy(currentCharge, successorClaim);
+  SessionCapacityLeaseState leaseState;
+  check(leaseState.acquire(policy, {}, currentCharge),
+        "wake fixture uses a producible lease");
+  const auto lease = leaseState.lease();
+  const auto held = makeHeldSuffix(
+      current, successor, currentAdmission, lease,
+      policy.successorHeadroom);
+  check(held.has_value(), "wake fixture qualifies");
+
+  DeferredTerminalSuffixObservation observation{
+      .currentIdentity = current,
+      .currentAdmission = currentAdmission,
+      .successor = successor,
+      .successorAdmission = successorAdmission,
+      .lease = lease,
+  };
+  const auto idle = dxmt9::render::classifyDeferredTerminalSuffix(
+      *held, observation);
+  check(idle.mayWait(), "quiescent held state may wait");
+
+  observation.schedulingMutexOwned = true;
+  const auto locked = dxmt9::render::classifyDeferredTerminalSuffix(
+      *held, observation);
+  checkEq(locked.decision, DeferredTerminalSuffixDecision::Invalid,
+          "the wait API rejects scheduling-lock ownership");
+  checkEq(locked.reason,
+          DeferredTerminalSuffixDecisionReason::SchedulingMutexOwned,
+          "locked-wait rejection is explicit");
+  observation.schedulingMutexOwned = false;
+
+  observation.wakeFlags =
+      dxmt9::render::DeferredTerminalSuffixWakeExactSuccessorReady;
+  observation.successorAdmission.predictedCommandBuffers = 2u;
+  const auto logicalHeadroomExceeded =
+      dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+  checkEq(logicalHeadroomExceeded.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "Ready-derived logical charge must fit successor policy");
+  observation.successorAdmission = successorAdmission;
+  observation.successorAdmission.key.allocatorPolicyEpoch++;
+  const auto incompatibleAdmission =
+      dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+  checkEq(incompatibleAdmission.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "Ready-derived admission must remain session-compatible");
+  observation.successorAdmission = successorAdmission;
+
+  struct DrainCase {
+    std::uint32_t flag;
+    DeferredTerminalSuffixDecisionReason reason;
+  };
+  constexpr DrainCase drains[] = {
+      {dxmt9::render::DeferredTerminalSuffixWakeOrderedRelease,
+       DeferredTerminalSuffixDecisionReason::OrderedRelease},
+      {dxmt9::render::DeferredTerminalSuffixWakeProducerWait,
+       DeferredTerminalSuffixDecisionReason::ProducerWait},
+      {dxmt9::render::DeferredTerminalSuffixWakeInitializer,
+       DeferredTerminalSuffixDecisionReason::Initializer},
+      {dxmt9::render::DeferredTerminalSuffixWakeQuery,
+       DeferredTerminalSuffixDecisionReason::Query},
+      {dxmt9::render::DeferredTerminalSuffixWakeReadback,
+       DeferredTerminalSuffixDecisionReason::Readback},
+      {dxmt9::render::DeferredTerminalSuffixWakeUpdateTexture,
+       DeferredTerminalSuffixDecisionReason::UpdateTexture},
+      {dxmt9::render::DeferredTerminalSuffixWakePresent,
+       DeferredTerminalSuffixDecisionReason::Present},
+      {dxmt9::render::DeferredTerminalSuffixWakeStop,
+       DeferredTerminalSuffixDecisionReason::Stop},
+      {dxmt9::render::DeferredTerminalSuffixWakeDeviceLoss,
+       DeferredTerminalSuffixDecisionReason::DeviceLoss},
+      {dxmt9::render::DeferredTerminalSuffixWakeWriterLost,
+       DeferredTerminalSuffixDecisionReason::WriterLost},
+      {dxmt9::render::DeferredTerminalSuffixWakeLeaseInvalidated,
+       DeferredTerminalSuffixDecisionReason::LeaseInvalidated},
+      {dxmt9::render::DeferredTerminalSuffixWakeHeadroomInvalidated,
+       DeferredTerminalSuffixDecisionReason::HeadroomInvalidated},
+      {dxmt9::render::DeferredTerminalSuffixWakeAdmissionPressure,
+       DeferredTerminalSuffixDecisionReason::AdmissionPressure},
+      {dxmt9::render::DeferredTerminalSuffixWakeWriterPressure,
+       DeferredTerminalSuffixDecisionReason::WriterPressure},
+  };
+  for (const DrainCase& drain : drains) {
+    observation.wakeFlags = drain.flag;
+    const auto result =
+        dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+    checkEq(result.decision,
+            DeferredTerminalSuffixDecision::NaturalDrain,
+            "each semantic, loss, lease, and pressure wake drains");
+    checkEq(result.reason, drain.reason,
+            "drain reason retains the exact wake identity");
+  }
+
+  observation.wakeFlags =
+      dxmt9::render::DeferredTerminalSuffixWakeExactSuccessorReady |
+      dxmt9::render::DeferredTerminalSuffixWakeAdmissionPressure |
+      dxmt9::render::DeferredTerminalSuffixWakeWriterPressure;
+  const auto readyOverPressure =
+      dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+  checkEq(readyOverPressure.decision,
+          DeferredTerminalSuffixDecision::ReserveExactSuccessor,
+          "exact Ready successor wins simultaneous pressure");
+
+  observation.wakeFlags |=
+      dxmt9::render::DeferredTerminalSuffixWakeOrderedRelease;
+  const auto releaseOverReady =
+      dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+  checkEq(releaseOverReady.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "ordered release still drains an exact Ready successor");
+  checkEq(releaseOverReady.reason,
+          DeferredTerminalSuffixDecisionReason::OrderedRelease,
+          "ordered release retains priority over the join optimization");
+}
+
+void deferredTerminalSuffixRevalidatesTentativeChargeBeforeJoin() {
+  ChunkSlot slot{};
+  appendDraw(slot, 0x10);
+  const auto semantic = summarize(slot);
+  const auto current = suffixIdentity(2u, 4u, 7u, 10u);
+  const auto successor = suffixIdentity(3u, 6u, 9u, 11u);
+  const auto currentAdmission = candidate(10u, 10u, semantic);
+  const auto successorAdmission = candidate(11u, 11u, semantic);
+  const auto currentCharge =
+      dxmt9::render::sessionCapacityFor(currentAdmission);
+  const auto successorClaim =
+      dxmt9::render::sessionCapacityFor(successorAdmission);
+  const auto policy = suffixCapacityPolicy(currentCharge, successorClaim);
+  SessionCapacityLeaseState leaseState;
+  check(leaseState.acquire(policy, {}, currentCharge),
+        "tentative fixture acquires through real lease state");
+  const auto proof = suffixProof(current, successor);
+  const auto held = makeHeldSuffix(
+      current, successor, currentAdmission, leaseState.lease(),
+      policy.successorHeadroom);
+  check(held.has_value(), "tentative fixture qualifies");
+  DeferredTerminalSuffixObservation observation{
+      .currentIdentity = current,
+      .currentAdmission = currentAdmission,
+      .successor = successor,
+      .successorAdmission = successorAdmission,
+      .lease = leaseState.lease(),
+      .wakeFlags =
+          dxmt9::render::DeferredTerminalSuffixWakeExactSuccessorReady,
+  };
+
+  const auto reserve = dxmt9::render::classifyDeferredTerminalSuffix(
+      *held, observation);
+  checkEq(reserve.decision,
+          DeferredTerminalSuffixDecision::ReserveExactSuccessor,
+          "exact Ready identity authorizes reservation before proof exists");
+  check(!dxmt9::render::markDeferredTerminalSuffixSuccessorTentative(
+             *held, observation),
+        "proof absence never authorizes Tentative or effects");
+
+  observation.proof = proof;
+  observation.proofValidated = true;
+  check(!dxmt9::render::markDeferredTerminalSuffixSuccessorTentative(
+             *held, observation),
+        "proof attachment still requires the real successor lease charge");
+  check(leaseState.charge(leaseState.lease().generation, successorClaim),
+        "real lease usable bound accepts the exact successor once");
+  observation.lease = leaseState.lease();
+  observation.proofValidated = false;
+  check(!dxmt9::render::markDeferredTerminalSuffixSuccessorTentative(
+             *held, observation),
+        "proof absence after charge still cannot authorize effects");
+  const auto chargedWithoutProof =
+      dxmt9::render::classifyDeferredTerminalSuffix(*held, observation);
+  checkEq(chargedWithoutProof.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "unattached charged successor follows the pre-effect drain path");
+  observation.proofValidated = true;
+  const auto tentative =
+      dxmt9::render::markDeferredTerminalSuffixSuccessorTentative(
+          *held, observation);
+  check(tentative.has_value(),
+        "Ready proof attaches only after the exact real charge");
+  checkEq(tentative->phase,
+          DeferredTerminalSuffixPhase::SuccessorTentative,
+          "reservation advances the bounded phase once");
+  check(tentative->proofAttached &&
+            tentative->proof.currentPrefix == proof.currentPrefix &&
+            tentative->proof.currentSuffix == proof.currentSuffix &&
+            tentative->proof.successorHead == proof.successorHead,
+        "complete proof is retained only by the tentative state");
+
+  const auto join = dxmt9::render::classifyDeferredTerminalSuffix(
+      *tentative, observation);
+  checkEq(join.decision,
+          DeferredTerminalSuffixDecision::JoinExactSuccessor,
+          "one exact successor charge permits the pre-effect join");
+
+  check(!leaseState.charge(leaseState.lease().generation, successorClaim),
+        "real lease refuses a second successor charge at the exact bound");
+  const auto twice = dxmt9::render::addSessionCapacity(
+      observation.lease.used, successorClaim);
+  check(twice.has_value(), "double-charge stale observation adds");
+  observation.lease.used = *twice;
+  const auto duplicateCharge =
+      dxmt9::render::classifyDeferredTerminalSuffix(
+          *tentative, observation);
+  checkEq(duplicateCharge.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "a duplicated successor charge rejects before join effect");
+  checkEq(duplicateCharge.reason,
+          DeferredTerminalSuffixDecisionReason::StaleIdentity,
+          "charge mismatch follows the pre-effect stale drain cut");
+
+  observation.lease = leaseState.lease();
+  observation.successor.source.id.generation++;
+  const auto staleSuccessor =
+      dxmt9::render::classifyDeferredTerminalSuffix(
+          *tentative, observation);
+  checkEq(staleSuccessor.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "a stale successor locator rejects before join effect");
+
+  auto staleBeforeAttachment = observation;
+  staleBeforeAttachment.successor = successor;
+  staleBeforeAttachment.successor.seqId++;
+  staleBeforeAttachment.lease.used = currentCharge;
+  staleBeforeAttachment.proofValidated = false;
+  const auto staleHeld = dxmt9::render::classifyDeferredTerminalSuffix(
+      *held, staleBeforeAttachment);
+  checkEq(staleHeld.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "a stale Ready successor naturally drains before proof attachment");
+
+  observation.successor = successor;
+  observation.release = {
+      .event = {
+          .ordinal = 1u,
+          .reason = dxmt9::core::metalqueue::SessionReleaseReason::Present,
+          .action =
+              dxmt9::core::metalqueue::SessionReleaseAction::SubmitSession,
+      },
+      .generation = 1u,
+  };
+  const auto staleRelease =
+      dxmt9::render::classifyDeferredTerminalSuffix(
+          *tentative, observation);
+  checkEq(staleRelease.decision,
+          DeferredTerminalSuffixDecision::NaturalDrain,
+          "release-generation drift rejects before join effect");
+}
+
 }  // namespace
 
 int main() {
@@ -965,6 +1512,9 @@ int main() {
     continuationIsConservativeAndRouteAsymmetric();
     multiSourceWindowPreflightIsStrictAndTransactional();
     retirementSplitsResidencyCreditFromEncodedWorkCap();
+    deferredTerminalSuffixQualificationIsExactAndBounded();
+    deferredTerminalSuffixWakePolicyDrainsWithoutLockedWait();
+    deferredTerminalSuffixRevalidatesTentativeChargeBeforeJoin();
   } catch (const TestFailure& error) {
     std::cerr << "encode_session_admission_spec failed: "
               << error.what() << '\n';
