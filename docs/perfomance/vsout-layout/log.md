@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "VSOut Layout — visible varying-width attempts to explain the VS-write bucket - Historical Log"
 type: domain-log
 status: historical
-updated: 2026-07-08
+updated: 2026-08-10
 source: docs/perfomance/vsout-layout/index.md
 related: docs/perfomance/vsout-layout/index.md; docs/perfomance/vsout-layout/overview.md
 ---
@@ -52,10 +52,12 @@ the bucket.
   fields; proves blanket width reduction does not move the bucket.
 - **`--trim-vsout-to-fs-reads`** (mini-replay) — exact FS-read liveness manifest;
   proves liveness trim is pixel-safe but perf-inert.
-- **`DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1`** (`--drop-vsout-point-size`) — single-field
-  drop (key `0xfff→0x7ff`); isolates the point-size / `point_size` path.
-- **`DXMT9_PROBE_POSITION_ONLY_VSOUT=1`** — extreme `16B` lower bound; **correctness-invalid
-  diagnostic** (forces constant fragment), used only as a bandwidth classifier.
+- **Retired `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1`** — single-field drop (key
+  `0xfff→0x7ff`) that isolated the point-size / `point_size` path.
+- **Retired `DXMT9_PROBE_POSITION_ONLY_VSOUT=1`** — extreme `16B` lower bound;
+  **correctness-invalid diagnostic** (forced constant fragment), used only as a
+  bandwidth classifier. The pure `positionOnlyVSOutLayout` helper remains for
+  the fragmentless depth-only route.
 - **`DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1`** (`--force-fragment-color`) — the control that
   separates fragment/raster effect from VSOut width; also a diagnostic, not a fix.
 - **`DXMT9_PROBE_HALF_VSOUT=1`** (`--probe-half-vsout`) — half4/half precision stage-out;
@@ -110,10 +112,10 @@ regressed `+3.40%`, failing the TVB mechanism gate. The single positive finding 
 correctness, not performance: the dump-first liveness trim is semantically safe
 (0 changed pixels, SSIM 1.000) — safe to do, not worth doing for perf.
 
-Two of these probes are **correctness-invalid diagnostics**, usable only as
-classifiers: `DXMT9_PROBE_POSITION_ONLY_VSOUT` (forces position-only + constant
-fragment) and `DXMT_DEBUG_FORCE_FRAGMENT_COLOR` (strips fragment work). They must
-never be treated as optimization candidates. The remaining `clip_distance` axis
+Two probes were **correctness-invalid diagnostics**: the retired position-only
+env path (position-only + constant fragment) and the surviving
+`DXMT_DEBUG_FORCE_FRAGMENT_COLOR` control (strips fragment work). They must never
+be treated as optimization candidates. The remaining `clip_distance` axis
 was audited and is already absent from the hot frame50 rows, so it offers no further
 width to remove.
 
@@ -130,8 +132,7 @@ finalize and require the shader rows actually used the modified VSOut sources:
 ```sh
 bash scripts/tools/run_3dmark05_perf_probe.sh --suffix half-vsout --frame 60 \
   --probe-half-vsout --dump-shaders --timeout 420
-# other axes: --trim-unused-varyings, --drop-vsout-point-size,
-#   --probe-position-only-vsout (correctness-invalid), --force-fragment-color (control)
+# other live axes: --trim-unused-varyings, --force-fragment-color (control)
 
 bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix half-vsout --frame 60 \
   --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \

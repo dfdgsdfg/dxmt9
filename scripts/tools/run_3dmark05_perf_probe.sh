@@ -50,12 +50,8 @@ recommended_gputrace_min_free_mb=2048
 trim_unused_varyings=0
 trim_unused_varyings_vs_hashes=
 trim_unused_varyings_ps_hashes=
-drop_vsout_point_size=0
-probe_position_only_vsout=0
 probe_half_vsout=0
 force_fragment_color=0
-trim_vertex_temps=0
-trim_vs_output_scratch=0
 suppress_rt_pixel_format_view=0
 suppress_x8_rt_pixel_format_view=0
 x8_shader_alpha_fill=0
@@ -737,13 +733,6 @@ Options:
                       Set DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES to a
                       comma/semicolon/space-separated allowlist of D3D pixel
                       shader hashes. Requires --trim-unused-varyings.
-  --drop-vsout-point-size
-                      Set DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1 to remove only
-                      VSOut [[point_size]] for pipeline-shape A/B probes
-  --probe-position-only-vsout
-                      Set DXMT9_PROBE_POSITION_ONLY_VSOUT=1 to force
-                      position-only VSOut and constant fragment output for a
-                      correctness-invalid hidden VS-write lower-bound probe
   --probe-half-vsout
                       Set DXMT9_PROBE_HALF_VSOUT=1 to request half-precision
                       user varyings in VSOut while keeping position,
@@ -752,12 +741,6 @@ Options:
                       Set DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1 to keep the
                       current VSOut layout while forcing translated/FFP
                       fragment shaders to a constant color
-  --trim-vertex-temps
-                      Set DXMT9_TRIM_VERTEX_TEMPS=1 for translated VS temp
-                      register/spill experiments
-  --trim-vs-output-scratch
-                      Set DXMT9_TRIM_VS_OUTPUT_SCRATCH=1 to size translated
-                      VS outTexcoord[] scratch to observed output usage
   --suppress-rt-pixel-format-view
                       Set DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW=1 to test
                       RT-only swizzle formats without PixelFormatView usage
@@ -1777,28 +1760,12 @@ while (($#)); do
       trim_unused_varyings_ps_hashes=${2:?--trim-unused-varyings-ps-hashes requires a value}
       shift 2
       ;;
-    --drop-vsout-point-size)
-      drop_vsout_point_size=1
-      shift
-      ;;
-    --probe-position-only-vsout)
-      probe_position_only_vsout=1
-      shift
-      ;;
     --probe-half-vsout)
       probe_half_vsout=1
       shift
       ;;
     --force-fragment-color)
       force_fragment_color=1
-      shift
-      ;;
-    --trim-vertex-temps)
-      trim_vertex_temps=1
-      shift
-      ;;
-    --trim-vs-output-scratch)
-      trim_vs_output_scratch=1
       shift
       ;;
     --suppress-rt-pixel-format-view)
@@ -4252,28 +4219,12 @@ elif [[ -n "$trim_unused_varyings_vs_hashes$trim_unused_varyings_ps_hashes" ]]; 
   exit 2
 fi
 
-if (( drop_vsout_point_size )); then
-  env_args+=("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1")
-fi
-
-if (( probe_position_only_vsout )); then
-  env_args+=("DXMT9_PROBE_POSITION_ONLY_VSOUT=1")
-fi
-
 if (( probe_half_vsout )); then
   env_args+=("DXMT9_PROBE_HALF_VSOUT=1")
 fi
 
 if (( force_fragment_color )); then
   env_args+=("DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1")
-fi
-
-if (( trim_vertex_temps )); then
-  env_args+=("DXMT9_TRIM_VERTEX_TEMPS=1")
-fi
-
-if (( trim_vs_output_scratch )); then
-  env_args+=("DXMT9_TRIM_VS_OUTPUT_SCRATCH=1")
 fi
 
 if (( suppress_rt_pixel_format_view )); then

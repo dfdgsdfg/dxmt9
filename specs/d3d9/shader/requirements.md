@@ -308,7 +308,11 @@ pass whose output changes the emitted MSL must contribute to the cache key
 - **Pixel input semantics**: matching per-input mapping with centroid
   interpolation flag.
 - **Max written temp register index**: highest `r`-register index written;
-  drives `r[]` array sizing in the emitter.
+  drives fragment `r[]` sizing and remains advisory for the conservative
+  vertex array.
+- **Vertex output scratch usage**: highest mapped or indexed texcoord output;
+  remains a pure analysis even though the default vertex `outTexcoord[]`
+  scratch stays at the conservative maximum.
 
 **R-CORE-SHADER-4.5** The required-pass set is the minimum needed for a correct
 default emit. Removing any of these passes must fail an audit test.
@@ -319,9 +323,6 @@ default emit. Removing any of these passes must fail an audit test.
 correctness oracle (§8) is green:
 
 - VSOut liveness (current opt-in: `DXMT9_TRIM_UNUSED_VARYINGS`).
-- Vertex temp-array trim (current opt-in: `DXMT9_TRIM_VERTEX_TEMPS`).
-- VS output scratch trim (current opt-in:
-  `DXMT9_TRIM_VS_OUTPUT_SCRATCH`).
 - Precision inference (target opt-in: a new IR-level flag; the prior
   text-rewrite carrier `DXMT9_FS_HALF_PRECISION` was removed as non-functional).
 

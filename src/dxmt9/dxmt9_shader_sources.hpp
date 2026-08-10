@@ -94,13 +94,10 @@ using VSOutLayout = ShaderPreludeOptions::VSOutLayout;
 // VS/FS pair's fragment-input liveness. This prevents SFIV-style global
 // trimming from deleting GT1 inputs such as texcoord5..7 or fogFactor.
 bool vsoutTrimEnabled();
-bool vsoutProbeDropPointSizeEnabled();
-bool vsoutProbePositionOnlyEnabled();
 bool vsoutProbeHalfEnabled();
 constexpr VSOutLayout fullVSOutLayout() { return VSOutLayout{}; }
 VSOutLayout minimalVSOutLayout();
 VSOutLayout positionOnlyVSOutLayout();
-VSOutLayout applyVSOutProbeOverrides(VSOutLayout layout);
 std::uint32_t vsoutLayoutKey(const VSOutLayout& layout);
 bool vsoutEmitTexcoord(const VSOutLayout& layout, std::size_t index);
 bool vsoutEmitColor(const VSOutLayout& layout);

@@ -717,7 +717,8 @@ def write_report(path: Path, joined_csv: Path, shader_dir: Path,
         lines.append(
             "- Rows with nonzero `VS outT over B` still declare more local "
             "`outTexcoord[]` scratch than the literal source references require. "
-            "Those rows are candidates for `DXMT9_TRIM_VS_OUTPUT_SCRATCH=1`."
+            "Treat this as source-shape attribution only; the rejected runtime "
+            "scratch-trim path has been retired."
         )
     high_unread_share = [
         row for row in rows

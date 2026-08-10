@@ -18,16 +18,6 @@ bool vsoutTrimEnabled() {
   return value;
 }
 
-bool vsoutProbeDropPointSizeEnabled() {
-  const char* env = std::getenv("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
-  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-}
-
-bool vsoutProbePositionOnlyEnabled() {
-  const char* env = std::getenv("DXMT9_PROBE_POSITION_ONLY_VSOUT");
-  return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-}
-
 bool vsoutProbeHalfEnabled() {
   const char* env = std::getenv("DXMT9_PROBE_HALF_VSOUT");
   return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
@@ -50,16 +40,6 @@ VSOutLayout positionOnlyVSOutLayout() {
   layout.secondaryColor = false;
   layout.fogFactor = false;
   layout.pointSize = false;
-  return layout;
-}
-
-VSOutLayout applyVSOutProbeOverrides(VSOutLayout layout) {
-  if (vsoutProbePositionOnlyEnabled()) {
-    return positionOnlyVSOutLayout();
-  }
-  if (vsoutProbeDropPointSizeEnabled()) {
-    layout.pointSize = false;
-  }
   return layout;
 }
 

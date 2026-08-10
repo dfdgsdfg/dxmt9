@@ -2100,53 +2100,31 @@ void testVs30OutputSemanticMappingBySemanticIndex() {
                    "vs_3_0 texcoord semantic does not fall back to raw output register index");
 }
 
-void testVsTempTrimIsOptInAndUsesObservedTempRange() {
-  {
-    const ScopedUnsetEnv noTrim("DXMT9_TRIM_VERTEX_TEMPS");
-    const auto source = translateVertex(makeVs30OutputSemanticBytecode());
-    checkContains(source, "float4 r[32];",
-                  "vertex temp array remains conservative by default");
-  }
-  {
-    const ScopedSetEnv trim("DXMT9_TRIM_VERTEX_TEMPS", "1");
-    const auto noTempSource = translateVertex(makeVs30OutputSemanticBytecode());
-    checkContains(noTempSource, "float4 r[1];",
-                  "vertex temp trim keeps one slot when the shader has no temp use");
-    checkNotContains(noTempSource, "float4 r[32];",
-                     "vertex temp trim removes the conservative 32-slot array");
+void testVsTempAnalysisPreservesConservativeDefault() {
+  const auto noTempSource = translateVertex(makeVs30OutputSemanticBytecode());
+  checkContains(noTempSource, "float4 r[32];",
+                "vertex temp array remains conservative when no temps are used");
 
-    const auto tempFiveSource = translateVertex(makeVs30TempFiveOutputBytecode());
-    checkContains(tempFiveSource, "float4 r[6];",
-                  "vertex temp trim sizes through the highest observed temp source/dest");
-    checkContains(tempFiveSource, "r[5]",
-                  "trimmed vertex temp source still references the highest used temp");
-  }
+  const auto tempFiveSource = translateVertex(makeVs30TempFiveOutputBytecode());
+  checkContains(tempFiveSource, "float4 r[32];",
+                "vertex temp array remains conservative with observed temp use");
+  checkContains(tempFiveSource, "r[5]",
+                "max-temp analysis preserves the highest observed temp reference");
 }
 
-void testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange() {
-  {
-    const ScopedUnsetEnv noTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
-    const auto source = translateVertex(makeVs30TempFiveOutputBytecode());
-    checkContains(source, "float4 outTexcoord[8];",
-                  "vertex output texcoord scratch remains conservative by default");
-  }
-  {
-    const ScopedSetEnv trim("DXMT9_TRIM_VS_OUTPUT_SCRATCH", "1");
-    const auto minimalLayout = dxmt9::shaders::minimalVSOutLayout();
-    const auto noTexcoordSource =
-        translateVertexWithVSOutLayout(makeVs30TempFiveOutputBytecode(), minimalLayout);
-    checkContains(noTexcoordSource, "float4 outTexcoord[1];",
-                  "vertex output scratch trim keeps one slot when no texcoord output is used");
-    checkNotContains(noTexcoordSource, "float4 outTexcoord[8];",
-                     "vertex output scratch trim removes the conservative 8-slot array");
+void testVsOutputScratchAnalysisPreservesConservativeDefault() {
+  const auto minimalLayout = dxmt9::shaders::minimalVSOutLayout();
+  const auto noTexcoordSource =
+      translateVertexWithVSOutLayout(makeVs30TempFiveOutputBytecode(), minimalLayout);
+  checkContains(noTexcoordSource, "float4 outTexcoord[8];",
+                "vertex output scratch remains conservative without texcoord output");
 
-    const auto texcoordTwoSource =
-        translateVertexWithVSOutLayout(makeVs30OutputSemanticBytecode(), minimalLayout);
-    checkContains(texcoordTwoSource, "float4 outTexcoord[3];",
-                  "vertex output scratch trim sizes through the highest mapped texcoord semantic");
-    checkContains(texcoordTwoSource, "outTexcoord[2] = vsConsts.vsFloatConst[1]",
-                  "trimmed vertex output scratch still references the highest mapped texcoord");
-  }
+  const auto texcoordTwoSource =
+      translateVertexWithVSOutLayout(makeVs30OutputSemanticBytecode(), minimalLayout);
+  checkContains(texcoordTwoSource, "float4 outTexcoord[8];",
+                "vertex output scratch remains conservative with mapped texcoord output");
+  checkContains(texcoordTwoSource, "outTexcoord[2] = vsConsts.vsFloatConst[1]",
+                "output liveness analysis preserves the highest mapped texcoord reference");
 }
 
 void testVsOutTrimHashAllowlistScopesPairLiveness() {
@@ -2194,37 +2172,20 @@ void testVsOutTrimHashAllowlistScopesPairLiveness() {
   }
 }
 
-void testVsOutPointSizeProbeDropsOnlyPointSize() {
-  {
-    const ScopedUnsetEnv noProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
-    const auto layout = dxmt9::shaders::applyVSOutProbeOverrides(
-        dxmt9::shaders::fullVSOutLayout());
-    check(layout.pointSize, "VSOut point-size probe is off by default");
-    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0xfffu,
-               "default full VSOut layout key includes pointSize");
-  }
+void testPositionOnlyVSOutLayoutHelper() {
+  const auto layout = dxmt9::shaders::positionOnlyVSOutLayout();
+  checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0u,
+             "position-only VSOut helper clears every optional layout bit");
 
-  {
-    const ScopedSetEnv probe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE", "1");
-    const auto layout = dxmt9::shaders::applyVSOutProbeOverrides(
-        dxmt9::shaders::fullVSOutLayout());
-    check(!layout.pointSize, "VSOut point-size probe drops pointSize");
-    check(layout.color, "VSOut point-size probe keeps color");
-    check(layout.secondaryColor, "VSOut point-size probe keeps secondaryColor");
-    check(layout.fogFactor, "VSOut point-size probe keeps fogFactor");
-    checkEqual(layout.texcoordMask, 0xffu, "VSOut point-size probe keeps all texcoords");
-    checkEqual(dxmt9::shaders::vsoutLayoutKey(layout), 0x7ffu,
-               "VSOut point-size probe clears only the pointSize layout bit");
-
-    dxmt9::shaders::ShaderPreludeOptions options{};
-    options.vsOutLayout = layout;
-    const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
-    checkNotContains(prelude, "[[point_size]]",
-                     "VSOut point-size probe removes Metal point_size attribute");
-    checkContains(prelude, "float fogFactor", "VSOut point-size probe leaves fogFactor");
-    checkContains(prelude, "float4 texcoord0", "VSOut point-size probe leaves texcoord0");
-    checkContains(prelude, "float4 texcoord7", "VSOut point-size probe leaves texcoord7");
-  }
+  dxmt9::shaders::ShaderPreludeOptions options{};
+  options.vsOutLayout = layout;
+  const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
+  checkContains(prelude, "float4 position [[position]]",
+                "position-only VSOut helper retains the required position field");
+  checkNotContains(prelude, "[[point_size]]",
+                   "position-only VSOut helper omits point size");
+  checkNotContains(prelude, "float4 texcoord0",
+                   "position-only VSOut helper omits user varyings");
 }
 
 void testVsOutHalfProbeNarrowsOnlyUserVaryings() {
@@ -3559,12 +3520,9 @@ int main() {
     const ScopedUnsetEnv noFullscreenVertex("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX");
     const ScopedUnsetEnv noPixelVFlip("DXMT_DEBUG_FORCE_PIXEL_V_FLIP");
     const ScopedUnsetEnv noVertexYFlip("DXMT_DEBUG_FLIP_VERTEX_Y");
-    const ScopedUnsetEnv noVertexTempTrim("DXMT9_TRIM_VERTEX_TEMPS");
-    const ScopedUnsetEnv noVsOutputScratchTrim("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
     const ScopedUnsetEnv noVsOutTrim("DXMT9_TRIM_UNUSED_VARYINGS");
     const ScopedUnsetEnv noVsOutTrimVsHashes("DXMT9_TRIM_UNUSED_VARYINGS_VS_HASHES");
     const ScopedUnsetEnv noVsOutTrimPsHashes("DXMT9_TRIM_UNUSED_VARYINGS_PS_HASHES");
-    const ScopedUnsetEnv noVsOutPointSizeProbe("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE");
     const ScopedUnsetEnv noVsOutHalfProbe("DXMT9_PROBE_HALF_VSOUT");
 
     testD3DBCDecodeAndClassificationFixtures();
@@ -3588,10 +3546,10 @@ int main() {
     testPs30TexkillLoweringContract();
     testPs20ColorInputUsesLegacyInputMapping();
     testVs30OutputSemanticMappingBySemanticIndex();
-    testVsTempTrimIsOptInAndUsesObservedTempRange();
-    testVsOutputScratchTrimIsOptInAndUsesObservedOutputRange();
+    testVsTempAnalysisPreservesConservativeDefault();
+    testVsOutputScratchAnalysisPreservesConservativeDefault();
     testVsOutTrimHashAllowlistScopesPairLiveness();
-    testVsOutPointSizeProbeDropsOnlyPointSize();
+    testPositionOnlyVSOutLayoutHelper();
     testVsOutHalfProbeNarrowsOnlyUserVaryings();
     testVertexDepthOutThrowsDeterministically();
     testVs30HighOutputRegisterSemanticMapping();

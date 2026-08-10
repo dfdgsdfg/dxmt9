@@ -20,7 +20,9 @@ GT1 objective?
 **Method.** Audited the current implementation surfaces for the remaining
 below-visible-backend candidates:
 
-- `DXMT9_PROBE_POSITION_ONLY_VSOUT` in `dxmt9_shader_sources.cpp`.
+- The now-retired position-only VSOut env probe in
+  `dxmt9_shader_sources.cpp`; `positionOnlyVSOutLayout` remains for the
+  fragmentless depth-only route.
 - `DXMT9_TILE_FFP` selector, tile/base PSO build, and draw-encoder tile
   post-pass in `dxmt9_pipeline_cache.cpp` and `dxmt9_draw_encoder.mm`.
 - winemetal mesh/object/tile command surface in `winemetal.h`, `Metal.hpp`,
@@ -50,7 +52,7 @@ flowchart TD
 
 | Candidate | Current implementation status | What it proves | What it does not prove |
 |---|---|---|---|
-| Position-only `VSOut` | Existing env probe rewrites the source-visible output layout to position-only | It is a useful correctness-invalid lower-bound diagnostic for visible stage-out fields | It does not create a separate Apple position/binning/depth path, and the visible-width family has already stayed flat in Xcode |
+| Position-only `VSOut` | The retired env probe rewrote the source-visible output layout to position-only; the helper remains in the fragmentless depth-only route | It was a useful correctness-invalid lower-bound diagnostic for visible stage-out fields | It does not create a separate Apple position/binning/depth path, and the visible-width family has already stayed flat in Xcode |
 | Tile-FFP | Selector, tile PSO, base-colour PSO, tile-stage constant bind, and per-draw tile post-pass exist; default remains `off` | It is the most concrete existing backend escape surface, but only for eligible untextured FFP draws | It cannot explain or fix arbitrary textured / programmable GT1 hot rows without first measuring eligible coverage and equality |
 | Metal 3 mesh/object | winemetal exposes mesh/object buffers, mesh PSO descriptors, and mesh draw replay commands | The lower Metal bridge can express mesh/object commands | The D3D9 GT1 draw path is not currently routed through this backend; using it would be a high-risk architecture project, not a cheap perf experiment |
 | Visibility scout | Per-draw Metal visibility counts can be toggled and exported after command-buffer completion | It can reject no-sample rows or rank sample visibility | Positive samples are not final-color ownership, so this is not the missing final-writer oracle |

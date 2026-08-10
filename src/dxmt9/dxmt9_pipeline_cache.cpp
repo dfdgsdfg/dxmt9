@@ -561,8 +561,6 @@ void logPipelineBuildFailureOnce(const char* stage,
 }  // namespace
 
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
-                                bool trimVertexTemps,
-                                bool trimVsOutputScratch,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
                                 bool forceFragmentShaderColor,
@@ -574,15 +572,11 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
                                 bool debugFfpAlpha,
-                                bool probeDropVSOutPointSize,
-                                bool probePositionOnlyVSOut,
                                 bool probeHalfVSOut,
                                 bool probeFragmentlessKeepVSOut) noexcept {
   u64 hash = kFnvOffset;
   hash = mix(hash, kShaderDebugEnvSchemaVersion);
   hash = mix(hash, static_cast<u64>(trimUnusedVaryings));
-  hash = mix(hash, static_cast<u64>(trimVertexTemps));
-  hash = mix(hash, static_cast<u64>(trimVsOutputScratch));
   hash = mix(hash, static_cast<u64>(forceFullscreenVertex));
   hash = mix(hash, static_cast<u64>(flipTranslatedVertexY));
   hash = mix(hash, static_cast<u64>(forceFragmentShaderColor));
@@ -594,12 +588,6 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
   hash = mix(hash, static_cast<u64>(debugFfpUv));
   hash = mix(hash, static_cast<u64>(debugFfpTexture));
   hash = mix(hash, static_cast<u64>(debugFfpAlpha));
-  if (probeDropVSOutPointSize) {
-    hash = mix(hash, 0x9f3b7c2d4a11e905ull);
-  }
-  if (probePositionOnlyVSOut) {
-    hash = mix(hash, 0x3b08d0a9d08c0fb1ull);
-  }
   if (probeHalfVSOut) {
     hash = mix(hash, 0xe14f9d92a8c61d37ull);
   }
@@ -614,8 +602,6 @@ u64 currentShaderSourceDebugEnvKey(
   const char* fragmentMode = std::getenv("DXMT_DEBUG_FRAGMENT_MODE");
   return makeShaderSourceDebugEnvKey(
       envFlag("DXMT9_TRIM_UNUSED_VARYINGS"),
-      envFlag("DXMT9_TRIM_VERTEX_TEMPS"),
-      envFlag("DXMT9_TRIM_VS_OUTPUT_SCRATCH"),
       envFlag("DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX"),
       envFlag("DXMT_DEBUG_FLIP_VERTEX_Y"),
       envFlag("DXMT_DEBUG_FORCE_FRAGMENT_COLOR"),
@@ -627,8 +613,6 @@ u64 currentShaderSourceDebugEnvKey(
       envFlag("DXMT_DEBUG_FFP_UV"),
       envFlag("DXMT_DEBUG_FFP_TEXTURE"),
       envFlag("DXMT_DEBUG_FFP_ALPHA"),
-      envFlag("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE"),
-      envFlag("DXMT9_PROBE_POSITION_ONLY_VSOUT"),
       envFlag("DXMT9_PROBE_HALF_VSOUT"),
       debug::probeFragmentlessDepthOnlyKeepVSOut());
 }
@@ -639,15 +623,13 @@ u64 currentShaderSourceDebugEnvKey() noexcept {
 
 bool shaderSourceDebugEnvIsDefault() noexcept {
   static const u64 kDefaultKey = makeShaderSourceDebugEnvKey(
-      /*trimUnusedVaryings=*/false, /*trimVertexTemps=*/false,
-      /*trimVsOutputScratch=*/false,
+      /*trimUnusedVaryings=*/false,
       /*forceFullscreenVertex=*/false, /*flipTranslatedVertexY=*/false,
       /*forceFragmentShaderColor=*/false, /*disableAlphaTest=*/false,
       /*disableFog=*/false, /*forceTextureWhite=*/false,
       /*fragmentMode=*/std::string_view{}, /*forcePixelVFlip=*/false,
       /*debugFfpUv=*/false, /*debugFfpTexture=*/false,
-      /*debugFfpAlpha=*/false, /*probeDropVSOutPointSize=*/false,
-      /*probePositionOnlyVSOut=*/false, /*probeHalfVSOut=*/false,
+      /*debugFfpAlpha=*/false, /*probeHalfVSOut=*/false,
       /*probeFragmentlessKeepVSOut=*/false);
   return currentShaderSourceDebugEnvKey() == kDefaultKey;
 }

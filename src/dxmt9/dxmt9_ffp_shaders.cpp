@@ -1193,8 +1193,7 @@ std::string makeFfpPixelSource(const FfpPixelKey& key,
       out << "  (void)dxmt9_pointCoord;\n";
     }
   }
-  if (shaders::vsoutProbePositionOnlyEnabled() ||
-      ::dxmt9::debug::forceFragmentShaderColor()) {
+  if (::dxmt9::debug::forceFragmentShaderColor()) {
     out << "  return dxmt9_make_ffp_fs_out(float4(1.0f, 0.0f, 1.0f, 1.0f), fsVolatile.sampleMask);\n";
     out << "}\n";
     out << "// ffp pixel hash " << key.hash << "\n";

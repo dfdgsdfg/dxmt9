@@ -41,9 +41,11 @@ using u64 = std::uint64_t;
 // per-draw FsVolatile immediate at fragment buffer 5 (new prelude struct +
 // entry-point param) instead of FfpPsConsts, and the alpha-test variant-key
 // bit is gone.
+// Debug-env schema v3 retires four rejected translated-VS/VSOut diagnostic
+// axes; the remaining key covers only live source-affecting env surfaces.
 inline constexpr u32 kShaderEmitterVersion = 3u;
 inline constexpr u32 kShaderSourceLayoutVersion = 3u;
-inline constexpr u32 kShaderDebugEnvSchemaVersion = 2u;
+inline constexpr u32 kShaderDebugEnvSchemaVersion = 3u;
 
 struct BlendAttachmentKey {
   bool blendingEnabled = false;
@@ -199,8 +201,6 @@ ShaderVariantKey makeShaderVariantProbeKey(ShaderVariantKey key) noexcept;
 // Stable value transform for source-affecting debug flags. Kept public so
 // native tests can verify the key shape without mutating process env.
 u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
-                                bool trimVertexTemps,
-                                bool trimVsOutputScratch,
                                 bool forceFullscreenVertex,
                                 bool flipTranslatedVertexY,
                                 bool forceFragmentShaderColor,
@@ -212,8 +212,6 @@ u64 makeShaderSourceDebugEnvKey(bool trimUnusedVaryings,
                                 bool debugFfpUv,
                                 bool debugFfpTexture,
                                 bool debugFfpAlpha,
-                                bool probeDropVSOutPointSize,
-                                bool probePositionOnlyVSOut,
                                 bool probeHalfVSOut,
                                 bool probeFragmentlessKeepVSOut) noexcept;
 
@@ -226,7 +224,7 @@ u64 currentShaderSourceDebugEnvKey(
 // equals the default (no DXMT_DISABLE_*/DXMT_FORCE_*/DXMT9_PROBE_*
 // classifier env active). Exposed so archive persistence
 // (dxmt9_command_queue.cpp, at CommandQueue construction) can gate the
-// R-BACK-3.11 pollution guard without duplicating the 19-parameter
+// R-BACK-3.11 pollution guard without duplicating the 14-parameter
 // makeShaderSourceDebugEnvKey() default-argument shape.
 bool shaderSourceDebugEnvIsDefault() noexcept;
 

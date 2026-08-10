@@ -108,22 +108,25 @@ def audit(root: Path, tile_coverage_csv: Path | None) -> list[dict[str, str]]:
         mesh_reason = "mesh/object bridge surface is incomplete in the audited source tree"
         mesh_action = "do not schedule mesh/object Xcode work"
 
-    position_probe = has_all(dxmt9_text, ("DXMT9_PROBE_POSITION_ONLY_VSOUT", "positionOnlyVSOutLayout"))
+    position_probe = has_all(
+        dxmt9_text,
+        ("positionOnlyVSOutLayout", "fragmentlessDepthOnly"),
+    )
     position_real_route = has_any(
         dxmt9_text,
         ("DXMT9_PROBE_POSITION_ONLY_BINNING", "positionOnlyBinning", "position_only_binning"),
     )
     if position_probe and not position_real_route:
         position_verdict = "visible-vsout-probe-only"
-        position_reason = "source-visible position-only VSOut probe exists, but no separate position/binning route is wired"
-        position_action = "do not use visible position-only VSOut as closure; define a real binning/depth/mesh route before Xcode"
+        position_reason = "the fragmentless depth-only route can use source-visible position-only VSOut, but no separate position/binning route is wired"
+        position_action = "do not use fragmentless position-only VSOut as closure; define a real binning/depth/mesh route before Xcode"
     elif position_real_route:
         position_verdict = "candidate-route-present"
         position_reason = "a position/binning route token exists in dxmt9"
         position_action = "validate row stability and Xcode bytes/invocation movement"
     else:
         position_verdict = "missing"
-        position_reason = "no position-only probe or real binning route found"
+        position_reason = "no fragmentless position-only or real binning route found"
         position_action = "ignore this backend escape until implementation exists"
 
     tile_bridge = has_all(dxmt9_text, ("selectTileFfpForPass", "makeFfpTilePixelSource")) and has_any(
@@ -158,7 +161,7 @@ def audit(root: Path, tile_coverage_csv: Path | None) -> list[dict[str, str]]:
             "candidate": "position-binning",
             "bridge_surface": "ordinary-render" if position_probe else "missing",
             "dxmt9_route": "present" if position_real_route else "missing",
-            "shader_emitter": "visible-vsout-probe" if position_probe else "missing",
+            "shader_emitter": "fragmentless-position-only-vsout" if position_probe else "missing",
             "current_gt1_evidence": "visible-width Xcode rejected",
             "verdict": position_verdict,
             "reason": position_reason,

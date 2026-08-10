@@ -1827,17 +1827,6 @@ OUT
             result.stderr,
         )
 
-    def test_wrapper_dry_run_includes_vertex_temp_trim_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--trim-vertex-temps",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_TRIM_VERTEX_TEMPS=1", result.stdout)
-
     def test_wrapper_dry_run_includes_scoped_varying_trim_env(self) -> None:
         result = self.run_script(
             RUN_WRAPPER,
@@ -1866,17 +1855,6 @@ OUT
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("require --trim-unused-varyings", result.stderr)
-
-    def test_wrapper_dry_run_includes_vsout_point_size_probe_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--drop-vsout-point-size",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1", result.stdout)
 
     def test_wrapper_dry_run_includes_half_vsout_probe_env(self) -> None:
         result = self.run_script(
@@ -3144,17 +3122,6 @@ OUT
         )
         self.assertEqual(joined["dxmt_backend_storage_confidence"], "high")
         self.assertGreater(joined["dxmt_hidden_backend_write_ratio"], 0.90)
-
-    def test_wrapper_dry_run_includes_vs_output_scratch_trim_env(self) -> None:
-        result = self.run_script(
-            RUN_WRAPPER,
-            "--no-gputrace",
-            "--trim-vs-output-scratch",
-            "--dry-run",
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("DXMT9_TRIM_VS_OUTPUT_SCRATCH=1", result.stdout)
 
     def test_wrapper_dry_run_includes_render_state_ab_env(self) -> None:
         result = self.run_script(

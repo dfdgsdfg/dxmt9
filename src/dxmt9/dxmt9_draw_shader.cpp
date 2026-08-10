@@ -183,7 +183,7 @@ shaders::VSOutLayout ffpPixelVaryingLiveness(const ShaderSourceContext& context)
 
 shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& context) {
   if (!shaders::vsoutTrimEnabled() || !trimAllowlistMatches(context)) {
-    return shaders::applyVSOutProbeOverrides(shaders::fullVSOutLayout());
+    return shaders::fullVSOutLayout();
   }
 
   shaders::VSOutLayout layout = shaders::fullVSOutLayout();
@@ -198,7 +198,7 @@ shaders::VSOutLayout resolveVSOutLayoutForShaderPair(const ShaderSourceContext& 
   // It must survive fragment-input liveness trimming so a programmable VS
   // with no oPts write can still receive D3DRS_POINTSIZE.
   layout.pointSize = true;
-  return shaders::applyVSOutProbeOverrides(layout);
+  return layout;
 }
 
 ShaderSourceContext makeShaderSourceContext(const DrawShaderLayoutContext& layout,

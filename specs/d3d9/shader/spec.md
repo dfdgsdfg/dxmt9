@@ -33,7 +33,7 @@ flowchart LR
     DEC["Decoder\ndxmt9_shader_decoder.cpp"]
     IR[["ShaderIR\n(struct SpirvModule)"]]
     P1["Required passes\n(constant usage,\nsampler usage,\nvertex output sem,\npixel input sem,\nmax temp)"]
-    P2["Optional passes\n(VSOut liveness,\ntemp trim,\nprecision inference)"]
+    P2["Optional passes\n(VSOut liveness,\nprecision inference)"]
     PLAN[["Analysis plans\n(value types)"]]
     EMIT["MSL emitter\ndxmt9_shader_metal_ir.cpp"]
     MSL["MSL translation\nunit (string)"]
@@ -371,7 +371,8 @@ Each is a pure function over `const SpirvModule&`:
 | `collectPixelSamplerUsage` | per-slot `bool` | sampler binding minimisation |
 | `collectConstantUsage` | `ConstantUsage` | constant-buffer slot range |
 | `shaderUsesPredicateRegisters` | `bool` | predicate emission |
-| `maxTempIndex` (inside `ConstantUsage`) | `u32` | sizes the emitted `r[]` array |
+| `maxTempIndex` (inside `ConstantUsage`) | `u32` | sizes fragment `r[]`; advisory for conservative vertex `r[]` |
+| `collectVertexOutputScratchUsage` | max index + indexed-access bit | advisory output-use analysis; vertex `outTexcoord[]` remains conservatively sized |
 
 These passes are the minimum set required for a correct default emit
 (R-CORE-SHADER-4.5).
@@ -381,8 +382,6 @@ These passes are the minimum set required for a correct default emit
 | Pass | Current opt-in | Status | gap.md row |
 |---|---|---|---|
 | VSOut liveness | `DXMT9_TRIM_UNUSED_VARYINGS` | implemented, opt-in | tracked |
-| Vertex temp-array trim | `DXMT9_TRIM_VERTEX_TEMPS` | implemented, opt-in | tracked |
-| VS output scratch trim | `DXMT9_TRIM_VS_OUTPUT_SCRATCH` | implemented, opt-in | tracked |
 | Precision inference (§4) | (target: new IR-level opt-in; supersedes the removed `DXMT9_FS_HALF_PRECISION` text-rewrite) | not implemented | new row |
 
 Each optional pass produces a value-type plan and participates in the cache
@@ -401,9 +400,9 @@ The pass walks every VS instruction that writes an `oT*`, `oD*`, `oFog`, or
 `oPts` register and intersects the writer set with the FS reader set. A
 field is emitted only when both sides reference it.
 
-The probe variants `DXMT9_TRIM_UNUSED_VARYINGS`, `minimalVSOutLayout`,
-`positionOnlyVSOutLayout`, and `applyVSOutProbeOverrides` are the current
-opt-in surface and remain available for A/B experiments.
+`DXMT9_TRIM_UNUSED_VARYINGS` is the current opt-in surface.
+`minimalVSOutLayout` and `positionOnlyVSOutLayout` remain pure layout helpers;
+the latter is also used by the fragmentless depth-only route.
 
 ---
 
@@ -499,7 +498,7 @@ separate `MTLBinaryArchive` slot):
 | Half-precision opt-in | every cast site and every typed identifier may change |
 | Half-pixel emit mode (programmable VS / FFP VS) | injection site differs by stage |
 | Debug toggles that change emitted code (`DXMT_DEBUG_FLIP_VERTEX_Y`, `DXMT_DEBUG_FORCE_PIXEL_V_FLIP`, `DXMT_DEBUG_FORCE_FRAGMENT_COLOR`, `DXMT_DEBUG_FORCE_FULLSCREEN_VERTEX`) | each adds or replaces an emit block |
-| Per-pass plan output that changes MSL bytes (precision plan, VSOut layout when liveness is enabled, trim plans) | the whole point of the pass is to change emit |
+| Per-pass plan output that changes MSL bytes (precision plan, VSOut layout when liveness is enabled) | the whole point of the pass is to change emit |
 
 The decision rule is mechanical: *does this axis change emitted MSL
 bytes for the same input IR?* If yes, library variant. If no, function
@@ -522,7 +521,7 @@ The cache key for one emitted shader is:
 cacheKey = hash64(
     irHash,                              // §2 hash
     shaderSourceContextKey,              // FFP variant, prelude options, alpha-test
-    enabledPassPlanHashes...,            // precision, VSOut layout, trim plans
+    enabledPassPlanHashes...,            // precision and VSOut layout plans
     halfPrecisionOptInBits,              // future precision-inference opt-in
     debugToggleBits                      // V-flip, force-fragment-color, etc.
 )
@@ -589,10 +588,10 @@ cache locality cuts invocations, and the counter moves in lockstep:
 This control path lives in the runtime / index-buffer code, not in the
 shader spec; it is owned by `specs/backend/`. The shader spec's residual
 unproven candidate is **per-output VSOut precision** (the IR-level FP16
-path, §4). Stage-out width reduction was tested via the existing trim
-passes (`DXMT9_TRIM_UNUSED_VARYINGS`, `minimalVSOutLayout`,
-`positionOnlyVSOutLayout`, `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE`) and did
-not move the counter at the GT1 baseline scale.
+path, §4). Stage-out width reduction was tested via VSOut liveness and the
+now-retired point-size / diagnostic position-only variants, plus the surviving
+`minimalVSOutLayout` and `positionOnlyVSOutLayout` helpers. It did not move the
+counter at the GT1 baseline scale.
 
 ### 8.2 Rejected Hypotheses
 
@@ -607,7 +606,7 @@ these in as the intended fix; the gap row for FP16 is the supersession.
 | State-bit ablation (alpha-test, cull, scissor, blend, fog) | `DXMT_DISABLE_*`, `DXMT9_PROBE_DISABLE_ALPHA_BLEND`, `DXMT9_PROBE_DEPTH_FUNC_ALWAYS` | rejected |
 | RT metadata removal | `DXMT9_SUPPRESS_RT_PIXEL_FORMAT_VIEW`, `DXMT9_SUPPRESS_X8_RT_PIXEL_FORMAT_VIEW` | rejected (texture writes dropped, VS buffer-write unchanged) |
 | Draw-call splits / merges | various probes | rejected (cost amplification) |
-| Drop VSOut point-size only | `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE` | rejected |
+| Drop VSOut point-size only | retired diagnostic variant | rejected |
 
 Pattern: state-bit and RT-metadata changes do not move the native backend
 VS write bucket. The empirically-proven control variable is post-transform

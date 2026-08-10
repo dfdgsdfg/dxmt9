@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Shader Codegen — translated-VS temp/scratch trim and offline Metal compiler inspection - Historical Log"
 type: domain-log
 status: historical
-updated: 2026-07-08
+updated: 2026-08-10
 source: docs/perfomance/shader-codegen/index.md
 related: docs/perfomance/shader-codegen/index.md; docs/perfomance/shader-codegen/overview.md
 ---
@@ -43,15 +43,14 @@ AIR-visible shape.
 | H3 | Compiler-visible IR (return + scratch) is large enough to own the bucket | rejected | shader-codegen-offline.01 |
 | H4 | The Metal compiler cannot see VSOut structural reductions, so source width is the lever | rejected | shader-codegen-offline.02 |
 
-## Verification methods
+## Historical verification methods
 
-- **`DXMT9_TRIM_VERTEX_TEMPS=1`** — sizes `r[]` from observed max temp index;
+- **Retired `DXMT9_TRIM_VERTEX_TEMPS=1`** — sized `r[]` from observed max temp index;
   proves the source-visible temp array is decoupled from the Xcode VS-write
-  counter. Exposed via `run_3dmark05_perf_probe.sh --trim-vertex-temps`.
-- **`DXMT9_TRIM_VS_OUTPUT_SCRATCH=1`** — sizes `outTexcoord[]` from emitted
-  texcoord usage; proves the output scratch is decoupled too. Exposed via
-  `--trim-vs-output-scratch`. Both flags are in the shader source debug-env key
-  so the PSO/source cache cannot serve a stale source across the A/B.
+  counter. The knob, wrapper flag, and cache-key bit were removed on 2026-08-10.
+- **Retired `DXMT9_TRIM_VS_OUTPUT_SCRATCH=1`** — sized `outTexcoord[]` from
+  emitted texcoord usage and proved the output scratch is decoupled too. The
+  knob, wrapper flag, and cache-key bit were removed on 2026-08-10.
 - **`xcrun metal` + metallib offline compile** (`analyze_metal_shader_codegen.py`)
   — compiles the matched top MSL with Apple's toolchain and summarizes IR return
   / local scratch without leaving `.air`/`.metallib`; proves the compiler already
@@ -118,22 +117,14 @@ investigation hands off to hidden-backend storage. The next useful lever is a
 legal Metal pipeline/backend shape that changes hidden vertex/tiler/parameter
 storage, or a reduction in submitted indexed primitive work (VS invocations).
 
-## How to run
-Every experiment here is a 3DMark05 GT1 run via the standard wrapper for the
-runtime A/B, plus offline `xcrun metal` analysis of the dumped MSL. Capture with a
-VS temp/scratch trim flag and `--dump-shaders`, then finalize and inspect the IR:
+## Historical recipe status
+
+The runtime temp/scratch A/B recipes cannot be rerun because their knobs,
+wrapper flags, and cache-key bits were removed on 2026-08-10 after both paths
+were rejected. The offline compiler analysis remains available for existing or
+new shader dumps:
 
 ```sh
-bash scripts/tools/run_3dmark05_perf_probe.sh --suffix vs-trim --frame 60 \
-  --trim-vertex-temps --dump-shaders --timeout 420
-# also: --trim-vs-output-scratch
-
-bash scripts/tools/finalize_3dmark05_perf_probe.sh --suffix vs-trim --frame 60 \
-  --baseline-joined traces/<baseline>/analysis/frame60-xcode-dxmt-joined-summary.csv \
-  --require-shader-dump-matches --require-top-vs-buffer-write-decrease \
-  --max-top-unexplained-buffer-write-ratio 0.50
-
-# Offline IR/scratch analysis of the matched top MSL (no runtime needed):
 python3 scripts/tools/analyze_metal_shader_codegen.py \
   traces/<run>/analysis/frame60-shader-dump-summary.csv \
   --shader-dir traces/<run>/analysis/shaders/msl \
@@ -141,8 +132,8 @@ python3 scripts/tools/analyze_metal_shader_codegen.py \
   --csv-output traces/<run>/analysis/frame60-codegen.csv
 ```
 
-The exact per-experiment flags live in each leaf's `**Method.**` field. See
-`agents/rules/environment_variables.rules.md` for env-var meanings and
+The original commands and measurements above remain historical evidence. See
+`agents/rules/environment_variables.rules.md` for live env-var meanings and
 `agents/rules/metal_debugging.rules.md` for the full workflow.
 
 ## Cross-references

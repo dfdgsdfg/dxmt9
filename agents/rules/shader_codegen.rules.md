@@ -38,9 +38,10 @@ SFIV CB GPU p50 `73 -> 2.4ms`, presents `1,740 -> 5,100`.
   test.
 - Any translator change that introduces a local array sized by a *shader
   property* (max register index, declared temps, output slots) must justify
-  the worst-case size against spill risk. `r[]` temps and `outTexcoord[]`
-  scratch are existing suspects with opt-in trims (`DXMT9_TRIM_VERTEX_TEMPS`,
-  `DXMT9_TRIM_VS_OUTPUT_SCRATCH`) — do not add new members of this class.
+  the worst-case size against spill risk. The pure max-index and output-usage
+  analyses remain available, but translated VS `r[]` and `outTexcoord[]` keep
+  their conservative default sizes after the rejected runtime trims were
+  retired — do not add new members of this class.
 - Source-contract tests prove *shape*, not *cost*. For emission-pattern
   changes, pair them with a GPU-counter gate (Xcode encoder counters or
   xctrace `metal-gpu-intervals`): watch stage "Buffer Bytes Written",

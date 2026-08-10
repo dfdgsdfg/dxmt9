@@ -47,16 +47,6 @@ using ::dxmt9::shaders::kArgbufResourceArrayStageCount;
 
 namespace {
 
-bool trimVertexTempsEnabled() {
-  const char* env = std::getenv("DXMT9_TRIM_VERTEX_TEMPS");
-  return env && env[0] != '\0' && env[0] != '0';
-}
-
-bool trimVertexOutputScratchEnabled() {
-  const char* env = std::getenv("DXMT9_TRIM_VS_OUTPUT_SCRATCH");
-  return env && env[0] != '\0' && env[0] != '0';
-}
-
 std::string pixelPositionExpression(const std::string& pixelInputs) {
   return pixelInputs + ".position";
 }
@@ -1534,11 +1524,9 @@ std::string translateSpirvToMsl(const SpirvModule& module,
   if (vertex) {
     const auto inputLayout = decodeVertexShaderInputLayout(module, context);
     const auto outputSemantics = collectVertexOutputSemantics(module);
-    const auto outputScratchUsage =
+    [[maybe_unused]] const auto outputScratchUsage =
         collectVertexOutputScratchUsage(module, outputSemantics, context.vsOutLayout);
-    const u32 texcoordScratchCount = trimVertexOutputScratchEnabled()
-        ? std::max<u32>(1u, outputScratchUsage.maxTexcoordIndex + 1u)
-        : kMaxTextureStages;
+    const u32 texcoordScratchCount = kMaxTextureStages;
     const u32 texcoordScratchMaxIndex = texcoordScratchCount - 1u;
     const auto vertexSamplerUsage = collectVertexSamplerUsage(module);
     const bool traceShaderInputs = [] {
@@ -1792,17 +1780,11 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       auto constantUsage = collectConstantUsage(module);
       promoteIndexedConstantDestinations(constantUsage, module, true);
       const auto constantAccess = makeConstantAccess(module, true, constantUsage);
-      // R-SHADER-AIR-SIZE: VS path keeps the full 32-temp array by
-      // default. FS sizing is already always-on, but a prior shared VS+FS
-      // trim produced a visual regression in SFIV stage-transition overlays.
-      // 3DMark05 GT1 frame60 now shows top VS shaders paying the full
-      // r[32] zero-init despite little or no actual temp use, so expose the
-      // VS version as an opt-in perf experiment until it has broader corpus
-      // coverage.
-      const u32 tempCount = trimVertexTempsEnabled()
-                                ? static_cast<u32>(std::max<std::int32_t>(
-                                      1, constantUsage.maxTempIndex + 1))
-                                : 32u;
+      // R-SHADER-AIR-SIZE: VS keeps the conservative full 32-temp array. FS
+      // sizing is always-on, but the rejected VS trim regressed SFIV
+      // stage-transition overlays. Keep collecting maxTempIndex as a pure
+      // analysis result without changing the default VS source shape.
+      const u32 tempCount = 32u;
 	    out << "  float4 r[" << tempCount << "];\n";
 	    out << "  for (uint i = 0; i < " << tempCount
 	        << "u; ++i) { r[i] = float4(0.0f); }\n";
@@ -2865,8 +2847,7 @@ std::string translateSpirvToMsl(const SpirvModule& module,
       out << "  return " << valueExpr << ";\n";
     }
   };
-  if (::dxmt9::shaders::vsoutProbePositionOnlyEnabled() ||
-      ::dxmt9::debug::forceFragmentShaderColor()) {
+  if (::dxmt9::debug::forceFragmentShaderColor()) {
     emitFragmentDebugReturn("float4(1.0f, 0.0f, 1.0f, 1.0f)");
     out << "}\n";
     out << "// decoded d3d hash " << module.hash << "\n";

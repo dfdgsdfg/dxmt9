@@ -48,7 +48,7 @@ class AuditBackendEscapeSurfaceTests(unittest.TestCase):
             "MTLRenderCommandEncoder_dispatchThreadsPerTile();",
         )
         dxmt9 = (
-            "DXMT9_PROBE_POSITION_ONLY_VSOUT positionOnlyVSOutLayout "
+            "fragmentlessDepthOnly positionOnlyVSOutLayout "
             "selectTileFfpForPass makeFfpTilePixelSource"
         )
         if mesh_route:

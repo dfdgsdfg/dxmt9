@@ -481,8 +481,6 @@ void testShaderVariantKeyCarriesSourceIdentity() {
 
   const auto debugOff = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/false,
-      /*trimVertexTemps=*/false,
-      /*trimVsOutputScratch=*/false,
       /*forceFullscreenVertex=*/false,
       /*flipTranslatedVertexY=*/false,
       /*forceFragmentShaderColor=*/false,
@@ -494,14 +492,10 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
       /*debugFfpAlpha=*/false,
-      /*probeDropVSOutPointSize=*/false,
-      /*probePositionOnlyVSOut=*/false,
       /*probeHalfVSOut=*/false,
       /*probeFragmentlessKeepVSOut=*/false);
   const auto debugUv = dxmt9::pipeline::makeShaderSourceDebugEnvKey(
       /*trimUnusedVaryings=*/true,
-      /*trimVertexTemps=*/true,
-      /*trimVsOutputScratch=*/true,
       /*forceFullscreenVertex=*/false,
       /*flipTranslatedVertexY=*/false,
       /*forceFragmentShaderColor=*/false,
@@ -513,8 +507,6 @@ void testShaderVariantKeyCarriesSourceIdentity() {
       /*debugFfpUv=*/false,
       /*debugFfpTexture=*/false,
       /*debugFfpAlpha=*/false,
-      /*probeDropVSOutPointSize=*/true,
-      /*probePositionOnlyVSOut=*/true,
       /*probeHalfVSOut=*/true,
       /*probeFragmentlessKeepVSOut=*/true);
   check(debugOff != debugUv, "pure debug env key responds to source-affecting values");

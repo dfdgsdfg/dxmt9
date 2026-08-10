@@ -268,27 +268,13 @@ Commercial / 3rd-party titles (require external prefix):
     pair-local VSOut liveness path is active. Compare it to the baseline joined
     CSV with `--baseline-joined <csv> --require-top-vs-buffer-write-decrease`
     to prove whether trimming moves the Xcode VS buffer-write counter.
-    If the broad trim does not move Xcode's bucket, use
-    `--drop-vsout-point-size` for a narrower pipeline-shape A/B. This sets
-    `DXMT9_PROBE_DROP_VSOUT_POINT_SIZE=1` and removes only
-    `VSOut.pointSize [[point_size]]` while preserving texcoords/color/fog, so
-    any counter movement is attributable to the Metal point-size path rather
-    than ordinary FS liveness.
     `--probe-half-vsout` sets `DXMT9_PROBE_HALF_VSOUT=1` and requests `half4`
     for color/secondary/texcoord VSOut fields plus `half` for fogFactor, while
     keeping `position`, `[[point_size]]`, and `[[clip_distance]]` as float.
     This is a mechanism probe for the shader spec's per-output VSOut precision
     hypothesis; gate it with Xcode counters and semantic images before treating
     it as more than a backend-shape classifier.
-    If live VSOut and point-size probes still leave Xcode's bucket unchanged,
-    use `--probe-position-only-vsout` as a correctness-invalid lower-bound
-    diagnostic. This sets `DXMT9_PROBE_POSITION_ONLY_VSOUT=1`, forces a
-    position-only VSOut layout, and makes translated/FFP fragment shaders
-    return a constant color so the reduced stage-in shape can compile. Accept
-    it only as evidence about whether visible stage-out shape can move
-    `VS Buffer Device Memory Bytes Written`.
-    To separate the constant-fragment side of that probe from the VSOut-layout
-    side, use `--force-fragment-color`. This sets
+    Use `--force-fragment-color` as a constant-fragment control. This sets
     `DXMT_DEBUG_FORCE_FRAGMENT_COLOR=1`, keeps the current VSOut layout, and
     forces translated/FFP fragment shaders to return a constant color. Compare
     it against the same baseline before attributing position-only movement to
@@ -315,20 +301,6 @@ Commercial / 3rd-party titles (require external prefix):
     This builds a separate shader-source variant only for selected indexed
     triangle-list draws and records `probe_force_texture_white_draws` in the
     encoder breakdown.
-    If VSOut trimming leaves Xcode's VS buffer-write bucket unchanged, run the
-    next paired candidate with `--trim-vertex-temps`; this sets
-    `DXMT9_TRIM_VERTEX_TEMPS=1` so translated VS `float4 r[]` is sized from
-    observed temp source/dest usage instead of the conservative 32-slot array.
-    Keep this as an experiment until a shader-corpus run and gputrace A/B prove
-    it does not reproduce the older VS trim visual regression.
-    If that also leaves Xcode's VS buffer-write bucket unchanged, run the next
-    paired candidate with `--trim-vs-output-scratch`; this sets
-    `DXMT9_TRIM_VS_OUTPUT_SCRATCH=1` so translated VS `float4 outTexcoord[]`
-    is sized from emitted/mapped texcoord output usage instead of the
-    conservative 8-slot local scratch array. Gate it the same way with
-    `--baseline-joined <csv> --require-top-vs-buffer-write-decrease` and keep
-    shader dumps enabled so the `VS outT[]` columns show whether the source
-    shape actually changed.
     After Xcode exports
     `analysis/frame<N>-counters-xcode.csv`, run
     `scripts/tools/finalize_3dmark05_perf_probe.sh --suffix <suffix> --frame <N>`.
