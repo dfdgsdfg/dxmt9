@@ -9,7 +9,7 @@
 namespace dxmt9::encoders {
 enum class ProductionPartitionFallbackReason : std::uint8_t;
 struct ParallelPassExecutionDecision;
-struct SealedParallelPassSnapshotResult;
+struct SealedParallelPassSnapshotBatchResult;
 }  // namespace dxmt9::encoders
 
 namespace dxmt9::render {
@@ -254,7 +254,7 @@ void countRenderPartitionProvider(render::PartitionModeRequest requestedMode,
 void countParallelPassDecision(
     const encoders::ParallelPassExecutionDecision& decision);
 void countParallelPassShadow(
-    const encoders::SealedParallelPassSnapshotResult& result);
+    const encoders::SealedParallelPassSnapshotBatchResult& result);
 void countCpuReadySessionHeadAppended(bool arenaSource);
 void countCpuReadySessionTailSubmitted();
 void countCompletionSpanShadowBuilt(std::uint64_t sourceCount);

@@ -1127,27 +1127,48 @@ If eligibility or snapshot validation fails before child Metal side effects,
 the coordinator uses the serial plan. A failure after child emission is an
 invariant failure, because Metal encoding cannot be rewound safely.
 
-The first implementation increment keeps this as a non-Metal execution
-contract. `ExplicitParallel` is a distinct queue-immutable mode and invokes the
-same bounded production planner and exact range validator as `ExplicitSerial`.
-When performance observation is enabled, a bounded producer attempts the first
-conservative production shape: one fresh, source-local logical pass whose
-effective replay consists only of two to sixteen validated `DrawRun` child
-ranges and, optionally, one final Present. A carried session predecessor,
-deferred session tail, Clear or any other coordinator command, attachment-key
-change, incomplete resource proof, attachment read hazard, stale first-draw
-locator, or capacity excess rejects the snapshot before Metal or queue effects.
+The current implementation keeps this as a non-Metal execution contract.
+`ExplicitParallel` is a distinct queue-immutable mode and invokes the same
+bounded production planner and exact range validator as `ExplicitSerial`. When
+performance observation is enabled, an allocation-free producer scans the
+final validated `EncodePartitionReplayStream` before the serial cursor and
+before Metal, queue, action, or completion effects. One fixed source-local
+batch owns at most 16 pass observations, each with two to 16 validated
+`DrawRun` children.
 
-The successful snapshot owns only fixed locator, attachment, exact read/write,
-and first-draw provenance values. It owns no `SourcePayloadView`, span, Tape
-page, Metal object, or mutable native binding shadow. Its `entryRender` key is a
-compact static eligibility proof, not an executable native state image: a real
-adapter must re-resolve every locator under a residency pin and validate the
-effective render route, initializer/capture state, full first-draw binding, and
-pass action epoch immediately before child creation. Production currently
-reports this snapshot as eligible, records `ParallelEncoderUnavailable`, and
-consumes the original validated ranges on the serial coordinator. It does not
-ask WMT for a parallel parent or child encoder.
+The producer derives pass boundaries from the effective replay order. A proven
+fresh call frontier, source-local finalization, Clear, Present, or attachment
+change may close or begin a logical span. Clear and Present are recorded only
+as source-qualified coordinator locators and never become child ranges.
+Multiple complete passes in one source are considered independently. A carried
+leading fragment and incomplete trailing fragment fail closed, but do not
+prevent a later pass beginning at an exact local boundary from being observed.
+The producer never infers a complete pass across a source, EncodeSession, or
+command-buffer boundary.
+
+Every DrawRun inside a candidate must be represented entirely by validated
+production child ranges; an unsplit/non-child DrawRun rejects that pass. Query,
+Readback, UpdateTexture, initializer waits, ordered controls, sidecar/global
+observations, and other helper commands are excluded before effects and cannot
+become children. Each pass requires one attachment key, complete unioned exact
+resource sets, no attachment write/read overlap, one nonzero pass-action epoch,
+and complete source-qualified first-draw provenance. Attachment changes split
+candidates without merging their action ownership. Fixed pass/child capacity,
+stale locators, incomplete resources, and epoch ambiguity reject without
+altering the production plan.
+
+A successful observation owns only fixed locators, attachment/resource values,
+pass boundaries, pass-action epoch, and first-draw provenance. It owns no
+`SourcePayloadView`, span, Tape page, Metal object, or mutable native binding
+shadow. Its `entryRender` key remains compact static eligibility, not an
+executable native-state image: a real adapter must re-resolve every locator
+under a source residency pin and revalidate effective render route,
+initializer/capture state, complete native first-draw bindings, resource
+residency, attachments, and pass-action epoch immediately before child
+creation. Production records `ParallelEncoderUnavailable` for each statically
+eligible pass and consumes the unchanged validated ranges on the serial
+coordinator. It does not ask WMT for a parallel parent or child encoder. With
+perf observation disabled, no pass-local producer or proof work runs.
 
 The pure bounded seam classifies sealed-plan eligibility and selection with a
 typed fallback reason, copies at most 16 locator-only child plans, assigns a
@@ -1246,7 +1267,7 @@ fallback is a provider-lifecycle decision, not a storage-only refactor.
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
 | Partition plan validation | partition snapshot/serial specs cover locator validation, threshold edges, deterministic subdivision, mixed and active-order streams, DCE-empty replay, segmented Arena consumption, merge-preservation identity, bounded overflow/malformed fail-open, and canonical selector resolution. EncodeSession lifecycle coverage compares production identity and explicit-serial execution and proves command-once, equal pass begin/end, equal split-policy and upload shape, and complete draw consumption. Wild explicit-plan evidence remains missing. |
 | Stable provider configuration | partition-axis pure resolver coverage pins unset, identity, serial, distinct `ExplicitParallel`, empty, and unknown behavior plus queue forwarding; partition requested/resolved counters are implemented. Source/segment-axis resolvers, the unified mode matrix, process-separated selector precedence/default/fallback evidence, and requested/resolved source/segment perf observability remain missing. |
-| Parallel order and join | deterministic Metal-free fake-child coverage proves ordered creation, arbitrary completion join, distinct local shadows, forced full first-draw binding, command/draw once, coordinator-owned actions/sidecars/completion, join-before-parent-end, pre-effect fallback, and post-effect fail-stop. Production native coverage additionally pins bounded value-owned sealing for the conservative complete source-local DrawRun shape, final-Present treatment, locator validation, attachment equality, read/write hazard rejection, and capacity failure. Enabled shadow counters expose attempts, sealed/eligible passes, child/draw volume and grouped rejection causes. Real WMT adapter, worker pool, cross-source/carried-session sealing, effective native-state revalidation, and formal/refinement evidence remain missing. |
+| Parallel order and join | deterministic Metal-free fake-child coverage proves ordered creation, arbitrary completion join, distinct local shadows, forced full first-draw binding, command/draw once, coordinator-owned actions/sidecars/completion, join-before-parent-end, pre-effect fallback, and post-effect fail-stop. Production native coverage pins the fixed pass-local batch over final replay order: Clear/Present coordinator boundaries, multi-pass extraction, attachment splitting, helper/control exclusion, non-child DrawRun rejection, carried/incomplete fragments, locator/resource/hazard/epoch validation, 2..16 child bounds, unchanged serial coverage, and perf-off zero producer work. Enabled counters expose attempts, candidate/sealed/eligible pass volume and maxima, child/draw volume and maxima, plus grouped rejection causes. Real WMT adapter, worker pool, cross-source/carried-session sealing, residency-pinned complete native-state revalidation, and formal/refinement evidence remain missing. |
 | Logical-pass actions across segments | native deferred-suffix action specs prove no held-edge Store/action/sidecar/completion publication and exactly-once terminal resolution/publication for join and natural drain; Metal integration evidence remains missing |
 | Post-encode deferred-suffix retirement | native retirement evidence blocks receipt/detach until suffix consumption, final borrow release, and all effects; it then proves command-once, current-before-successor receipt/completion/reclaim, residency/work conservation, and zero final receipt depth. `PostEncodePayloadRetirement` checks the corresponding safety and temporal properties and is green under `dxmt9-verify-tla`. |
 | Metal 4 capability lane | missing capability/fallback unit evidence, Metal integration, and visual/locality A/B |

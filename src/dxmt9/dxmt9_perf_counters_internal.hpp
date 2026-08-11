@@ -166,8 +166,11 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassFallbackUnavailable{0};
   std::atomic<std::uint64_t> parallelPassFallbackPreEffect{0};
   std::atomic<std::uint64_t> parallelPassShadowAttempts{0};
+  std::atomic<std::uint64_t> parallelPassShadowCandidates{0};
+  std::atomic<std::uint64_t> parallelPassShadowCandidatesMax{0};
   std::atomic<std::uint64_t> parallelPassShadowSealed{0};
   std::atomic<std::uint64_t> parallelPassShadowEligible{0};
+  std::atomic<std::uint64_t> parallelPassShadowEligibleMax{0};
   std::atomic<std::uint64_t> parallelPassShadowChildren{0};
   std::atomic<std::uint64_t> parallelPassShadowChildrenMax{0};
   std::atomic<std::uint64_t> parallelPassShadowDraws{0};

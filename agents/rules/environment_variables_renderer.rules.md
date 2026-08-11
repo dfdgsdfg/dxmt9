@@ -18,7 +18,7 @@ export and divergence flags below are diagnostic surfaces, not provider modes.
 | Var | Purpose | Default |
 |---|---|---|
 | `DXMT9_RENDER_MODE` | Select the unix-side render backend. Unset and `framegraph` resolve to `FrameGraphBackend`. Empty, `0`, `traditional`, and unknown values resolve to the conservative `TraditionalBackend` rollback. `scripts/run_apps/run_experiment.py` maps an omitted catalogue `render_mode` to `framegraph` unless the process environment explicitly overrides it for a diagnostic run. | framegraph |
-| `DXMT9_RENDER_PARTITION_MODE` | Queue-immutable partition execution selector. Unset or `identity` uses the allocation-free identity cursor. `serial` runs the bounded production planner after final Traditional/FrameGraph replay order and DCE selection, subdividing only large DrawRuns at indexed-merge-preserving edges before complete validation and serial consumption. `parallel` resolves to the distinct `ExplicitParallel` provider and runs that same validated planner. When perf observation is enabled, it also attempts a conservative value-owned sealed-pass shadow for complete fresh source-local DrawRun passes and reports eligibility or a grouped rejection; successful shadows still record `ParallelEncoderUnavailable` and use the explicit serial consumer. Real WMT `MTLParallelRenderCommandEncoder` calls and a worker pool remain unimplemented, so no Metal parallel encoding is activated. Empty and unknown values fail closed to identity. Partition edges do not create render-pass, command-buffer, action, or completion boundaries. | identity |
+| `DXMT9_RENDER_PARTITION_MODE` | Queue-immutable partition execution selector. Unset or `identity` uses the allocation-free identity cursor. `serial` runs the bounded production planner after final Traditional/FrameGraph replay order and DCE selection, subdividing only large DrawRuns at indexed-merge-preserving edges before complete validation and serial consumption. `parallel` resolves to the distinct `ExplicitParallel` provider and runs that same validated planner. When perf observation is enabled, it scans the final validated replay order before effects and builds a fixed batch of complete source-local logical-pass observations. Clear and Present may delimit a pass but remain coordinator-owned; every child is a validated DrawRun range, and carried/incomplete fragments, non-child DrawRuns, helper/control commands, attachment/resource/epoch uncertainty, or fixed-capacity overflow fail closed. Successful observations are static eligibility only: a future executor must re-resolve locators under a residency pin and validate complete native first-draw state plus the pass-action epoch. Production still records `ParallelEncoderUnavailable` and uses the unchanged serial consumer. Real WMT `MTLParallelRenderCommandEncoder` calls and a worker pool remain unimplemented, so no Metal parallel encoding is activated. Empty and unknown values fail closed to identity. Partition edges do not create render-pass, command-buffer, action, or completion boundaries. | identity |
 | `DXMT9_RENDERER_COMPAT_PROFILE` | Runtime compatibility-profile override. Unset and `progressive` enable the promoted optimizer set; `strict`, empty, `0`, and unknown values resolve to the feature-empty strict rollback. Catalogue `compat_profile` forwarding is still pending, so per-app rollback currently requires a process-environment override. | progressive |
 | `DXMT9_RENDERER_FEATURES` | Comma/space/semicolon-separated modern-renderer feature list for `FrameGraphBackend`. Under the default progressive profile, unset enables only `passcoalesce`; empty or `0` disables every optimizer feature. Explicit tokens accept `passcoalesce` and opt-in `dce`; unsupported tokens are warned and ignored. Strict rejects every token. `dce` may encode a proof-independent prefix of one dequeued chunk, then selects its FIFO successor only when that source is already ready; it never waits for proof. Without a ready successor it immediately completes the current optimized permutation without cross-chunk omission. A selected successor may omit only passes whose every output has a full-overwrite proof. The production lane replays a validated full permutation or DCE ordered subset through the existing canonical `encodeChunk` path. | passcoalesce |
 | `DXMT9_RENDERER_LOG_DIVERGENCE` | Enable renderer decision-divergence logging when the parity/divergence harness compares modern decisions against the traditional reference stream. | `0` |
@@ -70,6 +70,21 @@ observer runs:
 | `framegraph_dce_lookahead_prefix_commands` | Commands encoded through those optimized prefixes. |
 | `framegraph_dce_lookahead_selected` | Held sources that obtained a FIFO successor. |
 | `framegraph_dce_lookahead_fail_open` | Held sources completed without successor proof because no FIFO successor was ready after prefix encode. |
+
+Parallel mode adds a perf-gated observation-only counter family:
+
+| Counter | Meaning |
+|---|---|
+| `parallel_pass_shadow_attempts` | Producer invocations over a validated effective replay stream. |
+| `parallel_pass_shadow_candidates`, `parallel_pass_shadow_candidates_max` | Complete or rejected logical-pass candidates and the maximum candidates in one source-local batch. |
+| `parallel_pass_shadow_sealed`, `parallel_pass_shadow_eligible`, `parallel_pass_shadow_eligible_max` | Boundary-complete candidates, statically eligible passes, and maximum eligible passes in one batch. |
+| `parallel_pass_shadow_children`, `parallel_pass_shadow_children_max` | Eligible DrawRun child-range volume and maximum children in one pass. |
+| `parallel_pass_shadow_draws`, `parallel_pass_shadow_draws_max` | Eligible draw volume and maximum draws in one pass. |
+| `parallel_pass_shadow_reject_{plan,boundary,command,capacity,attachment,hazard,snapshot}` | Grouped fail-closed pass-local rejection counts. |
+
+When perf counters are disabled, the pass-local producer and all of its proof
+work are skipped. These counters do not claim native-state readiness, Metal
+parallel execution, or performance improvement.
 
 ## Current frontier
 

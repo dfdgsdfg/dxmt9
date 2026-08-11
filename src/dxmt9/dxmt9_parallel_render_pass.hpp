@@ -8,10 +8,12 @@
 #include <cstdint>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 namespace dxmt9::encoders {
 
 inline constexpr std::size_t kParallelRenderPassChildCapacity = 16u;
+inline constexpr std::size_t kParallelRenderPassCandidateCapacity = 16u;
 
 // A value proof that a child can establish its first draw without borrowing
 // the coordinator's mutable native binding shadow. The producer owns the
@@ -34,10 +36,14 @@ enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   UnsealedStart,
   UnsealedEnd,
   CoordinatorCommand,
+  NonChildDrawRun,
   TooFewChildren,
   ChildCapacity,
+  PassCapacity,
   AttachmentMismatch,
+  ResourceSetIncomplete,
   ResourceHazard,
+  PassActionEpoch,
   FirstDrawSnapshot,
   Count,
 };
@@ -45,15 +51,32 @@ enum class SealedParallelPassSnapshotFallback : std::uint8_t {
 struct SealedParallelPassSnapshotInput {
   const EncodePartitionReplayStream* stream = nullptr;
   std::span<const EncodePartitionRangeSnapshot> ranges{};
+  std::uint64_t firstPassActionEpoch = 1u;
   bool planValidated = false;
   bool sourceStartsPass = false;
   bool sourceEndsPass = false;
+  bool hasQuery = false;
+  bool hasUpdateTexture = false;
+  bool hasOrderedControl = false;
+  bool hasInitializerWait = false;
+  bool hasSidecarObservation = false;
 };
 
-// Fixed value-owned shadow of one complete single-source logical pass. It
-// deliberately contains no SourcePayloadView, resolved span, Metal object, or
-// page pointer. The source locator must be re-resolved under a residency pin by
-// any future executor before child creation.
+struct ParallelPassCommandLocator {
+  RetainedEncodeSourceLocator source{};
+  std::uint32_t replayOrdinal = 0;
+  std::uint32_t commandIndex = 0;
+  core::MetalCommandKind kind = core::MetalCommandKind::DrawRun;
+  bool valid = false;
+
+  friend constexpr bool operator==(const ParallelPassCommandLocator&,
+                                   const ParallelPassCommandLocator&) = default;
+};
+
+// Fixed value-owned shadow of one complete source-local logical pass. It owns
+// no SourcePayloadView, resolved span, page, Metal object, or mutable native
+// state. A future executor must re-resolve every locator under one residency
+// pin and validate native state plus passActionEpoch before child creation.
 struct SealedParallelPassSnapshot {
   std::array<EncodePartitionRangeSnapshot,
              kParallelRenderPassChildCapacity> ranges{};
@@ -61,11 +84,18 @@ struct SealedParallelPassSnapshot {
              kParallelRenderPassChildCapacity> firstDraws{};
   core::RenderAttachmentKey attachments{};
   core::ExactResourceSet attachmentWrites{};
+  core::ExactResourceSet resourceReads{};
   core::CpuReadyTape::SourceRef source{};
+  ParallelPassCommandLocator firstDraw{};
+  ParallelPassCommandLocator leadingClear{};
+  ParallelPassCommandLocator sealingCommand{};
   std::uint64_t seqId = 0;
+  std::uint64_t passActionEpoch = 0;
   std::uint64_t drawCount = 0;
+  std::uint32_t replayOrdinalBegin = 0;
+  std::uint32_t replayOrdinalEnd = 0;
   std::uint32_t childCount = 0;
-  bool hasTerminalPresent = false;
+  bool sealedAtSourceEnd = false;
 
   void reset() noexcept { *this = {}; }
   std::span<const EncodePartitionRangeSnapshot> rangeView() const noexcept {
@@ -78,27 +108,56 @@ struct SealedParallelPassSnapshot {
   }
 };
 
-struct SealedParallelPassSnapshotResult {
-  SealedParallelPassSnapshotFallback fallback =
-      SealedParallelPassSnapshotFallback::PlanMissing;
-  std::uint64_t drawCount = 0;
-  std::uint32_t childCount = 0;
-  bool considered = false;
-  bool sealed = false;
-  bool eligible = false;
+struct SealedParallelPassSnapshotBatch {
+  std::array<SealedParallelPassSnapshot,
+             kParallelRenderPassCandidateCapacity> passes{};
+  std::size_t count = 0;
 
-  friend constexpr bool operator==(
-      const SealedParallelPassSnapshotResult&,
-      const SealedParallelPassSnapshotResult&) = default;
+  void reset() noexcept { count = 0; }
+  std::span<const SealedParallelPassSnapshot> view() const noexcept {
+    return std::span<const SealedParallelPassSnapshot>(passes.data(), count);
+  }
 };
 
-// Production shadow producer for the first safely provable shape: a fresh,
-// source-local pass whose selected stream contains only DrawRuns and an
-// optional final Present. Full-plan validation must already have succeeded.
-// The function is allocation-free and performs no Metal or queue side effect.
-SealedParallelPassSnapshotResult produceSealedParallelPassSnapshot(
+struct SealedParallelPassSnapshotBatchResult {
+  SealedParallelPassSnapshotFallback fallback =
+      SealedParallelPassSnapshotFallback::PlanMissing;
+  std::array<std::uint32_t,
+             static_cast<std::size_t>(SealedParallelPassSnapshotFallback::Count)>
+      rejectionCounts{};
+  std::uint64_t drawCount = 0;
+  std::uint32_t childCount = 0;
+  std::uint32_t candidateCount = 0;
+  std::uint32_t sealedCount = 0;
+  std::uint32_t eligibleCount = 0;
+  std::uint32_t eligibleCountMax = 0;
+  std::uint32_t childCountMax = 0;
+  std::uint64_t drawCountMax = 0;
+  bool considered = false;
+
+  friend constexpr bool operator==(
+      const SealedParallelPassSnapshotBatchResult&,
+      const SealedParallelPassSnapshotBatchResult&) = default;
+};
+
+// Allocation-free producer over the final effective replay order. It can emit
+// several independent complete pass observations from one source, while
+// leaving every coordinator command outside child ranges. Full production-plan
+// validation must already have succeeded; the function has no side effects.
+SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const SealedParallelPassSnapshotInput& input,
-    SealedParallelPassSnapshot& snapshot) noexcept;
+    SealedParallelPassSnapshotBatch& snapshots) noexcept;
+
+template <typename Producer>
+bool runParallelPassObservationIfEnabled(bool explicitParallel,
+                                         bool perfEnabled,
+                                         Producer&& producer) {
+  if (!explicitParallel || !perfEnabled) {
+    return false;
+  }
+  std::forward<Producer>(producer)();
+  return true;
+}
 
 enum class ParallelPassFallbackReason : std::uint8_t {
   None,
@@ -143,13 +202,17 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
   case SealedParallelPassSnapshotFallback::UnsealedEnd:
     return ParallelPassFallbackReason::PassNotSealed;
   case SealedParallelPassSnapshotFallback::CoordinatorCommand:
+  case SealedParallelPassSnapshotFallback::NonChildDrawRun:
     return ParallelPassFallbackReason::CoordinatorCommand;
   case SealedParallelPassSnapshotFallback::TooFewChildren:
     return ParallelPassFallbackReason::TooFewChildren;
   case SealedParallelPassSnapshotFallback::ChildCapacity:
+  case SealedParallelPassSnapshotFallback::PassCapacity:
     return ParallelPassFallbackReason::ChildCapacity;
   case SealedParallelPassSnapshotFallback::AttachmentMismatch:
+  case SealedParallelPassSnapshotFallback::ResourceSetIncomplete:
   case SealedParallelPassSnapshotFallback::ResourceHazard:
+  case SealedParallelPassSnapshotFallback::PassActionEpoch:
     return ParallelPassFallbackReason::UnresolvedHazard;
   case SealedParallelPassSnapshotFallback::FirstDrawSnapshot:
   case SealedParallelPassSnapshotFallback::Count:
@@ -161,6 +224,7 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
 struct ParallelPassEligibilityInput {
   std::span<const EncodePartitionRangeSnapshot> ranges{};
   std::span<const ParallelFirstDrawSnapshot> firstDrawSnapshots{};
+  std::uint64_t passActionEpoch = 0;
   bool explicitPlan = false;
   bool planValidated = false;
   bool logicalPassSealed = false;
@@ -227,6 +291,9 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
   if (input.hasUnresolvedHazard) {
     return reject(ParallelPassFallbackReason::UnresolvedHazard);
   }
+  if (input.passActionEpoch == 0u) {
+    return reject(ParallelPassFallbackReason::UnresolvedHazard);
+  }
   if (input.firstDrawSnapshots.size() != input.ranges.size()) {
     return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
   }
@@ -237,7 +304,9 @@ inline ParallelPassEligibilityDecision classifyParallelPassEligibility(
     if (!input.firstDrawSnapshots[i].complete ||
         input.firstDrawSnapshots[i].generation == 0u ||
         !input.firstDrawSnapshots[i].entryRender.valid() ||
-        !input.firstDrawSnapshots[i].entryRender.entryStateComplete()) {
+        !input.firstDrawSnapshots[i].entryRender.entryStateComplete() ||
+        input.firstDrawSnapshots[i].entryRender.passActionEpoch !=
+            input.passActionEpoch) {
       return reject(ParallelPassFallbackReason::FirstDrawSnapshotMissing);
     }
   }
@@ -362,6 +431,8 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
   }
   std::array<bool, kParallelRenderPassChildCapacity + 1u> shadows{};
   const auto& firstSource = children.front().range.entry.source;
+  const std::uint64_t passActionEpoch =
+      children.front().firstDraw.entryRender.passActionEpoch;
   std::uint32_t previousReplayOrdinal = 0u;
   std::uint32_t previousDrawEnd = 0u;
   std::uint32_t previousCommandIndex = 0u;
@@ -391,7 +462,9 @@ inline ParallelPassFallbackReason validateParallelPassChildPlans(
     if (!child.firstDraw.complete || child.firstDraw.generation == 0u ||
         child.firstDraw.provenance != range.entry ||
         !child.firstDraw.entryRender.valid() ||
-        !child.firstDraw.entryRender.entryStateComplete()) {
+        !child.firstDraw.entryRender.entryStateComplete() ||
+        passActionEpoch == 0u ||
+        child.firstDraw.entryRender.passActionEpoch != passActionEpoch) {
       return ParallelPassFallbackReason::FirstDrawProvenanceInvalid;
     }
     if (!child.forceFullFirstDrawBinding) {
@@ -514,8 +587,10 @@ ParallelPassExecutionResult executeParallelRenderPass(
 }
 
 static_assert(std::is_trivially_copyable_v<ParallelFirstDrawSnapshot>);
+static_assert(std::is_trivially_copyable_v<ParallelPassCommandLocator>);
 static_assert(std::is_trivially_copyable_v<SealedParallelPassSnapshot>);
 static_assert(std::is_standard_layout_v<SealedParallelPassSnapshot>);
+static_assert(std::is_trivially_copyable_v<SealedParallelPassSnapshotBatch>);
 static_assert(std::is_standard_layout_v<ParallelPassChildPlan>);
 static_assert(std::is_trivially_copyable_v<ParallelPassPlanStorage>);
 

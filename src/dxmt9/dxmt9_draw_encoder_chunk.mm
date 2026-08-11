@@ -1248,44 +1248,41 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
         partitionRanges, partitionReplayStream);
     useExplicitPartitionPlan = static_cast<bool>(validation);
   }
-  if (parallelPartitionRequested && perf::enabled()) {
-    // Observation-only production sealing. The first admitted shape is a
-    // fresh source-local pass ending in this call; carried-session and
-    // cross-source passes remain explicitly unsealed. No snapshot or borrowed
-    // source view escapes this synchronous call, and the real WMT lane remains
-    // unavailable, so every successful shadow decision still consumes the
-    // validated plan through the serial cursor below.
-    thread_local SealedParallelPassSnapshot parallelPassShadow;
-    const auto shadow = produceSealedParallelPassSnapshot(
+  runParallelPassObservationIfEnabled(
+      parallelPartitionRequested, perf::enabled(), [&] {
+    // Observation-only pass-local sealing over the final validated replay
+    // order. Coordinator commands never enter a child range, no borrowed view
+    // escapes this call, and every eligible pass still consumes the untouched
+    // production plan through the serial cursor below.
+    thread_local SealedParallelPassSnapshotBatch parallelPassShadows;
+    const auto observation = produceSealedParallelPassSnapshots(
         SealedParallelPassSnapshotInput{
             .stream = &partitionReplayStream,
             .ranges = partitionRanges,
+            .firstPassActionEpoch = 1u,
             .planValidated = useExplicitPartitionPlan,
             .sourceStartsPass = options.session == nullptr,
             .sourceEndsPass = !(options.deferSessionFinalization &&
                                 options.session != nullptr),
         },
-        parallelPassShadow);
-    perf::countParallelPassShadow(shadow);
+        parallelPassShadows);
+    perf::countParallelPassShadow(observation);
 
-    ParallelPassExecutionDecision decision{
-        .fallback = parallelPassFallbackForSnapshot(shadow.fallback),
-        .considered = shadow.considered,
-    };
-    if (shadow.eligible) {
+    for (const auto& pass : parallelPassShadows.view()) {
       const auto eligibility = classifyParallelPassEligibility(
           ParallelPassEligibilityInput{
-              .ranges = parallelPassShadow.rangeView(),
-              .firstDrawSnapshots = parallelPassShadow.firstDrawView(),
+              .ranges = pass.rangeView(),
+              .firstDrawSnapshots = pass.firstDrawView(),
+              .passActionEpoch = pass.passActionEpoch,
               .explicitPlan = true,
               .planValidated = true,
               .logicalPassSealed = true,
-              .hasPresent = false,
           });
-      decision = decideParallelPassExecution(true, eligibility, false);
+      const auto decision =
+          decideParallelPassExecution(true, eligibility, false);
+      perf::countParallelPassDecision(decision);
     }
-    perf::countParallelPassDecision(decision);
-  }
+  });
 
   const bool traceEncodeProgress = traceEncodeProgressForSeq(sourceSeqId);
   auto traceEncodeStage = [&](const char* stage) {

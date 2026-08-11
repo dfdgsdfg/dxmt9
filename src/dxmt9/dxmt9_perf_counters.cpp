@@ -650,53 +650,48 @@ void countParallelPassDecision(
 }
 
 void countParallelPassShadow(
-    const encoders::SealedParallelPassSnapshotResult& result) {
+    const encoders::SealedParallelPassSnapshotBatchResult& result) {
   using Fallback = encoders::SealedParallelPassSnapshotFallback;
-  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 12u);
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 16u);
   auto& c = counters();
+  auto rejected = [&](Fallback fallback) {
+    return static_cast<std::uint64_t>(
+        result.rejectionCounts[static_cast<std::size_t>(fallback)]);
+  };
   if (result.considered) {
     add(c.parallelPassShadowAttempts);
   }
-  if (result.sealed) {
-    add(c.parallelPassShadowSealed);
-  }
-  if (result.eligible) {
-    add(c.parallelPassShadowEligible);
-    add(c.parallelPassShadowChildren, result.childCount);
-    updateMax(c.parallelPassShadowChildrenMax, result.childCount);
-    add(c.parallelPassShadowDraws, result.drawCount);
-    updateMax(c.parallelPassShadowDrawsMax, result.drawCount);
-  }
-  switch (result.fallback) {
-  case Fallback::None:
-    break;
-  case Fallback::PlanMissing:
-  case Fallback::PlanNotValidated:
-  case Fallback::ReplayInvalid:
-    add(c.parallelPassShadowRejectPlan);
-    break;
-  case Fallback::UnsealedStart:
-  case Fallback::UnsealedEnd:
-    add(c.parallelPassShadowRejectBoundary);
-    break;
-  case Fallback::CoordinatorCommand:
-    add(c.parallelPassShadowRejectCommand);
-    break;
-  case Fallback::TooFewChildren:
-  case Fallback::ChildCapacity:
-    add(c.parallelPassShadowRejectCapacity);
-    break;
-  case Fallback::AttachmentMismatch:
-    add(c.parallelPassShadowRejectAttachment);
-    break;
-  case Fallback::ResourceHazard:
-    add(c.parallelPassShadowRejectHazard);
-    break;
-  case Fallback::FirstDrawSnapshot:
-  case Fallback::Count:
-    add(c.parallelPassShadowRejectSnapshot);
-    break;
-  }
+  add(c.parallelPassShadowCandidates, result.candidateCount);
+  updateMax(c.parallelPassShadowCandidatesMax, result.candidateCount);
+  add(c.parallelPassShadowSealed, result.sealedCount);
+  add(c.parallelPassShadowEligible, result.eligibleCount);
+  updateMax(c.parallelPassShadowEligibleMax, result.eligibleCountMax);
+  add(c.parallelPassShadowChildren, result.childCount);
+  updateMax(c.parallelPassShadowChildrenMax, result.childCountMax);
+  add(c.parallelPassShadowDraws, result.drawCount);
+  updateMax(c.parallelPassShadowDrawsMax, result.drawCountMax);
+  add(c.parallelPassShadowRejectPlan,
+      rejected(Fallback::PlanMissing) +
+          rejected(Fallback::PlanNotValidated) +
+          rejected(Fallback::ReplayInvalid));
+  add(c.parallelPassShadowRejectBoundary,
+      rejected(Fallback::UnsealedStart) +
+          rejected(Fallback::UnsealedEnd));
+  add(c.parallelPassShadowRejectCommand,
+      rejected(Fallback::CoordinatorCommand) +
+          rejected(Fallback::NonChildDrawRun));
+  add(c.parallelPassShadowRejectCapacity,
+      rejected(Fallback::TooFewChildren) +
+          rejected(Fallback::ChildCapacity) +
+          rejected(Fallback::PassCapacity));
+  add(c.parallelPassShadowRejectAttachment,
+      rejected(Fallback::AttachmentMismatch));
+  add(c.parallelPassShadowRejectHazard,
+      rejected(Fallback::ResourceSetIncomplete) +
+          rejected(Fallback::ResourceHazard) +
+          rejected(Fallback::PassActionEpoch));
+  add(c.parallelPassShadowRejectSnapshot,
+      rejected(Fallback::FirstDrawSnapshot));
 }
 
 void countCpuReadySessionHeadAppended(bool arenaSource) {
